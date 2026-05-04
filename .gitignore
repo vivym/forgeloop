@@ -2,6 +2,7 @@
 .omc/
 
 # Local git worktrees
+.worktree/
 .worktrees/
 
 # Superpowers
