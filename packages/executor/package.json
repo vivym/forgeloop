@@ -1,0 +1,15 @@
+{
+  "name": "@forgeloop/executor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@forgeloop/contracts": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}
