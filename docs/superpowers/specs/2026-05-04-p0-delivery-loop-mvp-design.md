@@ -165,6 +165,64 @@ Read APIs use REST aggregation endpoints, such as:
 
 GraphQL is intentionally deferred until read-side aggregation complexity justifies it.
 
+### 6.1 P0 Command Inventory
+
+The implementation plan should slice API work around these commands and queries.
+
+Project / repo:
+
+- `POST /projects`
+- `POST /projects/:projectId/repos`
+- `GET /projects/:projectId/repos`
+
+Work Item:
+
+- `POST /work-items`
+- `GET /work-items`
+- `GET /work-items/:workItemId`
+- `GET /work-items/:workItemId/cockpit`
+- `GET /work-items/:workItemId/timeline`
+
+Spec:
+
+- `POST /work-items/:workItemId/specs`
+- `POST /specs/:specId/revisions`
+- `POST /specs/:specId/generate-draft`
+- `POST /specs/:specId/submit-for-approval`
+- `POST /specs/:specId/approve`
+- `POST /specs/:specId/request-changes`
+
+Plan:
+
+- `POST /work-items/:workItemId/plans`
+- `POST /plans/:planId/revisions`
+- `POST /plans/:planId/generate-draft`
+- `POST /plans/:planId/submit-for-approval`
+- `POST /plans/:planId/approve`
+- `POST /plans/:planId/request-changes`
+
+Execution Package:
+
+- `POST /plan-revisions/:planRevisionId/generate-packages`
+- `GET /work-items/:workItemId/execution-packages`
+- `GET /execution-packages/:packageId`
+- `POST /execution-packages/:packageId/mark-ready`
+- `POST /execution-packages/:packageId/run`
+- `POST /execution-packages/:packageId/rerun`
+
+Run / review:
+
+- `GET /run-sessions/:runSessionId`
+- `GET /review-packets/:reviewPacketId`
+- `POST /review-packets/:reviewPacketId/approve`
+- `POST /review-packets/:reviewPacketId/request-changes`
+
+Internal executor callbacks:
+
+- `POST /internal/executions`
+- `POST /internal/executions/:executionId/result`
+- `GET /internal/executions/:executionId`
+
 ## 7. Core Components
 
 ### 7.1 Project / Repo
@@ -276,6 +334,61 @@ Entities:
 
 Artifacts include future trace link fields such as `trace_subject_type` and `trace_subject_id`, but P0 does not build the full TraceEvent ledger.
 
+### 7.8 Executor Contracts
+
+`RunSpec` is the stable input from the control plane and workflow to executor-gateway. P0 must define it in `packages/contracts` before implementing either executor.
+
+Minimum `RunSpec` fields:
+
+- `run_session_id`
+- `execution_package_id`
+- `work_item_id`
+- `spec_revision_id`
+- `plan_revision_id`
+- `executor_type`: `mock` or `local_codex`
+- `repo`: `repo_id`, `local_path`, `base_branch`, `base_commit_sha`
+- `objective`
+- `context`: frozen SpecRevision summary, PlanRevision summary, Package instructions, and required checks
+- `allowed_paths`
+- `forbidden_paths`
+- `required_checks`: stable check ID, display name, command, timeout seconds, and whether failure blocks review
+- `artifact_policy`: requested artifacts such as diff, changed files, check output, logs, and execution summary
+- `timeout_seconds`
+- `idempotency_key`
+
+Minimum `ExecutorResult` fields:
+
+- `run_session_id`
+- `executor_type`
+- `executor_version`
+- `status`: `succeeded`, `failed`, `cancelled`, or `timed_out`
+- `started_at`
+- `finished_at`
+- `summary`
+- `changed_files`: repo ID, path, and change kind
+- `checks`: check ID, command, status, exit code, duration, and stdout/stderr artifact refs
+- `artifacts`: kind, name, content type, storage URI or local ref, digest if available
+- `failure`: failure kind, message, and retryable flag when status is not succeeded
+- `raw_metadata`: JSON for executor-specific diagnostics that must not drive core state transitions
+
+The workflow persists the complete RunSpec snapshot before execution and persists the complete ExecutorResult after execution. Review Packet generation reads only persisted RunSession data, not live executor state.
+
+### 7.9 `local_codex` Executor Semantics
+
+`local_codex` runs against one server-configured repo checkout for the Package's `repo_id`.
+
+P0 rules:
+
+- The ProjectRepo record must provide `local_path`; remote provider clone/provisioning is out of scope.
+- The executor-gateway creates a disposable worktree or workspace for `run_session_id` from `base_commit_sha` or the configured base branch.
+- The executor must enforce the Package's single repo, `allowed_paths`, and `forbidden_paths` boundaries before returning success.
+- The executor runs Codex with the frozen RunSpec context and required checks.
+- The executor returns changed files, diff/log/check artifacts, and summary through ExecutorResult.
+- The executor does not push branches, open PRs, merge code, or publish releases in P0.
+- If the workspace cannot be prepared cleanly, the result is `failed` with failure kind `workspace_prepare_failed`.
+
+`mock` executor uses the same RunSpec and ExecutorResult contracts, but generates deterministic success, failure, and check-failed outputs for tests and demos.
+
 ## 8. Data Model Boundary
 
 P0 creates only shortest-loop tables plus extension fields.
@@ -345,7 +458,7 @@ Only package execution uses Temporal.
 
 1. Load Package, approved SpecRevision, approved PlanRevision, and repo context.
 2. Build and persist a RunSpec snapshot.
-3. Create or update RunSession as queued/running.
+3. Update the existing RunSession as queued/running.
 4. Call executor-gateway with selected executor type.
 5. Wait for result or callback.
 6. Persist ExecutorResult into RunSession.
@@ -356,6 +469,8 @@ Only package execution uses Temporal.
 11. On failure, mark RunSession failed or timed out and move Package to a rerunnable or blocked state.
 
 The workflow must be idempotent for repeated starts, callback retries, and result persistence retries.
+
+The control plane is the authoritative creator of RunSession. The `run` command creates the RunSession with status `queued`, stores the initial RunSpec snapshot or the data needed to build it, and starts the Temporal workflow with `run_session_id`. The workflow is authoritative for execution progress and result persistence after that point.
 
 ## 10. Data Flow
 
@@ -377,7 +492,7 @@ A user or AI draft adapter generates packages from the approved PlanRevision. Th
 
 ### 10.5 Execution
 
-A user triggers a Package run. The control plane creates a RunSession and starts the Temporal workflow. The executor-gateway runs either mock execution or local Codex execution. Results are written back to RunSession and artifacts.
+A user triggers a Package run. The control plane creates a RunSession and starts the Temporal workflow. The executor-gateway runs either mock execution or local Codex execution. Results are written back to the same RunSession and artifacts.
 
 ### 10.6 Review
 
@@ -385,7 +500,7 @@ Successful execution creates a Review Packet. The reviewer inspects the packet a
 
 ## 11. State Model
 
-P0 follows the state design already documented in the architecture notes.
+P0 uses the state model from `docs/architecture-design/v0/status_design.md`, narrowed to the transitions below. The implementation plan must treat these transitions as the P0 source of truth.
 
 WorkItem:
 
@@ -426,6 +541,63 @@ ReviewPacket:
 - `superseded`
 
 Instant actions are not encoded as statuses. They are written as ObjectEvent, StatusHistory, or Decision.
+
+### 11.1 Required P0 Transitions
+
+WorkItem:
+
+| Trigger | From | To |
+| --- | --- | --- |
+| create work item | none | `phase=draft`, `activity_state=idle`, `gate_state=none`, `resolution=none` |
+| submit spec | `draft` or `triage` | `phase=spec`, `gate_state=awaiting_spec_approval` |
+| approve spec | `phase=spec` | `phase=plan`, `gate_state=none` |
+| submit plan | `phase=plan` | `phase=plan`, `gate_state=awaiting_plan_approval` |
+| approve plan | `phase=plan` | `phase=execution`, `gate_state=none` |
+| all packages approved | `phase=execution` | `phase=done`, `resolution=completed` |
+
+Spec / Plan:
+
+| Trigger | From | To |
+| --- | --- | --- |
+| create | none | `status=draft`, `editing_state=idle`, `gate_state=not_submitted`, `resolution=none` |
+| generate draft start | `status=draft` | `editing_state=ai_drafting` |
+| generate draft success/failure | `editing_state=ai_drafting` | `editing_state=idle` |
+| submit for approval | `status=draft` | `status=in_review`, `gate_state=awaiting_approval` |
+| approve | `status=in_review` | `status=approved`, `gate_state=approved`, `resolution=approved` |
+| request changes | `status=in_review` | `status=draft`, `gate_state=changes_requested`, `resolution=none` |
+
+ExecutionPackage:
+
+| Trigger | From | To |
+| --- | --- | --- |
+| generate package | none | `phase=draft`, `activity_state=idle`, `gate_state=not_submitted`, `resolution=none` |
+| mark ready | `phase=draft` | `phase=ready`, `gate_state=not_submitted` |
+| run | `phase=ready` or rerunnable after changes | `phase=execution`, `activity_state=ai_running` |
+| execution failed retryable | `phase=execution` | `phase=ready`, `activity_state=idle`, with last failure summary |
+| execution failed blocked | `phase=execution` | `phase=execution`, `activity_state=blocked`, with blocked reason |
+| execution succeeded | `phase=execution` | `phase=review`, `activity_state=awaiting_human`, `gate_state=awaiting_human_review` |
+| review approved | `phase=review` | `phase=review`, `activity_state=idle`, `gate_state=review_approved`, `resolution=completed` |
+| review changes requested | `phase=review` | `phase=ready`, `activity_state=idle`, `gate_state=changes_requested`, `resolution=none` |
+
+RunSession:
+
+| Trigger | From | To |
+| --- | --- | --- |
+| run command creates session | none | `queued` |
+| workflow starts executor | `queued` | `running` |
+| executor success | `running` | `succeeded` |
+| executor failure | `running` | `failed` |
+| executor timeout | `running` | `timed_out` |
+| user/system cancellation | `queued` or `running` | `cancelled` |
+
+ReviewPacket:
+
+| Trigger | From | To |
+| --- | --- | --- |
+| execution success creates packet | none | `awaiting_human_review` |
+| reviewer approves | `awaiting_human_review` | `approved` |
+| reviewer requests changes | `awaiting_human_review` | `changes_requested` |
+| newer RunSession created | `awaiting_human_review` | `superseded` |
 
 ## 12. Error Handling
 
