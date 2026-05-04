@@ -3,8 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   changedFileSchema,
   checkResultSchema,
+  commandInventoryResponseSchema,
   executorResultSchema,
+  forceRerunPackageRequestSchema,
+  rerunPackageRequestSchema,
   reviewDecisionPayloadSchema,
+  runPackageRequestSchema,
   runSpecSchema,
   selfReviewResultSchema,
   submitReviewDecisionResponseSchema,
@@ -64,69 +68,79 @@ describe('P0 delivery loop contracts', () => {
     recorded_at: '2026-05-05T02:01:00.000Z',
   };
 
-  it('parses a valid run spec', () => {
-    const parsed = runSpecSchema.parse({
-      run_session_id: 'run-session-1',
-      execution_package_id: 'exec-package-1',
-      work_item_id: 'work-item-1',
-      spec_revision_id: 'spec-revision-1',
-      plan_revision_id: 'plan-revision-1',
-      executor_type: 'local_codex',
-      repo: {
-        repo_id: 'repo-1',
-        local_path: '/workspace/repo',
-        base_branch: 'main',
-        base_commit_sha: '748c32b',
-      },
-      objective: 'Implement the P0 contracts package.',
-      context: {
-        spec_revision_summary: 'Thin delivery loop MVP contracts.',
-        plan_revision_summary: 'Add Zod schemas and DTO types.',
-        package_instructions: 'Keep this package shared-safe.',
-        required_checks: [
-          {
-            check_id: 'contracts-test',
-            display_name: 'Contracts tests',
-            command: 'pnpm test tests/contracts',
-            timeout_seconds: 60,
-            blocks_review: true,
-          },
-        ],
-      },
-      review_context: {
-        latest_decision: 'changes_requested',
-        requested_changes: [
-          {
-            title: 'Clarify artifact refs',
-            description: 'Make artifact references explicit enough for review packets.',
-            file_path: 'packages/contracts/src/executor.ts',
-            severity: 'major',
-            suggested_validation: 'pnpm test tests/contracts',
-          },
-        ],
-      },
-      allowed_paths: ['packages/contracts/**', 'tests/contracts/**'],
-      forbidden_paths: ['apps/**'],
-      required_checks: [
+  const validRequiredChecks = [
+    {
+      check_id: 'contracts-test',
+      display_name: 'Contracts tests',
+      command: 'pnpm test tests/contracts',
+      timeout_seconds: 60,
+      blocks_review: true,
+    },
+  ];
+
+  const validRunSpec = {
+    run_session_id: 'run-session-1',
+    execution_package_id: 'exec-package-1',
+    work_item_id: 'work-item-1',
+    spec_revision_id: 'spec-revision-1',
+    plan_revision_id: 'plan-revision-1',
+    executor_type: 'local_codex',
+    repo: {
+      repo_id: 'repo-1',
+      local_path: '/workspace/repo',
+      base_branch: 'main',
+      base_commit_sha: '748c32b',
+    },
+    objective: 'Implement the P0 contracts package.',
+    context: {
+      spec_revision_summary: 'Thin delivery loop MVP contracts.',
+      plan_revision_summary: 'Add Zod schemas and DTO types.',
+      package_instructions: 'Keep this package shared-safe.',
+      required_checks: validRequiredChecks,
+    },
+    review_context: {
+      latest_decision: 'changes_requested',
+      requested_changes: [
         {
-          check_id: 'contracts-test',
-          display_name: 'Contracts tests',
-          command: 'pnpm test tests/contracts',
-          timeout_seconds: 60,
-          blocks_review: true,
+          title: 'Clarify artifact refs',
+          description: 'Make artifact references explicit enough for review packets.',
+          file_path: 'packages/contracts/src/executor.ts',
+          severity: 'major',
+          suggested_validation: 'pnpm test tests/contracts',
         },
       ],
-      artifact_policy: {
-        requested_artifacts: ['diff', 'changed_files', 'check_output', 'logs', 'execution_summary'],
-      },
-      timeout_seconds: 300,
-      idempotency_key: 'exec-package-1:run-session-1:748c32b',
-    });
+    },
+    allowed_paths: ['packages/contracts/**', 'tests/contracts/**'],
+    forbidden_paths: ['apps/**'],
+    required_checks: validRequiredChecks,
+    artifact_policy: {
+      requested_artifacts: ['diff', 'changed_files', 'check_output', 'logs', 'execution_summary'],
+    },
+    timeout_seconds: 300,
+    idempotency_key: 'exec-package-1:run-session-1:748c32b',
+  };
+
+  it('parses a valid run spec', () => {
+    const parsed = runSpecSchema.parse(validRunSpec);
 
     expect(parsed.executor_type).toBe('local_codex');
     expect(parsed.required_checks[0]?.blocks_review).toBe(true);
     expect(parsed.review_context.requested_changes).toHaveLength(1);
     expect(parsed.idempotency_key).toBe('exec-package-1:run-session-1:748c32b');
+  });
+
+  it('rejects run specs with divergent required checks', () => {
+    expect(
+      runSpecSchema.safeParse({
+        ...validRunSpec,
+        required_checks: [
+          {
+            ...validRequiredChecks[0],
+            command: 'pnpm test',
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it('parses blocking and non-blocking executor results', () => {
@@ -286,6 +300,65 @@ describe('P0 delivery loop contracts', () => {
     expect(parsed.requested_changes).toHaveLength(1);
   });
 
+  it('parses the command inventory response DTO', () => {
+    const parsed = commandInventoryResponseSchema.parse({
+      commands: [
+        {
+          command: 'run_package',
+          method: 'POST',
+          path: '/api/commands/run-package',
+          description: 'Run an execution package.',
+        },
+        {
+          command: 'submit_review_decision',
+          method: 'POST',
+          path: '/api/commands/submit-review-decision',
+          description: 'Submit a review decision.',
+        },
+      ],
+    });
+
+    expect(parsed.commands.map((item) => item.command)).toEqual(['run_package', 'submit_review_decision']);
+  });
+
+  it('parses the run package request DTO', () => {
+    const parsed = runPackageRequestSchema.parse({
+      execution_package_id: 'exec-package-1',
+      requested_by_actor_id: 'actor-1',
+      executor_type: 'local_codex',
+      idempotency_key: 'run-package-1',
+    });
+
+    expect(parsed.workflow_only).toBe(false);
+    expect(parsed.executor_type).toBe('local_codex');
+  });
+
+  it('parses the rerun package request DTO', () => {
+    const parsed = rerunPackageRequestSchema.parse({
+      execution_package_id: 'exec-package-1',
+      previous_run_session_id: 'run-session-1',
+      review_packet_id: 'review-packet-1',
+      requested_changes_context: [validRequestedChange],
+      requested_by_actor_id: 'actor-1',
+      workflow_only: true,
+    });
+
+    expect(parsed.requested_changes_context).toHaveLength(1);
+    expect(parsed.workflow_only).toBe(true);
+  });
+
+  it('parses the force-rerun package request DTO', () => {
+    const parsed = forceRerunPackageRequestSchema.parse({
+      execution_package_id: 'exec-package-1',
+      previous_run_session_id: 'run-session-1',
+      requested_by_actor_id: 'actor-1',
+      force_reason: 'Reviewer approved a manual rerun after transient executor failure.',
+    });
+
+    expect(parsed.force).toBe(true);
+    expect(parsed.requested_changes_context).toEqual([]);
+  });
+
   it('parses a failed self-review result', () => {
     const parsed = selfReviewResultSchema.parse({
       status: 'failed',
@@ -409,6 +482,15 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
   });
 
+  it('rejects submit-review responses with no submitted decision', () => {
+    expect(
+      submitReviewDecisionResponseSchema.safeParse({
+        ...validSubmitReviewDecisionResponse,
+        decision: 'none',
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects approved review decision payloads with requested changes', () => {
     expect(
       reviewDecisionPayloadSchema.safeParse({
@@ -432,6 +514,29 @@ describe('P0 delivery loop contracts', () => {
       submitReviewDecisionResponseSchema.safeParse({
         ...validSubmitReviewDecisionResponse,
         recorded_at: recordedAt,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects invalid API command names and force reruns without a reason', () => {
+    expect(
+      commandInventoryResponseSchema.safeParse({
+        commands: [
+          {
+            command: 'rerun',
+            method: 'POST',
+            path: '/api/commands/rerun',
+            description: 'Invalid command name.',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      forceRerunPackageRequestSchema.safeParse({
+        execution_package_id: 'exec-package-1',
+        previous_run_session_id: 'run-session-1',
+        requested_by_actor_id: 'actor-1',
       }).success,
     ).toBe(false);
   });

@@ -92,6 +92,21 @@ export const requiredCheckSpecSchema = z.object({
 });
 export type RequiredCheckSpec = z.infer<typeof requiredCheckSpecSchema>;
 
+const requiredCheckSpecsMatch = (left: RequiredCheckSpec[], right: RequiredCheckSpec[]) =>
+  left.length === right.length &&
+  left.every((leftCheck, index) => {
+    const rightCheck = right[index];
+
+    return (
+      rightCheck !== undefined &&
+      leftCheck.check_id === rightCheck.check_id &&
+      leftCheck.display_name === rightCheck.display_name &&
+      leftCheck.command === rightCheck.command &&
+      leftCheck.timeout_seconds === rightCheck.timeout_seconds &&
+      leftCheck.blocks_review === rightCheck.blocks_review
+    );
+  });
+
 export const checkResultSchema = z
   .object({
     check_id: z.string().min(1),
@@ -130,40 +145,50 @@ const requestedChangeContextSchema = z.object({
   suggested_validation: z.string().min(1).optional(),
 });
 
-export const runSpecSchema = z.object({
-  run_session_id: z.string().min(1),
-  execution_package_id: z.string().min(1),
-  work_item_id: z.string().min(1),
-  spec_revision_id: z.string().min(1),
-  plan_revision_id: z.string().min(1),
-  executor_type: executorTypeSchema,
-  repo: z.object({
-    repo_id: z.string().min(1),
-    local_path: z.string().min(1),
-    base_branch: z.string().min(1),
-    base_commit_sha: z.string().min(1),
-  }),
-  objective: z.string().min(1),
-  context: z.object({
-    spec_revision_summary: z.string().min(1),
-    plan_revision_summary: z.string().min(1),
-    package_instructions: z.string().min(1),
+export const runSpecSchema = z
+  .object({
+    run_session_id: z.string().min(1),
+    execution_package_id: z.string().min(1),
+    work_item_id: z.string().min(1),
+    spec_revision_id: z.string().min(1),
+    plan_revision_id: z.string().min(1),
+    executor_type: executorTypeSchema,
+    repo: z.object({
+      repo_id: z.string().min(1),
+      local_path: z.string().min(1),
+      base_branch: z.string().min(1),
+      base_commit_sha: z.string().min(1),
+    }),
+    objective: z.string().min(1),
+    context: z.object({
+      spec_revision_summary: z.string().min(1),
+      plan_revision_summary: z.string().min(1),
+      package_instructions: z.string().min(1),
+      required_checks: z.array(requiredCheckSpecSchema),
+    }),
+    review_context: z.object({
+      latest_decision: z.enum(['none', 'approved', 'changes_requested']).optional(),
+      requested_changes: z.array(requestedChangeContextSchema).default([]),
+    }),
+    workflow_only: z.boolean().default(false),
+    allowed_paths: z.array(z.string().min(1)),
+    forbidden_paths: z.array(z.string().min(1)),
     required_checks: z.array(requiredCheckSpecSchema),
-  }),
-  review_context: z.object({
-    latest_decision: z.enum(['none', 'approved', 'changes_requested']).optional(),
-    requested_changes: z.array(requestedChangeContextSchema).default([]),
-  }),
-  workflow_only: z.boolean().default(false),
-  allowed_paths: z.array(z.string().min(1)),
-  forbidden_paths: z.array(z.string().min(1)),
-  required_checks: z.array(requiredCheckSpecSchema),
-  artifact_policy: z.object({
-    requested_artifacts: z.array(artifactKindSchema),
-  }),
-  timeout_seconds: z.number().int().positive(),
-  idempotency_key: z.string().min(1),
-});
+    artifact_policy: z.object({
+      requested_artifacts: z.array(artifactKindSchema),
+    }),
+    timeout_seconds: z.number().int().positive(),
+    idempotency_key: z.string().min(1),
+  })
+  .superRefine((runSpec, ctx) => {
+    if (!requiredCheckSpecsMatch(runSpec.context.required_checks, runSpec.required_checks)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['required_checks'],
+        message: 'required_checks must match context.required_checks in order',
+      });
+    }
+  });
 export type RunSpec = z.infer<typeof runSpecSchema>;
 
 export const executorResultStatusSchema = z.enum(['succeeded', 'failed', 'cancelled', 'timed_out']);

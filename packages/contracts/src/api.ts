@@ -4,8 +4,8 @@ import { executorTypeSchema } from './executor';
 import {
   requestedChangeSchema,
   reviewDecisionPayloadSchema,
-  reviewDecisionSchema,
   reviewPacketStatusSchema,
+  reviewSubmitDecisionSchema,
 } from './review';
 
 const isoDateTimeSchema = z.string().datetime();
@@ -83,7 +83,7 @@ export type SubmitReviewDecisionRequest = z.infer<typeof submitReviewDecisionReq
 export const submitReviewDecisionResponseSchema = z.object({
   review_packet_id: z.string().min(1),
   status: reviewPacketStatusSchema,
-  decision: reviewDecisionSchema,
+  decision: reviewSubmitDecisionSchema,
   recorded_at: isoDateTimeSchema,
 });
 export type SubmitReviewDecisionResponse = z.infer<typeof submitReviewDecisionResponseSchema>;
