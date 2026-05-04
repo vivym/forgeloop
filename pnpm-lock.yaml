@@ -254,18 +254,9 @@ importers:
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@forgeloop/db':
-        specifier: workspace:*
-        version: link:../db
-      '@forgeloop/executor':
-        specifier: workspace:*
-        version: link:../executor
       '@temporalio/workflow':
         specifier: ^1.17.0
         version: 1.17.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
 
 packages:
 

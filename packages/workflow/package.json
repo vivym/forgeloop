@@ -10,9 +10,6 @@
   },
   "dependencies": {
     "@forgeloop/contracts": "workspace:*",
-    "@forgeloop/db": "workspace:*",
-    "@forgeloop/executor": "workspace:*",
-    "@temporalio/workflow": "^1.17.0",
-    "zod": "^4.4.3"
+    "@temporalio/workflow": "^1.17.0"
   }
 }
