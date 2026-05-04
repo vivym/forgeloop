@@ -2,15 +2,16 @@ import { z } from 'zod';
 
 import { artifactRefSchema, changedFileSchema, checkResultSchema } from './executor';
 
-const isoDateTimeSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
-  message: 'Expected an ISO-compatible date-time string',
-});
+const isoDateTimeSchema = z.string().datetime();
 
 export const reviewPacketStatusSchema = z.enum(['ready', 'in_review', 'completed', 'archived']);
 export type ReviewPacketStatus = z.infer<typeof reviewPacketStatusSchema>;
 
 export const reviewDecisionSchema = z.enum(['none', 'approved', 'changes_requested']);
 export type ReviewDecision = z.infer<typeof reviewDecisionSchema>;
+
+export const reviewSubmitDecisionSchema = z.enum(['approved', 'changes_requested']);
+export type ReviewSubmitDecision = z.infer<typeof reviewSubmitDecisionSchema>;
 
 export const requestedChangeSchema = z.object({
   title: z.string().min(1),
@@ -52,13 +53,21 @@ export const selfReviewResultSchema = z
         message: 'failure_message is required when self-review status is failed',
       });
     }
+
+    if (result.status !== 'failed' && result.failure_message !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failure_message'],
+        message: 'failure_message is only allowed when self-review status is failed',
+      });
+    }
   });
 export type SelfReviewResult = z.infer<typeof selfReviewResultSchema>;
 
 export const reviewDecisionPayloadSchema = z
   .object({
     review_packet_id: z.string().min(1),
-    decision: reviewDecisionSchema,
+    decision: reviewSubmitDecisionSchema,
     summary: z.string().min(1),
     requested_changes: z.array(requestedChangeSchema).default([]),
     reviewed_by_actor_id: z.string().min(1),
@@ -70,6 +79,14 @@ export const reviewDecisionPayloadSchema = z
         code: 'custom',
         path: ['requested_changes'],
         message: 'changes_requested decisions require at least one requested change',
+      });
+    }
+
+    if (payload.decision === 'approved' && payload.requested_changes.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['requested_changes'],
+        message: 'approved decisions cannot include requested changes',
       });
     }
   });

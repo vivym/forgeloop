@@ -8,9 +8,7 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 
 export const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
 
-const isoDateTimeSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
-  message: 'Expected an ISO-compatible date-time string',
-});
+const isoDateTimeSchema = z.string().datetime();
 
 export const executorTypeSchema = z.enum(['mock', 'local_codex']);
 export type ExecutorType = z.infer<typeof executorTypeSchema>;
@@ -59,12 +57,30 @@ export const artifactRefSchema = z
   });
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;
 
-export const changedFileSchema = z.object({
-  repo_id: z.string().min(1),
-  path: z.string().min(1),
-  change_kind: z.enum(['added', 'modified', 'deleted', 'renamed']),
-  previous_path: z.string().min(1).optional(),
-});
+export const changedFileSchema = z
+  .object({
+    repo_id: z.string().min(1),
+    path: z.string().min(1),
+    change_kind: z.enum(['added', 'modified', 'deleted', 'renamed']),
+    previous_path: z.string().min(1).optional(),
+  })
+  .superRefine((changedFile, ctx) => {
+    if (changedFile.change_kind === 'renamed' && !changedFile.previous_path) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['previous_path'],
+        message: 'previous_path is required for renamed files',
+      });
+    }
+
+    if (changedFile.change_kind !== 'renamed' && changedFile.previous_path !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['previous_path'],
+        message: 'previous_path is only allowed for renamed files',
+      });
+    }
+  });
 export type ChangedFile = z.infer<typeof changedFileSchema>;
 
 export const requiredCheckSpecSchema = z.object({
@@ -76,16 +92,34 @@ export const requiredCheckSpecSchema = z.object({
 });
 export type RequiredCheckSpec = z.infer<typeof requiredCheckSpecSchema>;
 
-export const checkResultSchema = z.object({
-  check_id: z.string().min(1),
-  command: z.string().min(1),
-  status: z.enum(['succeeded', 'failed', 'cancelled', 'timed_out', 'skipped']),
-  exit_code: z.number().int().nullable(),
-  duration_seconds: z.number().nonnegative(),
-  blocks_review: z.boolean(),
-  stdout: artifactRefSchema.optional(),
-  stderr: artifactRefSchema.optional(),
-});
+export const checkResultSchema = z
+  .object({
+    check_id: z.string().min(1),
+    command: z.string().min(1),
+    status: z.enum(['succeeded', 'failed', 'cancelled', 'timed_out', 'skipped']),
+    exit_code: z.number().int().nullable(),
+    duration_seconds: z.number().nonnegative(),
+    blocks_review: z.boolean(),
+    stdout: artifactRefSchema.optional(),
+    stderr: artifactRefSchema.optional(),
+  })
+  .superRefine((checkResult, ctx) => {
+    if (checkResult.status === 'succeeded' && checkResult.exit_code !== 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['exit_code'],
+        message: 'succeeded checks require exit_code 0',
+      });
+    }
+
+    if (checkResult.status === 'failed' && (checkResult.exit_code === null || checkResult.exit_code === 0)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['exit_code'],
+        message: 'failed checks require a non-zero exit_code',
+      });
+    }
+  });
 export type CheckResult = z.infer<typeof checkResultSchema>;
 
 const requestedChangeContextSchema = z.object({
@@ -158,11 +192,37 @@ export const executorResultSchema = z
     raw_metadata: jsonObjectSchema.default({}),
   })
   .superRefine((result, ctx) => {
+    const hasUnsuccessfulBlockingCheck = result.checks.some((check) => check.blocks_review && check.status !== 'succeeded');
+
+    if (result.status === 'succeeded' && result.failure) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failure'],
+        message: 'failure is not allowed when ExecutorResult status is succeeded',
+      });
+    }
+
+    if (result.status === 'succeeded' && hasUnsuccessfulBlockingCheck) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['checks'],
+        message: 'succeeded ExecutorResult cannot include unsuccessful blocking checks',
+      });
+    }
+
     if (result.status !== 'succeeded' && !result.failure) {
       ctx.addIssue({
         code: 'custom',
         path: ['failure'],
         message: 'failure is required when ExecutorResult status is not succeeded',
+      });
+    }
+
+    if (result.failure?.kind === 'required_check_failed' && !hasUnsuccessfulBlockingCheck) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['checks'],
+        message: 'required_check_failed requires at least one unsuccessful blocking check',
       });
     }
   });

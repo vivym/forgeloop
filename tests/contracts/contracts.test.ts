@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  changedFileSchema,
+  checkResultSchema,
   executorResultSchema,
   reviewDecisionPayloadSchema,
   runSpecSchema,
@@ -8,6 +10,52 @@ import {
 } from '../../packages/contracts/src/index';
 
 describe('P0 delivery loop contracts', () => {
+  const validArtifactRef = {
+    kind: 'execution_summary',
+    name: 'summary',
+    content_type: 'text/markdown',
+    local_ref: 'artifacts/run-session/summary.md',
+  };
+
+  const validCheckResult = {
+    check_id: 'contracts-test',
+    command: 'pnpm test tests/contracts',
+    status: 'succeeded',
+    exit_code: 0,
+    duration_seconds: 12.4,
+    blocks_review: true,
+  };
+
+  const validExecutorResult = {
+    run_session_id: 'run-session-1',
+    executor_type: 'local_codex',
+    executor_version: '0.1.0',
+    status: 'succeeded',
+    started_at: '2026-05-05T01:00:00.000Z',
+    finished_at: '2026-05-05T01:02:00.000Z',
+    summary: 'Execution succeeded.',
+    changed_files: [],
+    checks: [validCheckResult],
+    artifacts: [validArtifactRef],
+  };
+
+  const validRequestedChange = {
+    title: 'Add rerun DTO',
+    description: 'Expose a contract for rerunning a package with requested changes context.',
+    file_path: 'packages/contracts/src/api.ts',
+    severity: 'major',
+    suggested_validation: 'pnpm test tests/contracts',
+  };
+
+  const validReviewDecisionPayload = {
+    review_packet_id: 'review-packet-1',
+    decision: 'approved',
+    summary: 'The contracts are ready for the next delivery loop stage.',
+    requested_changes: [],
+    reviewed_by_actor_id: 'actor-1',
+    reviewed_at: '2026-05-05T02:00:00.000Z',
+  };
+
   it('parses a valid run spec', () => {
     const parsed = runSpecSchema.parse({
       run_session_id: 'run-session-1',
@@ -243,5 +291,135 @@ describe('P0 delivery loop contracts', () => {
 
     expect(parsed.status).toBe('failed');
     expect(parsed.failure_message).toBe('Missing check output artifact.');
+  });
+
+  it('rejects executor success with a failure object', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        failure: {
+          kind: 'executor_error',
+          message: 'Unexpected executor error.',
+          retryable: true,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects executor success with an unsuccessful blocking check', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        checks: [
+          {
+            ...validCheckResult,
+            status: 'failed',
+            exit_code: 1,
+            blocks_review: true,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects required-check failure without an unsuccessful blocking check', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        status: 'failed',
+        failure: {
+          kind: 'required_check_failed',
+          message: 'Required check failed.',
+          retryable: true,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['2026-05-05', '05/06/2026'])('rejects non-date-time executor timestamps: %s', (startedAt) => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        started_at: startedAt,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects review decision payloads with no submitted decision', () => {
+    expect(
+      reviewDecisionPayloadSchema.safeParse({
+        ...validReviewDecisionPayload,
+        decision: 'none',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects approved review decision payloads with requested changes', () => {
+    expect(
+      reviewDecisionPayloadSchema.safeParse({
+        ...validReviewDecisionPayload,
+        requested_changes: [validRequestedChange],
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['2026-05-05', '05/06/2026'])('rejects non-date-time review timestamps: %s', (reviewedAt) => {
+    expect(
+      reviewDecisionPayloadSchema.safeParse({
+        ...validReviewDecisionPayload,
+        reviewed_at: reviewedAt,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects successful self-review results with a failure message', () => {
+    expect(
+      selfReviewResultSchema.safeParse({
+        status: 'succeeded',
+        summary: 'Self-review completed.',
+        spec_plan_alignment: 'The run matches the spec and plan.',
+        test_assessment: 'Required checks passed.',
+        risk_notes: [],
+        follow_up_questions: [],
+        failure_message: 'This should only be present on failed reviews.',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects contradictory check result exit codes', () => {
+    expect(
+      checkResultSchema.safeParse({
+        ...validCheckResult,
+        status: 'succeeded',
+        exit_code: 1,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      checkResultSchema.safeParse({
+        ...validCheckResult,
+        status: 'failed',
+        exit_code: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('requires previous_path only for renamed files', () => {
+    expect(
+      changedFileSchema.safeParse({
+        repo_id: 'repo-1',
+        path: 'packages/contracts/src/executor.ts',
+        change_kind: 'renamed',
+      }).success,
+    ).toBe(false);
+
+    expect(
+      changedFileSchema.safeParse({
+        repo_id: 'repo-1',
+        path: 'packages/contracts/src/executor.ts',
+        change_kind: 'modified',
+        previous_path: 'packages/contracts/src/old-executor.ts',
+      }).success,
+    ).toBe(false);
   });
 });
