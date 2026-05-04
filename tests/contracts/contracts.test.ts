@@ -146,6 +146,65 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
   });
 
+  it.each(['approved', 'none'] as const)(
+    'rejects run specs with %s review context and requested changes',
+    (latestDecision) => {
+      expect(
+        runSpecSchema.safeParse({
+          ...validRunSpec,
+          review_context: {
+            latest_decision: latestDecision,
+            requested_changes: [validRequestedChange],
+          },
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it('rejects run specs with omitted review decision and requested changes', () => {
+    expect(
+      runSpecSchema.safeParse({
+        ...validRunSpec,
+        review_context: {
+          requested_changes: [validRequestedChange],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects run specs with changes-requested review context and no requested changes', () => {
+    expect(
+      runSpecSchema.safeParse({
+        ...validRunSpec,
+        review_context: {
+          latest_decision: 'changes_requested',
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects run specs with duplicate required check ids', () => {
+    const duplicateRequiredChecks = [
+      validRequiredChecks[0],
+      {
+        ...validRequiredChecks[0],
+        display_name: 'Duplicate contracts tests',
+        command: 'pnpm test tests/contracts --runInBand',
+      },
+    ];
+
+    expect(
+      runSpecSchema.safeParse({
+        ...validRunSpec,
+        context: {
+          ...validRunSpec.context,
+          required_checks: duplicateRequiredChecks,
+        },
+        required_checks: duplicateRequiredChecks,
+      }).success,
+    ).toBe(false);
+  });
+
   it('parses blocking and non-blocking executor results', () => {
     const blocking = executorResultSchema.parse({
       run_session_id: 'run-session-blocking',
@@ -415,6 +474,32 @@ describe('P0 delivery loop contracts', () => {
     ]);
   });
 
+  it('parses rejected run command responses without run sessions', () => {
+    const parsed = runPackageResponseSchema.parse({
+      command_id: 'command-run-package-1',
+      execution_package_id: 'exec-package-1',
+      status: 'rejected',
+      workflow_only: false,
+      idempotency_key: 'run-package-1',
+      rejection_reason: 'Execution package is not runnable.',
+    });
+
+    expect(parsed.status).toBe('rejected');
+    expect(parsed.rejection_reason).toBe('Execution package is not runnable.');
+  });
+
+  it('rejects accepted run command responses without run sessions', () => {
+    expect(
+      runPackageResponseSchema.safeParse({
+        command_id: 'command-run-package-1',
+        execution_package_id: 'exec-package-1',
+        status: 'accepted',
+        workflow_only: false,
+        idempotency_key: 'run-package-1',
+      }).success,
+    ).toBe(false);
+  });
+
   it('parses a failed self-review result', () => {
     const parsed = selfReviewResultSchema.parse({
       status: 'failed',
@@ -543,6 +628,16 @@ describe('P0 delivery loop contracts', () => {
       submitReviewDecisionResponseSchema.safeParse({
         ...validSubmitReviewDecisionResponse,
         decision: 'none',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects submit-review responses with submitted decisions before completion', () => {
+    expect(
+      submitReviewDecisionResponseSchema.safeParse({
+        ...validSubmitReviewDecisionResponse,
+        status: 'ready',
+        decision: 'approved',
       }).success,
     ).toBe(false);
   });

@@ -4,7 +4,6 @@ import { executorTypeSchema } from './executor';
 import {
   requestedChangeSchema,
   reviewDecisionPayloadSchema,
-  reviewPacketStatusSchema,
   reviewSubmitDecisionSchema,
 } from './review';
 
@@ -58,14 +57,30 @@ export const forceRerunPackageRequestSchema = rerunPackageRequestSchema.extend({
 });
 export type ForceRerunPackageRequest = z.infer<typeof forceRerunPackageRequestSchema>;
 
-export const runCommandResponseSchema = z.object({
+const runCommandResponseBaseSchema = z.object({
   command_id: z.string().min(1),
   execution_package_id: z.string().min(1),
-  run_session_id: z.string().min(1),
-  status: z.enum(['accepted', 'already_running', 'rejected']),
   workflow_only: z.boolean(),
   idempotency_key: z.string().min(1),
 });
+
+export const runCommandResponseSchema = z.discriminatedUnion('status', [
+  runCommandResponseBaseSchema.extend({
+    status: z.literal('accepted'),
+    run_session_id: z.string().min(1),
+    rejection_reason: z.never().optional(),
+  }),
+  runCommandResponseBaseSchema.extend({
+    status: z.literal('already_running'),
+    run_session_id: z.string().min(1),
+    rejection_reason: z.never().optional(),
+  }),
+  runCommandResponseBaseSchema.extend({
+    status: z.literal('rejected'),
+    run_session_id: z.never().optional(),
+    rejection_reason: z.string().min(1),
+  }),
+]);
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 
 export const runPackageResponseSchema = runCommandResponseSchema;
@@ -82,7 +97,7 @@ export type SubmitReviewDecisionRequest = z.infer<typeof submitReviewDecisionReq
 
 export const submitReviewDecisionResponseSchema = z.object({
   review_packet_id: z.string().min(1),
-  status: reviewPacketStatusSchema,
+  status: z.literal('completed'),
   decision: reviewSubmitDecisionSchema,
   recorded_at: isoDateTimeSchema,
 });

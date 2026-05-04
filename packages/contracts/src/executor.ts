@@ -107,6 +107,31 @@ const requiredCheckSpecsMatch = (left: RequiredCheckSpec[], right: RequiredCheck
     );
   });
 
+const addDuplicateRequiredCheckIdIssues = (
+  checks: RequiredCheckSpec[],
+  path: (string | number)[],
+  ctx: z.RefinementCtx,
+) => {
+  const seenCheckIds = new Set<string>();
+  const duplicateCheckIds = new Set<string>();
+
+  checks.forEach((check) => {
+    if (seenCheckIds.has(check.check_id)) {
+      duplicateCheckIds.add(check.check_id);
+    }
+
+    seenCheckIds.add(check.check_id);
+  });
+
+  duplicateCheckIds.forEach((checkId) => {
+    ctx.addIssue({
+      code: 'custom',
+      path,
+      message: `required check ids must be unique: ${checkId}`,
+    });
+  });
+};
+
 export const checkResultSchema = z
   .object({
     check_id: z.string().min(1),
@@ -145,6 +170,29 @@ const requestedChangeContextSchema = z.object({
   suggested_validation: z.string().min(1).optional(),
 });
 
+const reviewContextSchema = z
+  .object({
+    latest_decision: z.enum(['none', 'approved', 'changes_requested']).optional(),
+    requested_changes: z.array(requestedChangeContextSchema).default([]),
+  })
+  .superRefine((reviewContext, ctx) => {
+    if (reviewContext.latest_decision === 'changes_requested' && reviewContext.requested_changes.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['requested_changes'],
+        message: 'changes_requested review context requires at least one requested change',
+      });
+    }
+
+    if (reviewContext.latest_decision !== 'changes_requested' && reviewContext.requested_changes.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['requested_changes'],
+        message: 'requested_changes are only allowed when latest_decision is changes_requested',
+      });
+    }
+  });
+
 export const runSpecSchema = z
   .object({
     run_session_id: z.string().min(1),
@@ -166,10 +214,7 @@ export const runSpecSchema = z
       package_instructions: z.string().min(1),
       required_checks: z.array(requiredCheckSpecSchema),
     }),
-    review_context: z.object({
-      latest_decision: z.enum(['none', 'approved', 'changes_requested']).optional(),
-      requested_changes: z.array(requestedChangeContextSchema).default([]),
-    }),
+    review_context: reviewContextSchema,
     workflow_only: z.boolean().default(false),
     allowed_paths: z.array(z.string().min(1)),
     forbidden_paths: z.array(z.string().min(1)),
@@ -188,6 +233,9 @@ export const runSpecSchema = z
         message: 'required_checks must match context.required_checks in order',
       });
     }
+
+    addDuplicateRequiredCheckIdIssues(runSpec.context.required_checks, ['context', 'required_checks'], ctx);
+    addDuplicateRequiredCheckIdIssues(runSpec.required_checks, ['required_checks'], ctx);
   });
 export type RunSpec = z.infer<typeof runSpecSchema>;
 
