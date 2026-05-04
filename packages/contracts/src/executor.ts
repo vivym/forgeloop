@@ -18,6 +18,8 @@ export type ExecutorType = z.infer<typeof executorTypeSchema>;
 export const failureKindSchema = z.enum([
   'required_check_failed',
   'executor_error',
+  'workspace_prepare_failed',
+  'preflight_failed',
   'path_violation',
   'cancelled',
   'timed_out',

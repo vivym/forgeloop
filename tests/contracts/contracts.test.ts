@@ -176,6 +176,38 @@ describe('P0 delivery loop contracts', () => {
     expect(nonBlocking.checks[0]?.blocks_review).toBe(false);
   });
 
+  it.each(['workspace_prepare_failed', 'preflight_failed'] as const)(
+    'parses a local codex executor result with %s failure',
+    (failureKind) => {
+      const parsed = executorResultSchema.parse({
+        run_session_id: `run-session-${failureKind}`,
+        executor_type: 'local_codex',
+        executor_version: '0.1.0',
+        status: 'failed',
+        started_at: '2026-05-05T01:00:00.000Z',
+        finished_at: '2026-05-05T01:02:00.000Z',
+        summary: `Local Codex execution failed during ${failureKind}.`,
+        changed_files: [],
+        checks: [],
+        artifacts: [
+          {
+            kind: 'logs',
+            name: 'executor logs',
+            content_type: 'text/plain',
+            local_ref: `artifacts/run-session-${failureKind}/executor.log`,
+          },
+        ],
+        failure: {
+          kind: failureKind,
+          message: `Local Codex execution failed during ${failureKind}.`,
+          retryable: true,
+        },
+      });
+
+      expect(parsed.failure?.kind).toBe(failureKind);
+    },
+  );
+
   it('parses a review request-changes decision payload', () => {
     const parsed = reviewDecisionPayloadSchema.parse({
       review_packet_id: 'review-packet-1',
