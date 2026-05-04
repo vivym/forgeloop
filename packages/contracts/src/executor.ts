@@ -210,6 +210,26 @@ export const executorResultSchema = z
       });
     }
 
+    if (hasUnsuccessfulBlockingCheck && result.status !== 'failed') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['status'],
+        message: 'unsuccessful blocking checks require failed ExecutorResult status',
+      });
+    }
+
+    if (
+      hasUnsuccessfulBlockingCheck &&
+      result.status === 'failed' &&
+      result.failure?.kind !== 'required_check_failed'
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failure', 'kind'],
+        message: 'unsuccessful blocking checks require required_check_failed failure kind',
+      });
+    }
+
     if (result.status !== 'succeeded' && !result.failure) {
       ctx.addIssue({
         code: 'custom',

@@ -7,6 +7,7 @@ import {
   reviewDecisionPayloadSchema,
   runSpecSchema,
   selfReviewResultSchema,
+  submitReviewDecisionResponseSchema,
 } from '../../packages/contracts/src/index';
 
 describe('P0 delivery loop contracts', () => {
@@ -54,6 +55,13 @@ describe('P0 delivery loop contracts', () => {
     requested_changes: [],
     reviewed_by_actor_id: 'actor-1',
     reviewed_at: '2026-05-05T02:00:00.000Z',
+  };
+
+  const validSubmitReviewDecisionResponse = {
+    review_packet_id: 'review-packet-1',
+    status: 'completed',
+    decision: 'approved',
+    recorded_at: '2026-05-05T02:01:00.000Z',
   };
 
   it('parses a valid run spec', () => {
@@ -336,6 +344,53 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
   });
 
+  it('rejects unsuccessful blocking checks with a non-required-check failure kind', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        status: 'failed',
+        checks: [
+          {
+            ...validCheckResult,
+            status: 'failed',
+            exit_code: 1,
+            blocks_review: true,
+          },
+        ],
+        failure: {
+          kind: 'executor_error',
+          message: 'Executor failed after a required check failed.',
+          retryable: true,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['timed_out', 'cancelled'] as const)(
+    'rejects unsuccessful blocking checks with %s executor status',
+    (status) => {
+      expect(
+        executorResultSchema.safeParse({
+          ...validExecutorResult,
+          status,
+          checks: [
+            {
+              ...validCheckResult,
+              status: 'failed',
+              exit_code: 1,
+              blocks_review: true,
+            },
+          ],
+          failure: {
+            kind: 'required_check_failed',
+            message: 'Required check failed.',
+            retryable: true,
+          },
+        }).success,
+      ).toBe(false);
+    },
+  );
+
   it.each(['2026-05-05', '05/06/2026'])('rejects non-date-time executor timestamps: %s', (startedAt) => {
     expect(
       executorResultSchema.safeParse({
@@ -368,6 +423,15 @@ describe('P0 delivery loop contracts', () => {
       reviewDecisionPayloadSchema.safeParse({
         ...validReviewDecisionPayload,
         reviewed_at: reviewedAt,
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['2026-05-05', '05/06/2026'])('rejects non-date-time recorded_at timestamps: %s', (recordedAt) => {
+    expect(
+      submitReviewDecisionResponseSchema.safeParse({
+        ...validSubmitReviewDecisionResponse,
+        recorded_at: recordedAt,
       }).success,
     ).toBe(false);
   });

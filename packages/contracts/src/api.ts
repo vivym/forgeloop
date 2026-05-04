@@ -8,9 +8,7 @@ import {
   reviewPacketStatusSchema,
 } from './review';
 
-const isoDateTimeSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
-  message: 'Expected an ISO-compatible date-time string',
-});
+const isoDateTimeSchema = z.string().datetime();
 
 export const commandNameSchema = z.enum([
   'run_package',
