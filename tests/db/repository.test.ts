@@ -304,6 +304,13 @@ const artifact: Artifact = {
   created_at: now,
 };
 
+const artifactWithTraceSubject: Artifact = {
+  ...artifact,
+  id: 'artifact-with-trace-subject',
+  trace_subject_type: 'execution_package',
+  trace_subject_id: executionPackage.id,
+};
+
 const decision: Decision = {
   id: 'decision-1',
   object_type: 'review_packet',
@@ -442,6 +449,14 @@ describe('P0Repository in-memory adapter', () => {
 
     expect(await repository.listStatusHistory(executionPackage.id)).toEqual([statusHistory]);
   });
+
+  it('persists artifact trace subject fields', async () => {
+    const repository = new InMemoryP0Repository();
+
+    await repository.saveArtifact(artifactWithTraceSubject);
+
+    expect(await repository.listArtifactsForObject('run_session', runSession.id)).toEqual([artifactWithTraceSubject]);
+  });
 });
 
 describe('P0Repository Drizzle adapter persistence mapping', () => {
@@ -485,6 +500,17 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
     expect(captures[2]?.values.summary).toBeNull();
     expect(captures[2]?.set?.completedAt).toBeNull();
     expect(captures[2]?.set?.summary).toBeNull();
+  });
+
+  it('writes omitted artifact trace subject fields as null', async () => {
+    const { repository, captures } = createInsertCaptureRepository();
+
+    await repository.saveArtifact(artifact);
+
+    expect(captures[0]?.values.traceSubjectType).toBeNull();
+    expect(captures[0]?.values.traceSubjectId).toBeNull();
+    expect(captures[0]?.set?.traceSubjectType).toBeNull();
+    expect(captures[0]?.set?.traceSubjectId).toBeNull();
   });
 
   it('maps database nulls back to omitted optional domain properties', async () => {

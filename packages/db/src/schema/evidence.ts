@@ -28,6 +28,8 @@ export const artifacts = pgTable('artifacts', {
   id: text('id').primaryKey(),
   objectType: text('object_type').notNull(),
   objectId: text('object_id').notNull(),
+  traceSubjectType: text('trace_subject_type'),
+  traceSubjectId: text('trace_subject_id'),
   ref: jsonb('ref').$type<Artifact['ref']>().notNull(),
   createdAt: timestampColumn('created_at').notNull(),
 });

@@ -134,4 +134,9 @@ describe('P0 Drizzle schema', () => {
     expect(columnType(review_packets, 'requestedChanges')).toBe('PgJsonb');
     expect(columnType(object_events, 'metadata')).toBe('PgJsonb');
   });
+
+  it('includes future artifact trace subject link columns', () => {
+    expect(columnType(artifacts, 'traceSubjectType')).toBe('PgText');
+    expect(columnType(artifacts, 'traceSubjectId')).toBe('PgText');
+  });
 });

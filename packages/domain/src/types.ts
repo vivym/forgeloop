@@ -281,6 +281,8 @@ export interface Artifact {
   id: string;
   object_type: string;
   object_id: string;
+  trace_subject_type?: string;
+  trace_subject_id?: string;
   ref: ArtifactRef;
   created_at: IsoDateTime;
 }
