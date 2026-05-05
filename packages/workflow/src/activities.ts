@@ -298,6 +298,19 @@ const assertApproved = (record: SpecRecord | PlanRecord, description: string): v
   }
 };
 
+const assertCurrentRevision = (input: {
+  objectType: 'spec' | 'plan';
+  executionPackageId: string;
+  packageRevisionId: string;
+  currentRevisionId: string | undefined;
+}): void => {
+  if (input.packageRevisionId !== input.currentRevisionId) {
+    throw new Error(
+      `ExecutionPackage ${input.executionPackageId} ${input.objectType}_revision_id ${input.packageRevisionId} is not current approved revision ${input.currentRevisionId ?? 'none'}`,
+    );
+  }
+};
+
 const latestRequestedChanges = (reviewPackets: ReviewPacketRecord[]): RunSpec['review_context'] => {
   const requestedChangePackets = reviewPackets
     .filter((packet) => packet.status === 'completed' && packet.decision === 'changes_requested')
@@ -333,6 +346,18 @@ const loadRunContext = async (
 
   assertApproved(spec, `Spec ${spec.id}`);
   assertApproved(plan, `Plan ${plan.id}`);
+  assertCurrentRevision({
+    objectType: 'spec',
+    executionPackageId: executionPackage.id,
+    packageRevisionId: executionPackage.spec_revision_id,
+    currentRevisionId: spec.current_revision_id,
+  });
+  assertCurrentRevision({
+    objectType: 'plan',
+    executionPackageId: executionPackage.id,
+    packageRevisionId: executionPackage.plan_revision_id,
+    currentRevisionId: plan.current_revision_id,
+  });
 
   const specRevision = assertFound(
     (await repository.listSpecRevisions(spec.id)).find((revision) => revision.id === executionPackage.spec_revision_id),
@@ -401,15 +426,20 @@ const archiveOpenReviewPacket = async (
   executionPackageId: string,
   at: IsoDateTime,
 ): Promise<void> => {
-  const openPacket = await repository.findOpenReviewPacketForPackage(executionPackageId);
+  const openPackets = (await repository.listReviewPacketsForPackage(executionPackageId)).filter(
+    (packet) =>
+      packet.run_session_id !== runSession.id &&
+      packet.decision === 'none' &&
+      (packet.status === 'ready' || packet.status === 'in_review'),
+  );
 
-  if (openPacket === undefined || openPacket.run_session_id === runSession.id) {
-    return;
-  }
-
-  await repository.saveReviewPacket({ ...openPacket, status: 'archived', decision: 'none', updated_at: at });
-  await repository.appendObjectEvent(
-    event(runSession, `review_packet_archived:${openPacket.id}`, at, { review_packet_id: openPacket.id }),
+  await Promise.all(
+    openPackets.map(async (openPacket) => {
+      await repository.saveReviewPacket({ ...openPacket, status: 'archived', decision: 'none', updated_at: at });
+      await repository.appendObjectEvent(
+        event(runSession, `review_packet_archived:${openPacket.id}`, at, { review_packet_id: openPacket.id }),
+      );
+    }),
   );
 };
 
@@ -772,20 +802,83 @@ const updatePackageAfterFailure = async (
   return updated;
 };
 
-export const executePackageRun = async (input: ExecutePackageRunInput): Promise<ExecutePackageRunResult> => {
-  const at = input.now?.() ?? new Date().toISOString();
-  const initialRunSession = assertFound(await input.repository.getRunSession(input.runSessionId), `RunSession ${input.runSessionId}`);
+const ensureTerminalRunSideEffects = async (
+  repository: PackageExecutionRepository,
+  runSession: RunSessionRecord,
+  executionPackage: ExecutionPackageRecord,
+  executorResult: ExecutorResult,
+  at: IsoDateTime,
+): Promise<void> => {
+  const terminalStatus = terminalStatusFor(executorResult);
 
-  if (terminalStatuses.has(initialRunSession.status)) {
-    const reviewPacket = await input.repository.getReviewPacket(`review-packet:${initialRunSession.id}`);
-    return {
-      runSessionId: initialRunSession.id,
-      status: initialRunSession.status,
-      ...(reviewPacket !== undefined ? { reviewPacketId: reviewPacket.id } : {}),
-    };
+  await repository.appendStatusHistory(
+    history({
+      id: `status-history:${runSession.id}:${terminalStatus}`,
+      objectType: 'run_session',
+      objectId: runSession.id,
+      fromStatus: 'running',
+      toStatus: terminalStatus,
+      actorId: runSession.requested_by_actor_id,
+      reason: executorResult.failure?.message,
+      at,
+    }),
+  );
+  await repository.appendObjectEvent(
+    event(runSession, terminalEventTypeFor(terminalStatus), at, { summary: executorResult.summary }),
+  );
+  await persistArtifacts(repository, runSession, executionPackage, executorResult.artifacts, at);
+};
+
+const reconcileTerminalRun = async (
+  input: ExecutePackageRunInput,
+  context: LoadedRunContext,
+  at: IsoDateTime,
+): Promise<ExecutePackageRunResult> => {
+  const executorResult = assertFound(context.runSession.executor_result, `ExecutorResult ${context.runSession.id}`);
+  const parsedExecutorResult = executorResultSchema.parse(executorResult);
+  const runSpec = runSpecSchema.parse(context.runSession.run_spec ?? buildRunSpec(context, input));
+
+  await ensureTerminalRunSideEffects(input.repository, context.runSession, context.executionPackage, parsedExecutorResult, at);
+
+  if (context.runSession.status !== 'succeeded') {
+    await updatePackageAfterFailure(input.repository, context.runSession, context.executionPackage, at);
+    return { runSessionId: context.runSession.id, status: context.runSession.status };
   }
 
+  let reviewPacket = await input.repository.getReviewPacket(`review-packet:${context.runSession.id}`);
+
+  if (reviewPacket === undefined) {
+    const selfReviewResult = await runSelfReview(
+      input.repository,
+      context.runSession,
+      context.executionPackage,
+      runSpec,
+      input.selfReview,
+      at,
+    );
+    reviewPacket = await createReviewPacket(
+      input.repository,
+      context.runSession,
+      context.executionPackage,
+      runSpec,
+      selfReviewResult,
+      at,
+    );
+  }
+
+  await updatePackageAfterSuccess(input.repository, context.runSession, context.executionPackage, at);
+
+  return { runSessionId: context.runSession.id, status: context.runSession.status, reviewPacketId: reviewPacket.id };
+};
+
+export const executePackageRun = async (input: ExecutePackageRunInput): Promise<ExecutePackageRunResult> => {
+  const at = input.now?.() ?? new Date().toISOString();
   const context = await loadRunContext(input.repository, input.runSessionId);
+
+  if (terminalStatuses.has(context.runSession.status)) {
+    return reconcileTerminalRun(input, context, at);
+  }
+
   const runSpec = buildRunSpec(context, input);
   await archiveOpenReviewPacket(input.repository, context.runSession, context.executionPackage.id, at);
 

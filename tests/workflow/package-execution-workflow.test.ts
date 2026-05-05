@@ -86,6 +86,36 @@ const executorResult = (runSpec: RunSpec, overrides: Partial<ExecutorResult> = {
   ...overrides,
 });
 
+const runSpecFor = (executionPackage: ExecutionPackage, runSessionId: string): RunSpec => ({
+  run_session_id: runSessionId,
+  execution_package_id: executionPackage.id,
+  work_item_id: executionPackage.work_item_id,
+  spec_revision_id: executionPackage.spec_revision_id,
+  plan_revision_id: executionPackage.plan_revision_id,
+  executor_type: 'mock',
+  repo: {
+    repo_id: executionPackage.repo_id,
+    local_path: '/workspace/forgeloop',
+    base_branch: 'main',
+    base_commit_sha: 'abc123',
+  },
+  objective: executionPackage.objective,
+  context: {
+    spec_revision_summary: 'Approved package execution spec',
+    plan_revision_summary: 'Approved package execution plan',
+    package_instructions: executionPackage.objective,
+    required_checks: [...requiredChecks],
+  },
+  review_context: { latest_decision: 'none', requested_changes: [] },
+  workflow_only: true,
+  allowed_paths: executionPackage.allowed_paths,
+  forbidden_paths: executionPackage.forbidden_paths,
+  required_checks: [...requiredChecks],
+  artifact_policy: { requested_artifacts: ['execution_summary', 'diff', 'changed_files', 'check_output'] },
+  timeout_seconds: 3600,
+  idempotency_key: runSessionId,
+});
+
 interface FixtureOptions {
   packageState?: 'ready' | 'review_changes_requested' | 'review_force_rerun';
   runSessionId?: string;
@@ -532,6 +562,217 @@ describe('executePackageRun', () => {
     expect(artifacts).toHaveLength(2);
     expect(events.map((event) => event.event_type)).toEqual(['workflow_started', 'executor_succeeded', 'review_packet_created']);
     expect(histories.map((history) => history.to_status)).toEqual(['running', 'succeeded']);
+  });
+
+  it('reconciles a terminal successful retry when final side effects are missing', async () => {
+    const { repository, runSessionId, executionPackage } = await createFixture();
+    const runSpec = runSpecFor(executionPackage, runSessionId);
+    const persistedResult = executorResult(runSpec);
+    let executorCalls = 0;
+
+    await repository.saveExecutionPackage({
+      ...executionPackage,
+      phase: 'execution',
+      activity_state: 'ai_running',
+      gate_state: 'none',
+    });
+    await repository.saveRunSession({
+      ...(await repository.getRunSession(runSessionId))!,
+      status: 'succeeded',
+      executor_type: 'mock',
+      run_spec: runSpec,
+      executor_result: persistedResult,
+      changed_files: persistedResult.changed_files,
+      check_results: persistedResult.checks,
+      artifacts: persistedResult.artifacts,
+      log_refs: [],
+      summary: persistedResult.summary,
+      started_at: now,
+      finished_at: later,
+      updated_at: later,
+    });
+
+    await runWorkflow(repository, runSessionId, {
+      executor: async (input) => {
+        executorCalls += 1;
+        return executorResult(input);
+      },
+    });
+
+    const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
+    const updatedPackage = await repository.getExecutionPackage(executionPackage.id);
+
+    expect(executorCalls).toBe(0);
+    expect(reviewPackets).toHaveLength(1);
+    expect(reviewPackets[0]).toMatchObject({ id: `review-packet:${runSessionId}`, status: 'ready' });
+    expect(updatedPackage).toMatchObject({
+      phase: 'review',
+      activity_state: 'awaiting_human',
+      gate_state: 'awaiting_human_review',
+    });
+  });
+
+  it('reconciles a terminal blocking-check retry without creating a ReviewPacket', async () => {
+    const { repository, runSessionId, executionPackage } = await createFixture();
+    const runSpec = runSpecFor(executionPackage, runSessionId);
+    const persistedResult = executorResult(runSpec, {
+      status: 'failed',
+      checks: [{ ...successfulChecks()[0]!, status: 'failed', exit_code: 1 }, successfulChecks()[1]!],
+      failure: { kind: 'required_check_failed', message: 'Unit tests failed.', retryable: true },
+    });
+    let executorCalls = 0;
+
+    await repository.saveExecutionPackage({
+      ...executionPackage,
+      phase: 'execution',
+      activity_state: 'ai_running',
+      gate_state: 'none',
+    });
+    await repository.saveRunSession({
+      ...(await repository.getRunSession(runSessionId))!,
+      status: 'failed',
+      executor_type: 'mock',
+      run_spec: runSpec,
+      executor_result: persistedResult,
+      changed_files: persistedResult.changed_files,
+      check_results: persistedResult.checks,
+      artifacts: persistedResult.artifacts,
+      log_refs: [],
+      summary: persistedResult.summary,
+      failure_kind: 'required_check_failed',
+      failure_reason: 'Unit tests failed.',
+      started_at: now,
+      finished_at: later,
+      updated_at: later,
+    });
+
+    await runWorkflow(repository, runSessionId, {
+      executor: async (input) => {
+        executorCalls += 1;
+        return executorResult(input);
+      },
+    });
+
+    expect(executorCalls).toBe(0);
+    expect(await repository.listReviewPacketsForPackage(executionPackage.id)).toEqual([]);
+    expect(await repository.getExecutionPackage(executionPackage.id)).toMatchObject({
+      phase: 'ready',
+      activity_state: 'idle',
+      gate_state: 'none',
+      last_failure_summary: 'Unit tests failed.',
+    });
+  });
+
+  it('rejects stale package revision ids before calling the executor', async () => {
+    const { repository, runSessionId, executionPackage } = await createFixture();
+    let executorCalls = 0;
+
+    await repository.saveSpecRevision({
+      id: 'spec-revision-stale',
+      spec_id: 'spec-1',
+      work_item_id: 'work-item-1',
+      revision_number: 0,
+      summary: 'Stale spec revision',
+      content: 'Old spec body',
+      background: 'Old background',
+      goals: ['Old goal'],
+      scope_in: ['Old scope'],
+      scope_out: [],
+      acceptance_criteria: ['Old criteria'],
+      risk_notes: [],
+      test_strategy_summary: 'Old tests',
+      artifact_refs: [],
+      created_at: now,
+    });
+    await repository.saveExecutionPackage({ ...executionPackage, spec_revision_id: 'spec-revision-stale' });
+
+    await expect(
+      runWorkflow(repository, runSessionId, {
+        executor: async (input) => {
+          executorCalls += 1;
+          return executorResult(input);
+        },
+      }),
+    ).rejects.toThrow('ExecutionPackage execution-package-1 spec_revision_id spec-revision-stale is not current approved revision spec-revision-1');
+    expect(executorCalls).toBe(0);
+  });
+
+  it('archives all older open ReviewPackets and preserves completed packets', async () => {
+    const openReady = transitionReviewPacket(undefined, {
+      type: 'create',
+      id: 'review-packet:open-ready',
+      run_session_id: 'run-session-open-ready',
+      execution_package_id: 'execution-package-1',
+      reviewer_actor_id: 'actor-reviewer',
+      spec_revision_id: 'spec-revision-1',
+      plan_revision_id: 'plan-revision-1',
+      changed_files: [],
+      check_result_summary: 'Open ready review.',
+      self_review: successfulSelfReview(),
+      risk_notes: [],
+      at: now,
+    });
+    const openInReview = transitionReviewPacket(
+      transitionReviewPacket(undefined, {
+        type: 'create',
+        id: 'review-packet:open-in-review',
+        run_session_id: 'run-session-open-in-review',
+        execution_package_id: 'execution-package-1',
+        reviewer_actor_id: 'actor-reviewer',
+        spec_revision_id: 'spec-revision-1',
+        plan_revision_id: 'plan-revision-1',
+        changed_files: [],
+        check_result_summary: 'Open in-review review.',
+        self_review: successfulSelfReview(),
+        risk_notes: [],
+        at: now,
+      }),
+      { type: 'start_review', at: now },
+    );
+    const completed = transitionReviewPacket(
+      transitionReviewPacket(undefined, {
+        type: 'create',
+        id: 'review-packet:completed',
+        run_session_id: 'run-session-completed',
+        execution_package_id: 'execution-package-1',
+        reviewer_actor_id: 'actor-reviewer',
+        spec_revision_id: 'spec-revision-1',
+        plan_revision_id: 'plan-revision-1',
+        changed_files: [],
+        check_result_summary: 'Completed review.',
+        self_review: successfulSelfReview(),
+        risk_notes: [],
+        at: now,
+      }),
+      {
+        type: 'approve',
+        summary: 'Approved.',
+        reviewed_by_actor_id: 'actor-reviewer',
+        reviewed_at: now,
+        at: now,
+      },
+    );
+    const { repository, runSessionId, executionPackage } = await createFixture({
+      packageState: 'review_force_rerun',
+      previousReviewPacket: openReady,
+      runSessionId: 'run-session-archives-all',
+    });
+    await repository.saveReviewPacket(openInReview);
+    await repository.saveReviewPacket(completed);
+
+    await runWorkflow(repository, runSessionId);
+
+    const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
+
+    expect(reviewPackets.find((packet) => packet.id === openReady.id)).toMatchObject({ status: 'archived', decision: 'none' });
+    expect(reviewPackets.find((packet) => packet.id === openInReview.id)).toMatchObject({
+      status: 'archived',
+      decision: 'none',
+    });
+    expect(reviewPackets.find((packet) => packet.id === completed.id)).toMatchObject({
+      status: 'completed',
+      decision: 'approved',
+    });
   });
 
   it('exposes injectable Temporal activities for worker registration', async () => {
