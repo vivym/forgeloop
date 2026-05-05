@@ -664,7 +664,7 @@ git commit -m "feat: add minimum P0 workbench"
 - Modify: `README.md`
 - Create: `docs/superpowers/reports/p0-delivery-loop-verification.md`
 
-- [ ] **Step 1: Write smoke tests**
+- [x] **Step 1: Write smoke tests**
 
 Cover:
 
@@ -678,11 +678,11 @@ and:
 Work Item -> Spec approval -> Plan approval -> Package run -> changes_requested -> edit Package or rerun -> new RunSession -> new Review Packet -> approve
 ```
 
-- [ ] **Step 2: Add stale packet smoke test**
+- [x] **Step 2: Add stale packet smoke test**
 
 Use `force-rerun` to archive open ReviewPacket before human decision.
 
-- [ ] **Step 3: Add dogfood script**
+- [x] **Step 3: Add dogfood script**
 
 Creates three WorkItems:
 
@@ -692,19 +692,19 @@ Creates three WorkItems:
 
 Each local_codex dogfood item must produce a review-approved patch/diff artifact, changed-files list, required-check results, and retained workspace/artifact reference. If Codex is unavailable, the script must exit non-zero for local_codex acceptance and write the limitation to the verification report; mock/control-flow validation is not a substitute for the two required local_codex dogfood items.
 
-- [ ] **Step 4: Add scripts**
+- [x] **Step 4: Add scripts**
 
 Add `smoke:p0` and `dogfood:p0` to root `package.json`.
 
-- [ ] **Step 5: Update README**
+- [x] **Step 5: Update README**
 
 Document install, local infra, test, API, Web, smoke, dogfood, and P0 boundaries.
 
-- [ ] **Step 6: Add verification report**
+- [x] **Step 6: Add verification report**
 
 Record commands to run and expected outcomes.
 
-- [ ] **Step 7: Run verification**
+- [x] **Step 7: Run verification**
 
 Run:
 
@@ -716,7 +716,7 @@ pnpm smoke:p0
 
 Expected: PASS. Document any local Codex unavailability.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add tests/smoke scripts package.json README.md docs/superpowers/reports
