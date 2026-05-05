@@ -10,6 +10,23 @@ const execFileAsync = promisify(execFile);
 
 export type CommandChecker = (command: string) => Promise<boolean>;
 
+export interface CommandRunOptions {
+  cwd?: string;
+  timeout?: number;
+  maxBuffer?: number;
+}
+
+export interface CommandRunResult {
+  stdout: string;
+  stderr: string;
+}
+
+export type CommandRunner = (
+  command: string,
+  args: readonly string[],
+  options?: CommandRunOptions,
+) => Promise<CommandRunResult>;
+
 export interface CodexInvocation {
   workspacePath: string;
   prompt: string;
@@ -63,6 +80,7 @@ export type LocalCodexPreflightResult = LocalCodexPreflightSuccess | LocalCodexP
 
 export interface DefaultLocalCodexEnvironmentOptions {
   workspaceRoot?: string;
+  commandRunner?: CommandRunner;
 }
 
 const failure = (message: string, retryable = false): LocalCodexPreflightFailure => ({
@@ -74,44 +92,53 @@ const failure = (message: string, retryable = false): LocalCodexPreflightFailure
   },
 });
 
-const commandExists = async (command: string): Promise<boolean> => {
+const execFileCommandRunner: CommandRunner = async (command, args, options) => {
+  const { stdout, stderr } = await execFileAsync(command, [...args], options);
+
+  return {
+    stdout: String(stdout),
+    stderr: String(stderr),
+  };
+};
+
+const commandExists = (runCommand: CommandRunner): CommandChecker => async (command) => {
   try {
-    await execFileAsync(command, ['--version']);
+    await runCommand(command, ['--version']);
     return true;
   } catch {
     return false;
   }
 };
 
-const isCodexRuntimeReady = async (): Promise<boolean> => {
+const isCodexRuntimeReady = (runCommand: CommandRunner) => async (): Promise<boolean> => {
   try {
-    await execFileAsync('codex', ['exec', '--help']);
+    await runCommand('codex', ['login', 'status']);
     return true;
   } catch {
     return false;
   }
 };
 
-const isGitRepo = async (repoPath: string): Promise<boolean> => {
+const isGitRepo = (runCommand: CommandRunner) => async (repoPath: string): Promise<boolean> => {
   try {
-    await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoPath });
+    await runCommand('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoPath });
     return true;
   } catch {
     return false;
   }
 };
 
-const resolveGitRef = async (repoPath: string, ref: string): Promise<boolean> => {
+const resolveGitRef = (runCommand: CommandRunner) => async (repoPath: string, ref: string): Promise<boolean> => {
   try {
-    await execFileAsync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: repoPath });
+    await runCommand('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: repoPath });
     return true;
   } catch {
     return false;
   }
 };
 
-const isWorkspaceClean = async (workspacePath: string): Promise<boolean> => {
-  const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: workspacePath });
+const isWorkspaceClean = (runCommand: CommandRunner) => async (workspacePath: string): Promise<boolean> => {
+  const { stdout } = await runCommand('git', ['status', '--porcelain'], { cwd: workspacePath });
 
   return stdout.trim().length === 0;
 };
@@ -133,16 +160,17 @@ export const createDefaultLocalCodexEnvironment = (
   options: DefaultLocalCodexEnvironmentOptions = {},
 ): LocalCodexEnvironment => {
   const workspaceRoot = options.workspaceRoot ?? join(tmpdir(), 'forgeloop-workspaces');
+  const runCommand = options.commandRunner ?? execFileCommandRunner;
 
   return {
-    commandExists,
-    isCodexRuntimeReady,
-    isGitRepo,
-    resolveGitRef,
-    isWorkspaceClean,
+    commandExists: commandExists(runCommand),
+    isCodexRuntimeReady: isCodexRuntimeReady(runCommand),
+    isGitRepo: isGitRepo(runCommand),
+    resolveGitRef: resolveGitRef(runCommand),
+    isWorkspaceClean: isWorkspaceClean(runCommand),
     isWritableDirectory,
     runCodex: async ({ workspacePath, prompt, timeoutSeconds }) => {
-      await execFileAsync('codex', ['exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', prompt], {
+      await runCommand('codex', ['exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', prompt], {
         cwd: workspacePath,
         timeout: timeoutSeconds * 1000,
         maxBuffer: 1024 * 1024 * 10,
@@ -153,7 +181,7 @@ export const createDefaultLocalCodexEnvironment = (
         await mkdir(workspaceRoot, { recursive: true });
         const workspacePath = await mkdtemp(join(workspaceRoot, `${runSessionId}-`));
         await rm(workspacePath, { recursive: true, force: true });
-        await execFileAsync('git', ['worktree', 'add', '--detach', workspacePath, baseRef], { cwd: repoPath });
+        await runCommand('git', ['worktree', 'add', '--detach', workspacePath, baseRef], { cwd: repoPath });
 
         return { ok: true, workspacePath };
       } catch (error) {

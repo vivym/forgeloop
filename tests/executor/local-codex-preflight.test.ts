@@ -171,6 +171,24 @@ describe('runLocalCodexPreflight', () => {
     expect(result.failure?.message).toContain('Codex runtime is not authenticated or ready');
   });
 
+  it('default readiness check uses Codex login status without exposing command output', async () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const environment = createDefaultLocalCodexEnvironment({
+      workspaceRoot: await makeTempDir(),
+      commandRunner: async (command: string, args: readonly string[]) => {
+        calls.push({ command, args });
+
+        return {
+          stdout: 'authenticated as test@example.com',
+          stderr: 'debug details that must not be surfaced',
+        };
+      },
+    });
+
+    await expect(environment.isCodexRuntimeReady()).resolves.toBe(true);
+    expect(calls).toEqual([{ command: 'codex', args: ['login', 'status'] }]);
+  });
+
   it('fails when disposable workspace preparation fails', async () => {
     const repo = await makeTempDir();
     const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
