@@ -32,13 +32,30 @@ const missingCommandChecker =
 
 const createPassingEnvironment = (overrides: Partial<LocalCodexEnvironment> = {}): LocalCodexEnvironment => ({
   commandExists: okCommandChecker,
+  isCodexRuntimeReady: async () => true,
   isGitRepo: async () => true,
   resolveGitRef: async () => true,
   prepareWorkspace: async () => ({ ok: true, workspacePath: '/tmp/forgeloop-workspace' }),
   isWorkspaceClean: async () => true,
   isWritableDirectory: async () => true,
+  runCodex: async () => undefined,
   ...overrides,
 });
+
+const createGitBackedTestEnvironment = (
+  workspaceRoot: string,
+  overrides: Partial<LocalCodexEnvironment> = {},
+): LocalCodexEnvironment => {
+  const environment = createDefaultLocalCodexEnvironment({ workspaceRoot });
+
+  return {
+    ...environment,
+    commandExists: async (command) => (command === 'codex' ? true : environment.commandExists(command)),
+    isCodexRuntimeReady: async () => true,
+    runCodex: async () => undefined,
+    ...overrides,
+  };
+};
 
 const createGitRepo = async () => {
   const repo = await makeTempDir();
@@ -141,6 +158,19 @@ describe('runLocalCodexPreflight', () => {
     expect(result.failure?.message).toContain('Missing required command: codex');
   });
 
+  it('fails when the Codex runtime is not authenticated or ready', async () => {
+    const repo = await makeTempDir();
+    const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
+      artifactRoot: await makeTempDir(),
+      environment: createPassingEnvironment({
+        isCodexRuntimeReady: async () => false,
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failure?.message).toContain('Codex runtime is not authenticated or ready');
+  });
+
   it('fails when disposable workspace preparation fails', async () => {
     const repo = await makeTempDir();
     const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
@@ -237,7 +267,7 @@ describe('runLocalCodexExecutor', () => {
       }),
       {
         artifactRoot,
-        environment: createDefaultLocalCodexEnvironment({ workspaceRoot: await makeTempDir() }),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
         runner,
       },
     );
@@ -277,7 +307,7 @@ describe('runLocalCodexExecutor', () => {
       }),
       {
         artifactRoot: await makeTempDir(),
-        environment: createDefaultLocalCodexEnvironment({ workspaceRoot: await makeTempDir() }),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
         runner: {
           run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
         },
@@ -315,7 +345,7 @@ describe('runLocalCodexExecutor', () => {
       }),
       {
         artifactRoot: await makeTempDir(),
-        environment: createDefaultLocalCodexEnvironment({ workspaceRoot: await makeTempDir() }),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
         runner: {
           run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
         },
@@ -333,5 +363,53 @@ describe('runLocalCodexExecutor', () => {
         },
       ],
     });
+  });
+
+  it('uses executor_error for generic default Codex process failures after preflight', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({ repo: { local_path: repo, base_commit_sha: head } }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir(), {
+          runCodex: async () => {
+            throw new Error('prompt rejected');
+          },
+        }),
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'executor_error',
+        message: expect.stringContaining('prompt rejected'),
+      },
+    });
+  });
+
+  it('passes required checks in the frozen default Codex prompt', async () => {
+    const { repo, head } = await createGitRepo();
+    let prompt = '';
+
+    await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ check_id: 'prompt-check', command: 'pnpm test tests/executor' })],
+        context: { required_checks: [blockingCheck({ check_id: 'prompt-check', command: 'pnpm test tests/executor' })] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir(), {
+          runCodex: async (input) => {
+            prompt = input.prompt;
+          },
+        }),
+      },
+    );
+
+    expect(prompt).toContain('Required checks:');
+    expect(prompt).toContain('prompt-check');
+    expect(prompt).toContain('pnpm test tests/executor');
   });
 });

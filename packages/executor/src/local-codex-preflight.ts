@@ -10,6 +10,12 @@ const execFileAsync = promisify(execFile);
 
 export type CommandChecker = (command: string) => Promise<boolean>;
 
+export interface CodexInvocation {
+  workspacePath: string;
+  prompt: string;
+  timeoutSeconds: number;
+}
+
 export interface WorkspacePrepareSuccess {
   ok: true;
   workspacePath: string;
@@ -24,6 +30,7 @@ export type WorkspacePrepareResult = WorkspacePrepareSuccess | WorkspacePrepareF
 
 export interface LocalCodexEnvironment {
   commandExists: CommandChecker;
+  isCodexRuntimeReady: () => Promise<boolean>;
   isGitRepo: (repoPath: string) => Promise<boolean>;
   resolveGitRef: (repoPath: string, ref: string) => Promise<boolean>;
   prepareWorkspace: (input: {
@@ -33,6 +40,7 @@ export interface LocalCodexEnvironment {
   }) => Promise<WorkspacePrepareResult>;
   isWorkspaceClean: (workspacePath: string) => Promise<boolean>;
   isWritableDirectory: (path: string) => Promise<boolean>;
+  runCodex: (input: CodexInvocation) => Promise<void>;
 }
 
 export interface LocalCodexPreflightOptions {
@@ -69,6 +77,15 @@ const failure = (message: string, retryable = false): LocalCodexPreflightFailure
 const commandExists = async (command: string): Promise<boolean> => {
   try {
     await execFileAsync(command, ['--version']);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isCodexRuntimeReady = async (): Promise<boolean> => {
+  try {
+    await execFileAsync('codex', ['exec', '--help']);
     return true;
   } catch {
     return false;
@@ -119,10 +136,18 @@ export const createDefaultLocalCodexEnvironment = (
 
   return {
     commandExists,
+    isCodexRuntimeReady,
     isGitRepo,
     resolveGitRef,
     isWorkspaceClean,
     isWritableDirectory,
+    runCodex: async ({ workspacePath, prompt, timeoutSeconds }) => {
+      await execFileAsync('codex', ['exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', prompt], {
+        cwd: workspacePath,
+        timeout: timeoutSeconds * 1000,
+        maxBuffer: 1024 * 1024 * 10,
+      });
+    },
     prepareWorkspace: async ({ repoPath, baseRef, runSessionId }) => {
       try {
         await mkdir(workspaceRoot, { recursive: true });
@@ -159,6 +184,10 @@ export const runLocalCodexPreflight = async (
 
   if (!(await environment.commandExists('codex'))) {
     return failure('Missing required command: codex');
+  }
+
+  if (!(await environment.isCodexRuntimeReady())) {
+    return failure('Codex runtime is not authenticated or ready for local execution');
   }
 
   if (!(await environment.isGitRepo(runSpec.repo.local_path))) {

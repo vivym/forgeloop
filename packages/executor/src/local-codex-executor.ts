@@ -61,6 +61,7 @@ const codexPromptFor = (runSpec: RunSpec) =>
     `Spec revision summary:\n${runSpec.context.spec_revision_summary}`,
     `Plan revision summary:\n${runSpec.context.plan_revision_summary}`,
     `Package instructions:\n${runSpec.context.package_instructions}`,
+    `Required checks:\n${JSON.stringify(runSpec.context.required_checks, null, 2)}`,
     `Allowed paths:\n${runSpec.allowed_paths.join('\n')}`,
     `Forbidden paths:\n${runSpec.forbidden_paths.join('\n')}`,
     `Requested change context:\n${JSON.stringify(runSpec.review_context.requested_changes, null, 2)}`,
@@ -82,15 +83,11 @@ const defaultRunner = (environment: LocalCodexEnvironment): CodexRunner => ({
     }
 
     try {
-      await execFileAsync(
-        'codex',
-        ['exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', codexPromptFor(runSpec)],
-        {
-          cwd: workspacePath,
-          timeout: runSpec.timeout_seconds * 1000,
-          maxBuffer: 1024 * 1024 * 10,
-        },
-      );
+      await environment.runCodex({
+        workspacePath,
+        prompt: codexPromptFor(runSpec),
+        timeoutSeconds: runSpec.timeout_seconds,
+      });
 
       return {
         status: 'succeeded',
@@ -103,7 +100,7 @@ const defaultRunner = (environment: LocalCodexEnvironment): CodexRunner => ({
         status: 'failed',
         summary: `Codex process failed: ${message}`,
         failure: {
-          kind: 'executor_process_failed',
+          kind: 'executor_error',
           message: `Codex process failed: ${message}`,
           retryable: true,
         },
