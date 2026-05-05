@@ -1,0 +1,382 @@
+import { describe, expect, it } from 'vitest';
+import type {
+  Artifact,
+  Decision,
+  ExecutionPackage,
+  ExecutionPackageDependency,
+  ObjectEvent,
+  Plan,
+  PlanRevision,
+  Project,
+  ProjectRepo,
+  ReviewPacket,
+  RunSession,
+  Spec,
+  SpecRevision,
+  StatusHistory,
+  WorkItem,
+} from '@forgeloop/domain';
+
+import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+
+const now = '2026-05-05T00:00:00.000Z';
+
+const artifactRef = {
+  kind: 'execution_summary',
+  name: 'summary',
+  content_type: 'text/markdown',
+  local_ref: 'artifacts/run-1/summary.md',
+} as const;
+
+const requiredCheck = {
+  check_id: 'db-tests',
+  display_name: 'DB tests',
+  command: 'pnpm test tests/db',
+  timeout_seconds: 120,
+  blocks_review: true,
+};
+
+const project: Project = {
+  id: 'project-1',
+  name: 'Forgeloop',
+  repo_ids: ['repo-1'],
+  owner_actor_id: 'actor-owner',
+  created_at: now,
+  updated_at: now,
+};
+
+const projectRepo: ProjectRepo = {
+  id: 'project-repo-1',
+  repo_id: 'repo-1',
+  project_id: project.id,
+  name: 'forgeloop',
+  status: 'active',
+  local_path: '/workspace/forgeloop',
+  default_branch: 'main',
+  base_commit_sha: 'abc123',
+  created_at: now,
+  updated_at: now,
+};
+
+const workItem: WorkItem = {
+  id: 'work-item-1',
+  project_id: project.id,
+  kind: 'feature',
+  title: 'Ship P0 db boundary',
+  goal: 'Persist the P0 delivery loop state.',
+  success_criteria: ['Required P0 records can be saved and queried.'],
+  priority: 'P0',
+  risk: 'medium',
+  owner_actor_id: 'actor-owner',
+  phase: 'execution',
+  activity_state: 'idle',
+  gate_state: 'none',
+  resolution: 'none',
+  current_spec_id: 'spec-1',
+  current_plan_id: 'plan-1',
+  created_at: now,
+  updated_at: now,
+};
+
+const spec: Spec = {
+  id: 'spec-1',
+  work_item_id: workItem.id,
+  entity_type: 'spec',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'spec-revision-1',
+  created_at: now,
+  updated_at: now,
+};
+
+const specRevision: SpecRevision = {
+  id: 'spec-revision-1',
+  spec_id: spec.id,
+  work_item_id: workItem.id,
+  revision_number: 1,
+  summary: 'Approved spec',
+  content: 'Spec body',
+  background: 'Background',
+  goals: ['Persist P0 state'],
+  scope_in: ['DB package'],
+  scope_out: ['Non-P0 workflows'],
+  acceptance_criteria: ['Repository can replay minimal flow'],
+  risk_notes: ['Adapter is not integration-tested against Postgres yet'],
+  test_strategy_summary: 'Vitest repository tests',
+  structured_document: { sections: ['goal', 'scope'] },
+  artifact_refs: [artifactRef],
+  created_at: now,
+};
+
+const plan: Plan = {
+  id: 'plan-1',
+  work_item_id: workItem.id,
+  entity_type: 'plan',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'plan-revision-1',
+  created_at: now,
+  updated_at: now,
+};
+
+const planRevision: PlanRevision = {
+  id: 'plan-revision-1',
+  plan_id: plan.id,
+  work_item_id: workItem.id,
+  revision_number: 1,
+  summary: 'Approved plan',
+  content: 'Plan body',
+  implementation_summary: 'Add schema and repository boundary.',
+  split_strategy: 'One package for db boundary.',
+  dependency_order: ['execution-package-1'],
+  test_matrix: ['pnpm test tests/db'],
+  risk_mitigations: ['Keep runtime adapter compile-safe'],
+  rollback_notes: 'Revert db package changes.',
+  structured_document: { steps: ['schema', 'repository'] },
+  artifact_refs: [artifactRef],
+  created_at: now,
+};
+
+const executionPackage: ExecutionPackage = {
+  id: 'execution-package-1',
+  work_item_id: workItem.id,
+  spec_id: spec.id,
+  spec_revision_id: specRevision.id,
+  plan_id: plan.id,
+  plan_revision_id: planRevision.id,
+  project_id: project.id,
+  repo_id: projectRepo.repo_id,
+  objective: 'Add the P0 db boundary.',
+  owner_actor_id: 'actor-owner',
+  reviewer_actor_id: 'actor-reviewer',
+  qa_owner_actor_id: 'actor-qa',
+  phase: 'review',
+  activity_state: 'awaiting_human',
+  gate_state: 'awaiting_human_review',
+  resolution: 'none',
+  required_checks: [requiredCheck],
+  required_artifact_kinds: ['execution_summary'],
+  allowed_paths: ['packages/db/**', 'tests/db/**'],
+  forbidden_paths: ['apps/**'],
+  last_run_session_id: 'run-session-1',
+  created_at: now,
+  updated_at: now,
+};
+
+const dependency: ExecutionPackageDependency = {
+  package_id: executionPackage.id,
+  depends_on_package_id: 'execution-package-0',
+};
+
+const runSession: RunSession = {
+  id: 'run-session-1',
+  execution_package_id: executionPackage.id,
+  requested_by_actor_id: 'actor-owner',
+  status: 'succeeded',
+  executor_type: 'mock',
+  run_spec: {
+    run_session_id: 'run-session-1',
+    execution_package_id: executionPackage.id,
+    work_item_id: workItem.id,
+    spec_revision_id: specRevision.id,
+    plan_revision_id: planRevision.id,
+    executor_type: 'mock',
+    repo: {
+      repo_id: projectRepo.repo_id,
+      local_path: projectRepo.local_path,
+      base_branch: projectRepo.default_branch,
+      base_commit_sha: projectRepo.base_commit_sha,
+    },
+    objective: executionPackage.objective,
+    context: {
+      spec_revision_summary: specRevision.summary,
+      plan_revision_summary: planRevision.summary,
+      package_instructions: executionPackage.objective,
+      required_checks: [requiredCheck],
+    },
+    review_context: { latest_decision: 'none', requested_changes: [] },
+    workflow_only: true,
+    allowed_paths: executionPackage.allowed_paths,
+    forbidden_paths: executionPackage.forbidden_paths,
+    required_checks: [requiredCheck],
+    artifact_policy: { requested_artifacts: ['execution_summary'] },
+    timeout_seconds: 300,
+    idempotency_key: 'execution-package-1:run-session-1:abc123',
+  },
+  executor_result: {
+    run_session_id: 'run-session-1',
+    executor_type: 'mock',
+    executor_version: '0.1.0',
+    status: 'succeeded',
+    started_at: now,
+    finished_at: now,
+    summary: 'Mock execution succeeded.',
+    changed_files: [{ repo_id: projectRepo.repo_id, path: 'packages/db/src/index.ts', change_kind: 'modified' }],
+    checks: [
+      {
+        check_id: requiredCheck.check_id,
+        command: requiredCheck.command,
+        status: 'succeeded',
+        exit_code: 0,
+        duration_seconds: 2,
+        blocks_review: true,
+      },
+    ],
+    artifacts: [artifactRef],
+    raw_metadata: { workflow_only: true },
+  },
+  changed_files: [{ repo_id: projectRepo.repo_id, path: 'packages/db/src/index.ts', change_kind: 'modified' }],
+  check_results: [
+    {
+      check_id: requiredCheck.check_id,
+      command: requiredCheck.command,
+      status: 'succeeded',
+      exit_code: 0,
+      duration_seconds: 2,
+      blocks_review: true,
+    },
+  ],
+  artifacts: [artifactRef],
+  log_refs: [{ ...artifactRef, kind: 'logs', name: 'executor log', content_type: 'text/plain' }],
+  summary: 'Run completed.',
+  created_at: now,
+  updated_at: now,
+  started_at: now,
+  finished_at: now,
+};
+
+const reviewPacket: ReviewPacket = {
+  id: 'review-packet-1',
+  run_session_id: runSession.id,
+  execution_package_id: executionPackage.id,
+  reviewer_actor_id: executionPackage.reviewer_actor_id,
+  spec_revision_id: specRevision.id,
+  plan_revision_id: planRevision.id,
+  status: 'ready',
+  decision: 'none',
+  summary: 'Ready for review.',
+  changed_files: runSession.changed_files,
+  check_result_summary: 'pnpm test tests/db passed.',
+  self_review: {
+    status: 'succeeded',
+    summary: 'The db boundary matches the approved plan.',
+    spec_plan_alignment: 'Aligned.',
+    test_assessment: 'DB repository tests cover the P0 flow.',
+    risk_notes: ['Postgres integration remains future work.'],
+    follow_up_questions: [],
+  },
+  risk_notes: ['Postgres integration remains future work.'],
+  requested_changes: [],
+  created_at: now,
+  updated_at: now,
+};
+
+const objectEvent: ObjectEvent = {
+  id: 'event-1',
+  object_type: 'execution_package',
+  object_id: executionPackage.id,
+  event_type: 'run_completed',
+  actor_id: 'actor-owner',
+  metadata: { run_session_id: runSession.id },
+  created_at: now,
+};
+
+const statusHistory: StatusHistory = {
+  id: 'status-1',
+  object_type: 'execution_package',
+  object_id: executionPackage.id,
+  from_status: 'execution',
+  to_status: 'review',
+  actor_id: 'actor-owner',
+  reason: 'Run succeeded.',
+  created_at: now,
+};
+
+const artifact: Artifact = {
+  id: 'artifact-1',
+  object_type: 'run_session',
+  object_id: runSession.id,
+  ref: artifactRef,
+  created_at: now,
+};
+
+const decision: Decision = {
+  id: 'decision-1',
+  object_type: 'review_packet',
+  object_id: reviewPacket.id,
+  actor_id: 'actor-reviewer',
+  decision: 'approved',
+  summary: 'Approved for handoff.',
+  created_at: now,
+};
+
+describe('P0Repository in-memory adapter', () => {
+  it('persists and queries a minimal P0 delivery flow', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+
+    await repository.saveProject(project);
+    await repository.saveProjectRepo(projectRepo);
+    await repository.saveWorkItem(workItem);
+    await repository.saveSpec(spec);
+    await repository.saveSpecRevision(specRevision);
+    await repository.savePlan(plan);
+    await repository.savePlanRevision(planRevision);
+    await repository.saveExecutionPackage(executionPackage);
+    await repository.saveExecutionPackageDependency(dependency);
+    await repository.saveRunSession(runSession);
+    await repository.saveReviewPacket(reviewPacket);
+    await repository.appendObjectEvent(objectEvent);
+    await repository.appendStatusHistory(statusHistory);
+    await repository.saveArtifact(artifact);
+    await repository.saveDecision(decision);
+
+    expect(await repository.getProject(project.id)).toEqual(project);
+    expect(await repository.listProjectRepos(project.id)).toEqual([projectRepo]);
+    expect(await repository.getWorkItem(workItem.id)).toEqual(workItem);
+    expect(await repository.listWorkItems(project.id)).toEqual([workItem]);
+    expect(await repository.getSpec(spec.id)).toEqual(spec);
+    expect(await repository.listSpecRevisions(spec.id)).toEqual([specRevision]);
+    expect(await repository.getPlan(plan.id)).toEqual(plan);
+    expect(await repository.listPlanRevisions(plan.id)).toEqual([planRevision]);
+    expect(await repository.getExecutionPackage(executionPackage.id)).toEqual(executionPackage);
+    expect(await repository.listExecutionPackagesForWorkItem(workItem.id)).toEqual([executionPackage]);
+    expect(await repository.listExecutionPackageDependencies(executionPackage.id)).toEqual([dependency]);
+    expect(await repository.getRunSession(runSession.id)).toEqual(runSession);
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toEqual([runSession]);
+    expect(await repository.getReviewPacket(reviewPacket.id)).toEqual(reviewPacket);
+    expect(await repository.listReviewPacketsForPackage(executionPackage.id)).toEqual([reviewPacket]);
+    expect(await repository.findOpenReviewPacketForPackage(executionPackage.id)).toEqual(reviewPacket);
+    expect(await repository.listObjectEvents(executionPackage.id)).toEqual([objectEvent]);
+    expect(await repository.listStatusHistory(executionPackage.id)).toEqual([statusHistory]);
+    expect(await repository.listArtifactsForObject('run_session', runSession.id)).toEqual([artifact]);
+    expect(await repository.listDecisionsForObject('review_packet', reviewPacket.id)).toEqual([decision]);
+  });
+
+  it('does not leak mutable references for key records', async () => {
+    const repository = new InMemoryP0Repository();
+
+    await repository.saveProject(project);
+    await repository.saveWorkItem(workItem);
+    await repository.saveRunSession(runSession);
+
+    const returnedProject = await repository.getProject(project.id);
+    const returnedWorkItem = await repository.getWorkItem(workItem.id);
+    const returnedRunSession = await repository.getRunSession(runSession.id);
+
+    if (returnedProject === undefined || returnedWorkItem === undefined || returnedRunSession === undefined) {
+      throw new Error('Expected saved records to be returned');
+    }
+
+    returnedProject.name = 'mutated';
+    returnedWorkItem.success_criteria.push('mutated');
+    returnedRunSession.changed_files[0]!.path = 'mutated.ts';
+
+    expect((await repository.getProject(project.id))?.name).toBe(project.name);
+    expect((await repository.getWorkItem(workItem.id))?.success_criteria).toEqual(workItem.success_criteria);
+    expect((await repository.getRunSession(runSession.id))?.changed_files).toEqual(runSession.changed_files);
+  });
+});
