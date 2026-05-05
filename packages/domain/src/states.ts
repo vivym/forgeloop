@@ -252,11 +252,25 @@ const cloneRunSpec = (runSpec: RunSpec): RunSpec => ({
   },
 });
 
+const expectedExecutorResultStatusByTransition: Record<
+  RunSessionTerminalExecutorResultTransition['type'],
+  ExecutorResult['status']
+> = {
+  executor_success: 'succeeded',
+  executor_failure: 'failed',
+  executor_timeout: 'timed_out',
+};
+
 const cloneRunSessionTerminalEvidence = (
   event: Extract<RunSessionTransition, { type: 'executor_success' | 'executor_failure' | 'executor_timeout' }>,
 ): Pick<RunSession, 'changed_files' | 'check_results' | 'artifacts' | 'summary'> &
   Partial<Pick<RunSession, 'executor_result' | 'executor_type' | 'failure_kind' | 'failure_reason' | 'log_refs'>> => {
   if (event.executor_result !== undefined) {
+    const expectedStatus = expectedExecutorResultStatusByTransition[event.type];
+    if (event.executor_result.status !== expectedStatus) {
+      return invalidTransition('RunSession', `executor_result/${event.executor_result.status}`, event.type);
+    }
+
     const executorResult = cloneExecutorResult(event.executor_result);
     return {
       executor_result: executorResult,

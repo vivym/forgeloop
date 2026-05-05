@@ -1082,6 +1082,73 @@ describe('domain state transitions', () => {
       });
     });
 
+    it.each([
+      {
+        type: 'executor_success' as const,
+        resultStatus: 'failed' as const,
+        failureKind: 'executor_error' as const,
+      },
+      {
+        type: 'executor_failure' as const,
+        resultStatus: 'timed_out' as const,
+        failureKind: 'timed_out' as const,
+      },
+      {
+        type: 'executor_timeout' as const,
+        resultStatus: 'failed' as const,
+        failureKind: 'executor_error' as const,
+      },
+    ])('rejects $type when executor_result status is $resultStatus', ({ type, resultStatus, failureKind }) => {
+      const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+      const result = executorResult({
+        status: resultStatus,
+        summary: 'Executor terminal status did not match the transition.',
+        failure: {
+          kind: failureKind,
+          message: 'Executor terminal status did not match the transition.',
+          retryable: false,
+        },
+        checks: [],
+      });
+
+      expectDomainError(
+        () =>
+          transitionRunSession(running, {
+            type,
+            executor_result: result,
+          }),
+        'INVALID_TRANSITION',
+      );
+    });
+
+    it('accepts matching executor_result status for timeout transitions', () => {
+      const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+      const result = executorResult({
+        status: 'timed_out',
+        summary: 'Executor exceeded timeout.',
+        failure: {
+          kind: 'timed_out',
+          message: 'Executor exceeded timeout.',
+          retryable: true,
+        },
+        checks: [],
+      });
+
+      const timedOut = transitionRunSession(running, {
+        type: 'executor_timeout',
+        executor_result: result,
+      });
+
+      expect(timedOut).toMatchObject({
+        status: 'timed_out',
+        executor_result: {
+          status: 'timed_out',
+        },
+        failure_kind: 'timed_out',
+        failure_reason: 'Executor exceeded timeout.',
+      });
+    });
+
     it('freezes executor_result and derived evidence after terminal transition', () => {
       const running = transitionRunSession(createSession(), { type: 'workflow_start' });
       const result = executorResult();
