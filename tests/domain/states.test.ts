@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ArtifactRef, ChangedFile, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
+import type { ArtifactKind, ArtifactRef, ChangedFile, RequiredCheckSpec, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
 
 import {
   DomainError,
@@ -151,7 +151,12 @@ describe('domain state transitions', () => {
         type: 'create',
         id: 'work-item-1',
         project_id: 'project-1',
+        kind: 'feature',
         title: 'Ship domain rules',
+        goal: 'Ship the P0 domain state machine.',
+        success_criteria: ['Spec, plan, execution, and review gates are enforced.'],
+        priority: 'P0',
+        risk: 'medium',
         owner_actor_id: 'actor-owner',
       });
 
@@ -204,7 +209,12 @@ describe('domain state transitions', () => {
         type: 'create',
         id: 'work-item-2',
         project_id: 'project-1',
+        kind: 'feature',
         title: 'Handle review loops',
+        goal: 'Support changes-requested review loops.',
+        success_criteria: ['Spec and plan gates can be resubmitted after requested changes.'],
+        priority: 'P0',
+        risk: 'medium',
         owner_actor_id: 'actor-owner',
       });
 
@@ -240,7 +250,12 @@ describe('domain state transitions', () => {
       const triage: WorkItem = {
         id: 'work-item-3',
         project_id: 'project-1',
+        kind: 'bugfix',
         title: 'Triaged item',
+        goal: 'Move a triaged item into spec review.',
+        success_criteria: ['Triage items can submit a spec.'],
+        priority: 'P1',
+        risk: 'low',
         owner_actor_id: 'actor-owner',
         phase: 'triage',
         activity_state: 'idle',
@@ -261,7 +276,12 @@ describe('domain state transitions', () => {
         type: 'create',
         id: 'work-item-4',
         project_id: 'project-1',
+        kind: 'feature',
         title: 'Invalid plan approval',
+        goal: 'Reject invalid plan approval.',
+        success_criteria: ['Draft work items cannot approve a plan.'],
+        priority: 'P1',
+        risk: 'low',
         owner_actor_id: 'actor-owner',
       });
 
@@ -272,7 +292,12 @@ describe('domain state transitions', () => {
       const item: WorkItem = {
         id: 'work-item-1',
         project_id: 'project-1',
+        kind: 'feature',
         title: 'Incomplete execution',
+        goal: 'Block incomplete execution.',
+        success_criteria: ['Completion requires derived evidence.'],
+        priority: 'P0',
+        risk: 'medium',
         owner_actor_id: 'actor-owner',
         phase: 'execution',
         activity_state: 'idle',
@@ -290,7 +315,12 @@ describe('domain state transitions', () => {
       const item: WorkItem = {
         id: 'work-item-1',
         project_id: 'project-1',
+        kind: 'feature',
         title: 'Blind completion',
+        goal: 'Block blind completion.',
+        success_criteria: ['Completion cannot proceed without derived evidence.'],
+        priority: 'P0',
+        risk: 'medium',
         owner_actor_id: 'actor-owner',
         phase: 'execution',
         activity_state: 'idle',
@@ -385,6 +415,19 @@ describe('domain state transitions', () => {
   });
 
   describe('ExecutionPackage', () => {
+    const requiredChecks: RequiredCheckSpec[] = [
+      {
+        check_id: 'domain-tests',
+        display_name: 'Domain tests',
+        command: 'pnpm test tests/domain',
+        timeout_seconds: 120,
+        blocks_review: true,
+      },
+    ];
+    const requiredArtifactKinds: ArtifactKind[] = ['execution_summary', 'diff'];
+    const allowedPaths = ['packages/domain/**', 'tests/domain/**'];
+    const forbiddenPaths = ['apps/**'];
+
     const createPackage = (): ExecutionPackage =>
       transitionExecutionPackage(undefined, {
         type: 'generate_package',
@@ -400,6 +443,10 @@ describe('domain state transitions', () => {
         owner_actor_id: 'actor-owner',
         reviewer_actor_id: 'actor-reviewer',
         qa_owner_actor_id: 'actor-qa',
+        required_checks: requiredChecks,
+        required_artifact_kinds: requiredArtifactKinds,
+        allowed_paths: allowedPaths,
+        forbidden_paths: forbiddenPaths,
       });
 
     const createReviewPackage = (): ExecutionPackage =>
@@ -448,6 +495,19 @@ describe('domain state transitions', () => {
         activity_state: 'awaiting_human',
         gate_state: 'awaiting_human_review',
       });
+    });
+
+    it('freezes required checks, artifact kinds, allowed paths, and forbidden paths when generated', () => {
+      const created = createPackage();
+
+      expect(created.required_checks).toEqual(requiredChecks);
+      expect(created.required_artifact_kinds).toEqual(requiredArtifactKinds);
+      expect(created.allowed_paths).toEqual(allowedPaths);
+      expect(created.forbidden_paths).toEqual(forbiddenPaths);
+      expect(created.required_checks).not.toBe(requiredChecks);
+      expect(created.required_artifact_kinds).not.toBe(requiredArtifactKinds);
+      expect(created.allowed_paths).not.toBe(allowedPaths);
+      expect(created.forbidden_paths).not.toBe(forbiddenPaths);
     });
 
     it('handles retryable, blocking, and blocking-check execution failures', () => {
@@ -818,8 +878,41 @@ describe('domain state transitions', () => {
       });
     });
 
+    it.each([
+      ['missing summary', { summary: undefined }],
+      ['blank summary', { summary: '   ' }],
+      ['missing reviewer', { reviewed_by_actor_id: undefined }],
+      ['blank reviewer', { reviewed_by_actor_id: '   ' }],
+      ['missing reviewed timestamp', { reviewed_at: undefined }],
+      ['blank reviewed timestamp', { reviewed_at: '   ' }],
+      ['missing requested changes', { requested_changes: undefined }],
+      ['empty requested changes', { requested_changes: [] }],
+    ] as const)('rejects request_changes with %s', (_caseName, override) => {
+      const event = {
+        type: 'request_changes',
+        summary: 'Needs more context.',
+        reviewed_by_actor_id: 'actor-reviewer',
+        reviewed_at: '2026-05-05T01:00:00.000Z',
+        requested_changes: [
+          {
+            title: 'Add QA owner',
+            description: 'Freeze the QA owner on the execution package.',
+            severity: 'major',
+          },
+        ],
+        ...override,
+      } as Parameters<typeof transitionReviewPacket>[1];
+
+      expectDomainError(() => transitionReviewPacket(createPacket(), event), 'INVALID_TRANSITION');
+    });
+
     it('rejects invalid ReviewPacket transitions', () => {
-      const completed = transitionReviewPacket(createPacket(), { type: 'approve' });
+      const completed = transitionReviewPacket(createPacket(), {
+        type: 'approve',
+        summary: 'Approved.',
+        reviewed_by_actor_id: 'actor-reviewer',
+        reviewed_at: '2026-05-05T01:00:00.000Z',
+      });
 
       expectDomainError(() => transitionReviewPacket(completed, { type: 'archive_for_newer_run' }), 'INVALID_TRANSITION');
     });

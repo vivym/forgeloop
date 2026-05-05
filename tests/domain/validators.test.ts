@@ -76,7 +76,12 @@ const packageBase = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackag
 const workItem: WorkItem = {
   id: 'work-item-1',
   project_id: 'project-1',
+  kind: 'feature',
   title: 'Domain rules',
+  goal: 'Enforce domain state rules.',
+  success_criteria: ['Completion and review validators reflect the P0 domain spec.'],
+  priority: 'P0',
+  risk: 'medium',
   owner_actor_id: 'actor-owner',
   phase: 'execution',
   activity_state: 'idle',
@@ -273,8 +278,12 @@ describe('domain validators', () => {
     expectDomainError(() => validatePackageEditAllowed(packageBase({ phase: 'review' })), 'EDIT_NOT_ALLOWED');
   });
 
-  it('allows force-rerun only for the execution owner while a review packet is open', () => {
-    const reviewPackage = packageBase({ phase: 'review', activity_state: 'awaiting_human' });
+  it('allows force-rerun only for the execution owner while the current review packet is open', () => {
+    const reviewPackage = packageBase({
+      phase: 'review',
+      activity_state: 'awaiting_human',
+      last_run_session_id: 'run-session-1',
+    });
     const openPacket = openReviewPacket();
 
     expect(() => validateForceRerunAllowed(reviewPackage, [openPacket], 'actor-owner')).not.toThrow();
@@ -296,6 +305,7 @@ describe('domain validators', () => {
         activity_state: 'idle',
         gate_state: 'review_approved',
         resolution: 'completed',
+        last_run_session_id: 'run-session-1',
       });
 
       expectDomainError(
@@ -305,16 +315,46 @@ describe('domain validators', () => {
     },
   );
 
-  it('allows force-rerun with a current open review packet after historical changes requested', () => {
+  it('rejects force-rerun when the only open review packet belongs to an older run', () => {
+    const reviewPackage = packageBase({
+      phase: 'review',
+      activity_state: 'awaiting_human',
+      last_run_session_id: 'run-session-2',
+    });
+
+    expectDomainError(
+      () => validateForceRerunAllowed(reviewPackage, [openReviewPacket({ run_session_id: 'run-session-1' })], 'actor-owner'),
+      'FORCE_RERUN_FORBIDDEN',
+    );
+  });
+
+  it('rejects force-rerun when the package has no last run session', () => {
     const reviewPackage = packageBase({ phase: 'review', activity_state: 'awaiting_human' });
+
+    expectDomainError(
+      () => validateForceRerunAllowed(reviewPackage, [openReviewPacket()], 'actor-owner'),
+      'FORCE_RERUN_FORBIDDEN',
+    );
+  });
+
+  it('allows force-rerun with a current open review packet after historical changes requested', () => {
+    const reviewPackage = packageBase({
+      phase: 'review',
+      activity_state: 'awaiting_human',
+      last_run_session_id: 'run-session-2',
+    });
 
     expect(
       () =>
         validateForceRerunAllowed(
           reviewPackage,
           [
-            openReviewPacket({ id: 'open-review-packet' }),
-            approvedReviewPacket({ id: 'completed-review-packet', decision: 'changes_requested' }),
+            openReviewPacket({ id: 'open-review-packet', run_session_id: 'run-session-2' }),
+            approvedReviewPacket({
+              id: 'completed-review-packet',
+              run_session_id: 'run-session-1',
+              decision: 'changes_requested',
+            }),
           ],
           'actor-owner',
         ),
@@ -327,6 +367,7 @@ describe('domain validators', () => {
       activity_state: 'idle',
       gate_state: 'review_approved',
       resolution: 'completed',
+      last_run_session_id: 'run-session-1',
     });
 
     expectDomainError(

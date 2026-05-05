@@ -7,7 +7,16 @@ import {
   type SpecPlanEntityType,
   type WorkItem,
 } from './types';
-import type { ArtifactRef, ChangedFile, FailureKind, RequestedChange, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
+import type {
+  ArtifactKind,
+  ArtifactRef,
+  ChangedFile,
+  FailureKind,
+  RequestedChange,
+  RequiredCheckSpec,
+  RunSpec,
+  SelfReviewResult,
+} from '@forgeloop/contracts';
 import type { WorkItemCompletion } from './completion';
 
 const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
@@ -21,8 +30,15 @@ export type WorkItemTransition =
       type: 'create';
       id: string;
       project_id: string;
+      kind: WorkItem['kind'];
       title: string;
+      goal: string;
+      success_criteria: string[];
+      priority: string;
+      risk: string;
       owner_actor_id: string;
+      current_spec_id?: string;
+      current_plan_id?: string;
     })
   | (Timestamped & {
       type:
@@ -72,6 +88,10 @@ export type ExecutionPackageTransition =
       owner_actor_id: string;
       reviewer_actor_id: string;
       qa_owner_actor_id: string;
+      required_checks: RequiredCheckSpec[];
+      required_artifact_kinds: ArtifactKind[];
+      allowed_paths: string[];
+      forbidden_paths: string[];
     })
   | (Timestamped & {
       type: 'mark_ready' | 'run' | 'rerun' | 'workflow_start' | 'execution_succeeded' | 'review_approved' | 'review_changes_requested';
@@ -126,22 +146,39 @@ export type ReviewPacketTransition =
     })
   | (Timestamped & {
       type: 'approve';
-      summary?: string;
-      reviewed_by_actor_id?: string;
-      reviewed_at?: string;
+      summary: string;
+      reviewed_by_actor_id: string;
+      reviewed_at: string;
     })
   | (Timestamped & {
       type: 'request_changes';
-      summary?: string;
-      reviewed_by_actor_id?: string;
-      reviewed_at?: string;
-      requested_changes?: RequestedChange[];
+      summary: string;
+      reviewed_by_actor_id: string;
+      reviewed_at: string;
+      requested_changes: RequestedChange[];
     });
 
 const timestampFor = (event: Timestamped) => event.at ?? DEFAULT_TIMESTAMP;
 
 const invalidTransition = (objectType: string, current: string, transition: string): never => {
   throw new DomainError('INVALID_TRANSITION', `Cannot apply ${transition} to ${objectType} in ${current}`);
+};
+
+const hasText = (value: string | undefined): value is string => value !== undefined && value.trim().length > 0;
+
+const assertReviewDecision = (
+  event: Extract<ReviewPacketTransition, { type: 'approve' | 'request_changes' }>,
+): void => {
+  if (!hasText(event.summary) || !hasText(event.reviewed_by_actor_id) || !hasText(event.reviewed_at)) {
+    return invalidTransition('ReviewPacket', 'invalid_decision_payload', event.type);
+  }
+
+  if (
+    event.type === 'request_changes' &&
+    (!Array.isArray(event.requested_changes) || event.requested_changes.length === 0)
+  ) {
+    return invalidTransition('ReviewPacket', 'invalid_decision_payload', event.type);
+  }
 };
 
 const assertWorkItemCompletion = (workItem: WorkItem, completion: WorkItemCompletion | undefined): void => {
@@ -164,12 +201,19 @@ export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkIt
     return {
       id: event.id,
       project_id: event.project_id,
+      kind: event.kind,
       title: event.title,
+      goal: event.goal,
+      success_criteria: [...event.success_criteria],
+      priority: event.priority,
+      risk: event.risk,
       owner_actor_id: event.owner_actor_id,
       phase: 'draft',
       activity_state: 'idle',
       gate_state: 'none',
       resolution: 'none',
+      ...(event.current_spec_id !== undefined ? { current_spec_id: event.current_spec_id } : {}),
+      ...(event.current_plan_id !== undefined ? { current_plan_id: event.current_plan_id } : {}),
       created_at: at,
       updated_at: at,
     };
@@ -343,10 +387,10 @@ export const transitionExecutionPackage = (
       activity_state: 'idle',
       gate_state: 'not_submitted',
       resolution: 'none',
-      required_checks: [],
-      required_artifact_kinds: [],
-      allowed_paths: [],
-      forbidden_paths: [],
+      required_checks: [...event.required_checks],
+      required_artifact_kinds: [...event.required_artifact_kinds],
+      allowed_paths: [...event.allowed_paths],
+      forbidden_paths: [...event.forbidden_paths],
       created_at: at,
       updated_at: at,
     };
@@ -584,6 +628,7 @@ export const transitionReviewPacket = (
         reviewPacket.decision === 'none' &&
         (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review')
       ) {
+        assertReviewDecision(event);
         return {
           ...reviewPacket,
           status: 'completed',
@@ -591,9 +636,9 @@ export const transitionReviewPacket = (
           requested_changes: [],
           completed_at: at,
           updated_at: at,
-          ...(event.summary !== undefined ? { summary: event.summary } : {}),
-          ...(event.reviewed_by_actor_id !== undefined ? { reviewed_by_actor_id: event.reviewed_by_actor_id } : {}),
-          ...(event.reviewed_at !== undefined ? { reviewed_at: event.reviewed_at } : {}),
+          summary: event.summary,
+          reviewed_by_actor_id: event.reviewed_by_actor_id,
+          reviewed_at: event.reviewed_at,
         };
       }
       break;
@@ -602,16 +647,17 @@ export const transitionReviewPacket = (
         reviewPacket.decision === 'none' &&
         (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review')
       ) {
+        assertReviewDecision(event);
         return {
           ...reviewPacket,
           status: 'completed',
           decision: 'changes_requested',
-          requested_changes: event.requested_changes ?? [],
+          requested_changes: event.requested_changes,
           completed_at: at,
           updated_at: at,
-          ...(event.summary !== undefined ? { summary: event.summary } : {}),
-          ...(event.reviewed_by_actor_id !== undefined ? { reviewed_by_actor_id: event.reviewed_by_actor_id } : {}),
-          ...(event.reviewed_at !== undefined ? { reviewed_at: event.reviewed_at } : {}),
+          summary: event.summary,
+          reviewed_by_actor_id: event.reviewed_by_actor_id,
+          reviewed_at: event.reviewed_at,
         };
       }
       break;

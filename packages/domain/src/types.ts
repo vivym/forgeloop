@@ -53,16 +53,20 @@ export interface Project {
 
 export interface ProjectRepo {
   id: string;
+  repo_id: string;
   project_id: string;
+  name: string;
+  status: 'active' | 'paused' | 'archived';
   local_path: string;
   default_branch: string;
   remote_url?: string;
-  base_commit_sha?: string;
+  base_commit_sha: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
 
 export type WorkItemPhase = 'draft' | 'triage' | 'spec' | 'plan' | 'execution' | 'done';
+export type WorkItemKind = 'feature' | 'bugfix' | 'tech_debt' | 'test_refactor';
 export type WorkItemActivityState = 'idle';
 export type WorkItemGateState =
   | 'none'
@@ -75,12 +79,19 @@ export type WorkItemResolution = 'none' | 'completed';
 export interface WorkItem {
   id: string;
   project_id: string;
+  kind: WorkItemKind;
   title: string;
+  goal: string;
+  success_criteria: string[];
+  priority: string;
+  risk: string;
   owner_actor_id: string;
   phase: WorkItemPhase;
   activity_state: WorkItemActivityState;
   gate_state: WorkItemGateState;
   resolution: WorkItemResolution;
+  current_spec_id?: string;
+  current_plan_id?: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -121,6 +132,14 @@ export interface SpecRevision {
   revision_number: number;
   summary: string;
   content: string;
+  background: string;
+  goals: string[];
+  scope_in: string[];
+  scope_out: string[];
+  acceptance_criteria: string[];
+  risk_notes: string[];
+  test_strategy_summary: string;
+  structured_document?: Record<string, unknown>;
   author_actor_id?: string;
   artifact_refs: ArtifactRef[];
   created_at: IsoDateTime;
@@ -133,6 +152,13 @@ export interface PlanRevision {
   revision_number: number;
   summary: string;
   content: string;
+  implementation_summary: string;
+  split_strategy: string;
+  dependency_order: string[];
+  test_matrix: string[];
+  risk_mitigations: string[];
+  rollback_notes: string;
+  structured_document?: Record<string, unknown>;
   author_actor_id?: string;
   artifact_refs: ArtifactRef[];
   created_at: IsoDateTime;
