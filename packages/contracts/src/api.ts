@@ -13,18 +13,39 @@ const commandNames = [
   'run_package',
   'rerun_package',
   'force_rerun_package',
-  'submit_review_decision',
+  'approve_review_packet',
+  'request_review_changes',
 ] as const;
 
 export const commandNameSchema = z.enum(commandNames);
 export type CommandName = z.infer<typeof commandNameSchema>;
 
-export const commandInventoryItemSchema = z.object({
-  command: commandNameSchema,
-  method: z.enum(['POST']),
-  path: z.string().min(1),
-  description: z.string().min(1),
-});
+const commandInventoryPaths: Record<CommandName, string> = {
+  run_package: '/execution-packages/:packageId/run',
+  rerun_package: '/execution-packages/:packageId/rerun',
+  force_rerun_package: '/execution-packages/:packageId/force-rerun',
+  approve_review_packet: '/review-packets/:reviewPacketId/approve',
+  request_review_changes: '/review-packets/:reviewPacketId/request-changes',
+};
+
+export const commandInventoryItemSchema = z
+  .object({
+    command: commandNameSchema,
+    method: z.enum(['POST']),
+    path: z.string().min(1),
+    description: z.string().min(1),
+  })
+  .superRefine((item, ctx) => {
+    const expectedPath = commandInventoryPaths[item.command];
+
+    if (item.path !== expectedPath) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['path'],
+        message: `${item.command} command path must be ${expectedPath}`,
+      });
+    }
+  });
 export type CommandInventoryItem = z.infer<typeof commandInventoryItemSchema>;
 
 export const commandInventoryResponseSchema = z

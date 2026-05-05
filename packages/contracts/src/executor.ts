@@ -74,6 +74,14 @@ export const changedFileSchema = z
       });
     }
 
+    if (changedFile.change_kind === 'renamed' && changedFile.previous_path === changedFile.path) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['previous_path'],
+        message: 'previous_path must differ from path for renamed files',
+      });
+    }
+
     if (changedFile.change_kind !== 'renamed' && changedFile.previous_path !== undefined) {
       ctx.addIssue({
         code: 'custom',
@@ -324,14 +332,14 @@ export const executorResultSchema = z
     }
 
     if (
-      hasFailedBlockingCheck &&
+      hasUnsuccessfulBlockingCheck &&
       result.status === 'failed' &&
       result.failure?.kind !== 'required_check_failed'
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['failure', 'kind'],
-        message: 'failed blocking checks require required_check_failed failure kind',
+        message: 'unsuccessful blocking checks require required_check_failed failure kind',
       });
     }
 
@@ -370,11 +378,11 @@ export const executorResultSchema = z
       });
     }
 
-    if (result.failure?.kind === 'required_check_failed' && !hasFailedBlockingCheck) {
+    if (result.failure?.kind === 'required_check_failed' && !hasUnsuccessfulBlockingCheck) {
       ctx.addIssue({
         code: 'custom',
         path: ['checks'],
-        message: 'required_check_failed requires at least one failed blocking check',
+        message: 'required_check_failed requires at least one unsuccessful blocking check',
       });
     }
   });

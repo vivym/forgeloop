@@ -77,26 +77,32 @@ describe('P0 delivery loop contracts', () => {
       {
         command: 'run_package',
         method: 'POST',
-        path: '/api/commands/run-package',
+        path: '/execution-packages/:packageId/run',
         description: 'Run an execution package.',
       },
       {
         command: 'rerun_package',
         method: 'POST',
-        path: '/api/commands/rerun-package',
+        path: '/execution-packages/:packageId/rerun',
         description: 'Rerun an execution package with review context.',
       },
       {
         command: 'force_rerun_package',
         method: 'POST',
-        path: '/api/commands/force-rerun-package',
+        path: '/execution-packages/:packageId/force-rerun',
         description: 'Force rerun an execution package after manual approval.',
       },
       {
-        command: 'submit_review_decision',
+        command: 'approve_review_packet',
         method: 'POST',
-        path: '/api/commands/submit-review-decision',
-        description: 'Submit a review decision.',
+        path: '/review-packets/:reviewPacketId/approve',
+        description: 'Approve a review packet.',
+      },
+      {
+        command: 'request_review_changes',
+        method: 'POST',
+        path: '/review-packets/:reviewPacketId/request-changes',
+        description: 'Request changes for a review packet.',
       },
     ],
   };
@@ -358,6 +364,34 @@ describe('P0 delivery loop contracts', () => {
     expect(nonBlocking.checks[0]?.blocks_review).toBe(false);
   });
 
+  it.each(['timed_out', 'skipped', 'cancelled'] as const)(
+    'parses failed required-check results with blocking %s check evidence',
+    (checkStatus) => {
+      const parsed = executorResultSchema.parse({
+        ...validExecutorResult,
+        status: 'failed',
+        checks: [
+          {
+            ...validCheckResult,
+            status: checkStatus,
+            exit_code: checkStatus === 'timed_out' ? 124 : null,
+            blocks_review: true,
+          },
+        ],
+        failure: {
+          kind: 'required_check_failed',
+          message: `Required check ${checkStatus}.`,
+          retryable: true,
+        },
+      });
+
+      expect(parsed.status).toBe('failed');
+      expect(parsed.failure?.kind).toBe('required_check_failed');
+      expect(parsed.checks[0]?.status).toBe(checkStatus);
+      expect(parsed.checks[0]?.blocks_review).toBe(true);
+    },
+  );
+
   it.each(['workspace_prepare_failed', 'preflight_failed', 'executor_process_failed'] as const)(
     'parses a local codex executor result with %s failure',
     (failureKind) => {
@@ -423,7 +457,15 @@ describe('P0 delivery loop contracts', () => {
       'run_package',
       'rerun_package',
       'force_rerun_package',
-      'submit_review_decision',
+      'approve_review_packet',
+      'request_review_changes',
+    ]);
+    expect(parsed.commands.map((item) => item.path)).toEqual([
+      '/execution-packages/:packageId/run',
+      '/execution-packages/:packageId/rerun',
+      '/execution-packages/:packageId/force-rerun',
+      '/review-packets/:reviewPacketId/approve',
+      '/review-packets/:reviewPacketId/request-changes',
     ]);
   });
 
@@ -799,6 +841,20 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
   });
 
+  it('rejects command inventory items with non-spec command paths', () => {
+    expect(
+      commandInventoryResponseSchema.safeParse({
+        commands: [
+          {
+            ...validCommandInventory.commands[0],
+            path: '/api/commands/run-package',
+          },
+          ...validCommandInventory.commands.slice(1),
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects successful self-review results with a failure message', () => {
     expect(
       selfReviewResultSchema.safeParse({
@@ -898,6 +954,15 @@ describe('P0 delivery loop contracts', () => {
         path: 'packages/contracts/src/executor.ts',
         change_kind: 'modified',
         previous_path: 'packages/contracts/src/old-executor.ts',
+      }).success,
+    ).toBe(false);
+
+    expect(
+      changedFileSchema.safeParse({
+        repo_id: 'repo-1',
+        path: 'packages/contracts/src/executor.ts',
+        change_kind: 'renamed',
+        previous_path: 'packages/contracts/src/executor.ts',
       }).success,
     ).toBe(false);
   });
