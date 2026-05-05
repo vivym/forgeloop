@@ -11,7 +11,8 @@
     "dev:executor": "pnpm --filter @forgeloop/executor-gateway start:dev",
     "dev:worker": "pnpm --filter @forgeloop/workflow-worker start:dev",
     "dev:web": "pnpm --filter @forgeloop/web dev",
-    "smoke:p0": "vitest run tests/smoke"
+    "smoke:p0": "vitest run tests/smoke",
+    "dogfood:p0": "tsx scripts/p0-dogfood.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",
