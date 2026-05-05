@@ -444,15 +444,17 @@ export class P0Service {
   async runPackage(packageId: string, dto: RunPackageDto, mode: 'run' | 'rerun' | 'force_rerun'): Promise<Record<string, unknown>> {
     const executionPackage = await this.getExecutionPackage(packageId);
     const reviewPackets = await this.repository.listReviewPacketsForPackage(packageId);
-    if (mode === 'force_rerun') {
+    const validation = this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode);
+    if (mode === 'force_rerun' && validation.currentOpenReviewPacket !== undefined) {
       try {
-        validateForceRerunAllowed(executionPackage, reviewPackets, dto.requested_by_actor_id);
+        validateForceRerunAllowed(executionPackage, reviewPackets, validation.requestedByActorId);
       } catch (error) {
         if (error instanceof DomainError && error.code === 'FORCE_RERUN_FORBIDDEN') {
           throw new ForbiddenException(error.message);
         }
         throw error;
       }
+      await this.archiveReviewPacket(validation.currentOpenReviewPacket, 'force_rerun');
     }
     const runSessionId = this.id('run-session');
     const queuedPackage =
@@ -472,13 +474,13 @@ export class P0Service {
       type: 'create',
       id: runSessionId,
       execution_package_id: packageId,
-      requested_by_actor_id: dto.requested_by_actor_id,
+      requested_by_actor_id: validation.requestedByActorId,
       executor_type: dto.executor_type ?? 'mock',
       at: this.now(),
     });
     await this.repository.saveExecutionPackage(queuedPackage);
     await this.repository.saveRunSession(runSession);
-    await this.event('execution_package', packageId, mode === 'force_rerun' ? 'force_rerun_requested' : `${mode}_requested`, dto.requested_by_actor_id, {
+    await this.event('execution_package', packageId, mode === 'force_rerun' ? 'force_rerun_requested' : `${mode}_requested`, validation.requestedByActorId, {
       run_session_id: runSessionId,
     });
 
@@ -502,6 +504,51 @@ export class P0Service {
       run_session_id: runSessionId,
       workflow_result: workflowResult,
     };
+  }
+
+  private validateRunRequest(
+    packageId: string,
+    executionPackage: ExecutionPackage,
+    reviewPackets: ReviewPacket[],
+    dto: RunPackageDto,
+    mode: 'run' | 'rerun' | 'force_rerun',
+  ): { requestedByActorId: string; currentOpenReviewPacket?: ReviewPacket } {
+    const requestedByActorId = this.required(dto.requested_by_actor_id, 'requested_by_actor_id');
+
+    if (dto.execution_package_id !== undefined && dto.execution_package_id !== packageId) {
+      throw new BadRequestException('execution_package_id must match packageId path parameter');
+    }
+
+    if (mode === 'run') {
+      return { requestedByActorId };
+    }
+
+    const previousRunSessionId = this.required(dto.previous_run_session_id, 'previous_run_session_id');
+    if (executionPackage.last_run_session_id !== previousRunSessionId) {
+      throw new BadRequestException('previous_run_session_id must match the package current last_run_session_id');
+    }
+
+    if (mode === 'rerun') {
+      return { requestedByActorId };
+    }
+
+    if (dto.force !== true) {
+      throw new BadRequestException('force must be true for force-rerun');
+    }
+    this.required(dto.force_reason, 'force_reason');
+
+    const currentOpenReviewPacket = reviewPackets.find(
+      (reviewPacket) =>
+        reviewPacket.run_session_id === previousRunSessionId &&
+        reviewPacket.decision === 'none' &&
+        (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review'),
+    );
+
+    if (currentOpenReviewPacket === undefined) {
+      throw new BadRequestException('force-rerun requires a current open ready or in_review ReviewPacket');
+    }
+
+    return { requestedByActorId, currentOpenReviewPacket };
   }
 
   async getRunSession(runSessionId: string): Promise<RunSession> {

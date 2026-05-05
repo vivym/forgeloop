@@ -3,7 +3,10 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
 import { Test } from '../../apps/control-plane-api/node_modules/@nestjs/testing/index.js';
+import { InMemoryP0Repository } from '../../packages/db/src/index';
+import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -141,6 +144,22 @@ const createManualPackage = async (
   return (await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/execution-packages`).send(body).expect(201))
     .body;
 };
+
+class SequencingRepository extends InMemoryP0Repository {
+  readonly operations: string[] = [];
+
+  override async saveRunSession(runSession: RunSession): Promise<void> {
+    this.operations.push(`saveRunSession:${runSession.id}`);
+    await super.saveRunSession(runSession);
+  }
+
+  override async saveReviewPacket(reviewPacket: ReviewPacket): Promise<void> {
+    if (reviewPacket.status === 'archived') {
+      this.operations.push(`archiveReviewPacket:${reviewPacket.id}`);
+    }
+    await super.saveReviewPacket(reviewPacket);
+  }
+}
 
 describe('P0 control plane API', () => {
   let app: INestApplication;
@@ -280,6 +299,94 @@ describe('P0 control plane API', () => {
     expect(newRunSession.run_spec.objective).toBe('Edited package creates a fresh run spec.');
   });
 
+  it('archives an in-review ReviewPacket on package edit and preserves the previous RunSession', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const executionPackage = await createManualPackage(app, planRevisionId);
+    const service = app.get(P0Service);
+    const repository = (service as unknown as { repository: InMemoryP0Repository }).repository;
+
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    const run = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    const readyPacket = await repository.getReviewPacket(run.workflow_result.reviewPacketId);
+    await repository.saveReviewPacket({ ...readyPacket!, status: 'in_review' });
+
+    await request(server)
+      .patch(`/execution-packages/${executionPackage.id}`)
+      .send({ objective: 'Edit while human review has started.' })
+      .expect(200);
+
+    expect((await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body.status).toBe('succeeded');
+    expect((await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body.status).toBe(
+      'archived',
+    );
+  });
+
+  it('validates run, rerun, and force-rerun request bodies and previous run ids', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const executionPackage = await createManualPackage(app, planRevisionId);
+
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(400);
+
+    const run = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    await request(server)
+      .post(`/review-packets/${run.workflow_result.reviewPacketId}/request-changes`)
+      .send({
+        summary: 'Rerun required.',
+        reviewed_by_actor_id: actorReviewer,
+        reviewed_at: '2026-05-05T03:00:00.000Z',
+        requested_changes: [{ title: 'Rerun', description: 'Exercise validation.' }],
+      })
+      .expect(201);
+
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/rerun`)
+      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+      .expect(400);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/rerun`)
+      .send({ requested_by_actor_id: actorOwner, previous_run_session_id: 'run-session-stale', workflow_only: true })
+      .expect(400);
+
+    const rerun = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/rerun`)
+        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: run.run_session_id, workflow_only: true })
+        .expect(201)
+    ).body;
+
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .send({ requested_by_actor_id: actorOwner, previous_run_session_id: rerun.run_session_id, workflow_only: true })
+      .expect(400);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .send({
+        requested_by_actor_id: actorOwner,
+        previous_run_session_id: 'run-session-stale',
+        force: true,
+        force_reason: 'Stale run id.',
+        workflow_only: true,
+      })
+      .expect(400);
+  });
+
   it('enforces owner-only force-rerun and archives the current open ReviewPacket', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
@@ -322,5 +429,127 @@ describe('P0 control plane API', () => {
       'archived',
     );
     expect(forceRun.workflow_result.reviewPacketId).not.toBe(run.workflow_result.reviewPacketId);
+  });
+
+  it('rejects force-rerun after completed review and leaves the completed packet immutable', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const executionPackage = await createManualPackage(app, planRevisionId);
+
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    const run = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    await request(server)
+      .post(`/review-packets/${run.workflow_result.reviewPacketId}/approve`)
+      .send({
+        summary: 'Completed review.',
+        reviewed_by_actor_id: actorReviewer,
+        reviewed_at: '2026-05-05T04:00:00.000Z',
+      })
+      .expect(201);
+
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .send({
+        requested_by_actor_id: actorOwner,
+        previous_run_session_id: run.run_session_id,
+        force: true,
+        force_reason: 'Cannot force-rerun after completed review.',
+        workflow_only: true,
+      })
+      .expect(400);
+
+    expect((await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body).toMatchObject({
+      status: 'completed',
+      decision: 'approved',
+      summary: 'Completed review.',
+    });
+  });
+
+  it('archives the current open ReviewPacket before saving the force-rerun RunSession', async () => {
+    const service = app.get(P0Service);
+    const repository = new SequencingRepository();
+    (service as unknown as { repository: SequencingRepository }).repository = repository;
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const executionPackage = await createManualPackage(app, planRevisionId);
+
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    const run = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    repository.operations.length = 0;
+
+    const forceRun = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+        .send({
+          requested_by_actor_id: actorOwner,
+          previous_run_session_id: run.run_session_id,
+          force: true,
+          force_reason: 'Owner wants a fresh run before review.',
+          workflow_only: true,
+        })
+        .expect(201)
+    ).body;
+
+    expect(repository.operations.indexOf(`archiveReviewPacket:${run.workflow_result.reviewPacketId}`)).toBeLessThan(
+      repository.operations.indexOf(`saveRunSession:${forceRun.run_session_id}`),
+    );
+  });
+
+  it('supports Spec and Plan request-changes command paths', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server)
+      .post(`/specs/${spec.id}/revisions`)
+      .send({
+        summary: 'Spec for changes',
+        content: 'Spec body',
+        background: 'Background',
+        goals: ['Goal'],
+        scope_in: ['Scope'],
+        scope_out: [],
+        acceptance_criteria: ['Criteria'],
+        test_strategy_summary: 'Tests',
+      })
+      .expect(201);
+    await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    expect(
+      (await request(server).post(`/specs/${spec.id}/request-changes`).send({ actor_id: actorReviewer }).expect(201)).body,
+    ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
+
+    const { workItem: planWorkItem } = await createProjectRepoWorkItem(app);
+    const approvedSpec = await approveSpec(app, planWorkItem.id);
+    expect(approvedSpec.specId).toContain('spec');
+    const plan = (await request(server).post(`/work-items/${planWorkItem.id}/plans`).send({}).expect(201)).body;
+    await request(server)
+      .post(`/plans/${plan.id}/revisions`)
+      .send({
+        summary: 'Plan for changes',
+        content: 'Plan body',
+        implementation_summary: 'Implementation',
+        split_strategy: 'One package',
+        test_matrix: ['pnpm test tests/api'],
+        rollback_notes: 'Revert',
+      })
+      .expect(201);
+    await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    expect(
+      (await request(server).post(`/plans/${plan.id}/request-changes`).send({ actor_id: actorReviewer }).expect(201)).body,
+    ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
   });
 });

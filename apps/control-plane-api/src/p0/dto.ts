@@ -81,6 +81,7 @@ export interface PatchExecutionPackageDto {
 }
 
 export interface RunPackageDto {
+  execution_package_id?: string;
   requested_by_actor_id: string;
   executor_type?: 'mock' | 'local_codex';
   workflow_only?: boolean;
