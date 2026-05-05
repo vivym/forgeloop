@@ -325,7 +325,7 @@ export const transitionExecutionPackage = (
       }
       break;
     case 'force_rerun':
-      if (executionPackage.phase === 'review' && event.has_open_review_packet) {
+      if (executionPackage.phase === 'review' && executionPackage.resolution === 'none' && event.has_open_review_packet) {
         return {
           ...executionPackage,
           phase: 'queued',

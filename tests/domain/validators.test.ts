@@ -218,6 +218,40 @@ describe('domain validators', () => {
       'FORCE_RERUN_FORBIDDEN',
     );
   });
+
+  it.each(['ready', 'in_review'] as const)(
+    'rejects force-rerun for a completed package even with an open %s review packet',
+    (status) => {
+      const completedPackage = packageBase({
+        phase: 'review',
+        activity_state: 'idle',
+        gate_state: 'review_approved',
+        resolution: 'completed',
+      });
+
+      expectDomainError(
+        () => validateForceRerunAllowed(completedPackage, [openReviewPacket({ status })], 'actor-owner'),
+        'FORCE_RERUN_FORBIDDEN',
+      );
+    },
+  );
+
+  it('rejects force-rerun when the package already has a completed review decision', () => {
+    const reviewPackage = packageBase({ phase: 'review', activity_state: 'awaiting_human' });
+
+    expectDomainError(
+      () =>
+        validateForceRerunAllowed(
+          reviewPackage,
+          [
+            openReviewPacket({ id: 'open-review-packet' }),
+            approvedReviewPacket({ id: 'completed-review-packet', decision: 'changes_requested' }),
+          ],
+          'actor-owner',
+        ),
+      'FORCE_RERUN_FORBIDDEN',
+    );
+  });
 });
 
 describe('domain completion derivation', () => {

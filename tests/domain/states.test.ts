@@ -357,6 +357,19 @@ describe('domain state transitions', () => {
         'INVALID_TRANSITION',
       );
     });
+
+    it('rejects force-rerun after review approval even with an open review packet', () => {
+      const approved = transitionExecutionPackage(createReviewPackage(), { type: 'review_approved' });
+
+      expectDomainError(
+        () =>
+          transitionExecutionPackage(approved, {
+            type: 'force_rerun',
+            has_open_review_packet: true,
+          }),
+        'INVALID_TRANSITION',
+      );
+    });
   });
 
   describe('RunSession', () => {
