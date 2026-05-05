@@ -620,11 +620,11 @@ git commit -m "feat: add executor gateway and workflow worker"
 - Create: `apps/web/src/api.ts`
 - Create: `apps/web/src/styles.css`
 
-- [ ] **Step 1: Implement API client**
+- [x] **Step 1: Implement API client**
 
 Functions for WorkItem list/detail/cockpit/timeline, Spec/Plan commands, Package commands, RunSession detail, and ReviewPacket decisions.
 
-- [ ] **Step 2: Implement single-screen workbench**
+- [x] **Step 2: Implement single-screen workbench**
 
 Sections:
 
@@ -634,21 +634,21 @@ Sections:
 - Run/Review
 - Timeline
 
-- [ ] **Step 3: Add workflow actions**
+- [x] **Step 3: Add workflow actions**
 
 Forms/buttons for create, approve, generate package, manual package, mark ready, run, request changes, rerun, approve.
 
-- [ ] **Step 4: Render operational state**
+- [x] **Step 4: Render operational state**
 
 Show phase/gate/activity/resolution, run status, review status/decision, failed checks, artifacts, and next action.
 
-- [ ] **Step 5: Build web app**
+- [x] **Step 5: Build web app**
 
 Run: `pnpm --filter @forgeloop/web build`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web
