@@ -51,7 +51,44 @@ describe('workflow worker app wiring', () => {
     expect(closeDb).toHaveBeenCalledOnce();
   });
 
+  it('preserves the worker run error and attempts all cleanup when cleanup fails', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('worker run failed'));
+    const create = vi.fn().mockResolvedValue({ run });
+    const closeConnection = vi.fn().mockRejectedValue(new Error('connection close failed'));
+    const connect = vi.fn().mockResolvedValue({ close: closeConnection });
+    const closeDb = vi.fn().mockRejectedValue(new Error('db close failed'));
+
+    let thrown: unknown;
+    try {
+      await startWorkflowWorker({
+        taskQueue: 'p0-worker-test',
+        temporalAddress: 'temporal.test:7233',
+        connect,
+        createWorker: create,
+        createActivities: () => ({ executePackageRunActivity: vi.fn() }),
+        createRuntimeDependencies: () => ({
+          repository: {} as never,
+          executor: vi.fn(),
+          selfReview: vi.fn(),
+          close: closeDb,
+        }),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain(
+      'Failed to start Forgeloop workflow worker for task queue p0-worker-test: worker run failed',
+    );
+    expect((thrown as { cleanupErrors?: unknown[] }).cleanupErrors).toHaveLength(2);
+    expect(closeDb).toHaveBeenCalledOnce();
+    expect(closeConnection).toHaveBeenCalledOnce();
+  });
+
   it('rejects with a clear error when Temporal startup fails', async () => {
+    const createRuntimeDependencies = vi.fn();
+
     await expect(
       startWorkflowWorker({
         taskQueue: 'p0-worker-test',
@@ -59,13 +96,9 @@ describe('workflow worker app wiring', () => {
         connect: vi.fn().mockRejectedValue(new Error('connection refused')),
         createWorker: vi.fn(),
         createActivities: () => ({ executePackageRunActivity: vi.fn() }),
-        createRuntimeDependencies: () => ({
-          repository: {} as never,
-          executor: vi.fn(),
-          selfReview: vi.fn(),
-          close: vi.fn(),
-        }),
+        createRuntimeDependencies,
       }),
     ).rejects.toThrow('Failed to start Forgeloop workflow worker for task queue p0-worker-test: connection refused');
+    expect(createRuntimeDependencies).not.toHaveBeenCalled();
   });
 });

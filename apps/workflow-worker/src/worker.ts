@@ -53,6 +53,25 @@ const workflowPath = () =>
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+const attachCleanupErrors = (error: Error, cleanupErrors: unknown[]): Error => {
+  if (cleanupErrors.length > 0) {
+    (error as Error & { cleanupErrors?: unknown[] }).cleanupErrors = cleanupErrors;
+  }
+
+  return error;
+};
+
+const closeConnection = async (connection: unknown): Promise<void> => {
+  if (
+    connection !== undefined &&
+    connection !== null &&
+    typeof connection === 'object' &&
+    typeof (connection as { close?: unknown }).close === 'function'
+  ) {
+    await (connection as { close: () => Promise<void> }).close();
+  }
+};
+
 const dynamicImport = new Function('specifier', 'return import(specifier)') as <T>(specifier: string) => Promise<T>;
 
 export const createExecutorGatewayAdapter = (
@@ -141,6 +160,7 @@ export const startWorkflowWorker = async (deps: StartWorkflowWorkerDeps = {}): P
   const activitiesFactory = deps.createActivities ?? createActivities;
   let runtimeDependencies: RuntimeDependencies | undefined;
   let connection: unknown;
+  let primaryError: Error | undefined;
 
   try {
     connection = await connect({ address: temporalAddress });
@@ -154,18 +174,36 @@ export const startWorkflowWorker = async (deps: StartWorkflowWorkerDeps = {}): P
 
     await worker.run();
   } catch (error) {
-    throw new Error(`Failed to start Forgeloop workflow worker for task queue ${taskQueue}: ${errorMessage(error)}`, {
+    primaryError = new Error(`Failed to start Forgeloop workflow worker for task queue ${taskQueue}: ${errorMessage(error)}`, {
       cause: error,
     });
-  } finally {
+  }
+
+  const cleanupErrors: unknown[] = [];
+  try {
     await runtimeDependencies?.close();
-    if (
-      connection !== undefined &&
-      connection !== null &&
-      typeof connection === 'object' &&
-      typeof (connection as { close?: unknown }).close === 'function'
-    ) {
-      await (connection as { close: () => Promise<void> }).close();
-    }
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    await closeConnection(connection);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+
+  if (primaryError !== undefined) {
+    throw attachCleanupErrors(primaryError, cleanupErrors);
+  }
+
+  if (cleanupErrors.length > 0) {
+    throw attachCleanupErrors(
+      new Error(
+        `Failed to clean up Forgeloop workflow worker for task queue ${taskQueue}: ${cleanupErrors
+          .map(errorMessage)
+          .join('; ')}`,
+        { cause: cleanupErrors[0] },
+      ),
+      cleanupErrors,
+    );
   }
 };

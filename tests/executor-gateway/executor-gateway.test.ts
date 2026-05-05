@@ -49,12 +49,28 @@ const resultFor = (runSpec: RunSpec, summary = `fake ${runSpec.executor_type} co
 
 const createCountingAdapter = (name: 'mock' | 'local_codex') => {
   const calls: RunSpec[] = [];
+  let implementation: ExecutorAdapter = async (runSpec) => resultFor(runSpec, `${name} adapter completed`);
   const adapter: ExecutorAdapter = async (runSpec) => {
     calls.push(runSpec);
-    return resultFor(runSpec, `${name} adapter completed`);
+    return implementation(runSpec);
   };
 
-  return { adapter, calls };
+  return {
+    adapter,
+    calls,
+    useImplementation: (next: ExecutorAdapter) => {
+      implementation = next;
+    },
+  };
+};
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+
+  return { promise, resolve };
 };
 
 describe('executor gateway internal API', () => {
@@ -126,7 +142,75 @@ describe('executor gateway internal API', () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  it('falls back to run_session_id for idempotency when the same run is posted with a different key', async () => {
+  it('serializes concurrent duplicate executions under the same idempotency key and run session', async () => {
+    const runSpec = createRunSpec({
+      executor_type: 'mock',
+      run_session_id: 'run-concurrent-idem',
+      idempotency_key: 'concurrent-idempotency-key',
+    });
+    const adapterResult = deferred<ExecutorResult>();
+    const adapterStarted = deferred<void>();
+    const duplicateAdapterStarted = deferred<void>();
+    let adapterStartCount = 0;
+    mock.useImplementation(async () => {
+      adapterStartCount += 1;
+      if (adapterStartCount === 1) {
+        adapterStarted.resolve();
+      } else {
+        duplicateAdapterStarted.resolve();
+      }
+      return adapterResult.promise;
+    });
+    const sendExecution = () =>
+      new Promise<request.Response>((resolve, reject) => {
+        request(app.getHttpServer())
+          .post('/internal/executions')
+          .send(runSpec)
+          .expect(201)
+          .end((error, response) => (error == null ? resolve(response) : reject(error)));
+      });
+
+    const firstRequest = sendExecution();
+    await adapterStarted.promise;
+    const secondRequest = sendExecution();
+
+    await Promise.race([duplicateAdapterStarted.promise, new Promise((resolve) => setTimeout(resolve, 50))]);
+    const adapterCallsBeforeCompletion = mock.calls.length;
+    adapterResult.resolve(resultFor(runSpec, 'serialized adapter completed'));
+
+    const [first, second] = await Promise.all([firstRequest, secondRequest]);
+
+    expect(adapterCallsBeforeCompletion).toBe(1);
+    expect(mock.calls).toHaveLength(1);
+    expect(first.body.idempotent_replay).toBe(false);
+    expect(second.body).toMatchObject({
+      execution_id: 'concurrent-idempotency-key',
+      run_session_id: 'run-concurrent-idem',
+      idempotent_replay: true,
+    });
+    expect(second.body.result).toEqual(first.body.result);
+  });
+
+  it('returns 409 when an idempotency key is reused for a different run session', async () => {
+    const firstRunSpec = createRunSpec({
+      executor_type: 'mock',
+      run_session_id: 'run-idempotency-key-owner',
+      idempotency_key: 'colliding-idempotency-key',
+    });
+    const collisionRunSpec = createRunSpec({
+      executor_type: 'mock',
+      run_session_id: 'run-idempotency-key-intruder',
+      idempotency_key: 'colliding-idempotency-key',
+    });
+
+    await request(app.getHttpServer()).post('/internal/executions').send(firstRunSpec).expect(201);
+    const collision = await request(app.getHttpServer()).post('/internal/executions').send(collisionRunSpec).expect(409);
+
+    expect(collision.body.message).toContain('idempotency_key');
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it('returns 409 when a run session is reused with an incompatible idempotency key', async () => {
     const firstRunSpec = createRunSpec({
       executor_type: 'mock',
       run_session_id: 'run-session-idem',
@@ -138,15 +222,10 @@ describe('executor gateway internal API', () => {
       idempotency_key: 'second-key',
     });
 
-    const first = await request(app.getHttpServer()).post('/internal/executions').send(firstRunSpec).expect(201);
-    const replay = await request(app.getHttpServer()).post('/internal/executions').send(replayRunSpec).expect(201);
+    await request(app.getHttpServer()).post('/internal/executions').send(firstRunSpec).expect(201);
+    const collision = await request(app.getHttpServer()).post('/internal/executions').send(replayRunSpec).expect(409);
 
-    expect(replay.body).toMatchObject({
-      execution_id: 'first-key',
-      run_session_id: 'run-session-idem',
-      idempotent_replay: true,
-    });
-    expect(replay.body.result).toEqual(first.body.result);
+    expect(collision.body.message).toContain('run_session_id');
     expect(mock.calls).toHaveLength(1);
   });
 
