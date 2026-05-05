@@ -387,7 +387,7 @@ export const transitionExecutionPackage = (
       activity_state: 'idle',
       gate_state: 'not_submitted',
       resolution: 'none',
-      required_checks: [...event.required_checks],
+      required_checks: event.required_checks.map((check) => ({ ...check })),
       required_artifact_kinds: [...event.required_artifact_kinds],
       allowed_paths: [...event.allowed_paths],
       forbidden_paths: [...event.forbidden_paths],

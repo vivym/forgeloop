@@ -510,6 +510,47 @@ describe('domain state transitions', () => {
       expect(created.forbidden_paths).not.toBe(forbiddenPaths);
     });
 
+    it('freezes required check policy when generated', () => {
+      const requiredCheck: RequiredCheckSpec = {
+        check_id: 'domain-tests',
+        display_name: 'Domain tests',
+        command: 'pnpm test tests/domain',
+        timeout_seconds: 120,
+        blocks_review: true,
+      };
+      const created = transitionExecutionPackage(undefined, {
+        type: 'generate_package',
+        id: 'package-required-check-policy',
+        work_item_id: 'work-item-1',
+        spec_id: 'spec-1',
+        spec_revision_id: 'spec-revision-1',
+        plan_id: 'plan-1',
+        plan_revision_id: 'plan-revision-1',
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        objective: 'Implement one package.',
+        owner_actor_id: 'actor-owner',
+        reviewer_actor_id: 'actor-reviewer',
+        qa_owner_actor_id: 'actor-qa',
+        required_checks: [requiredCheck],
+        required_artifact_kinds: requiredArtifactKinds,
+        allowed_paths: allowedPaths,
+        forbidden_paths: forbiddenPaths,
+      });
+
+      requiredCheck.display_name = 'Mutated tests';
+      requiredCheck.command = 'pnpm test mutated';
+      requiredCheck.timeout_seconds = 999;
+      requiredCheck.blocks_review = false;
+
+      expect(created.required_checks[0]).toMatchObject({
+        display_name: 'Domain tests',
+        command: 'pnpm test tests/domain',
+        timeout_seconds: 120,
+        blocks_review: true,
+      });
+    });
+
     it('handles retryable, blocking, and blocking-check execution failures', () => {
       const ready = transitionExecutionPackage(createPackage(), { type: 'mark_ready' });
       const execution = transitionExecutionPackage(transitionExecutionPackage(ready, { type: 'run' }), {
