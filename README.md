@@ -38,7 +38,8 @@ The API defaults to `http://localhost:3000`. The web app is served by Vite, usua
 Common environment variables:
 
 - `PORT`: control-plane API port.
-- `FORGELOOP_API_URL`: API URL used by scripts and the web client, default `http://localhost:3000`.
+- `FORGELOOP_API_URL`: API URL used by scripts, default `http://localhost:3000`.
+- `VITE_FORGELOOP_API_URL`: API URL used by the web client, default `http://localhost:3000`.
 - `FORGELOOP_REPO_PATH`: local repo checkout used for dogfood local_codex runs.
 - `FORGELOOP_REPO_ID`: repo id bound to a ForgeLoop project, default `forgeloop`.
 - `FORGELOOP_BASE_COMMIT_SHA`: base commit for dogfood local_codex runs, default `git rev-parse HEAD`.

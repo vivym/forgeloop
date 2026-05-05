@@ -99,7 +99,12 @@ export function App() {
   const runSessions = hasActiveCockpit ? (cockpit.run_sessions ?? []) : [];
   const reviewPackets = hasActiveCockpit ? (cockpit.review_packets ?? []) : [];
   const selectedPackage = packages.find((item) => item.id === selectedPackageId) ?? packages[0];
-  const failedChecks = (runDetail?.check_results ?? []).filter((check) => check.status !== 'succeeded' && check.blocks_review !== false);
+  const activeSelectedRunId = hasActiveCockpit && runSessions.some((run) => run.id === selectedRunId) ? selectedRunId : '';
+  const activeSelectedReviewId =
+    hasActiveCockpit && reviewPackets.some((packet) => packet.id === selectedReviewId) ? selectedReviewId : '';
+  const activeRunDetail = activeSelectedRunId && runDetail?.id === activeSelectedRunId ? runDetail : null;
+  const activeReviewDetail = activeSelectedReviewId && reviewDetail?.id === activeSelectedReviewId ? reviewDetail : null;
+  const failedChecks = (activeRunDetail?.check_results ?? []).filter((check) => check.status !== 'succeeded' && check.blocks_review !== false);
   const nextActions = hasActiveCockpit ? (cockpit.next_actions ?? []) : [];
 
   useEffect(() => {
@@ -311,18 +316,19 @@ export function App() {
   }
 
   function reviewDecision(decision: 'approve' | 'request_changes') {
-    if (!selectedReviewId) return;
+    if (!activeSelectedReviewId) return;
     void runAction(decision === 'approve' ? 'Review approved' : 'Review changes requested', async () => {
+      const reviewPacketId = activeSelectedReviewId;
       const body = {
         summary: reviewForm.summary.trim() || (decision === 'approve' ? 'Approved.' : 'Changes requested.'),
         reviewed_by_actor_id: reviewForm.actor_id.trim() || reviewerDefault,
         reviewed_at: new Date().toISOString(),
         ...(decision === 'request_changes' ? { requested_changes: [toRequestedChange(reviewForm)] } : {}),
       };
-      if (decision === 'approve') await api.approveReviewPacket(selectedReviewId, body);
-      else await api.requestReviewChanges(selectedReviewId, body);
+      if (decision === 'approve') await api.approveReviewPacket(reviewPacketId, body);
+      else await api.requestReviewChanges(reviewPacketId, body);
       await refreshWorkbench();
-      setReviewDetail(await api.getReviewPacket(selectedReviewId));
+      setReviewDetail(await api.getReviewPacket(reviewPacketId));
     });
   }
 
@@ -503,13 +509,13 @@ export function App() {
         </section>
 
         <section className="panel run-review">
-          <SectionHeader title="Run/Review" meta={runDetail?.status ?? reviewDetail?.decision ?? 'none'} />
+          <SectionHeader title="Run/Review" meta={activeRunDetail?.status ?? activeReviewDetail?.decision ?? 'none'} />
           <div className="form-grid two">
-            <label>Run<select value={selectedRunId} onChange={(event) => setSelectedRunId(event.target.value)}>
+            <label>Run<select value={activeSelectedRunId} onChange={(event) => setSelectedRunId(event.target.value)}>
               <option value="">No run selected</option>
               {runSessions.map((run) => <option key={run.id} value={run.id}>{run.status} / {run.id}</option>)}
             </select></label>
-            <label>Review<select value={selectedReviewId} onChange={(event) => setSelectedReviewId(event.target.value)}>
+            <label>Review<select value={activeSelectedReviewId} onChange={(event) => setSelectedReviewId(event.target.value)}>
               <option value="">No review selected</option>
               {reviewPackets.map((packet) => <option key={packet.id} value={packet.id}>{packet.decision} / {packet.id}</option>)}
             </select></label>
@@ -522,11 +528,11 @@ export function App() {
           <label>Force reason<input value={runForm.force_reason} onChange={(event) => setRunForm({ ...runForm, force_reason: event.target.value })} /></label>
           <div className="button-row">
             <button disabled={!selectedPackage} onClick={() => runPackage('run')}>Run</button>
-            <button disabled={!selectedPackage || !selectedRunId} onClick={() => runPackage('rerun')}>Rerun</button>
-            <button disabled={!selectedPackage || !selectedRunId} onClick={() => runPackage('force')}>Force Rerun</button>
+            <button disabled={!selectedPackage || !activeSelectedRunId} onClick={() => runPackage('rerun')}>Rerun</button>
+            <button disabled={!selectedPackage || !activeSelectedRunId} onClick={() => runPackage('force')}>Force Rerun</button>
           </div>
-          <RunDetail run={runDetail} failedChecks={failedChecks} />
-          <ReviewDetail review={reviewDetail} />
+          <RunDetail run={activeRunDetail} failedChecks={failedChecks} />
+          <ReviewDetail review={activeReviewDetail} />
           <div className="review-controls">
             <div className="form-grid two">
               <label>Reviewer<input value={reviewForm.actor_id} onChange={(event) => setReviewForm({ ...reviewForm, actor_id: event.target.value })} /></label>
@@ -537,8 +543,8 @@ export function App() {
             <label>Change description<textarea value={reviewForm.change_description} onChange={(event) => setReviewForm({ ...reviewForm, change_description: event.target.value })} /></label>
             <label>Suggested validation<input value={reviewForm.suggested_validation} onChange={(event) => setReviewForm({ ...reviewForm, suggested_validation: event.target.value })} /></label>
             <div className="button-row">
-              <button disabled={!selectedReviewId} onClick={() => reviewDecision('approve')}>Approve Review</button>
-              <button disabled={!selectedReviewId} onClick={() => reviewDecision('request_changes')}>Request Changes</button>
+              <button disabled={!activeSelectedReviewId} onClick={() => reviewDecision('approve')}>Approve Review</button>
+              <button disabled={!activeSelectedReviewId} onClick={() => reviewDecision('request_changes')}>Request Changes</button>
             </div>
           </div>
         </section>
