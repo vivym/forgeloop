@@ -594,6 +594,41 @@ describe('runLocalCodexExecutor', () => {
     }
   });
 
+  it('returns preflight_failed when default Codex env setup cannot use artifact root', async () => {
+    const { repo, head } = await createGitRepo();
+    const artifactRootParent = await makeTempDir();
+    const artifactRootFile = join(artifactRootParent, 'artifact-root-file');
+    const codexHome = join(await makeTempDir(), '.codex');
+    let codexInvoked = false;
+    await writeFile(artifactRootFile, 'not a directory');
+
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: artifactRootFile,
+        codexHome,
+        environment: createGitBackedTestEnvironment(await makeTempDir(), {
+          runCodex: async () => {
+            codexInvoked = true;
+          },
+        }),
+      },
+    );
+
+    expect(codexInvoked).toBe(false);
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'preflight_failed',
+        message: expect.stringContaining('Codex environment setup failed'),
+      },
+    });
+  });
+
   it('neutralizes git remotes in the disposable workspace before runner and checks execute', async () => {
     const { repo, head } = await createGitRepo();
     await execGit(repo, ['remote', 'add', 'origin', 'https://example.com/repo.git']);

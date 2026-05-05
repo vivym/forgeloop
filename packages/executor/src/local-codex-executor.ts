@@ -543,9 +543,6 @@ export const runLocalCodexExecutor = async (
   const environment = options.environment ?? createDefaultLocalCodexEnvironment();
   const usesDefaultRunner = options.runner === undefined;
   const codexHome = configuredCodexHome(options);
-  const codexEnv = usesDefaultRunner && codexHome !== undefined
-    ? await createCodexEnv(options.artifactRoot, runSpec, codexHome)
-    : undefined;
 
   if (usesDefaultRunner && codexHome === undefined) {
     return executorFailureResult({
@@ -558,6 +555,25 @@ export const runLocalCodexExecutor = async (
         retryable: false,
       },
     });
+  }
+
+  let codexEnv: NodeJS.ProcessEnv | undefined;
+  if (usesDefaultRunner && codexHome !== undefined) {
+    try {
+      codexEnv = await createCodexEnv(options.artifactRoot, runSpec, codexHome);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown Codex environment setup error';
+      return executorFailureResult({
+        runSpec,
+        startedAt,
+        summary: `Local Codex preflight failed: Codex environment setup failed: ${message}`,
+        failure: {
+          kind: 'preflight_failed',
+          message: `Codex environment setup failed: ${message}`,
+          retryable: false,
+        },
+      });
+    }
   }
 
   const preflightOptions = {
