@@ -5,6 +5,7 @@ import {
   checkResultSchema,
   commandInventoryResponseSchema,
   executorResultSchema,
+  failureKindSchema,
   forceRerunPackageRequestSchema,
   forceRerunPackageResponseSchema,
   rerunPackageRequestSchema,
@@ -308,7 +309,7 @@ describe('P0 delivery loop contracts', () => {
     expect(nonBlocking.checks[0]?.blocks_review).toBe(false);
   });
 
-  it.each(['workspace_prepare_failed', 'preflight_failed'] as const)(
+  it.each(['workspace_prepare_failed', 'preflight_failed', 'executor_process_failed'] as const)(
     'parses a local codex executor result with %s failure',
     (failureKind) => {
       const parsed = executorResultSchema.parse({
@@ -339,6 +340,10 @@ describe('P0 delivery loop contracts', () => {
       expect(parsed.failure?.kind).toBe(failureKind);
     },
   );
+
+  it('parses the executor process failure kind', () => {
+    expect(failureKindSchema.parse('executor_process_failed')).toBe('executor_process_failed');
+  });
 
   it('parses a review request-changes decision payload', () => {
     const parsed = reviewDecisionPayloadSchema.parse({
@@ -720,6 +725,58 @@ describe('P0 delivery loop contracts', () => {
         ...validCheckResult,
         status: 'failed',
         exit_code: 0,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      checkResultSchema.safeParse({
+        ...validCheckResult,
+        status: 'skipped',
+        exit_code: 0,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      checkResultSchema.safeParse({
+        ...validCheckResult,
+        status: 'cancelled',
+        exit_code: 0,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      checkResultSchema.safeParse({
+        ...validCheckResult,
+        status: 'timed_out',
+        exit_code: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects executor timeout status with non-timeout failure kind', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        status: 'timed_out',
+        failure: {
+          kind: 'preflight_failed',
+          message: 'Preflight failed before execution timed out.',
+          retryable: true,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects failed executor status with timeout failure kind', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        status: 'failed',
+        failure: {
+          kind: 'timed_out',
+          message: 'Execution timed out.',
+          retryable: true,
+        },
       }).success,
     ).toBe(false);
   });

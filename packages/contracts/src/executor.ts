@@ -18,6 +18,7 @@ export const failureKindSchema = z.enum([
   'executor_error',
   'workspace_prepare_failed',
   'preflight_failed',
+  'executor_process_failed',
   'path_violation',
   'cancelled',
   'timed_out',
@@ -157,6 +158,25 @@ export const checkResultSchema = z
         code: 'custom',
         path: ['exit_code'],
         message: 'failed checks require a non-zero exit_code',
+      });
+    }
+
+    if (
+      (checkResult.status === 'skipped' || checkResult.status === 'cancelled') &&
+      checkResult.exit_code !== null
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['exit_code'],
+        message: `${checkResult.status} checks require exit_code null`,
+      });
+    }
+
+    if (checkResult.status === 'timed_out' && checkResult.exit_code === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['exit_code'],
+        message: 'timed_out checks require exit_code null or non-zero',
       });
     }
   });
@@ -308,6 +328,33 @@ export const executorResultSchema = z
         code: 'custom',
         path: ['failure'],
         message: 'failure is required when ExecutorResult status is not succeeded',
+      });
+    }
+
+    if (result.status === 'timed_out' && result.failure && result.failure.kind !== 'timed_out') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failure', 'kind'],
+        message: 'timed_out ExecutorResult requires timed_out failure kind',
+      });
+    }
+
+    if (result.status === 'cancelled' && result.failure && result.failure.kind !== 'cancelled') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failure', 'kind'],
+        message: 'cancelled ExecutorResult requires cancelled failure kind',
+      });
+    }
+
+    if (
+      result.status === 'failed' &&
+      (result.failure?.kind === 'timed_out' || result.failure?.kind === 'cancelled')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failure', 'kind'],
+        message: 'failed ExecutorResult cannot use timed_out or cancelled failure kind',
       });
     }
 
