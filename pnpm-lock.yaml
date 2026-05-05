@@ -189,6 +189,9 @@ importers:
       '@forgeloop/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@forgeloop/executor':
+        specifier: workspace:*
+        version: link:../../packages/executor
       '@forgeloop/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow

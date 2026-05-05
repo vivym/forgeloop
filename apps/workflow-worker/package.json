@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@forgeloop/db": "workspace:*",
+    "@forgeloop/executor": "workspace:*",
     "@forgeloop/workflow": "workspace:*",
     "@temporalio/client": "^1.17.0",
     "@temporalio/worker": "^1.17.0",
