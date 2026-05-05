@@ -170,7 +170,9 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {
-    this.objectEvents.set(objectEvent.id, clone(objectEvent));
+    if (!this.objectEvents.has(objectEvent.id)) {
+      this.objectEvents.set(objectEvent.id, clone(objectEvent));
+    }
   }
 
   async listObjectEvents(objectId: string, objectType?: string): Promise<ObjectEvent[]> {
@@ -183,7 +185,9 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async appendStatusHistory(statusHistory: StatusHistory): Promise<void> {
-    this.statusHistories.set(statusHistory.id, clone(statusHistory));
+    if (!this.statusHistories.has(statusHistory.id)) {
+      this.statusHistories.set(statusHistory.id, clone(statusHistory));
+    }
   }
 
   async listStatusHistory(objectId: string, objectType?: string): Promise<StatusHistory[]> {

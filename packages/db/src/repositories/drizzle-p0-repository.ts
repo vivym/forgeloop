@@ -1,4 +1,4 @@
-import { and, asc, eq, notInArray } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, notInArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
@@ -44,8 +44,21 @@ export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 const snakeToCamel = (value: string) => value.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
 const camelToSnake = (value: string) => value.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
 
-const toDbRecord = (record: object): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(record).map(([key, value]) => [snakeToCamel(key), value]));
+const toDbRecord = (record: object, table?: AnyPgTable): Record<string, unknown> => {
+  const dbRecord = Object.fromEntries(Object.entries(record).map(([key, value]) => [snakeToCamel(key), value]));
+
+  if (table === undefined) {
+    return dbRecord;
+  }
+
+  for (const [columnName, column] of Object.entries(getTableColumns(table))) {
+    if (!(column as { notNull?: boolean }).notNull && dbRecord[columnName] === undefined) {
+      dbRecord[columnName] = null;
+    }
+  }
+
+  return dbRecord;
+};
 
 const fromDbRecord = <T>(record: Record<string, unknown>): T =>
   Object.fromEntries(
@@ -132,12 +145,13 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async saveExecutionPackageDependency(dependency: ExecutionPackageDependency): Promise<void> {
+    const record = toDbRecord(dependency, execution_package_dependencies);
     await this.db
       .insert(execution_package_dependencies)
-      .values(toDbRecord(dependency) as never)
+      .values(record as never)
       .onConflictDoUpdate({
         target: [execution_package_dependencies.packageId, execution_package_dependencies.dependsOnPackageId],
-        set: toDbRecord(dependency) as never,
+        set: record as never,
       });
   }
 
@@ -197,7 +211,7 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {
-    await this.upsert(object_events, object_events.id, objectEvent);
+    await this.db.insert(object_events).values(toDbRecord(objectEvent, object_events) as never).onConflictDoNothing();
   }
 
   async listObjectEvents(objectId: string, objectType?: string): Promise<ObjectEvent[]> {
@@ -211,7 +225,10 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async appendStatusHistory(statusHistory: StatusHistory): Promise<void> {
-    await this.upsert(status_histories, status_histories.id, statusHistory);
+    await this.db
+      .insert(status_histories)
+      .values(toDbRecord(statusHistory, status_histories) as never)
+      .onConflictDoNothing();
   }
 
   async listStatusHistory(objectId: string, objectType?: string): Promise<StatusHistory[]> {
@@ -249,7 +266,7 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   private async upsert(table: AnyPgTable, target: AnyPgColumn, entity: object): Promise<void> {
-    const record = toDbRecord(entity);
+    const record = toDbRecord(entity, table);
     await this.db.insert(table).values(record as never).onConflictDoUpdate({
       target,
       set: record as never,

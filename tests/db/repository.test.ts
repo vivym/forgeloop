@@ -17,7 +17,7 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { DrizzleP0Repository, InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 
@@ -314,6 +314,38 @@ const decision: Decision = {
   created_at: now,
 };
 
+const createInsertCaptureRepository = () => {
+  const captures: Array<{ values: Record<string, unknown>; set?: Record<string, unknown> }> = [];
+  const db = {
+    insert: () => ({
+      values: (values: Record<string, unknown>) => ({
+        onConflictDoUpdate: async ({ set }: { set: Record<string, unknown> }) => {
+          captures.push({ values, set });
+        },
+        onConflictDoNothing: async () => {
+          captures.push({ values });
+        },
+      }),
+    }),
+  };
+
+  return { repository: new DrizzleP0Repository(db as never), captures };
+};
+
+const createSingleRowRepository = (row: Record<string, unknown>) => {
+  const db = {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => [row],
+        }),
+      }),
+    }),
+  };
+
+  return new DrizzleP0Repository(db as never);
+};
+
 describe('P0Repository in-memory adapter', () => {
   it('persists and queries a minimal P0 delivery flow', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
@@ -378,5 +410,155 @@ describe('P0Repository in-memory adapter', () => {
     expect((await repository.getProject(project.id))?.name).toBe(project.name);
     expect((await repository.getWorkItem(workItem.id))?.success_criteria).toEqual(workItem.success_criteria);
     expect((await repository.getRunSession(runSession.id))?.changed_files).toEqual(runSession.changed_files);
+  });
+
+  it('keeps the original object event when the same event id is appended again', async () => {
+    const repository = new InMemoryP0Repository();
+    const duplicateEvent: ObjectEvent = {
+      ...objectEvent,
+      event_type: 'run_started',
+      metadata: { run_session_id: 'different-run-session' },
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.appendObjectEvent(objectEvent);
+    await repository.appendObjectEvent(duplicateEvent);
+
+    expect(await repository.listObjectEvents(executionPackage.id)).toEqual([objectEvent]);
+  });
+
+  it('keeps the original status history when the same history id is appended again', async () => {
+    const repository = new InMemoryP0Repository();
+    const duplicateStatusHistory: StatusHistory = {
+      ...statusHistory,
+      from_status: 'ready',
+      to_status: 'execution',
+      reason: 'Conflicting duplicate.',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.appendStatusHistory(statusHistory);
+    await repository.appendStatusHistory(duplicateStatusHistory);
+
+    expect(await repository.listStatusHistory(executionPackage.id)).toEqual([statusHistory]);
+  });
+});
+
+describe('P0Repository Drizzle adapter persistence mapping', () => {
+  it('writes omitted nullable optional domain fields as null without nulling required JSON fields', async () => {
+    const { repository, captures } = createInsertCaptureRepository();
+    const executionPackageWithoutLastRun: ExecutionPackage = { ...executionPackage };
+    const runSessionWithoutTerminalFields: RunSession = {
+      id: 'run-session-open',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: 'actor-owner',
+      status: 'running',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      created_at: now,
+      updated_at: now,
+    };
+    const reviewPacketWithoutCompletion: ReviewPacket = { ...reviewPacket, id: 'review-packet-open' };
+
+    delete executionPackageWithoutLastRun.last_run_session_id;
+    delete reviewPacketWithoutCompletion.summary;
+
+    await repository.saveExecutionPackage(executionPackageWithoutLastRun);
+    await repository.saveRunSession(runSessionWithoutTerminalFields);
+    await repository.saveReviewPacket(reviewPacketWithoutCompletion);
+
+    expect(captures[0]?.values.lastRunSessionId).toBeNull();
+    expect(captures[0]?.set?.lastRunSessionId).toBeNull();
+    expect(captures[1]?.values.finishedAt).toBeNull();
+    expect(captures[1]?.values.summary).toBeNull();
+    expect(captures[1]?.values.failureReason).toBeNull();
+    expect(captures[1]?.set?.finishedAt).toBeNull();
+    expect(captures[1]?.set?.summary).toBeNull();
+    expect(captures[1]?.set?.failureReason).toBeNull();
+    expect(captures[1]?.values.changedFiles).toEqual([]);
+    expect(captures[1]?.values.checkResults).toEqual([]);
+    expect(captures[1]?.values.artifacts).toEqual([]);
+    expect(captures[1]?.values.logRefs).toEqual([]);
+    expect(captures[2]?.values.completedAt).toBeNull();
+    expect(captures[2]?.values.summary).toBeNull();
+    expect(captures[2]?.set?.completedAt).toBeNull();
+    expect(captures[2]?.set?.summary).toBeNull();
+  });
+
+  it('maps database nulls back to omitted optional domain properties', async () => {
+    const executionPackageRow = {
+      id: executionPackage.id,
+      workItemId: executionPackage.work_item_id,
+      specId: executionPackage.spec_id,
+      specRevisionId: executionPackage.spec_revision_id,
+      planId: executionPackage.plan_id,
+      planRevisionId: executionPackage.plan_revision_id,
+      projectId: executionPackage.project_id,
+      repoId: executionPackage.repo_id,
+      objective: executionPackage.objective,
+      ownerActorId: executionPackage.owner_actor_id,
+      reviewerActorId: executionPackage.reviewer_actor_id,
+      qaOwnerActorId: executionPackage.qa_owner_actor_id,
+      phase: executionPackage.phase,
+      activityState: executionPackage.activity_state,
+      gateState: executionPackage.gate_state,
+      resolution: executionPackage.resolution,
+      requiredChecks: executionPackage.required_checks,
+      requiredArtifactKinds: executionPackage.required_artifact_kinds,
+      allowedPaths: executionPackage.allowed_paths,
+      forbiddenPaths: executionPackage.forbidden_paths,
+      lastRunSessionId: null,
+      createdAt: executionPackage.created_at,
+      updatedAt: executionPackage.updated_at,
+    };
+    const runSessionRow = {
+      id: runSession.id,
+      executionPackageId: runSession.execution_package_id,
+      requestedByActorId: runSession.requested_by_actor_id,
+      status: runSession.status,
+      changedFiles: runSession.changed_files,
+      checkResults: runSession.check_results,
+      artifacts: runSession.artifacts,
+      logRefs: runSession.log_refs,
+      summary: null,
+      failureReason: null,
+      createdAt: runSession.created_at,
+      updatedAt: runSession.updated_at,
+      finishedAt: null,
+    };
+    const reviewPacketRow = {
+      id: reviewPacket.id,
+      runSessionId: reviewPacket.run_session_id,
+      executionPackageId: reviewPacket.execution_package_id,
+      reviewerActorId: reviewPacket.reviewer_actor_id,
+      specRevisionId: reviewPacket.spec_revision_id,
+      planRevisionId: reviewPacket.plan_revision_id,
+      status: reviewPacket.status,
+      decision: reviewPacket.decision,
+      changedFiles: reviewPacket.changed_files,
+      checkResultSummary: reviewPacket.check_result_summary,
+      selfReview: reviewPacket.self_review,
+      riskNotes: reviewPacket.risk_notes,
+      requestedChanges: reviewPacket.requested_changes,
+      createdAt: reviewPacket.created_at,
+      updatedAt: reviewPacket.updated_at,
+      completedAt: null,
+      summary: null,
+    };
+
+    const mappedExecutionPackage = await createSingleRowRepository(executionPackageRow).getExecutionPackage(
+      executionPackage.id,
+    );
+    const mappedRunSession = await createSingleRowRepository(runSessionRow).getRunSession(runSession.id);
+    const mappedReviewPacket = await createSingleRowRepository(reviewPacketRow).getReviewPacket(reviewPacket.id);
+
+    expect(mappedExecutionPackage).not.toHaveProperty('last_run_session_id');
+    expect(mappedRunSession).not.toHaveProperty('finished_at');
+    expect(mappedRunSession).not.toHaveProperty('summary');
+    expect(mappedRunSession).not.toHaveProperty('failure_reason');
+    expect(mappedReviewPacket).not.toHaveProperty('completed_at');
+    expect(mappedReviewPacket).not.toHaveProperty('summary');
   });
 });
