@@ -9,6 +9,7 @@ import {
   runLocalCodexExecutor,
   runLocalCodexPreflight,
   type CommandChecker,
+  type CommandRunner,
   type CodexRunner,
   type LocalCodexEnvironment,
 } from '../../packages/executor/src/index';
@@ -21,6 +22,14 @@ const makeTempDir = async () => {
   const dir = await mkdtemp(join(tmpdir(), 'forgeloop-executor-'));
   tempRoots.push(dir);
   return dir;
+};
+
+const execGit = async (cwd: string, args: readonly string[]) => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+
+  return execFileAsync('git', [...args], { cwd });
 };
 
 const okCommandChecker: CommandChecker = async () => true;
@@ -39,6 +48,7 @@ const createPassingEnvironment = (overrides: Partial<LocalCodexEnvironment> = {}
   isWorkspaceClean: async () => true,
   isWritableDirectory: async () => true,
   runCodex: async () => undefined,
+  runCommand: async () => ({ stdout: '', stderr: '' }),
   ...overrides,
 });
 
@@ -59,18 +69,15 @@ const createGitBackedTestEnvironment = (
 
 const createGitRepo = async () => {
   const repo = await makeTempDir();
-  const { execFile } = await import('node:child_process');
-  const { promisify } = await import('node:util');
-  const execFileAsync = promisify(execFile);
 
-  await execFileAsync('git', ['init', '-b', 'main'], { cwd: repo });
-  await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
-  await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+  await execGit(repo, ['init', '-b', 'main']);
+  await execGit(repo, ['config', 'user.email', 'test@example.com']);
+  await execGit(repo, ['config', 'user.name', 'Test User']);
   await mkdir(join(repo, 'packages/executor/src'), { recursive: true });
   await writeFile(join(repo, 'packages/executor/src/existing.ts'), 'export const existing = true;\n');
-  await execFileAsync('git', ['add', '.'], { cwd: repo });
-  await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: repo });
-  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repo });
+  await execGit(repo, ['add', '.']);
+  await execGit(repo, ['commit', '-m', 'initial']);
+  const { stdout } = await execGit(repo, ['rev-parse', 'HEAD']);
 
   return {
     repo,
@@ -187,6 +194,30 @@ describe('runLocalCodexPreflight', () => {
 
     await expect(environment.isCodexRuntimeReady()).resolves.toBe(true);
     expect(calls).toEqual([{ command: 'codex', args: ['login', 'status'] }]);
+  });
+
+  it('sanitizes disposable workspace path segments from run session ids', async () => {
+    const repo = await makeTempDir();
+    const workspaceRoot = await makeTempDir();
+    const result = await runLocalCodexPreflight(
+      createRunSpec({
+        run_session_id: '../escape/run-session',
+        repo: { local_path: repo },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createPassingEnvironment({
+          prepareWorkspace: createDefaultLocalCodexEnvironment({
+            workspaceRoot,
+            commandRunner: async () => ({ stdout: '', stderr: '' }),
+          }).prepareWorkspace,
+        }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.workspacePath.startsWith(workspaceRoot)).toBe(true);
+    expect(result.workspacePath).not.toContain('..');
   });
 
   it('fails when disposable workspace preparation fails', async () => {
@@ -429,5 +460,276 @@ describe('runLocalCodexExecutor', () => {
     expect(prompt).toContain('Required checks:');
     expect(prompt).toContain('prompt-check');
     expect(prompt).toContain('pnpm test tests/executor');
+  });
+
+  it('uses workspace-write sandbox and sanitized environment for the default Codex invocation', async () => {
+    const { repo, head } = await createGitRepo();
+    const workspaceRoot = await makeTempDir();
+    const commandCalls: Array<{ command: string; args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    const commandRunner: CommandRunner = async (command, args, options) => {
+      commandCalls.push({ command, args, env: options?.env });
+
+      if (command === 'codex') {
+        return { stdout: '', stderr: '' };
+      }
+
+      const { stdout, stderr } = await execFileAsync(command, [...args], options);
+      return { stdout: String(stdout), stderr: String(stderr) };
+    };
+    process.env.GITHUB_TOKEN = 'secret-token';
+
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
+      },
+    );
+
+    delete process.env.GITHUB_TOKEN;
+    expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+    const codexExecCall = commandCalls.find(
+      (call) => call.command === 'codex' && call.args[0] === 'exec',
+    );
+    expect(codexExecCall?.args).toContain('workspace-write');
+    expect(codexExecCall?.args).not.toContain('danger-full-access');
+    expect(codexExecCall?.env).not.toHaveProperty('GITHUB_TOKEN');
+  });
+
+  it('neutralizes git remotes in the disposable workspace before runner and checks execute', async () => {
+    const { repo, head } = await createGitRepo();
+    await execGit(repo, ['remote', 'add', 'origin', 'https://example.com/repo.git']);
+    let runnerRemotes = 'not checked';
+
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async ({ workspacePath }) => {
+            const { stdout } = await execGit(workspacePath, ['remote']);
+            runnerRemotes = stdout;
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+    expect(runnerRemotes.trim()).toBe('');
+  });
+
+  it('records forbidden blocking checks as failed without executing them', async () => {
+    const { repo, head } = await createGitRepo();
+    const markerPath = join(repo, 'should-not-exist');
+    const forbiddenCheck = blockingCheck({
+      check_id: 'publish',
+      display_name: 'Publish',
+      command: `git push origin main && touch ${JSON.stringify(markerPath)}`,
+    });
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [forbiddenCheck],
+        context: { required_checks: [forbiddenCheck] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: { kind: 'required_check_failed' },
+      checks: [{ check_id: 'publish', status: 'failed', exit_code: 1 }],
+    });
+    await expect(stat(markerPath)).rejects.toThrow();
+  });
+
+  it('returns path_violation before running checks for runner changes outside allowed paths', async () => {
+    const { repo, head } = await createGitRepo();
+    let checkRan = false;
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
+        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async ({ workspacePath }) => {
+            await writeFile(join(workspacePath, 'README.md'), 'outside allowed paths\n');
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    checkRan = result.checks.length > 0;
+    expect(checkRan).toBe(false);
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: { kind: 'path_violation' },
+      changed_files: [{ path: 'README.md' }],
+    });
+  });
+
+  it('returns final path_violation when checks mutate forbidden files and captures the final diff', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ command: 'mkdir -p packages/contracts/src && echo bad > packages/contracts/src/mutate.ts' })],
+        context: {
+          required_checks: [blockingCheck({ command: 'mkdir -p packages/contracts/src && echo bad > packages/contracts/src/mutate.ts' })],
+        },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async ({ workspacePath }) => {
+            await writeFile(join(workspacePath, 'packages/executor/src/allowed.ts'), 'export const ok = true;\n');
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: { kind: 'path_violation' },
+      changed_files: expect.arrayContaining([
+        expect.objectContaining({ path: 'packages/contracts/src/mutate.ts' }),
+      ]),
+    });
+    const diffArtifact = result.artifacts.find((artifact) => artifact.kind === 'diff');
+    await expect(readFile(diffArtifact?.local_ref ?? '', 'utf8')).resolves.toContain('packages/contracts/src/mutate.ts');
+  });
+
+  it('rejects renames from forbidden previous paths into allowed paths', async () => {
+    const { repo, head } = await createGitRepo();
+    await mkdir(join(repo, 'packages/contracts/src'), { recursive: true });
+    await writeFile(join(repo, 'packages/contracts/src/secret.ts'), 'export const secret = true;\n');
+    await execGit(repo, ['add', '.']);
+    await execGit(repo, ['commit', '-m', 'add forbidden source']);
+    const { stdout } = await execGit(repo, ['rev-parse', 'HEAD']);
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: stdout.trim() },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async ({ workspacePath }) => {
+            await mkdir(join(workspacePath, 'packages/executor/src'), { recursive: true });
+            await execGit(workspacePath, ['mv', 'packages/contracts/src/secret.ts', 'packages/executor/src/secret.ts']);
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: { kind: 'path_violation' },
+      changed_files: [
+        {
+          path: 'packages/executor/src/secret.ts',
+          previous_path: 'packages/contracts/src/secret.ts',
+          change_kind: 'renamed',
+        },
+      ],
+    });
+  });
+
+  it('keeps artifact paths under artifact root for malicious run and check ids', async () => {
+    const { repo, head } = await createGitRepo();
+    const artifactRoot = await makeTempDir();
+    const maliciousCheck = blockingCheck({
+      check_id: '../check/escape',
+      command: 'node -e "process.exit(0)"',
+    });
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        run_session_id: '../session/escape',
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [maliciousCheck],
+        context: { required_checks: [maliciousCheck] },
+      }),
+      {
+        artifactRoot,
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async ({ workspacePath }) => {
+            await writeFile(join(workspacePath, 'packages/executor/src/safe.ts'), 'export const safe = true;\n');
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+    for (const artifact of result.artifacts) {
+      expect(artifact.local_ref?.startsWith(artifactRoot)).toBe(true);
+      expect(artifact.local_ref?.slice(artifactRoot.length)).not.toContain('..');
+    }
+  });
+
+  it('returns executor_error with logs artifact when diff capture fails', async () => {
+    const { repo, head } = await createGitRepo();
+    const workspaceRoot = await makeTempDir();
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    const commandRunner: CommandRunner = async (command, args, options) => {
+      if (command === 'git' && args[0] === 'diff') {
+        throw new Error('stdout maxBuffer length exceeded');
+      }
+      if (command === 'codex') {
+        return { stdout: '', stderr: '' };
+      }
+
+      const { stdout, stderr } = await execFileAsync(command, [...args], options);
+      return { stdout: String(stdout), stderr: String(stderr) };
+    };
+
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'executor_error',
+        message: expect.stringContaining('diff capture failed'),
+      },
+      artifacts: [expect.objectContaining({ kind: 'logs' })],
+    });
   });
 });

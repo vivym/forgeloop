@@ -1,6 +1,6 @@
-import { exec, execFile } from 'node:child_process';
+import { exec } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
@@ -19,9 +19,20 @@ import {
 } from './local-codex-preflight.js';
 
 const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
 
 const EXECUTOR_VERSION = '0.1.0';
+const GIT_OUTPUT_MAX_BUFFER = 1024 * 1024 * 50;
+const REDACTED_ENV_KEYS = new Set([
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'NPM_TOKEN',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+]);
 
 export interface CodexRunnerInput {
   runSpec: RunSpec;
@@ -55,6 +66,31 @@ interface CommandExecutionResult {
 
 const nowIso = () => new Date().toISOString();
 
+const sanitizedEnv = (): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(process.env).filter(([key]) => !REDACTED_ENV_KEYS.has(key)));
+
+const safePathSegment = (value: string): string => {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/^-+|-+$/g, '');
+
+  return sanitized.length > 0 ? sanitized : 'artifact';
+};
+
+const assertInside = (root: string, candidate: string): string => {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidate);
+  const relativePath = relative(resolvedRoot, resolvedCandidate);
+
+  if (relativePath.startsWith('..') || relativePath === '..' || resolve(relativePath) === relativePath) {
+    throw new Error(`Resolved path escapes root: ${candidate}`);
+  }
+
+  return resolvedCandidate;
+};
+
 const codexPromptFor = (runSpec: RunSpec) =>
   [
     `Objective:\n${runSpec.objective}`,
@@ -87,6 +123,7 @@ const defaultRunner = (environment: LocalCodexEnvironment): CodexRunner => ({
         workspacePath,
         prompt: codexPromptFor(runSpec),
         timeoutSeconds: runSpec.timeout_seconds,
+        env: sanitizedEnv(),
       });
 
       return {
@@ -133,14 +170,34 @@ const executorFailureResult = (input: {
   raw_metadata: input.rawMetadata ?? {},
 });
 
-const statusOutput = async (workspacePath: string, args: string[]) => {
-  const { stdout } = await execFileAsync('git', args, { cwd: workspacePath });
+const statusOutput = async (environment: LocalCodexEnvironment, workspacePath: string, args: string[]) => {
+  const { stdout } = await environment.runCommand('git', args, {
+    cwd: workspacePath,
+    env: sanitizedEnv(),
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+  });
 
   return stdout;
 };
 
-const prepareDiffIndex = async (workspacePath: string) => {
-  await execFileAsync('git', ['add', '-N', '.'], { cwd: workspacePath });
+const prepareDiffIndex = async (environment: LocalCodexEnvironment, workspacePath: string) => {
+  await environment.runCommand('git', ['add', '-N', '.'], { cwd: workspacePath, env: sanitizedEnv() });
+};
+
+const neutralizeGitRemotes = async (environment: LocalCodexEnvironment, workspacePath: string) => {
+  const { stdout } = await environment.runCommand('git', ['remote'], {
+    cwd: workspacePath,
+    env: sanitizedEnv(),
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+  });
+
+  await Promise.all(
+    stdout
+      .split('\n')
+      .map((remote) => remote.trim())
+      .filter(Boolean)
+      .map((remote) => environment.runCommand('git', ['remote', 'remove', remote], { cwd: workspacePath, env: sanitizedEnv() })),
+  );
 };
 
 const changeKindFor = (status: string): ChangedFile['change_kind'] => {
@@ -188,7 +245,12 @@ const pathIsForbidden = (path: string, forbiddenPatterns: readonly string[]) =>
 
 const pathViolation = (runSpec: RunSpec, changedFiles: readonly ChangedFile[]): ExecutorFailure | undefined => {
   const violatingFile = changedFiles.find(
-    (file) => !pathIsAllowed(file.path, runSpec.allowed_paths) || pathIsForbidden(file.path, runSpec.forbidden_paths),
+    (file) =>
+      !pathIsAllowed(file.path, runSpec.allowed_paths) ||
+      pathIsForbidden(file.path, runSpec.forbidden_paths) ||
+      (file.previous_path !== undefined &&
+        (!pathIsAllowed(file.previous_path, runSpec.allowed_paths) ||
+          pathIsForbidden(file.previous_path, runSpec.forbidden_paths))),
   );
 
   if (violatingFile === undefined) {
@@ -202,7 +264,8 @@ const pathViolation = (runSpec: RunSpec, changedFiles: readonly ChangedFile[]): 
   };
 };
 
-const artifactPath = (artifactRoot: string, runSessionId: string, name: string) => join(artifactRoot, runSessionId, name);
+const artifactPath = (artifactRoot: string, runSessionId: string, name: string) =>
+  assertInside(artifactRoot, join(artifactRoot, safePathSegment(runSessionId), safePathSegment(name)));
 
 const writeArtifact = async (
   artifactRoot: string,
@@ -212,7 +275,7 @@ const writeArtifact = async (
 ): Promise<ArtifactRef> => {
   const localRef = artifactPath(artifactRoot, runSessionId, artifact.name);
 
-  await mkdir(join(artifactRoot, runSessionId), { recursive: true });
+  await mkdir(assertInside(artifactRoot, join(artifactRoot, safePathSegment(runSessionId))), { recursive: true });
   await writeFile(localRef, content);
 
   return {
@@ -229,6 +292,7 @@ const runCheckCommand = async (command: string, cwd: string, timeoutSeconds: num
       cwd,
       timeout: timeoutSeconds * 1000,
       maxBuffer: 1024 * 1024 * 10,
+      env: sanitizedEnv(),
     });
 
     return {
@@ -258,6 +322,17 @@ const runCheckCommand = async (command: string, cwd: string, timeoutSeconds: num
   }
 };
 
+const forbiddenCheckPatterns = [
+  /\bgit\s+push\b/i,
+  /\bgh\s+pr\b/i,
+  /\bgh\s+release\b/i,
+  /\bnpm\s+publish\b/i,
+  /\bpnpm\s+publish\b/i,
+  /\byarn\s+npm\s+publish\b/i,
+];
+
+const isForbiddenCheckCommand = (command: string) => forbiddenCheckPatterns.some((pattern) => pattern.test(command));
+
 const runChecks = async (
   runSpec: RunSpec,
   workspacePath: string,
@@ -267,13 +342,21 @@ const runChecks = async (
   const artifacts: ArtifactRef[] = [];
 
   for (const check of runSpec.required_checks) {
-    const result = await runCheckCommand(check.command, workspacePath, check.timeout_seconds);
+    const result = isForbiddenCheckCommand(check.command)
+      ? {
+          status: 'failed' as const,
+          exitCode: 1,
+          stdout: '',
+          stderr: `Blocked forbidden required-check command: ${check.command}`,
+          durationSeconds: 0,
+        }
+      : await runCheckCommand(check.command, workspacePath, check.timeout_seconds);
     const stdoutArtifact = await writeArtifact(
       artifactRoot,
       runSpec.run_session_id,
       {
         kind: 'check_output',
-        name: `${check.check_id}-stdout.txt`,
+        name: `${safePathSegment(check.check_id)}-stdout.txt`,
         content_type: 'text/plain',
       },
       result.stdout,
@@ -283,7 +366,7 @@ const runChecks = async (
       runSpec.run_session_id,
       {
         kind: 'check_output',
-        name: `${check.check_id}-stderr.txt`,
+        name: `${safePathSegment(check.check_id)}-stderr.txt`,
         content_type: 'text/plain',
       },
       result.stderr,
@@ -305,6 +388,102 @@ const runChecks = async (
   return { checks, artifacts };
 };
 
+const collectChangedFiles = async (
+  environment: LocalCodexEnvironment,
+  runSpec: RunSpec,
+  workspacePath: string,
+): Promise<ChangedFile[]> => {
+  await prepareDiffIndex(environment, workspacePath);
+  const nameStatus = await statusOutput(environment, workspacePath, ['diff', '--name-status', 'HEAD']);
+
+  return parseChangedFiles(runSpec.repo.repo_id, nameStatus);
+};
+
+const captureDiffArtifacts = async (
+  environment: LocalCodexEnvironment,
+  runSpec: RunSpec,
+  workspacePath: string,
+  artifactRoot: string,
+  summary: string,
+): Promise<{ changedFiles: ChangedFile[]; artifacts: ArtifactRef[] }> => {
+  const changedFiles = await collectChangedFiles(environment, runSpec, workspacePath);
+  const diff = await statusOutput(environment, workspacePath, ['diff', 'HEAD']);
+  const diffArtifact = await writeArtifact(
+    artifactRoot,
+    runSpec.run_session_id,
+    {
+      kind: 'diff',
+      name: 'patch.diff',
+      content_type: 'text/x-diff',
+    },
+    diff,
+  );
+  const changedFilesArtifact = await writeArtifact(
+    artifactRoot,
+    runSpec.run_session_id,
+    {
+      kind: 'changed_files',
+      name: 'changed-files.json',
+      content_type: 'application/json',
+    },
+    JSON.stringify(changedFiles, null, 2),
+  );
+  const summaryArtifact = await writeArtifact(
+    artifactRoot,
+    runSpec.run_session_id,
+    {
+      kind: 'execution_summary',
+      name: 'execution-summary.md',
+      content_type: 'text/markdown',
+    },
+    summary,
+  );
+
+  return {
+    changedFiles,
+    artifacts: [diffArtifact, changedFilesArtifact, summaryArtifact],
+  };
+};
+
+const diffCaptureFailure = async (
+  runSpec: RunSpec,
+  startedAt: string,
+  artifactRoot: string,
+  error: unknown,
+): Promise<ExecutorResult> => {
+  const message = error instanceof Error ? error.message : 'unknown diff capture failure';
+  let artifacts: ArtifactRef[] = [];
+
+  try {
+    artifacts = [
+      await writeArtifact(
+        artifactRoot,
+        runSpec.run_session_id,
+        {
+          kind: 'logs',
+          name: 'diff-capture-error.txt',
+          content_type: 'text/plain',
+        },
+        `diff capture failed: ${message}`,
+      ),
+    ];
+  } catch {
+    artifacts = [];
+  }
+
+  return executorFailureResult({
+    runSpec,
+    startedAt,
+    summary: `Git diff capture failed: ${message}`,
+    failure: {
+      kind: 'executor_error',
+      message: `Git diff capture failed: ${message}`,
+      retryable: true,
+    },
+    artifacts,
+  });
+};
+
 export const runLocalCodexExecutor = async (
   runSpec: RunSpec,
   options: LocalCodexExecutorOptions,
@@ -324,6 +503,8 @@ export const runLocalCodexExecutor = async (
       failure: preflight.failure,
     });
   }
+
+  await neutralizeGitRemotes(environment, preflight.workspacePath);
 
   const runner = options.runner ?? defaultRunner(environment);
   const runnerResult = await runner.run({
@@ -351,51 +532,67 @@ export const runLocalCodexExecutor = async (
     });
   }
 
-  await prepareDiffIndex(preflight.workspacePath);
-  const nameStatus = await statusOutput(preflight.workspacePath, ['diff', '--name-status', 'HEAD']);
-  const diff = await statusOutput(preflight.workspacePath, ['diff', 'HEAD']);
-  const changedFiles = parseChangedFiles(runSpec.repo.repo_id, nameStatus);
-  const diffArtifact = await writeArtifact(
-    options.artifactRoot,
-    runSpec.run_session_id,
-    {
-      kind: 'diff',
-      name: 'patch.diff',
-      content_type: 'text/x-diff',
-    },
-    diff,
-  );
-  const changedFilesArtifact = await writeArtifact(
-    options.artifactRoot,
-    runSpec.run_session_id,
-    {
-      kind: 'changed_files',
-      name: 'changed-files.json',
-      content_type: 'application/json',
-    },
-    JSON.stringify(changedFiles, null, 2),
-  );
-  const summaryArtifact = await writeArtifact(
-    options.artifactRoot,
-    runSpec.run_session_id,
-    {
-      kind: 'execution_summary',
-      name: 'execution-summary.md',
-      content_type: 'text/markdown',
-    },
-    runnerResult.summary,
-  );
-  const pathFailure = pathViolation(runSpec, changedFiles);
-  const checkRun = await runChecks(runSpec, preflight.workspacePath, options.artifactRoot);
-  const artifacts = [diffArtifact, changedFilesArtifact, summaryArtifact, ...checkRun.artifacts];
+  let initialChangedFiles: ChangedFile[];
+  try {
+    initialChangedFiles = await collectChangedFiles(environment, runSpec, preflight.workspacePath);
+  } catch (error) {
+    return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
+  }
 
-  if (pathFailure !== undefined) {
+  const initialPathFailure = pathViolation(runSpec, initialChangedFiles);
+
+  if (initialPathFailure !== undefined) {
+    let capture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
+    try {
+      capture = await captureDiffArtifacts(
+        environment,
+        runSpec,
+        preflight.workspacePath,
+        options.artifactRoot,
+        runnerResult.summary,
+      );
+    } catch (error) {
+      return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
+    }
+
     return executorFailureResult({
       runSpec,
       startedAt,
-      summary: pathFailure.message,
-      failure: pathFailure,
-      changedFiles,
+      summary: initialPathFailure.message,
+      failure: initialPathFailure,
+      changedFiles: capture.changedFiles,
+      checks: [],
+      artifacts: capture.artifacts,
+      rawMetadata: {
+        workspace_path: preflight.workspacePath,
+        base_ref: preflight.resolvedBaseRef,
+      },
+    });
+  }
+
+  const checkRun = await runChecks(runSpec, preflight.workspacePath, options.artifactRoot);
+  let finalCapture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
+  try {
+    finalCapture = await captureDiffArtifacts(
+      environment,
+      runSpec,
+      preflight.workspacePath,
+      options.artifactRoot,
+      runnerResult.summary,
+    );
+  } catch (error) {
+    return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
+  }
+  const artifacts = [...finalCapture.artifacts, ...checkRun.artifacts];
+  const finalPathFailure = pathViolation(runSpec, finalCapture.changedFiles);
+
+  if (finalPathFailure !== undefined) {
+    return executorFailureResult({
+      runSpec,
+      startedAt,
+      summary: finalPathFailure.message,
+      failure: finalPathFailure,
+      changedFiles: finalCapture.changedFiles,
       checks: checkRun.checks,
       artifacts,
       rawMetadata: {
@@ -417,7 +614,7 @@ export const runLocalCodexExecutor = async (
         message: `Blocking check failed: ${failedBlockingCheck.check_id}`,
         retryable: true,
       },
-      changedFiles,
+      changedFiles: finalCapture.changedFiles,
       checks: checkRun.checks,
       artifacts,
       rawMetadata: {
@@ -435,7 +632,7 @@ export const runLocalCodexExecutor = async (
     started_at: startedAt,
     finished_at: nowIso(),
     summary: runnerResult.summary,
-    changed_files: changedFiles,
+    changed_files: finalCapture.changedFiles,
     checks: checkRun.checks,
     artifacts,
     raw_metadata: {

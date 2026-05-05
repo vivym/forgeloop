@@ -14,6 +14,7 @@ export interface CommandRunOptions {
   cwd?: string;
   timeout?: number;
   maxBuffer?: number;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface CommandRunResult {
@@ -31,6 +32,7 @@ export interface CodexInvocation {
   workspacePath: string;
   prompt: string;
   timeoutSeconds: number;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface WorkspacePrepareSuccess {
@@ -58,6 +60,7 @@ export interface LocalCodexEnvironment {
   isWorkspaceClean: (workspacePath: string) => Promise<boolean>;
   isWritableDirectory: (path: string) => Promise<boolean>;
   runCodex: (input: CodexInvocation) => Promise<void>;
+  runCommand: CommandRunner;
 }
 
 export interface LocalCodexPreflightOptions {
@@ -91,6 +94,16 @@ const failure = (message: string, retryable = false): LocalCodexPreflightFailure
     retryable,
   },
 });
+
+const safePathSegment = (value: string): string => {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/^-+|-+$/g, '');
+
+  return sanitized.length > 0 ? sanitized : 'run-session';
+};
 
 const execFileCommandRunner: CommandRunner = async (command, args, options) => {
   const { stdout, stderr } = await execFileAsync(command, [...args], options);
@@ -169,17 +182,23 @@ export const createDefaultLocalCodexEnvironment = (
     resolveGitRef: resolveGitRef(runCommand),
     isWorkspaceClean: isWorkspaceClean(runCommand),
     isWritableDirectory,
-    runCodex: async ({ workspacePath, prompt, timeoutSeconds }) => {
-      await runCommand('codex', ['exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', prompt], {
+    runCodex: async ({ workspacePath, prompt, timeoutSeconds, env }) => {
+      const commandOptions: CommandRunOptions = {
         cwd: workspacePath,
         timeout: timeoutSeconds * 1000,
         maxBuffer: 1024 * 1024 * 10,
-      });
+      };
+      if (env !== undefined) {
+        commandOptions.env = env;
+      }
+
+      await runCommand('codex', ['exec', '--sandbox', 'workspace-write', '--skip-git-repo-check', prompt], commandOptions);
     },
+    runCommand,
     prepareWorkspace: async ({ repoPath, baseRef, runSessionId }) => {
       try {
         await mkdir(workspaceRoot, { recursive: true });
-        const workspacePath = await mkdtemp(join(workspaceRoot, `${runSessionId}-`));
+        const workspacePath = await mkdtemp(join(workspaceRoot, `${safePathSegment(runSessionId)}-`));
         await rm(workspacePath, { recursive: true, force: true });
         await runCommand('git', ['worktree', 'add', '--detach', workspacePath, baseRef], { cwd: repoPath });
 
