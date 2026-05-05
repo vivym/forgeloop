@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ArtifactRef, ChangedFile, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
 
 import {
   DomainError,
@@ -39,11 +40,16 @@ describe('domain state transitions', () => {
     const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
       id: 'package-1',
       work_item_id: 'work-item-1',
+      spec_id: 'spec-1',
+      spec_revision_id: 'spec-revision-1',
+      plan_id: 'plan-1',
+      plan_revision_id: 'plan-revision-1',
       project_id: 'project-1',
       repo_id: 'repo-1',
       objective: 'Implement the domain package.',
       owner_actor_id: 'actor-owner',
       reviewer_actor_id: 'actor-reviewer',
+      qa_owner_actor_id: 'actor-qa',
       phase: 'review',
       activity_state: 'idle',
       gate_state: 'review_approved',
@@ -62,6 +68,13 @@ describe('domain state transitions', () => {
       execution_package_id: 'package-1',
       requested_by_actor_id: 'actor-owner',
       status: 'succeeded',
+      changed_files: [
+        {
+          repo_id: 'repo-1',
+          path: 'packages/domain/src/types.ts',
+          change_kind: 'modified',
+        },
+      ],
       check_results: [
         {
           check_id: 'domain-tests',
@@ -86,6 +99,14 @@ describe('domain state transitions', () => {
           local_ref: 'artifacts/run-session/diff.patch',
         },
       ],
+      log_refs: [
+        {
+          kind: 'logs',
+          name: 'executor log',
+          content_type: 'text/plain',
+          local_ref: 'artifacts/run-session/executor.log',
+        },
+      ],
       created_at: '2026-05-05T00:00:00.000Z',
       updated_at: '2026-05-05T00:00:00.000Z',
       finished_at: '2026-05-05T00:00:00.000Z',
@@ -97,8 +118,27 @@ describe('domain state transitions', () => {
       run_session_id: 'run-session-1',
       execution_package_id: 'package-1',
       reviewer_actor_id: 'actor-reviewer',
+      spec_revision_id: 'spec-revision-1',
+      plan_revision_id: 'plan-revision-1',
       status: 'completed',
       decision: 'approved',
+      changed_files: [
+        {
+          repo_id: 'repo-1',
+          path: 'packages/domain/src/types.ts',
+          change_kind: 'modified',
+        },
+      ],
+      check_result_summary: 'pnpm test tests/domain passed.',
+      self_review: {
+        status: 'succeeded',
+        summary: 'Changes match the P0 domain spec.',
+        spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
+        test_assessment: 'Domain transition tests cover the new review packet context.',
+        risk_notes: [],
+        follow_up_questions: [],
+      },
+      risk_notes: [],
       requested_changes: [],
       created_at: '2026-05-05T00:00:00.000Z',
       updated_at: '2026-05-05T00:00:00.000Z',
@@ -350,11 +390,16 @@ describe('domain state transitions', () => {
         type: 'generate_package',
         id: 'package-1',
         work_item_id: 'work-item-1',
+        spec_id: 'spec-1',
+        spec_revision_id: 'spec-revision-1',
+        plan_id: 'plan-1',
+        plan_revision_id: 'plan-revision-1',
         project_id: 'project-1',
         repo_id: 'repo-1',
         objective: 'Implement one package.',
         owner_actor_id: 'actor-owner',
         reviewer_actor_id: 'actor-reviewer',
+        qa_owner_actor_id: 'actor-qa',
       });
 
     const createReviewPackage = (): ExecutionPackage =>
@@ -368,6 +413,11 @@ describe('domain state transitions', () => {
     it('generates, marks ready, runs, and reaches review on success', () => {
       const created = createPackage();
       expect(created).toMatchObject({
+        spec_id: 'spec-1',
+        spec_revision_id: 'spec-revision-1',
+        plan_id: 'plan-1',
+        plan_revision_id: 'plan-revision-1',
+        qa_owner_actor_id: 'actor-qa',
         phase: 'draft',
         activity_state: 'idle',
         gate_state: 'not_submitted',
@@ -534,17 +584,101 @@ describe('domain state transitions', () => {
   });
 
   describe('RunSession', () => {
+    const changedFiles: ChangedFile[] = [
+      {
+        repo_id: 'repo-1',
+        path: 'packages/domain/src/types.ts',
+        change_kind: 'modified',
+      },
+    ];
+    const logRefs: ArtifactRef[] = [
+      {
+        kind: 'logs',
+        name: 'executor log',
+        content_type: 'text/plain',
+        local_ref: 'artifacts/run-session/executor.log',
+      },
+    ];
+    const runSpec: RunSpec = {
+      run_session_id: 'run-session-1',
+      execution_package_id: 'package-1',
+      work_item_id: 'work-item-1',
+      spec_revision_id: 'spec-revision-1',
+      plan_revision_id: 'plan-revision-1',
+      executor_type: 'local_codex',
+      repo: {
+        repo_id: 'repo-1',
+        local_path: '/Users/viv/projs/forgeloop/.worktrees/p0-delivery-loop-mvp',
+        base_branch: 'codex/p0-delivery-loop-mvp',
+        base_commit_sha: '3d1b01c8aa45c67764c462ad0defe9c6822da141',
+      },
+      objective: 'Implement missing P0 fields.',
+      context: {
+        spec_revision_summary: 'P0 delivery loop spec.',
+        plan_revision_summary: 'P0 delivery loop plan.',
+        package_instructions: 'Keep domain changes scoped.',
+        required_checks: [
+          {
+            check_id: 'domain-tests',
+            display_name: 'Domain tests',
+            command: 'pnpm test tests/domain',
+            timeout_seconds: 120,
+            blocks_review: true,
+          },
+        ],
+      },
+      review_context: {
+        latest_decision: 'none',
+        requested_changes: [],
+      },
+      workflow_only: false,
+      allowed_paths: ['packages/domain/**', 'tests/domain/**'],
+      forbidden_paths: ['apps/**'],
+      required_checks: [
+        {
+          check_id: 'domain-tests',
+          display_name: 'Domain tests',
+          command: 'pnpm test tests/domain',
+          timeout_seconds: 120,
+          blocks_review: true,
+        },
+      ],
+      artifact_policy: {
+        requested_artifacts: ['execution_summary', 'diff'],
+      },
+      timeout_seconds: 900,
+      idempotency_key: 'run-session-1:package-1',
+    };
+
     const createSession = (): RunSession =>
       transitionRunSession(undefined, {
         type: 'create',
         id: 'run-session-1',
         execution_package_id: 'package-1',
         requested_by_actor_id: 'actor-owner',
+        executor_type: 'local_codex',
+        run_spec: runSpec,
+        changed_files: changedFiles,
+        log_refs: logRefs,
+        summary: 'Queued with frozen run spec.',
+        failure_kind: 'required_check_failed',
+        failure_reason: 'Required checks not run yet.',
       });
 
     it('creates, starts, and records terminal executor outcomes', () => {
       const queued = createSession();
-      expect(queued.status).toBe('queued');
+      expect(queued).toMatchObject({
+        status: 'queued',
+        executor_type: 'local_codex',
+        run_spec: runSpec,
+        changed_files: changedFiles,
+        check_results: [],
+        artifacts: [],
+        log_refs: logRefs,
+        summary: 'Queued with frozen run spec.',
+        failure_kind: 'required_check_failed',
+        failure_reason: 'Required checks not run yet.',
+      });
 
       const running = transitionRunSession(queued, { type: 'workflow_start' });
       expect(running.status).toBe('running');
@@ -568,6 +702,22 @@ describe('domain state transitions', () => {
   });
 
   describe('ReviewPacket', () => {
+    const changedFiles: ChangedFile[] = [
+      {
+        repo_id: 'repo-1',
+        path: 'tests/domain/states.test.ts',
+        change_kind: 'modified',
+      },
+    ];
+    const selfReview: SelfReviewResult = {
+      status: 'succeeded',
+      summary: 'Changes match the P0 domain spec.',
+      spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
+      test_assessment: 'Domain transition tests cover the new review packet context.',
+      risk_notes: ['Domain persistence adapters must map the new fields.'],
+      follow_up_questions: [],
+    };
+
     const createPacket = (): ReviewPacket =>
       transitionReviewPacket(undefined, {
         type: 'create',
@@ -575,11 +725,23 @@ describe('domain state transitions', () => {
         run_session_id: 'run-session-1',
         execution_package_id: 'package-1',
         reviewer_actor_id: 'actor-reviewer',
+        spec_revision_id: 'spec-revision-1',
+        plan_revision_id: 'plan-revision-1',
+        changed_files: changedFiles,
+        check_result_summary: 'pnpm test tests/domain passed.',
+        self_review: selfReview,
+        risk_notes: ['Domain persistence adapters must map the new fields.'],
       });
 
     it('creates, starts review, and records approval', () => {
       const ready = createPacket();
       expect(ready).toMatchObject({
+        spec_revision_id: 'spec-revision-1',
+        plan_revision_id: 'plan-revision-1',
+        changed_files: changedFiles,
+        check_result_summary: 'pnpm test tests/domain passed.',
+        self_review: selfReview,
+        risk_notes: ['Domain persistence adapters must map the new fields.'],
         status: 'ready',
         decision: 'none',
       });
@@ -590,22 +752,65 @@ describe('domain state transitions', () => {
         decision: 'none',
       });
 
-      expect(transitionReviewPacket(inReview, { type: 'approve' })).toMatchObject({
+      expect(
+        transitionReviewPacket(inReview, {
+          type: 'approve',
+          summary: 'Approved after review.',
+          reviewed_by_actor_id: 'actor-reviewer',
+          reviewed_at: '2026-05-05T01:00:00.000Z',
+        }),
+      ).toMatchObject({
         status: 'completed',
         decision: 'approved',
+        summary: 'Approved after review.',
+        reviewed_by_actor_id: 'actor-reviewer',
+        reviewed_at: '2026-05-05T01:00:00.000Z',
+        requested_changes: [],
       });
     });
 
     it('allows approval, changes requested, and archive from open packets', () => {
       const ready = createPacket();
 
-      expect(transitionReviewPacket(ready, { type: 'approve' })).toMatchObject({
+      expect(
+        transitionReviewPacket(ready, {
+          type: 'approve',
+          summary: 'Approved.',
+          reviewed_by_actor_id: 'actor-reviewer',
+          reviewed_at: '2026-05-05T01:00:00.000Z',
+        }),
+      ).toMatchObject({
         status: 'completed',
         decision: 'approved',
+        requested_changes: [],
       });
-      expect(transitionReviewPacket(ready, { type: 'request_changes' })).toMatchObject({
+      expect(
+        transitionReviewPacket(ready, {
+          type: 'request_changes',
+          summary: 'Needs more context.',
+          reviewed_by_actor_id: 'actor-reviewer',
+          reviewed_at: '2026-05-05T01:00:00.000Z',
+          requested_changes: [
+            {
+              title: 'Add QA owner',
+              description: 'Freeze the QA owner on the execution package.',
+              severity: 'major',
+            },
+          ],
+        }),
+      ).toMatchObject({
         status: 'completed',
         decision: 'changes_requested',
+        summary: 'Needs more context.',
+        reviewed_by_actor_id: 'actor-reviewer',
+        reviewed_at: '2026-05-05T01:00:00.000Z',
+        requested_changes: [
+          {
+            title: 'Add QA owner',
+            description: 'Freeze the QA owner on the execution package.',
+            severity: 'major',
+          },
+        ],
       });
       expect(transitionReviewPacket(ready, { type: 'archive_for_newer_run' })).toMatchObject({
         status: 'archived',

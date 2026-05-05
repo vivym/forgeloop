@@ -50,11 +50,16 @@ const project: Project = {
 const packageBase = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
   id: 'package-1',
   work_item_id: 'work-item-1',
+  spec_id: 'spec-1',
+  spec_revision_id: 'spec-revision-1',
+  plan_id: 'plan-1',
+  plan_revision_id: 'plan-revision-1',
   project_id: 'project-1',
   repo_id: 'repo-1',
   objective: 'Implement the domain package.',
   owner_actor_id: 'actor-owner',
   reviewer_actor_id: 'actor-reviewer',
+  qa_owner_actor_id: 'actor-qa',
   phase: 'ready',
   activity_state: 'idle',
   gate_state: 'not_submitted',
@@ -86,6 +91,13 @@ const successfulRun = (overrides: Partial<RunSession> = {}): RunSession => ({
   execution_package_id: 'package-1',
   requested_by_actor_id: 'actor-owner',
   status: 'succeeded',
+  changed_files: [
+    {
+      repo_id: 'repo-1',
+      path: 'packages/domain/src/types.ts',
+      change_kind: 'modified',
+    },
+  ],
   check_results: [
     {
       check_id: 'domain-tests',
@@ -97,6 +109,14 @@ const successfulRun = (overrides: Partial<RunSession> = {}): RunSession => ({
     },
   ],
   artifacts: [executionSummaryArtifact, diffArtifact],
+  log_refs: [
+    {
+      kind: 'logs',
+      name: 'executor log',
+      content_type: 'text/plain',
+      local_ref: 'artifacts/run-session/executor.log',
+    },
+  ],
   created_at: timestamp,
   updated_at: timestamp,
   finished_at: timestamp,
@@ -108,8 +128,27 @@ const approvedReviewPacket = (overrides: Partial<ReviewPacket> = {}): ReviewPack
   run_session_id: 'run-session-1',
   execution_package_id: 'package-1',
   reviewer_actor_id: 'actor-reviewer',
+  spec_revision_id: 'spec-revision-1',
+  plan_revision_id: 'plan-revision-1',
   status: 'completed',
   decision: 'approved',
+  changed_files: [
+    {
+      repo_id: 'repo-1',
+      path: 'packages/domain/src/types.ts',
+      change_kind: 'modified',
+    },
+  ],
+  check_result_summary: 'pnpm test tests/domain passed.',
+  self_review: {
+    status: 'succeeded',
+    summary: 'Changes match the P0 domain spec.',
+    spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
+    test_assessment: 'Domain transition tests cover the new review packet context.',
+    risk_notes: [],
+    follow_up_questions: [],
+  },
+  risk_notes: [],
   requested_changes: [],
   created_at: timestamp,
   updated_at: timestamp,
@@ -122,8 +161,27 @@ const openReviewPacket = (overrides: Partial<ReviewPacket> = {}): ReviewPacket =
   run_session_id: 'run-session-1',
   execution_package_id: 'package-1',
   reviewer_actor_id: 'actor-reviewer',
+  spec_revision_id: 'spec-revision-1',
+  plan_revision_id: 'plan-revision-1',
   status: 'ready',
   decision: 'none',
+  changed_files: [
+    {
+      repo_id: 'repo-1',
+      path: 'packages/domain/src/types.ts',
+      change_kind: 'modified',
+    },
+  ],
+  check_result_summary: 'pnpm test tests/domain passed.',
+  self_review: {
+    status: 'succeeded',
+    summary: 'Changes match the P0 domain spec.',
+    spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
+    test_assessment: 'Domain transition tests cover the new review packet context.',
+    risk_notes: [],
+    follow_up_questions: [],
+  },
+  risk_notes: [],
   requested_changes: [],
   created_at: timestamp,
   updated_at: timestamp,
@@ -184,6 +242,10 @@ describe('domain validators', () => {
     expectDomainError(
       () => validateExecutionPackage(project, packageBase({ reviewer_actor_id: '' })),
       'REVIEWER_REQUIRED',
+    );
+    expectDomainError(
+      () => validateExecutionPackage(project, packageBase({ qa_owner_actor_id: '   ' })),
+      'QA_OWNER_REQUIRED',
     );
     expectDomainError(
       () => validateExecutionPackage(project, packageBase({ objective: '   ' })),

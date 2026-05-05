@@ -66,6 +66,12 @@ export const validateExecutionPackage = (
     });
   }
 
+  if (!hasText(executionPackage.qa_owner_actor_id)) {
+    throw new DomainError('QA_OWNER_REQUIRED', `Package ${executionPackage.id} must have a QA owner`, {
+      execution_package_id: executionPackage.id,
+    });
+  }
+
   if (!hasText(executionPackage.objective)) {
     throw new DomainError('EXECUTION_OBJECTIVE_REQUIRED', `Package ${executionPackage.id} must have an objective`, {
       execution_package_id: executionPackage.id,

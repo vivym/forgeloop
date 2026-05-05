@@ -1,10 +1,14 @@
 import type {
   ArtifactKind,
   ArtifactRef,
+  ChangedFile,
   CheckResult,
   ExecutorType,
+  FailureKind,
   RequiredCheckSpec,
   RequestedChange,
+  RunSpec,
+  SelfReviewResult,
 } from '@forgeloop/contracts';
 
 export type DomainErrorCode =
@@ -15,6 +19,7 @@ export type DomainErrorCode =
   | 'REQUIRED_CHECK_MISSING'
   | 'OWNER_REQUIRED'
   | 'REVIEWER_REQUIRED'
+  | 'QA_OWNER_REQUIRED'
   | 'DEPENDENCY_CYCLE'
   | 'EXECUTION_OBJECTIVE_REQUIRED'
   | 'EDIT_NOT_ALLOWED'
@@ -146,11 +151,16 @@ export type ExecutionPackageResolution = 'none' | 'completed';
 export interface ExecutionPackage {
   id: string;
   work_item_id: string;
+  spec_id: string;
+  spec_revision_id: string;
+  plan_id: string;
+  plan_revision_id: string;
   project_id: string;
   repo_id: string;
   objective: string;
   owner_actor_id: string;
   reviewer_actor_id: string;
+  qa_owner_actor_id: string;
   phase: ExecutionPackagePhase;
   activity_state: ExecutionPackageActivityState;
   gate_state: ExecutionPackageGateState;
@@ -179,9 +189,14 @@ export interface RunSession {
   requested_by_actor_id: string;
   status: RunSessionStatus;
   executor_type?: ExecutorType;
+  run_spec?: RunSpec;
+  changed_files: ChangedFile[];
   check_results: CheckResult[];
   artifacts: ArtifactRef[];
+  log_refs: ArtifactRef[];
   summary?: string;
+  failure_kind?: FailureKind;
+  failure_reason?: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   started_at?: IsoDateTime;
@@ -196,9 +211,17 @@ export interface ReviewPacket {
   run_session_id: string;
   execution_package_id: string;
   reviewer_actor_id: string;
+  spec_revision_id: string;
+  plan_revision_id: string;
   status: ReviewPacketStatus;
   decision: ReviewPacketDecision;
   summary?: string;
+  changed_files: ChangedFile[];
+  check_result_summary: string;
+  self_review: SelfReviewResult;
+  risk_notes: string[];
+  reviewed_by_actor_id?: string;
+  reviewed_at?: IsoDateTime;
   requested_changes: RequestedChange[];
   created_at: IsoDateTime;
   updated_at: IsoDateTime;

@@ -7,6 +7,7 @@ import {
   type SpecPlanEntityType,
   type WorkItem,
 } from './types';
+import type { ArtifactRef, ChangedFile, FailureKind, RequestedChange, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
 import type { WorkItemCompletion } from './completion';
 
 const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
@@ -61,11 +62,16 @@ export type ExecutionPackageTransition =
       type: 'generate_package';
       id: string;
       work_item_id: string;
+      spec_id: string;
+      spec_revision_id: string;
+      plan_id: string;
+      plan_revision_id: string;
       project_id: string;
       repo_id: string;
       objective: string;
       owner_actor_id: string;
       reviewer_actor_id: string;
+      qa_owner_actor_id: string;
     })
   | (Timestamped & {
       type: 'mark_ready' | 'run' | 'rerun' | 'workflow_start' | 'execution_succeeded' | 'review_approved' | 'review_changes_requested';
@@ -89,6 +95,13 @@ export type RunSessionTransition =
       id: string;
       execution_package_id: string;
       requested_by_actor_id: string;
+      executor_type?: RunSession['executor_type'];
+      run_spec?: RunSpec;
+      changed_files?: ChangedFile[];
+      log_refs?: ArtifactRef[];
+      summary?: string;
+      failure_kind?: FailureKind;
+      failure_reason?: string;
     })
   | (Timestamped & {
       type: 'workflow_start' | 'executor_success' | 'executor_failure' | 'executor_timeout' | 'cancel';
@@ -101,9 +114,28 @@ export type ReviewPacketTransition =
       run_session_id: string;
       execution_package_id: string;
       reviewer_actor_id: string;
+      spec_revision_id: string;
+      plan_revision_id: string;
+      changed_files: ChangedFile[];
+      check_result_summary: string;
+      self_review: SelfReviewResult;
+      risk_notes: string[];
     })
   | (Timestamped & {
-      type: 'start_review' | 'approve' | 'request_changes' | 'archive_for_newer_run';
+      type: 'start_review' | 'archive_for_newer_run';
+    })
+  | (Timestamped & {
+      type: 'approve';
+      summary?: string;
+      reviewed_by_actor_id?: string;
+      reviewed_at?: string;
+    })
+  | (Timestamped & {
+      type: 'request_changes';
+      summary?: string;
+      reviewed_by_actor_id?: string;
+      reviewed_at?: string;
+      requested_changes?: RequestedChange[];
     });
 
 const timestampFor = (event: Timestamped) => event.at ?? DEFAULT_TIMESTAMP;
@@ -297,11 +329,16 @@ export const transitionExecutionPackage = (
     return {
       id: event.id,
       work_item_id: event.work_item_id,
+      spec_id: event.spec_id,
+      spec_revision_id: event.spec_revision_id,
+      plan_id: event.plan_id,
+      plan_revision_id: event.plan_revision_id,
       project_id: event.project_id,
       repo_id: event.repo_id,
       objective: event.objective,
       owner_actor_id: event.owner_actor_id,
       reviewer_actor_id: event.reviewer_actor_id,
+      qa_owner_actor_id: event.qa_owner_actor_id,
       phase: 'draft',
       activity_state: 'idle',
       gate_state: 'not_submitted',
@@ -453,10 +490,17 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       execution_package_id: event.execution_package_id,
       requested_by_actor_id: event.requested_by_actor_id,
       status: 'queued',
+      changed_files: event.changed_files ?? [],
       check_results: [],
       artifacts: [],
+      log_refs: event.log_refs ?? [],
       created_at: at,
       updated_at: at,
+      ...(event.executor_type !== undefined ? { executor_type: event.executor_type } : {}),
+      ...(event.run_spec !== undefined ? { run_spec: event.run_spec } : {}),
+      ...(event.summary !== undefined ? { summary: event.summary } : {}),
+      ...(event.failure_kind !== undefined ? { failure_kind: event.failure_kind } : {}),
+      ...(event.failure_reason !== undefined ? { failure_reason: event.failure_reason } : {}),
     };
   }
 
@@ -511,8 +555,14 @@ export const transitionReviewPacket = (
       run_session_id: event.run_session_id,
       execution_package_id: event.execution_package_id,
       reviewer_actor_id: event.reviewer_actor_id,
+      spec_revision_id: event.spec_revision_id,
+      plan_revision_id: event.plan_revision_id,
       status: 'ready',
       decision: 'none',
+      changed_files: event.changed_files,
+      check_result_summary: event.check_result_summary,
+      self_review: event.self_review,
+      risk_notes: event.risk_notes,
       requested_changes: [],
       created_at: at,
       updated_at: at,
@@ -534,7 +584,17 @@ export const transitionReviewPacket = (
         reviewPacket.decision === 'none' &&
         (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review')
       ) {
-        return { ...reviewPacket, status: 'completed', decision: 'approved', completed_at: at, updated_at: at };
+        return {
+          ...reviewPacket,
+          status: 'completed',
+          decision: 'approved',
+          requested_changes: [],
+          completed_at: at,
+          updated_at: at,
+          ...(event.summary !== undefined ? { summary: event.summary } : {}),
+          ...(event.reviewed_by_actor_id !== undefined ? { reviewed_by_actor_id: event.reviewed_by_actor_id } : {}),
+          ...(event.reviewed_at !== undefined ? { reviewed_at: event.reviewed_at } : {}),
+        };
       }
       break;
     case 'request_changes':
@@ -546,8 +606,12 @@ export const transitionReviewPacket = (
           ...reviewPacket,
           status: 'completed',
           decision: 'changes_requested',
+          requested_changes: event.requested_changes ?? [],
           completed_at: at,
           updated_at: at,
+          ...(event.summary !== undefined ? { summary: event.summary } : {}),
+          ...(event.reviewed_by_actor_id !== undefined ? { reviewed_by_actor_id: event.reviewed_by_actor_id } : {}),
+          ...(event.reviewed_at !== undefined ? { reviewed_at: event.reviewed_at } : {}),
         };
       }
       break;
