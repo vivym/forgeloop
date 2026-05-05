@@ -421,9 +421,10 @@ export class P0Service {
             resolution: 'none',
           }
         : executionPackage;
+    const patch = Object.fromEntries(Object.entries(dto).filter(([, value]) => value !== undefined)) as Partial<ExecutionPackage>;
     const updated: ExecutionPackage = {
       ...editablePackage,
-      ...dto,
+      ...patch,
       updated_at: this.now(),
     };
     const project = await this.getProject(updated.project_id);

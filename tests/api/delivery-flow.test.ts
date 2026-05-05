@@ -1,10 +1,14 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createServer } from 'node:net';
+import { setTimeout as delay } from 'node:timers/promises';
+
 import { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
-import { Test } from '../../apps/control-plane-api/node_modules/@nestjs/testing/index.js';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 
@@ -145,6 +149,68 @@ const createManualPackage = async (
     .body;
 };
 
+const getAvailablePort = async (): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (typeof address === 'string' || address === null) {
+        server.close(() => reject(new Error('Unable to allocate an API smoke test port')));
+        return;
+      }
+      const { port } = address;
+      server.close(() => resolve(port));
+    });
+  });
+
+const stopProcess = async (child: ChildProcessWithoutNullStreams): Promise<void> => {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    child.once('exit', () => resolve());
+    child.kill('SIGTERM');
+    setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+      }
+    }, 1_000).unref();
+  });
+};
+
+const startRuntimeApi = async (): Promise<{ child: ChildProcessWithoutNullStreams; port: number; logs: () => string }> => {
+  const port = await getAvailablePort();
+  const child = spawn('pnpm', ['exec', 'tsx', 'src/main.ts'], {
+    cwd: 'apps/control-plane-api',
+    env: { ...process.env, PORT: String(port) },
+  });
+  const output: string[] = [];
+  child.stdout.on('data', (chunk: Buffer) => output.push(chunk.toString()));
+  child.stderr.on('data', (chunk: Buffer) => output.push(chunk.toString()));
+
+  return { child, port, logs: () => output.join('') };
+};
+
+const waitForRuntimeCreateProject = async (
+  port: number,
+): Promise<request.Response> => {
+  const startedAt = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - startedAt < 8_000) {
+    try {
+      return await request(`http://127.0.0.1:${port}`).post('/projects').send({ name: 'Runtime smoke' });
+    } catch (error) {
+      lastError = error;
+      await delay(100);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Timed out waiting for runtime API');
+};
+
 class SequencingRepository extends InMemoryP0Repository {
   readonly operations: string[] = [];
 
@@ -260,6 +326,120 @@ describe('P0 control plane API', () => {
     expect(timeline.map((entry: { source: string }) => entry.source)).toEqual(
       expect.arrayContaining(['object_event', 'status_history', 'decision', 'artifact']),
     );
+  });
+
+  it('serves POST /projects when booted through the tsx runtime entrypoint', async () => {
+    const runtime = await startRuntimeApi();
+    try {
+      const response = await waitForRuntimeCreateProject(runtime.port);
+
+      expect(response.status, runtime.logs()).toBe(201);
+      expect(response.body).toMatchObject({ id: expect.stringContaining('project'), name: 'Runtime smoke' });
+    } finally {
+      await stopProcess(runtime.child);
+    }
+  });
+
+  it('maps invalid domain transitions and package validators to 4xx responses', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(400);
+
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const executionPackage = await createManualPackage(app, planRevisionId);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(400);
+
+    const run = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    await request(server)
+      .post(`/review-packets/${run.workflow_result.reviewPacketId}/approve`)
+      .send({
+        summary: 'Approved once.',
+        reviewed_by_actor_id: actorReviewer,
+        reviewed_at: '2026-05-05T05:00:00.000Z',
+      })
+      .expect(201);
+    await request(server)
+      .post(`/review-packets/${run.workflow_result.reviewPacketId}/approve`)
+      .send({
+        summary: 'Approved twice.',
+        reviewed_by_actor_id: actorReviewer,
+        reviewed_at: '2026-05-05T05:01:00.000Z',
+      })
+      .expect(400);
+
+    await request(server).patch(`/execution-packages/${executionPackage.id}`).send({ owner_actor_id: '' }).expect(400);
+  });
+
+  it('rejects malformed request bodies with 400 responses and does not persist invalid objects', async () => {
+    const server = app.getHttpServer();
+
+    await request(server).post('/projects').send({ name: { text: 'Forgeloop' } }).expect(400);
+    await request(server).post('/projects').send(null).expect(400);
+
+    const { project, workItem } = await createProjectRepoWorkItem(app);
+    await request(server)
+      .post('/work-items')
+      .send({
+        project_id: project.id,
+        kind: 'feature',
+        title: 'Invalid success criteria',
+        goal: 'This should not persist.',
+        success_criteria: 'not-an-array',
+        priority: 'P0',
+        risk: 'medium',
+        owner_actor_id: actorOwner,
+      })
+      .expect(400);
+    expect((await request(server).get('/work-items').query({ project_id: project.id }).expect(200)).body).toHaveLength(1);
+
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    await request(server)
+      .post(`/plan-revisions/${planRevisionId}/execution-packages`)
+      .send({
+        repo_id: 'repo-1',
+        objective: 'Invalid package.',
+        owner_actor_id: actorOwner,
+        reviewer_actor_id: actorReviewer,
+        qa_owner_actor_id: actorQa,
+        required_checks: 'pnpm test',
+        required_artifact_kinds: ['execution_summary'],
+        allowed_paths: ['apps/control-plane-api/**'],
+        forbidden_paths: [],
+      })
+      .expect(400);
+    expect((await request(server).get(`/work-items/${workItem.id}/execution-packages`).expect(200)).body).toHaveLength(0);
+
+    const executionPackage = await createManualPackage(app, planRevisionId);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    const run = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    await request(server)
+      .post(`/review-packets/${run.workflow_result.reviewPacketId}/request-changes`)
+      .send({
+        summary: 'Invalid review decision.',
+        reviewed_by_actor_id: actorReviewer,
+        reviewed_at: '2026-05-05T06:00:00.000Z',
+        requested_changes: { title: 'Wrong shape' },
+      })
+      .expect(400);
+    expect((await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body).toMatchObject({
+      status: 'ready',
+      decision: 'none',
+    });
   });
 
   it('archives an open ReviewPacket on package edit while preserving old RunSessions and completed packets', async () => {
