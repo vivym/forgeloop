@@ -265,6 +265,8 @@ export interface CreateExecutionPackageBody {
   forbidden_paths: string[];
 }
 
+export type PatchExecutionPackageBody = Partial<Omit<CreateExecutionPackageBody, 'repo_id'>>;
+
 export interface ActorCommandBody {
   actor_id?: string;
 }
@@ -377,7 +379,7 @@ export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
     listExecutionPackages: (workItemId: string) =>
       request<ExecutionPackage[]>(`/work-items/${encodeURIComponent(workItemId)}/execution-packages`),
     getExecutionPackage: (packageId: string) => request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}`),
-    patchExecutionPackage: (packageId: string, body: Partial<CreateExecutionPackageBody>) =>
+    patchExecutionPackage: (packageId: string, body: PatchExecutionPackageBody) =>
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}`, { method: 'PATCH', body }),
     markPackageReady: (packageId: string, body: ActorCommandBody) =>
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}/mark-ready`, { method: 'POST', body }),

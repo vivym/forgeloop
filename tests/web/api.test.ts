@@ -63,6 +63,53 @@ describe('Forgeloop web API client', () => {
     });
   });
 
+  it('patches execution package content without sending repo_id', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'package-1' }), { status: 200 }));
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await api.patchExecutionPackage('package-1', {
+      objective: 'Tighten package edit controls',
+      owner_actor_id: 'actor-owner',
+      reviewer_actor_id: 'actor-reviewer',
+      qa_owner_actor_id: 'actor-qa',
+      required_checks: [
+        {
+          check_id: 'web-build',
+          display_name: 'Web build',
+          command: 'pnpm --filter @forgeloop/web build',
+          timeout_seconds: 600,
+          blocks_review: true,
+        },
+      ],
+      required_artifact_kinds: ['diff', 'check_output'],
+      allowed_paths: ['apps/web/**'],
+      forbidden_paths: ['apps/control-plane-api/**'],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('http://api.local/execution-packages/package-1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        objective: 'Tighten package edit controls',
+        owner_actor_id: 'actor-owner',
+        reviewer_actor_id: 'actor-reviewer',
+        qa_owner_actor_id: 'actor-qa',
+        required_checks: [
+          {
+            check_id: 'web-build',
+            display_name: 'Web build',
+            command: 'pnpm --filter @forgeloop/web build',
+            timeout_seconds: 600,
+            blocks_review: true,
+          },
+        ],
+        required_artifact_kinds: ['diff', 'check_output'],
+        allowed_paths: ['apps/web/**'],
+        forbidden_paths: ['apps/control-plane-api/**'],
+      }),
+    });
+  });
+
   it('surfaces backend error messages from non-2xx responses', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ message: 'Spec is not awaiting approval', code: 'INVALID_TRANSITION' }), {

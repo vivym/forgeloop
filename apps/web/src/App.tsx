@@ -8,6 +8,7 @@ import {
   type CheckResult,
   type CockpitResponse,
   type CreateExecutionPackageBody,
+  type PatchExecutionPackageBody,
   type CreatePlanRevisionBody,
   type CreateSpecRevisionBody,
   type CreateWorkItemBody,
@@ -109,6 +110,12 @@ export function App() {
   useEffect(() => {
     setRevisionForm(defaultRevisionForm(specMode));
   }, [specMode]);
+
+  useEffect(() => {
+    if (selectedPackage) {
+      setPackageForm(toPackageForm(selectedPackage));
+    }
+  }, [selectedPackage]);
 
   useEffect(() => {
     if (!selectedRunId) {
@@ -220,6 +227,14 @@ export function App() {
     event.preventDefault();
     void runAction('Created execution package', async () => {
       await api.createExecutionPackage(requiredPlanRevisionId(), parsePackageForm(packageForm));
+      await refreshWorkbench();
+    });
+  }
+
+  function updateSelectedPackage() {
+    if (!selectedPackage) return;
+    void runAction('Updated execution package', async () => {
+      await api.patchExecutionPackage(selectedPackage.id, parsePackagePatchForm(packageForm));
       await refreshWorkbench();
     });
   }
@@ -436,9 +451,13 @@ export function App() {
             </div>
             <label>Objective<textarea required value={packageForm.objective} onChange={(event) => setPackageForm({ ...packageForm, objective: event.target.value })} /></label>
             <label>Required checks<textarea value={packageForm.required_checks} onChange={(event) => setPackageForm({ ...packageForm, required_checks: event.target.value })} /></label>
+            <label>Artifact kinds<textarea value={packageForm.required_artifact_kinds} onChange={(event) => setPackageForm({ ...packageForm, required_artifact_kinds: event.target.value })} /></label>
             <label>Allowed paths<textarea value={packageForm.allowed_paths} onChange={(event) => setPackageForm({ ...packageForm, allowed_paths: event.target.value })} /></label>
             <label>Forbidden paths<textarea value={packageForm.forbidden_paths} onChange={(event) => setPackageForm({ ...packageForm, forbidden_paths: event.target.value })} /></label>
-            <button type="submit" disabled={!currentPlan?.current_revision_id || loading}>Create Manual Package</button>
+            <div className="button-row">
+              <button type="submit" disabled={!currentPlan?.current_revision_id || loading}>Create Manual Package</button>
+              <button type="button" disabled={!selectedPackage || loading} onClick={updateSelectedPackage}>Update Selected Package</button>
+            </div>
           </form>
         </section>
 
@@ -623,6 +642,7 @@ function toPackageForm(body: CreateExecutionPackageBody) {
   return {
     ...body,
     required_checks: body.required_checks.map((check) => `${check.check_id}|${check.display_name}|${check.command}|${check.timeout_seconds}|${check.blocks_review}`).join('\n'),
+    required_artifact_kinds: body.required_artifact_kinds.join('\n'),
     allowed_paths: body.allowed_paths.join('\n'),
     forbidden_paths: body.forbidden_paths.join('\n'),
   };
@@ -645,10 +665,30 @@ function parsePackageForm(form: ReturnType<typeof toPackageForm>): CreateExecuti
         blocks_review: blocks_review?.trim() !== 'false',
       };
     }),
-    required_artifact_kinds: form.required_artifact_kinds,
+    required_artifact_kinds: parseArtifactKinds(form.required_artifact_kinds),
     allowed_paths: lines(form.allowed_paths),
     forbidden_paths: lines(form.forbidden_paths),
   };
+}
+
+function parsePackagePatchForm(form: ReturnType<typeof toPackageForm>): PatchExecutionPackageBody {
+  const body = parsePackageForm(form);
+  return {
+    objective: body.objective,
+    owner_actor_id: body.owner_actor_id,
+    reviewer_actor_id: body.reviewer_actor_id,
+    qa_owner_actor_id: body.qa_owner_actor_id,
+    required_checks: body.required_checks,
+    required_artifact_kinds: body.required_artifact_kinds,
+    allowed_paths: body.allowed_paths,
+    forbidden_paths: body.forbidden_paths,
+  };
+}
+
+function parseArtifactKinds(value: string): ArtifactKind[] {
+  const allowed = new Set<ArtifactKind>(['diff', 'changed_files', 'check_output', 'logs', 'execution_summary', 'self_review', 'review_packet', 'raw_metadata']);
+  const parsed = lines(value).filter((kind): kind is ArtifactKind => allowed.has(kind as ArtifactKind));
+  return parsed.length > 0 ? parsed : artifactKinds;
 }
 
 function cleanWorkItem(body: CreateWorkItemBody): CreateWorkItemBody {
