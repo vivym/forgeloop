@@ -576,7 +576,7 @@ git commit -m "feat: add P0 control plane API"
 - Create: `apps/workflow-worker/src/main.ts`
 - Create: `apps/workflow-worker/src/worker.ts`
 
-- [ ] **Step 1: Implement executor-gateway API**
+- [x] **Step 1: Implement executor-gateway API**
 
 Routes:
 
@@ -585,15 +585,15 @@ Routes:
 
 Gateway stores transient execution results only and never writes domain tables.
 
-- [ ] **Step 2: Wire mock and local_codex adapters**
+- [x] **Step 2: Wire mock and local_codex adapters**
 
 Select adapter from `RunSpec.executor_type`.
 
-- [ ] **Step 3: Implement workflow worker startup**
+- [x] **Step 3: Implement workflow worker startup**
 
 Register P0 workflow/activities. If Temporal is unavailable, startup should fail loudly with a clear error.
 
-- [ ] **Step 4: Build apps**
+- [x] **Step 4: Build apps**
 
 Run:
 
@@ -604,7 +604,7 @@ pnpm --filter @forgeloop/workflow-worker build
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/executor-gateway apps/workflow-worker
