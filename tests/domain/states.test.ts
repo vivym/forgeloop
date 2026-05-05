@@ -1121,6 +1121,37 @@ describe('domain state transitions', () => {
       );
     });
 
+    it.each([
+      { type: 'executor_success' as const, status: 'succeeded' as const },
+      { type: 'executor_failure' as const, status: 'failed' as const },
+      { type: 'executor_timeout' as const, status: 'timed_out' as const },
+    ])('rejects $type when executor_result belongs to another run session', ({ type, status }) => {
+      const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+      const result = executorResult({
+        run_session_id: 'run-session-2',
+        status,
+        summary: 'Executor terminal result belongs to a different run session.',
+        failure:
+          status === 'succeeded'
+            ? undefined
+            : {
+                kind: status === 'timed_out' ? 'timed_out' : 'executor_error',
+                message: 'Executor terminal result belongs to a different run session.',
+                retryable: false,
+              },
+        checks: [],
+      });
+
+      expectDomainError(
+        () =>
+          transitionRunSession(running, {
+            type,
+            executor_result: result,
+          }),
+        'INVALID_TRANSITION',
+      );
+    });
+
     it('accepts matching executor_result status for timeout transitions', () => {
       const running = transitionRunSession(createSession(), { type: 'workflow_start' });
       const result = executorResult({

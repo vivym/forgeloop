@@ -262,6 +262,7 @@ const expectedExecutorResultStatusByTransition: Record<
 };
 
 const cloneRunSessionTerminalEvidence = (
+  runSessionId: string,
   event: Extract<RunSessionTransition, { type: 'executor_success' | 'executor_failure' | 'executor_timeout' }>,
 ): Pick<RunSession, 'changed_files' | 'check_results' | 'artifacts' | 'summary'> &
   Partial<Pick<RunSession, 'executor_result' | 'executor_type' | 'failure_kind' | 'failure_reason' | 'log_refs'>> => {
@@ -269,6 +270,9 @@ const cloneRunSessionTerminalEvidence = (
     const expectedStatus = expectedExecutorResultStatusByTransition[event.type];
     if (event.executor_result.status !== expectedStatus) {
       return invalidTransition('RunSession', `executor_result/${event.executor_result.status}`, event.type);
+    }
+    if (event.executor_result.run_session_id !== runSessionId) {
+      return invalidTransition('RunSession', `executor_result/${event.executor_result.run_session_id}`, event.type);
     }
 
     const executorResult = cloneExecutorResult(event.executor_result);
@@ -709,7 +713,7 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
 
         return {
           ...runSessionWithoutFailure,
-          ...cloneRunSessionTerminalEvidence(event),
+          ...cloneRunSessionTerminalEvidence(runSession.id, event),
           status: 'succeeded',
           finished_at: at,
           updated_at: at,
@@ -718,7 +722,7 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       break;
     case 'executor_failure':
       if (runSession.status === 'running') {
-        const terminalEvidence = cloneRunSessionTerminalEvidence(event);
+        const terminalEvidence = cloneRunSessionTerminalEvidence(runSession.id, event);
         const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
         const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
         const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
@@ -741,7 +745,7 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       break;
     case 'executor_timeout':
       if (runSession.status === 'running') {
-        const terminalEvidence = cloneRunSessionTerminalEvidence(event);
+        const terminalEvidence = cloneRunSessionTerminalEvidence(runSession.id, event);
         const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
         const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
         const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
