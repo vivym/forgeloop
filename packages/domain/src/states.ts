@@ -1,0 +1,535 @@
+import {
+  DomainError,
+  type ExecutionPackage,
+  type ReviewPacket,
+  type RunSession,
+  type SpecPlan,
+  type SpecPlanEntityType,
+  type WorkItem,
+} from './types';
+
+const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
+
+type Timestamped = {
+  at?: string;
+};
+
+export type WorkItemTransition =
+  | (Timestamped & {
+      type: 'create';
+      id: string;
+      project_id: string;
+      title: string;
+      owner_actor_id: string;
+    })
+  | (Timestamped & {
+      type:
+        | 'submit_spec'
+        | 'approve_spec'
+        | 'request_spec_changes'
+        | 'resubmit_spec'
+        | 'submit_plan'
+        | 'approve_plan'
+        | 'request_plan_changes'
+        | 'resubmit_plan'
+        | 'complete_execution';
+    });
+
+export type SpecPlanTransition =
+  | (Timestamped & {
+      type: 'create';
+      entity_type: SpecPlanEntityType;
+      id: string;
+      work_item_id: string;
+    })
+  | (Timestamped & {
+      type:
+        | 'generate_draft_start'
+        | 'generate_draft_success'
+        | 'generate_draft_failure'
+        | 'submit_for_approval'
+        | 'approve'
+        | 'request_changes';
+    });
+
+export type ExecutionPackageTransition =
+  | (Timestamped & {
+      type: 'generate_package';
+      id: string;
+      work_item_id: string;
+      project_id: string;
+      repo_id: string;
+      objective: string;
+      owner_actor_id: string;
+      reviewer_actor_id: string;
+    })
+  | (Timestamped & {
+      type: 'mark_ready' | 'run' | 'rerun' | 'workflow_start' | 'execution_succeeded' | 'review_approved' | 'review_changes_requested';
+    })
+  | (Timestamped & {
+      type: 'force_rerun';
+      has_open_review_packet: boolean;
+    })
+  | (Timestamped & {
+      type: 'execution_failed_retryable' | 'execution_failed_blocking_check';
+      failure_summary: string;
+    })
+  | (Timestamped & {
+      type: 'execution_failed_blocked';
+      blocked_reason: string;
+    });
+
+export type RunSessionTransition =
+  | (Timestamped & {
+      type: 'create';
+      id: string;
+      execution_package_id: string;
+      requested_by_actor_id: string;
+    })
+  | (Timestamped & {
+      type: 'workflow_start' | 'executor_success' | 'executor_failure' | 'executor_timeout' | 'cancel';
+    });
+
+export type ReviewPacketTransition =
+  | (Timestamped & {
+      type: 'create';
+      id: string;
+      run_session_id: string;
+      execution_package_id: string;
+      reviewer_actor_id: string;
+    })
+  | (Timestamped & {
+      type: 'start_review' | 'approve' | 'request_changes' | 'archive_for_newer_run';
+    });
+
+const timestampFor = (event: Timestamped) => event.at ?? DEFAULT_TIMESTAMP;
+
+const invalidTransition = (objectType: string, current: string, transition: string): never => {
+  throw new DomainError('INVALID_TRANSITION', `Cannot apply ${transition} to ${objectType} in ${current}`);
+};
+
+export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkItemTransition): WorkItem => {
+  const at = timestampFor(event);
+
+  if (workItem === undefined) {
+    if (event.type !== 'create') {
+      return invalidTransition('WorkItem', 'none', event.type);
+    }
+
+    return {
+      id: event.id,
+      project_id: event.project_id,
+      title: event.title,
+      owner_actor_id: event.owner_actor_id,
+      phase: 'draft',
+      activity_state: 'idle',
+      gate_state: 'none',
+      resolution: 'none',
+      created_at: at,
+      updated_at: at,
+    };
+  }
+
+  if (event.type === 'create') {
+    return invalidTransition('WorkItem', workItem.phase, event.type);
+  }
+
+  switch (event.type) {
+    case 'submit_spec':
+      if (workItem.phase === 'draft' || workItem.phase === 'triage') {
+        return {
+          ...workItem,
+          phase: 'spec',
+          gate_state: 'awaiting_spec_approval',
+          resolution: 'none',
+          updated_at: at,
+        };
+      }
+      break;
+    case 'approve_spec':
+      if (workItem.phase === 'spec') {
+        return { ...workItem, phase: 'plan', gate_state: 'none', updated_at: at };
+      }
+      break;
+    case 'request_spec_changes':
+      if (workItem.phase === 'spec') {
+        return { ...workItem, gate_state: 'spec_changes_requested', updated_at: at };
+      }
+      break;
+    case 'resubmit_spec':
+      if (workItem.phase === 'spec' && workItem.gate_state === 'spec_changes_requested') {
+        return { ...workItem, gate_state: 'awaiting_spec_approval', updated_at: at };
+      }
+      break;
+    case 'submit_plan':
+      if (workItem.phase === 'plan') {
+        return { ...workItem, gate_state: 'awaiting_plan_approval', updated_at: at };
+      }
+      break;
+    case 'approve_plan':
+      if (workItem.phase === 'plan') {
+        return { ...workItem, phase: 'execution', gate_state: 'none', updated_at: at };
+      }
+      break;
+    case 'request_plan_changes':
+      if (workItem.phase === 'plan') {
+        return { ...workItem, gate_state: 'plan_changes_requested', updated_at: at };
+      }
+      break;
+    case 'resubmit_plan':
+      if (workItem.phase === 'plan' && workItem.gate_state === 'plan_changes_requested') {
+        return { ...workItem, gate_state: 'awaiting_plan_approval', updated_at: at };
+      }
+      break;
+    case 'complete_execution':
+      if (workItem.phase === 'execution') {
+        return { ...workItem, phase: 'done', resolution: 'completed', gate_state: 'none', updated_at: at };
+      }
+      break;
+  }
+
+  return invalidTransition('WorkItem', `${workItem.phase}/${workItem.gate_state}`, event.type);
+};
+
+export const transitionSpecPlan = (entity: SpecPlan | undefined, event: SpecPlanTransition): SpecPlan => {
+  const at = timestampFor(event);
+
+  if (entity === undefined) {
+    if (event.type !== 'create') {
+      return invalidTransition('SpecPlan', 'none', event.type);
+    }
+
+    return {
+      id: event.id,
+      work_item_id: event.work_item_id,
+      entity_type: event.entity_type,
+      status: 'draft',
+      editing_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      created_at: at,
+      updated_at: at,
+    } as SpecPlan;
+  }
+
+  if (event.type === 'create') {
+    return invalidTransition('SpecPlan', entity.status, event.type);
+  }
+
+  switch (event.type) {
+    case 'generate_draft_start':
+      if (entity.status === 'draft') {
+        return { ...entity, editing_state: 'ai_drafting', updated_at: at };
+      }
+      break;
+    case 'generate_draft_success':
+    case 'generate_draft_failure':
+      if (entity.editing_state === 'ai_drafting') {
+        return { ...entity, editing_state: 'idle', updated_at: at };
+      }
+      break;
+    case 'submit_for_approval':
+      if (entity.status === 'draft') {
+        return {
+          ...entity,
+          status: 'in_review',
+          editing_state: 'idle',
+          gate_state: 'awaiting_approval',
+          resolution: 'none',
+          updated_at: at,
+        };
+      }
+      break;
+    case 'approve':
+      if (entity.status === 'in_review') {
+        return {
+          ...entity,
+          status: 'approved',
+          editing_state: 'idle',
+          gate_state: 'approved',
+          resolution: 'approved',
+          updated_at: at,
+        };
+      }
+      break;
+    case 'request_changes':
+      if (entity.status === 'in_review') {
+        return {
+          ...entity,
+          status: 'draft',
+          editing_state: 'idle',
+          gate_state: 'changes_requested',
+          resolution: 'none',
+          updated_at: at,
+        };
+      }
+      break;
+  }
+
+  return invalidTransition('SpecPlan', `${entity.status}/${entity.editing_state}/${entity.gate_state}`, event.type);
+};
+
+export const transitionExecutionPackage = (
+  executionPackage: ExecutionPackage | undefined,
+  event: ExecutionPackageTransition,
+): ExecutionPackage => {
+  const at = timestampFor(event);
+
+  if (executionPackage === undefined) {
+    if (event.type !== 'generate_package') {
+      return invalidTransition('ExecutionPackage', 'none', event.type);
+    }
+
+    return {
+      id: event.id,
+      work_item_id: event.work_item_id,
+      project_id: event.project_id,
+      repo_id: event.repo_id,
+      objective: event.objective,
+      owner_actor_id: event.owner_actor_id,
+      reviewer_actor_id: event.reviewer_actor_id,
+      phase: 'draft',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      required_checks: [],
+      required_artifact_kinds: [],
+      allowed_paths: [],
+      forbidden_paths: [],
+      created_at: at,
+      updated_at: at,
+    };
+  }
+
+  if (event.type === 'generate_package') {
+    return invalidTransition('ExecutionPackage', executionPackage.phase, event.type);
+  }
+
+  switch (event.type) {
+    case 'mark_ready':
+      if (executionPackage.phase === 'draft') {
+        return { ...executionPackage, phase: 'ready', gate_state: 'not_submitted', updated_at: at };
+      }
+      break;
+    case 'run':
+    case 'rerun':
+      if (executionPackage.phase === 'ready') {
+        return {
+          ...executionPackage,
+          phase: 'queued',
+          activity_state: 'awaiting_ai',
+          gate_state: 'none',
+          resolution: 'none',
+          updated_at: at,
+        };
+      }
+      break;
+    case 'force_rerun':
+      if (executionPackage.phase === 'review' && event.has_open_review_packet) {
+        return {
+          ...executionPackage,
+          phase: 'queued',
+          activity_state: 'awaiting_ai',
+          gate_state: 'none',
+          resolution: 'none',
+          updated_at: at,
+        };
+      }
+      break;
+    case 'workflow_start':
+      if (executionPackage.phase === 'queued') {
+        return { ...executionPackage, phase: 'execution', activity_state: 'ai_running', updated_at: at };
+      }
+      break;
+    case 'execution_failed_retryable':
+      if (executionPackage.phase === 'execution') {
+        return {
+          ...executionPackage,
+          phase: 'ready',
+          activity_state: 'idle',
+          gate_state: 'none',
+          last_failure_summary: event.failure_summary,
+          updated_at: at,
+        };
+      }
+      break;
+    case 'execution_failed_blocked':
+      if (executionPackage.phase === 'execution') {
+        return {
+          ...executionPackage,
+          activity_state: 'blocked',
+          blocked_reason: event.blocked_reason,
+          updated_at: at,
+        };
+      }
+      break;
+    case 'execution_succeeded':
+      if (executionPackage.phase === 'execution') {
+        return {
+          ...executionPackage,
+          phase: 'review',
+          activity_state: 'awaiting_human',
+          gate_state: 'awaiting_human_review',
+          resolution: 'none',
+          updated_at: at,
+        };
+      }
+      break;
+    case 'execution_failed_blocking_check':
+      if (executionPackage.phase === 'execution') {
+        return {
+          ...executionPackage,
+          phase: 'ready',
+          activity_state: 'idle',
+          gate_state: 'none',
+          last_failure_summary: event.failure_summary,
+          updated_at: at,
+        };
+      }
+      break;
+    case 'review_approved':
+      if (executionPackage.phase === 'review') {
+        return {
+          ...executionPackage,
+          activity_state: 'idle',
+          gate_state: 'review_approved',
+          resolution: 'completed',
+          updated_at: at,
+        };
+      }
+      break;
+    case 'review_changes_requested':
+      if (executionPackage.phase === 'review') {
+        return {
+          ...executionPackage,
+          phase: 'ready',
+          activity_state: 'idle',
+          gate_state: 'changes_requested',
+          resolution: 'none',
+          updated_at: at,
+        };
+      }
+      break;
+  }
+
+  return invalidTransition(
+    'ExecutionPackage',
+    `${executionPackage.phase}/${executionPackage.activity_state}/${executionPackage.gate_state}`,
+    event.type,
+  );
+};
+
+export const transitionRunSession = (runSession: RunSession | undefined, event: RunSessionTransition): RunSession => {
+  const at = timestampFor(event);
+
+  if (runSession === undefined) {
+    if (event.type !== 'create') {
+      return invalidTransition('RunSession', 'none', event.type);
+    }
+
+    return {
+      id: event.id,
+      execution_package_id: event.execution_package_id,
+      requested_by_actor_id: event.requested_by_actor_id,
+      status: 'queued',
+      check_results: [],
+      artifacts: [],
+      created_at: at,
+      updated_at: at,
+    };
+  }
+
+  if (event.type === 'create') {
+    return invalidTransition('RunSession', runSession.status, event.type);
+  }
+
+  switch (event.type) {
+    case 'workflow_start':
+      if (runSession.status === 'queued') {
+        return { ...runSession, status: 'running', started_at: at, updated_at: at };
+      }
+      break;
+    case 'executor_success':
+      if (runSession.status === 'running') {
+        return { ...runSession, status: 'succeeded', finished_at: at, updated_at: at };
+      }
+      break;
+    case 'executor_failure':
+      if (runSession.status === 'running') {
+        return { ...runSession, status: 'failed', finished_at: at, updated_at: at };
+      }
+      break;
+    case 'executor_timeout':
+      if (runSession.status === 'running') {
+        return { ...runSession, status: 'timed_out', finished_at: at, updated_at: at };
+      }
+      break;
+    case 'cancel':
+      if (runSession.status === 'queued' || runSession.status === 'running') {
+        return { ...runSession, status: 'cancelled', finished_at: at, updated_at: at };
+      }
+      break;
+  }
+
+  return invalidTransition('RunSession', runSession.status, event.type);
+};
+
+export const transitionReviewPacket = (
+  reviewPacket: ReviewPacket | undefined,
+  event: ReviewPacketTransition,
+): ReviewPacket => {
+  const at = timestampFor(event);
+
+  if (reviewPacket === undefined) {
+    if (event.type !== 'create') {
+      return invalidTransition('ReviewPacket', 'none', event.type);
+    }
+
+    return {
+      id: event.id,
+      run_session_id: event.run_session_id,
+      execution_package_id: event.execution_package_id,
+      reviewer_actor_id: event.reviewer_actor_id,
+      status: 'ready',
+      decision: 'none',
+      requested_changes: [],
+      created_at: at,
+      updated_at: at,
+    };
+  }
+
+  if (event.type === 'create') {
+    return invalidTransition('ReviewPacket', reviewPacket.status, event.type);
+  }
+
+  switch (event.type) {
+    case 'start_review':
+      if (reviewPacket.status === 'ready') {
+        return { ...reviewPacket, status: 'in_review', decision: 'none', updated_at: at };
+      }
+      break;
+    case 'approve':
+      if (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review') {
+        return { ...reviewPacket, status: 'completed', decision: 'approved', completed_at: at, updated_at: at };
+      }
+      break;
+    case 'request_changes':
+      if (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review') {
+        return {
+          ...reviewPacket,
+          status: 'completed',
+          decision: 'changes_requested',
+          completed_at: at,
+          updated_at: at,
+        };
+      }
+      break;
+    case 'archive_for_newer_run':
+      if (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review') {
+        return { ...reviewPacket, status: 'archived', decision: 'none', updated_at: at };
+      }
+      break;
+  }
+
+  return invalidTransition('ReviewPacket', `${reviewPacket.status}/${reviewPacket.decision}`, event.type);
+};
