@@ -6,8 +6,10 @@ import {
   commandInventoryResponseSchema,
   executorResultSchema,
   failureKindSchema,
+  approveReviewPacketRequestSchema,
   forceRerunPackageRequestSchema,
   forceRerunPackageResponseSchema,
+  requestReviewChangesRequestSchema,
   rerunPackageRequestSchema,
   rerunPackageResponseSchema,
   reviewDecisionPayloadSchema,
@@ -448,6 +450,67 @@ describe('P0 delivery loop contracts', () => {
 
     expect(parsed.decision).toBe('changes_requested');
     expect(parsed.requested_changes).toHaveLength(1);
+  });
+
+  it('parses the approve review packet request DTO', () => {
+    const parsed = approveReviewPacketRequestSchema.parse({
+      review_packet_id: 'review-packet-1',
+      decision: 'approved',
+      summary: 'The contracts are ready for the next delivery loop stage.',
+      reviewed_by_actor_id: 'actor-1',
+      reviewed_at: '2026-05-05T02:00:00.000Z',
+    });
+
+    expect(parsed.decision).toBe('approved');
+    expect('requested_changes' in parsed).toBe(false);
+  });
+
+  it('parses the request review changes request DTO', () => {
+    const parsed = requestReviewChangesRequestSchema.parse({
+      ...validReviewDecisionPayload,
+      decision: 'changes_requested',
+      requested_changes: [validRequestedChange],
+    });
+
+    expect(parsed.decision).toBe('changes_requested');
+    expect(parsed.requested_changes).toHaveLength(1);
+  });
+
+  it('rejects changes-requested decisions on the approve review packet request DTO', () => {
+    expect(
+      approveReviewPacketRequestSchema.safeParse({
+        ...validReviewDecisionPayload,
+        decision: 'changes_requested',
+        requested_changes: [validRequestedChange],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects requested changes on the approve review packet request DTO', () => {
+    expect(
+      approveReviewPacketRequestSchema.safeParse({
+        ...validReviewDecisionPayload,
+        requested_changes: [validRequestedChange],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects approved decisions on the request review changes request DTO', () => {
+    expect(
+      requestReviewChangesRequestSchema.safeParse({
+        ...validReviewDecisionPayload,
+        requested_changes: [validRequestedChange],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('requires requested changes on the request review changes request DTO', () => {
+    expect(
+      requestReviewChangesRequestSchema.safeParse({
+        ...validReviewDecisionPayload,
+        decision: 'changes_requested',
+      }).success,
+    ).toBe(false);
   });
 
   it('parses the command inventory response DTO', () => {

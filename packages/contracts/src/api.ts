@@ -143,6 +143,25 @@ export type RerunPackageResponse = RunCommandResponse;
 export const forceRerunPackageResponseSchema = runCommandResponseSchema;
 export type ForceRerunPackageResponse = RunCommandResponse;
 
+const reviewDecisionRequestBaseSchema = z.object({
+  review_packet_id: z.string().min(1),
+  summary: z.string().min(1),
+  reviewed_by_actor_id: z.string().min(1),
+  reviewed_at: isoDateTimeSchema,
+});
+
+export const approveReviewPacketRequestSchema = reviewDecisionRequestBaseSchema.extend({
+  decision: z.literal('approved'),
+  requested_changes: z.never().optional(),
+});
+export type ApproveReviewPacketRequest = z.infer<typeof approveReviewPacketRequestSchema>;
+
+export const requestReviewChangesRequestSchema = reviewDecisionRequestBaseSchema.extend({
+  decision: z.literal('changes_requested'),
+  requested_changes: z.array(requestedChangeSchema).min(1),
+});
+export type RequestReviewChangesRequest = z.infer<typeof requestReviewChangesRequestSchema>;
+
 export const submitReviewDecisionRequestSchema = reviewDecisionPayloadSchema;
 export type SubmitReviewDecisionRequest = z.infer<typeof submitReviewDecisionRequestSchema>;
 
