@@ -166,6 +166,39 @@ const invalidTransition = (objectType: string, current: string, transition: stri
 
 const hasText = (value: string | undefined): value is string => value !== undefined && value.trim().length > 0;
 
+const cloneArtifactRef = (artifact: ArtifactRef): ArtifactRef => ({ ...artifact });
+
+const cloneChangedFile = (changedFile: ChangedFile): ChangedFile => ({ ...changedFile });
+
+const cloneRequiredCheckSpec = (check: RequiredCheckSpec): RequiredCheckSpec => ({ ...check });
+
+const cloneRequestedChange = (change: RequestedChange): RequestedChange => ({ ...change });
+
+const cloneSelfReviewResult = (selfReview: SelfReviewResult): SelfReviewResult => ({
+  ...selfReview,
+  risk_notes: [...selfReview.risk_notes],
+  follow_up_questions: [...selfReview.follow_up_questions],
+});
+
+const cloneRunSpec = (runSpec: RunSpec): RunSpec => ({
+  ...runSpec,
+  repo: { ...runSpec.repo },
+  context: {
+    ...runSpec.context,
+    required_checks: runSpec.context.required_checks.map(cloneRequiredCheckSpec),
+  },
+  review_context: {
+    ...runSpec.review_context,
+    requested_changes: (runSpec.review_context.requested_changes ?? []).map(cloneRequestedChange),
+  },
+  allowed_paths: [...runSpec.allowed_paths],
+  forbidden_paths: [...runSpec.forbidden_paths],
+  required_checks: runSpec.required_checks.map(cloneRequiredCheckSpec),
+  artifact_policy: {
+    requested_artifacts: [...runSpec.artifact_policy.requested_artifacts],
+  },
+});
+
 const assertReviewDecision = (
   event: Extract<ReviewPacketTransition, { type: 'approve' | 'request_changes' }>,
 ): void => {
@@ -534,14 +567,14 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       execution_package_id: event.execution_package_id,
       requested_by_actor_id: event.requested_by_actor_id,
       status: 'queued',
-      changed_files: event.changed_files ?? [],
+      changed_files: (event.changed_files ?? []).map(cloneChangedFile),
       check_results: [],
       artifacts: [],
-      log_refs: event.log_refs ?? [],
+      log_refs: (event.log_refs ?? []).map(cloneArtifactRef),
       created_at: at,
       updated_at: at,
       ...(event.executor_type !== undefined ? { executor_type: event.executor_type } : {}),
-      ...(event.run_spec !== undefined ? { run_spec: event.run_spec } : {}),
+      ...(event.run_spec !== undefined ? { run_spec: cloneRunSpec(event.run_spec) } : {}),
       ...(event.summary !== undefined ? { summary: event.summary } : {}),
       ...(event.failure_kind !== undefined ? { failure_kind: event.failure_kind } : {}),
       ...(event.failure_reason !== undefined ? { failure_reason: event.failure_reason } : {}),
@@ -603,10 +636,10 @@ export const transitionReviewPacket = (
       plan_revision_id: event.plan_revision_id,
       status: 'ready',
       decision: 'none',
-      changed_files: event.changed_files,
+      changed_files: event.changed_files.map(cloneChangedFile),
       check_result_summary: event.check_result_summary,
-      self_review: event.self_review,
-      risk_notes: event.risk_notes,
+      self_review: cloneSelfReviewResult(event.self_review),
+      risk_notes: [...event.risk_notes],
       requested_changes: [],
       created_at: at,
       updated_at: at,
@@ -652,7 +685,7 @@ export const transitionReviewPacket = (
           ...reviewPacket,
           status: 'completed',
           decision: 'changes_requested',
-          requested_changes: event.requested_changes,
+          requested_changes: event.requested_changes.map(cloneRequestedChange),
           completed_at: at,
           updated_at: at,
           summary: event.summary,

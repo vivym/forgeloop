@@ -428,4 +428,64 @@ describe('domain completion derivation', () => {
     expect(completion.done).toBe(false);
     expect(completion.incomplete_reasons).toContain('package package-1 is missing artifact diff');
   });
+
+  it('uses a later approved successful run with artifacts when no current run is recorded', () => {
+    const completion = deriveWorkItemCompletion(
+      workItem,
+      [packageBase()],
+      [
+        successfulRun({ id: 'run-session-1', artifacts: [executionSummaryArtifact] }),
+        successfulRun({ id: 'run-session-2', artifacts: [executionSummaryArtifact, diffArtifact] }),
+      ],
+      [
+        approvedReviewPacket({ id: 'review-packet-1', run_session_id: 'run-session-1' }),
+        approvedReviewPacket({ id: 'review-packet-2', run_session_id: 'run-session-2' }),
+      ],
+    );
+
+    expect(completion).toEqual({
+      done: true,
+      resolution: 'completed',
+      incomplete_reasons: [],
+    });
+  });
+
+  it('blocks completion when the current run is missing a required artifact even if an older run has it', () => {
+    const completion = deriveWorkItemCompletion(
+      workItem,
+      [packageBase({ last_run_session_id: 'run-session-2' })],
+      [
+        successfulRun({ id: 'run-session-1', artifacts: [executionSummaryArtifact, diffArtifact] }),
+        successfulRun({ id: 'run-session-2', artifacts: [executionSummaryArtifact] }),
+      ],
+      [
+        approvedReviewPacket({ id: 'review-packet-1', run_session_id: 'run-session-1' }),
+        approvedReviewPacket({ id: 'review-packet-2', run_session_id: 'run-session-2' }),
+      ],
+    );
+
+    expect(completion.done).toBe(false);
+    expect(completion.incomplete_reasons).toContain('package package-1 is missing artifact diff');
+  });
+
+  it('completes with current run artifacts even if an older approved run lacks artifacts', () => {
+    const completion = deriveWorkItemCompletion(
+      workItem,
+      [packageBase({ last_run_session_id: 'run-session-2' })],
+      [
+        successfulRun({ id: 'run-session-1', artifacts: [executionSummaryArtifact] }),
+        successfulRun({ id: 'run-session-2', artifacts: [executionSummaryArtifact, diffArtifact] }),
+      ],
+      [
+        approvedReviewPacket({ id: 'review-packet-1', run_session_id: 'run-session-1' }),
+        approvedReviewPacket({ id: 'review-packet-2', run_session_id: 'run-session-2' }),
+      ],
+    );
+
+    expect(completion).toEqual({
+      done: true,
+      resolution: 'completed',
+      incomplete_reasons: [],
+    });
+  });
 });

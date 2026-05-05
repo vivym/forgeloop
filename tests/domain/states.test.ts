@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { ArtifactKind, ArtifactRef, ChangedFile, RequiredCheckSpec, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
+import type {
+  ArtifactKind,
+  ArtifactRef,
+  ChangedFile,
+  RequestedChange,
+  RequiredCheckSpec,
+  RunSpec,
+  SelfReviewResult,
+} from '@forgeloop/contracts';
 
 import {
   DomainError,
@@ -789,6 +797,111 @@ describe('domain state transitions', () => {
       expect(transitionRunSession(running, { type: 'executor_timeout' }).status).toBe('timed_out');
     });
 
+    it('freezes create payload evidence after transition', () => {
+      const changedFilesInput: ChangedFile[] = [
+        {
+          repo_id: 'repo-1',
+          path: 'packages/domain/src/types.ts',
+          change_kind: 'modified',
+        },
+      ];
+      const logRefsInput: ArtifactRef[] = [
+        {
+          kind: 'logs',
+          name: 'executor log',
+          content_type: 'text/plain',
+          local_ref: 'artifacts/run-session/executor.log',
+        },
+      ];
+      const runSpecInput: RunSpec = {
+        ...runSpec,
+        repo: { ...runSpec.repo },
+        context: {
+          ...runSpec.context,
+          required_checks: runSpec.context.required_checks.map((check) => ({ ...check })),
+        },
+        review_context: {
+          latest_decision: 'changes_requested',
+          requested_changes: [
+            {
+              title: 'Original change',
+              description: 'Original requested change.',
+              severity: 'major',
+            },
+          ],
+        },
+        allowed_paths: [...runSpec.allowed_paths],
+        forbidden_paths: [...runSpec.forbidden_paths],
+        required_checks: runSpec.required_checks.map((check) => ({ ...check })),
+        artifact_policy: {
+          requested_artifacts: [...runSpec.artifact_policy.requested_artifacts],
+        },
+      };
+
+      const session = transitionRunSession(undefined, {
+        type: 'create',
+        id: 'run-session-frozen',
+        execution_package_id: 'package-1',
+        requested_by_actor_id: 'actor-owner',
+        run_spec: runSpecInput,
+        changed_files: changedFilesInput,
+        log_refs: logRefsInput,
+      });
+
+      changedFilesInput[0].path = 'mutated/path.ts';
+      changedFilesInput.push({
+        repo_id: 'repo-1',
+        path: 'mutated/new.ts',
+        change_kind: 'added',
+      });
+      logRefsInput[0].local_ref = 'artifacts/run-session/mutated.log';
+      logRefsInput.push({
+        kind: 'logs',
+        name: 'mutated log',
+        content_type: 'text/plain',
+        local_ref: 'artifacts/run-session/new.log',
+      });
+      runSpecInput.repo.local_path = '/mutated/worktree';
+      runSpecInput.context.required_checks[0].command = 'pnpm mutated';
+      runSpecInput.review_context.requested_changes[0].title = 'Mutated change';
+      runSpecInput.review_context.requested_changes.push({
+        title: 'New change',
+        description: 'New requested change.',
+      });
+      runSpecInput.allowed_paths.push('mutated/**');
+      runSpecInput.artifact_policy.requested_artifacts.push('logs');
+
+      expect(session.changed_files).toEqual([
+        {
+          repo_id: 'repo-1',
+          path: 'packages/domain/src/types.ts',
+          change_kind: 'modified',
+        },
+      ]);
+      expect(session.log_refs).toEqual([
+        {
+          kind: 'logs',
+          name: 'executor log',
+          content_type: 'text/plain',
+          local_ref: 'artifacts/run-session/executor.log',
+        },
+      ]);
+      expect(session.run_spec?.repo.local_path).toBe('/Users/viv/projs/forgeloop/.worktrees/p0-delivery-loop-mvp');
+      expect(session.run_spec?.context.required_checks[0].command).toBe('pnpm test tests/domain');
+      expect(session.run_spec?.review_context.requested_changes).toEqual([
+        {
+          title: 'Original change',
+          description: 'Original requested change.',
+          severity: 'major',
+        },
+      ]);
+      expect(session.run_spec?.allowed_paths).toEqual(['packages/domain/**', 'tests/domain/**']);
+      expect(session.run_spec?.artifact_policy.requested_artifacts).toEqual(['execution_summary', 'diff']);
+      expect(session.changed_files).not.toBe(changedFilesInput);
+      expect(session.log_refs).not.toBe(logRefsInput);
+      expect(session.run_spec).not.toBe(runSpecInput);
+    });
+
     it('allows queued or running sessions to be cancelled', () => {
       const queued = createSession();
       const running = transitionRunSession(queued, { type: 'workflow_start' });
@@ -870,6 +983,71 @@ describe('domain state transitions', () => {
       });
     });
 
+    it('freezes create payload evidence after transition', () => {
+      const changedFilesInput: ChangedFile[] = [
+        {
+          repo_id: 'repo-1',
+          path: 'tests/domain/states.test.ts',
+          change_kind: 'modified',
+        },
+      ];
+      const selfReviewInput: SelfReviewResult = {
+        status: 'succeeded',
+        summary: 'Changes match the P0 domain spec.',
+        spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
+        test_assessment: 'Domain transition tests cover the new review packet context.',
+        risk_notes: ['Domain persistence adapters must map the new fields.'],
+        follow_up_questions: ['Should adapters mirror this shape?'],
+      };
+      const riskNotesInput = ['Domain persistence adapters must map the new fields.'];
+
+      const packet = transitionReviewPacket(undefined, {
+        type: 'create',
+        id: 'review-packet-frozen',
+        run_session_id: 'run-session-1',
+        execution_package_id: 'package-1',
+        reviewer_actor_id: 'actor-reviewer',
+        spec_revision_id: 'spec-revision-1',
+        plan_revision_id: 'plan-revision-1',
+        changed_files: changedFilesInput,
+        check_result_summary: 'pnpm test tests/domain passed.',
+        self_review: selfReviewInput,
+        risk_notes: riskNotesInput,
+      });
+
+      changedFilesInput[0].path = 'mutated/path.ts';
+      changedFilesInput.push({
+        repo_id: 'repo-1',
+        path: 'mutated/new.ts',
+        change_kind: 'added',
+      });
+      selfReviewInput.summary = 'Mutated summary.';
+      selfReviewInput.risk_notes[0] = 'Mutated nested risk.';
+      selfReviewInput.follow_up_questions.push('Mutated question?');
+      riskNotesInput[0] = 'Mutated risk.';
+      riskNotesInput.push('New risk.');
+
+      expect(packet.changed_files).toEqual([
+        {
+          repo_id: 'repo-1',
+          path: 'tests/domain/states.test.ts',
+          change_kind: 'modified',
+        },
+      ]);
+      expect(packet.self_review).toEqual({
+        status: 'succeeded',
+        summary: 'Changes match the P0 domain spec.',
+        spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
+        test_assessment: 'Domain transition tests cover the new review packet context.',
+        risk_notes: ['Domain persistence adapters must map the new fields.'],
+        follow_up_questions: ['Should adapters mirror this shape?'],
+      });
+      expect(packet.risk_notes).toEqual(['Domain persistence adapters must map the new fields.']);
+      expect(packet.changed_files).not.toBe(changedFilesInput);
+      expect(packet.self_review).not.toBe(selfReviewInput);
+      expect(packet.risk_notes).not.toBe(riskNotesInput);
+    });
+
     it('allows approval, changes requested, and archive from open packets', () => {
       const ready = createPacket();
 
@@ -917,6 +1095,45 @@ describe('domain state transitions', () => {
         status: 'archived',
         decision: 'none',
       });
+    });
+
+    it('freezes requested changes after changes-requested decision', () => {
+      const ready = createPacket();
+      const requestedChangesInput: RequestedChange[] = [
+        {
+          title: 'Add QA owner',
+          description: 'Freeze the QA owner on the execution package.',
+          file_path: 'packages/domain/src/types.ts',
+          severity: 'major',
+          suggested_validation: 'pnpm test tests/domain',
+        },
+      ];
+
+      const completed = transitionReviewPacket(ready, {
+        type: 'request_changes',
+        summary: 'Needs more context.',
+        reviewed_by_actor_id: 'actor-reviewer',
+        reviewed_at: '2026-05-05T01:00:00.000Z',
+        requested_changes: requestedChangesInput,
+      });
+
+      requestedChangesInput[0].title = 'Mutated title';
+      requestedChangesInput[0].description = 'Mutated description.';
+      requestedChangesInput.push({
+        title: 'New request',
+        description: 'New request after transition.',
+      });
+
+      expect(completed.requested_changes).toEqual([
+        {
+          title: 'Add QA owner',
+          description: 'Freeze the QA owner on the execution package.',
+          file_path: 'packages/domain/src/types.ts',
+          severity: 'major',
+          suggested_validation: 'pnpm test tests/domain',
+        },
+      ]);
+      expect(completed.requested_changes).not.toBe(requestedChangesInput);
     });
 
     it.each([
