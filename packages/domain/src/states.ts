@@ -525,17 +525,23 @@ export const transitionReviewPacket = (
 
   switch (event.type) {
     case 'start_review':
-      if (reviewPacket.status === 'ready') {
+      if (reviewPacket.status === 'ready' && reviewPacket.decision === 'none') {
         return { ...reviewPacket, status: 'in_review', decision: 'none', updated_at: at };
       }
       break;
     case 'approve':
-      if (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review') {
+      if (
+        reviewPacket.decision === 'none' &&
+        (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review')
+      ) {
         return { ...reviewPacket, status: 'completed', decision: 'approved', completed_at: at, updated_at: at };
       }
       break;
     case 'request_changes':
-      if (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review') {
+      if (
+        reviewPacket.decision === 'none' &&
+        (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review')
+      ) {
         return {
           ...reviewPacket,
           status: 'completed',
@@ -546,7 +552,10 @@ export const transitionReviewPacket = (
       }
       break;
     case 'archive_for_newer_run':
-      if (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review') {
+      if (
+        reviewPacket.decision === 'none' &&
+        (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review')
+      ) {
         return { ...reviewPacket, status: 'archived', decision: 'none', updated_at: at };
       }
       break;

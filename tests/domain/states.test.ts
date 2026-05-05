@@ -618,5 +618,36 @@ describe('domain state transitions', () => {
 
       expectDomainError(() => transitionReviewPacket(completed, { type: 'archive_for_newer_run' }), 'INVALID_TRANSITION');
     });
+
+    it.each(['approved', 'changes_requested'] as const)(
+      'rejects open ReviewPacket transitions when decision is %s',
+      (decision) => {
+        const invalidReadyPacket: ReviewPacket = {
+          ...createPacket(),
+          decision,
+        };
+        const invalidInReviewPacket: ReviewPacket = {
+          ...invalidReadyPacket,
+          status: 'in_review',
+        };
+
+        expectDomainError(() => transitionReviewPacket(invalidReadyPacket, { type: 'start_review' }), 'INVALID_TRANSITION');
+        expectDomainError(() => transitionReviewPacket(invalidReadyPacket, { type: 'approve' }), 'INVALID_TRANSITION');
+        expectDomainError(() => transitionReviewPacket(invalidInReviewPacket, { type: 'approve' }), 'INVALID_TRANSITION');
+        expectDomainError(() => transitionReviewPacket(invalidReadyPacket, { type: 'request_changes' }), 'INVALID_TRANSITION');
+        expectDomainError(
+          () => transitionReviewPacket(invalidInReviewPacket, { type: 'request_changes' }),
+          'INVALID_TRANSITION',
+        );
+        expectDomainError(
+          () => transitionReviewPacket(invalidReadyPacket, { type: 'archive_for_newer_run' }),
+          'INVALID_TRANSITION',
+        );
+        expectDomainError(
+          () => transitionReviewPacket(invalidInReviewPacket, { type: 'archive_for_newer_run' }),
+          'INVALID_TRANSITION',
+        );
+      },
+    );
   });
 });

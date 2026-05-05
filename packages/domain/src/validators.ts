@@ -139,15 +139,11 @@ export const validateForceRerunAllowed = (
     (reviewPacket) =>
       reviewPacket.decision === 'none' && (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review'),
   );
-  const hasCompletedReviewDecision = packageReviewPackets.some(
-    (reviewPacket) => reviewPacket.status === 'completed' && reviewPacket.decision !== 'none',
-  );
 
   if (
     executionPackage.phase !== 'review' ||
     executionPackage.resolution !== 'none' ||
     executionPackage.owner_actor_id !== actorId ||
-    hasCompletedReviewDecision ||
     !hasOpenReviewPacket
   ) {
     throw new DomainError('FORCE_RERUN_FORBIDDEN', `Actor ${actorId} cannot force-rerun package ${executionPackage.id}`, {

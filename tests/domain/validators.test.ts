@@ -243,10 +243,10 @@ describe('domain validators', () => {
     },
   );
 
-  it('rejects force-rerun when the package already has a completed review decision', () => {
+  it('allows force-rerun with a current open review packet after historical changes requested', () => {
     const reviewPackage = packageBase({ phase: 'review', activity_state: 'awaiting_human' });
 
-    expectDomainError(
+    expect(
       () =>
         validateForceRerunAllowed(
           reviewPackage,
@@ -254,6 +254,24 @@ describe('domain validators', () => {
             openReviewPacket({ id: 'open-review-packet' }),
             approvedReviewPacket({ id: 'completed-review-packet', decision: 'changes_requested' }),
           ],
+          'actor-owner',
+        ),
+    ).not.toThrow();
+  });
+
+  it('rejects force-rerun for a completed package even with an invalid open review tuple', () => {
+    const completedPackage = packageBase({
+      phase: 'review',
+      activity_state: 'idle',
+      gate_state: 'review_approved',
+      resolution: 'completed',
+    });
+
+    expectDomainError(
+      () =>
+        validateForceRerunAllowed(
+          completedPackage,
+          [openReviewPacket({ status: 'ready', decision: 'approved' })],
           'actor-owner',
         ),
       'FORCE_RERUN_FORBIDDEN',
