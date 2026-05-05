@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   api,
@@ -25,6 +25,7 @@ import {
   type WorkItem,
   type WorkItemKind,
 } from './api';
+import { isActiveCockpit } from './workbenchState';
 
 const actorDefault = 'actor-owner';
 const reviewerDefault = 'actor-reviewer';
@@ -57,6 +58,8 @@ const emptyPackage: CreateExecutionPackageBody = {
 type SpecPlanMode = 'spec' | 'plan';
 
 export function App() {
+  const selectedWorkItemIdRef = useRef('');
+  const refreshRequestIdRef = useRef(0);
   const [projectFilter, setProjectFilter] = useState('');
   const [manualWorkItemId, setManualWorkItemId] = useState('');
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
@@ -88,23 +91,27 @@ export function App() {
     suggested_validation: '',
   });
 
-  const selectedWorkItem = cockpit.work_item ?? workItems.find((item) => item.id === selectedWorkItemId);
-  const currentSpec = cockpit.current_spec ?? null;
-  const currentPlan = cockpit.current_plan ?? null;
-  const packages = cockpit.packages ?? [];
-  const runSessions = cockpit.run_sessions ?? [];
-  const reviewPackets = cockpit.review_packets ?? [];
+  const hasActiveCockpit = isActiveCockpit(cockpit, selectedWorkItemId);
+  const selectedWorkItem = hasActiveCockpit ? cockpit.work_item : workItems.find((item) => item.id === selectedWorkItemId);
+  const currentSpec = hasActiveCockpit ? (cockpit.current_spec ?? null) : null;
+  const currentPlan = hasActiveCockpit ? (cockpit.current_plan ?? null) : null;
+  const packages = hasActiveCockpit ? (cockpit.packages ?? []) : [];
+  const runSessions = hasActiveCockpit ? (cockpit.run_sessions ?? []) : [];
+  const reviewPackets = hasActiveCockpit ? (cockpit.review_packets ?? []) : [];
   const selectedPackage = packages.find((item) => item.id === selectedPackageId) ?? packages[0];
   const failedChecks = (runDetail?.check_results ?? []).filter((check) => check.status !== 'succeeded' && check.blocks_review !== false);
-  const nextActions = cockpit.next_actions ?? [];
+  const nextActions = hasActiveCockpit ? (cockpit.next_actions ?? []) : [];
 
   useEffect(() => {
     void loadWorkItems();
   }, []);
 
   useEffect(() => {
-    if (!selectedWorkItemId) return;
-    void refreshWorkbench(selectedWorkItemId);
+    selectedWorkItemIdRef.current = selectedWorkItemId;
+    clearWorkbenchState();
+    if (selectedWorkItemId) {
+      void refreshWorkbench(selectedWorkItemId);
+    }
   }, [selectedWorkItemId]);
 
   useEffect(() => {
@@ -122,9 +129,14 @@ export function App() {
       setRunDetail(null);
       return;
     }
+    let cancelled = false;
     void runAction(`Loaded run ${selectedRunId}`, async () => {
-      setRunDetail(await api.getRunSession(selectedRunId));
+      const detail = await api.getRunSession(selectedRunId);
+      if (!cancelled) setRunDetail(detail);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedRunId]);
 
   useEffect(() => {
@@ -132,12 +144,20 @@ export function App() {
       setReviewDetail(null);
       return;
     }
+    let cancelled = false;
     void runAction(`Loaded review ${selectedReviewId}`, async () => {
-      setReviewDetail(await api.getReviewPacket(selectedReviewId));
+      const detail = await api.getReviewPacket(selectedReviewId);
+      if (!cancelled) setReviewDetail(detail);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedReviewId]);
 
-  const completionText = useMemo(() => JSON.stringify(cockpit.completion_state ?? {}, null, 2), [cockpit.completion_state]);
+  const completionText = useMemo(
+    () => JSON.stringify(hasActiveCockpit ? (cockpit.completion_state ?? {}) : {}, null, 2),
+    [cockpit.completion_state, hasActiveCockpit],
+  );
 
   async function runAction(success: string, action: () => Promise<void>) {
     setLoading(true);
@@ -160,16 +180,37 @@ export function App() {
     });
   }
 
+  function clearWorkbenchState() {
+    refreshRequestIdRef.current += 1;
+    setCockpit({});
+    setTimeline([]);
+    setSpecRevisions([]);
+    setPlanRevisions([]);
+    setSelectedPackageId('');
+    setSelectedRunId('');
+    setSelectedReviewId('');
+    setRunDetail(null);
+    setReviewDetail(null);
+    setPackageForm(toPackageForm(emptyPackage));
+  }
+
   async function refreshWorkbench(workItemId = selectedWorkItemId) {
     if (!workItemId) return;
+    const requestId = ++refreshRequestIdRef.current;
     await runAction('Workbench refreshed', async () => {
       const [cockpitResponse, timelineResponse] = await Promise.all([api.getCockpit(workItemId), api.getTimeline(workItemId)]);
-      setCockpit(cockpitResponse);
-      setTimeline(timelineResponse);
+      if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
       const spec = cockpitResponse.current_spec;
       const plan = cockpitResponse.current_plan;
-      setSpecRevisions(spec?.id ? await api.listSpecRevisions(spec.id) : []);
-      setPlanRevisions(plan?.id ? await api.listPlanRevisions(plan.id) : []);
+      const [nextSpecRevisions, nextPlanRevisions] = await Promise.all([
+        spec?.id ? api.listSpecRevisions(spec.id) : Promise.resolve([]),
+        plan?.id ? api.listPlanRevisions(plan.id) : Promise.resolve([]),
+      ]);
+      if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
+      setCockpit(cockpitResponse);
+      setTimeline(timelineResponse);
+      setSpecRevisions(nextSpecRevisions);
+      setPlanRevisions(nextPlanRevisions);
       const pkg = cockpitResponse.packages?.[0];
       setSelectedPackageId((current) => (current && cockpitResponse.packages?.some((item) => item.id === current) ? current : (pkg?.id ?? '')));
       const run = cockpitResponse.run_sessions?.[0];
@@ -183,10 +224,10 @@ export function App() {
     event.preventDefault();
     void runAction('Created work item', async () => {
       const created = await api.createWorkItem(cleanWorkItem(workItemForm));
+      const items = await api.listWorkItems(projectFilter.trim() || undefined);
+      setWorkItems(items);
       setSelectedWorkItemId(created.id);
       setManualWorkItemId(created.id);
-      await loadWorkItems();
-      await refreshWorkbench(created.id);
       setWorkItemForm(emptyWorkItem);
     });
   }
@@ -286,7 +327,7 @@ export function App() {
   }
 
   function requiredWorkItemId() {
-    if (!selectedWorkItemId) throw new Error('Select or load a work item first.');
+    if (!hasActiveCockpit || !selectedWorkItemId) throw new Error('Load the selected work item cockpit first.');
     return selectedWorkItemId;
   }
 
@@ -386,14 +427,14 @@ export function App() {
           <EntitySummary title="Current spec" entity={currentSpec} revisions={specRevisions} />
           <EntitySummary title="Current plan" entity={currentPlan} revisions={planRevisions} />
           <div className="button-row">
-            <button disabled={!selectedWorkItemId} onClick={() => specPlanCommand('Created spec', () => api.createSpec(requiredWorkItemId()))}>Create Spec</button>
+            <button disabled={!hasActiveCockpit} onClick={() => specPlanCommand('Created spec', () => api.createSpec(requiredWorkItemId()))}>Create Spec</button>
             <button disabled={!currentSpec?.id} onClick={() => currentSpec && specPlanCommand('Generated spec draft', () => api.generateSpecDraft(currentSpec.id))}>Generate Spec</button>
             <button disabled={!currentSpec?.id} onClick={() => currentSpec && specPlanCommand('Submitted spec', () => api.submitSpecForApproval(currentSpec.id, commandBody()))}>Submit Spec</button>
             <button disabled={!currentSpec?.id} onClick={() => currentSpec && specPlanCommand('Approved spec', () => api.approveSpec(currentSpec.id, commandBody()))}>Approve Spec</button>
             <button disabled={!currentSpec?.id} onClick={() => currentSpec && specPlanCommand('Spec changes requested', () => api.requestSpecChanges(currentSpec.id, commandBody()))}>Request Spec Changes</button>
           </div>
           <div className="button-row">
-            <button disabled={!selectedWorkItemId} onClick={() => specPlanCommand('Created plan', () => api.createPlan(requiredWorkItemId()))}>Create Plan</button>
+            <button disabled={!hasActiveCockpit} onClick={() => specPlanCommand('Created plan', () => api.createPlan(requiredWorkItemId()))}>Create Plan</button>
             <button disabled={!currentPlan?.id} onClick={() => currentPlan && specPlanCommand('Generated plan draft', () => api.generatePlanDraft(currentPlan.id))}>Generate Plan</button>
             <button disabled={!currentPlan?.id} onClick={() => currentPlan && specPlanCommand('Submitted plan', () => api.submitPlanForApproval(currentPlan.id, commandBody()))}>Submit Plan</button>
             <button disabled={!currentPlan?.id} onClick={() => currentPlan && specPlanCommand('Approved plan', () => api.approvePlan(currentPlan.id, commandBody()))}>Approve Plan</button>
@@ -420,7 +461,7 @@ export function App() {
                 <label>Rollback notes<input value={revisionForm.rollback} onChange={(event) => setRevisionForm({ ...revisionForm, rollback: event.target.value })} /></label>
               </>
             )}
-            <button type="submit" disabled={!selectedWorkItemId || loading}>Create {specMode} Revision</button>
+            <button type="submit" disabled={!hasActiveCockpit || loading}>Create {specMode} Revision</button>
           </form>
         </section>
 
@@ -532,6 +573,10 @@ function StatusLine({ item }: { item: { phase?: string; gate_state?: string; act
   return <span className="status-line">{item.phase ?? 'phase?'} / {item.gate_state ?? 'gate?'} / {item.activity_state ?? 'activity?'} / {item.resolution ?? 'resolution?'}</span>;
 }
 
+function SpecPlanStatusLine({ item }: { item: SpecPlan }) {
+  return <span className="status-line">{item.status} / {item.editing_state} / {item.gate_state} / {item.resolution}</span>;
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
@@ -545,7 +590,7 @@ function EntitySummary({ title, entity, revisions }: { title: string; entity: Sp
   return (
     <div className="entity-summary">
       <h3>{title}</h3>
-      {entity ? <><StatusLine item={entity} /><span>{entity.id}</span><span>current revision: {entity.current_revision_id ?? 'none'}</span></> : <EmptyState text="Not created" />}
+      {entity ? <><SpecPlanStatusLine item={entity} /><span>{entity.id}</span><span>current revision: {entity.current_revision_id ?? 'none'}</span></> : <EmptyState text="Not created" />}
       <PillList values={revisions.map((revision) => `r${revision.revision_number}: ${revision.summary}`)} empty="No revisions" />
     </div>
   );
