@@ -1,4 +1,7 @@
-import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { ForbiddenException, Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
 import {
   type Artifact,
   type Decision,
@@ -26,8 +29,9 @@ import {
   validatePackageEditAllowed,
 } from '@forgeloop/domain';
 import { InMemoryP0Repository, type P0Repository } from '@forgeloop/db';
-import type { CheckResult, ExecutorResult, RunSpec, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
+import type { ExecutorResult, ExecutorType, RunSpec, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import { executePackageRun } from '@forgeloop/workflow';
+import { runLocalCodexExecutor, runMockExecutor } from '@forgeloop/executor';
 
 import type {
   ActorCommandDto,
@@ -57,6 +61,35 @@ const actorOrSystem = (actorId: string | undefined): string => actorId ?? 'syste
 const statusForPackage = (executionPackage: ExecutionPackage): string =>
   `${executionPackage.phase}/${executionPackage.activity_state}/${executionPackage.gate_state}`;
 
+export type P0ExecutorAdapter = (runSpec: RunSpec) => Promise<ExecutorResult>;
+export type P0ExecutorAdapterRegistry = Record<ExecutorType, P0ExecutorAdapter>;
+
+export const P0_EXECUTOR_ADAPTERS = Symbol('P0_EXECUTOR_ADAPTERS');
+
+const safePathSegment = (value: string): string => {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/^-+|-+$/g, '');
+
+  return sanitized.length > 0 ? sanitized : 'artifact';
+};
+
+export const createDefaultP0ExecutorAdapters = (): P0ExecutorAdapterRegistry => {
+  const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
+  const codexHome = process.env.FORGELOOP_CODEX_HOME ?? process.env.CODEX_HOME;
+
+  return {
+    mock: runMockExecutor,
+    local_codex: (runSpec) =>
+      runLocalCodexExecutor(runSpec, {
+        artifactRoot: join(artifactRoot, safePathSegment(runSpec.run_session_id)),
+        ...(codexHome === undefined ? {} : { codexHome }),
+      }),
+  };
+};
+
 @Injectable()
 export class P0Service {
   private readonly repository: P0Repository = new InMemoryP0Repository();
@@ -64,6 +97,8 @@ export class P0Service {
   private timeCounter = 0;
   private readonly specRevisionIndex = new Map<string, string>();
   private readonly planRevisionIndex = new Map<string, string>();
+
+  constructor(@Inject(P0_EXECUTOR_ADAPTERS) private readonly executorAdapters: P0ExecutorAdapterRegistry) {}
 
   async createProject(dto: CreateProjectDto): Promise<Project> {
     const at = this.now();
@@ -457,6 +492,12 @@ export class P0Service {
       }
       await this.archiveReviewPacket(validation.currentOpenReviewPacket, 'force_rerun');
     }
+    const workflowOnly = dto.workflow_only ?? false;
+    const executorType: ExecutorType = workflowOnly ? 'mock' : (dto.executor_type ?? 'mock');
+    const executor = this.executorAdapters[executorType];
+    if (executor === undefined) {
+      throw new BadRequestException(`No executor adapter registered for ${executorType}`);
+    }
     const runSessionId = this.id('run-session');
     const queuedPackage =
       mode === 'force_rerun'
@@ -476,7 +517,7 @@ export class P0Service {
       id: runSessionId,
       execution_package_id: packageId,
       requested_by_actor_id: validation.requestedByActorId,
-      executor_type: dto.executor_type ?? 'mock',
+      executor_type: executorType,
       at: this.now(),
     });
     await this.repository.saveExecutionPackage(queuedPackage);
@@ -488,10 +529,10 @@ export class P0Service {
     const workflowResult = await executePackageRun({
       repository: this.repository,
       runSessionId,
-      executor: (runSpec) => Promise.resolve(this.mockExecutorResult(runSpec)),
+      executor,
       selfReview: (input) => Promise.resolve(this.mockSelfReview(input)),
-      workflowOnly: dto.workflow_only ?? false,
-      defaultExecutorType: dto.executor_type ?? 'mock',
+      workflowOnly,
+      defaultExecutorType: executorType,
       now: () => this.now(),
       ...(mode === 'force_rerun' ? { forceRerun: true } : {}),
     });
@@ -499,7 +540,7 @@ export class P0Service {
     return {
       command_id: this.id('command'),
       execution_package_id: packageId,
-      workflow_only: dto.workflow_only ?? false,
+      workflow_only: workflowOnly,
       idempotency_key: runSessionId,
       status: 'accepted',
       run_session_id: runSessionId,
@@ -824,44 +865,6 @@ export class P0Service {
     await this.repository.savePlan({ ...plan, current_revision_id: revision.id, updated_at: this.now() });
     this.planRevisionIndex.set(revision.id, plan.id);
     return revision;
-  }
-
-  private mockExecutorResult(runSpec: RunSpec): ExecutorResult {
-    const at = this.now();
-    const checks: CheckResult[] = runSpec.required_checks.map((check) => ({
-      check_id: check.check_id,
-      command: check.command,
-      status: 'succeeded',
-      exit_code: 0,
-      duration_seconds: 1,
-      blocks_review: check.blocks_review,
-    }));
-    return {
-      run_session_id: runSpec.run_session_id,
-      executor_type: runSpec.executor_type,
-      executor_version: 'control-plane-mock',
-      status: 'succeeded',
-      started_at: at,
-      finished_at: this.now(),
-      summary: `Mock execution completed for ${runSpec.execution_package_id}.`,
-      changed_files: [{ repo_id: runSpec.repo.repo_id, path: 'apps/control-plane-api/src/p0/p0.service.ts', change_kind: 'modified' }],
-      checks,
-      artifacts: [
-        {
-          kind: 'execution_summary',
-          name: 'execution summary',
-          content_type: 'text/markdown',
-          local_ref: `artifacts/${runSpec.run_session_id}/summary.md`,
-        },
-        {
-          kind: 'diff',
-          name: 'patch diff',
-          content_type: 'text/x-diff',
-          local_ref: `artifacts/${runSpec.run_session_id}/diff.patch`,
-        },
-      ],
-      raw_metadata: { workflow_only: runSpec.workflow_only },
-    };
   }
 
   private mockSelfReview(input: SelfReviewInput): SelfReviewResult {

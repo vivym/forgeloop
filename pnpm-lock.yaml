@@ -96,6 +96,9 @@ importers:
       '@forgeloop/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@forgeloop/executor':
+        specifier: workspace:*
+        version: link:../../packages/executor
       '@forgeloop/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow

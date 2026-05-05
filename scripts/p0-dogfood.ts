@@ -12,6 +12,7 @@ type DogfoodItem = {
   kind: 'feature' | 'bugfix' | 'test_refactor';
   title: string;
   goal: string;
+  evidencePath: string;
   executorType: 'local_codex' | 'mock';
   workflowOnly: boolean;
   changesRequested: boolean;
@@ -42,6 +43,7 @@ const dogfoodItems: DogfoodItem[] = [
     kind: 'feature',
     title: 'Dogfood feature through local_codex',
     goal: 'Produce an approved P0 feature handoff with real local_codex evidence.',
+    evidencePath: 'docs/superpowers/reports/p0-dogfood-feature-local-codex.md',
     executorType: 'local_codex',
     workflowOnly: false,
     changesRequested: false,
@@ -51,6 +53,7 @@ const dogfoodItems: DogfoodItem[] = [
     kind: 'bugfix',
     title: 'Dogfood bugfix through local_codex review loop',
     goal: 'Produce an approved P0 bugfix handoff after changes_requested and rerun.',
+    evidencePath: 'docs/superpowers/reports/p0-dogfood-bugfix-local-codex.md',
     executorType: 'local_codex',
     workflowOnly: false,
     changesRequested: true,
@@ -60,17 +63,18 @@ const dogfoodItems: DogfoodItem[] = [
     kind: 'test_refactor',
     title: 'Dogfood test refactor through mock executor',
     goal: 'Validate P0 fallback control flow with the workflow-only mock executor.',
+    evidencePath: 'docs/superpowers/reports/p0-dogfood-test-refactor-mock.md',
     executorType: 'mock',
     workflowOnly: true,
     changesRequested: false,
   },
 ];
 
-const requiredChecks = [
+const requiredChecksFor = (item: DogfoodItem) => [
   {
     check_id: 'dogfood-required',
     display_name: 'Dogfood required check',
-    command: 'pnpm smoke:p0',
+    command: `test -f ${item.evidencePath}`,
     timeout_seconds: 600,
     blocks_review: true,
   },
@@ -231,13 +235,18 @@ const createReadyPackage = async (planRevisionId: string, item: DogfoodItem): Pr
     method: 'POST',
     body: {
       repo_id: repoId,
-      objective: item.goal,
+      objective: [
+        item.goal,
+        `Create or update only ${item.evidencePath}.`,
+        `Write a short markdown note naming ${item.label}, the run session, and that this is disposable dogfood evidence.`,
+        'Do not change source code, package metadata, lockfiles, git remotes, or files outside the allowed path.',
+      ].join('\n'),
       owner_actor_id: actorOwner,
       reviewer_actor_id: actorReviewer,
       qa_owner_actor_id: actorQa,
-      required_checks: requiredChecks,
+      required_checks: requiredChecksFor(item),
       required_artifact_kinds: ['diff', 'changed_files', 'check_output', 'execution_summary'],
-      allowed_paths: ['apps/**', 'packages/**', 'tests/**', 'scripts/**', 'docs/**', 'README.md', 'package.json'],
+      allowed_paths: ['docs/superpowers/reports/**'],
       forbidden_paths: ['.git/**', 'node_modules/**'],
     },
   });

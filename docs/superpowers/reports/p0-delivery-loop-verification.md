@@ -1,6 +1,6 @@
 # P0 Delivery Loop Verification
 
-Generated: 2026-05-05T15:24:33.372Z
+Generated: 2026-05-05T15:53:30.000Z
 Dogfood status: FAIL
 
 ## Commands
@@ -19,7 +19,7 @@ Dogfood status: FAIL
 
 ## Dogfood Preconditions
 
-- API URL: http://localhost:3111
+- API URL: http://localhost:3112
 - Repo path: /Users/viv/projs/forgeloop/.worktrees/p0-delivery-loop-mvp
 - Repo id: forgeloop
 - local_codex acceptance requires Codex CLI, a server-configured local repo checkout, changed files, required-check results, a diff artifact, and retained workspace/base-ref evidence.
@@ -31,28 +31,12 @@ Dogfood status: FAIL
 
 ## Dogfood Results
 
-- feature-local-codex: FAILED (local_codex)
-  - WorkItem: work-item-5
-  - Package: execution-package-27
-  - RunSession: run-session-30
-  - ReviewPacket: review-packet:run-session-30
-  - local_codex run is missing retained workspace_path/base_ref evidence.
-- bugfix-local-codex: FAILED (local_codex)
-  - WorkItem: work-item-35
-  - Package: execution-package-57
-  - RunSession: run-session-65
-  - ReviewPacket: review-packet:run-session-65
-  - local_codex run is missing retained workspace_path/base_ref evidence.
-- test-refactor-mock: PASSED (mock)
-  - WorkItem: work-item-70
-  - Package: execution-package-92
-  - RunSession: run-session-95
-  - ReviewPacket: review-packet:run-session-95
-  - Evidence checks passed.
+- No dogfood work items completed in this run.
 
 ## Actual Results
 
-- `pnpm test`: PASS, 17 test files and 248 tests passed.
+- `pnpm test tests/api/local-codex-routing.test.ts`: PASS, 1 file and 2 tests passed.
+- `pnpm test`: PASS, 18 test files and 250 tests passed.
 - `pnpm build`: PASS, all workspace build scripts completed.
 - `pnpm smoke:p0`: PASS, 1 smoke test file and 3 tests passed.
-- `pnpm dogfood:p0`: FAIL when run against `FORGELOOP_API_URL=http://localhost:3111`; Codex CLI was available, the mock item passed, and both local_codex items failed acceptance because retained `workspace_path`/`base_ref` evidence was missing.
+- `pnpm dogfood:p0`: attempted against `FORGELOOP_API_URL=http://localhost:3112` with `FORGELOOP_CODEX_HOME=$HOME/.codex` and `FORGELOOP_EXECUTOR_ARTIFACT_ROOT=/tmp/forgeloop-p0-dogfood-artifacts`. The control plane launched a real `codex exec` process for the first local_codex item with the narrowed report-file objective, but it did not complete after more than five minutes and only created hermetic Codex env files. The attempt was stopped, so no local dogfood acceptance is claimed from this run.
