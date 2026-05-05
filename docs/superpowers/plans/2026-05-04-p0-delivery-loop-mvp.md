@@ -512,7 +512,7 @@ git commit -m "feat: implement package execution workflow"
 - Create: `apps/control-plane-api/src/p0/dto.ts`
 - Test: `tests/api/delivery-flow.test.ts`
 
-- [ ] **Step 1: Write API tests**
+- [x] **Step 1: Write API tests**
 
 Use Nest testing module + Supertest. Cover full command inventory enough for P0 flow:
 
@@ -531,7 +531,7 @@ Use Nest testing module + Supertest. Cover full command inventory enough for P0 
 - approve/request changes
 - cockpit/timeline reads
 
-- [ ] **Step 2: Implement service methods**
+- [x] **Step 2: Implement service methods**
 
 Service uses repository, domain validators, and workflow entrypoint.
 
@@ -543,23 +543,23 @@ Add deterministic mock AI draft adapter methods:
 
 These adapters must write ObjectEvent records and must not mutate approved revisions on failure.
 
-- [ ] **Step 3: Implement controller routes**
+- [x] **Step 3: Implement controller routes**
 
 Match spec command inventory exactly.
 
 `PATCH /execution-packages/:packageId` must archive an open ReviewPacket if one exists in `ready` or `in_review`, leave completed ReviewPackets immutable, preserve old RunSessions, and ensure the next run creates a new RunSpec snapshot.
 
-- [ ] **Step 4: Implement query responses**
+- [x] **Step 4: Implement query responses**
 
 WorkItem cockpit includes current Spec/Plan, Packages, RunSessions, ReviewPackets, next actions, and completion state. Timeline merges ObjectEvent, StatusHistory, Decision, and Artifact summaries.
 
-- [ ] **Step 5: Run API tests**
+- [x] **Step 5: Run API tests**
 
 Run: `pnpm test tests/api`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/control-plane-api tests/api
