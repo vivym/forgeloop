@@ -16,7 +16,7 @@ import {
   runSpecSchema,
   selfReviewResultSchema,
   submitReviewDecisionResponseSchema,
-} from '../../packages/contracts/src/index';
+} from '@forgeloop/contracts';
 
 describe('P0 delivery loop contracts', () => {
   const validArtifactRef = {
@@ -231,6 +231,26 @@ describe('P0 delivery loop contracts', () => {
           required_checks: duplicateRequiredChecks,
         },
         required_checks: duplicateRequiredChecks,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects run specs with no allowed paths', () => {
+    expect(
+      runSpecSchema.safeParse({
+        ...validRunSpec,
+        allowed_paths: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects run specs with no requested artifacts', () => {
+    expect(
+      runSpecSchema.safeParse({
+        ...validRunSpec,
+        artifact_policy: {
+          requested_artifacts: [],
+        },
       }).success,
     ).toBe(false);
   });
@@ -588,7 +608,7 @@ describe('P0 delivery loop contracts', () => {
   });
 
   it.each(['timed_out', 'cancelled'] as const)(
-    'rejects unsuccessful blocking checks with %s executor status',
+    'rejects failed blocking checks with %s executor status',
     (status) => {
       expect(
         executorResultSchema.safeParse({
@@ -603,12 +623,47 @@ describe('P0 delivery loop contracts', () => {
             },
           ],
           failure: {
-            kind: 'required_check_failed',
-            message: 'Required check failed.',
+            kind: status,
+            message: `Execution ${status}.`,
             retryable: true,
           },
         }).success,
       ).toBe(false);
+    },
+  );
+
+  it.each([
+    ['timed_out', 'timed_out'],
+    ['timed_out', 'cancelled'],
+    ['timed_out', 'skipped'],
+    ['cancelled', 'timed_out'],
+    ['cancelled', 'cancelled'],
+    ['cancelled', 'skipped'],
+  ] as const)(
+    'parses %s executor results with partial %s blocking check evidence',
+    (status, checkStatus) => {
+      const parsed = executorResultSchema.parse({
+        ...validExecutorResult,
+        status,
+        checks: [
+          {
+            ...validCheckResult,
+            status: checkStatus,
+            exit_code: checkStatus === 'timed_out' ? 124 : null,
+            blocks_review: true,
+          },
+        ],
+        failure: {
+          kind: status,
+          message: `Execution ${status} before all required checks completed.`,
+          retryable: true,
+        },
+      });
+
+      expect(parsed.status).toBe(status);
+      expect(parsed.failure?.kind).toBe(status);
+      expect(parsed.checks[0]?.status).toBe(checkStatus);
+      expect(parsed.checks[0]?.blocks_review).toBe(true);
     },
   );
 

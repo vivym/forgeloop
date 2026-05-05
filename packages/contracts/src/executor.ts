@@ -237,11 +237,11 @@ export const runSpecSchema = z
     }),
     review_context: reviewContextSchema,
     workflow_only: z.boolean().default(false),
-    allowed_paths: z.array(z.string().min(1)),
+    allowed_paths: z.array(z.string().min(1)).min(1),
     forbidden_paths: z.array(z.string().min(1)),
     required_checks: z.array(requiredCheckSpecSchema),
     artifact_policy: z.object({
-      requested_artifacts: z.array(artifactKindSchema),
+      requested_artifacts: z.array(artifactKindSchema).min(1),
     }),
     timeout_seconds: z.number().int().positive(),
     idempotency_key: z.string().min(1),
@@ -287,6 +287,7 @@ export const executorResultSchema = z
   })
   .superRefine((result, ctx) => {
     const hasUnsuccessfulBlockingCheck = result.checks.some((check) => check.blocks_review && check.status !== 'succeeded');
+    const hasFailedBlockingCheck = result.checks.some((check) => check.blocks_review && check.status === 'failed');
 
     if (Date.parse(result.finished_at) < Date.parse(result.started_at)) {
       ctx.addIssue({
@@ -314,23 +315,23 @@ export const executorResultSchema = z
       });
     }
 
-    if (hasUnsuccessfulBlockingCheck && result.status !== 'failed') {
+    if (hasFailedBlockingCheck && result.status !== 'failed') {
       ctx.addIssue({
         code: 'custom',
         path: ['status'],
-        message: 'unsuccessful blocking checks require failed ExecutorResult status',
+        message: 'failed blocking checks require failed ExecutorResult status',
       });
     }
 
     if (
-      hasUnsuccessfulBlockingCheck &&
+      hasFailedBlockingCheck &&
       result.status === 'failed' &&
       result.failure?.kind !== 'required_check_failed'
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['failure', 'kind'],
-        message: 'unsuccessful blocking checks require required_check_failed failure kind',
+        message: 'failed blocking checks require required_check_failed failure kind',
       });
     }
 
@@ -369,11 +370,11 @@ export const executorResultSchema = z
       });
     }
 
-    if (result.failure?.kind === 'required_check_failed' && !hasUnsuccessfulBlockingCheck) {
+    if (result.failure?.kind === 'required_check_failed' && !hasFailedBlockingCheck) {
       ctx.addIssue({
         code: 'custom',
         path: ['checks'],
-        message: 'required_check_failed requires at least one unsuccessful blocking check',
+        message: 'required_check_failed requires at least one failed blocking check',
       });
     }
   });
