@@ -529,6 +529,65 @@ describe('runLocalCodexExecutor', () => {
 
     expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
     expect(runnerRemotes.trim()).toBe('');
+    await expect(execGit(repo, ['remote', 'get-url', 'origin'])).resolves.toMatchObject({
+      stdout: 'https://example.com/repo.git\n',
+    });
+  });
+
+  it('runs required checks with hermetic home and without ambient auth credentials', async () => {
+    const { repo, head } = await createGitRepo();
+    const originalEnv = {
+      GH_TOKEN: process.env.GH_TOKEN,
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK,
+    };
+    process.env.GH_TOKEN = 'gh-secret';
+    process.env.GITHUB_TOKEN = 'github-secret';
+    process.env.OPENAI_API_KEY = 'openai-secret';
+    process.env.SSH_AUTH_SOCK = '/tmp/ssh-agent.sock';
+    const check = blockingCheck({
+      check_id: 'env-check',
+      command:
+        'node -e "const fs=require(\'fs\'); fs.mkdirSync(\'packages/executor/src\', {recursive:true}); fs.writeFileSync(\'packages/executor/src/env.json\', JSON.stringify({HOME:process.env.HOME,GH_TOKEN:process.env.GH_TOKEN,GITHUB_TOKEN:process.env.GITHUB_TOKEN,OPENAI_API_KEY:process.env.OPENAI_API_KEY,SSH_AUTH_SOCK:process.env.SSH_AUTH_SOCK,GIT_CONFIG_GLOBAL:process.env.GIT_CONFIG_GLOBAL,GIT_TERMINAL_PROMPT:process.env.GIT_TERMINAL_PROMPT}))"',
+    });
+
+    try {
+      const result = await runLocalCodexExecutor(
+        createRunSpec({
+          repo: { local_path: repo, base_commit_sha: head },
+          required_checks: [check],
+          context: { required_checks: [check] },
+        }),
+        {
+          artifactRoot: await makeTempDir(),
+          environment: createGitBackedTestEnvironment(await makeTempDir()),
+          runner: {
+            run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
+          },
+        },
+      );
+
+      expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+      const envJsonPath = join(result.raw_metadata.workspace_path as string, 'packages/executor/src/env.json');
+      const envSnapshot = JSON.parse(await readFile(envJsonPath, 'utf8'));
+      expect(envSnapshot.HOME).toContain('.forgeloop-hermetic-env');
+      expect(envSnapshot.HOME).not.toBe(process.env.HOME);
+      expect(envSnapshot.GH_TOKEN).toBeUndefined();
+      expect(envSnapshot.GITHUB_TOKEN).toBeUndefined();
+      expect(envSnapshot.OPENAI_API_KEY).toBeUndefined();
+      expect(envSnapshot.SSH_AUTH_SOCK).toBeUndefined();
+      expect(envSnapshot.GIT_TERMINAL_PROMPT).toBe('0');
+      expect(envSnapshot.GIT_CONFIG_GLOBAL).toContain('.forgeloop-hermetic-env');
+    } finally {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 
   it('records forbidden blocking checks as failed without executing them', async () => {

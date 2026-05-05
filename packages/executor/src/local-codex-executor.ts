@@ -22,17 +22,7 @@ const execAsync = promisify(exec);
 
 const EXECUTOR_VERSION = '0.1.0';
 const GIT_OUTPUT_MAX_BUFFER = 1024 * 1024 * 50;
-const REDACTED_ENV_KEYS = new Set([
-  'GITHUB_TOKEN',
-  'GH_TOKEN',
-  'NPM_TOKEN',
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY',
-  'AWS_SESSION_TOKEN',
-  'GOOGLE_APPLICATION_CREDENTIALS',
-]);
+const ALLOWED_ENV_KEYS = new Set(['PATH', 'TMPDIR', 'TEMP', 'TMP', 'SHELL', 'LANG', 'TERM']);
 
 export interface CodexRunnerInput {
   runSpec: RunSpec;
@@ -66,8 +56,45 @@ interface CommandExecutionResult {
 
 const nowIso = () => new Date().toISOString();
 
-const sanitizedEnv = (): NodeJS.ProcessEnv =>
-  Object.fromEntries(Object.entries(process.env).filter(([key]) => !REDACTED_ENV_KEYS.has(key)));
+const createHermeticEnv = async (workspacePath: string): Promise<NodeJS.ProcessEnv> => {
+  const root = join(workspacePath, '.git', '.forgeloop-hermetic-env');
+  const home = join(root, 'home');
+  const xdgConfig = join(root, 'xdg-config');
+  const xdgCache = join(root, 'xdg-cache');
+  const xdgData = join(root, 'xdg-data');
+  const npmCache = join(root, 'npm-cache');
+  const pnpmHome = join(root, 'pnpm-home');
+  const npmUserConfig = join(root, 'npmrc');
+  const gitConfig = join(root, 'gitconfig');
+
+  await mkdir(home, { recursive: true });
+  await mkdir(xdgConfig, { recursive: true });
+  await mkdir(xdgCache, { recursive: true });
+  await mkdir(xdgData, { recursive: true });
+  await mkdir(npmCache, { recursive: true });
+  await mkdir(pnpmHome, { recursive: true });
+  await writeFile(gitConfig, '');
+  await writeFile(npmUserConfig, '');
+
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => ALLOWED_ENV_KEYS.has(key) || key.startsWith('LC_')),
+  );
+
+  return {
+    ...env,
+    HOME: home,
+    XDG_CONFIG_HOME: xdgConfig,
+    XDG_CACHE_HOME: xdgCache,
+    XDG_DATA_HOME: xdgData,
+    GIT_CONFIG_GLOBAL: gitConfig,
+    GIT_TERMINAL_PROMPT: '0',
+    NPM_CONFIG_USERCONFIG: npmUserConfig,
+    npm_config_userconfig: npmUserConfig,
+    NPM_CONFIG_CACHE: npmCache,
+    npm_config_cache: npmCache,
+    PNPM_HOME: pnpmHome,
+  };
+};
 
 const safePathSegment = (value: string): string => {
   const sanitized = value
@@ -104,7 +131,7 @@ const codexPromptFor = (runSpec: RunSpec) =>
     'Do not push, open a pull request, merge, release, or modify files outside the allowed paths.',
   ].join('\n\n');
 
-const defaultRunner = (environment: LocalCodexEnvironment): CodexRunner => ({
+const defaultRunner = (environment: LocalCodexEnvironment, env: NodeJS.ProcessEnv): CodexRunner => ({
   run: async ({ runSpec, workspacePath }) => {
     if (!(await environment.commandExists('codex'))) {
       return {
@@ -123,7 +150,7 @@ const defaultRunner = (environment: LocalCodexEnvironment): CodexRunner => ({
         workspacePath,
         prompt: codexPromptFor(runSpec),
         timeoutSeconds: runSpec.timeout_seconds,
-        env: sanitizedEnv(),
+        env,
       });
 
       return {
@@ -170,24 +197,29 @@ const executorFailureResult = (input: {
   raw_metadata: input.rawMetadata ?? {},
 });
 
-const statusOutput = async (environment: LocalCodexEnvironment, workspacePath: string, args: string[]) => {
+const statusOutput = async (
+  environment: LocalCodexEnvironment,
+  workspacePath: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+) => {
   const { stdout } = await environment.runCommand('git', args, {
     cwd: workspacePath,
-    env: sanitizedEnv(),
+    env,
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
 
   return stdout;
 };
 
-const prepareDiffIndex = async (environment: LocalCodexEnvironment, workspacePath: string) => {
-  await environment.runCommand('git', ['add', '-N', '.'], { cwd: workspacePath, env: sanitizedEnv() });
+const prepareDiffIndex = async (environment: LocalCodexEnvironment, workspacePath: string, env: NodeJS.ProcessEnv) => {
+  await environment.runCommand('git', ['add', '-N', '.'], { cwd: workspacePath, env });
 };
 
-const neutralizeGitRemotes = async (environment: LocalCodexEnvironment, workspacePath: string) => {
+const neutralizeGitRemotes = async (environment: LocalCodexEnvironment, workspacePath: string, env: NodeJS.ProcessEnv) => {
   const { stdout } = await environment.runCommand('git', ['remote'], {
     cwd: workspacePath,
-    env: sanitizedEnv(),
+    env,
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
 
@@ -196,7 +228,7 @@ const neutralizeGitRemotes = async (environment: LocalCodexEnvironment, workspac
       .split('\n')
       .map((remote) => remote.trim())
       .filter(Boolean)
-      .map((remote) => environment.runCommand('git', ['remote', 'remove', remote], { cwd: workspacePath, env: sanitizedEnv() })),
+      .map((remote) => environment.runCommand('git', ['remote', 'remove', remote], { cwd: workspacePath, env })),
   );
 };
 
@@ -284,7 +316,12 @@ const writeArtifact = async (
   };
 };
 
-const runCheckCommand = async (command: string, cwd: string, timeoutSeconds: number): Promise<CommandExecutionResult> => {
+const runCheckCommand = async (
+  command: string,
+  cwd: string,
+  timeoutSeconds: number,
+  env: NodeJS.ProcessEnv,
+): Promise<CommandExecutionResult> => {
   const started = performance.now();
 
   try {
@@ -292,7 +329,7 @@ const runCheckCommand = async (command: string, cwd: string, timeoutSeconds: num
       cwd,
       timeout: timeoutSeconds * 1000,
       maxBuffer: 1024 * 1024 * 10,
-      env: sanitizedEnv(),
+      env,
     });
 
     return {
@@ -337,6 +374,7 @@ const runChecks = async (
   runSpec: RunSpec,
   workspacePath: string,
   artifactRoot: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<{ checks: CheckResult[]; artifacts: ArtifactRef[] }> => {
   const checks: CheckResult[] = [];
   const artifacts: ArtifactRef[] = [];
@@ -350,7 +388,7 @@ const runChecks = async (
           stderr: `Blocked forbidden required-check command: ${check.command}`,
           durationSeconds: 0,
         }
-      : await runCheckCommand(check.command, workspacePath, check.timeout_seconds);
+      : await runCheckCommand(check.command, workspacePath, check.timeout_seconds, env);
     const stdoutArtifact = await writeArtifact(
       artifactRoot,
       runSpec.run_session_id,
@@ -392,9 +430,10 @@ const collectChangedFiles = async (
   environment: LocalCodexEnvironment,
   runSpec: RunSpec,
   workspacePath: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<ChangedFile[]> => {
-  await prepareDiffIndex(environment, workspacePath);
-  const nameStatus = await statusOutput(environment, workspacePath, ['diff', '--name-status', 'HEAD']);
+  await prepareDiffIndex(environment, workspacePath, env);
+  const nameStatus = await statusOutput(environment, workspacePath, ['diff', '--name-status', 'HEAD'], env);
 
   return parseChangedFiles(runSpec.repo.repo_id, nameStatus);
 };
@@ -405,9 +444,10 @@ const captureDiffArtifacts = async (
   workspacePath: string,
   artifactRoot: string,
   summary: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<{ changedFiles: ChangedFile[]; artifacts: ArtifactRef[] }> => {
-  const changedFiles = await collectChangedFiles(environment, runSpec, workspacePath);
-  const diff = await statusOutput(environment, workspacePath, ['diff', 'HEAD']);
+  const changedFiles = await collectChangedFiles(environment, runSpec, workspacePath, env);
+  const diff = await statusOutput(environment, workspacePath, ['diff', 'HEAD'], env);
   const diffArtifact = await writeArtifact(
     artifactRoot,
     runSpec.run_session_id,
@@ -504,9 +544,10 @@ export const runLocalCodexExecutor = async (
     });
   }
 
-  await neutralizeGitRemotes(environment, preflight.workspacePath);
+  const executionEnv = await createHermeticEnv(preflight.workspacePath);
+  await neutralizeGitRemotes(environment, preflight.workspacePath, executionEnv);
 
-  const runner = options.runner ?? defaultRunner(environment);
+  const runner = options.runner ?? defaultRunner(environment, executionEnv);
   const runnerResult = await runner.run({
     runSpec,
     workspacePath: preflight.workspacePath,
@@ -534,7 +575,7 @@ export const runLocalCodexExecutor = async (
 
   let initialChangedFiles: ChangedFile[];
   try {
-    initialChangedFiles = await collectChangedFiles(environment, runSpec, preflight.workspacePath);
+    initialChangedFiles = await collectChangedFiles(environment, runSpec, preflight.workspacePath, executionEnv);
   } catch (error) {
     return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
   }
@@ -550,6 +591,7 @@ export const runLocalCodexExecutor = async (
         preflight.workspacePath,
         options.artifactRoot,
         runnerResult.summary,
+        executionEnv,
       );
     } catch (error) {
       return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
@@ -570,7 +612,7 @@ export const runLocalCodexExecutor = async (
     });
   }
 
-  const checkRun = await runChecks(runSpec, preflight.workspacePath, options.artifactRoot);
+  const checkRun = await runChecks(runSpec, preflight.workspacePath, options.artifactRoot, executionEnv);
   let finalCapture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
   try {
     finalCapture = await captureDiffArtifacts(
@@ -579,6 +621,7 @@ export const runLocalCodexExecutor = async (
       preflight.workspacePath,
       options.artifactRoot,
       runnerResult.summary,
+      executionEnv,
     );
   } catch (error) {
     return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);

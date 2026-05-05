@@ -200,7 +200,8 @@ export const createDefaultLocalCodexEnvironment = (
         await mkdir(workspaceRoot, { recursive: true });
         const workspacePath = await mkdtemp(join(workspaceRoot, `${safePathSegment(runSessionId)}-`));
         await rm(workspacePath, { recursive: true, force: true });
-        await runCommand('git', ['worktree', 'add', '--detach', workspacePath, baseRef], { cwd: repoPath });
+        await runCommand('git', ['clone', '--no-checkout', repoPath, workspacePath]);
+        await runCommand('git', ['checkout', '--detach', baseRef], { cwd: workspacePath });
 
         return { ok: true, workspacePath };
       } catch (error) {
