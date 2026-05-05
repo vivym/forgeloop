@@ -155,6 +155,13 @@ describe('domain validators', () => {
     );
   });
 
+  it('rejects packages whose project_id does not match the project', () => {
+    expectDomainError(
+      () => validateExecutionPackage(project, packageBase({ project_id: 'project-2' })),
+      'PROJECT_MISMATCH',
+    );
+  });
+
   it('rejects packages that span multiple repos', () => {
     expectDomainError(
       () =>

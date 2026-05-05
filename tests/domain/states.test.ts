@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DomainError,
+  deriveWorkItemCompletion,
   transitionExecutionPackage,
   transitionReviewPacket,
   transitionRunSession,
@@ -27,6 +28,84 @@ const expectDomainError = (fn: () => unknown, code: string) => {
 
 describe('domain state transitions', () => {
   describe('WorkItem', () => {
+    const requiredCheck = {
+      check_id: 'domain-tests',
+      display_name: 'Domain tests',
+      command: 'pnpm test tests/domain',
+      timeout_seconds: 120,
+      blocks_review: true,
+    };
+
+    const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+      id: 'package-1',
+      work_item_id: 'work-item-1',
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      objective: 'Implement the domain package.',
+      owner_actor_id: 'actor-owner',
+      reviewer_actor_id: 'actor-reviewer',
+      phase: 'review',
+      activity_state: 'idle',
+      gate_state: 'review_approved',
+      resolution: 'completed',
+      required_checks: [requiredCheck],
+      required_artifact_kinds: ['execution_summary', 'diff'],
+      allowed_paths: ['packages/domain/**', 'tests/domain/**'],
+      forbidden_paths: ['apps/**'],
+      created_at: '2026-05-05T00:00:00.000Z',
+      updated_at: '2026-05-05T00:00:00.000Z',
+      ...overrides,
+    });
+
+    const successfulRun = (overrides: Partial<RunSession> = {}): RunSession => ({
+      id: 'run-session-1',
+      execution_package_id: 'package-1',
+      requested_by_actor_id: 'actor-owner',
+      status: 'succeeded',
+      check_results: [
+        {
+          check_id: 'domain-tests',
+          command: 'pnpm test tests/domain',
+          status: 'succeeded',
+          exit_code: 0,
+          duration_seconds: 7,
+          blocks_review: true,
+        },
+      ],
+      artifacts: [
+        {
+          kind: 'execution_summary',
+          name: 'summary',
+          content_type: 'text/markdown',
+          local_ref: 'artifacts/run-session/summary.md',
+        },
+        {
+          kind: 'diff',
+          name: 'diff',
+          content_type: 'text/x-diff',
+          local_ref: 'artifacts/run-session/diff.patch',
+        },
+      ],
+      created_at: '2026-05-05T00:00:00.000Z',
+      updated_at: '2026-05-05T00:00:00.000Z',
+      finished_at: '2026-05-05T00:00:00.000Z',
+      ...overrides,
+    });
+
+    const approvedReviewPacket = (overrides: Partial<ReviewPacket> = {}): ReviewPacket => ({
+      id: 'review-packet-1',
+      run_session_id: 'run-session-1',
+      execution_package_id: 'package-1',
+      reviewer_actor_id: 'actor-reviewer',
+      status: 'completed',
+      decision: 'approved',
+      requested_changes: [],
+      created_at: '2026-05-05T00:00:00.000Z',
+      updated_at: '2026-05-05T00:00:00.000Z',
+      completed_at: '2026-05-05T00:00:00.000Z',
+      ...overrides,
+    });
+
     it('creates and advances through approved spec, approved plan, execution, and done', () => {
       const created = transitionWorkItem(undefined, {
         type: 'create',
@@ -67,7 +146,13 @@ describe('domain state transitions', () => {
         gate_state: 'none',
       });
 
-      const completed = transitionWorkItem(planApproved, { type: 'complete_execution' });
+      const completion = deriveWorkItemCompletion(
+        planApproved,
+        [executionPackage()],
+        [successfulRun()],
+        [approvedReviewPacket()],
+      );
+      const completed = transitionWorkItem(planApproved, { type: 'complete_execution', completion });
       expect(completed).toMatchObject({
         phase: 'done',
         resolution: 'completed',
@@ -141,6 +226,44 @@ describe('domain state transitions', () => {
       });
 
       expectDomainError(() => transitionWorkItem(item, { type: 'approve_plan' }), 'INVALID_TRANSITION');
+    });
+
+    it('blocks execution completion when derived completion evidence is incomplete', () => {
+      const item: WorkItem = {
+        id: 'work-item-1',
+        project_id: 'project-1',
+        title: 'Incomplete execution',
+        owner_actor_id: 'actor-owner',
+        phase: 'execution',
+        activity_state: 'idle',
+        gate_state: 'none',
+        resolution: 'none',
+        created_at: '2026-05-05T00:00:00.000Z',
+        updated_at: '2026-05-05T00:00:00.000Z',
+      };
+      const completion = deriveWorkItemCompletion(item, [executionPackage()], [], [approvedReviewPacket()]);
+
+      expectDomainError(() => transitionWorkItem(item, { type: 'complete_execution', completion }), 'COMPLETION_BLOCKED');
+    });
+
+    it('blocks blind execution completion without derived completion evidence', () => {
+      const item: WorkItem = {
+        id: 'work-item-1',
+        project_id: 'project-1',
+        title: 'Blind completion',
+        owner_actor_id: 'actor-owner',
+        phase: 'execution',
+        activity_state: 'idle',
+        gate_state: 'none',
+        resolution: 'none',
+        created_at: '2026-05-05T00:00:00.000Z',
+        updated_at: '2026-05-05T00:00:00.000Z',
+      };
+
+      expectDomainError(
+        () => transitionWorkItem(item, { type: 'complete_execution' } as Parameters<typeof transitionWorkItem>[1]),
+        'COMPLETION_BLOCKED',
+      );
     });
   });
 
@@ -317,6 +440,34 @@ describe('domain state transitions', () => {
       });
     });
 
+    it.each(['execution_succeeded', 'execution_failed_retryable', 'execution_failed_blocking_check'] as const)(
+      'rejects %s when execution is blocked',
+      (type) => {
+        const ready = transitionExecutionPackage(createPackage(), { type: 'mark_ready' });
+        const execution = transitionExecutionPackage(transitionExecutionPackage(ready, { type: 'run' }), {
+          type: 'workflow_start',
+        });
+        const blocked = transitionExecutionPackage(execution, {
+          type: 'execution_failed_blocked',
+          blocked_reason: 'Needs human input.',
+        });
+
+        expectDomainError(
+          () =>
+            transitionExecutionPackage(
+              blocked,
+              type === 'execution_succeeded'
+                ? { type }
+                : {
+                    type,
+                    failure_summary: 'Terminal event after blocked state.',
+                  },
+            ),
+          'INVALID_TRANSITION',
+        );
+      },
+    );
+
     it('records review approval and changes-requested outcomes', () => {
       const review = createReviewPackage();
 
@@ -369,6 +520,16 @@ describe('domain state transitions', () => {
           }),
         'INVALID_TRANSITION',
       );
+    });
+
+    it('rejects changes-requested and second review decisions after review approval', () => {
+      const approved = transitionExecutionPackage(createReviewPackage(), { type: 'review_approved' });
+
+      expectDomainError(
+        () => transitionExecutionPackage(approved, { type: 'review_changes_requested' }),
+        'INVALID_TRANSITION',
+      );
+      expectDomainError(() => transitionExecutionPackage(approved, { type: 'review_approved' }), 'INVALID_TRANSITION');
     });
   });
 

@@ -7,6 +7,7 @@ import {
   type SpecPlanEntityType,
   type WorkItem,
 } from './types';
+import type { WorkItemCompletion } from './completion';
 
 const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
 
@@ -32,7 +33,10 @@ export type WorkItemTransition =
         | 'approve_plan'
         | 'request_plan_changes'
         | 'resubmit_plan'
-        | 'complete_execution';
+    })
+  | (Timestamped & {
+      type: 'complete_execution';
+      completion: WorkItemCompletion;
     });
 
 export type SpecPlanTransition =
@@ -106,6 +110,15 @@ const timestampFor = (event: Timestamped) => event.at ?? DEFAULT_TIMESTAMP;
 
 const invalidTransition = (objectType: string, current: string, transition: string): never => {
   throw new DomainError('INVALID_TRANSITION', `Cannot apply ${transition} to ${objectType} in ${current}`);
+};
+
+const assertWorkItemCompletion = (workItem: WorkItem, completion: WorkItemCompletion | undefined): void => {
+  if (completion?.done !== true || completion.resolution !== 'completed') {
+    throw new DomainError('COMPLETION_BLOCKED', `Work item ${workItem.id} cannot be completed yet`, {
+      work_item_id: workItem.id,
+      incomplete_reasons: completion?.incomplete_reasons ?? ['completion evidence is required'],
+    });
+  }
 };
 
 export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkItemTransition): WorkItem => {
@@ -183,6 +196,7 @@ export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkIt
       break;
     case 'complete_execution':
       if (workItem.phase === 'execution') {
+        assertWorkItemCompletion(workItem, event.completion);
         return { ...workItem, phase: 'done', resolution: 'completed', gate_state: 'none', updated_at: at };
       }
       break;
@@ -305,6 +319,13 @@ export const transitionExecutionPackage = (
     return invalidTransition('ExecutionPackage', executionPackage.phase, event.type);
   }
 
+  const isRunningExecution = executionPackage.phase === 'execution' && executionPackage.activity_state === 'ai_running';
+  const isAwaitingHumanReview =
+    executionPackage.phase === 'review' &&
+    executionPackage.activity_state === 'awaiting_human' &&
+    executionPackage.gate_state === 'awaiting_human_review' &&
+    executionPackage.resolution === 'none';
+
   switch (event.type) {
     case 'mark_ready':
       if (executionPackage.phase === 'draft') {
@@ -342,7 +363,7 @@ export const transitionExecutionPackage = (
       }
       break;
     case 'execution_failed_retryable':
-      if (executionPackage.phase === 'execution') {
+      if (isRunningExecution) {
         return {
           ...executionPackage,
           phase: 'ready',
@@ -354,7 +375,7 @@ export const transitionExecutionPackage = (
       }
       break;
     case 'execution_failed_blocked':
-      if (executionPackage.phase === 'execution') {
+      if (isRunningExecution) {
         return {
           ...executionPackage,
           activity_state: 'blocked',
@@ -364,7 +385,7 @@ export const transitionExecutionPackage = (
       }
       break;
     case 'execution_succeeded':
-      if (executionPackage.phase === 'execution') {
+      if (isRunningExecution) {
         return {
           ...executionPackage,
           phase: 'review',
@@ -376,7 +397,7 @@ export const transitionExecutionPackage = (
       }
       break;
     case 'execution_failed_blocking_check':
-      if (executionPackage.phase === 'execution') {
+      if (isRunningExecution) {
         return {
           ...executionPackage,
           phase: 'ready',
@@ -388,7 +409,7 @@ export const transitionExecutionPackage = (
       }
       break;
     case 'review_approved':
-      if (executionPackage.phase === 'review') {
+      if (isAwaitingHumanReview) {
         return {
           ...executionPackage,
           activity_state: 'idle',
@@ -399,7 +420,7 @@ export const transitionExecutionPackage = (
       }
       break;
     case 'review_changes_requested':
-      if (executionPackage.phase === 'review') {
+      if (isAwaitingHumanReview) {
         return {
           ...executionPackage,
           phase: 'ready',

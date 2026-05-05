@@ -10,6 +10,7 @@ import type {
 export type DomainErrorCode =
   | 'INVALID_TRANSITION'
   | 'REPO_NOT_BOUND'
+  | 'PROJECT_MISMATCH'
   | 'PACKAGE_MULTIPLE_REPOS'
   | 'REQUIRED_CHECK_MISSING'
   | 'OWNER_REQUIRED'

@@ -26,6 +26,14 @@ export const validateExecutionPackage = (
   executionPackage: ExecutionPackage,
   options: ExecutionPackageValidationOptions = {},
 ): void => {
+  if (executionPackage.project_id !== project.id) {
+    throw new DomainError('PROJECT_MISMATCH', `Package ${executionPackage.id} belongs to project ${executionPackage.project_id}`, {
+      execution_package_id: executionPackage.id,
+      project_id: project.id,
+      execution_package_project_id: executionPackage.project_id,
+    });
+  }
+
   validateRepoBelongsToProject(project, executionPackage.repo_id);
 
   const referencedRepoIds = new Set(options.referenced_repo_ids ?? [executionPackage.repo_id]);
