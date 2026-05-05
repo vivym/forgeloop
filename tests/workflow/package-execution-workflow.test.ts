@@ -775,6 +775,93 @@ describe('executePackageRun', () => {
     });
   });
 
+  it('does not let an old terminal retry overwrite newer package state', async () => {
+    const { repository, runSessionId, executionPackage } = await createFixture();
+    const runSpec = runSpecFor(executionPackage, runSessionId);
+    const persistedResult = executorResult(runSpec);
+
+    await repository.saveExecutionPackage({
+      ...executionPackage,
+      phase: 'queued',
+      activity_state: 'awaiting_ai',
+      gate_state: 'none',
+      last_run_session_id: 'run-session-newer',
+    });
+    await repository.saveRunSession({
+      ...(await repository.getRunSession(runSessionId))!,
+      status: 'succeeded',
+      executor_type: 'mock',
+      run_spec: runSpec,
+      executor_result: persistedResult,
+      changed_files: persistedResult.changed_files,
+      check_results: persistedResult.checks,
+      artifacts: persistedResult.artifacts,
+      log_refs: [],
+      summary: persistedResult.summary,
+      started_at: now,
+      finished_at: later,
+      updated_at: later,
+    });
+
+    await runWorkflow(repository, runSessionId);
+
+    expect(await repository.getExecutionPackage(executionPackage.id)).toMatchObject({
+      phase: 'queued',
+      activity_state: 'awaiting_ai',
+      gate_state: 'none',
+      last_run_session_id: 'run-session-newer',
+    });
+    expect(await repository.getReviewPacket(`review-packet:${runSessionId}`)).toMatchObject({
+      status: 'ready',
+      run_session_id: runSessionId,
+    });
+  });
+
+  it('fails the run and releases package execution when the executor throws after workflow start', async () => {
+    const { repository, runSessionId, executionPackage } = await createFixture();
+
+    const result = await runWorkflow(repository, runSessionId, {
+      executor: async () => {
+        throw new Error('executor process crashed');
+      },
+    });
+
+    expect(result).toEqual({ runSessionId, status: 'failed' });
+    expect(await repository.getRunSession(runSessionId)).toMatchObject({
+      status: 'failed',
+      failure_kind: 'executor_error',
+      failure_reason: 'executor process crashed',
+    });
+    expect(await repository.getExecutionPackage(executionPackage.id)).toMatchObject({
+      phase: 'ready',
+      activity_state: 'idle',
+      gate_state: 'none',
+      last_failure_summary: 'executor process crashed',
+    });
+    expect(await repository.listReviewPacketsForPackage(executionPackage.id)).toEqual([]);
+  });
+
+  it('fails succeeded executor results that omit required blocking checks', async () => {
+    const { repository, runSessionId, executionPackage } = await createFixture();
+
+    const result = await runWorkflow(repository, runSessionId, {
+      executor: (runSpec) =>
+        Promise.resolve(
+          executorResult(runSpec, {
+            checks: [successfulChecks()[1]!],
+          }),
+        ),
+    });
+
+    expect(result).toEqual({ runSessionId, status: 'failed' });
+    expect(await repository.getRunSession(runSessionId)).toMatchObject({
+      status: 'failed',
+      failure_kind: 'required_check_failed',
+      failure_reason: 'Required check unit-tests did not report a result.',
+    });
+    expect(await repository.listReviewPacketsForPackage(executionPackage.id)).toEqual([]);
+  });
+
   it('exposes injectable Temporal activities for worker registration', async () => {
     const { repository, runSessionId, executionPackage } = await createFixture();
     const activities = createPackageExecutionActivities({

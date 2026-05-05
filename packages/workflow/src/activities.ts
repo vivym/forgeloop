@@ -553,6 +553,117 @@ const terminalEventTypeFor = (status: RunSessionStatus): string => {
   }
 };
 
+const failureSummaryForError = (error: unknown): string => {
+  const message = errorMessage(error);
+  return message.length > 500 ? `${message.slice(0, 497)}...` : message;
+};
+
+const executorFailureResult = (
+  runSpec: RunSpec,
+  runSession: RunSessionRecord,
+  error: unknown,
+  at: IsoDateTime,
+): ExecutorResult => {
+  const message = failureSummaryForError(error);
+
+  return {
+    run_session_id: runSession.id,
+    executor_type: runSpec.executor_type,
+    executor_version: 'workflow',
+    status: 'failed',
+    started_at: runSession.started_at ?? at,
+    finished_at: at,
+    summary: message,
+    changed_files: [],
+    checks: [],
+    artifacts: [],
+    failure: {
+      kind: 'executor_error',
+      message,
+      retryable: true,
+    },
+    raw_metadata: {
+      failure_source: 'workflow_executor_invocation',
+    },
+  };
+};
+
+const missingRequiredCheckResult = (check: RequiredCheckSpec): CheckResult => ({
+  check_id: check.check_id,
+  command: check.command,
+  status: 'skipped',
+  exit_code: null,
+  duration_seconds: 0,
+  blocks_review: check.blocks_review,
+});
+
+const failedRequiredCheckResult = (check: RequiredCheckSpec): CheckResult => ({
+  ...missingRequiredCheckResult(check),
+  status: 'failed',
+  exit_code: 1,
+});
+
+const requiredCheckFailureResult = (
+  result: ExecutorResult,
+  message: string,
+  checks: CheckResult[],
+): ExecutorResult => ({
+  ...result,
+  status: 'failed',
+  summary: message,
+  checks,
+  failure: {
+    kind: 'required_check_failed',
+    message,
+    retryable: true,
+  },
+});
+
+const executorMalformedResult = (result: ExecutorResult, message: string): ExecutorResult => ({
+  ...result,
+  status: 'failed',
+  summary: message,
+  failure: {
+    kind: 'executor_error',
+    message,
+    retryable: true,
+  },
+});
+
+const validateExecutorResultForRunSpec = (runSpec: RunSpec, result: ExecutorResult): ExecutorResult => {
+  if (result.status !== 'succeeded') {
+    return result;
+  }
+
+  const resultChecksById = new Map(result.checks.map((check) => [check.check_id, check]));
+
+  for (const requiredCheck of runSpec.required_checks) {
+    const resultCheck = resultChecksById.get(requiredCheck.check_id);
+
+    if (resultCheck === undefined) {
+      const message = `Required check ${requiredCheck.check_id} did not report a result.`;
+      const checks = [...result.checks, missingRequiredCheckResult(requiredCheck)];
+      return requiredCheck.blocks_review
+        ? requiredCheckFailureResult(result, message, checks)
+        : executorMalformedResult(result, message);
+    }
+
+    if (resultCheck.blocks_review !== requiredCheck.blocks_review) {
+      const message = `Required check ${requiredCheck.check_id} reported blocks_review=${resultCheck.blocks_review}; expected ${requiredCheck.blocks_review}.`;
+      const checks = requiredCheck.blocks_review
+        ? result.checks.map((check) =>
+            check.check_id === requiredCheck.check_id ? failedRequiredCheckResult(requiredCheck) : check,
+          )
+        : result.checks;
+      return requiredCheck.blocks_review
+        ? requiredCheckFailureResult(result, message, checks)
+        : executorMalformedResult(result, message);
+    }
+  }
+
+  return result;
+};
+
 const persistExecutorResult = async (
   repository: PackageExecutionRepository,
   runSession: RunSessionRecord,
@@ -802,6 +913,9 @@ const updatePackageAfterFailure = async (
   return updated;
 };
 
+const isLatestRunForPackage = (runSession: RunSessionRecord, executionPackage: ExecutionPackageRecord): boolean =>
+  executionPackage.last_run_session_id === runSession.id;
+
 const ensureTerminalRunSideEffects = async (
   repository: PackageExecutionRepository,
   runSession: RunSessionRecord,
@@ -839,9 +953,12 @@ const reconcileTerminalRun = async (
   const runSpec = runSpecSchema.parse(context.runSession.run_spec ?? buildRunSpec(context, input));
 
   await ensureTerminalRunSideEffects(input.repository, context.runSession, context.executionPackage, parsedExecutorResult, at);
+  const isLatestRun = isLatestRunForPackage(context.runSession, context.executionPackage);
 
   if (context.runSession.status !== 'succeeded') {
-    await updatePackageAfterFailure(input.repository, context.runSession, context.executionPackage, at);
+    if (isLatestRun) {
+      await updatePackageAfterFailure(input.repository, context.runSession, context.executionPackage, at);
+    }
     return { runSessionId: context.runSession.id, status: context.runSession.status };
   }
 
@@ -866,7 +983,9 @@ const reconcileTerminalRun = async (
     );
   }
 
-  await updatePackageAfterSuccess(input.repository, context.runSession, context.executionPackage, at);
+  if (isLatestRun) {
+    await updatePackageAfterSuccess(input.repository, context.runSession, context.executionPackage, at);
+  }
 
   return { runSessionId: context.runSession.id, status: context.runSession.status, reviewPacketId: reviewPacket.id };
 };
@@ -883,10 +1002,18 @@ export const executePackageRun = async (input: ExecutePackageRunInput): Promise<
   await archiveOpenReviewPacket(input.repository, context.runSession, context.executionPackage.id, at);
 
   const started = await startWorkflow(input.repository, context.runSession, context.executionPackage, runSpec, at);
-  const executorResult = executorResultSchema.parse(await input.executor(runSpec));
+  let executorResult: ExecutorResult;
 
-  if (executorResult.run_session_id !== started.runSession.id) {
-    throw new Error(`ExecutorResult run_session_id ${executorResult.run_session_id} does not match ${started.runSession.id}`);
+  try {
+    const parsedExecutorResult = executorResultSchema.parse(await input.executor(runSpec));
+
+    if (parsedExecutorResult.run_session_id !== started.runSession.id) {
+      throw new Error(`ExecutorResult run_session_id ${parsedExecutorResult.run_session_id} does not match ${started.runSession.id}`);
+    }
+
+    executorResult = validateExecutorResultForRunSpec(runSpec, parsedExecutorResult);
+  } catch (error) {
+    executorResult = executorFailureResult(runSpec, started.runSession, error, at);
   }
 
   const terminalRunSession = await persistExecutorResult(
@@ -898,7 +1025,9 @@ export const executePackageRun = async (input: ExecutePackageRunInput): Promise<
   );
 
   if (terminalRunSession.status !== 'succeeded') {
-    await updatePackageAfterFailure(input.repository, terminalRunSession, started.executionPackage, at);
+    if (isLatestRunForPackage(terminalRunSession, started.executionPackage)) {
+      await updatePackageAfterFailure(input.repository, terminalRunSession, started.executionPackage, at);
+    }
     return { runSessionId: terminalRunSession.id, status: terminalRunSession.status };
   }
 
@@ -918,7 +1047,9 @@ export const executePackageRun = async (input: ExecutePackageRunInput): Promise<
     selfReviewResult,
     at,
   );
-  await updatePackageAfterSuccess(input.repository, terminalRunSession, started.executionPackage, at);
+  if (isLatestRunForPackage(terminalRunSession, started.executionPackage)) {
+    await updatePackageAfterSuccess(input.repository, terminalRunSession, started.executionPackage, at);
+  }
 
   return { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: reviewPacket.id };
 };
