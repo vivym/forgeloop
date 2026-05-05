@@ -72,6 +72,35 @@ describe('P0 delivery loop contracts', () => {
     recorded_at: '2026-05-05T02:01:00.000Z',
   };
 
+  const validCommandInventory = {
+    commands: [
+      {
+        command: 'run_package',
+        method: 'POST',
+        path: '/api/commands/run-package',
+        description: 'Run an execution package.',
+      },
+      {
+        command: 'rerun_package',
+        method: 'POST',
+        path: '/api/commands/rerun-package',
+        description: 'Rerun an execution package with review context.',
+      },
+      {
+        command: 'force_rerun_package',
+        method: 'POST',
+        path: '/api/commands/force-rerun-package',
+        description: 'Force rerun an execution package after manual approval.',
+      },
+      {
+        command: 'submit_review_decision',
+        method: 'POST',
+        path: '/api/commands/submit-review-decision',
+        description: 'Submit a review decision.',
+      },
+    ],
+  };
+
   const validRequiredChecks = [
     {
       check_id: 'contracts-test',
@@ -368,34 +397,7 @@ describe('P0 delivery loop contracts', () => {
   });
 
   it('parses the command inventory response DTO', () => {
-    const parsed = commandInventoryResponseSchema.parse({
-      commands: [
-        {
-          command: 'run_package',
-          method: 'POST',
-          path: '/api/commands/run-package',
-          description: 'Run an execution package.',
-        },
-        {
-          command: 'rerun_package',
-          method: 'POST',
-          path: '/api/commands/rerun-package',
-          description: 'Rerun an execution package with review context.',
-        },
-        {
-          command: 'force_rerun_package',
-          method: 'POST',
-          path: '/api/commands/force-rerun-package',
-          description: 'Force rerun an execution package after manual approval.',
-        },
-        {
-          command: 'submit_review_decision',
-          method: 'POST',
-          path: '/api/commands/submit-review-decision',
-          description: 'Submit a review decision.',
-        },
-      ],
-    });
+    const parsed = commandInventoryResponseSchema.parse(validCommandInventory);
 
     expect(parsed.commands.map((item) => item.command)).toEqual([
       'run_package',
@@ -619,6 +621,31 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
   });
 
+  it('rejects executor results that finish before they start', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        started_at: '2026-05-05T01:02:00.000Z',
+        finished_at: '2026-05-05T01:00:00.000Z',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects executor results with duplicate check ids', () => {
+    expect(
+      executorResultSchema.safeParse({
+        ...validExecutorResult,
+        checks: [
+          validCheckResult,
+          {
+            ...validCheckResult,
+            command: 'pnpm build',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects review decision payloads with no submitted decision', () => {
     expect(
       reviewDecisionPayloadSchema.safeParse({
@@ -693,6 +720,26 @@ describe('P0 delivery loop contracts', () => {
         execution_package_id: 'exec-package-1',
         previous_run_session_id: 'run-session-1',
         requested_by_actor_id: 'actor-1',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects incomplete or duplicate command inventories', () => {
+    expect(
+      commandInventoryResponseSchema.safeParse({
+        commands: validCommandInventory.commands.slice(1),
+      }).success,
+    ).toBe(false);
+
+    expect(
+      commandInventoryResponseSchema.safeParse({
+        commands: [
+          ...validCommandInventory.commands,
+          {
+            ...validCommandInventory.commands[0],
+            path: '/api/commands/run-package-copy',
+          },
+        ],
       }).success,
     ).toBe(false);
   });

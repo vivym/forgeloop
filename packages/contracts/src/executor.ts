@@ -108,9 +108,10 @@ const requiredCheckSpecsMatch = (left: RequiredCheckSpec[], right: RequiredCheck
     );
   });
 
-const addDuplicateRequiredCheckIdIssues = (
-  checks: RequiredCheckSpec[],
+const addDuplicateCheckIdIssues = (
+  checks: Array<{ check_id: string }>,
   path: (string | number)[],
+  description: string,
   ctx: z.RefinementCtx,
 ) => {
   const seenCheckIds = new Set<string>();
@@ -128,7 +129,7 @@ const addDuplicateRequiredCheckIdIssues = (
     ctx.addIssue({
       code: 'custom',
       path,
-      message: `required check ids must be unique: ${checkId}`,
+      message: `${description} check ids must be unique: ${checkId}`,
     });
   });
 };
@@ -254,8 +255,8 @@ export const runSpecSchema = z
       });
     }
 
-    addDuplicateRequiredCheckIdIssues(runSpec.context.required_checks, ['context', 'required_checks'], ctx);
-    addDuplicateRequiredCheckIdIssues(runSpec.required_checks, ['required_checks'], ctx);
+    addDuplicateCheckIdIssues(runSpec.context.required_checks, ['context', 'required_checks'], 'required', ctx);
+    addDuplicateCheckIdIssues(runSpec.required_checks, ['required_checks'], 'required', ctx);
   });
 export type RunSpec = z.infer<typeof runSpecSchema>;
 
@@ -286,6 +287,16 @@ export const executorResultSchema = z
   })
   .superRefine((result, ctx) => {
     const hasUnsuccessfulBlockingCheck = result.checks.some((check) => check.blocks_review && check.status !== 'succeeded');
+
+    if (Date.parse(result.finished_at) < Date.parse(result.started_at)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['finished_at'],
+        message: 'finished_at must be greater than or equal to started_at',
+      });
+    }
+
+    addDuplicateCheckIdIssues(result.checks, ['checks'], 'ExecutorResult', ctx);
 
     if (result.status === 'succeeded' && result.failure) {
       ctx.addIssue({

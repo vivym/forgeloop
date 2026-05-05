@@ -9,12 +9,14 @@ import {
 
 const isoDateTimeSchema = z.string().datetime();
 
-export const commandNameSchema = z.enum([
+const commandNames = [
   'run_package',
   'rerun_package',
   'force_rerun_package',
   'submit_review_decision',
-]);
+] as const;
+
+export const commandNameSchema = z.enum(commandNames);
 export type CommandName = z.infer<typeof commandNameSchema>;
 
 export const commandInventoryItemSchema = z.object({
@@ -25,9 +27,37 @@ export const commandInventoryItemSchema = z.object({
 });
 export type CommandInventoryItem = z.infer<typeof commandInventoryItemSchema>;
 
-export const commandInventoryResponseSchema = z.object({
-  commands: z.array(commandInventoryItemSchema),
-});
+export const commandInventoryResponseSchema = z
+  .object({
+    commands: z.array(commandInventoryItemSchema),
+  })
+  .superRefine((inventory, ctx) => {
+    const commandCounts = new Map<CommandName, number>();
+
+    inventory.commands.forEach((item, index) => {
+      const count = commandCounts.get(item.command) ?? 0;
+
+      if (count > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['commands', index, 'command'],
+          message: `command inventory command must be unique: ${item.command}`,
+        });
+      }
+
+      commandCounts.set(item.command, count + 1);
+    });
+
+    commandNames.forEach((command) => {
+      if (!commandCounts.has(command)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['commands'],
+          message: `command inventory is missing command: ${command}`,
+        });
+      }
+    });
+  });
 export type CommandInventoryResponse = z.infer<typeof commandInventoryResponseSchema>;
 
 export const runPackageRequestSchema = z.object({
