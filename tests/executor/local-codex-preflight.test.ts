@@ -420,6 +420,7 @@ describe('runLocalCodexExecutor', () => {
       createRunSpec({ repo: { local_path: repo, base_commit_sha: head } }),
       {
         artifactRoot: await makeTempDir(),
+        codexHome: join(await makeTempDir(), '.codex'),
         environment: createGitBackedTestEnvironment(await makeTempDir(), {
           runCodex: async () => {
             throw new Error('prompt rejected');
@@ -449,6 +450,7 @@ describe('runLocalCodexExecutor', () => {
       }),
       {
         artifactRoot: await makeTempDir(),
+        codexHome: join(await makeTempDir(), '.codex'),
         environment: createGitBackedTestEnvironment(await makeTempDir(), {
           runCodex: async (input) => {
             prompt = input.prompt;
@@ -465,6 +467,7 @@ describe('runLocalCodexExecutor', () => {
   it('uses workspace-write sandbox and sanitized environment for the default Codex invocation', async () => {
     const { repo, head } = await createGitRepo();
     const workspaceRoot = await makeTempDir();
+    const codexHome = join(await makeTempDir(), '.codex');
     const commandCalls: Array<{ command: string; args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
@@ -489,6 +492,7 @@ describe('runLocalCodexExecutor', () => {
       }),
       {
         artifactRoot: await makeTempDir(),
+        codexHome,
         environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
       },
     );
@@ -501,6 +505,93 @@ describe('runLocalCodexExecutor', () => {
     expect(codexExecCall?.args).toContain('workspace-write');
     expect(codexExecCall?.args).not.toContain('danger-full-access');
     expect(codexExecCall?.env).not.toHaveProperty('GITHUB_TOKEN');
+  });
+
+  it('uses the same explicit Codex auth env for readiness and default invocation', async () => {
+    const { repo, head } = await createGitRepo();
+    const workspaceRoot = await makeTempDir();
+    const codexHome = join(await makeTempDir(), '.codex');
+    const codexEnvs: Array<{ args: readonly string[]; env: NodeJS.ProcessEnv }> = [];
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    const commandRunner: CommandRunner = async (command, args, options) => {
+      if (command === 'codex') {
+        codexEnvs.push({ args, env: options?.env ?? {} });
+        return { stdout: '', stderr: '' };
+      }
+
+      const { stdout, stderr } = await execFileAsync(command, [...args], options);
+      return { stdout: String(stdout), stderr: String(stderr) };
+    };
+
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        codexHome,
+        environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+    const readinessEnv = codexEnvs.find((call) => call.args.join(' ') === 'login status')?.env;
+    const invocationEnv = codexEnvs.find((call) => call.args[0] === 'exec')?.env;
+    expect(readinessEnv?.CODEX_HOME).toBe(codexHome);
+    expect(invocationEnv?.CODEX_HOME).toBe(codexHome);
+    expect(readinessEnv?.HOME).toBe(invocationEnv?.HOME);
+    expect(readinessEnv?.XDG_CONFIG_HOME).toBe(invocationEnv?.XDG_CONFIG_HOME);
+  });
+
+  it('fails preflight before default Codex invocation when no explicit Codex home is configured', async () => {
+    const { repo, head } = await createGitRepo();
+    let codexInvoked = false;
+    const originalCodexHome = process.env.CODEX_HOME;
+    const originalForgeloopCodexHome = process.env.FORGELOOP_CODEX_HOME;
+    delete process.env.CODEX_HOME;
+    delete process.env.FORGELOOP_CODEX_HOME;
+
+    try {
+      const result = await runLocalCodexExecutor(
+        createRunSpec({
+          repo: { local_path: repo, base_commit_sha: head },
+          required_checks: [],
+          context: { required_checks: [] },
+        }),
+        {
+          artifactRoot: await makeTempDir(),
+          environment: createGitBackedTestEnvironment(await makeTempDir(), {
+            runCodex: async () => {
+              codexInvoked = true;
+            },
+          }),
+        },
+      );
+
+      expect(codexInvoked).toBe(false);
+      expect(executorResultSchema.parse(result)).toMatchObject({
+        status: 'failed',
+        failure: {
+          kind: 'preflight_failed',
+          message: expect.stringContaining('Codex home is not configured'),
+        },
+      });
+    } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
+      if (originalForgeloopCodexHome === undefined) {
+        delete process.env.FORGELOOP_CODEX_HOME;
+      } else {
+        process.env.FORGELOOP_CODEX_HOME = originalForgeloopCodexHome;
+      }
+    }
   });
 
   it('neutralizes git remotes in the disposable workspace before runner and checks execute', async () => {
@@ -588,6 +679,42 @@ describe('runLocalCodexExecutor', () => {
         }
       }
     }
+  });
+
+  it('does not expose Codex home to required checks while default Codex receives it', async () => {
+    const { repo, head } = await createGitRepo();
+    const codexHome = join(await makeTempDir(), '.codex');
+    let codexInvocationEnv: NodeJS.ProcessEnv | undefined;
+    const check = blockingCheck({
+      check_id: 'codex-env-check',
+      command:
+        'node -e "const fs=require(\'fs\'); fs.mkdirSync(\'packages/executor/src\', {recursive:true}); fs.writeFileSync(\'packages/executor/src/codex-env.json\', JSON.stringify({CODEX_HOME:process.env.CODEX_HOME,HOME:process.env.HOME}))"',
+    });
+
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [check],
+        context: { required_checks: [check] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        codexHome,
+        environment: createGitBackedTestEnvironment(await makeTempDir(), {
+          isCodexRuntimeReady: async () => true,
+          runCodex: async (input) => {
+            codexInvocationEnv = input.env;
+          },
+        }),
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+    expect(codexInvocationEnv?.CODEX_HOME).toBe(codexHome);
+    const envJsonPath = join(result.raw_metadata.workspace_path as string, 'packages/executor/src/codex-env.json');
+    const checkEnv = JSON.parse(await readFile(envJsonPath, 'utf8'));
+    expect(checkEnv.CODEX_HOME).toBeUndefined();
+    expect(checkEnv.HOME).not.toBe(codexInvocationEnv?.HOME);
   });
 
   it('records forbidden blocking checks as failed without executing them', async () => {
@@ -778,6 +905,7 @@ describe('runLocalCodexExecutor', () => {
       }),
       {
         artifactRoot: await makeTempDir(),
+        codexHome: join(await makeTempDir(), '.codex'),
         environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
       },
     );

@@ -28,6 +28,10 @@ export type CommandRunner = (
   options?: CommandRunOptions,
 ) => Promise<CommandRunResult>;
 
+export interface CodexRuntimeReadyOptions {
+  env?: NodeJS.ProcessEnv;
+}
+
 export interface CodexInvocation {
   workspacePath: string;
   prompt: string;
@@ -49,7 +53,7 @@ export type WorkspacePrepareResult = WorkspacePrepareSuccess | WorkspacePrepareF
 
 export interface LocalCodexEnvironment {
   commandExists: CommandChecker;
-  isCodexRuntimeReady: () => Promise<boolean>;
+  isCodexRuntimeReady: (options?: CodexRuntimeReadyOptions) => Promise<boolean>;
   isGitRepo: (repoPath: string) => Promise<boolean>;
   resolveGitRef: (repoPath: string, ref: string) => Promise<boolean>;
   prepareWorkspace: (input: {
@@ -66,6 +70,7 @@ export interface LocalCodexEnvironment {
 export interface LocalCodexPreflightOptions {
   artifactRoot: string;
   environment?: LocalCodexEnvironment;
+  codexEnv?: NodeJS.ProcessEnv;
 }
 
 export interface LocalCodexPreflightSuccess {
@@ -123,9 +128,9 @@ const commandExists = (runCommand: CommandRunner): CommandChecker => async (comm
   }
 };
 
-const isCodexRuntimeReady = (runCommand: CommandRunner) => async (): Promise<boolean> => {
+const isCodexRuntimeReady = (runCommand: CommandRunner) => async (options: CodexRuntimeReadyOptions = {}): Promise<boolean> => {
   try {
-    await runCommand('codex', ['login', 'status']);
+    await runCommand('codex', ['login', 'status'], options.env === undefined ? undefined : { env: options.env });
     return true;
   } catch {
     return false;
@@ -234,7 +239,7 @@ export const runLocalCodexPreflight = async (
     return failure('Missing required command: codex');
   }
 
-  if (!(await environment.isCodexRuntimeReady())) {
+  if (!(await environment.isCodexRuntimeReady(options.codexEnv === undefined ? undefined : { env: options.codexEnv }))) {
     return failure('Codex runtime is not authenticated or ready for local execution');
   }
 

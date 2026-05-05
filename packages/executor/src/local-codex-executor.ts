@@ -42,6 +42,7 @@ export interface CodexRunner {
 
 export interface LocalCodexExecutorOptions {
   artifactRoot: string;
+  codexHome?: string;
   environment?: LocalCodexEnvironment;
   runner?: CodexRunner;
 }
@@ -56,8 +57,10 @@ interface CommandExecutionResult {
 
 const nowIso = () => new Date().toISOString();
 
-const createHermeticEnv = async (workspacePath: string): Promise<NodeJS.ProcessEnv> => {
-  const root = join(workspacePath, '.git', '.forgeloop-hermetic-env');
+const baseHermeticEnv = (): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(process.env).filter(([key]) => ALLOWED_ENV_KEYS.has(key) || key.startsWith('LC_')));
+
+const createHermeticEnv = async (root: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> => {
   const home = join(root, 'home');
   const xdgConfig = join(root, 'xdg-config');
   const xdgCache = join(root, 'xdg-cache');
@@ -76,12 +79,8 @@ const createHermeticEnv = async (workspacePath: string): Promise<NodeJS.ProcessE
   await writeFile(gitConfig, '');
   await writeFile(npmUserConfig, '');
 
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => ALLOWED_ENV_KEYS.has(key) || key.startsWith('LC_')),
-  );
-
   return {
-    ...env,
+    ...baseHermeticEnv(),
     HOME: home,
     XDG_CONFIG_HOME: xdgConfig,
     XDG_CACHE_HOME: xdgCache,
@@ -93,8 +92,20 @@ const createHermeticEnv = async (workspacePath: string): Promise<NodeJS.ProcessE
     NPM_CONFIG_CACHE: npmCache,
     npm_config_cache: npmCache,
     PNPM_HOME: pnpmHome,
+    ...extraEnv,
   };
 };
+
+const createCheckEnv = (workspacePath: string): Promise<NodeJS.ProcessEnv> =>
+  createHermeticEnv(join(workspacePath, '.git', '.forgeloop-hermetic-env'));
+
+const configuredCodexHome = (options: LocalCodexExecutorOptions): string | undefined =>
+  options.codexHome ?? process.env.FORGELOOP_CODEX_HOME ?? process.env.CODEX_HOME;
+
+const createCodexEnv = (artifactRoot: string, runSpec: RunSpec, codexHome: string): Promise<NodeJS.ProcessEnv> =>
+  createHermeticEnv(join(artifactRoot, safePathSegment(runSpec.run_session_id), 'codex-env'), {
+    CODEX_HOME: codexHome,
+  });
 
 const safePathSegment = (value: string): string => {
   const sanitized = value
@@ -530,10 +541,31 @@ export const runLocalCodexExecutor = async (
 ): Promise<ExecutorResult> => {
   const startedAt = nowIso();
   const environment = options.environment ?? createDefaultLocalCodexEnvironment();
-  const preflight = await runLocalCodexPreflight(runSpec, {
+  const usesDefaultRunner = options.runner === undefined;
+  const codexHome = configuredCodexHome(options);
+  const codexEnv = usesDefaultRunner && codexHome !== undefined
+    ? await createCodexEnv(options.artifactRoot, runSpec, codexHome)
+    : undefined;
+
+  if (usesDefaultRunner && codexHome === undefined) {
+    return executorFailureResult({
+      runSpec,
+      startedAt,
+      summary: 'Local Codex preflight failed: Codex home is not configured for hermetic execution.',
+      failure: {
+        kind: 'preflight_failed',
+        message: 'Codex home is not configured for hermetic execution. Set codexHome, FORGELOOP_CODEX_HOME, or CODEX_HOME.',
+        retryable: false,
+      },
+    });
+  }
+
+  const preflightOptions = {
     artifactRoot: options.artifactRoot,
     environment,
-  });
+    ...(codexEnv === undefined ? {} : { codexEnv }),
+  };
+  const preflight = await runLocalCodexPreflight(runSpec, preflightOptions);
 
   if (!preflight.ok) {
     return executorFailureResult({
@@ -544,10 +576,10 @@ export const runLocalCodexExecutor = async (
     });
   }
 
-  const executionEnv = await createHermeticEnv(preflight.workspacePath);
-  await neutralizeGitRemotes(environment, preflight.workspacePath, executionEnv);
+  const checkEnv = await createCheckEnv(preflight.workspacePath);
+  await neutralizeGitRemotes(environment, preflight.workspacePath, checkEnv);
 
-  const runner = options.runner ?? defaultRunner(environment, executionEnv);
+  const runner = options.runner ?? defaultRunner(environment, codexEnv ?? checkEnv);
   const runnerResult = await runner.run({
     runSpec,
     workspacePath: preflight.workspacePath,
@@ -575,7 +607,7 @@ export const runLocalCodexExecutor = async (
 
   let initialChangedFiles: ChangedFile[];
   try {
-    initialChangedFiles = await collectChangedFiles(environment, runSpec, preflight.workspacePath, executionEnv);
+    initialChangedFiles = await collectChangedFiles(environment, runSpec, preflight.workspacePath, checkEnv);
   } catch (error) {
     return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
   }
@@ -591,7 +623,7 @@ export const runLocalCodexExecutor = async (
         preflight.workspacePath,
         options.artifactRoot,
         runnerResult.summary,
-        executionEnv,
+        checkEnv,
       );
     } catch (error) {
       return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
@@ -612,7 +644,7 @@ export const runLocalCodexExecutor = async (
     });
   }
 
-  const checkRun = await runChecks(runSpec, preflight.workspacePath, options.artifactRoot, executionEnv);
+  const checkRun = await runChecks(runSpec, preflight.workspacePath, options.artifactRoot, checkEnv);
   let finalCapture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
   try {
     finalCapture = await captureDiffArtifacts(
@@ -621,7 +653,7 @@ export const runLocalCodexExecutor = async (
       preflight.workspacePath,
       options.artifactRoot,
       runnerResult.summary,
-      executionEnv,
+      checkEnv,
     );
   } catch (error) {
     return diffCaptureFailure(runSpec, startedAt, options.artifactRoot, error);
