@@ -3,6 +3,7 @@ import type {
   ArtifactRef,
   ChangedFile,
   CheckResult,
+  ExecutorResult,
   ExecutorType,
   FailureKind,
   RequiredCheckSpec,
@@ -215,6 +216,7 @@ export interface RunSession {
   requested_by_actor_id: string;
   status: RunSessionStatus;
   executor_type?: ExecutorType;
+  executor_result?: ExecutorResult;
   run_spec?: RunSpec;
   changed_files: ChangedFile[];
   check_results: CheckResult[];

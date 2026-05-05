@@ -4,6 +4,7 @@ import type {
   ArtifactRef,
   ChangedFile,
   CheckResult,
+  ExecutorResult,
   RequestedChange,
   RequiredCheckSpec,
   RunSpec,
@@ -808,6 +809,54 @@ describe('domain state transitions', () => {
         failure_reason: 'Required checks not run yet.',
       });
 
+    const executorResult = (overrides: Partial<ExecutorResult> = {}): ExecutorResult => ({
+      run_session_id: 'run-session-1',
+      executor_type: 'local_codex',
+      executor_version: 'local-codex-test@1.2.3',
+      status: 'succeeded',
+      started_at: '2026-05-05T00:00:01.000Z',
+      finished_at: '2026-05-05T00:00:09.000Z',
+      summary: 'Executor completed successfully.',
+      changed_files: [
+        {
+          repo_id: 'repo-1',
+          path: 'packages/domain/src/states.ts',
+          change_kind: 'modified',
+        },
+      ],
+      checks: [
+        {
+          check_id: 'domain-tests',
+          command: 'pnpm test tests/domain',
+          status: 'succeeded',
+          exit_code: 0,
+          duration_seconds: 4,
+          blocks_review: true,
+          stdout: {
+            kind: 'check_output',
+            name: 'stdout',
+            content_type: 'text/plain',
+            local_ref: 'artifacts/run-session/stdout.log',
+          },
+        },
+      ],
+      artifacts: [
+        {
+          kind: 'execution_summary',
+          name: 'summary',
+          content_type: 'text/markdown',
+          local_ref: 'artifacts/run-session/summary.md',
+        },
+      ],
+      raw_metadata: {
+        executor_pid: 12345,
+        nested: {
+          mode: 'test',
+        },
+      },
+      ...overrides,
+    });
+
     it('creates, starts, and records terminal executor outcomes', () => {
       const queued = createSession();
       expect(queued).toMatchObject({
@@ -969,6 +1018,116 @@ describe('domain state transitions', () => {
       expect(succeeded.check_results[0].stdout).not.toBe(terminalCheckResults[0].stdout);
       expect(succeeded.artifacts).not.toBe(terminalArtifacts);
       expect(succeeded.log_refs).not.toBe(terminalLogRefs);
+    });
+
+    it('stores complete executor_result on success and derives convenience evidence', () => {
+      const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+      const result = executorResult();
+
+      const succeeded = transitionRunSession(running, {
+        type: 'executor_success',
+        executor_result: result,
+      });
+
+      expect(succeeded).toMatchObject({
+        status: 'succeeded',
+        executor_type: 'local_codex',
+        executor_result: {
+          executor_version: 'local-codex-test@1.2.3',
+          raw_metadata: {
+            executor_pid: 12345,
+            nested: {
+              mode: 'test',
+            },
+          },
+        },
+        changed_files: result.changed_files,
+        check_results: result.checks,
+        artifacts: result.artifacts,
+        summary: 'Executor completed successfully.',
+      });
+      expect(succeeded.executor_result).not.toBe(result);
+    });
+
+    it('stores complete executor_result failure details including retryability', () => {
+      const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+      const result = executorResult({
+        status: 'failed',
+        summary: 'Executor exited non-zero.',
+        failure: {
+          kind: 'executor_error',
+          message: 'Executor exited non-zero.',
+          retryable: true,
+        },
+        checks: [],
+      });
+
+      const failed = transitionRunSession(running, {
+        type: 'executor_failure',
+        executor_result: result,
+      });
+
+      expect(failed).toMatchObject({
+        status: 'failed',
+        summary: 'Executor exited non-zero.',
+        failure_kind: 'executor_error',
+        failure_reason: 'Executor exited non-zero.',
+        executor_result: {
+          failure: {
+            kind: 'executor_error',
+            message: 'Executor exited non-zero.',
+            retryable: true,
+          },
+        },
+      });
+    });
+
+    it('freezes executor_result and derived evidence after terminal transition', () => {
+      const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+      const result = executorResult();
+
+      const succeeded = transitionRunSession(running, {
+        type: 'executor_success',
+        executor_result: result,
+      });
+
+      result.executor_version = 'mutated-version';
+      result.raw_metadata.nested = { mode: 'mutated' };
+      result.changed_files[0].path = 'mutated/path.ts';
+      result.checks[0].stdout!.local_ref = 'artifacts/run-session/mutated-stdout.log';
+      result.artifacts[0].local_ref = 'artifacts/run-session/mutated-summary.md';
+
+      expect(succeeded.executor_result).toMatchObject({
+        executor_version: 'local-codex-test@1.2.3',
+        raw_metadata: {
+          nested: {
+            mode: 'test',
+          },
+        },
+        changed_files: [
+          {
+            path: 'packages/domain/src/states.ts',
+          },
+        ],
+        checks: [
+          {
+            stdout: {
+              local_ref: 'artifacts/run-session/stdout.log',
+            },
+          },
+        ],
+        artifacts: [
+          {
+            local_ref: 'artifacts/run-session/summary.md',
+          },
+        ],
+      });
+      expect(succeeded.changed_files[0].path).toBe('packages/domain/src/states.ts');
+      expect(succeeded.check_results[0].stdout?.local_ref).toBe('artifacts/run-session/stdout.log');
+      expect(succeeded.artifacts[0].local_ref).toBe('artifacts/run-session/summary.md');
+      expect(succeeded.executor_result?.changed_files).not.toBe(result.changed_files);
+      expect(succeeded.executor_result?.checks).not.toBe(result.checks);
+      expect(succeeded.executor_result?.artifacts).not.toBe(result.artifacts);
     });
 
     it.each([

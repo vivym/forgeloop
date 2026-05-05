@@ -12,6 +12,7 @@ import type {
   ArtifactRef,
   ChangedFile,
   CheckResult,
+  ExecutorResult,
   FailureKind,
   RequestedChange,
   RequiredCheckSpec,
@@ -115,6 +116,33 @@ export type ExecutionPackageTransition =
       blocked_reason: string;
     });
 
+type RunSessionTerminalExecutorResultTransition = Timestamped & {
+  type: 'executor_success' | 'executor_failure' | 'executor_timeout';
+  executor_result: ExecutorResult;
+};
+
+type RunSessionTerminalLegacyTransition =
+  | (Timestamped & {
+      type: 'executor_success';
+      executor_result?: undefined;
+      changed_files: ChangedFile[];
+      check_results: CheckResult[];
+      artifacts: ArtifactRef[];
+      log_refs: ArtifactRef[];
+      summary: string;
+    })
+  | (Timestamped & {
+      type: 'executor_failure' | 'executor_timeout';
+      executor_result?: undefined;
+      changed_files: ChangedFile[];
+      check_results: CheckResult[];
+      artifacts: ArtifactRef[];
+      log_refs: ArtifactRef[];
+      summary: string;
+      failure_kind: FailureKind;
+      failure_reason: string;
+    });
+
 export type RunSessionTransition =
   | (Timestamped & {
       type: 'create';
@@ -132,24 +160,8 @@ export type RunSessionTransition =
   | (Timestamped & {
       type: 'workflow_start' | 'cancel';
     })
-  | (Timestamped & {
-      type: 'executor_success';
-      changed_files: ChangedFile[];
-      check_results: CheckResult[];
-      artifacts: ArtifactRef[];
-      log_refs: ArtifactRef[];
-      summary: string;
-    })
-  | (Timestamped & {
-      type: 'executor_failure' | 'executor_timeout';
-      changed_files: ChangedFile[];
-      check_results: CheckResult[];
-      artifacts: ArtifactRef[];
-      log_refs: ArtifactRef[];
-      summary: string;
-      failure_kind: FailureKind;
-      failure_reason: string;
-    });
+  | RunSessionTerminalExecutorResultTransition
+  | RunSessionTerminalLegacyTransition;
 
 export type ReviewPacketTransition =
   | (Timestamped & {
@@ -200,6 +212,17 @@ const cloneCheckResult = (check: CheckResult): CheckResult => ({
   ...(check.stderr !== undefined ? { stderr: cloneArtifactRef(check.stderr) } : {}),
 });
 
+const cloneJsonObject = <T extends Record<string, unknown>>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+const cloneExecutorResult = (result: ExecutorResult): ExecutorResult => ({
+  ...result,
+  changed_files: result.changed_files.map(cloneChangedFile),
+  checks: result.checks.map(cloneCheckResult),
+  artifacts: result.artifacts.map(cloneArtifactRef),
+  ...(result.failure !== undefined ? { failure: { ...result.failure } } : {}),
+  raw_metadata: cloneJsonObject(result.raw_metadata),
+});
+
 const cloneRequiredCheckSpec = (check: RequiredCheckSpec): RequiredCheckSpec => ({ ...check });
 
 const cloneRequestedChange = (change: RequestedChange): RequestedChange => ({ ...change });
@@ -231,13 +254,44 @@ const cloneRunSpec = (runSpec: RunSpec): RunSpec => ({
 
 const cloneRunSessionTerminalEvidence = (
   event: Extract<RunSessionTransition, { type: 'executor_success' | 'executor_failure' | 'executor_timeout' }>,
-): Pick<RunSession, 'changed_files' | 'check_results' | 'artifacts' | 'log_refs' | 'summary'> => ({
-  changed_files: event.changed_files.map(cloneChangedFile),
-  check_results: event.check_results.map(cloneCheckResult),
-  artifacts: event.artifacts.map(cloneArtifactRef),
-  log_refs: event.log_refs.map(cloneArtifactRef),
-  summary: event.summary,
-});
+): Pick<RunSession, 'changed_files' | 'check_results' | 'artifacts' | 'summary'> &
+  Partial<Pick<RunSession, 'executor_result' | 'executor_type' | 'failure_kind' | 'failure_reason' | 'log_refs'>> => {
+  if (event.executor_result !== undefined) {
+    const executorResult = cloneExecutorResult(event.executor_result);
+    return {
+      executor_result: executorResult,
+      executor_type: executorResult.executor_type,
+      changed_files: executorResult.changed_files.map(cloneChangedFile),
+      check_results: executorResult.checks.map(cloneCheckResult),
+      artifacts: executorResult.artifacts.map(cloneArtifactRef),
+      summary: executorResult.summary,
+      ...(executorResult.failure !== undefined
+        ? {
+            failure_kind: executorResult.failure.kind,
+            failure_reason: executorResult.failure.message,
+          }
+        : {}),
+    };
+  }
+
+  if (
+    event.changed_files === undefined ||
+    event.check_results === undefined ||
+    event.artifacts === undefined ||
+    event.log_refs === undefined ||
+    event.summary === undefined
+  ) {
+    return invalidTransition('RunSession', 'invalid_terminal_payload', event.type);
+  }
+
+  return {
+    changed_files: event.changed_files.map(cloneChangedFile),
+    check_results: event.check_results.map(cloneCheckResult),
+    artifacts: event.artifacts.map(cloneArtifactRef),
+    log_refs: event.log_refs.map(cloneArtifactRef),
+    summary: event.summary,
+  };
+};
 
 const assertReviewDecision = (
   event: Extract<ReviewPacketTransition, { type: 'approve' | 'request_changes' }>,
@@ -650,12 +704,22 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       break;
     case 'executor_failure':
       if (runSession.status === 'running') {
+        const terminalEvidence = cloneRunSessionTerminalEvidence(event);
+        const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
+        const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
+        const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
+        const failureReason = terminalEvidence.failure_reason ?? legacyFailureReason;
+
+        if (failureKind === undefined || failureReason === undefined) {
+          return invalidTransition('RunSession', 'invalid_terminal_payload', event.type);
+        }
+
         return {
           ...runSession,
-          ...cloneRunSessionTerminalEvidence(event),
+          ...terminalEvidence,
           status: 'failed',
-          failure_kind: event.failure_kind,
-          failure_reason: event.failure_reason,
+          failure_kind: failureKind,
+          failure_reason: failureReason,
           finished_at: at,
           updated_at: at,
         };
@@ -663,12 +727,22 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       break;
     case 'executor_timeout':
       if (runSession.status === 'running') {
+        const terminalEvidence = cloneRunSessionTerminalEvidence(event);
+        const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
+        const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
+        const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
+        const failureReason = terminalEvidence.failure_reason ?? legacyFailureReason;
+
+        if (failureKind === undefined || failureReason === undefined) {
+          return invalidTransition('RunSession', 'invalid_terminal_payload', event.type);
+        }
+
         return {
           ...runSession,
-          ...cloneRunSessionTerminalEvidence(event),
+          ...terminalEvidence,
           status: 'timed_out',
-          failure_kind: event.failure_kind,
-          failure_reason: event.failure_reason,
+          failure_kind: failureKind,
+          failure_reason: failureReason,
           finished_at: at,
           updated_at: at,
         };
