@@ -11,6 +11,7 @@ import type {
   ArtifactKind,
   ArtifactRef,
   ChangedFile,
+  CheckResult,
   FailureKind,
   RequestedChange,
   RequiredCheckSpec,
@@ -94,10 +95,15 @@ export type ExecutionPackageTransition =
       forbidden_paths: string[];
     })
   | (Timestamped & {
-      type: 'mark_ready' | 'run' | 'rerun' | 'workflow_start' | 'execution_succeeded' | 'review_approved' | 'review_changes_requested';
+      type: 'mark_ready' | 'workflow_start' | 'execution_succeeded' | 'review_approved' | 'review_changes_requested';
+    })
+  | (Timestamped & {
+      type: 'run' | 'rerun';
+      run_session_id: string;
     })
   | (Timestamped & {
       type: 'force_rerun';
+      run_session_id: string;
       has_open_review_packet: boolean;
     })
   | (Timestamped & {
@@ -124,7 +130,25 @@ export type RunSessionTransition =
       failure_reason?: string;
     })
   | (Timestamped & {
-      type: 'workflow_start' | 'executor_success' | 'executor_failure' | 'executor_timeout' | 'cancel';
+      type: 'workflow_start' | 'cancel';
+    })
+  | (Timestamped & {
+      type: 'executor_success';
+      changed_files: ChangedFile[];
+      check_results: CheckResult[];
+      artifacts: ArtifactRef[];
+      log_refs: ArtifactRef[];
+      summary: string;
+    })
+  | (Timestamped & {
+      type: 'executor_failure' | 'executor_timeout';
+      changed_files: ChangedFile[];
+      check_results: CheckResult[];
+      artifacts: ArtifactRef[];
+      log_refs: ArtifactRef[];
+      summary: string;
+      failure_kind: FailureKind;
+      failure_reason: string;
     });
 
 export type ReviewPacketTransition =
@@ -170,6 +194,12 @@ const cloneArtifactRef = (artifact: ArtifactRef): ArtifactRef => ({ ...artifact 
 
 const cloneChangedFile = (changedFile: ChangedFile): ChangedFile => ({ ...changedFile });
 
+const cloneCheckResult = (check: CheckResult): CheckResult => ({
+  ...check,
+  ...(check.stdout !== undefined ? { stdout: cloneArtifactRef(check.stdout) } : {}),
+  ...(check.stderr !== undefined ? { stderr: cloneArtifactRef(check.stderr) } : {}),
+});
+
 const cloneRequiredCheckSpec = (check: RequiredCheckSpec): RequiredCheckSpec => ({ ...check });
 
 const cloneRequestedChange = (change: RequestedChange): RequestedChange => ({ ...change });
@@ -197,6 +227,16 @@ const cloneRunSpec = (runSpec: RunSpec): RunSpec => ({
   artifact_policy: {
     requested_artifacts: [...runSpec.artifact_policy.requested_artifacts],
   },
+});
+
+const cloneRunSessionTerminalEvidence = (
+  event: Extract<RunSessionTransition, { type: 'executor_success' | 'executor_failure' | 'executor_timeout' }>,
+): Pick<RunSession, 'changed_files' | 'check_results' | 'artifacts' | 'log_refs' | 'summary'> => ({
+  changed_files: event.changed_files.map(cloneChangedFile),
+  check_results: event.check_results.map(cloneCheckResult),
+  artifacts: event.artifacts.map(cloneArtifactRef),
+  log_refs: event.log_refs.map(cloneArtifactRef),
+  summary: event.summary,
 });
 
 const assertReviewDecision = (
@@ -455,6 +495,7 @@ export const transitionExecutionPackage = (
           activity_state: 'awaiting_ai',
           gate_state: 'none',
           resolution: 'none',
+          last_run_session_id: event.run_session_id,
           updated_at: at,
         };
       }
@@ -467,6 +508,7 @@ export const transitionExecutionPackage = (
           activity_state: 'awaiting_ai',
           gate_state: 'none',
           resolution: 'none',
+          last_run_session_id: event.run_session_id,
           updated_at: at,
         };
       }
@@ -593,17 +635,43 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       break;
     case 'executor_success':
       if (runSession.status === 'running') {
-        return { ...runSession, status: 'succeeded', finished_at: at, updated_at: at };
+        const runSessionWithoutFailure = { ...runSession };
+        delete runSessionWithoutFailure.failure_kind;
+        delete runSessionWithoutFailure.failure_reason;
+
+        return {
+          ...runSessionWithoutFailure,
+          ...cloneRunSessionTerminalEvidence(event),
+          status: 'succeeded',
+          finished_at: at,
+          updated_at: at,
+        };
       }
       break;
     case 'executor_failure':
       if (runSession.status === 'running') {
-        return { ...runSession, status: 'failed', finished_at: at, updated_at: at };
+        return {
+          ...runSession,
+          ...cloneRunSessionTerminalEvidence(event),
+          status: 'failed',
+          failure_kind: event.failure_kind,
+          failure_reason: event.failure_reason,
+          finished_at: at,
+          updated_at: at,
+        };
       }
       break;
     case 'executor_timeout':
       if (runSession.status === 'running') {
-        return { ...runSession, status: 'timed_out', finished_at: at, updated_at: at };
+        return {
+          ...runSession,
+          ...cloneRunSessionTerminalEvidence(event),
+          status: 'timed_out',
+          failure_kind: event.failure_kind,
+          failure_reason: event.failure_reason,
+          finished_at: at,
+          updated_at: at,
+        };
       }
       break;
     case 'cancel':

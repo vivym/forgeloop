@@ -3,6 +3,7 @@ import type {
   ArtifactKind,
   ArtifactRef,
   ChangedFile,
+  CheckResult,
   RequestedChange,
   RequiredCheckSpec,
   RunSpec,
@@ -459,9 +460,15 @@ describe('domain state transitions', () => {
 
     const createReviewPackage = (): ExecutionPackage =>
       transitionExecutionPackage(
-        transitionExecutionPackage(transitionExecutionPackage(transitionExecutionPackage(createPackage(), { type: 'mark_ready' }), { type: 'run' }), {
-          type: 'workflow_start',
-        }),
+        transitionExecutionPackage(
+          transitionExecutionPackage(transitionExecutionPackage(createPackage(), { type: 'mark_ready' }), {
+            type: 'run',
+            run_session_id: 'run-session-1',
+          }),
+          {
+            type: 'workflow_start',
+          },
+        ),
         { type: 'execution_succeeded' },
       );
 
@@ -485,10 +492,11 @@ describe('domain state transitions', () => {
         gate_state: 'not_submitted',
       });
 
-      const queued = transitionExecutionPackage(ready, { type: 'run' });
+      const queued = transitionExecutionPackage(ready, { type: 'run', run_session_id: 'run-session-1' });
       expect(queued).toMatchObject({
         phase: 'queued',
         activity_state: 'awaiting_ai',
+        last_run_session_id: 'run-session-1',
       });
 
       const execution = transitionExecutionPackage(queued, { type: 'workflow_start' });
@@ -502,6 +510,23 @@ describe('domain state transitions', () => {
         phase: 'review',
         activity_state: 'awaiting_human',
         gate_state: 'awaiting_human_review',
+      });
+    });
+
+    it('records the replacement run id for rerun and force-rerun queued transitions', () => {
+      const ready = transitionExecutionPackage(createPackage(), { type: 'mark_ready' });
+      const rerunQueued = transitionExecutionPackage(ready, { type: 'rerun', run_session_id: 'run-session-2' });
+      expect(rerunQueued.last_run_session_id).toBe('run-session-2');
+
+      const forceRerunQueued = transitionExecutionPackage(createReviewPackage(), {
+        type: 'force_rerun',
+        run_session_id: 'run-session-3',
+        has_open_review_packet: true,
+      });
+      expect(forceRerunQueued).toMatchObject({
+        phase: 'queued',
+        activity_state: 'awaiting_ai',
+        last_run_session_id: 'run-session-3',
       });
     });
 
@@ -561,9 +586,12 @@ describe('domain state transitions', () => {
 
     it('handles retryable, blocking, and blocking-check execution failures', () => {
       const ready = transitionExecutionPackage(createPackage(), { type: 'mark_ready' });
-      const execution = transitionExecutionPackage(transitionExecutionPackage(ready, { type: 'run' }), {
-        type: 'workflow_start',
-      });
+      const execution = transitionExecutionPackage(
+        transitionExecutionPackage(ready, { type: 'run', run_session_id: 'run-session-1' }),
+        {
+          type: 'workflow_start',
+        },
+      );
 
       expect(
         transitionExecutionPackage(execution, {
@@ -603,9 +631,12 @@ describe('domain state transitions', () => {
       'rejects %s when execution is blocked',
       (type) => {
         const ready = transitionExecutionPackage(createPackage(), { type: 'mark_ready' });
-        const execution = transitionExecutionPackage(transitionExecutionPackage(ready, { type: 'run' }), {
-          type: 'workflow_start',
-        });
+        const execution = transitionExecutionPackage(
+          transitionExecutionPackage(ready, { type: 'run', run_session_id: 'run-session-1' }),
+          {
+            type: 'workflow_start',
+          },
+        );
         const blocked = transitionExecutionPackage(execution, {
           type: 'execution_failed_blocked',
           blocked_reason: 'Needs human input.',
@@ -651,6 +682,7 @@ describe('domain state transitions', () => {
       expect(
         transitionExecutionPackage(review, {
           type: 'force_rerun',
+          run_session_id: 'run-session-2',
           has_open_review_packet: true,
         }),
       ).toMatchObject({
@@ -662,6 +694,7 @@ describe('domain state transitions', () => {
         () =>
           transitionExecutionPackage(review, {
             type: 'force_rerun',
+            run_session_id: 'run-session-2',
             has_open_review_packet: false,
           }),
         'INVALID_TRANSITION',
@@ -675,6 +708,7 @@ describe('domain state transitions', () => {
         () =>
           transitionExecutionPackage(approved, {
             type: 'force_rerun',
+            run_session_id: 'run-session-2',
             has_open_review_packet: true,
           }),
         'INVALID_TRANSITION',
@@ -792,9 +826,232 @@ describe('domain state transitions', () => {
       const running = transitionRunSession(queued, { type: 'workflow_start' });
       expect(running.status).toBe('running');
 
-      expect(transitionRunSession(running, { type: 'executor_success' }).status).toBe('succeeded');
-      expect(transitionRunSession(running, { type: 'executor_failure' }).status).toBe('failed');
-      expect(transitionRunSession(running, { type: 'executor_timeout' }).status).toBe('timed_out');
+      expect(
+        transitionRunSession(running, {
+          type: 'executor_success',
+          changed_files: changedFiles,
+          check_results: [],
+          artifacts: [],
+          log_refs: logRefs,
+          summary: 'Executor completed successfully.',
+        }).status,
+      ).toBe('succeeded');
+      expect(
+        transitionRunSession(running, {
+          type: 'executor_failure',
+          changed_files: changedFiles,
+          check_results: [],
+          artifacts: [],
+          log_refs: logRefs,
+          summary: 'Executor failed.',
+          failure_kind: 'executor_error',
+          failure_reason: 'Executor exited non-zero.',
+        }).status,
+      ).toBe('failed');
+      expect(
+        transitionRunSession(running, {
+          type: 'executor_timeout',
+          changed_files: changedFiles,
+          check_results: [],
+          artifacts: [],
+          log_refs: logRefs,
+          summary: 'Executor timed out.',
+          failure_kind: 'timed_out',
+          failure_reason: 'Executor exceeded timeout.',
+        }).status,
+      ).toBe('timed_out');
+    });
+
+    it('stores cloned executor success evidence and clears queued failure details', () => {
+      const queued = createSession();
+      const running = transitionRunSession(queued, { type: 'workflow_start' });
+      const terminalChangedFiles: ChangedFile[] = [
+        {
+          repo_id: 'repo-1',
+          path: 'packages/domain/src/states.ts',
+          change_kind: 'modified',
+        },
+      ];
+      const terminalCheckResults: CheckResult[] = [
+        {
+          check_id: 'domain-tests',
+          command: 'pnpm test tests/domain',
+          status: 'succeeded',
+          exit_code: 0,
+          duration_seconds: 4,
+          blocks_review: true,
+          stdout: {
+            kind: 'check_output',
+            name: 'stdout',
+            content_type: 'text/plain',
+            local_ref: 'artifacts/run-session/stdout.log',
+          },
+        },
+      ];
+      const terminalArtifacts: ArtifactRef[] = [
+        {
+          kind: 'execution_summary',
+          name: 'summary',
+          content_type: 'text/markdown',
+          local_ref: 'artifacts/run-session/summary.md',
+        },
+      ];
+      const terminalLogRefs: ArtifactRef[] = [
+        {
+          kind: 'logs',
+          name: 'executor log',
+          content_type: 'text/plain',
+          local_ref: 'artifacts/run-session/executor-success.log',
+        },
+      ];
+
+      const succeeded = transitionRunSession(running, {
+        type: 'executor_success',
+        changed_files: terminalChangedFiles,
+        check_results: terminalCheckResults,
+        artifacts: terminalArtifacts,
+        log_refs: terminalLogRefs,
+        summary: 'Executor completed successfully.',
+      });
+
+      terminalChangedFiles[0].path = 'mutated/path.ts';
+      terminalCheckResults[0].stdout!.local_ref = 'artifacts/run-session/mutated-stdout.log';
+      terminalArtifacts[0].local_ref = 'artifacts/run-session/mutated-summary.md';
+      terminalLogRefs[0].local_ref = 'artifacts/run-session/mutated-success.log';
+
+      expect(succeeded).toMatchObject({
+        status: 'succeeded',
+        changed_files: [
+          {
+            repo_id: 'repo-1',
+            path: 'packages/domain/src/states.ts',
+            change_kind: 'modified',
+          },
+        ],
+        check_results: [
+          {
+            check_id: 'domain-tests',
+            command: 'pnpm test tests/domain',
+            status: 'succeeded',
+            exit_code: 0,
+            duration_seconds: 4,
+            blocks_review: true,
+            stdout: {
+              kind: 'check_output',
+              name: 'stdout',
+              content_type: 'text/plain',
+              local_ref: 'artifacts/run-session/stdout.log',
+            },
+          },
+        ],
+        artifacts: [
+          {
+            kind: 'execution_summary',
+            name: 'summary',
+            content_type: 'text/markdown',
+            local_ref: 'artifacts/run-session/summary.md',
+          },
+        ],
+        log_refs: [
+          {
+            kind: 'logs',
+            name: 'executor log',
+            content_type: 'text/plain',
+            local_ref: 'artifacts/run-session/executor-success.log',
+          },
+        ],
+        summary: 'Executor completed successfully.',
+      });
+      expect(succeeded.failure_kind).toBeUndefined();
+      expect(succeeded.failure_reason).toBeUndefined();
+      expect(succeeded.changed_files).not.toBe(terminalChangedFiles);
+      expect(succeeded.check_results).not.toBe(terminalCheckResults);
+      expect(succeeded.check_results[0].stdout).not.toBe(terminalCheckResults[0].stdout);
+      expect(succeeded.artifacts).not.toBe(terminalArtifacts);
+      expect(succeeded.log_refs).not.toBe(terminalLogRefs);
+    });
+
+    it.each([
+      { type: 'executor_failure' as const, status: 'failed' as const, failure_kind: 'executor_error' as const },
+      { type: 'executor_timeout' as const, status: 'timed_out' as const, failure_kind: 'timed_out' as const },
+    ])('stores cloned $type failure evidence and details', ({ type, status, failure_kind }) => {
+      const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+      const terminalCheckResults: CheckResult[] = [
+        {
+          check_id: 'domain-tests',
+          command: 'pnpm test tests/domain',
+          status,
+          exit_code: null,
+          duration_seconds: 120,
+          blocks_review: true,
+          stderr: {
+            kind: 'check_output',
+            name: 'stderr',
+            content_type: 'text/plain',
+            local_ref: 'artifacts/run-session/stderr.log',
+          },
+        },
+      ];
+      const terminalArtifacts: ArtifactRef[] = [
+        {
+          kind: 'raw_metadata',
+          name: 'executor metadata',
+          content_type: 'application/json',
+          local_ref: 'artifacts/run-session/metadata.json',
+        },
+      ];
+
+      const terminal = transitionRunSession(running, {
+        type,
+        changed_files: changedFiles,
+        check_results: terminalCheckResults,
+        artifacts: terminalArtifacts,
+        log_refs: logRefs,
+        summary: 'Executor did not complete.',
+        failure_kind,
+        failure_reason: `${type} stopped execution.`,
+      });
+
+      terminalCheckResults[0].stderr!.local_ref = 'artifacts/run-session/mutated-stderr.log';
+      terminalArtifacts[0].local_ref = 'artifacts/run-session/mutated-metadata.json';
+
+      expect(terminal).toMatchObject({
+        status,
+        changed_files: changedFiles,
+        check_results: [
+          {
+            check_id: 'domain-tests',
+            command: 'pnpm test tests/domain',
+            status,
+            exit_code: null,
+            duration_seconds: 120,
+            blocks_review: true,
+            stderr: {
+              kind: 'check_output',
+              name: 'stderr',
+              content_type: 'text/plain',
+              local_ref: 'artifacts/run-session/stderr.log',
+            },
+          },
+        ],
+        artifacts: [
+          {
+            kind: 'raw_metadata',
+            name: 'executor metadata',
+            content_type: 'application/json',
+            local_ref: 'artifacts/run-session/metadata.json',
+          },
+        ],
+        log_refs: logRefs,
+        summary: 'Executor did not complete.',
+        failure_kind,
+        failure_reason: `${type} stopped execution.`,
+      });
+      expect(terminal.changed_files).not.toBe(changedFiles);
+      expect(terminal.check_results).not.toBe(terminalCheckResults);
+      expect(terminal.check_results[0].stderr).not.toBe(terminalCheckResults[0].stderr);
+      expect(terminal.artifacts).not.toBe(terminalArtifacts);
+      expect(terminal.log_refs).not.toBe(logRefs);
     });
 
     it('freezes create payload evidence after transition', () => {
@@ -911,7 +1168,18 @@ describe('domain state transitions', () => {
     });
 
     it('rejects invalid RunSession transitions', () => {
-      expectDomainError(() => transitionRunSession(createSession(), { type: 'executor_success' }), 'INVALID_TRANSITION');
+      expectDomainError(
+        () =>
+          transitionRunSession(createSession(), {
+            type: 'executor_success',
+            changed_files: changedFiles,
+            check_results: [],
+            artifacts: [],
+            log_refs: logRefs,
+            summary: 'Executor completed successfully.',
+          }),
+        'INVALID_TRANSITION',
+      );
     });
   });
 
