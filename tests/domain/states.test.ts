@@ -1670,6 +1670,56 @@ describe('domain state transitions', () => {
       ['blank reviewed timestamp', { reviewed_at: '   ' }],
       ['missing requested changes', { requested_changes: undefined }],
       ['empty requested changes', { requested_changes: [] }],
+      [
+        'blank requested change title',
+        {
+          requested_changes: [
+            {
+              title: '   ',
+              description: 'Freeze the QA owner on the execution package.',
+              severity: 'major',
+            },
+          ],
+        },
+      ],
+      [
+        'blank requested change description',
+        {
+          requested_changes: [
+            {
+              title: 'Add QA owner',
+              description: '   ',
+              severity: 'major',
+            },
+          ],
+        },
+      ],
+      [
+        'blank requested change file path',
+        {
+          requested_changes: [
+            {
+              title: 'Add QA owner',
+              description: 'Freeze the QA owner on the execution package.',
+              file_path: '   ',
+              severity: 'major',
+            },
+          ],
+        },
+      ],
+      [
+        'blank requested change suggested validation',
+        {
+          requested_changes: [
+            {
+              title: 'Add QA owner',
+              description: 'Freeze the QA owner on the execution package.',
+              severity: 'major',
+              suggested_validation: '   ',
+            },
+          ],
+        },
+      ],
     ] as const)('rejects request_changes with %s', (_caseName, override) => {
       const event = {
         type: 'request_changes',

@@ -324,6 +324,19 @@ const assertReviewDecision = (
   ) {
     return invalidTransition('ReviewPacket', 'invalid_decision_payload', event.type);
   }
+
+  if (event.type === 'request_changes') {
+    for (const change of event.requested_changes) {
+      if (
+        !hasText(change.title) ||
+        !hasText(change.description) ||
+        (change.file_path !== undefined && !hasText(change.file_path)) ||
+        (change.suggested_validation !== undefined && !hasText(change.suggested_validation))
+      ) {
+        return invalidTransition('ReviewPacket', 'invalid_decision_payload', event.type);
+      }
+    }
+  }
 };
 
 const assertWorkItemCompletion = (workItem: WorkItem, completion: WorkItemCompletion | undefined): void => {
