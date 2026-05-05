@@ -3,6 +3,8 @@
   "compilerOptions": {
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "noEmit": true
   },
   "include": ["src/**/*.ts"]

@@ -11,9 +11,11 @@
     "@forgeloop/contracts": "workspace:*",
     "@forgeloop/db": "workspace:*",
     "@forgeloop/domain": "workspace:*",
+    "@forgeloop/workflow": "workspace:*",
     "@nestjs/common": "^11.1.19",
     "@nestjs/core": "^11.1.19",
     "@nestjs/platform-express": "^11.1.19",
+    "@nestjs/testing": "^11.1.19",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "zod": "^4.4.3"
