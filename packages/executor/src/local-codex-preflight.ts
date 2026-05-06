@@ -2,11 +2,8 @@ import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 
 import type { ExecutorFailure, RunSpec } from '../../contracts/src/executor.js';
-
-const execFileAsync = promisify(execFile);
 
 export type CommandChecker = (command: string) => Promise<boolean>;
 
@@ -110,14 +107,27 @@ const safePathSegment = (value: string): string => {
   return sanitized.length > 0 ? sanitized : 'run-session';
 };
 
-const execFileCommandRunner: CommandRunner = async (command, args, options) => {
-  const { stdout, stderr } = await execFileAsync(command, [...args], options);
+const execFileCommandRunner: CommandRunner = async (command, args, options) =>
+  new Promise((resolve, reject) => {
+    const child = execFile(command, [...args], options, (error, stdout, stderr) => {
+      const result = {
+        stdout: String(stdout),
+        stderr: String(stderr),
+      };
 
-  return {
-    stdout: String(stdout),
-    stderr: String(stderr),
-  };
-};
+      if (error !== null) {
+        const errorWithOutput = error as Error & { stdout?: string; stderr?: string };
+        errorWithOutput.stdout = result.stdout;
+        errorWithOutput.stderr = result.stderr;
+        reject(errorWithOutput);
+        return;
+      }
+
+      resolve(result);
+    });
+
+    child.stdin?.end();
+  });
 
 const commandExists = (runCommand: CommandRunner): CommandChecker => async (command) => {
   try {

@@ -196,6 +196,21 @@ describe('runLocalCodexPreflight', () => {
     expect(calls).toEqual([{ command: 'codex', args: ['login', 'status'] }]);
   });
 
+  it('closes stdin for default command runner subprocesses', async () => {
+    const environment = createDefaultLocalCodexEnvironment({ workspaceRoot: await makeTempDir() });
+
+    const result = await environment.runCommand(
+      'node',
+      [
+        '-e',
+        'process.stdin.on("end", () => process.stdout.write("stdin-closed")); process.stdin.resume();',
+      ],
+      { timeout: 1_000 },
+    );
+
+    expect(result.stdout).toBe('stdin-closed');
+  });
+
   it('sanitizes disposable workspace path segments from run session ids', async () => {
     const repo = await makeTempDir();
     const workspaceRoot = await makeTempDir();
