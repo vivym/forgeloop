@@ -6,7 +6,7 @@ import {
   type SpecPlan,
   type SpecPlanEntityType,
   type WorkItem,
-} from './types';
+} from './types.js';
 import type {
   ArtifactKind,
   ArtifactRef,
@@ -19,7 +19,7 @@ import type {
   RunSpec,
   SelfReviewResult,
 } from '@forgeloop/contracts';
-import type { WorkItemCompletion } from './completion';
+import type { WorkItemCompletion } from './completion.js';
 
 const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
 

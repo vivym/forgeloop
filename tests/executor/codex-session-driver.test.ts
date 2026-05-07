@@ -54,6 +54,27 @@ describe('codex app-server dangerous mode confirmation', () => {
       }),
     ).rejects.toThrow(/dangerous mode/i);
   });
+
+  it.each([
+    {
+      approvalPolicy: 'never',
+      sandbox: { type: 'danger-full-access' },
+    },
+    {
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+    },
+    {
+      approvalPolicy: 'never',
+      sandbox: { type: 'workspaceWrite' },
+    },
+    {
+      approvalPolicy: 'on-request',
+      sandbox: { type: 'dangerFullAccess' },
+    },
+  ])('does not confirm non-response dangerous mode config %#', (config) => {
+    expect(resolveEffectiveDangerousMode(config)).toBe('unconfirmed');
+  });
 });
 
 describe('codex app-server driver input routing', () => {

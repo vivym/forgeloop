@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { artifactRefSchema, changedFileSchema, checkResultSchema } from './executor';
+import { artifactRefSchema, changedFileSchema, checkResultSchema } from './executor.js';
 
 const isoDateTimeSchema = z.string().datetime();
 

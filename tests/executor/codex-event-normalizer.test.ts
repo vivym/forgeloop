@@ -60,4 +60,24 @@ describe('codex event normalizer', () => {
     expect(truncated.length).toBeLessThanOrEqual(8_200);
     expect(truncated).toContain('[truncated]');
   });
+
+  it('keeps unknown notification summaries concise when the type contains secrets or huge strings', () => {
+    const events = normalizeCodexAppServerNotification({
+      params: {
+        type: `token=sk-test-secret-${'a'.repeat(9_000)}`,
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        event_type: 'codex_warning',
+        summary: 'Unknown Codex app-server notification',
+        payload: {
+          notification_type: expect.stringContaining('token=[REDACTED]'),
+        },
+      }),
+    ]);
+    expect(events[0]?.summary).not.toContain('sk-test-secret');
+    expect(String(events[0]?.payload.notification_type).length).toBeLessThanOrEqual(8_200);
+  });
 });

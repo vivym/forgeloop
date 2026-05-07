@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-import { executorTypeSchema, jsonObjectSchema } from './executor';
+import { executorTypeSchema, jsonObjectSchema } from './executor.js';
 import {
   requestedChangeSchema,
   reviewDecisionPayloadSchema,
   reviewSubmitDecisionSchema,
-} from './review';
+} from './review.js';
 
 const isoDateTimeSchema = z.string().datetime();
 

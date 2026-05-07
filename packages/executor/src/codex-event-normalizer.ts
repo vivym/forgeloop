@@ -1,4 +1,6 @@
-import type { NormalizedRunEventDraft, RunEventType } from './codex-session-driver.js';
+import type { RunEventType } from '@forgeloop/contracts';
+
+import type { NormalizedRunEventDraft } from './codex-session-driver.js';
 
 const SECRET_PATTERNS = [/(sk-[A-Za-z0-9_-]{8,})/g, /(token=)[^\s]+/gi, /(password=)[^\s]+/gi];
 const DEFAULT_MAX_STRING_LENGTH = 8_192;
@@ -155,9 +157,7 @@ export const normalizeCodexAppServerNotification = (input: unknown): NormalizedR
   return [
     eventDraft(
       'codex_warning',
-      notificationType === 'unknown'
-        ? 'Unknown Codex app-server notification'
-        : `Unknown Codex app-server notification: ${notificationType}`,
+      'Unknown Codex app-server notification',
       {
         notification_type: notificationType,
       },

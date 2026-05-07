@@ -1,4 +1,4 @@
-import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem, WorkItemResolution } from './types';
+import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem, WorkItemResolution } from './types.js';
 
 export interface WorkItemCompletion {
   done: boolean;

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { ArtifactRef } from '../../contracts/src/executor.js';
+import type { ArtifactRef } from '@forgeloop/contracts';
 
 export interface CodexRawLogStore {
   appendRawNotification(input: {

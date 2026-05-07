@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
-import type { ExecutorFailure } from '../../contracts/src/executor.js';
+import type { ExecutorFailure } from '@forgeloop/contracts';
+import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { normalizeCodexExecJsonLine } from './codex-event-normalizer.js';
 import type { CodexRawLogStore } from './codex-raw-log-store.js';
@@ -9,7 +10,6 @@ import type {
   CodexDriverStartInput,
   CodexDriverStreamItem,
   CodexSessionDriver,
-  RunRuntimeMetadata,
 } from './codex-session-driver.js';
 
 export const buildCodexExecArgs = (input: { prompt: string; threadId?: string }): string[] =>

@@ -1,13 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
+import type { RunRuntimeMetadata } from '@forgeloop/domain';
+
 import { normalizeCodexAppServerNotification } from './codex-event-normalizer.js';
 import type { CodexRawLogStore } from './codex-raw-log-store.js';
 import type {
   CodexDriverStartInput,
   CodexDriverStreamItem,
   CodexSessionDriver,
-  RunRuntimeMetadata,
 } from './codex-session-driver.js';
 
 type SandboxConfig = { type: string } | string | null | undefined;
@@ -54,9 +55,11 @@ const responseConfig = (response: unknown): CodexEffectiveConfig => {
 
 export const resolveEffectiveDangerousMode = (config: CodexEffectiveConfig): RunRuntimeMetadata['effective_dangerous_mode'] => {
   const sandbox = config.sandbox;
-  const sandboxType = typeof sandbox === 'string' ? sandbox : sandbox?.type;
 
-  return config.approvalPolicy === 'never' && (sandboxType === 'dangerFullAccess' || sandboxType === 'danger-full-access')
+  return config.approvalPolicy === 'never' &&
+    sandbox !== null &&
+    typeof sandbox === 'object' &&
+    sandbox.type === 'dangerFullAccess'
     ? 'confirmed'
     : 'unconfirmed';
 };
