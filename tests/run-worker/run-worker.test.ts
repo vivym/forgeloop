@@ -500,4 +500,79 @@ describe('RunWorker', () => {
       summary: 'Codex activity stalled.',
     });
   });
+
+  it('stalls and releases lease when driver stream ends without terminal', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    const driver = new FakeCodexSessionDriver({
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Driver resumed.',
+            payload: {},
+          },
+        },
+      ],
+    });
+    const worker = runWorker({ repository, driver });
+
+    await worker.drainOnce();
+
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Driver stream ended before terminal completion.',
+    });
+    expect(await repository.getRunWorkerLease(runSession.id)).toMatchObject({
+      status: 'released',
+      worker_id: 'worker-1',
+    });
+    expect((await repository.listRunEvents(runSession.id)).map((event) => event.event_type)).toContain('stalled');
+  });
+
+  it('watchdog interrupts a stream stuck before the first item', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    let currentTime = Date.parse('2026-05-08T00:00:00.000Z');
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        ...runSession.runtime_metadata!,
+        driver_kind: 'fake',
+        driver_status: 'active',
+        last_event_at: new Date(currentTime).toISOString(),
+      },
+    });
+    const driver = new FakeCodexSessionDriver({
+      script: [
+        { kind: 'delay', ms: 1_000 },
+        {
+          kind: 'terminal',
+          status: 'succeeded',
+          summary: 'Should not wait for this.',
+        },
+      ],
+    });
+    const worker = runWorker({
+      repository,
+      driver,
+      heartbeatIntervalMs: 5,
+      idleThresholdMs: 10_000,
+      now: () => new Date(currentTime).toISOString(),
+    });
+
+    const pending = worker.drainOnce();
+    await delay(15);
+    currentTime += 20_000;
+
+    await expect(Promise.race([pending, delay(300).then(() => 'timeout')])).resolves.not.toBe('timeout');
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Codex activity stalled.',
+    });
+    expect(await repository.getRunWorkerLease(runSession.id)).toMatchObject({ status: 'released' });
+  });
 });

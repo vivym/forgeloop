@@ -228,10 +228,13 @@ export class RunWorker {
       });
       const driver = this.driverFactory({ runSession: started, runtimeMetadata });
       const opened = await this.openDriverStream(driver, started, runtimeMetadata, input, wasQueued ? 'start' : 'resume');
-      const primed = await this.primeDriverStream(opened, started, input, wasQueued ? 'start' : 'resume');
+      const primed = await this.primeDriverStream(opened, started, input, wasQueued ? 'start' : 'resume', control);
 
       if (primed.stalled === true) {
         terminalOrStopped = true;
+        return;
+      }
+      if (control.stopped) {
         return;
       }
 
@@ -263,6 +266,7 @@ export class RunWorker {
 
       const terminal =
         primed.firstTerminal ?? (await this.consumeStream(primed.iterator, primed.currentRunSession, input, control));
+      const stoppedBeforeStreamEndHandling = control.stopped;
       control.stop();
       await commandPolling.done;
 
@@ -273,6 +277,14 @@ export class RunWorker {
       if (terminal !== undefined) {
         terminalOrStopped = true;
         await this.finalizeTerminal(started, terminal, input);
+        return;
+      }
+      if (!stoppedBeforeStreamEndHandling) {
+        const latest = (await this.repository.getRunSession(started.id)) ?? primed.currentRunSession;
+        if (!terminalStatuses.has(latest.status)) {
+          await this.stallRun(latest, input, 'Driver stream ended before terminal completion.');
+        }
+        terminalOrStopped = true;
       }
     } catch (error) {
       const runSession = await this.repository.getRunSession(input.runSessionId);
@@ -379,11 +391,18 @@ export class RunWorker {
     runSession: RunSession,
     lease: OwnedRun,
     mode: 'start' | 'resume',
+    control: RunControl,
   ): Promise<PrimedDriverStream> {
     const iterator = opened.stream[Symbol.asyncIterator]();
+    control.cancelStream = () => {
+      void iterator.return?.();
+    };
 
     try {
-      const first = await iterator.next();
+      const first = await this.nextStreamItem(iterator, control);
+      if (first === undefined) {
+        return { ...opened, iterator, currentRunSession: runSession, stalled: control.stalled };
+      }
       if (first.done === true) {
         return { ...opened, iterator, currentRunSession: runSession };
       }
@@ -395,16 +414,20 @@ export class RunWorker {
         first.value.kind === 'event' &&
         isFallbackRequiredEvent(first.value)
       ) {
-        const next = await iterator.next();
+        const next = await this.nextStreamItem(iterator, control);
+        if (next === undefined) {
+          return { ...opened, iterator, currentRunSession: handled.currentRunSession, stalled: control.stalled };
+        }
         if (next.done === true) {
-          return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, first.value.event.summary);
+          await iterator.return?.();
+          return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, first.value.event.summary, control);
         }
 
         const nextHandled = await this.handleStreamItem(next.value, handled.currentRunSession, lease);
         if (nextHandled.terminal !== undefined) {
           if (nextHandled.terminal.status === 'failed') {
             await iterator.return?.();
-            return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, nextHandled.terminal);
+            return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, nextHandled.terminal, control);
           }
 
           return {
@@ -428,7 +451,7 @@ export class RunWorker {
           await this.stallRun(runSession, lease, 'Driver recovery failed.', handled.terminal.failure?.message ?? handled.terminal.summary);
           return { ...opened, iterator, currentRunSession: handled.currentRunSession, stalled: true };
         }
-        return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, handled.terminal);
+        return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, handled.terminal, control);
       }
 
       return {
@@ -442,7 +465,7 @@ export class RunWorker {
         throw error;
       }
 
-      return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, error);
+      return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, error, control);
     }
   }
 
@@ -451,6 +474,7 @@ export class RunWorker {
     runSession: RunSession,
     lease: OwnedRun,
     reason: unknown,
+    control: RunControl,
   ): Promise<PrimedDriverStream> {
     const fallbackMetadata = { ...runtimeMetadata, driver_kind: 'exec_fallback' as const };
     const fallback = this.execFallbackDriverFactory({ runSession, runtimeMetadata: fallbackMetadata });
@@ -472,7 +496,13 @@ export class RunWorker {
     try {
       const opened = await this.openDriverStream(fallback, runSession, fallbackMetadata, lease, 'resume');
       const iterator = opened.stream[Symbol.asyncIterator]();
-      const first = await iterator.next();
+      control.cancelStream = () => {
+        void iterator.return?.();
+      };
+      const first = await this.nextStreamItem(iterator, control);
+      if (first === undefined) {
+        return { ...opened, iterator, currentRunSession: runSession, stalled: control.stalled };
+      }
       if (first.done === true) {
         await this.stallRun(runSession, lease, 'Driver recovery failed.', 'Exec fallback ended before recovery completed.');
         return { ...opened, iterator, currentRunSession: runSession, stalled: true };
@@ -511,7 +541,7 @@ export class RunWorker {
   ): Promise<Extract<CodexDriverStreamItem, { kind: 'terminal' }> | undefined> {
     let current = runSession;
     while (!control.stopped) {
-      const item = await Promise.race([iterator.next(), control.stoppedPromise.then(() => undefined)]);
+      const item = await this.nextStreamItem(iterator, control);
       if (item === undefined) {
         return undefined;
       }
@@ -527,6 +557,13 @@ export class RunWorker {
     }
 
     return undefined;
+  }
+
+  private async nextStreamItem(
+    iterator: AsyncIterator<CodexDriverStreamItem>,
+    control: RunControl,
+  ): Promise<IteratorResult<CodexDriverStreamItem> | undefined> {
+    return Promise.race([iterator.next(), control.stoppedPromise.then(() => undefined)]);
   }
 
   private async handleStreamItem(

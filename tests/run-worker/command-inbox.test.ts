@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { InMemoryP0Repository } from '../../packages/db/src';
-import type { RunCommand } from '../../packages/domain/src';
+import type { RunCommand, RunEvent } from '../../packages/domain/src';
 
 import { applyPendingRunCommands, FakeCodexSessionDriver } from '../../packages/run-worker/src';
 import { seedRunningRunWithCommand } from '../helpers/p0-runtime-fixtures';
@@ -24,6 +24,19 @@ const acquireLease = async (repository: InMemoryP0Repository, runSessionId: stri
     expires_at: '2026-05-08T00:02:00.000Z',
   });
 };
+
+class FailingDeliveryEventRepository extends InMemoryP0Repository {
+  override async appendWorkerRunEvent(
+    event: Omit<RunEvent, 'sequence' | 'cursor'>,
+    leaseInput: { workerId: string; leaseToken: string },
+  ): Promise<RunEvent> {
+    if (event.event_type === 'user_input') {
+      throw new Error('injected delivery append failure');
+    }
+
+    return super.appendWorkerRunEvent(event, leaseInput);
+  }
+}
 
 describe('command inbox', () => {
   it('applies pending input exactly once to the active turn', async () => {
@@ -174,5 +187,50 @@ describe('command inbox', () => {
         },
       }),
     ]);
+  });
+
+  it('does not mark input applied when delivery event append fails after driver ack', async () => {
+    const repository = new FailingDeliveryEventRepository();
+    const { runSession } = await seedRunningRunWithCommand(repository, command());
+    await acquireLease(repository, runSession.id);
+    const driver = new FakeCodexSessionDriver({
+      inputAcks: [{ continuity: { thread_id: 'thread-1', turn_id: 'turn-2' } }],
+    });
+
+    await expect(
+      applyPendingRunCommands({
+        repository,
+        runSessionId: runSession.id,
+        workerId: lease.workerId,
+        leaseToken: lease.leaseToken,
+        driver,
+        runtimeMetadata: {
+          durability_mode: 'durable',
+          driver_kind: 'fake',
+          active_turn_id: 'turn-1',
+          recovery_attempt_count: 0,
+          effective_dangerous_mode: 'not_requested',
+        },
+        now: () => now,
+      }),
+    ).rejects.toThrow('injected delivery append failure');
+
+    expect(await repository.listRunEvents(runSession.id)).toEqual([]);
+    const reclaimed = await repository.claimNextRunCommand(
+      runSession.id,
+      lease.workerId,
+      lease.leaseToken,
+      '2026-05-08T00:01:00.000Z',
+      { reclaim_claimed_before: '2026-05-08T00:00:30.000Z' },
+    );
+    expect(reclaimed).toEqual(
+      expect.objectContaining({
+        reclaimed: true,
+        command: expect.objectContaining({
+          status: 'claimed',
+          driver_ack: { continuity: { thread_id: 'thread-1', turn_id: 'turn-2' } },
+        }),
+      }),
+    );
   });
 });

@@ -99,8 +99,8 @@ const applyInputCommand = async (
   const lease = { workerId: input.workerId, leaseToken: input.leaseToken };
 
   if (reclaimed && command.driver_ack !== undefined) {
-    await input.repository.markRunCommandApplied(command.id, lease, at, command.driver_ack);
     await appendDeliveryEvent(input.repository, command, lease, command.driver_ack, at);
+    await input.repository.markRunCommandApplied(command.id, lease, at, command.driver_ack);
     return;
   }
 
@@ -111,21 +111,24 @@ const applyInputCommand = async (
     return;
   }
 
+  const targetTurnId = command.target_turn_id ?? input.runtimeMetadata.active_turn_id;
+  let ack: Record<string, unknown>;
   try {
-    const targetTurnId = command.target_turn_id ?? input.runtimeMetadata.active_turn_id;
-    const ack = await input.driver.sendInput({
+    ack = await input.driver.sendInput({
       message: textPayload(command),
       runtimeMetadata: input.runtimeMetadata,
       ...(targetTurnId === undefined ? {} : { targetTurnId }),
     });
     await input.repository.recordRunCommandDriverAck(command.id, lease, ack, at);
-    await input.repository.markRunCommandApplied(command.id, lease, at, ack);
-    await appendDeliveryEvent(input.repository, command, lease, ack, at);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await input.repository.markRunCommandFailed(command.id, lease, reason, at);
     await appendWarning(input.repository, command, lease, 'driver_rejected_command', at);
+    return;
   }
+
+  await appendDeliveryEvent(input.repository, command, lease, ack, at);
+  await input.repository.markRunCommandApplied(command.id, lease, at, ack);
 };
 
 const applyCancelCommand = async (
