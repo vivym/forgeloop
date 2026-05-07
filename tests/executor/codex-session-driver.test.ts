@@ -183,6 +183,38 @@ describe('codex app-server dangerous mode confirmation', () => {
 });
 
 describe('codex app-server driver input routing', () => {
+  it('initializes the app-server transport before starting a thread', async () => {
+    const calls: string[] = [];
+    const driver = createCodexAppServerDriverForTest({
+      initialize: async () => {
+        calls.push('initialize');
+      },
+      request: async (method: string) => {
+        calls.push(method);
+        return method === 'thread/start'
+          ? {
+              thread: { id: 'thread-1' },
+              approvalPolicy: 'never',
+              sandbox: { type: 'dangerFullAccess' },
+            }
+          : { turn: { id: 'turn-1' } };
+      },
+      notifications: async function* () {
+        yield {
+          method: 'turn/completed',
+          params: {
+            threadId: 'thread-1',
+            turn: { id: 'turn-1', status: 'completed', error: null },
+          },
+        };
+      },
+    });
+
+    await collectUntilTerminal(driver.startRun({ runSpec: createRunSpec(), workspacePath: tmpdir() }));
+
+    expect(calls.slice(0, 3)).toEqual(['initialize', 'thread/start', 'turn/start']);
+  });
+
   it('steers an active turn or explicit target turn', async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const driver = createCodexAppServerDriverForTest({ request });
@@ -317,6 +349,31 @@ describe('codex app-server driver input routing', () => {
     ]);
   });
 
+  it('fails startRun when no notification stream is available after turn start', async () => {
+    const request = vi.fn(async (method: string) =>
+      method === 'thread/start'
+        ? {
+            thread: { id: 'thread-1' },
+            approvalPolicy: 'never',
+            sandbox: { type: 'dangerFullAccess' },
+          }
+        : { turn: { id: 'turn-1' } },
+    );
+    const driver = createCodexAppServerDriverForTest({ request });
+
+    await expect(
+      collectUntilTerminal(driver.startRun({ runSpec: createRunSpec(), workspacePath: tmpdir() })),
+    ).resolves.toEqual([
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'thread_started' }) }),
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'turn_started' }) }),
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'failed',
+        summary: 'Codex app-server notification stream ended before turn completion.',
+      }),
+    ]);
+  });
+
   it('maps failed turn/completed notifications to retryable terminal failures', async () => {
     const request = vi.fn(async () => ({
       thread: { id: 'thread-1' },
@@ -364,6 +421,50 @@ describe('codex app-server driver input routing', () => {
 });
 
 describe('codex app-server process transport', () => {
+  it('sends an idempotent initialize handshake to the process transport', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'forgeloop-codex-app-server-'));
+    const logPath = join(directory, 'protocol.ndjson');
+    const binaryPath = join(directory, 'app-server-fake.js');
+    await writeFile(
+      binaryPath,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const logPath = ${JSON.stringify(logPath)};
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  fs.appendFileSync(logPath, line + '\\n');
+  const message = JSON.parse(line);
+  if (message.method === 'initialize' && message.id !== undefined) {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: message.id,
+      result: {
+        userAgent: 'fake',
+        codexHome: ${JSON.stringify(directory)},
+        platformFamily: 'unix',
+        platformOs: 'macos'
+      }
+    }) + '\\n');
+  }
+});
+`,
+    );
+    await chmod(binaryPath, 0o755);
+
+    const transport = new CodexAppServerProcessTransport({ codexBinary: binaryPath, args: [] });
+    await transport.initialize();
+    await transport.initialize();
+    await transport.close();
+
+    const messages = (await readFile(logPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { method: string; params?: { clientInfo?: { name?: string } } });
+
+    expect(messages.map((message) => message.method)).toEqual(['initialize', 'initialized']);
+    expect(messages[0]?.params?.clientInfo?.name).toBe('forgeloop');
+  });
+
   it('rejects pending requests when the app-server process cannot be spawned', async () => {
     const transport = new CodexAppServerProcessTransport({ codexBinary: missingCodexBinary() });
 

@@ -19,6 +19,7 @@ export interface CodexEffectiveConfig {
 }
 
 export interface CodexAppServerTransport {
+  initialize?(): Promise<void>;
   request(method: string, params: Record<string, unknown>): Promise<unknown>;
   notifications?(): AsyncIterable<unknown>;
   close?(): Promise<void>;
@@ -221,6 +222,8 @@ export class CodexAppServerDriver implements CodexSessionDriver {
 
   async *startRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
     try {
+      await this.#transport.initialize?.();
+
       const threadResponse = await this.#transport.request('thread/start', {
         cwd: input.workspacePath,
         approvalPolicy: 'never',
@@ -321,6 +324,8 @@ export class CodexAppServerDriver implements CodexSessionDriver {
     }
 
     try {
+      await this.#transport.initialize?.();
+
       const response = await this.#transport.request('thread/resume', {
         threadId,
         cwd: input.workspacePath,
@@ -423,6 +428,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
   async *#streamNotifications(runSessionId: string): AsyncIterable<CodexDriverStreamItem> {
     const notifications = this.#transport.notifications?.();
     if (notifications === undefined) {
+      yield notificationStreamEndedTerminal();
       return;
     }
 
@@ -469,6 +475,8 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   #requestId = 0;
   #closed = false;
   #processError: Error | undefined = undefined;
+  #initialized = false;
+  #initializePromise: Promise<void> | undefined = undefined;
 
   constructor(options: CodexAppServerProcessTransportOptions = {}) {
     this.#child = spawn(options.codexBinary ?? 'codex', options.args ?? ['app-server'], {
@@ -484,6 +492,37 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
     this.#child.once('close', () => {
       this.#closeWithError(new Error('Codex app-server process closed before the request completed.'));
     });
+  }
+
+  async initialize(): Promise<void> {
+    if (this.#initialized) {
+      return;
+    }
+
+    if (this.#initializePromise !== undefined) {
+      return this.#initializePromise;
+    }
+
+    this.#initializePromise = (async () => {
+      await this.request('initialize', {
+        clientInfo: {
+          name: 'forgeloop',
+          title: 'Forgeloop',
+          version: '0.0.0',
+        },
+        capabilities: null,
+      });
+      await this.#sendNotification('initialized');
+      this.#initialized = true;
+    })();
+
+    try {
+      await this.#initializePromise;
+    } finally {
+      if (!this.#initialized) {
+        this.#initializePromise = undefined;
+      }
+    }
   }
 
   async request(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -504,6 +543,23 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
       }
     });
     return response;
+  }
+
+  async #sendNotification(method: string): Promise<void> {
+    if (this.#closed) {
+      throw this.#processError ?? new Error('Codex app-server process is closed.');
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      this.#child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method })}\n`, (error) => {
+        if (error !== null && error !== undefined) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
   }
 
   async *notifications(): AsyncIterable<unknown> {
