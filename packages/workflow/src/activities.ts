@@ -15,20 +15,12 @@ import {
   type SelfReviewInput,
   type SelfReviewResult,
 } from '@forgeloop/contracts';
+import type { RunSessionStatus } from '@forgeloop/domain';
+
+import { finalizePackageRunWithExecutorResult } from './execution-finalizer';
 
 type IsoDateTime = string;
 
-type RunSessionStatus =
-  | 'queued'
-  | 'running'
-  | 'waiting_for_input'
-  | 'stalled'
-  | 'resuming'
-  | 'cancel_requested'
-  | 'succeeded'
-  | 'failed'
-  | 'timed_out'
-  | 'cancelled';
 type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review';
 type ExecutionPackageActivityState = 'idle' | 'awaiting_ai' | 'ai_running' | 'blocked' | 'awaiting_human';
 type ExecutionPackageGateState = 'none' | 'not_submitted' | 'awaiting_human_review' | 'review_approved' | 'changes_requested';
@@ -202,6 +194,11 @@ export interface PackageExecutionRepository {
   appendObjectEvent(objectEvent: ObjectEventRecord): Promise<void>;
   appendStatusHistory(statusHistory: StatusHistoryRecord): Promise<void>;
   saveArtifact(artifact: ArtifactRecord): Promise<void>;
+  withActiveRunWorkerLease<T>(
+    runSessionId: string,
+    lease: { workerId: string; leaseToken: string; now: string },
+    write: (repository: PackageExecutionRepository) => Promise<T>,
+  ): Promise<T>;
 }
 
 export type PackageRunExecutor = (runSpec: RunSpec) => Promise<ExecutorResult>;
@@ -218,6 +215,23 @@ export interface ExecutePackageRunInput {
   timeoutSeconds?: number;
   forceRerun?: boolean;
 }
+
+export interface BuildPackageRunSpecInput {
+  repository: PackageExecutionRepository;
+  runSessionId: string;
+  defaultExecutorType?: ExecutorType;
+  workflowOnly?: boolean;
+  now?: () => IsoDateTime;
+  forceRerun?: boolean;
+}
+
+export interface StartPackageRunResult {
+  runSession: RunSessionRecord;
+  executionPackage: ExecutionPackageRecord;
+  runSpec: RunSpec;
+}
+
+export type BuildAndStartPackageRun = (input: BuildPackageRunSpecInput) => Promise<StartPackageRunResult>;
 
 export interface ExecutePackageRunActivityInput {
   runSessionId: string;
@@ -341,7 +355,7 @@ const latestRequestedChanges = (reviewPackets: ReviewPacketRecord[]): RunSpec['r
   };
 };
 
-const loadRunContext = async (
+export const loadRunContext = async (
   repository: PackageExecutionRepository,
   runSessionId: string,
 ): Promise<LoadedRunContext> => {
@@ -533,8 +547,42 @@ const persistArtifacts = async (
         ref: clone(artifact),
         created_at: at,
       }),
-    ),
-  );
+  ),
+);
+};
+
+export const buildAndStartPackageRun = async (input: BuildPackageRunSpecInput): Promise<StartPackageRunResult> => {
+  const at = input.now?.() ?? new Date().toISOString();
+  const context = await loadRunContext(input.repository, input.runSessionId);
+  const runSpec = buildRunSpec(context, input);
+
+  await archiveOpenReviewPacket(input.repository, context.runSession, context.executionPackage.id, at);
+
+  const started = await startWorkflow(input.repository, context.runSession, context.executionPackage, runSpec, at);
+  return {
+    runSession: started.runSession,
+    executionPackage: started.executionPackage,
+    runSpec,
+  };
+};
+
+const runExecutorAndNormalize = async (
+  executor: PackageRunExecutor,
+  runSpec: RunSpec,
+  runSession: RunSessionRecord,
+  at: IsoDateTime,
+): Promise<ExecutorResult> => {
+  try {
+    const parsedExecutorResult = executorResultSchema.parse(await executor(runSpec));
+
+    if (parsedExecutorResult.run_session_id !== runSession.id) {
+      throw new Error(`ExecutorResult run_session_id ${parsedExecutorResult.run_session_id} does not match ${runSession.id}`);
+    }
+
+    return validateExecutorResultForRunSpec(runSpec, parsedExecutorResult);
+  } catch (error) {
+    return executorFailureResult(runSpec, runSession, error, at);
+  }
 };
 
 const terminalStatusFor = (result: ExecutorResult): RunSessionStatus => {
@@ -1005,63 +1053,39 @@ export const executePackageRun = async (input: ExecutePackageRunInput): Promise<
   const context = await loadRunContext(input.repository, input.runSessionId);
 
   if (terminalStatuses.has(context.runSession.status)) {
-    return reconcileTerminalRun(input, context, at);
+    return finalizePackageRunWithExecutorResult({
+      repository: input.repository,
+      runSessionId: input.runSessionId,
+      executorResult: assertFound(context.runSession.executor_result, `ExecutorResult ${context.runSession.id}`),
+      selfReview: input.selfReview,
+      now: () => at,
+    });
   }
 
-  const runSpec = buildRunSpec(context, input);
-  await archiveOpenReviewPacket(input.repository, context.runSession, context.executionPackage.id, at);
-
-  const started = await startWorkflow(input.repository, context.runSession, context.executionPackage, runSpec, at);
-  let executorResult: ExecutorResult;
-
-  try {
-    const parsedExecutorResult = executorResultSchema.parse(await input.executor(runSpec));
-
-    if (parsedExecutorResult.run_session_id !== started.runSession.id) {
-      throw new Error(`ExecutorResult run_session_id ${parsedExecutorResult.run_session_id} does not match ${started.runSession.id}`);
-    }
-
-    executorResult = validateExecutorResultForRunSpec(runSpec, parsedExecutorResult);
-  } catch (error) {
-    executorResult = executorFailureResult(runSpec, started.runSession, error, at);
+  const buildInput: BuildPackageRunSpecInput = {
+    repository: input.repository,
+    runSessionId: input.runSessionId,
+    now: () => at,
+  };
+  if (input.defaultExecutorType !== undefined) {
+    buildInput.defaultExecutorType = input.defaultExecutorType;
+  }
+  if (input.workflowOnly !== undefined) {
+    buildInput.workflowOnly = input.workflowOnly;
+  }
+  if (input.forceRerun !== undefined) {
+    buildInput.forceRerun = input.forceRerun;
   }
 
-  const terminalRunSession = await persistExecutorResult(
-    input.repository,
-    started.runSession,
-    started.executionPackage,
+  const started = await buildAndStartPackageRun(buildInput);
+  const executorResult = await runExecutorAndNormalize(input.executor, started.runSpec, started.runSession, at);
+  return finalizePackageRunWithExecutorResult({
+    repository: input.repository,
+    runSessionId: started.runSession.id,
     executorResult,
-    at,
-  );
-
-  if (terminalRunSession.status !== 'succeeded') {
-    if (isLatestRunForPackage(terminalRunSession, started.executionPackage)) {
-      await updatePackageAfterFailure(input.repository, terminalRunSession, started.executionPackage, at);
-    }
-    return { runSessionId: terminalRunSession.id, status: terminalRunSession.status };
-  }
-
-  const selfReviewResult = await runSelfReview(
-    input.repository,
-    terminalRunSession,
-    started.executionPackage,
-    runSpec,
-    input.selfReview,
-    at,
-  );
-  const reviewPacket = await createReviewPacket(
-    input.repository,
-    terminalRunSession,
-    started.executionPackage,
-    runSpec,
-    selfReviewResult,
-    at,
-  );
-  if (isLatestRunForPackage(terminalRunSession, started.executionPackage)) {
-    await updatePackageAfterSuccess(input.repository, terminalRunSession, started.executionPackage, at);
-  }
-
-  return { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: reviewPacket.id };
+    selfReview: input.selfReview,
+    now: () => at,
+  });
 };
 
 export const createPackageExecutionActivities = (
