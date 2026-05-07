@@ -152,15 +152,16 @@ export type RunEventVisibility = z.infer<typeof runEventVisibilitySchema>;
 
 export const publicRunEventSchema = z
   .object({
-    event_id: z.string().min(1),
+    id: z.string().min(1),
     run_session_id: z.string().min(1),
-    execution_package_id: z.string().min(1),
-    sequence: z.number().int().nonnegative(),
+    sequence: z.number().int().positive(),
+    cursor: z.string().min(1),
     event_type: runEventTypeSchema,
     source: runEventSourceSchema,
     visibility: z.literal('public'),
-    occurred_at: isoDateTimeSchema,
+    summary: z.string().min(1),
     payload: jsonObjectSchema,
+    created_at: isoDateTimeSchema,
   })
   .strict();
 export type PublicRunEvent = z.infer<typeof publicRunEventSchema>;

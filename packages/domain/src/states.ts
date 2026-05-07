@@ -27,6 +27,8 @@ type Timestamped = {
   at?: string;
 };
 
+type RunRuntimeMetadataUpdate = Partial<NonNullable<RunSession['runtime_metadata']>>;
+
 export type WorkItemTransition =
   | (Timestamped & {
       type: 'create';
@@ -158,15 +160,19 @@ export type RunSessionTransition =
       failure_reason?: string;
     })
   | (Timestamped & {
-      type:
-        | 'workflow_start'
-        | 'worker_started'
-        | 'waiting_for_input'
-        | 'stalled'
-        | 'resume_requested'
-        | 'cancel_requested'
-        | 'recovered'
-        | 'cancel';
+      type: 'workflow_start' | 'resume_requested' | 'cancel_requested' | 'cancel';
+    })
+  | (Timestamped & {
+      type: 'worker_started';
+      runtime_metadata?: RunRuntimeMetadataUpdate;
+    })
+  | (Timestamped & {
+      type: 'waiting_for_input' | 'stalled';
+      reason: string;
+    })
+  | (Timestamped & {
+      type: 'recovered';
+      runtime_metadata?: RunRuntimeMetadataUpdate;
     })
   | RunSessionTerminalExecutorResultTransition
   | RunSessionTerminalLegacyTransition;
@@ -363,6 +369,20 @@ const isNonTerminalRunSessionStatus = (status: RunSession['status']): boolean =>
   status === 'stalled' ||
   status === 'resuming' ||
   status === 'cancel_requested';
+
+const defaultRunRuntimeMetadata = (): NonNullable<RunSession['runtime_metadata']> => ({
+  durability_mode: 'durable',
+  recovery_attempt_count: 0,
+  effective_dangerous_mode: 'not_requested',
+});
+
+const mergeRunRuntimeMetadata = (
+  existing: RunSession['runtime_metadata'],
+  updates: RunRuntimeMetadataUpdate,
+): NonNullable<RunSession['runtime_metadata']> => ({
+  ...(existing ?? defaultRunRuntimeMetadata()),
+  ...updates,
+});
 
 export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkItemTransition): WorkItem => {
   const at = timestampFor(event);
@@ -730,12 +750,24 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
 
   switch (event.type) {
     case 'workflow_start':
+      if (runSession.status === 'queued' || runSession.status === 'stalled' || runSession.status === 'resuming') {
+        return {
+          ...runSession,
+          status: 'running',
+          ...(runSession.started_at === undefined ? { started_at: at } : {}),
+          updated_at: at,
+        };
+      }
+      break;
     case 'worker_started':
       if (runSession.status === 'queued' || runSession.status === 'stalled' || runSession.status === 'resuming') {
         return {
           ...runSession,
           status: 'running',
           ...(runSession.started_at === undefined ? { started_at: at } : {}),
+          ...(event.runtime_metadata !== undefined
+            ? { runtime_metadata: mergeRunRuntimeMetadata(runSession.runtime_metadata, event.runtime_metadata) }
+            : {}),
           updated_at: at,
         };
       }
@@ -757,7 +789,14 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       break;
     case 'recovered':
       if (runSession.status === 'stalled' || runSession.status === 'resuming') {
-        return { ...runSession, status: 'running', updated_at: at };
+        return {
+          ...runSession,
+          status: 'running',
+          ...(event.runtime_metadata !== undefined
+            ? { runtime_metadata: mergeRunRuntimeMetadata(runSession.runtime_metadata, event.runtime_metadata) }
+            : {}),
+          updated_at: at,
+        };
       }
       break;
     case 'cancel_requested':
@@ -828,7 +867,6 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       break;
     case 'cancel':
       if (
-        runSession.status === 'queued' ||
         runSession.status === 'running' ||
         runSession.status === 'waiting_for_input' ||
         runSession.status === 'stalled' ||

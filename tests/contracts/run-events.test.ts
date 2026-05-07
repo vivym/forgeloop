@@ -9,17 +9,18 @@ import {
 
 describe('long-running run event contracts', () => {
   const publicEvent = {
-    event_id: 'event-1',
+    id: 'event-1',
     run_session_id: 'run-session-1',
-    execution_package_id: 'exec-package-1',
     sequence: 1,
+    cursor: 'cursor-1',
     event_type: 'agent_message_completed',
     source: 'codex',
     visibility: 'public',
-    occurred_at: '2026-05-07T01:00:00.000Z',
+    summary: 'Codex completed a message.',
     payload: {
       message: 'Ready for review.',
     },
+    created_at: '2026-05-07T01:00:00.000Z',
   };
 
   it('parses accepted run responses and rejects workflow results', () => {
@@ -47,10 +48,20 @@ describe('long-running run event contracts', () => {
   it('parses public run events without raw refs and rejects internal visibility', () => {
     const parsed = publicRunEventSchema.parse(publicEvent);
 
+    expect(parsed).toEqual(publicEvent);
     expect(parsed.visibility).toBe('public');
     expect('raw_ref' in parsed).toBe(false);
     expect(publicRunEventSchema.safeParse({ ...publicEvent, visibility: 'internal' }).success).toBe(false);
     expect(publicRunEventSchema.safeParse({ ...publicEvent, raw_ref: 'local://raw/event-1.json' }).success).toBe(false);
+    expect(publicRunEventSchema.safeParse({ ...publicEvent, sequence: 0 }).success).toBe(false);
+    expect(
+      publicRunEventSchema.safeParse({
+        ...publicEvent,
+        event_id: 'legacy-event-1',
+        execution_package_id: 'exec-package-1',
+        occurred_at: '2026-05-07T01:00:00.000Z',
+      }).success,
+    ).toBe(false);
   });
 
   it('parses run event list responses', () => {

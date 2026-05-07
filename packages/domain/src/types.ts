@@ -229,7 +229,7 @@ export type RunDriverStatus = 'not_started' | 'starting' | 'active' | 'waiting_f
 export type EffectiveDangerousMode = 'confirmed' | 'unconfirmed' | 'not_requested';
 
 export interface RunRuntimeMetadata {
-  durability_mode: 'durable' | 'ephemeral';
+  durability_mode: 'durable' | 'volatile_demo';
   driver_kind?: RunDriverKind;
   driver_status?: RunDriverStatus;
   codex_thread_id?: string;
@@ -239,8 +239,8 @@ export interface RunRuntimeMetadata {
   worker_id?: string;
   last_event_cursor?: string;
   last_event_at?: IsoDateTime;
-  recovery_attempt_count?: number;
-  effective_dangerous_mode?: EffectiveDangerousMode;
+  recovery_attempt_count: number;
+  effective_dangerous_mode: EffectiveDangerousMode;
 }
 
 export interface RunSession {
@@ -268,37 +268,45 @@ export interface RunSession {
 export interface RunEvent {
   id: string;
   run_session_id: string;
-  execution_package_id: string;
   sequence: number;
+  cursor: string;
   event_type: RunEventType;
   source: RunEventSource;
   visibility: RunEventVisibility;
-  occurred_at: IsoDateTime;
+  summary: string;
   payload: Record<string, unknown>;
   raw_ref?: string;
+  created_at: IsoDateTime;
 }
 
 export interface RunCommand {
   id: string;
   run_session_id: string;
   command_type: RunCommandType;
-  status: 'queued' | 'claimed' | 'acknowledged' | 'completed' | 'failed';
+  status: 'pending' | 'claimed' | 'applied' | 'failed' | 'superseded';
+  actor_id: string;
   payload: Record<string, unknown>;
+  target_thread_id?: string;
+  target_turn_id?: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
+  claimed_by_worker_id?: string;
   claimed_at?: IsoDateTime;
-  completed_at?: IsoDateTime;
+  applied_at?: IsoDateTime;
+  failure_reason?: string;
   driver_ack?: Record<string, unknown>;
 }
+
+export type RunWorkerLeaseStatus = 'active' | 'released' | 'expired';
 
 export interface RunWorkerLease {
   id: string;
   run_session_id: string;
   worker_id: string;
   lease_token: string;
-  acquired_at: IsoDateTime;
+  heartbeat_at: IsoDateTime;
   expires_at: IsoDateTime;
-  released_at?: IsoDateTime;
+  status: RunWorkerLeaseStatus;
 }
 
 export type ReviewPacketStatus = 'ready' | 'in_review' | 'completed' | 'archived';
