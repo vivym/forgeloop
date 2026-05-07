@@ -508,7 +508,7 @@ export class InMemoryP0Repository implements P0Repository {
     now: string,
   ): Promise<RunCommand> {
     const command = this.runCommands.get(commandId);
-    if (command === undefined || command.claimed_by_worker_id !== lease.workerId) {
+    if (command === undefined || command.status !== 'claimed' || command.claimed_by_worker_id !== lease.workerId) {
       throw new DomainError('INVALID_TRANSITION', `Run command ${commandId} is not claimed by worker ${lease.workerId}`);
     }
 

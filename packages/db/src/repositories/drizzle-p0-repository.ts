@@ -497,16 +497,13 @@ export class DrizzleP0Repository implements P0Repository {
         select *
         from run_worker_leases
         where run_session_id = ${runSessionId}
+          and worker_id = ${lease.workerId}
+          and lease_token = ${lease.leaseToken}
+          and status = 'active'
+          and expires_at > ${lease.now}
         for update
       `);
-      const lockedLease = lockResult.rows[0];
-      if (
-        lockedLease === undefined ||
-        lockedLease.worker_id !== lease.workerId ||
-        lockedLease.lease_token !== lease.leaseToken ||
-        lockedLease.status !== 'active' ||
-        String(lockedLease.expires_at) <= lease.now
-      ) {
+      if (lockResult.rows[0] === undefined) {
         throw invalidLease(runSessionId);
       }
 
@@ -666,6 +663,7 @@ export class DrizzleP0Repository implements P0Repository {
         update run_commands
         set ${setClause}
         where id = ${commandId}
+          and status = 'claimed'
           and claimed_by_worker_id = ${lease.workerId}
           and exists (
             select 1

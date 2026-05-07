@@ -189,6 +189,73 @@ describe('run runtime repository behavior', () => {
     expect(claims.filter(Boolean)[0]?.command.id).toBe('input-1');
   });
 
+  it('does not mutate terminal commands through the same worker lease', async () => {
+    const repository = createRepository();
+    const lease = { workerId: 'worker-1', leaseToken: 'lease-token-1' };
+
+    await repository.claimRunWorkerLease({
+      run_session_id: 'run-session-1',
+      worker_id: lease.workerId,
+      lease_token: lease.leaseToken,
+      now,
+      expires_at: '2026-05-05T00:01:00.000Z',
+    });
+    await repository.saveRunCommand(runCommand({ id: 'apply-then-terminal' }));
+    await repository.saveRunCommand(runCommand({ id: 'fail-then-terminal' }));
+
+    expect(await repository.claimNextRunCommand('run-session-1', lease.workerId, lease.leaseToken, now)).toMatchObject({
+      command: { id: 'apply-then-terminal' },
+    });
+    await repository.markRunCommandApplied(
+      'apply-then-terminal',
+      lease,
+      '2026-05-05T00:00:10.000Z',
+      { driver_command_id: 'driver-command-1' },
+    );
+    await expect(
+      repository.markRunCommandFailed(
+        'apply-then-terminal',
+        lease,
+        'Should not overwrite applied command.',
+        '2026-05-05T00:00:11.000Z',
+      ),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'INVALID_TRANSITION' });
+    await expect(
+      repository.recordRunCommandDriverAck(
+        'apply-then-terminal',
+        lease,
+        { driver_command_id: 'driver-command-after-applied' },
+        '2026-05-05T00:00:12.000Z',
+      ),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'INVALID_TRANSITION' });
+
+    expect(await repository.claimNextRunCommand('run-session-1', lease.workerId, lease.leaseToken, now)).toMatchObject({
+      command: { id: 'fail-then-terminal' },
+    });
+    await repository.markRunCommandFailed(
+      'fail-then-terminal',
+      lease,
+      'Driver failed.',
+      '2026-05-05T00:00:13.000Z',
+    );
+    await expect(
+      repository.markRunCommandApplied(
+        'fail-then-terminal',
+        lease,
+        '2026-05-05T00:00:14.000Z',
+        { driver_command_id: 'driver-command-after-failed' },
+      ),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'INVALID_TRANSITION' });
+    await expect(
+      repository.recordRunCommandDriverAck(
+        'fail-then-terminal',
+        lease,
+        { driver_command_id: 'driver-command-after-failed' },
+        '2026-05-05T00:00:15.000Z',
+      ),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'INVALID_TRANSITION' });
+  });
+
   it('claims expired leases and lists only non-terminal recoverable run sessions', async () => {
     const repository = createRepository();
 
