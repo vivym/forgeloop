@@ -1,9 +1,14 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import type { ReviewPacket } from '../../packages/domain/src';
+import type { RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -118,6 +123,35 @@ const runPackage = async (
       .expect(201)
   ).body;
 
+const repositoryFor = (app: INestApplication) =>
+  (app.get(P0Service) as unknown as {
+    repository: {
+      getRunSession(runSessionId: string): Promise<{ execution_package_id: string } | undefined>;
+      listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
+    };
+  }).repository;
+
+const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
+  const worker = app.get(RUN_WORKER) as RunWorker;
+  const repository = repositoryFor(app);
+  void worker.drainOnce();
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const runSession = await repository.getRunSession(runSessionId);
+    if (runSession !== undefined) {
+      const packet = (await repository.listReviewPacketsForPackage(runSession.execution_package_id)).find(
+        (item) => item.run_session_id === runSessionId,
+      );
+      if (packet !== undefined) {
+        return packet;
+      }
+    }
+    await delay(10);
+  }
+
+  throw new Error(`Timed out waiting for ReviewPacket for ${runSessionId}`);
+};
+
 const approveReviewPacket = async (app: INestApplication, reviewPacketId: string, reviewedAt = '2026-05-05T01:00:00.000Z') =>
   request(app.getHttpServer())
     .post(`/review-packets/${reviewPacketId}/approve`)
@@ -147,8 +181,10 @@ describe('P0 smoke delivery loop', () => {
     const executionPackage = await createReadyPackage(app, planRevisionId);
 
     const run = await runPackage(app, executionPackage.id);
-    expect(run).toMatchObject({ status: 'accepted', workflow_result: { status: 'succeeded' } });
-    expect(run.workflow_result.reviewPacketId).toEqual(expect.stringContaining('review-packet'));
+    expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
+    expect(run).not.toHaveProperty('workflow_result');
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    expect(reviewPacketId).toEqual(expect.stringContaining('review-packet'));
 
     const runSession = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
     expect(runSession).toMatchObject({
@@ -163,7 +199,7 @@ describe('P0 smoke delivery loop', () => {
     expect(runSession.changed_files).not.toHaveLength(0);
     expect(runSession.check_results).toEqual([expect.objectContaining({ check_id: 'smoke', status: 'succeeded' })]);
 
-    const reviewPacket = (await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body;
+    const reviewPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
     expect(reviewPacket).toMatchObject({
       status: 'ready',
       decision: 'none',
@@ -195,8 +231,9 @@ describe('P0 smoke delivery loop', () => {
     const executionPackage = await createReadyPackage(app, planRevisionId, 'Fix the P0 smoke bug.');
 
     const firstRun = await runPackage(app, executionPackage.id);
+    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
     await request(server)
-      .post(`/review-packets/${firstRun.workflow_result.reviewPacketId}/request-changes`)
+      .post(`/review-packets/${firstReviewPacketId}/request-changes`)
       .send({
         summary: 'Tighten the validation evidence.',
         reviewed_by_actor_id: actorReviewer,
@@ -214,8 +251,9 @@ describe('P0 smoke delivery loop', () => {
       .expect(201);
 
     const rerun = await runPackage(app, executionPackage.id, 'rerun', { previous_run_session_id: firstRun.run_session_id });
+    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
     expect(rerun.run_session_id).not.toBe(firstRun.run_session_id);
-    expect(rerun.workflow_result.reviewPacketId).not.toBe(firstRun.workflow_result.reviewPacketId);
+    expect(rerunReviewPacketId).not.toBe(firstReviewPacketId);
 
     const rerunSession = (await request(server).get(`/run-sessions/${rerun.run_session_id}`).expect(200)).body;
     expect(rerunSession.run_spec.review_context).toEqual({
@@ -228,7 +266,7 @@ describe('P0 smoke delivery loop', () => {
       ],
     });
 
-    await approveReviewPacket(app, rerun.workflow_result.reviewPacketId, '2026-05-05T03:00:00.000Z');
+    await approveReviewPacket(app, rerunReviewPacketId, '2026-05-05T03:00:00.000Z');
 
     const cockpit = (await request(server).get(`/work-items/${workItem.id}/cockpit`).expect(200)).body;
     expect(cockpit.run_sessions.map((item: { id: string }) => item.id)).toEqual(
@@ -236,8 +274,8 @@ describe('P0 smoke delivery loop', () => {
     );
     expect(cockpit.review_packets).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: firstRun.workflow_result.reviewPacketId, decision: 'changes_requested' }),
-        expect.objectContaining({ id: rerun.workflow_result.reviewPacketId, decision: 'approved' }),
+        expect.objectContaining({ id: firstReviewPacketId, decision: 'changes_requested' }),
+        expect.objectContaining({ id: rerunReviewPacketId, decision: 'approved' }),
       ]),
     );
     expect(cockpit.packages[0]).toMatchObject({ gate_state: 'review_approved', resolution: 'completed' });
@@ -249,17 +287,19 @@ describe('P0 smoke delivery loop', () => {
     const executionPackage = await createReadyPackage(app, planRevisionId, 'Refresh P0 smoke coverage.');
 
     const firstRun = await runPackage(app, executionPackage.id);
+    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
     const forceRun = await runPackage(app, executionPackage.id, 'force-rerun', {
       previous_run_session_id: firstRun.run_session_id,
       force: true,
       force_reason: 'Replace stale packet before human review.',
     });
+    const forceReviewPacketId = (await waitForReviewPacket(app, forceRun.run_session_id)).id;
 
     expect(forceRun.run_session_id).not.toBe(firstRun.run_session_id);
-    expect(forceRun.workflow_result.reviewPacketId).not.toBe(firstRun.workflow_result.reviewPacketId);
+    expect(forceReviewPacketId).not.toBe(firstReviewPacketId);
 
-    const archivedPacket = (await request(server).get(`/review-packets/${firstRun.workflow_result.reviewPacketId}`).expect(200)).body;
-    const replacementPacket = (await request(server).get(`/review-packets/${forceRun.workflow_result.reviewPacketId}`).expect(200)).body;
+    const archivedPacket = (await request(server).get(`/review-packets/${firstReviewPacketId}`).expect(200)).body;
+    const replacementPacket = (await request(server).get(`/review-packets/${forceReviewPacketId}`).expect(200)).body;
     expect(archivedPacket).toMatchObject({ status: 'archived', decision: 'none' });
     expect(replacementPacket).toMatchObject({ status: 'ready', decision: 'none' });
 

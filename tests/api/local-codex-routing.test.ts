@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
@@ -5,10 +7,9 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import {
-  P0_EXECUTOR_ADAPTERS,
-  type P0ExecutorAdapterRegistry,
-} from '../../apps/control-plane-api/src/p0/p0.service';
+import { P0_REPOSITORY, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import type { P0Repository } from '../../packages/db/src';
+import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -136,6 +137,21 @@ const createReadyPackage = async (app: INestApplication, planRevisionId: string)
   return executionPackage.id as string;
 };
 
+const waitForTerminalRunSession = async (app: INestApplication, runSessionId: string): Promise<Record<string, unknown>> => {
+  const worker = app.get(RUN_WORKER) as RunWorker;
+  void worker.drainOnce();
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const runSession = (await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}`).expect(200)).body;
+    if (['succeeded', 'failed', 'timed_out', 'cancelled'].includes(runSession.status)) {
+      return runSession;
+    }
+    await delay(10);
+  }
+
+  throw new Error(`Timed out waiting for terminal RunSession ${runSessionId}`);
+};
+
 describe('control-plane local_codex routing', () => {
   let app: INestApplication;
   const mockAdapter = vi.fn((runSpec: RunSpec) => Promise.resolve(resultFor(runSpec, 'mock')));
@@ -145,14 +161,34 @@ describe('control-plane local_codex routing', () => {
     mockAdapter.mockClear();
     localCodexAdapter.mockClear();
 
-    const adapters: P0ExecutorAdapterRegistry = {
-      mock: mockAdapter,
-      local_codex: localCodexAdapter,
-    };
-
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_EXECUTOR_ADAPTERS)
-      .useValue(adapters)
+      .overrideProvider(RUN_WORKER)
+      .useFactory({
+        inject: [P0_REPOSITORY],
+        factory: (repository: P0Repository) =>
+          new RunWorker({
+            repository,
+            workerId: 'local-codex-routing-test-worker',
+            driverFactory: () =>
+              new FakeCodexSessionDriver({
+                kind: 'fake',
+                script: [{ kind: 'terminal', status: 'succeeded', summary: 'Test fake driver completed.' }],
+              }),
+            evidenceCollector: (input) =>
+              input.runSpec.executor_type === 'local_codex' && input.runSpec.workflow_only !== true
+                ? localCodexAdapter(input.runSpec)
+                : mockAdapter(input.runSpec),
+            selfReview: (input) =>
+              Promise.resolve({
+                status: 'succeeded',
+                summary: `Self-review completed for ${input.run_session_id}.`,
+                spec_plan_alignment: 'Run spec matches the approved package.',
+                test_assessment: 'Required checks passed.',
+                risk_notes: [],
+                follow_up_questions: [],
+              }),
+          }),
+      })
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -174,7 +210,9 @@ describe('control-plane local_codex routing', () => {
         .send({ requested_by_actor_id: actorOwner, executor_type: 'local_codex', workflow_only: false })
         .expect(201)
     ).body;
-    const runSession = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
+    expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
+    expect(run).not.toHaveProperty('workflow_result');
+    const runSession = await waitForTerminalRunSession(app, run.run_session_id);
 
     expect(localCodexAdapter).toHaveBeenCalledTimes(1);
     expect(mockAdapter).not.toHaveBeenCalled();
@@ -204,7 +242,9 @@ describe('control-plane local_codex routing', () => {
         .send({ requested_by_actor_id: actorOwner, executor_type: 'local_codex', workflow_only: true })
         .expect(201)
     ).body;
-    const runSession = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
+    expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
+    expect(run).not.toHaveProperty('workflow_result');
+    const runSession = await waitForTerminalRunSession(app, run.run_session_id);
 
     expect(mockAdapter).toHaveBeenCalledTimes(1);
     expect(localCodexAdapter).not.toHaveBeenCalled();

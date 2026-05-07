@@ -129,6 +129,23 @@ export const runPackageSchema = z
   .strict();
 export type RunPackageDto = z.infer<typeof runPackageSchema>;
 
+export const runInputSchema = z
+  .object({
+    actor_id: nonEmptyString.optional(),
+    message: nonEmptyString,
+    target_turn_id: nonEmptyString.optional(),
+  })
+  .strict();
+export type RunInputDto = z.infer<typeof runInputSchema>;
+
+export const runControlSchema = z
+  .object({
+    actor_id: nonEmptyString.optional(),
+    reason: nonEmptyString.optional(),
+  })
+  .strict();
+export type RunControlDto = z.infer<typeof runControlSchema>;
+
 export const reviewDecisionSchema = z
   .object({
     summary: nonEmptyString,

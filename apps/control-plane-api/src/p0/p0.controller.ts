@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Sse } from '@nestjs/common';
+import type { MessageEvent } from '@nestjs/common';
+import type { Observable } from 'rxjs';
 
 import {
   actorCommandSchema,
@@ -10,6 +12,8 @@ import {
   createWorkItemSchema,
   patchExecutionPackageSchema,
   reviewDecisionSchema,
+  runControlSchema,
+  runInputSchema,
   runPackageSchema,
 } from './dto';
 import type {
@@ -22,6 +26,8 @@ import type {
   CreateWorkItemDto,
   PatchExecutionPackageDto,
   ReviewDecisionDto,
+  RunControlDto,
+  RunInputDto,
   RunPackageDto,
 } from './dto';
 import { P0Service } from './p0.service';
@@ -229,6 +235,54 @@ export class P0Controller {
   @Get('run-sessions/:runSessionId')
   getRunSession(@Param('runSessionId') runSessionId: string) {
     return this.service.getRunSession(runSessionId);
+  }
+
+  @Get('run-sessions/:runSessionId/events')
+  listRunEvents(
+    @Param('runSessionId') runSessionId: string,
+    @Query('after') after?: string,
+    @Query('actor_id') actorId?: string,
+  ) {
+    return this.service.listRunEvents(runSessionId, {
+      ...(after === undefined ? {} : { after }),
+      ...(actorId === undefined ? {} : { actorId }),
+    });
+  }
+
+  @Sse('run-sessions/:runSessionId/events/stream')
+  streamRunEvents(
+    @Param('runSessionId') runSessionId: string,
+    @Query('after') after?: string,
+    @Query('actor_id') actorId?: string,
+  ): Observable<MessageEvent> {
+    return this.service.streamRunEvents(runSessionId, {
+      ...(after === undefined ? {} : { after }),
+      ...(actorId === undefined ? {} : { actorId }),
+    });
+  }
+
+  @Post('run-sessions/:runSessionId/input')
+  sendRunInput(
+    @Param('runSessionId') runSessionId: string,
+    @Body(new ZodValidationPipe(runInputSchema)) body: RunInputDto,
+  ) {
+    return this.service.createRunInputCommand(runSessionId, body);
+  }
+
+  @Post('run-sessions/:runSessionId/cancel')
+  cancelRun(
+    @Param('runSessionId') runSessionId: string,
+    @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
+  ) {
+    return this.service.createRunCancelCommand(runSessionId, body);
+  }
+
+  @Post('run-sessions/:runSessionId/resume')
+  resumeRun(
+    @Param('runSessionId') runSessionId: string,
+    @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
+  ) {
+    return this.service.createRunResumeCommand(runSessionId, body);
   }
 
   @Get('review-packets/:reviewPacketId')

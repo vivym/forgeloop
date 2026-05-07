@@ -17,7 +17,12 @@ import type {
 import { transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src/index';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
+import {
+  P0_DEMO_ACTOR_ID_FALLBACK,
+  P0_REPOSITORY,
+  RUN_DURABILITY_MODE,
+  RUN_WORKER,
+} from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src';
 
 const now = '2026-05-05T00:00:00.000Z';
@@ -429,7 +434,7 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
         owner_actor_id: actorOwner,
         reviewer_actor_id: actorReviewer,
         qa_owner_actor_id: actorQa,
-        required_checks,
+        required_checks: [...requiredChecks],
         required_artifact_kinds: ['execution_summary'],
         allowed_paths: ['apps/control-plane-api/**', 'tests/api/**'],
         forbidden_paths: ['packages/db/**'],
@@ -446,7 +451,16 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
 export const seedAppWithRunSession = async (
   options: { durabilityMode?: 'durable' | 'volatile_demo'; allowDemoActorIdFallback?: boolean } = {},
 ): Promise<{ app: INestApplication; repo: InMemoryP0Repository; runSessionId: string }> => {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(RUN_WORKER)
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined });
+  if (options.durabilityMode !== undefined) {
+    moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);
+  }
+  if (options.allowDemoActorIdFallback !== undefined) {
+    moduleBuilder = moduleBuilder.overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK).useValue(options.allowDemoActorIdFallback);
+  }
+  const moduleRef = await moduleBuilder.compile();
   const app = moduleRef.createNestApplication();
   await app.init();
 
@@ -461,8 +475,7 @@ export const seedAppWithRunSession = async (
       .expect(201)
   ).body as { run_session_id: string };
 
-  const service = app.get(P0Service);
-  const repo = (service as unknown as { repository: InMemoryP0Repository }).repository;
+  const repo = app.get(P0_REPOSITORY) as InMemoryP0Repository;
   const runSession = await repo.getRunSession(run.run_session_id);
 
   if (runSession !== undefined) {

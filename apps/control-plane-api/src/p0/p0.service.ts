@@ -1,7 +1,5 @@
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-import { ForbiddenException, Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import type { MessageEvent } from '@nestjs/common';
 import {
   type Artifact,
   type Decision,
@@ -12,6 +10,9 @@ import {
   type Project,
   type ProjectRepo,
   type ReviewPacket,
+  type RunCommand,
+  type RunEvent,
+  type RunRuntimeMetadata,
   type RunSession,
   type Spec,
   type SpecRevision,
@@ -28,10 +29,20 @@ import {
   validateForceRerunAllowed,
   validatePackageEditAllowed,
 } from '@forgeloop/domain';
-import { InMemoryP0Repository, type P0Repository } from '@forgeloop/db';
-import type { ExecutorResult, ExecutorType, RunSpec, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
-import { executePackageRun } from '@forgeloop/workflow';
-import { runLocalCodexExecutor, runMockExecutor } from '@forgeloop/executor';
+import type { P0Repository } from '@forgeloop/db';
+import type {
+  ExecutorType,
+  PublicRunEvent,
+  RunAcceptedResponse,
+  RunEventListResponse,
+  RunOperatorCommandResponse,
+  SelfReviewInput,
+  SelfReviewResult,
+} from '@forgeloop/contracts';
+import { publicRunEventSchema } from '@forgeloop/contracts';
+import type { RunWorker } from '@forgeloop/run-worker';
+import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
+import { Observable } from 'rxjs';
 
 import type {
   ActorCommandDto,
@@ -43,8 +54,11 @@ import type {
   CreateWorkItemDto,
   PatchExecutionPackageDto,
   ReviewDecisionDto,
+  RunControlDto,
+  RunInputDto,
   RunPackageDto,
 } from './dto';
+import { serializePublicRunSession } from './run-session-serialization';
 
 type TimelineEntry = {
   id: string;
@@ -61,44 +75,29 @@ const actorOrSystem = (actorId: string | undefined): string => actorId ?? 'syste
 const statusForPackage = (executionPackage: ExecutionPackage): string =>
   `${executionPackage.phase}/${executionPackage.activity_state}/${executionPackage.gate_state}`;
 
-export type P0ExecutorAdapter = (runSpec: RunSpec) => Promise<ExecutorResult>;
-export type P0ExecutorAdapterRegistry = Record<ExecutorType, P0ExecutorAdapter>;
+export type RunDurabilityMode = RunRuntimeMetadata['durability_mode'];
 
-export const P0_EXECUTOR_ADAPTERS = Symbol('P0_EXECUTOR_ADAPTERS');
+export const P0_REPOSITORY = Symbol('P0_REPOSITORY');
+export const RUN_WORKER = Symbol('RUN_WORKER');
+export const RUN_DURABILITY_MODE = Symbol('RUN_DURABILITY_MODE');
+export const P0_DEMO_ACTOR_ID_FALLBACK = Symbol('P0_DEMO_ACTOR_ID_FALLBACK');
 
-const safePathSegment = (value: string): string => {
-  const sanitized = value
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/\.\.+/g, '-')
-    .replace(/^\.+/, '')
-    .replace(/^-+|-+$/g, '');
-
-  return sanitized.length > 0 ? sanitized : 'artifact';
-};
-
-export const createDefaultP0ExecutorAdapters = (): P0ExecutorAdapterRegistry => {
-  const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
-  const codexHome = process.env.FORGELOOP_CODEX_HOME ?? process.env.CODEX_HOME;
-
-  return {
-    mock: runMockExecutor,
-    local_codex: (runSpec) =>
-      runLocalCodexExecutor(runSpec, {
-        artifactRoot: join(artifactRoot, safePathSegment(runSpec.run_session_id)),
-        ...(codexHome === undefined ? {} : { codexHome }),
-      }),
-  };
-};
+const terminalRunStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
+const streamPollMs = 500;
 
 @Injectable()
 export class P0Service {
-  private readonly repository: P0Repository = new InMemoryP0Repository();
   private idCounter = 0;
   private timeCounter = 0;
   private readonly specRevisionIndex = new Map<string, string>();
   private readonly planRevisionIndex = new Map<string, string>();
 
-  constructor(@Inject(P0_EXECUTOR_ADAPTERS) private readonly executorAdapters: P0ExecutorAdapterRegistry) {}
+  constructor(
+    @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
+    @Inject(RUN_WORKER) private readonly runWorker: RunWorker,
+    @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
+  ) {}
 
   async createProject(dto: CreateProjectDto): Promise<Project> {
     const at = this.now();
@@ -477,7 +476,7 @@ export class P0Service {
     return updated;
   }
 
-  async runPackage(packageId: string, dto: RunPackageDto, mode: 'run' | 'rerun' | 'force_rerun'): Promise<Record<string, unknown>> {
+  async runPackage(packageId: string, dto: RunPackageDto, mode: 'run' | 'rerun' | 'force_rerun'): Promise<RunAcceptedResponse> {
     const executionPackage = await this.getExecutionPackage(packageId);
     const reviewPackets = await this.repository.listReviewPacketsForPackage(packageId);
     const validation = this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode);
@@ -494,23 +493,20 @@ export class P0Service {
     }
     const workflowOnly = dto.workflow_only ?? false;
     const executorType: ExecutorType = workflowOnly ? 'mock' : (dto.executor_type ?? 'mock');
-    const executor = this.executorAdapters[executorType];
-    if (executor === undefined) {
-      throw new BadRequestException(`No executor adapter registered for ${executorType}`);
-    }
     const runSessionId = this.id('run-session');
+    const queuedAt = this.now();
     const queuedPackage =
       mode === 'force_rerun'
         ? transitionExecutionPackage(executionPackage, {
             type: 'force_rerun',
             run_session_id: runSessionId,
             has_open_review_packet: true,
-            at: this.now(),
+            at: queuedAt,
           })
         : transitionExecutionPackage(executionPackage, {
             type: mode,
             run_session_id: runSessionId,
-            at: this.now(),
+            at: queuedAt,
           });
     const runSession = transitionRunSession(undefined, {
       type: 'create',
@@ -518,33 +514,40 @@ export class P0Service {
       execution_package_id: packageId,
       requested_by_actor_id: validation.requestedByActorId,
       executor_type: executorType,
-      at: this.now(),
+      at: queuedAt,
     });
     await this.repository.saveExecutionPackage(queuedPackage);
-    await this.repository.saveRunSession(runSession);
+    await this.repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: this.initialRuntimeMetadata(),
+    });
+    const context = await loadRunContext(this.repository, runSessionId);
+    const runSpec = buildRunSpec(context, { defaultExecutorType: executorType, workflowOnly });
+    await this.repository.saveRunSession({
+      ...runSession,
+      executor_type: executorType,
+      run_spec: runSpec,
+      runtime_metadata: this.initialRuntimeMetadata(),
+    });
+    await this.repository.appendRunEvent({
+      id: this.id('run-event'),
+      run_session_id: runSessionId,
+      event_type: 'run_queued',
+      source: 'api',
+      visibility: 'public',
+      summary: 'Run queued.',
+      payload: { execution_package_id: packageId, mode, workflow_only: workflowOnly, executor_type: executorType },
+      created_at: queuedAt,
+    });
     await this.event('execution_package', packageId, mode === 'force_rerun' ? 'force_rerun_requested' : `${mode}_requested`, validation.requestedByActorId, {
       run_session_id: runSessionId,
     });
 
-    const workflowResult = await executePackageRun({
-      repository: this.repository,
-      runSessionId,
-      executor,
-      selfReview: (input) => Promise.resolve(this.mockSelfReview(input)),
-      workflowOnly,
-      defaultExecutorType: executorType,
-      now: () => this.now(),
-      ...(mode === 'force_rerun' ? { forceRerun: true } : {}),
-    });
-
+    this.kickRunWorker();
     return {
-      command_id: this.id('command'),
-      execution_package_id: packageId,
-      workflow_only: workflowOnly,
-      idempotency_key: runSessionId,
       status: 'accepted',
       run_session_id: runSessionId,
-      workflow_result: workflowResult,
+      execution_package_id: packageId,
     };
   }
 
@@ -594,7 +597,82 @@ export class P0Service {
   }
 
   async getRunSession(runSessionId: string): Promise<RunSession> {
-    return this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
+    return serializePublicRunSession(this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`));
+  }
+
+  async listRunEvents(runSessionId: string, options: { after?: string; actorId?: string } = {}): Promise<RunEventListResponse> {
+    const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
+    const actorId = this.resolveRunActor(options.actorId === undefined ? {} : { demoActorId: options.actorId });
+    await this.assertRunViewerAllowed(runSession, actorId);
+    const events = this.publicRunEvents(
+      await this.repository.listRunEvents(runSessionId, options.after === undefined ? {} : { after: options.after }),
+    );
+    return {
+      events,
+      ...(events.at(-1)?.cursor === undefined ? {} : { next_cursor: events.at(-1)!.cursor }),
+      has_more: false,
+    };
+  }
+
+  streamRunEvents(runSessionId: string, options: { after?: string; actorId?: string } = {}): Observable<MessageEvent> {
+    return new Observable<MessageEvent>((subscriber) => {
+      let stopped = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let cursor = options.after;
+
+      const poll = async (): Promise<void> => {
+        try {
+          const response = await this.listRunEvents(runSessionId, {
+            ...(cursor === undefined ? {} : { after: cursor }),
+            ...(options.actorId === undefined ? {} : { actorId: options.actorId }),
+          });
+          for (const event of response.events) {
+            cursor = event.cursor;
+            subscriber.next({ data: event });
+          }
+          if (!stopped) {
+            timeout = setTimeout(() => {
+              void poll();
+            }, streamPollMs);
+          }
+        } catch (error) {
+          subscriber.error(error);
+        }
+      };
+
+      void poll();
+      return () => {
+        stopped = true;
+        if (timeout !== undefined) {
+          clearTimeout(timeout);
+        }
+      };
+    });
+  }
+
+  async createRunInputCommand(runSessionId: string, dto: RunInputDto): Promise<RunOperatorCommandResponse> {
+    return this.createRunOperatorCommand(runSessionId, 'input', {
+      ...(dto.actor_id === undefined ? {} : { actorId: dto.actor_id }),
+      payload: { message: dto.message },
+      ...(dto.target_turn_id === undefined ? {} : { targetTurnId: dto.target_turn_id }),
+      eventSummary: 'User input submitted.',
+    });
+  }
+
+  async createRunCancelCommand(runSessionId: string, dto: RunControlDto): Promise<RunOperatorCommandResponse> {
+    return this.createRunOperatorCommand(runSessionId, 'cancel', {
+      ...(dto.actor_id === undefined ? {} : { actorId: dto.actor_id }),
+      payload: dto.reason === undefined ? {} : { reason: dto.reason },
+      eventSummary: 'Cancel requested.',
+    });
+  }
+
+  async createRunResumeCommand(runSessionId: string, dto: RunControlDto): Promise<RunOperatorCommandResponse> {
+    return this.createRunOperatorCommand(runSessionId, 'resume', {
+      ...(dto.actor_id === undefined ? {} : { actorId: dto.actor_id }),
+      payload: dto.reason === undefined ? {} : { reason: dto.reason },
+      eventSummary: 'Run resume requested.',
+    });
   }
 
   async getReviewPacket(reviewPacketId: string): Promise<ReviewPacket> {
@@ -643,7 +721,7 @@ export class P0Service {
       current_spec: workItem.current_spec_id === undefined ? null : await this.repository.getSpec(workItem.current_spec_id),
       current_plan: workItem.current_plan_id === undefined ? null : await this.repository.getPlan(workItem.current_plan_id),
       packages,
-      run_sessions: runSessions,
+      run_sessions: runSessions.map(serializePublicRunSession),
       review_packets: reviewPackets,
       next_actions: this.nextActions(packages, reviewPackets),
       completion_state: completionState,
@@ -865,6 +943,132 @@ export class P0Service {
     await this.repository.savePlan({ ...plan, current_revision_id: revision.id, updated_at: this.now() });
     this.planRevisionIndex.set(revision.id, plan.id);
     return revision;
+  }
+
+  private initialRuntimeMetadata(): RunRuntimeMetadata {
+    return {
+      durability_mode: this.durabilityMode,
+      recovery_attempt_count: 0,
+      effective_dangerous_mode: 'not_requested',
+    };
+  }
+
+  private publicRunEvents(events: RunEvent[]): PublicRunEvent[] {
+    return events
+      .filter((event) => event.visibility === 'public')
+      .map((event) => {
+        const { raw_ref: _rawRef, ...publicEvent } = event;
+        return publicRunEventSchema.parse(publicEvent);
+      });
+  }
+
+  private resolveRunActor(input: { authenticatedActorId?: string; demoActorId?: string }): string {
+    if (input.authenticatedActorId !== undefined && input.authenticatedActorId.trim().length > 0) {
+      return input.authenticatedActorId;
+    }
+
+    if (this.allowDemoActorIdFallback && this.durabilityMode === 'volatile_demo') {
+      return this.required(input.demoActorId, 'actor_id');
+    }
+
+    throw new UnauthorizedException('Authenticated actor is required');
+  }
+
+  private async assertRunViewerAllowed(runSession: RunSession, actorId: string): Promise<void> {
+    const executionPackage = await this.getExecutionPackage(runSession.execution_package_id);
+    const workItem = await this.getWorkItem(executionPackage.work_item_id);
+    const allowed = new Set([
+      workItem.owner_actor_id,
+      executionPackage.owner_actor_id,
+      executionPackage.reviewer_actor_id,
+      executionPackage.qa_owner_actor_id,
+    ]);
+
+    if (!allowed.has(actorId)) {
+      throw new ForbiddenException(`Actor ${actorId} cannot view run ${runSession.id}`);
+    }
+  }
+
+  private async assertRunOperatorAllowed(runSession: RunSession, actorId: string): Promise<void> {
+    const executionPackage = await this.getExecutionPackage(runSession.execution_package_id);
+    if (actorId !== executionPackage.owner_actor_id && actorId !== executionPackage.reviewer_actor_id) {
+      throw new ForbiddenException(`Actor ${actorId} cannot operate run ${runSession.id}`);
+    }
+  }
+
+  private assertRunCommandTargetIsNonTerminal(runSession: RunSession): void {
+    if (terminalRunStatuses.has(runSession.status)) {
+      throw new BadRequestException(`RunSession ${runSession.id} is terminal`);
+    }
+  }
+
+  private async createRunOperatorCommand(
+    runSessionId: string,
+    commandType: RunCommand['command_type'],
+    input: {
+      actorId?: string;
+      payload: Record<string, unknown>;
+      targetTurnId?: string;
+      eventSummary: string;
+    },
+  ): Promise<RunOperatorCommandResponse> {
+    const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
+    this.assertRunCommandTargetIsNonTerminal(runSession);
+    const actorId = this.resolveRunActor(input.actorId === undefined ? {} : { demoActorId: input.actorId });
+    await this.assertRunOperatorAllowed(runSession, actorId);
+
+    const at = this.now();
+    if (commandType === 'cancel') {
+      await this.repository.supersedePendingRunCommands(runSessionId, ['input'], at);
+    }
+
+    const command: RunCommand = {
+      id: this.id('run-command'),
+      run_session_id: runSessionId,
+      command_type: commandType,
+      status: 'pending',
+      actor_id: actorId,
+      payload: input.payload,
+      ...(input.targetTurnId === undefined ? {} : { target_turn_id: input.targetTurnId }),
+      created_at: at,
+      updated_at: at,
+    };
+
+    await this.repository.saveRunCommand(command);
+
+    if (commandType === 'cancel') {
+      await this.repository.saveRunSession(transitionRunSession(runSession, { type: 'cancel_requested', at }));
+    }
+    if (commandType === 'resume') {
+      await this.repository.saveRunSession(transitionRunSession(runSession, { type: 'resume_requested', at }));
+    }
+
+    await this.repository.appendRunEvent({
+      id: this.id('run-event'),
+      run_session_id: runSessionId,
+      event_type: commandType === 'input' ? 'user_input' : commandType === 'cancel' ? 'cancel_requested' : 'resuming',
+      source: commandType === 'input' ? 'user' : 'api',
+      visibility: 'public',
+      summary: input.eventSummary,
+      payload: { command_id: command.id, actor_id: actorId, ...input.payload },
+      created_at: at,
+    });
+
+    this.kickRunWorker();
+    return {
+      status: 'accepted',
+      command_id: command.id,
+      run_session_id: runSessionId,
+      command_type: commandType,
+    };
+  }
+
+  private kickRunWorker(): void {
+    try {
+      this.runWorker.kick();
+    } catch {
+      // The durable repository state is authoritative; kick is only an in-process wake-up.
+    }
   }
 
   private mockSelfReview(input: SelfReviewInput): SelfReviewResult {

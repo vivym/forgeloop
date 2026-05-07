@@ -102,6 +102,9 @@ importers:
       '@forgeloop/executor':
         specifier: workspace:*
         version: link:../../packages/executor
+      '@forgeloop/run-worker':
+        specifier: workspace:*
+        version: link:../../packages/run-worker
       '@forgeloop/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
