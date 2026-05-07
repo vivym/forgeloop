@@ -59,6 +59,27 @@ const waitForProcessExit = async (pid: number): Promise<void> => {
   throw new Error(`Process ${pid} was still running.`);
 };
 
+const waitForProtocolMethods = async (logPath: string, expected: string[]): Promise<void> => {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const messages = (await readFile(logPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { method: string });
+
+      if (JSON.stringify(messages.map((message) => message.method)) === JSON.stringify(expected)) {
+        return;
+      }
+    } catch {
+      // The fake process creates the protocol log lazily after the first message.
+    }
+    await delay(25);
+  }
+
+  throw new Error(`Timed out waiting for protocol methods: ${expected.join(', ')}`);
+};
+
 describe('codex exec fallback driver boundary', () => {
   it('builds dangerous JSON exec args for a new prompt without sandbox fallback', () => {
     const args = buildCodexExecArgs({ prompt: 'implement task' });
@@ -454,6 +475,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     const transport = new CodexAppServerProcessTransport({ codexBinary: binaryPath, args: [] });
     await transport.initialize();
     await transport.initialize();
+    await waitForProtocolMethods(logPath, ['initialize', 'initialized']);
     await transport.close();
 
     const messages = (await readFile(logPath, 'utf8'))

@@ -267,6 +267,24 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/run-worker:
+    dependencies:
+      '@forgeloop/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@forgeloop/db':
+        specifier: workspace:*
+        version: link:../db
+      '@forgeloop/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@forgeloop/executor':
+        specifier: workspace:*
+        version: link:../executor
+      '@forgeloop/workflow':
+        specifier: workspace:*
+        version: link:../workflow
+
   packages/workflow:
     dependencies:
       '@forgeloop/contracts':

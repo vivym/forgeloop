@@ -34,6 +34,7 @@ describe('workspace bootstrap contract', () => {
       'packages/db/package.json': '@forgeloop/db',
       'packages/domain/package.json': '@forgeloop/domain',
       'packages/executor/package.json': '@forgeloop/executor',
+      'packages/run-worker/package.json': '@forgeloop/run-worker',
       'packages/workflow/package.json': '@forgeloop/workflow',
     };
 
@@ -53,6 +54,7 @@ describe('workspace bootstrap contract', () => {
       '@forgeloop/domain': ['packages/domain/src/index.ts'],
       '@forgeloop/db': ['packages/db/src/index.ts'],
       '@forgeloop/executor': ['packages/executor/src/index.ts'],
+      '@forgeloop/run-worker': ['packages/run-worker/src/index.ts'],
       '@forgeloop/workflow': ['packages/workflow/src/index.ts'],
     });
   });
