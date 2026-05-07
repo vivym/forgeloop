@@ -947,6 +947,45 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
+  it('returns schema-valid required_check_failed when source repo mutates and a blocking check fails', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ command: 'node -e "process.exit(1)"' })],
+        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(1)"' })] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async () => {
+            await mkdir(join(repo, 'packages/domain/src'), { recursive: true });
+            await writeFile(join(repo, 'packages/domain/src/types.ts'), 'export const mutated = true;\n');
+
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    const parsed = executorResultSchema.safeParse(result);
+    expect(parsed.success).toBe(true);
+    expect(result).toMatchObject({
+      status: 'failed',
+      summary: expect.stringContaining('Source repo changed outside the run worktree.'),
+      failure: {
+        kind: 'required_check_failed',
+        message: expect.stringContaining('Blocking check failed'),
+        retryable: true,
+      },
+      raw_metadata: {
+        source_repo_before_status: '',
+        source_repo_after_status: expect.stringContaining('packages/domain/src/types.ts'),
+      },
+    });
+  });
+
   it('returns failed evidence when source repo verification throws after diff capture', async () => {
     const { repo, head } = await createGitRepo();
     const baseEnvironment = createGitBackedTestEnvironment(await makeTempDir());
