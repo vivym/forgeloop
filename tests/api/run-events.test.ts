@@ -98,6 +98,64 @@ describe('run event API', () => {
     await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: 'actor-owner' }).expect(401);
   });
 
+  it('rejects unauthorized SSE viewers before opening the event stream', async () => {
+    const { app, runSessionId } = await track(seedAppWithRunSession());
+
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events/stream`)
+      .set('Accept', 'text/event-stream')
+      .query({ actor_id: 'actor-stranger' })
+      .expect(403);
+  });
+
+  it('redacts raw log artifact refs from work item timeline responses', async () => {
+    const { app, runSessionId, repo } = await track(seedAppWithRunSession());
+    const runSession = await repo.getRunSession(runSessionId);
+    const executionPackage = await repo.getExecutionPackage(runSession!.execution_package_id);
+    await repo.saveArtifact({
+      id: 'artifact-public-diff',
+      object_type: 'run_session',
+      object_id: runSessionId,
+      ref: { kind: 'diff', name: 'Diff', content_type: 'text/x-patch', local_ref: 'artifacts/diff.patch' },
+      created_at: '2026-05-07T00:00:00.000Z',
+    });
+    await repo.saveArtifact({
+      id: 'artifact-raw-log',
+      object_type: 'run_session',
+      object_id: runSessionId,
+      ref: { kind: 'logs', name: 'Raw Codex log', content_type: 'application/jsonl', local_ref: 'artifacts/raw-codex.jsonl' },
+      created_at: '2026-05-07T00:00:01.000Z',
+    });
+    await repo.saveArtifact({
+      id: 'artifact-raw-ref',
+      object_type: 'run_session',
+      object_id: runSessionId,
+      ref: {
+        kind: 'raw_metadata',
+        name: 'Raw metadata',
+        content_type: 'application/json',
+        local_ref: 'artifacts/metadata.json',
+        raw_ref: { local_ref: 'artifacts/internal-raw.jsonl' },
+      } as never,
+      created_at: '2026-05-07T00:00:02.000Z',
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${executionPackage!.work_item_id}/timeline`).expect(200);
+
+    expect(response.body.filter((entry: { source: string }) => entry.source === 'artifact')).toEqual([
+      expect.objectContaining({
+        payload: {
+          kind: 'diff',
+          name: 'Diff',
+          content_type: 'text/x-patch',
+          local_ref: 'artifacts/diff.patch',
+        },
+      }),
+    ]);
+    expect(JSON.stringify(response.body)).not.toContain('raw-codex.jsonl');
+    expect(JSON.stringify(response.body)).not.toContain('raw_ref');
+  });
+
   it('persists user input as a pending command before delivery', async () => {
     const { app, runSessionId, repo } = await track(seedAppWithRunSession());
 

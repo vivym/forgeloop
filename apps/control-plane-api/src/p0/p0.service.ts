@@ -31,6 +31,7 @@ import {
 } from '@forgeloop/domain';
 import type { P0Repository } from '@forgeloop/db';
 import type {
+  ArtifactRef,
   ExecutorType,
   PublicRunEvent,
   RunAcceptedResponse,
@@ -58,7 +59,7 @@ import type {
   RunInputDto,
   RunPackageDto,
 } from './dto';
-import { serializePublicRunSession } from './run-session-serialization';
+import { serializePublicArtifactRef, serializePublicRunSession } from './run-session-serialization';
 
 type TimelineEntry = {
   id: string;
@@ -67,7 +68,7 @@ type TimelineEntry = {
   object_id: string;
   summary: string;
   created_at: string;
-  payload: ObjectEvent | StatusHistory | Decision | Artifact;
+  payload: ObjectEvent | StatusHistory | Decision | ArtifactRef;
 };
 
 const actorOrSystem = (actorId: string | undefined): string => actorId ?? 'system';
@@ -479,7 +480,10 @@ export class P0Service {
   async runPackage(packageId: string, dto: RunPackageDto, mode: 'run' | 'rerun' | 'force_rerun'): Promise<RunAcceptedResponse> {
     const executionPackage = await this.getExecutionPackage(packageId);
     const reviewPackets = await this.repository.listReviewPacketsForPackage(packageId);
-    const validation = this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode);
+    const requestedByActorId = this.resolveRunActor(
+      dto.requested_by_actor_id === undefined ? {} : { demoActorId: dto.requested_by_actor_id },
+    );
+    const validation = this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode, requestedByActorId);
     if (mode === 'force_rerun' && validation.currentOpenReviewPacket !== undefined) {
       try {
         validateForceRerunAllowed(executionPackage, reviewPackets, validation.requestedByActorId);
@@ -557,9 +561,8 @@ export class P0Service {
     reviewPackets: ReviewPacket[],
     dto: RunPackageDto,
     mode: 'run' | 'rerun' | 'force_rerun',
+    requestedByActorId: string,
   ): { requestedByActorId: string; currentOpenReviewPacket?: ReviewPacket } {
-    const requestedByActorId = this.required(dto.requested_by_actor_id, 'requested_by_actor_id');
-
     if (dto.execution_package_id !== undefined && dto.execution_package_id !== packageId) {
       throw new BadRequestException('execution_package_id must match packageId path parameter');
     }
@@ -614,7 +617,9 @@ export class P0Service {
     };
   }
 
-  streamRunEvents(runSessionId: string, options: { after?: string; actorId?: string } = {}): Observable<MessageEvent> {
+  async streamRunEvents(runSessionId: string, options: { after?: string; actorId?: string } = {}): Promise<Observable<MessageEvent>> {
+    await this.assertRunEventViewer(runSessionId, options.actorId);
+
     return new Observable<MessageEvent>((subscriber) => {
       let stopped = false;
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -648,6 +653,12 @@ export class P0Service {
         }
       };
     });
+  }
+
+  private async assertRunEventViewer(runSessionId: string, actorIdInput: string | undefined): Promise<void> {
+    const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
+    const actorId = this.resolveRunActor(actorIdInput === undefined ? {} : { demoActorId: actorIdInput });
+    await this.assertRunViewerAllowed(runSession, actorId);
   }
 
   async createRunInputCommand(runSessionId: string, dto: RunInputDto): Promise<RunOperatorCommandResponse> {
@@ -789,14 +800,18 @@ export class P0Service {
         });
       }
       for (const item of await this.repository.listArtifactsForObject(ref.objectType, ref.objectId)) {
+        const publicArtifactRef = serializePublicArtifactRef(item.ref);
+        if (publicArtifactRef === undefined) {
+          continue;
+        }
         entries.push({
           id: item.id,
           source: 'artifact',
           object_type: item.object_type,
           object_id: item.object_id,
-          summary: item.ref.name,
+          summary: publicArtifactRef.name,
           created_at: item.created_at,
-          payload: item,
+          payload: publicArtifactRef,
         });
       }
     }

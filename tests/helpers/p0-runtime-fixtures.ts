@@ -465,17 +465,51 @@ export const seedAppWithRunSession = async (
   await app.init();
 
   const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+  const repo = app.get(P0_REPOSITORY) as InMemoryP0Repository;
+
+  if (options.durabilityMode === 'durable' && options.allowDemoActorIdFallback === false) {
+    const runSessionId = 'run-session-seeded';
+    const at = '2026-05-07T00:00:00.000Z';
+    await repo.saveExecutionPackage(transitionExecutionPackage(executionPackage, { type: 'run', run_session_id: runSessionId, at }));
+    await repo.saveRunSession({
+      ...transitionRunSession(undefined, {
+        type: 'create',
+        id: runSessionId,
+        execution_package_id: executionPackage.id,
+        requested_by_actor_id: actorOwner,
+        executor_type: 'mock',
+        at,
+      }),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'not_requested',
+      },
+    });
+    await repo.appendRunEvent({
+      id: 'run-event-seeded-queued',
+      run_session_id: runSessionId,
+      event_type: 'run_queued',
+      source: 'api',
+      visibility: 'public',
+      summary: 'Run queued.',
+      payload: { execution_package_id: executionPackage.id, mode: 'run', workflow_only: true, executor_type: 'mock' },
+      created_at: at,
+    });
+
+    return { app, repo, runSessionId };
+  }
+
   const run = (
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .send({
-        requested_by_actor_id: options.allowDemoActorIdFallback === true ? undefined : actorOwner,
+        requested_by_actor_id: actorOwner,
         workflow_only: true,
       })
       .expect(201)
   ).body as { run_session_id: string };
 
-  const repo = app.get(P0_REPOSITORY) as InMemoryP0Repository;
   const runSession = await repo.getRunSession(run.run_session_id);
 
   if (runSession !== undefined) {

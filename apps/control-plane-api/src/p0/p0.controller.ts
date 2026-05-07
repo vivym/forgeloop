@@ -254,7 +254,7 @@ export class P0Controller {
     @Param('runSessionId') runSessionId: string,
     @Query('after') after?: string,
     @Query('actor_id') actorId?: string,
-  ): Observable<MessageEvent> {
+  ): Promise<Observable<MessageEvent>> {
     return this.service.streamRunEvents(runSessionId, {
       ...(after === undefined ? {} : { after }),
       ...(actorId === undefined ? {} : { actorId }),
