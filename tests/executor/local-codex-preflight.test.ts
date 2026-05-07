@@ -401,6 +401,41 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
+  it('records blocking required-check timeouts as required_check_failed', async () => {
+    const { repo, head } = await createGitRepo();
+    const timeoutCheck = blockingCheck({
+      command: 'node -e "setTimeout(() => {}, 5000)"',
+      timeout_seconds: 1,
+    });
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [timeoutCheck],
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'required_check_failed',
+      },
+      checks: [
+        {
+          status: 'timed_out',
+          exit_code: null,
+          blocks_review: true,
+        },
+      ],
+    });
+  });
+
   it('returns executor_error when required check execution throws', async () => {
     const { repo, head } = await createGitRepo();
     const artifactRoot = await makeTempDir();
@@ -947,7 +982,7 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
-  it('returns schema-valid required_check_failed when source repo mutates and a blocking check fails', async () => {
+  it('returns schema-valid path_violation when source repo mutates and a blocking check fails', async () => {
     const { repo, head } = await createGitRepo();
     const result = await runLocalCodexExecutor(
       createRunSpec({
@@ -975,14 +1010,60 @@ describe('runLocalCodexExecutor', () => {
       status: 'failed',
       summary: expect.stringContaining('Source repo changed outside the run worktree.'),
       failure: {
-        kind: 'required_check_failed',
-        message: expect.stringContaining('Blocking check failed'),
-        retryable: true,
+        kind: 'path_violation',
+        message: 'Source repo changed outside the run worktree.',
+        retryable: false,
       },
+      checks: [
+        {
+          status: 'failed',
+          exit_code: 1,
+          blocks_review: true,
+        },
+      ],
       raw_metadata: {
         source_repo_before_status: '',
         source_repo_after_status: expect.stringContaining('packages/domain/src/types.ts'),
       },
+    });
+  });
+
+  it('returns schema-valid path_violation when a failed blocking check mutates a forbidden path', async () => {
+    const { repo, head } = await createGitRepo();
+    const forbiddenMutationCheck = blockingCheck({
+      command: `node -e "const fs=require('node:fs');fs.mkdirSync('packages/contracts/src',{recursive:true});fs.writeFileSync('packages/contracts/src/check.ts','export const bad = true;\\n');process.exit(1)"`,
+    });
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [forbiddenMutationCheck],
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
+        },
+      },
+    );
+
+    const parsed = executorResultSchema.safeParse(result);
+    expect(parsed.success).toBe(true);
+    expect(result).toMatchObject({
+      status: 'failed',
+      summary: expect.stringContaining('Changed file is outside allowed paths or inside forbidden paths'),
+      failure: {
+        kind: 'path_violation',
+        retryable: false,
+      },
+      changed_files: [{ path: 'packages/contracts/src/check.ts' }],
+      checks: [
+        {
+          status: 'failed',
+          exit_code: 1,
+          blocks_review: true,
+        },
+      ],
     });
   });
 

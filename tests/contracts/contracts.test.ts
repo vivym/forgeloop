@@ -677,7 +677,29 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
   });
 
-  it('rejects unsuccessful blocking checks with a non-required-check failure kind', () => {
+  it('allows path_violation to take precedence over unsuccessful blocking checks', () => {
+    const parsed = executorResultSchema.parse({
+      ...validExecutorResult,
+      status: 'failed',
+      checks: [
+        {
+          ...validCheckResult,
+          status: 'failed',
+          exit_code: 1,
+          blocks_review: true,
+        },
+      ],
+      failure: {
+        kind: 'path_violation',
+        message: 'Source repo changed outside the run worktree.',
+        retryable: false,
+      },
+    });
+
+    expect(parsed.failure?.kind).toBe('path_violation');
+  });
+
+  it('rejects unsuccessful blocking checks with an unrelated non-required-check failure kind', () => {
     expect(
       executorResultSchema.safeParse({
         ...validExecutorResult,

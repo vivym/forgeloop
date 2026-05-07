@@ -432,6 +432,9 @@ const blockingCheckFailure = (check: CheckResult): ExecutorFailure => ({
   retryable: true,
 });
 
+const appendBlockingCheckFailureSummary = (summary: string, check: CheckResult | undefined): string =>
+  check === undefined ? summary : `${summary}; Blocking check failed: ${check.check_id}`;
+
 const sourceRepoVerificationFailure = (error: unknown): ExecutorFailure => ({
   kind: 'path_violation',
   message: `Source repo verification failed: ${error instanceof Error ? error.message : 'unknown source repo verification error'}`,
@@ -647,31 +650,13 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
   const failedBlockingCheck = checkRun.checks.find((check) => check.blocks_review && check.status !== 'succeeded');
 
   if (finalPathFailure !== undefined) {
-    if (failedBlockingCheck !== undefined) {
-      const failure = blockingCheckFailure(failedBlockingCheck);
-      const summary = sourceRepoGuard.unchanged
-        ? `${failure.message}; ${finalPathFailure.message}`
-        : `${failure.message}; ${finalPathFailure.message}; Source repo changed outside the run worktree.`;
-
-      return executorFailureResult({
-        runSpec: input.runSpec,
-        startedAt: input.startedAt,
-        summary,
-        failure,
-        changedFiles: finalCapture.changedFiles,
-        checks: checkRun.checks,
-        artifacts,
-        rawMetadata,
-      });
-    }
+    const failure = sourceRepoGuard.unchanged ? finalPathFailure : sourceRepoMutationFailure();
 
     return executorFailureResult({
       runSpec: input.runSpec,
       startedAt: input.startedAt,
-      summary: finalPathFailure.message,
-      failure: sourceRepoGuard.unchanged
-        ? finalPathFailure
-        : sourceRepoMutationFailure(),
+      summary: appendBlockingCheckFailureSummary(failure.message, failedBlockingCheck),
+      failure,
       changedFiles: finalCapture.changedFiles,
       checks: checkRun.checks,
       artifacts,
@@ -680,26 +665,13 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
   }
 
   if (!sourceRepoGuard.unchanged) {
-    if (failedBlockingCheck !== undefined) {
-      const failure = blockingCheckFailure(failedBlockingCheck);
-
-      return executorFailureResult({
-        runSpec: input.runSpec,
-        startedAt: input.startedAt,
-        summary: `${failure.message}; Source repo changed outside the run worktree.`,
-        failure,
-        changedFiles: finalCapture.changedFiles,
-        checks: checkRun.checks,
-        artifacts,
-        rawMetadata,
-      });
-    }
+    const failure = sourceRepoMutationFailure();
 
     return executorFailureResult({
       runSpec: input.runSpec,
       startedAt: input.startedAt,
-      summary: 'Source repo changed outside the run worktree.',
-      failure: sourceRepoMutationFailure(),
+      summary: appendBlockingCheckFailureSummary(failure.message, failedBlockingCheck),
+      failure,
       changedFiles: finalCapture.changedFiles,
       checks: checkRun.checks,
       artifacts,
