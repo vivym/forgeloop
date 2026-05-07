@@ -501,7 +501,7 @@ export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecuto
     return { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: reviewPacket.id };
   };
 
-  if (input.workerLease === undefined || input.now === undefined) {
+  if (input.workerLease === undefined) {
     return finalize(input.repository);
   }
 
