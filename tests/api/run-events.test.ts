@@ -81,6 +81,28 @@ describe('run event API', () => {
     expect(JSON.stringify(response.body)).not.toContain('raw-codex.jsonl');
   });
 
+  it('exposes non-secret worker lease metadata on run-session detail responses', async () => {
+    const { app, runSessionId, repo } = await track(seedAppWithRunSession());
+    await repo.claimRunWorkerLease({
+      run_session_id: runSessionId,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-secret',
+      now: '2026-05-07T00:01:00.000Z',
+      expires_at: '2026-05-07T00:06:00.000Z',
+    });
+
+    const response = await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}`).expect(200);
+
+    expect(response.body.runtime_metadata).toMatchObject({
+      worker_id: 'worker-1',
+      worker_lease_status: 'active',
+      worker_lease_heartbeat_at: '2026-05-07T00:01:00.000Z',
+      worker_lease_expires_at: '2026-05-07T00:06:00.000Z',
+    });
+    expect(JSON.stringify(response.body)).not.toContain('lease-token-secret');
+    expect(JSON.stringify(response.body)).not.toContain('lease_token');
+  });
+
   it('rejects event backfill for actors who cannot view the work item', async () => {
     const { app, runSessionId } = await track(seedAppWithRunSession());
 

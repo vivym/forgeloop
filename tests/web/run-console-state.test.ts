@@ -40,6 +40,22 @@ describe('run console state', () => {
     );
   });
 
+  it('detects fallback continuation mode from real continuity objects', () => {
+    const events = appendRunEvents([], [
+      {
+        id: 'event-1',
+        sequence: 1,
+        cursor: '0000000001',
+        event_type: 'user_input',
+        payload: { continuity: { thread_id: 'thread-1', turn_id: 'turn-1', fallback: true } },
+      },
+    ]);
+
+    expect(latestContinuationNotice(events)).toBe(
+      'Continuation resumed through fallback; live subagent continuity is not guaranteed.',
+    );
+  });
+
   it('detects same-thread continuation mode for UI labeling', () => {
     const events = appendRunEvents([], [
       {
@@ -48,6 +64,22 @@ describe('run console state', () => {
         cursor: '0000000001',
         event_type: 'user_input',
         payload: { continuity: 'thread_continuation' },
+      },
+    ]);
+
+    expect(latestContinuationNotice(events)).toBe(
+      'Continuation started as a new turn; live subagent continuity is not guaranteed.',
+    );
+  });
+
+  it('detects same-thread continuation mode from real continuity objects', () => {
+    const events = appendRunEvents([], [
+      {
+        id: 'event-1',
+        sequence: 1,
+        cursor: '0000000001',
+        event_type: 'user_input',
+        payload: { continuity: { thread_id: 'thread-1', turn_id: 'turn-1' } },
       },
     ]);
 
@@ -76,18 +108,17 @@ describe('run console state', () => {
   });
 
   it('derives worker lease labels without using driver status as lease status', () => {
+    expect(workerLeaseLabel({ worker_id: 'worker-1', worker_lease_status: 'active' }, [])).toBe('worker-1 / active');
+
     expect(
-      workerLeaseLabel(
-        { worker_id: 'worker-1', driver_status: 'active' },
-        [
-          {
-            id: 'event-1',
-            sequence: 1,
-            event_type: 'worker_lease_acquired',
-            payload: { worker_id: 'worker-2', lease_status: 'active' },
-          },
-        ],
-      ),
+      workerLeaseLabel(undefined, [
+        {
+          id: 'event-1',
+          sequence: 1,
+          event_type: 'worker_lease_acquired',
+          payload: { worker_id: 'worker-2', lease_status: 'active' },
+        },
+      ]),
     ).toBe('worker-2 / active');
 
     expect(workerLeaseLabel({ worker_id: 'worker-1', driver_status: 'active' }, [])).toBe('worker-1 / status unavailable');

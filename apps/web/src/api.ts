@@ -159,6 +159,9 @@ export interface RunSession {
     workspace_path?: string;
     app_server_endpoint?: string;
     worker_id?: string;
+    worker_lease_status?: 'active' | 'released' | 'expired';
+    worker_lease_heartbeat_at?: string;
+    worker_lease_expires_at?: string;
     last_event_cursor?: string;
     last_event_at?: string;
     recovery_attempt_count?: number;
@@ -330,7 +333,7 @@ export interface ReviewDecisionBody {
 
 export interface RunEventStreamHandlers {
   onEvent: (event: RunEvent) => void;
-  onError: (error: Event) => void;
+  onError: (error: Event | Error) => void;
 }
 
 type FetchLike = typeof fetch;
@@ -480,7 +483,11 @@ export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
         `${baseUrl}/run-sessions/${encodeURIComponent(runSessionId)}/events/stream?${runEventsQuery(options)}`,
       );
       eventSource.onmessage = (message) => {
-        handlers.onEvent(JSON.parse(message.data) as RunEvent);
+        try {
+          handlers.onEvent(JSON.parse(message.data) as RunEvent);
+        } catch (error) {
+          handlers.onError(error instanceof Event ? error : error instanceof Error ? error : new Error(String(error)));
+        }
       };
       eventSource.onerror = (error) => {
         handlers.onError(error);

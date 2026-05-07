@@ -209,4 +209,29 @@ describe('Forgeloop web API client', () => {
     expect(onError).toHaveBeenCalledWith(error);
     expect(instances[0]?.close).toHaveBeenCalled();
   });
+
+  it('routes malformed run event stream messages to the error handler', () => {
+    const instances: Array<{ url: string; close: ReturnType<typeof vi.fn>; onmessage?: (event: MessageEvent) => void; onerror?: (error: Event) => void }> = [];
+    class MockEventSource {
+      readonly url: string;
+      readonly close = vi.fn();
+      onmessage?: (event: MessageEvent) => void;
+      onerror?: (error: Event) => void;
+
+      constructor(url: string) {
+        this.url = url;
+        instances.push(this);
+      }
+    }
+    vi.stubGlobal('EventSource', MockEventSource);
+    const api = createForgeloopApi({ baseUrl: 'http://api.local' });
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+
+    api.openRunEventStream('run-1', { actorId: 'actor-owner' }, { onEvent, onError });
+    instances[0]?.onmessage?.({ data: '{not-json' } as MessageEvent);
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.any(SyntaxError));
+  });
 });

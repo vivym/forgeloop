@@ -600,7 +600,11 @@ export class P0Service {
   }
 
   async getRunSession(runSessionId: string): Promise<RunSession> {
-    return serializePublicRunSession(this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`));
+    return serializePublicRunSession(
+      await this.withWorkerLeaseMetadata(
+        this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`),
+      ),
+    );
   }
 
   async listRunEvents(runSessionId: string, options: { after?: string; actorId?: string } = {}): Promise<RunEventListResponse> {
@@ -732,7 +736,9 @@ export class P0Service {
       current_spec: workItem.current_spec_id === undefined ? null : await this.repository.getSpec(workItem.current_spec_id),
       current_plan: workItem.current_plan_id === undefined ? null : await this.repository.getPlan(workItem.current_plan_id),
       packages,
-      run_sessions: runSessions.map(serializePublicRunSession),
+      run_sessions: (await Promise.all(runSessions.map((runSession) => this.withWorkerLeaseMetadata(runSession)))).map(
+        serializePublicRunSession,
+      ),
       review_packets: reviewPackets,
       next_actions: this.nextActions(packages, reviewPackets),
       completion_state: completionState,
@@ -965,6 +971,24 @@ export class P0Service {
       durability_mode: this.durabilityMode,
       recovery_attempt_count: 0,
       effective_dangerous_mode: 'not_requested',
+    };
+  }
+
+  private async withWorkerLeaseMetadata(runSession: RunSession): Promise<RunSession> {
+    const lease = await this.repository.getRunWorkerLease(runSession.id);
+    if (lease === undefined) {
+      return runSession;
+    }
+
+    return {
+      ...runSession,
+      runtime_metadata: {
+        ...(runSession.runtime_metadata ?? this.initialRuntimeMetadata()),
+        worker_id: lease.worker_id,
+        worker_lease_status: lease.status,
+        worker_lease_heartbeat_at: lease.heartbeat_at,
+        worker_lease_expires_at: lease.expires_at,
+      },
     };
   }
 

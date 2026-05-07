@@ -14,8 +14,20 @@ export const latestContinuationNotice = (
   events: Array<{ payload?: Record<string, unknown> }>,
 ): string | undefined => {
   const continuity = [...events].reverse().find(
-    (item) => item.payload?.continuity === 'resume_fallback' || item.payload?.continuity === 'thread_continuation',
+    (item) => {
+      const value = item.payload?.continuity;
+      if (value === 'resume_fallback' || value === 'thread_continuation') return true;
+      return isContinuityObject(value) && (value.fallback !== undefined || value.thread_id !== undefined || value.turn_id !== undefined);
+    },
   )?.payload?.continuity;
+  if (isContinuityObject(continuity)) {
+    if (continuity.fallback !== undefined && continuity.fallback !== false && continuity.fallback !== '') {
+      return 'Continuation resumed through fallback; live subagent continuity is not guaranteed.';
+    }
+    if (continuity.thread_id !== undefined || continuity.turn_id !== undefined) {
+      return 'Continuation started as a new turn; live subagent continuity is not guaranteed.';
+    }
+  }
   if (continuity === 'resume_fallback') {
     return 'Continuation resumed through fallback; live subagent continuity is not guaranteed.';
   }
@@ -24,6 +36,9 @@ export const latestContinuationNotice = (
   }
   return undefined;
 };
+
+const isContinuityObject = (value: unknown): value is { fallback?: unknown; thread_id?: unknown; turn_id?: unknown } =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export const visibleRunArtifacts = <T extends { kind?: string; raw_ref?: unknown }>(artifacts: T[]): T[] =>
   artifacts.filter((artifact) => artifact.kind !== 'logs' && artifact.raw_ref === undefined);
@@ -49,13 +64,17 @@ export const latestPlanStep = (events: Array<{ event_type?: string; payload?: Re
 };
 
 export const workerLeaseLabel = (
-  metadata: { worker_id?: string } | undefined,
+  metadata: { worker_id?: string; worker_lease_status?: string } | undefined,
   events: Array<{ event_type?: string; payload?: Record<string, unknown> }>,
 ): string => {
+  if (metadata?.worker_id !== undefined) {
+    return `${metadata.worker_id} / ${metadata.worker_lease_status ?? 'status unavailable'}`;
+  }
+
   const leaseEvent = [...events].reverse().find(
     (event) => event.event_type === 'worker_lease_acquired' || event.event_type === 'watchdog_heartbeat',
   );
-  const workerId = payloadText(leaseEvent?.payload, ['worker_id', 'workerId']) ?? metadata?.worker_id;
+  const workerId = payloadText(leaseEvent?.payload, ['worker_id', 'workerId']);
   if (!workerId) return 'none';
 
   const leaseStatus = payloadText(leaseEvent?.payload, ['lease_status', 'leaseStatus', 'status']);

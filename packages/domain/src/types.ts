@@ -237,6 +237,9 @@ export interface RunRuntimeMetadata {
   workspace_path?: string;
   app_server_endpoint?: string;
   worker_id?: string;
+  worker_lease_status?: RunWorkerLeaseStatus;
+  worker_lease_heartbeat_at?: IsoDateTime;
+  worker_lease_expires_at?: IsoDateTime;
   last_event_cursor?: string;
   last_event_at?: IsoDateTime;
   recovery_attempt_count: number;
