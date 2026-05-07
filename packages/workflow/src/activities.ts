@@ -18,7 +18,17 @@ import {
 
 type IsoDateTime = string;
 
-type RunSessionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+type RunSessionStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting_for_input'
+  | 'stalled'
+  | 'resuming'
+  | 'cancel_requested'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled';
 type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review';
 type ExecutionPackageActivityState = 'idle' | 'awaiting_ai' | 'ai_running' | 'blocked' | 'awaiting_human';
 type ExecutionPackageGateState = 'none' | 'not_submitted' | 'awaiting_human_review' | 'review_approved' | 'changes_requested';
