@@ -242,9 +242,9 @@ export class DrizzleP0Repository implements P0Repository {
     lease: { workerId: string; leaseToken: string },
   ): Promise<RunEvent> {
     return this.db.transaction(async (tx) => {
-      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
-      await repository.assertActiveRunWorkerLease(event.run_session_id, lease.workerId, lease.leaseToken, event.created_at);
-      return repository.appendRunEventInTransaction(tx as ForgeloopDrizzleDatabase, event);
+      const db = tx as ForgeloopDrizzleDatabase;
+      await this.lockActiveRunWorkerLease(db, event.run_session_id, lease.workerId, lease.leaseToken, event.created_at);
+      return this.appendRunEventInTransaction(db, event);
     });
   }
 
@@ -260,8 +260,7 @@ export class DrizzleP0Repository implements P0Repository {
     options: { reclaim_claimed_before?: string } = {},
   ): Promise<{ command: RunCommand; reclaimed: boolean } | undefined> {
     return this.db.transaction(async (tx) => {
-      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
-      await repository.assertActiveRunWorkerLease(runSessionId, workerId, leaseToken, now);
+      await this.lockActiveRunWorkerLease(tx as ForgeloopDrizzleDatabase, runSessionId, workerId, leaseToken, now);
 
       const pendingResult = await tx.execute(sql<Record<string, unknown>>`
         with candidate as (
@@ -493,20 +492,7 @@ export class DrizzleP0Repository implements P0Repository {
     write: (repository: P0Repository) => Promise<T>,
   ): Promise<T> {
     return this.db.transaction(async (tx) => {
-      const lockResult = await tx.execute(sql<Record<string, unknown>>`
-        select *
-        from run_worker_leases
-        where run_session_id = ${runSessionId}
-          and worker_id = ${lease.workerId}
-          and lease_token = ${lease.leaseToken}
-          and status = 'active'
-          and expires_at > ${lease.now}
-        for update
-      `);
-      if (lockResult.rows[0] === undefined) {
-        throw invalidLease(runSessionId);
-      }
-
+      await this.lockActiveRunWorkerLease(tx as ForgeloopDrizzleDatabase, runSessionId, lease.workerId, lease.leaseToken, lease.now);
       const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
       const result = await write(repository);
       await repository.assertActiveRunWorkerLease(runSessionId, lease.workerId, lease.leaseToken, lease.now);
@@ -638,6 +624,29 @@ export class DrizzleP0Repository implements P0Repository {
     }
 
     return fromDbRecord<RunEvent>(row);
+  }
+
+  private async lockActiveRunWorkerLease(
+    db: ForgeloopDrizzleDatabase,
+    runSessionId: string,
+    workerId: string,
+    leaseToken: string,
+    now: string,
+  ): Promise<void> {
+    const lockResult = await db.execute(sql<Record<string, unknown>>`
+      select *
+      from run_worker_leases
+      where run_session_id = ${runSessionId}
+        and worker_id = ${workerId}
+        and lease_token = ${leaseToken}
+        and status = 'active'
+        and expires_at > ${now}
+      for update
+    `);
+
+    if (lockResult.rows[0] === undefined) {
+      throw invalidLease(runSessionId);
+    }
   }
 
   private commandClaimFromRows(
