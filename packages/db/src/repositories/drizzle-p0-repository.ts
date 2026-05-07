@@ -52,6 +52,8 @@ export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 
 const snakeToCamel = (value: string) => value.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
 const camelToSnake = (value: string) => value.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
+const timestampKeyPattern = /(?:^|_)at$|At$/;
+const postgresTimestampPattern = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)([+-]\d{2})(?::?(\d{2}))?$/;
 
 const toDbRecord = (record: object, table?: AnyPgTable): Record<string, unknown> => {
   const dbRecord = Object.fromEntries(Object.entries(record).map(([key, value]) => [snakeToCamel(key), value]));
@@ -69,11 +71,26 @@ const toDbRecord = (record: object, table?: AnyPgTable): Record<string, unknown>
   return dbRecord;
 };
 
+const normalizeTimestampValue = (key: string, value: unknown): unknown => {
+  if (!timestampKeyPattern.test(key) || (typeof value !== 'string' && !(value instanceof Date))) {
+    return value;
+  }
+
+  const normalizedInput =
+    typeof value === 'string'
+      ? value.replace(postgresTimestampPattern, (_match, date: string, time: string, offsetHours: string, offsetMinutes?: string) => {
+          return `${date}T${time}${offsetHours}:${offsetMinutes ?? '00'}`;
+        })
+      : value;
+  const date = normalizedInput instanceof Date ? normalizedInput : new Date(normalizedInput);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+};
+
 const fromDbRecord = <T>(record: Record<string, unknown>): T =>
   Object.fromEntries(
     Object.entries(record)
       .filter(([, value]) => value !== null)
-      .map(([key, value]) => [camelToSnake(key), value]),
+      .map(([key, value]) => [camelToSnake(key), normalizeTimestampValue(key, value)]),
   ) as T;
 
 const recoverableRunSessionStatuses: RunSession['status'][] = [

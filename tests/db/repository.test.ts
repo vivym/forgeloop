@@ -587,4 +587,29 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
     expect(mappedReviewPacket).not.toHaveProperty('completed_at');
     expect(mappedReviewPacket).not.toHaveProperty('summary');
   });
+
+  it('normalizes PostgreSQL timestamp strings back to ISO datetime strings', async () => {
+    const runSessionRow = {
+      id: runSession.id,
+      executionPackageId: runSession.execution_package_id,
+      requestedByActorId: runSession.requested_by_actor_id,
+      status: runSession.status,
+      changedFiles: runSession.changed_files,
+      checkResults: runSession.check_results,
+      artifacts: runSession.artifacts,
+      logRefs: runSession.log_refs,
+      summary: runSession.summary,
+      createdAt: '2026-05-08 03:00:00+00',
+      updatedAt: '2026-05-08 03:01:00.01+00',
+      startedAt: new Date('2026-05-08T03:02:00.123Z'),
+      finishedAt: '2026-05-08 03:03:00.456789+00',
+    };
+
+    const mappedRunSession = await createSingleRowRepository(runSessionRow).getRunSession(runSession.id);
+
+    expect(mappedRunSession?.created_at).toBe('2026-05-08T03:00:00.000Z');
+    expect(mappedRunSession?.updated_at).toBe('2026-05-08T03:01:00.010Z');
+    expect(mappedRunSession?.started_at).toBe('2026-05-08T03:02:00.123Z');
+    expect(mappedRunSession?.finished_at).toBe('2026-05-08T03:03:00.456Z');
+  });
 });
