@@ -1,11 +1,26 @@
+import { execFile as execFileCallback } from 'node:child_process';
 import { writeFile, mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
 
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
+import type {
+  ExecutionPackage,
+  Plan,
+  PlanRevision,
+  Project,
+  ProjectRepo,
+  RunCommand,
+  RunSession,
+  Spec,
+  SpecRevision,
+  WorkItem,
+} from '@forgeloop/domain';
+import { transitionExecutionPackage, transitionRunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../apps/control-plane-api/src/app.module';
 import {
@@ -14,9 +29,11 @@ import {
   RUN_DURABILITY_MODE,
   RUN_WORKER,
 } from '../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository, type P0Repository } from '../packages/db/src';
+import { createDbClient, createDrizzleP0Repository, InMemoryP0Repository, type DbClient, type P0Repository } from '../packages/db/src';
 import type { CodexSessionDriver } from '../packages/executor/src';
 import { FakeCodexSessionDriver, type FakeCodexScriptItem, RunWorker } from '../packages/run-worker/src';
+
+const execFile = promisify(execFileCallback);
 
 type JsonObject = Record<string, unknown>;
 
@@ -36,12 +53,25 @@ type DogfoodResult = {
   notes: string[];
 };
 
+type CheckStatus = 'passed' | 'failed' | 'skipped';
+
+type VerificationCheck = {
+  label: string;
+  status: CheckStatus;
+  details: string[];
+};
+
 const reportPath = resolve(process.env.FORGELOOP_REPORT_PATH ?? 'docs/superpowers/reports/p0-delivery-loop-verification.md');
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
 const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
 const actorQa = process.env.FORGELOOP_ACTOR_QA ?? 'actor-qa';
+const databaseUrl = process.env.FORGELOOP_DATABASE_URL?.trim();
+const webUrlCandidates = (process.env.FORGELOOP_WEB_URL ?? 'http://localhost:5173,http://localhost:5174')
+  .split(',')
+  .map((value) => value.trim().replace(/\/$/, ''))
+  .filter((value) => value.length > 0);
 
 const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:p0', 'pnpm dogfood:p0'];
 const terminalRunStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
@@ -101,6 +131,19 @@ const requestJson = async (
   return payload;
 };
 
+const runCommand = async (
+  command: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<{ stdout: string; stderr: string }> => {
+  const { stdout, stderr } = await execFile(command, args, {
+    cwd: repoPath,
+    env: { ...process.env, ...options.env },
+    timeout: options.timeoutMs ?? 30_000,
+  });
+  return { stdout: stdout.trim(), stderr: stderr.trim() };
+};
+
 const eventQuery = (after?: string): string => {
   const params = new URLSearchParams({ actor_id: actorOwner });
   if (after !== undefined) {
@@ -112,6 +155,79 @@ const eventQuery = (after?: string): string => {
 const listRunEvents = async (apiUrl: string, runSessionId: string, after?: string): Promise<PublicRunEvent[]> => {
   const response = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}/events?${eventQuery(after)}`);
   return arrayField(response, 'events') as PublicRunEvent[];
+};
+
+const eventSourceUrl = (apiUrl: string, runSessionId: string, after?: string): string =>
+  `${apiUrl}/run-sessions/${encodeURIComponent(runSessionId)}/events/stream?${eventQuery(after)}`;
+
+const parseSseData = (buffer: string): { events: PublicRunEvent[]; remaining: string } => {
+  const events: PublicRunEvent[] = [];
+  const chunks = buffer.split(/\n\n/);
+  const remaining = chunks.pop() ?? '';
+
+  for (const chunk of chunks) {
+    const dataLines = chunk
+      .split(/\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trimStart());
+    if (dataLines.length === 0) {
+      continue;
+    }
+    const parsed = JSON.parse(dataLines.join('\n'));
+    if (isObject(parsed)) {
+      events.push(parsed as PublicRunEvent);
+    }
+  }
+
+  return { events, remaining };
+};
+
+const waitForSseEvent = async (
+  apiUrl: string,
+  runSessionId: string,
+  predicate: (event: PublicRunEvent) => boolean,
+  options: { after?: string; label: string; timeoutMs?: number },
+): Promise<PublicRunEvent> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 5_000);
+  let buffer = '';
+
+  try {
+    const response = await fetch(eventSourceUrl(apiUrl, runSessionId, options.after), {
+      headers: { accept: 'text/event-stream' },
+      signal: controller.signal,
+    });
+    if (!response.ok || response.body === null) {
+      throw new Error(`SSE ${options.label} failed with ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const read = await reader.read();
+      if (read.done) {
+        throw new Error(`SSE stream ended before ${options.label}`);
+      }
+      buffer += decoder.decode(read.value, { stream: true });
+      const parsed = parseSseData(buffer);
+      buffer = parsed.remaining;
+      for (const event of parsed.events) {
+        console.log(`[sse] ${runSessionId} ${event.cursor} ${event.event_type}: ${event.summary}`);
+        if (predicate(event)) {
+          await reader.cancel();
+          return event;
+        }
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Timed out waiting for SSE ${options.label} on ${runSessionId}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
 };
 
 const waitForEvent = async (
@@ -168,12 +284,15 @@ const waitForRunStatus = async (
   );
 };
 
-const createApiApp = async (repository: P0Repository): Promise<{ app: INestApplication; apiUrl: string }> => {
+const createApiApp = async (
+  repository: P0Repository,
+  options: { durabilityMode?: 'volatile_demo' | 'durable' } = {},
+): Promise<{ app: INestApplication; apiUrl: string }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(P0_REPOSITORY)
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
-    .useValue('volatile_demo')
+    .useValue(options.durabilityMode ?? 'volatile_demo')
     .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
     .useValue(true)
     .overrideProvider(RUN_WORKER)
@@ -184,7 +303,7 @@ const createApiApp = async (repository: P0Repository): Promise<{ app: INestAppli
   await app.listen(0, '127.0.0.1');
   const address = app.getHttpServer().address() as AddressInfo;
   const apiUrl = `http://127.0.0.1:${address.port}`;
-  console.log(`[dogfood] API started in-process at ${apiUrl}`);
+  console.log(`[dogfood] API started in-process at ${apiUrl} (${options.durabilityMode ?? 'volatile_demo'})`);
   return { app, apiUrl };
 };
 
@@ -396,6 +515,22 @@ const approveReviewPacket = async (apiUrl: string, reviewPacketId: string): Prom
   });
 };
 
+const runControlCommand = async (
+  apiUrl: string,
+  runSessionId: string,
+  command: 'cancel' | 'resume',
+  reason: string,
+): Promise<string> => {
+  const response = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}/${command}`, {
+    method: 'POST',
+    body: { actor_id: actorOwner, reason },
+  });
+  if (response.status !== 'accepted' || response.command_type !== command) {
+    throw new Error(`${command} command was not accepted: ${JSON.stringify(response)}`);
+  }
+  return stringField(response, 'command_id');
+};
+
 const reviewPacketIdForRun = async (repository: P0Repository, runSessionId: string): Promise<string> => {
   const runSession = await repository.getRunSession(runSessionId);
   if (runSession === undefined) {
@@ -442,13 +577,19 @@ const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, pro
   const queued = await waitForEvent(apiUrl, runSessionId, (event) => event.event_type === 'run_queued', {
     label: 'run_queued before terminal status',
   });
+  const sseDriverStarted = waitForSseEvent(apiUrl, runSessionId, (event) => event.event_type === 'driver_started', {
+    after: queued.cursor,
+    label: 'driver_started append',
+  });
 
   const driver = new FakeCodexSessionDriver({
-    script: [driverStarted('Fake driver started.'), waitingForInput(), { kind: 'delay', ms: 200 }, terminalSucceeded('Fake driver completed.')],
+    script: [driverStarted('Fake driver started.'), waitingForInput(), { kind: 'delay', ms: 500 }, terminalSucceeded('Fake driver completed.')],
     inputAcks: [{ continuity: { thread_id: 'dogfood-thread', turn_id: 'dogfood-turn-after-input' } }],
+    cancelAcks: [{ cancelled: true, reason: 'dogfood cancel command accepted' }],
   });
   const worker = createWorker(repository, driver, 'dogfood-worker-live', makeClock('2026-05-08T01:00:00.000Z'));
   const workerRun = worker.drainOnce();
+  await sseDriverStarted;
 
   const waiting = await waitForEvent(apiUrl, runSessionId, (event) => event.event_type === 'waiting_for_input', {
     after: queued.cursor,
@@ -458,6 +599,14 @@ const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, pro
   if (terminalRunStatuses.has(stringField(preTerminal, 'status'))) {
     notes.push('Run reached terminal status before waiting_for_input was observed.');
   }
+
+  const resumeCommandId = await runControlCommand(apiUrl, runSessionId, 'resume', 'Dogfood verifies Run Console resume command.');
+  await waitForEvent(
+    apiUrl,
+    runSessionId,
+    (event) => event.event_type === 'resuming' && event.payload.command_id === resumeCommandId,
+    { after: waiting.cursor, label: 'resuming event' },
+  );
 
   const command = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}/input`, {
     method: 'POST',
@@ -481,9 +630,20 @@ const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, pro
     { after: waiting.cursor, label: 'delivered user_input event' },
   );
 
+  const cancelCommandId = await runControlCommand(apiUrl, runSessionId, 'cancel', 'Dogfood verifies Run Console cancel command.');
+  await waitForEvent(
+    apiUrl,
+    runSessionId,
+    (event) => event.event_type === 'cancel_requested' && event.payload.command_id === cancelCommandId,
+    { after: waiting.cursor, label: 'cancel_requested event' },
+  );
+
   await workerRun;
   if (driver.inputs.length !== 1 || driver.inputs[0]?.message !== 'Continue with the fake dogfood path.') {
     notes.push('Fake driver did not receive the submitted input exactly once.');
+  }
+  if (driver.cancelRequests.length !== 1) {
+    notes.push('Fake driver did not receive the cancel command exactly once.');
   }
 
   const reviewPacketId = await assertFinalEvidence(apiUrl, repository, runSessionId);
@@ -567,7 +727,424 @@ const dogfoodRestartRun = async (
   };
 };
 
-const renderReport = (data: { status: 'PASS' | 'FAIL'; apiUrl?: string; results: DogfoodResult[]; error?: string }): string => {
+const durableRecordsFor = (prefix: string): {
+  project: Project;
+  projectRepo: ProjectRepo;
+  workItem: WorkItem;
+  spec: Spec;
+  specRevision: SpecRevision;
+  plan: Plan;
+  planRevision: PlanRevision;
+  executionPackage: ExecutionPackage;
+  runSession: RunSession;
+  command: RunCommand;
+} => {
+  const now = '2026-05-08T03:00:00.000Z';
+  const runSessionId = `${prefix}-run-session`;
+  const project: Project = {
+    id: `${prefix}-project`,
+    name: `Forgeloop P0 durable dogfood ${prefix}`,
+    repo_ids: [`${prefix}-repo`],
+    owner_actor_id: actorOwner,
+    created_at: now,
+    updated_at: now,
+  };
+  const projectRepo: ProjectRepo = {
+    id: `${prefix}-project-repo`,
+    repo_id: `${prefix}-repo`,
+    project_id: project.id,
+    name: repoId,
+    status: 'active',
+    local_path: repoPath,
+    default_branch: 'main',
+    base_commit_sha: 'dogfood-durable-base',
+    created_at: now,
+    updated_at: now,
+  };
+  const workItem: WorkItem = {
+    id: `${prefix}-work-item`,
+    project_id: project.id,
+    kind: 'test_refactor',
+    title: 'Durable dogfood restart recovery',
+    goal: 'Verify run state survives fresh repository and API instances.',
+    success_criteria: ['Events backfill after restart.', 'Worker lease takeover completes without duplicate input.'],
+    priority: 'P0',
+    risk: 'medium',
+    owner_actor_id: actorOwner,
+    phase: 'execution',
+    activity_state: 'idle',
+    gate_state: 'none',
+    resolution: 'none',
+    current_spec_id: `${prefix}-spec`,
+    current_plan_id: `${prefix}-plan`,
+    created_at: now,
+    updated_at: now,
+  };
+  const spec: Spec = {
+    id: `${prefix}-spec`,
+    work_item_id: workItem.id,
+    entity_type: 'spec',
+    status: 'approved',
+    editing_state: 'idle',
+    gate_state: 'approved',
+    resolution: 'approved',
+    current_revision_id: `${prefix}-spec-revision`,
+    created_at: now,
+    updated_at: now,
+  };
+  const specRevision: SpecRevision = {
+    id: `${prefix}-spec-revision`,
+    spec_id: spec.id,
+    work_item_id: workItem.id,
+    revision_number: 1,
+    summary: 'Durable dogfood spec',
+    content: 'Durable dogfood spec body',
+    background: 'Durable restart recovery must be explicit.',
+    goals: ['Backfill events from Postgres'],
+    scope_in: ['Run events', 'Run commands', 'Worker leases'],
+    scope_out: ['Browser visual rendering'],
+    acceptance_criteria: ['Fresh repository instances can recover the run'],
+    risk_notes: [],
+    test_strategy_summary: 'Dogfood fake-driver restart check',
+    artifact_refs: [],
+    created_at: now,
+  };
+  const plan: Plan = {
+    id: `${prefix}-plan`,
+    work_item_id: workItem.id,
+    entity_type: 'plan',
+    status: 'approved',
+    editing_state: 'idle',
+    gate_state: 'approved',
+    resolution: 'approved',
+    current_revision_id: `${prefix}-plan-revision`,
+    created_at: now,
+    updated_at: now,
+  };
+  const planRevision: PlanRevision = {
+    id: `${prefix}-plan-revision`,
+    plan_id: plan.id,
+    work_item_id: workItem.id,
+    revision_number: 1,
+    summary: 'Durable dogfood plan',
+    content: 'Seed a recoverable run, rebuild repository/app instances, then let a worker reclaim it.',
+    implementation_summary: 'Use Drizzle/Postgres repository instances over the same database.',
+    split_strategy: 'Single durable recovery check.',
+    dependency_order: [`${prefix}-execution-package`],
+    test_matrix: ['pnpm dogfood:p0'],
+    risk_mitigations: [],
+    rollback_notes: 'Remove dogfood records by prefix if needed.',
+    artifact_refs: [],
+    created_at: now,
+  };
+  const generatedPackage = transitionExecutionPackage(undefined, {
+    type: 'generate_package',
+    id: `${prefix}-execution-package`,
+    work_item_id: workItem.id,
+    spec_id: spec.id,
+    spec_revision_id: specRevision.id,
+    plan_id: plan.id,
+    plan_revision_id: planRevision.id,
+    project_id: project.id,
+    repo_id: projectRepo.repo_id,
+    objective: 'Durable dogfood recovery package.',
+    owner_actor_id: actorOwner,
+    reviewer_actor_id: actorReviewer,
+    qa_owner_actor_id: actorQa,
+    required_checks: [
+      {
+        check_id: 'dogfood-required',
+        display_name: 'Dogfood required check',
+        command: 'pnpm dogfood:p0',
+        timeout_seconds: 600,
+        blocks_review: true,
+      },
+    ],
+    required_artifact_kinds: ['diff', 'changed_files', 'check_output', 'execution_summary'],
+    allowed_paths: ['docs/superpowers/reports/**'],
+    forbidden_paths: ['.git/**', 'node_modules/**'],
+    at: now,
+  });
+  const readyPackage = transitionExecutionPackage(generatedPackage, { type: 'mark_ready', at: now });
+  const executionPackage = {
+    ...transitionExecutionPackage(readyPackage, { type: 'run', run_session_id: runSessionId, at: now }),
+    phase: 'execution',
+    activity_state: 'ai_running',
+    updated_at: now,
+  } satisfies ExecutionPackage;
+  const runSpec = {
+    run_session_id: runSessionId,
+    execution_package_id: executionPackage.id,
+    work_item_id: workItem.id,
+    spec_revision_id: specRevision.id,
+    plan_revision_id: planRevision.id,
+    executor_type: 'mock' as const,
+    repo: {
+      repo_id: projectRepo.repo_id,
+      local_path: repoPath,
+      base_branch: projectRepo.default_branch,
+      base_commit_sha: projectRepo.base_commit_sha,
+    },
+    objective: executionPackage.objective,
+    context: {
+      spec_revision_summary: specRevision.summary,
+      plan_revision_summary: planRevision.summary,
+      package_instructions: executionPackage.objective,
+      required_checks: executionPackage.required_checks,
+    },
+    review_context: { latest_decision: 'none' as const, requested_changes: [] },
+    workflow_only: true,
+    allowed_paths: executionPackage.allowed_paths,
+    forbidden_paths: executionPackage.forbidden_paths,
+    required_checks: executionPackage.required_checks,
+    artifact_policy: { requested_artifacts: ['diff' as const, 'changed_files' as const, 'check_output' as const, 'execution_summary' as const] },
+    timeout_seconds: 3600,
+    idempotency_key: runSessionId,
+  };
+  const runSession: RunSession = {
+    ...transitionRunSession(undefined, {
+      type: 'create',
+      id: runSessionId,
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      executor_type: 'mock',
+      at: now,
+    }),
+    status: 'waiting_for_input',
+    run_spec: runSpec,
+    runtime_metadata: {
+      durability_mode: 'durable',
+      driver_kind: 'fake',
+      driver_status: 'waiting_for_input',
+      codex_thread_id: `${prefix}-thread`,
+      active_turn_id: `${prefix}-turn`,
+      recovery_attempt_count: 0,
+      effective_dangerous_mode: 'not_requested',
+    },
+    started_at: now,
+    updated_at: now,
+  };
+  const command: RunCommand = {
+    id: `${prefix}-run-command-applied-input`,
+    run_session_id: runSessionId,
+    command_type: 'input',
+    status: 'applied',
+    actor_id: actorOwner,
+    payload: { message: 'This input was applied before durable restart.' },
+    target_turn_id: `${prefix}-turn`,
+    claimed_by_worker_id: `${prefix}-old-worker`,
+    claimed_at: '2026-05-08T03:00:01.000Z',
+    applied_at: '2026-05-08T03:00:02.000Z',
+    driver_ack: { continuity: { thread_id: `${prefix}-thread`, turn_id: `${prefix}-turn-after-input` } },
+    created_at: now,
+    updated_at: '2026-05-08T03:00:02.000Z',
+  };
+
+  return { project, projectRepo, workItem, spec, specRevision, plan, planRevision, executionPackage, runSession, command };
+};
+
+const seedDurableRecoverableRun = async (repository: P0Repository, prefix: string): Promise<{ runSessionId: string; queuedCursor: string }> => {
+  const records = durableRecordsFor(prefix);
+  await repository.saveProject(records.project);
+  await repository.saveProjectRepo(records.projectRepo);
+  await repository.saveWorkItem(records.workItem);
+  await repository.saveSpec(records.spec);
+  await repository.saveSpecRevision(records.specRevision);
+  await repository.savePlan(records.plan);
+  await repository.savePlanRevision(records.planRevision);
+  await repository.saveExecutionPackage(records.executionPackage);
+  await repository.saveRunSession(records.runSession);
+  await repository.saveRunCommand(records.command);
+  const queued = await repository.appendRunEvent({
+    id: `${prefix}-run-event-queued`,
+    run_session_id: records.runSession.id,
+    event_type: 'run_queued',
+    source: 'api',
+    visibility: 'public',
+    summary: 'Durable run queued.',
+    payload: { execution_package_id: records.executionPackage.id, mode: 'run', workflow_only: true, executor_type: 'mock' },
+    created_at: '2026-05-08T03:00:00.000Z',
+  });
+  await repository.appendRunEvent({
+    id: `${prefix}-run-event-input-submitted`,
+    run_session_id: records.runSession.id,
+    event_type: 'user_input',
+    source: 'user',
+    visibility: 'public',
+    summary: 'User input submitted before restart.',
+    payload: { command_id: records.command.id, actor_id: actorOwner, message: records.command.payload.message },
+    created_at: '2026-05-08T03:00:01.000Z',
+  });
+  await repository.claimRunWorkerLease({
+    run_session_id: records.runSession.id,
+    worker_id: `${prefix}-old-worker`,
+    lease_token: `${prefix}-old-lease`,
+    now: '2026-05-08T03:00:00.000Z',
+    expires_at: '2026-05-08T03:00:05.000Z',
+  });
+
+  return { runSessionId: records.runSession.id, queuedCursor: queued.cursor };
+};
+
+const createDurableRepository = (connectionString: string): { client: DbClient; repository: P0Repository } => {
+  const client = createDbClient({ connectionString });
+  return { client, repository: createDrizzleP0Repository(client.db) };
+};
+
+const runDbPushCheck = async (): Promise<VerificationCheck> => {
+  if (databaseUrl === undefined || databaseUrl.length === 0) {
+    return {
+      label: 'DB schema push',
+      status: 'skipped',
+      details: ['FORGELOOP_DATABASE_URL is not set; durable DB push was not run.'],
+    };
+  }
+
+  try {
+    await runCommand('pnpm', ['db:push'], { env: { FORGELOOP_DATABASE_URL: databaseUrl }, timeoutMs: 60_000 });
+    return {
+      label: 'DB schema push',
+      status: 'passed',
+      details: ['FORGELOOP_DATABASE_URL is set and `pnpm db:push` completed.'],
+    };
+  } catch (error) {
+    return {
+      label: 'DB schema push',
+      status: 'failed',
+      details: [`FORGELOOP_DATABASE_URL is set but schema push failed: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+};
+
+const runDurableRepositoryCheck = async (dbPush: VerificationCheck): Promise<VerificationCheck> => {
+  if (databaseUrl === undefined || databaseUrl.length === 0) {
+    return {
+      label: 'Durable restart recovery',
+      status: 'skipped',
+      details: ['FORGELOOP_DATABASE_URL is not set; only volatile fake-driver restart checks were run.'],
+    };
+  }
+  if (dbPush.status !== 'passed') {
+    return {
+      label: 'Durable restart recovery',
+      status: 'skipped',
+      details: ['Schema push did not pass, so durable restart recovery was not attempted.'],
+    };
+  }
+
+  const prefix = `dogfood-${Date.now()}`;
+  let client1: DbClient | undefined;
+  let client2: DbClient | undefined;
+  let app1: INestApplication | undefined;
+  let app2: INestApplication | undefined;
+
+  try {
+    const first = createDurableRepository(databaseUrl);
+    client1 = first.client;
+    const seeded = await seedDurableRecoverableRun(first.repository, prefix);
+    const firstApp = await createApiApp(first.repository, { durabilityMode: 'volatile_demo' });
+    app1 = firstApp.app;
+    await app1.close();
+    app1 = undefined;
+    await client1.pool.end();
+    client1 = undefined;
+
+    const second = createDurableRepository(databaseUrl);
+    client2 = second.client;
+    const secondApp = await createApiApp(second.repository, { durabilityMode: 'volatile_demo' });
+    app2 = secondApp.app;
+    const apiUrl = secondApp.apiUrl;
+    const backfilled = await listRunEvents(apiUrl, seeded.runSessionId, seeded.queuedCursor);
+    if (!backfilled.some((event) => event.event_type === 'user_input')) {
+      throw new Error('Fresh API/repository instance did not backfill the pre-restart user_input event.');
+    }
+
+    const driver = new FakeCodexSessionDriver({
+      script: [driverStarted('Durable restart worker reclaimed run.'), terminalSucceeded('Durable restart worker completed.')],
+      inputAcks: [{ continuity: { thread_id: `${prefix}-thread`, turn_id: `${prefix}-duplicate-input` } }],
+    });
+    const worker = createWorker(second.repository, driver, `${prefix}-new-worker`, makeClock('2026-05-08T03:01:00.000Z'));
+    await worker.drainOnce();
+    if (driver.inputs.length !== 0) {
+      throw new Error('Fresh worker duplicated already-applied durable input.');
+    }
+    const lease = await second.repository.getRunWorkerLease(seeded.runSessionId);
+    if (lease?.worker_id !== `${prefix}-new-worker` || lease.status !== 'released') {
+      throw new Error('Fresh worker did not reclaim and release the durable run lease.');
+    }
+    await waitForRunStatus(apiUrl, seeded.runSessionId, (status) => status === 'succeeded', 'durable terminal success');
+
+    return {
+      label: 'Durable restart recovery',
+      status: 'passed',
+      details: [
+        'Used fresh Drizzle repository and Nest app instances over the same Postgres database.',
+        `RunSession ${seeded.runSessionId} backfilled events by cursor, reclaimed an expired lease, and completed without duplicate input delivery.`,
+      ],
+    };
+  } catch (error) {
+    return {
+      label: 'Durable restart recovery',
+      status: 'failed',
+      details: [error instanceof Error ? error.message : String(error)],
+    };
+  } finally {
+    await app1?.close();
+    await app2?.close();
+    await client1?.pool.end();
+    await client2?.pool.end();
+  }
+};
+
+const probeWebApp = async (): Promise<VerificationCheck[]> => {
+  for (const webUrl of webUrlCandidates) {
+    try {
+      const response = await fetch(webUrl, { signal: AbortSignal.timeout(1_500) });
+      const text = await response.text();
+      if (response.ok && text.includes('<div id="root"')) {
+        return [
+          {
+            label: 'Web app probe',
+            status: 'passed',
+            details: [`Web app responded at ${webUrl}.`],
+          },
+          {
+            label: 'Browser visual/text-overflow verification',
+            status: 'skipped',
+            details: [
+              'No in-app browser automation was available to this script; visual Run Console layout and narrow viewport text overflow remain manual checks.',
+            ],
+          },
+        ];
+      }
+    } catch {
+      // Try the next likely Vite URL.
+    }
+  }
+
+  return [
+    {
+      label: 'Web app probe',
+      status: 'skipped',
+      details: [`No web app responded at ${webUrlCandidates.join(', ')}.`],
+    },
+    {
+      label: 'Browser visual/text-overflow verification',
+      status: 'skipped',
+      details: [
+        'Run Console visual layout and narrow viewport text overflow remain unverified because no web app/browser target was available to this script.',
+      ],
+    },
+  ];
+};
+
+const renderReport = (data: {
+  status: 'PASS' | 'FAIL';
+  apiUrl?: string;
+  results: DogfoodResult[];
+  checks: VerificationCheck[];
+  error?: string;
+}): string => {
   const resultLines =
     data.results.length === 0
       ? ['- No dogfood runs completed.']
@@ -580,6 +1157,10 @@ const renderReport = (data: { status: 'PASS' | 'FAIL'; apiUrl?: string; results:
             ...(result.notes.length === 0 ? ['  - Evidence checks passed.'] : result.notes.map((note) => `  - ${note}`)),
           ].join('\n'),
         );
+  const checkLines =
+    data.checks.length === 0
+      ? ['- No additional verification checks recorded.']
+      : data.checks.map((check) => [`- ${check.label}: ${check.status.toUpperCase()}`, ...check.details.map((detail) => `  - ${detail}`)].join('\n'));
 
   return [
     '# P0 Delivery Loop Verification',
@@ -596,19 +1177,24 @@ const renderReport = (data: { status: 'PASS' | 'FAIL'; apiUrl?: string; results:
     '- `pnpm test`: all Vitest suites pass.',
     '- `pnpm build`: all workspace packages and apps compile.',
     '- `pnpm smoke:p0`: P0 smoke suite passes and observes public run events before waiting for terminal evidence.',
-    '- `pnpm dogfood:p0`: exits 0 only when fake-driver live events, input delivery, event backfill, lease takeover, final evidence, and Review Packet approval pass.',
+    '- `pnpm dogfood:p0`: exits 0 only when volatile fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable DB checks run only when `FORGELOOP_DATABASE_URL` is set.',
     '',
     '## Dogfood Preconditions',
     '',
     `- API URL: ${data.apiUrl ?? 'not started'}`,
     `- Repo path: ${repoPath}`,
     `- Repo id: ${repoId}`,
-    '- Dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.',
-    '- Real local_codex acceptance is separate from this deterministic dogfood pass and requires a local Codex runtime.',
+    '- Volatile dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.',
+    '- Durable dogfood uses fresh Drizzle repository and Nest app instances over the same Postgres database only when `FORGELOOP_DATABASE_URL` is set.',
+    '- Real local_codex acceptance is separate from this deterministic fake-driver dogfood pass and requires a local Codex runtime.',
     '',
     '## Dogfood Results',
     '',
     ...resultLines,
+    '',
+    '## DB And Manual/Web Verification',
+    '',
+    ...checkLines,
     '',
     '## Actual Results',
     '',
@@ -627,6 +1213,7 @@ const main = async (): Promise<number> => {
   let app: INestApplication | undefined;
   let apiUrl: string | undefined;
   const results: DogfoodResult[] = [];
+  const checks: VerificationCheck[] = [];
 
   try {
     const started = await createApiApp(repository);
@@ -640,16 +1227,28 @@ const main = async (): Promise<number> => {
     apiUrl = restarted.apiUrl;
     results.push(restarted.result);
 
+    checks.push({
+      label: 'Run Console HTTP/SSE command semantics',
+      status: 'passed',
+      details: ['Verified event backfill, SSE append, input submission/delivery, resume command, and cancel command through public run APIs.'],
+    });
+    const dbPush = await runDbPushCheck();
+    checks.push(dbPush);
+    checks.push(await runDurableRepositoryCheck(dbPush));
+    checks.push(...(await probeWebApp()));
+
     const failed = results.filter((result) => result.status === 'failed');
-    const status = failed.length === 0 ? 'PASS' : 'FAIL';
-    await writeReport(renderReport({ status, apiUrl, results }));
-    return failed.length === 0 ? 0 : 1;
+    const failedChecks = checks.filter((check) => check.status === 'failed');
+    const status = failed.length === 0 && failedChecks.length === 0 ? 'PASS' : 'FAIL';
+    await writeReport(renderReport({ status, apiUrl, results, checks }));
+    return status === 'PASS' ? 0 : 1;
   } catch (error) {
     await writeReport(
       renderReport({
         status: 'FAIL',
         apiUrl,
         results,
+        checks,
         error: error instanceof Error ? error.message : String(error),
       }),
     );
