@@ -279,6 +279,44 @@ describe('codex app-server driver input routing', () => {
     ]);
   });
 
+  it('fails startRun when notifications end before turn completion', async () => {
+    const request = vi.fn(async (method: string) =>
+      method === 'thread/start'
+        ? {
+            thread: { id: 'thread-1' },
+            approvalPolicy: 'never',
+            sandbox: { type: 'dangerFullAccess' },
+          }
+        : { turn: { id: 'turn-1' } },
+    );
+    const driver = createCodexAppServerDriverForTest({
+      request,
+      notifications: async function* () {
+        yield {
+          method: 'item/agentMessage/delta',
+          params: { threadId: 'thread-1', turnId: 'turn-1', delta: 'working' },
+        };
+      },
+    });
+
+    await expect(
+      collectUntilTerminal(driver.startRun({ runSpec: createRunSpec(), workspacePath: tmpdir() })),
+    ).resolves.toEqual([
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'thread_started' }) }),
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'turn_started' }) }),
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'agent_message_delta' }) }),
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'failed',
+        summary: 'Codex app-server notification stream ended before turn completion.',
+        failure: expect.objectContaining({
+          kind: 'executor_error',
+          retryable: true,
+        }),
+      }),
+    ]);
+  });
+
   it('maps failed turn/completed notifications to retryable terminal failures', async () => {
     const request = vi.fn(async () => ({
       thread: { id: 'thread-1' },

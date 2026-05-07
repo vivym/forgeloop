@@ -117,6 +117,27 @@ const turnCompletedTerminal = (notification: unknown): CodexDriverStreamItem | u
   };
 };
 
+const notificationStreamEndedTerminal = (error?: unknown): CodexDriverStreamItem => {
+  const message =
+    error instanceof Error
+      ? `Codex app-server notification stream ended before turn completion: ${error.message}`
+      : 'Codex app-server notification stream ended before turn completion.';
+
+  return {
+    kind: 'terminal',
+    status: 'failed',
+    summary: 'Codex app-server notification stream ended before turn completion.',
+    runtimeMetadata: {
+      driver_status: 'terminal',
+    },
+    failure: {
+      kind: 'executor_error',
+      message,
+      retryable: true,
+    },
+  };
+};
+
 const responseConfig = (response: unknown): CodexEffectiveConfig => {
   if (response !== null && typeof response === 'object') {
     const record = response as Record<string, unknown>;
@@ -405,26 +426,33 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       return;
     }
 
-    for await (const notification of notifications) {
-      const rawRef = await this.#rawLogStore?.appendRawNotification({
-        runSessionId,
-        source: 'app_server',
-        payload: notification,
-      });
+    try {
+      for await (const notification of notifications) {
+        const rawRef = await this.#rawLogStore?.appendRawNotification({
+          runSessionId,
+          source: 'app_server',
+          payload: notification,
+        });
 
-      for (const event of normalizeCodexAppServerNotification(notification)) {
-        if (rawRef !== undefined) {
-          event.raw_ref = rawRef.raw_ref;
+        for (const event of normalizeCodexAppServerNotification(notification)) {
+          if (rawRef !== undefined) {
+            event.raw_ref = rawRef.raw_ref;
+          }
+          yield { kind: 'event', event };
         }
-        yield { kind: 'event', event };
-      }
 
-      const terminal = turnCompletedTerminal(notification);
-      if (terminal !== undefined) {
-        yield terminal;
-        return;
+        const terminal = turnCompletedTerminal(notification);
+        if (terminal !== undefined) {
+          yield terminal;
+          return;
+        }
       }
+    } catch (error) {
+      yield notificationStreamEndedTerminal(error);
+      return;
     }
+
+    yield notificationStreamEndedTerminal();
   }
 }
 
@@ -487,6 +515,10 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
       }
 
       await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    if (this.#processError !== undefined) {
+      throw this.#processError;
     }
   }
 
