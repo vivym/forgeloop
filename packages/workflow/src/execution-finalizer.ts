@@ -26,6 +26,9 @@ import type {
 import { buildRunSpec, loadRunContext } from './activities';
 
 type IsoDateTime = string;
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+type LoadedRunContext = Awaited<ReturnType<typeof loadRunContext>>;
 
 export interface FinalizePackageRunWithExecutorResultInput {
   repository: PackageExecutionRepository;
@@ -118,8 +121,35 @@ const terminalEventTypeFor = (status: RunSessionStatus): string => {
   }
 };
 
+const canonicalJsonValue = (value: unknown): JsonValue => {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(canonicalJsonValue);
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, JsonValue> = {};
+
+    for (const key of Object.keys(record).sort()) {
+      const child = record[key];
+
+      if (child !== undefined) {
+        sorted[key] = canonicalJsonValue(child);
+      }
+    }
+
+    return sorted;
+  }
+
+  throw new Error(`ExecutorResult contains non-JSON value ${String(value)}`);
+};
+
 const executorResultsEqual = (left: ExecutorResult | undefined, right: ExecutorResult): boolean =>
-  left !== undefined && JSON.stringify(left) === JSON.stringify(right);
+  left !== undefined && JSON.stringify(canonicalJsonValue(left)) === JSON.stringify(canonicalJsonValue(right));
 
 const displayNameForCheck = (runSpec: RunSpec, checkResult: CheckResult): string =>
   runSpec.required_checks.find((check) => check.check_id === checkResult.check_id)?.display_name ?? checkResult.check_id;
@@ -183,12 +213,10 @@ const persistArtifacts = async (
 };
 
 const runSelfReview = async (
-  repository: PackageExecutionRepository,
   runSession: RunSessionRecord,
   executionPackage: ExecutionPackageRecord,
   runSpec: RunSpec,
   selfReview: PackageRunSelfReview,
-  at: IsoDateTime,
 ): Promise<SelfReviewResult> => {
   const input: SelfReviewInput = {
     run_session_id: runSession.id,
@@ -203,19 +231,9 @@ const runSelfReview = async (
   };
 
   try {
-    const result = selfReviewResultSchema.parse(await selfReview(input));
-
-    if (result.status === 'failed') {
-      await repository.appendObjectEvent(
-        event(runSession, 'self_review_failed', at, { failure_message: result.failure_message ?? result.summary }),
-      );
-    }
-
-    return result;
+    return selfReviewResultSchema.parse(await selfReview(input));
   } catch (error) {
-    const result = fallbackSelfReview(errorMessage(error));
-    await repository.appendObjectEvent(event(runSession, 'self_review_failed', at, { failure_message: result.failure_message }));
-    return result;
+    return fallbackSelfReview(errorMessage(error));
   }
 };
 
@@ -256,6 +274,11 @@ const createReviewPacket = async (
     updated_at: at,
   };
 
+  if (selfReviewResult.status === 'failed') {
+    await repository.appendObjectEvent(
+      event(runSession, 'self_review_failed', at, { failure_message: selfReviewResult.failure_message ?? selfReviewResult.summary }),
+    );
+  }
   await repository.saveReviewPacket(reviewPacket);
   await repository.appendObjectEvent(event(runSession, 'review_packet_created', at, { review_packet_id: reviewPacket.id }));
 
@@ -338,6 +361,34 @@ const updatePackageAfterFailure = async (
   return updated;
 };
 
+const successPackageStatus = 'review/awaiting_human/awaiting_human_review';
+
+const successPackageIsReconciled = (executionPackage: ExecutionPackageRecord): boolean =>
+  statusForPackage(executionPackage) === successPackageStatus && executionPackage.resolution === 'none';
+
+const failureSummaryFor = (runSession: RunSessionRecord): string =>
+  runSession.failure_reason ?? runSession.summary ?? 'Execution failed.';
+
+const failurePackageIsReconciled = (
+  runSession: RunSessionRecord,
+  executionPackage: ExecutionPackageRecord,
+): boolean => {
+  const failureSummary = failureSummaryFor(runSession);
+  const blockingCheckFailed = runSession.failure_kind === 'required_check_failed';
+  const retryable = runSession.executor_result?.failure?.retryable ?? true;
+
+  if (blockingCheckFailed || retryable) {
+    return (
+      executionPackage.phase === 'ready' &&
+      executionPackage.activity_state === 'idle' &&
+      executionPackage.gate_state === 'none' &&
+      executionPackage.last_failure_summary === failureSummary
+    );
+  }
+
+  return executionPackage.activity_state === 'blocked' && executionPackage.blocked_reason === failureSummary;
+};
+
 const persistExecutorResult = async (
   repository: PackageExecutionRepository,
   runSession: RunSessionRecord,
@@ -390,120 +441,156 @@ const persistExecutorResult = async (
   return persisted;
 };
 
-const ensureTerminalRunSideEffects = async (
-  repository: PackageExecutionRepository,
-  runSession: RunSessionRecord,
-  executionPackage: ExecutionPackageRecord,
-  executorResult: ExecutorResult,
-  at: IsoDateTime,
-): Promise<void> => {
-  const terminalStatus = terminalStatusFor(executorResult);
-
-  await repository.appendStatusHistory(
-    history({
-      id: `status-history:${runSession.id}:${terminalStatus}`,
-      objectType: 'run_session',
-      objectId: runSession.id,
-      fromStatus: 'running',
-      toStatus: terminalStatus,
-      actorId: runSession.requested_by_actor_id,
-      reason: executorResult.failure?.message,
-      at,
-    }),
-  );
-  await repository.appendObjectEvent(
-    event(runSession, terminalEventTypeFor(terminalStatus), at, { summary: executorResult.summary }),
-  );
-  await persistArtifacts(repository, runSession, executionPackage, executorResult.artifacts, at);
-};
-
 const isLatestRunForPackage = (runSession: RunSessionRecord, executionPackage: ExecutionPackageRecord): boolean =>
   executionPackage.last_run_session_id === runSession.id;
 
-export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecutorResult = async (input) => {
-  const at = input.now?.() ?? new Date().toISOString();
-  const context = await loadRunContext(input.repository, input.runSessionId);
-  const parsedExecutorResult = executorResultSchema.parse(input.executorResult);
+interface FinalizationState {
+  context: LoadedRunContext;
+  runSpec: RunSpec;
+  runSession: RunSessionRecord;
+  reviewPacket: ReviewPacketRecord | undefined;
+}
+
+interface PendingSuccessFinalization {
+  kind: 'pending_success';
+  runSession: RunSessionRecord;
+  executionPackage: ExecutionPackageRecord;
+  runSpec: RunSpec;
+  needsSelfReview: boolean;
+}
+
+interface CompletedFinalization {
+  kind: 'completed';
+  result: ExecutePackageRunResult;
+}
+
+type PreparedFinalization = CompletedFinalization | PendingSuccessFinalization;
+
+const loadFinalizationState = async (
+  repository: PackageExecutionRepository,
+  runSessionId: string,
+  parsedExecutorResult: ExecutorResult,
+): Promise<FinalizationState & { terminalMatches: boolean }> => {
+  const context = await loadRunContext(repository, runSessionId);
   const currentResult = context.runSession.executor_result;
   const terminalMatches =
     terminalStatuses.has(context.runSession.status) && executorResultsEqual(currentResult, parsedExecutorResult);
   const runSpec = runSpecSchema.parse(context.runSession.run_spec ?? buildRunSpec(context, {}));
-  const finalize = async (repository: PackageExecutionRepository): Promise<ExecutePackageRunResult> => {
-    if (terminalMatches) {
-      if (context.runSession.status !== 'succeeded') {
-        return { runSessionId: context.runSession.id, status: context.runSession.status };
-      }
+  const reviewPacket = await repository.getReviewPacket(`review-packet:${context.runSession.id}`);
 
-      const latestRun = isLatestRunForPackage(context.runSession, context.executionPackage);
-      let reviewPacket = await repository.getReviewPacket(`review-packet:${context.runSession.id}`);
-      if (reviewPacket === undefined) {
-        const selfReviewResult = await runSelfReview(
-          repository,
-          context.runSession,
-          context.executionPackage,
-          runSpec,
-          input.selfReview,
-          at,
-        );
-        reviewPacket = await createReviewPacket(
-          repository,
-          context.runSession,
-          context.executionPackage,
-          runSpec,
-          selfReviewResult,
-          at,
-        );
-      }
+  return { context, runSpec, runSession: context.runSession, reviewPacket, terminalMatches };
+};
 
-      const desiredPackageStatus = 'review/awaiting_human/awaiting_human_review';
-      if (latestRun && statusForPackage(context.executionPackage) !== desiredPackageStatus) {
-        await updatePackageAfterSuccess(repository, context.runSession, context.executionPackage, at);
-      }
+const reconcileFailedPackageIfNeeded = async (
+  repository: PackageExecutionRepository,
+  runSession: RunSessionRecord,
+  executionPackage: ExecutionPackageRecord,
+  at: IsoDateTime,
+): Promise<void> => {
+  if (isLatestRunForPackage(runSession, executionPackage) && !failurePackageIsReconciled(runSession, executionPackage)) {
+    await updatePackageAfterFailure(repository, runSession, executionPackage, at);
+  }
+};
 
-      return { runSessionId: context.runSession.id, status: context.runSession.status, reviewPacketId: reviewPacket.id };
-    }
+const reconcileSucceededPackageIfNeeded = async (
+  repository: PackageExecutionRepository,
+  runSession: RunSessionRecord,
+  executionPackage: ExecutionPackageRecord,
+  at: IsoDateTime,
+): Promise<void> => {
+  if (isLatestRunForPackage(runSession, executionPackage) && !successPackageIsReconciled(executionPackage)) {
+    await updatePackageAfterSuccess(repository, runSession, executionPackage, at);
+  }
+};
 
-    const terminalRunSession = await persistExecutorResult(
-      repository,
-      context.runSession,
-      context.executionPackage,
-      parsedExecutorResult,
-      at,
-    );
+const prepareFinalization = async (
+  repository: PackageExecutionRepository,
+  runSessionId: string,
+  parsedExecutorResult: ExecutorResult,
+  at: IsoDateTime,
+): Promise<PreparedFinalization> => {
+  const state = await loadFinalizationState(repository, runSessionId, parsedExecutorResult);
+  const terminalRunSession = state.terminalMatches
+    ? state.runSession
+    : await persistExecutorResult(repository, state.runSession, state.context.executionPackage, parsedExecutorResult, at);
 
-    if (terminalRunSession.status !== 'succeeded') {
-      if (isLatestRunForPackage(terminalRunSession, context.executionPackage)) {
-        await updatePackageAfterFailure(repository, terminalRunSession, context.executionPackage, at);
-      }
-      return { runSessionId: terminalRunSession.id, status: terminalRunSession.status };
-    }
+  if (terminalRunSession.status !== 'succeeded') {
+    await reconcileFailedPackageIfNeeded(repository, terminalRunSession, state.context.executionPackage, at);
 
-    const selfReviewResult = await runSelfReview(
-      repository,
-      terminalRunSession,
-      context.executionPackage,
-      runSpec,
-      input.selfReview,
-      at,
-    );
-    const reviewPacket = await createReviewPacket(
-      repository,
-      terminalRunSession,
-      context.executionPackage,
-      runSpec,
-      selfReviewResult,
-      at,
-    );
-    if (isLatestRunForPackage(terminalRunSession, context.executionPackage)) {
-      await updatePackageAfterSuccess(repository, terminalRunSession, context.executionPackage, at);
-    }
-
-    return { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: reviewPacket.id };
-  };
-
-  if (input.workerLease === undefined) {
-    return finalize(input.repository);
+    return { kind: 'completed', result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status } };
   }
 
-  return input.repository.withActiveRunWorkerLease(input.runSessionId, { ...input.workerLease, now: at }, finalize);
+  const packageReconciled =
+    !isLatestRunForPackage(terminalRunSession, state.context.executionPackage) ||
+    successPackageIsReconciled(state.context.executionPackage);
+
+  if (state.reviewPacket !== undefined && packageReconciled) {
+    return {
+      kind: 'completed',
+      result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: state.reviewPacket.id },
+    };
+  }
+
+  return {
+    kind: 'pending_success',
+    runSession: terminalRunSession,
+    executionPackage: state.context.executionPackage,
+    runSpec: state.runSpec,
+    needsSelfReview: state.reviewPacket === undefined,
+  };
+};
+
+const completeSucceededFinalization = async (
+  repository: PackageExecutionRepository,
+  runSessionId: string,
+  parsedExecutorResult: ExecutorResult,
+  runSpec: RunSpec,
+  selfReviewResult: SelfReviewResult | undefined,
+  at: IsoDateTime,
+): Promise<ExecutePackageRunResult> => {
+  const state = await loadFinalizationState(repository, runSessionId, parsedExecutorResult);
+
+  if (!state.terminalMatches || state.runSession.status !== 'succeeded') {
+    throw new Error(`Run session ${runSessionId} changed before success finalization completed`);
+  }
+
+  const reviewPacket =
+    state.reviewPacket ??
+    (await createReviewPacket(
+      repository,
+      state.runSession,
+      state.context.executionPackage,
+      runSpec,
+      assertFound(selfReviewResult, `SelfReviewResult ${runSessionId}`),
+      at,
+    ));
+
+  await reconcileSucceededPackageIfNeeded(repository, state.runSession, state.context.executionPackage, at);
+
+  return { runSessionId: state.runSession.id, status: state.runSession.status, reviewPacketId: reviewPacket.id };
+};
+
+export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecutorResult = async (input) => {
+  const at = input.now?.() ?? new Date().toISOString();
+  const parsedExecutorResult = executorResultSchema.parse(input.executorResult);
+  const withLeaseFence = <T>(write: (repository: PackageExecutionRepository) => Promise<T>): Promise<T> =>
+    input.workerLease === undefined
+      ? write(input.repository)
+      : input.repository.withActiveRunWorkerLease(input.runSessionId, { ...input.workerLease, now: at }, write);
+
+  const prepared = await withLeaseFence((repository) =>
+    prepareFinalization(repository, input.runSessionId, parsedExecutorResult, at),
+  );
+
+  if (prepared.kind === 'completed') {
+    return prepared.result;
+  }
+
+  const selfReviewResult = prepared.needsSelfReview
+    ? await runSelfReview(prepared.runSession, prepared.executionPackage, prepared.runSpec, input.selfReview)
+    : undefined;
+
+  return withLeaseFence((repository) =>
+    completeSucceededFinalization(repository, input.runSessionId, parsedExecutorResult, prepared.runSpec, selfReviewResult, at),
+  );
 };

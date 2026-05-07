@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ExecutorResult } from '@forgeloop/contracts';
 import { InMemoryP0Repository } from '../../packages/db/src';
 import type { ReviewPacket } from '../../packages/domain/src/index';
 import { finalizePackageRunWithExecutorResult } from '../../packages/workflow/src';
@@ -10,6 +11,16 @@ import {
 
 class LeasingRepository extends InMemoryP0Repository {
   calls = 0;
+  insideLease = false;
+  leaseReadCount = 0;
+
+  override async getRunSession(runSessionId: string) {
+    if (this.insideLease) {
+      this.leaseReadCount += 1;
+    }
+
+    return super.getRunSession(runSessionId);
+  }
 
   override async withActiveRunWorkerLease<T>(
     runSessionId: string,
@@ -17,9 +28,58 @@ class LeasingRepository extends InMemoryP0Repository {
     write: (repository: LeasingRepository) => Promise<T>,
   ): Promise<T> {
     this.calls += 1;
-    return super.withActiveRunWorkerLease(runSessionId, lease, write);
+    return super.withActiveRunWorkerLease(runSessionId, lease, async (repository) => {
+      this.insideLease = true;
+      try {
+        return await write(repository as LeasingRepository);
+      } finally {
+        this.insideLease = false;
+      }
+    });
   }
 }
+
+const retryableFailedExecutorResult = (
+  runSessionId: string,
+  rawMetadata: ExecutorResult['raw_metadata'] = {},
+): ExecutorResult => ({
+  run_session_id: runSessionId,
+  executor_type: 'mock',
+  executor_version: 'test-executor',
+  status: 'failed',
+  started_at: '2026-05-05T00:00:00.000Z',
+  finished_at: '2026-05-05T00:01:00.000Z',
+  summary: 'Unit tests failed.',
+  changed_files: [],
+  checks: [
+    {
+      check_id: 'unit-tests',
+      command: 'pnpm test tests/workflow',
+      status: 'failed',
+      exit_code: 1,
+      duration_seconds: 2,
+      blocks_review: true,
+    },
+  ],
+  artifacts: [],
+  failure: { kind: 'required_check_failed', message: 'Unit tests failed.', retryable: true },
+  raw_metadata: rawMetadata,
+});
+
+const nonRetryableFailedExecutorResult = (runSessionId: string): ExecutorResult => ({
+  run_session_id: runSessionId,
+  executor_type: 'mock',
+  executor_version: 'test-executor',
+  status: 'failed',
+  started_at: '2026-05-05T00:00:00.000Z',
+  finished_at: '2026-05-05T00:01:00.000Z',
+  summary: 'Executor process failed permanently.',
+  changed_files: [],
+  checks: [],
+  artifacts: [],
+  failure: { kind: 'executor_process_failed', message: 'Executor process failed permanently.', retryable: false },
+  raw_metadata: {},
+});
 
 describe('execution finalizer', () => {
   it('is idempotent when retrying a succeeded executor result after partial persistence', async () => {
@@ -129,6 +189,115 @@ describe('execution finalizer', () => {
     expect(reviewPacketsAfterSecond).toEqual(reviewPacketsAfterFirst);
   });
 
+  it('reconciles a matching terminal failed retry without replaying terminal side effects', async () => {
+    const repo = new InMemoryP0Repository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const runSessionId = context.runSession.id;
+    const terminalAt = '2026-05-07T00:00:00.000Z';
+    const persistedResult = retryableFailedExecutorResult(runSessionId, { nested: { beta: true, alpha: 1 } });
+    const semanticallyEqualResult = retryableFailedExecutorResult(runSessionId, { nested: { alpha: 1, beta: true } });
+
+    await repo.saveRunSession({
+      ...context.runSession,
+      status: 'failed',
+      executor_type: 'mock',
+      executor_result: persistedResult,
+      run_spec: context.runSession.run_spec!,
+      changed_files: persistedResult.changed_files,
+      check_results: persistedResult.checks,
+      artifacts: [],
+      log_refs: [],
+      summary: persistedResult.summary,
+      failure_kind: persistedResult.failure!.kind,
+      failure_reason: persistedResult.failure!.message,
+      started_at: terminalAt,
+      finished_at: terminalAt,
+      updated_at: terminalAt,
+    });
+
+    const first = await finalizePackageRunWithExecutorResult({
+      repository: repo,
+      runSessionId,
+      executorResult: semanticallyEqualResult,
+      selfReview: async () => succeededSelfReview(),
+      now: () => '2026-05-07T00:00:01.000Z',
+    });
+    const packageAfterFirst = await repo.getExecutionPackage(context.executionPackage.id);
+    const runAfterFirst = await repo.getRunSession(runSessionId);
+    const historiesAfterFirst = await repo.listStatusHistory(runSessionId, 'run_session');
+    const eventsAfterFirst = await repo.listObjectEvents(runSessionId, 'run_session');
+    const artifactsAfterFirst = await repo.listArtifactsForObject('run_session', runSessionId);
+
+    const second = await finalizePackageRunWithExecutorResult({
+      repository: repo,
+      runSessionId,
+      executorResult: semanticallyEqualResult,
+      selfReview: async () => succeededSelfReview(),
+      now: () => '2026-05-07T00:00:02.000Z',
+    });
+    const packageAfterSecond = await repo.getExecutionPackage(context.executionPackage.id);
+    const runAfterSecond = await repo.getRunSession(runSessionId);
+
+    expect(first).toEqual({ runSessionId, status: 'failed' });
+    expect(second).toEqual(first);
+    expect(packageAfterFirst).toMatchObject({
+      phase: 'ready',
+      activity_state: 'idle',
+      gate_state: 'none',
+      last_failure_summary: 'Unit tests failed.',
+      updated_at: '2026-05-07T00:00:01.000Z',
+    });
+    expect(packageAfterSecond).toEqual(packageAfterFirst);
+    expect(runAfterFirst?.updated_at).toBe(terminalAt);
+    expect(runAfterSecond).toEqual(runAfterFirst);
+    expect(historiesAfterFirst).toHaveLength(0);
+    expect(eventsAfterFirst).toHaveLength(0);
+    expect(artifactsAfterFirst).toHaveLength(0);
+    expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(0);
+  });
+
+  it('reconciles a matching terminal nonretryable failure to blocked without review packet', async () => {
+    const repo = new InMemoryP0Repository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const runSessionId = context.runSession.id;
+    const terminalAt = '2026-05-07T00:00:00.000Z';
+    const result = nonRetryableFailedExecutorResult(runSessionId);
+
+    await repo.saveRunSession({
+      ...context.runSession,
+      status: 'failed',
+      executor_type: 'mock',
+      executor_result: result,
+      run_spec: context.runSession.run_spec!,
+      changed_files: result.changed_files,
+      check_results: result.checks,
+      artifacts: [],
+      log_refs: [],
+      summary: result.summary,
+      failure_kind: result.failure!.kind,
+      failure_reason: result.failure!.message,
+      started_at: terminalAt,
+      finished_at: terminalAt,
+      updated_at: terminalAt,
+    });
+
+    const finalResult = await finalizePackageRunWithExecutorResult({
+      repository: repo,
+      runSessionId,
+      executorResult: result,
+      selfReview: async () => succeededSelfReview(),
+      now: () => '2026-05-07T00:00:01.000Z',
+    });
+    const updatedPackage = await repo.getExecutionPackage(context.executionPackage.id);
+
+    expect(finalResult).toEqual({ runSessionId, status: 'failed' });
+    expect(updatedPackage).toMatchObject({
+      activity_state: 'blocked',
+      blocked_reason: 'Executor process failed permanently.',
+    });
+    expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(0);
+  });
+
   it('fences terminal writes through the active worker lease even when now is omitted', async () => {
     const repo = new LeasingRepository();
     const context = await seedReadyStartedPackageRun(repo);
@@ -195,6 +364,38 @@ describe('execution finalizer', () => {
 
     expect(finalResult).toMatchObject({ runSessionId, status: 'succeeded', reviewPacketId: `review-packet:${runSessionId}` });
     expect(repo.calls).toBe(1);
+    expect(repo.leaseReadCount).toBeGreaterThan(0);
+  });
+
+  it('runs self-review outside the worker lease fence', async () => {
+    const repo = new LeasingRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = succeededExecutorResult(context.runSession.id);
+    const runSessionId = context.runSession.id;
+    const lease = await repo.claimRunWorkerLease({
+      run_session_id: runSessionId,
+      worker_id: 'worker-1',
+      lease_token: 'lease-1',
+      now: '2026-05-07T00:00:00.000Z',
+      expires_at: '2026-05-09T00:10:00.000Z',
+    });
+    let selfReviewRanInsideLease = true;
+
+    const finalResult = await finalizePackageRunWithExecutorResult({
+      repository: repo,
+      runSessionId,
+      executorResult: result,
+      selfReview: async () => {
+        selfReviewRanInsideLease = repo.insideLease;
+        return succeededSelfReview();
+      },
+      workerLease: { workerId: lease.worker_id, leaseToken: lease.lease_token },
+      now: () => '2026-05-07T00:00:01.000Z',
+    });
+
+    expect(finalResult).toEqual({ runSessionId, status: 'succeeded', reviewPacketId: `review-packet:${runSessionId}` });
+    expect(selfReviewRanInsideLease).toBe(false);
+    expect(repo.calls).toBe(2);
   });
 
   it('rejects a stale worker lease when finalizing without now', async () => {
