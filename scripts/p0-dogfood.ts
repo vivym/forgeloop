@@ -294,7 +294,7 @@ const createApiApp = async (
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue(options.durabilityMode ?? 'volatile_demo')
     .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
-    .useValue(true)
+    .useValue((options.durabilityMode ?? 'volatile_demo') === 'volatile_demo')
     .overrideProvider(RUN_WORKER)
     .useValue(noopRunWorker)
     .compile();
@@ -567,6 +567,31 @@ const assertFinalEvidence = async (apiUrl: string, repository: P0Repository, run
   }
   await approveReviewPacket(apiUrl, reviewPacketId);
   return reviewPacketId;
+};
+
+const assertRepositoryFinalEvidence = async (repository: P0Repository, runSessionId: string): Promise<void> => {
+  const runSession = await repository.getRunSession(runSessionId);
+  if (runSession === undefined) {
+    throw new Error(`Missing durable RunSession ${runSessionId}`);
+  }
+  if (runSession.status !== 'succeeded') {
+    throw new Error(`Durable RunSession ${runSessionId} status is ${runSession.status}`);
+  }
+  if (runSession.changed_files.length === 0) {
+    throw new Error(`Durable RunSession ${runSessionId} has no changed files`);
+  }
+  if (!runSession.check_results.some((check) => check.check_id === 'dogfood-required' && check.status === 'succeeded')) {
+    throw new Error(`Durable RunSession ${runSessionId} is missing succeeded dogfood-required check`);
+  }
+  if (!runSession.artifacts.some((artifact) => artifact.kind === 'diff')) {
+    throw new Error(`Durable RunSession ${runSessionId} is missing diff artifact`);
+  }
+
+  const reviewPacketId = await reviewPacketIdForRun(repository, runSessionId);
+  const reviewPacket = await repository.getReviewPacket(reviewPacketId);
+  if (reviewPacket?.status !== 'ready' || reviewPacket.decision !== 'none') {
+    throw new Error(`Durable ReviewPacket ${reviewPacketId} was not ready for review`);
+  }
 };
 
 const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, projectId: string): Promise<DogfoodResult> => {
@@ -1019,14 +1044,14 @@ const runDbPushCheck = async (): Promise<VerificationCheck> => {
 const runDurableRepositoryCheck = async (dbPush: VerificationCheck): Promise<VerificationCheck> => {
   if (databaseUrl === undefined || databaseUrl.length === 0) {
     return {
-      label: 'Durable restart recovery',
+      label: 'Durable repository restart recovery',
       status: 'skipped',
-      details: ['FORGELOOP_DATABASE_URL is not set; only volatile fake-driver restart checks were run.'],
+      details: ['FORGELOOP_DATABASE_URL is not set; durable repository restart recovery was not run.'],
     };
   }
   if (dbPush.status !== 'passed') {
     return {
-      label: 'Durable restart recovery',
+      label: 'Durable repository restart recovery',
       status: 'skipped',
       details: ['Schema push did not pass, so durable restart recovery was not attempted.'],
     };
@@ -1035,28 +1060,19 @@ const runDurableRepositoryCheck = async (dbPush: VerificationCheck): Promise<Ver
   const prefix = `dogfood-${Date.now()}`;
   let client1: DbClient | undefined;
   let client2: DbClient | undefined;
-  let app1: INestApplication | undefined;
-  let app2: INestApplication | undefined;
 
   try {
     const first = createDurableRepository(databaseUrl);
     client1 = first.client;
     const seeded = await seedDurableRecoverableRun(first.repository, prefix);
-    const firstApp = await createApiApp(first.repository, { durabilityMode: 'volatile_demo' });
-    app1 = firstApp.app;
-    await app1.close();
-    app1 = undefined;
     await client1.pool.end();
     client1 = undefined;
 
     const second = createDurableRepository(databaseUrl);
     client2 = second.client;
-    const secondApp = await createApiApp(second.repository, { durabilityMode: 'volatile_demo' });
-    app2 = secondApp.app;
-    const apiUrl = secondApp.apiUrl;
-    const backfilled = await listRunEvents(apiUrl, seeded.runSessionId, seeded.queuedCursor);
+    const backfilled = await second.repository.listRunEvents(seeded.runSessionId, { after: seeded.queuedCursor });
     if (!backfilled.some((event) => event.event_type === 'user_input')) {
-      throw new Error('Fresh API/repository instance did not backfill the pre-restart user_input event.');
+      throw new Error('Fresh durable repository instance did not backfill the pre-restart user_input event.');
     }
 
     const driver = new FakeCodexSessionDriver({
@@ -1072,25 +1088,24 @@ const runDurableRepositoryCheck = async (dbPush: VerificationCheck): Promise<Ver
     if (lease?.worker_id !== `${prefix}-new-worker` || lease.status !== 'released') {
       throw new Error('Fresh worker did not reclaim and release the durable run lease.');
     }
-    await waitForRunStatus(apiUrl, seeded.runSessionId, (status) => status === 'succeeded', 'durable terminal success');
+    await assertRepositoryFinalEvidence(second.repository, seeded.runSessionId);
 
     return {
-      label: 'Durable restart recovery',
+      label: 'Durable repository restart recovery',
       status: 'passed',
       details: [
-        'Used fresh Drizzle repository and Nest app instances over the same Postgres database.',
+        'Used fresh Drizzle repository instances over the same Postgres database, with the pool closed and reopened across the restart boundary.',
         `RunSession ${seeded.runSessionId} backfilled events by cursor, reclaimed an expired lease, and completed without duplicate input delivery.`,
+        'Verified terminal changed files, checks, artifacts, and Review Packet readiness through repository reads.',
       ],
     };
   } catch (error) {
     return {
-      label: 'Durable restart recovery',
+      label: 'Durable repository restart recovery',
       status: 'failed',
       details: [error instanceof Error ? error.message : String(error)],
     };
   } finally {
-    await app1?.close();
-    await app2?.close();
     await client1?.pool.end();
     await client2?.pool.end();
   }
@@ -1177,7 +1192,7 @@ const renderReport = (data: {
     '- `pnpm test`: all Vitest suites pass.',
     '- `pnpm build`: all workspace packages and apps compile.',
     '- `pnpm smoke:p0`: P0 smoke suite passes and observes public run events before waiting for terminal evidence.',
-    '- `pnpm dogfood:p0`: exits 0 only when volatile fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable DB checks run only when `FORGELOOP_DATABASE_URL` is set.',
+    '- `pnpm dogfood:p0`: exits 0 only when volatile fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable repository checks run only when `FORGELOOP_DATABASE_URL` is set.',
     '',
     '## Dogfood Preconditions',
     '',
@@ -1185,7 +1200,8 @@ const renderReport = (data: {
     `- Repo path: ${repoPath}`,
     `- Repo id: ${repoId}`,
     '- Volatile dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.',
-    '- Durable dogfood uses fresh Drizzle repository and Nest app instances over the same Postgres database only when `FORGELOOP_DATABASE_URL` is set.',
+    '- Durable dogfood uses fresh Drizzle repository instances over the same Postgres database only when `FORGELOOP_DATABASE_URL` is set.',
+    '- Public durable API/SSE coverage is not claimed because authenticated actor injection for durable mode is not implemented yet.',
     '- Real local_codex acceptance is separate from this deterministic fake-driver dogfood pass and requires a local Codex runtime.',
     '',
     '## Dogfood Results',
