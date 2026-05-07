@@ -426,6 +426,65 @@ const sourceRepoMutationFailure = (): ExecutorFailure => ({
   retryable: false,
 });
 
+const sourceRepoVerificationFailure = (error: unknown): ExecutorFailure => ({
+  kind: 'path_violation',
+  message: `Source repo verification failed: ${error instanceof Error ? error.message : 'unknown source repo verification error'}`,
+  retryable: false,
+});
+
+const sourceRepoVerificationFailureResult = (
+  input: LocalCodexEvidenceInput,
+  error: unknown,
+  evidence: {
+    changedFiles: ChangedFile[];
+    checks: CheckResult[];
+    artifacts: ArtifactRef[];
+  },
+): ExecutorResult => {
+  const failure = sourceRepoVerificationFailure(error);
+
+  return executorFailureResult({
+    runSpec: input.runSpec,
+    startedAt: input.startedAt,
+    summary: failure.message,
+    failure,
+    changedFiles: evidence.changedFiles,
+    checks: evidence.checks,
+    artifacts: evidence.artifacts,
+    rawMetadata: rawMetadataFor(input, null),
+  });
+};
+
+const verifySourceRepoForEvidence = async (
+  input: LocalCodexEvidenceInput,
+  evidence: {
+    changedFiles: ChangedFile[];
+    checks: CheckResult[];
+    artifacts: ArtifactRef[];
+  },
+): Promise<
+  | {
+      ok: true;
+      guard: Awaited<ReturnType<typeof verifySourceRepoUnchanged>>;
+    }
+  | {
+      ok: false;
+      result: ExecutorResult;
+    }
+> => {
+  try {
+    return {
+      ok: true,
+      guard: await verifySourceRepoUnchanged(input.environment, input.sourceRepoSnapshot),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      result: sourceRepoVerificationFailureResult(input, error, evidence),
+    };
+  }
+};
+
 export const captureFailedLocalCodexEvidence: CaptureFailedLocalCodexEvidence = async (input) => {
   let capture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
   try {
@@ -442,7 +501,15 @@ export const captureFailedLocalCodexEvidence: CaptureFailedLocalCodexEvidence = 
   }
 
   const pathFailure = pathViolation(input.runSpec, capture.changedFiles);
-  const sourceRepoGuard = await verifySourceRepoUnchanged(input.environment, input.sourceRepoSnapshot);
+  const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
+    changedFiles: capture.changedFiles,
+    checks: [],
+    artifacts: capture.artifacts,
+  });
+  if (!sourceRepoVerification.ok) {
+    return sourceRepoVerification.result;
+  }
+  const sourceRepoGuard = sourceRepoVerification.guard;
   const failure = !sourceRepoGuard.unchanged
     ? sourceRepoMutationFailure()
     : pathFailure ?? input.failure;
@@ -483,7 +550,15 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
     } catch (error) {
       return diffCaptureFailure(input, error);
     }
-    const sourceRepoGuard = await verifySourceRepoUnchanged(input.environment, input.sourceRepoSnapshot);
+    const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
+      changedFiles: capture.changedFiles,
+      checks: [],
+      artifacts: capture.artifacts,
+    });
+    if (!sourceRepoVerification.ok) {
+      return sourceRepoVerification.result;
+    }
+    const sourceRepoGuard = sourceRepoVerification.guard;
 
     return executorFailureResult({
       runSpec: input.runSpec,
@@ -515,7 +590,15 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
   }
   const artifacts = [...finalCapture.artifacts, ...checkRun.artifacts];
   const finalPathFailure = pathViolation(input.runSpec, finalCapture.changedFiles);
-  const sourceRepoGuard = await verifySourceRepoUnchanged(input.environment, input.sourceRepoSnapshot);
+  const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
+    changedFiles: finalCapture.changedFiles,
+    checks: checkRun.checks,
+    artifacts,
+  });
+  if (!sourceRepoVerification.ok) {
+    return sourceRepoVerification.result;
+  }
+  const sourceRepoGuard = sourceRepoVerification.guard;
   const rawMetadata = rawMetadataFor(input, sourceRepoGuard.afterPorcelain);
 
   if (finalPathFailure !== undefined) {

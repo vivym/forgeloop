@@ -1,7 +1,33 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { sourceRepoWasMutated, worktreePathForRun } from '../../packages/executor/src/index';
+import {
+  createDefaultLocalCodexEnvironment,
+  snapshotSourceRepoStatus,
+  sourceRepoWasMutated,
+  verifySourceRepoUnchanged,
+  worktreePathForRun,
+} from '../../packages/executor/src/index';
+
+const execFileAsync = promisify(execFile);
+const tempRoots: string[] = [];
+
+const makeTempDir = async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'forgeloop-worktree-'));
+  tempRoots.push(dir);
+  return dir;
+};
+
+const execGit = async (cwd: string, args: readonly string[]) => execFileAsync('git', [...args], { cwd });
+
+afterEach(async () => {
+  await Promise.all(tempRoots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 describe('Codex persistent worktrees', () => {
   it('uses a stable per-run worktree path under the source repo', () => {
@@ -17,6 +43,27 @@ describe('Codex persistent worktrees', () => {
         afterPorcelain: ' M packages/domain/src/types.ts\n',
       }),
     ).toBe(true);
+  });
+
+  it('detects source repo mutation when dirty porcelain stays the same but content changes', async () => {
+    const repo = await makeTempDir();
+    await execGit(repo, ['init', '-b', 'main']);
+    await execGit(repo, ['config', 'user.email', 'test@example.com']);
+    await execGit(repo, ['config', 'user.name', 'Test User']);
+    await writeFile(join(repo, 'tracked.txt'), 'clean\n');
+    await execGit(repo, ['add', '.']);
+    await execGit(repo, ['commit', '-m', 'initial']);
+    await writeFile(join(repo, 'tracked.txt'), 'dirty before\n');
+    await writeFile(join(repo, 'untracked.txt'), 'untracked before\n');
+
+    const environment = createDefaultLocalCodexEnvironment();
+    const snapshot = await snapshotSourceRepoStatus(environment, repo);
+    await writeFile(join(repo, 'tracked.txt'), 'dirty after\n');
+    await writeFile(join(repo, 'untracked.txt'), 'untracked after\n');
+    const result = await verifySourceRepoUnchanged(environment, snapshot);
+
+    expect(result.beforePorcelain).toBe(result.afterPorcelain);
+    expect(result.unchanged).toBe(false);
   });
 
   it('keeps local worktree and superpowers directories ignored', () => {

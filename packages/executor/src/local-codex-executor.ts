@@ -193,7 +193,26 @@ const executorFailureResult = (input: {
   raw_metadata: input.rawMetadata ?? {},
 });
 
-const neutralizeGitRemotes = async (environment: LocalCodexEnvironment, workspacePath: string, env: NodeJS.ProcessEnv) => {
+const appendGitConfigEnv = (
+  env: NodeJS.ProcessEnv,
+  entries: Array<{ key: string; value: string }>,
+) => {
+  const existingCount = Number.parseInt(env.GIT_CONFIG_COUNT ?? '0', 10);
+  const offset = Number.isFinite(existingCount) ? existingCount : 0;
+
+  env.GIT_CONFIG_COUNT = String(offset + entries.length);
+  entries.forEach((entry, index) => {
+    const envIndex = offset + index;
+    env[`GIT_CONFIG_KEY_${envIndex}`] = entry.key;
+    env[`GIT_CONFIG_VALUE_${envIndex}`] = entry.value;
+  });
+};
+
+const neutralizeGitRemotes = async (
+  environment: LocalCodexEnvironment,
+  workspacePath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Array<{ key: string; value: string }>> => {
   const { stdout } = await environment.runCommand('git', ['remote'], {
     cwd: workspacePath,
     env,
@@ -205,22 +224,31 @@ const neutralizeGitRemotes = async (environment: LocalCodexEnvironment, workspac
     .filter(Boolean);
 
   if (remotes.length === 0) {
-    return;
+    return [];
   }
 
-  await environment.runCommand('git', ['config', 'extensions.worktreeConfig', 'true'], {
-    cwd: workspacePath,
-    env,
-  });
+  const entries = remotes.map((remote) => ({
+    key: `remote.${remote}.pushurl`,
+    value: 'DISABLED_BY_FORGELOOP',
+  }));
 
-  await Promise.all(
-    remotes.map((remote) =>
-      environment.runCommand('git', ['config', '--worktree', `remote.${remote}.pushurl`, 'DISABLED_BY_FORGELOOP'], {
-        cwd: workspacePath,
-        env,
-      }),
-    ),
-  );
+  // Use process-local Git config overrides so linked worktrees do not mutate shared source repo config.
+  appendGitConfigEnv(env, entries);
+
+  return entries;
+};
+
+const applyRemoteNeutralization = async (input: {
+  environment: LocalCodexEnvironment;
+  workspacePath: string;
+  checkEnv: NodeJS.ProcessEnv;
+  codexEnv?: NodeJS.ProcessEnv;
+}) => {
+  const entries = await neutralizeGitRemotes(input.environment, input.workspacePath, input.checkEnv);
+
+  if (input.codexEnv !== undefined) {
+    appendGitConfigEnv(input.codexEnv, entries);
+  }
 };
 
 export const runLocalCodexExecutor = async (
@@ -281,7 +309,12 @@ export const runLocalCodexExecutor = async (
   }
 
   const checkEnv = await createCheckEnv(environment, preflight.workspacePath);
-  await neutralizeGitRemotes(environment, preflight.workspacePath, checkEnv);
+  await applyRemoteNeutralization({
+    environment,
+    workspacePath: preflight.workspacePath,
+    checkEnv,
+    ...(codexEnv === undefined ? {} : { codexEnv }),
+  });
   const sourceRepoSnapshot = await snapshotSourceRepoStatus(environment, runSpec.repo.local_path);
   const effectiveDangerousMode = usesDefaultRunner ? 'confirmed' : 'not_requested';
 

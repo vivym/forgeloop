@@ -660,35 +660,36 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
-  it('disables git remote pushes in the persistent workspace without removing source remotes', async () => {
+  it('disables git remote pushes through process env without mutating shared repo config', async () => {
     const { repo, head } = await createGitRepo();
     await execGit(repo, ['remote', 'add', 'origin', 'https://example.com/repo.git']);
-    let runnerPushUrl = 'not checked';
+    const remoteCheck = blockingCheck({
+      check_id: 'remote-push',
+      command: 'git remote get-url --push origin > packages/executor/src/push-url.txt',
+    });
 
     const result = await runLocalCodexExecutor(
       createRunSpec({
         repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [],
-        context: { required_checks: [] },
+        required_checks: [remoteCheck],
+        context: { required_checks: [remoteCheck] },
       }),
       {
         artifactRoot: await makeTempDir(),
         environment: createGitBackedTestEnvironment(await makeTempDir()),
         runner: {
-          run: async ({ workspacePath }) => {
-            const { stdout } = await execGit(workspacePath, ['remote', 'get-url', '--push', 'origin']);
-            runnerPushUrl = stdout.trim();
-            return { status: 'succeeded', summary: 'Runner completed.' };
-          },
+          run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
         },
       },
     );
 
     expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
-    expect(runnerPushUrl).toBe('DISABLED_BY_FORGELOOP');
+    await expect(readFile(join(result.raw_metadata.workspace_path as string, 'packages/executor/src/push-url.txt'), 'utf8'))
+      .resolves.toBe('DISABLED_BY_FORGELOOP\n');
     await expect(execGit(repo, ['remote', 'get-url', 'origin'])).resolves.toMatchObject({
       stdout: 'https://example.com/repo.git\n',
     });
+    await expect(execGit(repo, ['config', '--get', 'extensions.worktreeConfig'])).rejects.toThrow();
   });
 
   it('uses .worktrees under the source repo by default for compatibility runs', async () => {
@@ -897,6 +898,65 @@ describe('runLocalCodexExecutor', () => {
       raw_metadata: {
         source_repo_before_status: '',
         source_repo_after_status: expect.stringContaining('packages/domain/src/types.ts'),
+      },
+    });
+  });
+
+  it('returns failed evidence when source repo verification throws after diff capture', async () => {
+    const { repo, head } = await createGitRepo();
+    const baseEnvironment = createGitBackedTestEnvironment(await makeTempDir());
+    const baseRunCommand = baseEnvironment.runCommand;
+    let failSourceStatus = false;
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: {
+          ...baseEnvironment,
+          runCommand: async (command, args, options) => {
+            if (failSourceStatus && command === 'git' && args[0] === 'status' && options?.cwd === repo) {
+              throw new Error('source repo metadata missing');
+            }
+
+            return baseRunCommand(command, args, options);
+          },
+        },
+        runner: {
+          run: async ({ workspacePath }) => {
+            await writeFile(join(workspacePath, 'packages/executor/src/source-verify.ts'), 'export const ok = true;\n');
+            failSourceStatus = true;
+
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'path_violation',
+        message: expect.stringContaining('Source repo verification failed'),
+        retryable: false,
+      },
+      changed_files: [
+        {
+          path: 'packages/executor/src/source-verify.ts',
+          change_kind: 'added',
+        },
+      ],
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({ kind: 'diff' }),
+        expect.objectContaining({ kind: 'changed_files' }),
+        expect.objectContaining({ kind: 'execution_summary' }),
+      ]),
+      raw_metadata: {
+        source_repo_before_status: '',
+        source_repo_after_status: null,
       },
     });
   });
@@ -1166,7 +1226,7 @@ describe('runLocalCodexExecutor', () => {
     const { promisify } = await import('node:util');
     const execFileAsync = promisify(execFile);
     const commandRunner: CommandRunner = async (command, args, options) => {
-      if (command === 'git' && args[0] === 'diff') {
+      if (command === 'git' && args[0] === 'diff' && options?.cwd !== repo) {
         throw new Error('stdout maxBuffer length exceeded');
       }
       if (command === 'codex') {
