@@ -27,20 +27,51 @@ const textPayload = (command: RunCommand): string => {
 
 const sanitizeContinuity = (ack: Record<string, unknown>): Record<string, unknown> => {
   const continuity = ack.continuity;
+  if (continuity === 'resume_fallback') {
+    const threadId = scalarField(ack, ['thread_id', 'threadId']);
+    return {
+      fallback: 'resume_fallback',
+      ...(threadId === undefined ? {} : { thread_id: threadId }),
+    };
+  }
+  if (continuity === 'thread_continuation') {
+    const threadId = scalarField(ack, ['thread_id', 'threadId']);
+    const turnId = scalarField(ack, ['turn_id', 'turnId']);
+    return {
+      ...(threadId === undefined ? {} : { thread_id: threadId }),
+      ...(turnId === undefined ? {} : { turn_id: turnId }),
+    };
+  }
   if (continuity === undefined || continuity === null || typeof continuity !== 'object' || Array.isArray(continuity)) {
     return {};
   }
 
   const record = continuity as Record<string, unknown>;
   const sanitized: Record<string, unknown> = {};
-  for (const key of ['thread_id', 'turn_id', 'fallback']) {
-    const value = record[key];
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      sanitized[key] = value;
-    }
+  const threadId = scalarField(record, ['thread_id']);
+  const turnId = scalarField(record, ['turn_id']);
+  const fallback = scalarField(record, ['fallback']);
+  if (threadId !== undefined) {
+    sanitized.thread_id = threadId;
+  }
+  if (turnId !== undefined) {
+    sanitized.turn_id = turnId;
+  }
+  if (fallback !== undefined) {
+    sanitized.fallback = fallback;
   }
 
   return sanitized;
+};
+
+const scalarField = (record: Record<string, unknown>, keys: string[]): string | number | boolean | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+  }
+  return undefined;
 };
 
 const appendDeliveryEvent = async (

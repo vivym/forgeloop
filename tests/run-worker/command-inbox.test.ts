@@ -141,6 +141,148 @@ describe('command inbox', () => {
     ]);
   });
 
+  it('emits fallback continuity from exec fallback driver acknowledgement without sensitive fields', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedRunningRunWithCommand(repository, command());
+    await acquireLease(repository, runSession.id);
+    const driver = new FakeCodexSessionDriver({
+      inputAcks: [
+        {
+          continuity: 'resume_fallback',
+          threadId: 'thread-1',
+          pid: 12345,
+          args: ['codex', '--resume', 'thread-1'],
+          response: { token: 'do-not-leak' },
+        },
+      ],
+    });
+
+    await applyPendingRunCommands({
+      repository,
+      runSessionId: runSession.id,
+      workerId: lease.workerId,
+      leaseToken: lease.leaseToken,
+      driver,
+      runtimeMetadata: {
+        durability_mode: 'durable',
+        driver_kind: 'exec_fallback',
+        active_turn_id: 'turn-1',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'not_requested',
+      },
+      now: () => now,
+    });
+
+    const events = await repository.listRunEvents(runSession.id);
+    expect(events).toEqual([
+      expect.objectContaining({
+        event_type: 'user_input',
+        payload: {
+          command_id: 'run-command:run-session-1:continue',
+          continuity: {
+            fallback: 'resume_fallback',
+            thread_id: 'thread-1',
+          },
+        },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain('pid');
+    expect(JSON.stringify(events)).not.toContain('args');
+    expect(JSON.stringify(events)).not.toContain('do-not-leak');
+  });
+
+  it('emits thread continuation from app server acknowledgement without raw response data', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedRunningRunWithCommand(repository, command());
+    await acquireLease(repository, runSession.id);
+    const driver = new FakeCodexSessionDriver({
+      inputAcks: [
+        {
+          continuity: 'thread_continuation',
+          threadId: 'thread-1',
+          turnId: 'turn-2',
+          response: { accessToken: 'do-not-leak' },
+        },
+      ],
+    });
+
+    await applyPendingRunCommands({
+      repository,
+      runSessionId: runSession.id,
+      workerId: lease.workerId,
+      leaseToken: lease.leaseToken,
+      driver,
+      runtimeMetadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'not_requested',
+      },
+      now: () => now,
+    });
+
+    const events = await repository.listRunEvents(runSession.id);
+    expect(events).toEqual([
+      expect.objectContaining({
+        event_type: 'user_input',
+        payload: {
+          command_id: 'run-command:run-session-1:continue',
+          continuity: {
+            thread_id: 'thread-1',
+            turn_id: 'turn-2',
+          },
+        },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain('response');
+    expect(JSON.stringify(events)).not.toContain('do-not-leak');
+  });
+
+  it('omits continuity details for active turn steering acknowledgements', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedRunningRunWithCommand(repository, command());
+    await acquireLease(repository, runSession.id);
+    const driver = new FakeCodexSessionDriver({
+      inputAcks: [
+        {
+          continuity: 'turn_steer',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          response: { accessToken: 'do-not-leak' },
+        },
+      ],
+    });
+
+    await applyPendingRunCommands({
+      repository,
+      runSessionId: runSession.id,
+      workerId: lease.workerId,
+      leaseToken: lease.leaseToken,
+      driver,
+      runtimeMetadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        active_turn_id: 'turn-1',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'not_requested',
+      },
+      now: () => now,
+    });
+
+    const events = await repository.listRunEvents(runSession.id);
+    expect(events).toEqual([
+      expect.objectContaining({
+        event_type: 'user_input',
+        payload: {
+          command_id: 'run-command:run-session-1:continue',
+          continuity: {},
+        },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain('turn_steer');
+    expect(JSON.stringify(events)).not.toContain('do-not-leak');
+  });
+
   it('does not re-send stale claimed input with unknown delivery state and marks warning', async () => {
     const repository = new InMemoryP0Repository();
     const { runSession, command: staleCommand } = await seedRunningRunWithCommand(
