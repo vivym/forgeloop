@@ -79,5 +79,7 @@ describe('codex event normalizer', () => {
     ]);
     expect(events[0]?.summary).not.toContain('sk-test-secret');
     expect(String(events[0]?.payload.notification_type).length).toBeLessThanOrEqual(8_200);
+    expect(JSON.stringify(events[0]?.raw_ref)).not.toContain('sk-');
+    expect(JSON.stringify(events[0]?.raw_ref).length).toBeLessThanOrEqual(8_300);
   });
 });

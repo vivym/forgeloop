@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
 import type { ExecutorFailure } from '@forgeloop/contracts';
@@ -27,6 +27,32 @@ const failureFromExit = (code: number | null, signal: NodeJS.Signals | null): Ex
   message: signal === null ? `Codex exec exited with code ${code ?? 'unknown'}` : `Codex exec exited on signal ${signal}`,
   retryable: true,
 });
+
+const failureFromSpawnError = (error: Error): ExecutorFailure => ({
+  kind: 'executor_process_failed',
+  message: `Failed to spawn Codex exec process: ${error.message}`,
+  retryable: true,
+});
+
+const waitForChildSpawn = async (child: ChildProcess): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const cleanup = () => {
+      child.off('error', onError);
+      child.off('spawn', onSpawn);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onSpawn = () => {
+      cleanup();
+      child.on('error', () => undefined);
+      resolve();
+    };
+
+    child.once('error', onError);
+    child.once('spawn', onSpawn);
+  });
 
 export class CodexExecFallbackDriver implements CodexSessionDriver {
   readonly kind = 'exec_fallback' as const;
@@ -75,6 +101,7 @@ export class CodexExecFallbackDriver implements CodexSessionDriver {
     const child = spawn(this.#codexBinary, args, {
       stdio: ['ignore', 'ignore', 'ignore'],
     });
+    await waitForChildSpawn(child);
 
     return {
       continuity: 'resume_fallback',
@@ -100,28 +127,30 @@ export class CodexExecFallbackDriver implements CodexSessionDriver {
     const lines = createInterface({ input: child.stdout });
     const stderrLines = createInterface({ input: child.stderr });
     let stderr = '';
+    let completed = false;
+    let spawnError: Error | undefined;
 
     stderrLines.on('line', (line) => {
       stderr = stderr.length === 0 ? line : `${stderr}\n${line}`;
     });
 
-    for await (const line of lines) {
-      const rawRef = await this.#rawLogStore?.appendRawNotification({
-        runSessionId: input.runSpec.run_session_id,
-        source: 'exec_fallback',
-        payload: line,
+    const terminal = new Promise<CodexDriverStreamItem>((resolve) => {
+      child.once('error', (error) => {
+        spawnError = error;
+        completed = true;
+        resolve({
+          kind: 'terminal',
+          status: 'failed',
+          summary: 'Codex exec fallback failed to start.',
+          failure: failureFromSpawnError(error),
+        });
       });
-
-      for (const event of normalizeCodexExecJsonLine(line)) {
-        if (rawRef !== undefined) {
-          event.raw_ref = rawRef.raw_ref;
-        }
-        yield { kind: 'event', event };
-      }
-    }
-
-    const terminal = await new Promise<CodexDriverStreamItem>((resolve) => {
       child.once('close', (code, signal) => {
+        completed = true;
+        if (spawnError !== undefined) {
+          return;
+        }
+
         if (code === 0 && signal === null) {
           resolve({
             kind: 'terminal',
@@ -143,6 +172,29 @@ export class CodexExecFallbackDriver implements CodexSessionDriver {
       });
     });
 
-    yield terminal;
+    try {
+      for await (const line of lines) {
+        const rawRef = await this.#rawLogStore?.appendRawNotification({
+          runSessionId: input.runSpec.run_session_id,
+          source: 'exec_fallback',
+          payload: line,
+        });
+
+        for (const event of normalizeCodexExecJsonLine(line)) {
+          if (rawRef !== undefined) {
+            event.raw_ref = rawRef.raw_ref;
+          }
+          yield { kind: 'event', event };
+        }
+      }
+
+      yield await terminal;
+    } finally {
+      lines.close();
+      stderrLines.close();
+      if (!completed && !child.killed && child.exitCode === null) {
+        child.kill('SIGTERM');
+      }
+    }
   }
 }

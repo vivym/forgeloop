@@ -36,6 +36,87 @@ export interface CodexAppServerProcessTransportOptions {
 
 const textInput = (message: string): Array<Record<string, unknown>> => [{ type: 'text', text: message, text_elements: [] }];
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const stringField = (record: Record<string, unknown>, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string') {
+      return value;
+    }
+  }
+
+  return undefined;
+};
+
+const notificationBody = (notification: unknown): Record<string, unknown> => {
+  if (!isRecord(notification)) {
+    return {};
+  }
+
+  const params = notification.params;
+  if (isRecord(params)) {
+    return typeof notification.method === 'string' ? { ...params, method: notification.method } : params;
+  }
+
+  return notification;
+};
+
+const turnCompletedTerminal = (notification: unknown): CodexDriverStreamItem | undefined => {
+  const body = notificationBody(notification);
+  const method = stringField(body, ['method']);
+  const type = stringField(body, ['type', 'event_type', 'eventType', 'kind']);
+  if (method !== 'turn/completed' && type !== 'turn_completed') {
+    return undefined;
+  }
+
+  const turn = isRecord(body.turn) ? body.turn : body;
+  const status = stringField(turn, ['status']) ?? 'unknown';
+  if (status === 'completed') {
+    return {
+      kind: 'terminal',
+      status: 'succeeded',
+      summary: 'Codex app-server turn completed.',
+      runtimeMetadata: {
+        driver_status: 'terminal',
+      },
+    };
+  }
+
+  if (status === 'interrupted') {
+    return {
+      kind: 'terminal',
+      status: 'cancelled',
+      summary: 'Codex app-server turn interrupted.',
+      runtimeMetadata: {
+        driver_status: 'terminal',
+      },
+    };
+  }
+
+  const error = isRecord(turn.error) ? turn.error : undefined;
+  const errorMessage = error === undefined ? undefined : stringField(error, ['message', 'additionalDetails']);
+  const summary =
+    status === 'failed'
+      ? 'Codex app-server turn failed.'
+      : `Codex app-server turn ended with unknown status: ${status}.`;
+
+  return {
+    kind: 'terminal',
+    status: 'failed',
+    summary,
+    runtimeMetadata: {
+      driver_status: 'terminal',
+    },
+    failure: {
+      kind: 'executor_error',
+      message: errorMessage ?? summary,
+      retryable: true,
+    },
+  };
+};
+
 const responseConfig = (response: unknown): CodexEffectiveConfig => {
   if (response !== null && typeof response === 'object') {
     const record = response as Record<string, unknown>;
@@ -337,6 +418,12 @@ export class CodexAppServerDriver implements CodexSessionDriver {
         }
         yield { kind: 'event', event };
       }
+
+      const terminal = turnCompletedTerminal(notification);
+      if (terminal !== undefined) {
+        yield terminal;
+        return;
+      }
     }
   }
 }
@@ -353,6 +440,7 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   readonly #notificationQueue: unknown[] = [];
   #requestId = 0;
   #closed = false;
+  #processError: Error | undefined = undefined;
 
   constructor(options: CodexAppServerProcessTransportOptions = {}) {
     this.#child = spawn(options.codexBinary ?? 'codex', options.args ?? ['app-server'], {
@@ -362,22 +450,31 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
     createInterface({ input: this.#child.stdout }).on('line', (line) => {
       this.#handleLine(line);
     });
+    this.#child.once('error', (error) => {
+      this.#closeWithError(error);
+    });
     this.#child.once('close', () => {
-      this.#closed = true;
-      for (const pending of this.#pending.values()) {
-        pending.reject(new Error('Codex app-server process closed before the request completed.'));
-      }
-      this.#pending.clear();
+      this.#closeWithError(new Error('Codex app-server process closed before the request completed.'));
     });
   }
 
   async request(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (this.#closed) {
+      throw this.#processError ?? new Error('Codex app-server process is closed.');
+    }
+
     const id = ++this.#requestId;
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
     const response = new Promise<unknown>((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
     });
-    this.#child.stdin.write(`${payload}\n`);
+    this.#child.stdin.write(`${payload}\n`, (error) => {
+      if (error !== null && error !== undefined) {
+        const pending = this.#pending.get(id);
+        this.#pending.delete(id);
+        pending?.reject(error);
+      }
+    });
     return response;
   }
 
@@ -394,8 +491,8 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   }
 
   async close(): Promise<void> {
+    this.#closeWithError(new Error('Codex app-server process was closed.'));
     this.#child.kill('SIGTERM');
-    this.#closed = true;
   }
 
   #handleLine(line: string): void {
@@ -426,6 +523,17 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
     }
 
     this.#notificationQueue.push(message);
+  }
+
+  #closeWithError(error: Error): void {
+    if (this.#processError === undefined) {
+      this.#processError = error;
+    }
+    this.#closed = true;
+    for (const pending of this.#pending.values()) {
+      pending.reject(error);
+    }
+    this.#pending.clear();
   }
 }
 

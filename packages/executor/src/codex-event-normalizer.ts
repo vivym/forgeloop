@@ -50,6 +50,9 @@ export const redactForPublicPayload = (value: unknown): Record<string, unknown> 
     : { value: sanitized };
 };
 
+const sanitizeNotificationType = (notificationType: string): string =>
+  String(redactForPublicPayload({ notification_type: notificationType }).notification_type ?? 'unknown');
+
 const isRecord = (value: unknown): value is JsonRecord =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -137,6 +140,10 @@ export const normalizeCodexAppServerNotification = (input: unknown): NormalizedR
     ];
   }
 
+  if (type === 'turn_completed' || method === 'turn/completed') {
+    return [];
+  }
+
   if (
     type === 'command_output_delta' ||
     method === 'command/exec/outputDelta' ||
@@ -152,7 +159,7 @@ export const normalizeCodexAppServerNotification = (input: unknown): NormalizedR
     ];
   }
 
-  const notificationType = type ?? method ?? 'unknown';
+  const notificationType = sanitizeNotificationType(type ?? method ?? 'unknown');
 
   return [
     eventDraft(
