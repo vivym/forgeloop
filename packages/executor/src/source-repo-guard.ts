@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readlink } from 'node:fs/promises';
-import { relative, resolve } from 'node:path';
+import { lstat, readFile, readdir, readlink } from 'node:fs/promises';
+import { join, relative, resolve } from 'node:path';
 
 import type { LocalCodexEnvironment } from './local-codex-preflight.js';
 
@@ -34,7 +34,16 @@ const assertSafeRepoPath = (repoPath: string, path: string): string => {
 
 const splitNul = (value: string): string[] => value.split('\0').filter(Boolean);
 
+const isIgnoredRunWorktreePath = (path: string): boolean => path === '.worktrees' || path.startsWith('.worktrees/');
+
 const hashUntrackedPath = async (hash: ReturnType<typeof createHash>, repoPath: string, path: string) => {
+  if (isIgnoredRunWorktreePath(path)) {
+    hash.update('ignored-run-worktree\0');
+    hash.update(path);
+    hash.update('\0');
+    return;
+  }
+
   const resolvedPath = assertSafeRepoPath(repoPath, path);
   const stats = await lstat(resolvedPath);
 
@@ -53,6 +62,17 @@ const hashUntrackedPath = async (hash: ReturnType<typeof createHash>, repoPath: 
     hash.update('file\0');
     hash.update(await readFile(resolvedPath));
     hash.update('\0');
+    return;
+  }
+
+  if (stats.isDirectory()) {
+    hash.update('directory\0');
+    const entries = await readdir(resolvedPath, { withFileTypes: true });
+
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      await hashUntrackedPath(hash, repoPath, join(path, entry.name));
+    }
+    hash.update('end-directory\0');
     return;
   }
 

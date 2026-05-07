@@ -315,7 +315,30 @@ export const runLocalCodexExecutor = async (
     checkEnv,
     ...(codexEnv === undefined ? {} : { codexEnv }),
   });
-  const sourceRepoSnapshot = await snapshotSourceRepoStatus(environment, runSpec.repo.local_path);
+  let sourceRepoSnapshot: Awaited<ReturnType<typeof snapshotSourceRepoStatus>>;
+  try {
+    sourceRepoSnapshot = await snapshotSourceRepoStatus(environment, runSpec.repo.local_path);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown source repo snapshot error';
+
+    return executorFailureResult({
+      runSpec,
+      startedAt,
+      summary: `Local Codex preflight failed: Source repo status snapshot failed: ${message}`,
+      failure: {
+        kind: 'preflight_failed',
+        message: `Source repo status snapshot failed: ${message}`,
+        retryable: false,
+      },
+      rawMetadata: {
+        workspace_path: preflight.workspacePath,
+        base_ref: preflight.resolvedBaseRef,
+        source_repo_before_status: null,
+        source_repo_after_status: null,
+        effective_dangerous_mode: usesDefaultRunner ? 'confirmed' : 'not_requested',
+      },
+    });
+  }
   const effectiveDangerousMode = usesDefaultRunner ? 'confirmed' : 'not_requested';
 
   const runner = options.runner ?? defaultRunner(environment, codexEnv ?? checkEnv);

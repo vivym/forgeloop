@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -60,6 +60,28 @@ describe('Codex persistent worktrees', () => {
     const snapshot = await snapshotSourceRepoStatus(environment, repo);
     await writeFile(join(repo, 'tracked.txt'), 'dirty after\n');
     await writeFile(join(repo, 'untracked.txt'), 'untracked after\n');
+    const result = await verifySourceRepoUnchanged(environment, snapshot);
+
+    expect(result.beforePorcelain).toBe(result.afterPorcelain);
+    expect(result.unchanged).toBe(false);
+  });
+
+  it('detects source repo mutation inside an untracked nested repository directory', async () => {
+    const repo = await makeTempDir();
+    await execGit(repo, ['init', '-b', 'main']);
+    await execGit(repo, ['config', 'user.email', 'test@example.com']);
+    await execGit(repo, ['config', 'user.name', 'Test User']);
+    await writeFile(join(repo, 'tracked.txt'), 'clean\n');
+    await execGit(repo, ['add', '.']);
+    await execGit(repo, ['commit', '-m', 'initial']);
+    const nestedRepo = join(repo, 'vendor', 'nested');
+    await mkdir(nestedRepo, { recursive: true });
+    await execGit(nestedRepo, ['init', '-b', 'main']);
+    await writeFile(join(nestedRepo, 'nested.txt'), 'nested before\n');
+
+    const environment = createDefaultLocalCodexEnvironment();
+    const snapshot = await snapshotSourceRepoStatus(environment, repo);
+    await writeFile(join(nestedRepo, 'nested.txt'), 'nested after\n');
     const result = await verifySourceRepoUnchanged(environment, snapshot);
 
     expect(result.beforePorcelain).toBe(result.afterPorcelain);

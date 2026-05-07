@@ -961,6 +961,50 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
+  it('returns preflight failure and skips runner when source repo snapshot fails', async () => {
+    const { repo, head } = await createGitRepo();
+    const baseEnvironment = createGitBackedTestEnvironment(await makeTempDir());
+    const baseRunCommand = baseEnvironment.runCommand;
+    let invoked = false;
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: {
+          ...baseEnvironment,
+          runCommand: async (command, args, options) => {
+            if (command === 'git' && args[0] === 'status' && options?.cwd === repo) {
+              throw new Error('source repo status unavailable');
+            }
+
+            return baseRunCommand(command, args, options);
+          },
+        },
+        runner: {
+          run: async () => {
+            invoked = true;
+
+            return { status: 'succeeded', summary: 'should not run' };
+          },
+        },
+      },
+    );
+
+    expect(invoked).toBe(false);
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'preflight_failed',
+        message: expect.stringContaining('Source repo status snapshot failed'),
+        retryable: false,
+      },
+    });
+  });
+
   it('returns path_violation from evidence capture when a failed runner mutates the source repo', async () => {
     const { repo, head } = await createGitRepo();
     const result = await runLocalCodexExecutor(
