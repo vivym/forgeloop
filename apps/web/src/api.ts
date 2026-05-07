@@ -150,6 +150,20 @@ export interface RunSession {
   check_results?: CheckResult[];
   artifacts?: ArtifactRef[];
   log_refs?: ArtifactRef[];
+  runtime_metadata?: {
+    durability_mode?: 'durable' | 'volatile_demo';
+    driver_kind?: 'app_server' | 'exec_fallback' | 'fake';
+    driver_status?: 'not_started' | 'starting' | 'active' | 'waiting_for_input' | 'stalled' | 'terminal';
+    codex_thread_id?: string;
+    active_turn_id?: string;
+    workspace_path?: string;
+    app_server_endpoint?: string;
+    worker_id?: string;
+    last_event_cursor?: string;
+    last_event_at?: string;
+    recovery_attempt_count?: number;
+    effective_dangerous_mode?: 'confirmed' | 'unconfirmed' | 'not_requested';
+  };
   summary?: string;
   failure_kind?: string;
   failure_reason?: string;
@@ -157,6 +171,32 @@ export interface RunSession {
   updated_at?: string;
   started_at?: string;
   finished_at?: string;
+}
+
+export interface RunEvent {
+  id: string;
+  run_session_id?: string;
+  sequence: number;
+  cursor?: string;
+  event_type?: string;
+  source?: string;
+  visibility?: 'public';
+  summary?: string;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface RunEventListResponse {
+  events: RunEvent[];
+  next_cursor?: string;
+  has_more?: boolean;
+}
+
+export interface RunOperatorCommandResponse {
+  status?: string;
+  command_id?: string;
+  run_session_id?: string;
+  command_type?: 'input' | 'cancel' | 'resume';
 }
 
 export interface RequestedChange {
@@ -288,6 +328,11 @@ export interface ReviewDecisionBody {
   requested_changes?: RequestedChange[];
 }
 
+export interface RunEventStreamHandlers {
+  onEvent: (event: RunEvent) => void;
+  onError: (error: Event) => void;
+}
+
 type FetchLike = typeof fetch;
 
 export class ForgeloopApiError extends Error {
@@ -310,6 +355,18 @@ export interface ForgeloopApiOptions {
 const defaultBaseUrl = () => import.meta.env.VITE_FORGELOOP_API_URL || 'http://localhost:3000';
 
 const normalizeBaseUrl = (baseUrl: string) => baseUrl.replace(/\/+$/, '');
+
+const requiredActorId = (actorId: string) => {
+  const trimmed = actorId.trim();
+  if (!trimmed) throw new Error('actorId is required');
+  return trimmed;
+};
+
+const runEventsQuery = (options: { after?: string; actorId: string }) => {
+  const params = new URLSearchParams({ actor_id: requiredActorId(options.actorId) });
+  if (options.after) params.set('after', options.after);
+  return params.toString();
+};
 
 export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
   const baseUrl = normalizeBaseUrl(options.baseUrl ?? defaultBaseUrl());
@@ -391,6 +448,45 @@ export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
       request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/force-rerun`, { method: 'POST', body }),
 
     getRunSession: (runSessionId: string) => request<RunSession>(`/run-sessions/${encodeURIComponent(runSessionId)}`),
+    listRunEvents: async (runSessionId: string, options: { after?: string; actorId: string }) =>
+      request<RunEventListResponse>(`/run-sessions/${encodeURIComponent(runSessionId)}/events?${runEventsQuery(options)}`),
+    sendRunInput: async (runSessionId: string, actorId: string, message: string, targetTurnId?: string) =>
+      request<RunOperatorCommandResponse>(`/run-sessions/${encodeURIComponent(runSessionId)}/input`, {
+        method: 'POST',
+        body: {
+          actor_id: requiredActorId(actorId),
+          message,
+          ...(targetTurnId ? { target_turn_id: targetTurnId } : {}),
+        },
+      }),
+    cancelRun: async (runSessionId: string, actorId: string, reason?: string) =>
+      request<RunOperatorCommandResponse>(`/run-sessions/${encodeURIComponent(runSessionId)}/cancel`, {
+        method: 'POST',
+        body: {
+          actor_id: requiredActorId(actorId),
+          ...(reason ? { reason } : {}),
+        },
+      }),
+    resumeRun: async (runSessionId: string, actorId: string, reason?: string) =>
+      request<RunOperatorCommandResponse>(`/run-sessions/${encodeURIComponent(runSessionId)}/resume`, {
+        method: 'POST',
+        body: {
+          actor_id: requiredActorId(actorId),
+          ...(reason ? { reason } : {}),
+        },
+      }),
+    openRunEventStream: (runSessionId: string, options: { after?: string; actorId: string }, handlers: RunEventStreamHandlers) => {
+      const eventSource = new EventSource(
+        `${baseUrl}/run-sessions/${encodeURIComponent(runSessionId)}/events/stream?${runEventsQuery(options)}`,
+      );
+      eventSource.onmessage = (message) => {
+        handlers.onEvent(JSON.parse(message.data) as RunEvent);
+      };
+      eventSource.onerror = (error) => {
+        handlers.onError(error);
+      };
+      return eventSource;
+    },
     getReviewPacket: (reviewPacketId: string) => request<ReviewPacket>(`/review-packets/${encodeURIComponent(reviewPacketId)}`),
     approveReviewPacket: (reviewPacketId: string, body: ReviewDecisionBody) =>
       request<Record<string, unknown>>(`/review-packets/${encodeURIComponent(reviewPacketId)}/approve`, { method: 'POST', body }),

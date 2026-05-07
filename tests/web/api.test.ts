@@ -5,6 +5,7 @@ import { createForgeloopApi, ForgeloopApiError } from '../../apps/web/src/api';
 describe('Forgeloop web API client', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('sends JSON bodies to normalized endpoint URLs', async () => {
@@ -125,5 +126,87 @@ describe('Forgeloop web API client', () => {
       status: 400,
       details: { code: 'INVALID_TRANSITION' },
     } satisfies Partial<ForgeloopApiError>);
+  });
+
+  it('propagates actor ids to run event and operator command endpoints', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('/events')) {
+        return new Response(JSON.stringify({ events: [{ id: 'event-1', sequence: 1 }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ accepted: true }), { status: 202 });
+    });
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await api.listRunEvents('run-1', { actorId: 'actor owner', after: '0000000001' });
+    await api.sendRunInput('run-1', 'actor-owner', 'continue', 'turn-1');
+    await api.cancelRun('run-1', 'actor-owner', 'operator requested stop');
+    await api.resumeRun('run-1', 'actor-owner', 'operator requested resume');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://api.local/run-sessions/run-1/events?actor_id=actor+owner&after=0000000001',
+      {
+        method: 'GET',
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/run-sessions/run-1/input', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actor_id: 'actor-owner', message: 'continue', target_turn_id: 'turn-1' }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/run-sessions/run-1/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actor_id: 'actor-owner', reason: 'operator requested stop' }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/run-sessions/run-1/resume', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actor_id: 'actor-owner', reason: 'operator requested resume' }),
+    });
+  });
+
+  it('rejects run event helpers before sending requests without an actor id', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await expect(api.listRunEvents('run-1', { actorId: '' })).rejects.toThrow('actorId is required');
+    await expect(api.sendRunInput('run-1', '', 'continue')).rejects.toThrow('actorId is required');
+    await expect(api.cancelRun('run-1', '   ')).rejects.toThrow('actorId is required');
+    await expect(api.resumeRun('run-1', '')).rejects.toThrow('actorId is required');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('opens run event streams with actor ids and parses incoming messages', () => {
+    const instances: Array<{ url: string; close: ReturnType<typeof vi.fn>; onmessage?: (event: MessageEvent) => void; onerror?: (error: Event) => void }> = [];
+    class MockEventSource {
+      readonly url: string;
+      readonly close = vi.fn();
+      onmessage?: (event: MessageEvent) => void;
+      onerror?: (error: Event) => void;
+
+      constructor(url: string) {
+        this.url = url;
+        instances.push(this);
+      }
+    }
+    vi.stubGlobal('EventSource', MockEventSource);
+    const api = createForgeloopApi({ baseUrl: 'http://api.local' });
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+
+    const stream = api.openRunEventStream('run-1', { actorId: 'actor owner', after: '0000000001' }, { onEvent, onError });
+
+    expect(instances[0]?.url).toBe('http://api.local/run-sessions/run-1/events/stream?actor_id=actor+owner&after=0000000001');
+    instances[0]?.onmessage?.({ data: JSON.stringify({ id: 'event-1', sequence: 1 }) } as MessageEvent);
+    const error = new Event('error');
+    instances[0]?.onerror?.(error);
+    stream.close();
+
+    expect(onEvent).toHaveBeenCalledWith({ id: 'event-1', sequence: 1 });
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(instances[0]?.close).toHaveBeenCalled();
   });
 });

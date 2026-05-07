@@ -17,6 +17,7 @@ import {
   type PlanRevision,
   type RequestedChange,
   type ReviewPacket,
+  type RunEvent,
   type RunPackageBody,
   type RunSession,
   type SpecPlan,
@@ -25,7 +26,7 @@ import {
   type WorkItem,
   type WorkItemKind,
 } from './api';
-import { isActiveCockpit } from './workbenchState';
+import { appendRunEvents, isActiveCockpit, latestContinuationNotice, nextRunEventCursor, visibleRunArtifacts } from './workbenchState';
 
 const actorDefault = 'actor-owner';
 const reviewerDefault = 'actor-reviewer';
@@ -60,6 +61,9 @@ type SpecPlanMode = 'spec' | 'plan';
 export function App() {
   const selectedWorkItemIdRef = useRef('');
   const refreshRequestIdRef = useRef(0);
+  const runEventCursorRef = useRef<string | undefined>(undefined);
+  const runStreamRef = useRef<EventSource | null>(null);
+  const runStreamRetryRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [projectFilter, setProjectFilter] = useState('');
   const [manualWorkItemId, setManualWorkItemId] = useState('');
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
@@ -72,6 +76,11 @@ export function App() {
   const [selectedRunId, setSelectedRunId] = useState('');
   const [selectedReviewId, setSelectedReviewId] = useState('');
   const [runDetail, setRunDetail] = useState<RunSession | null>(null);
+  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [runInput, setRunInput] = useState('');
+  const [runStreamStatus, setRunStreamStatus] = useState<'idle' | 'connecting' | 'live' | 'retrying' | 'blocked'>('idle');
+  const [runConsoleError, setRunConsoleError] = useState('');
+  const [now, setNow] = useState(() => Date.now());
   const [reviewDetail, setReviewDetail] = useState<ReviewPacket | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
@@ -103,12 +112,19 @@ export function App() {
   const activeSelectedReviewId =
     hasActiveCockpit && reviewPackets.some((packet) => packet.id === selectedReviewId) ? selectedReviewId : '';
   const activeRunDetail = activeSelectedRunId && runDetail?.id === activeSelectedRunId ? runDetail : null;
+  const activeRunSummary = activeRunDetail ?? runSessions.find((run) => run.id === activeSelectedRunId) ?? null;
   const activeReviewDetail = activeSelectedReviewId && reviewDetail?.id === activeSelectedReviewId ? reviewDetail : null;
   const failedChecks = (activeRunDetail?.check_results ?? []).filter((check) => check.status !== 'succeeded' && check.blocks_review !== false);
   const nextActions = hasActiveCockpit ? (cockpit.next_actions ?? []) : [];
+  const selectedRunActorId = runForm.actor_id.trim() || selectedPackage?.owner_actor_id || actorDefault;
 
   useEffect(() => {
     void loadWorkItems();
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -159,6 +175,98 @@ export function App() {
     };
   }, [selectedReviewId]);
 
+  useEffect(() => {
+    runStreamRef.current?.close();
+    runStreamRef.current = null;
+    if (runStreamRetryRef.current !== undefined) {
+      clearTimeout(runStreamRetryRef.current);
+      runStreamRetryRef.current = undefined;
+    }
+    runEventCursorRef.current = undefined;
+    setRunEvents([]);
+    setRunConsoleError('');
+
+    if (!activeSelectedRunId) {
+      setRunStreamStatus('idle');
+      return;
+    }
+
+    let stopped = false;
+    const mergeRunEvents = (incoming: RunEvent[]) => {
+      setRunEvents((current) => {
+        const next = appendRunEvents(current, incoming);
+        runEventCursorRef.current = nextRunEventCursor(next);
+        return next;
+      });
+    };
+    const closeStream = () => {
+      runStreamRef.current?.close();
+      runStreamRef.current = null;
+    };
+    const scheduleReconnect = () => {
+      if (stopped) return;
+      setRunStreamStatus('retrying');
+      setRunConsoleError('Run event stream disconnected; reconnecting.');
+      closeStream();
+      if (runStreamRetryRef.current !== undefined) clearTimeout(runStreamRetryRef.current);
+      runStreamRetryRef.current = setTimeout(() => {
+        runStreamRetryRef.current = undefined;
+        openStream(runEventCursorRef.current);
+      }, 1500);
+    };
+    const openStream = (after?: string) => {
+      if (stopped) return;
+      try {
+        setRunStreamStatus('connecting');
+        let stream: EventSource;
+        stream = api.openRunEventStream(
+          activeSelectedRunId,
+          { actorId: selectedRunActorId, ...(after === undefined ? {} : { after }) },
+          {
+            onEvent: (event) => {
+              if (stopped) return;
+              setRunStreamStatus('live');
+              setRunConsoleError('');
+              mergeRunEvents([event]);
+            },
+            onError: () => {
+              scheduleReconnect();
+            },
+          },
+        );
+        runStreamRef.current = stream;
+        setRunStreamStatus('live');
+      } catch (cause) {
+        setRunStreamStatus('blocked');
+        setRunConsoleError(cause instanceof Error ? cause.message : 'Unable to open run event stream');
+      }
+    };
+    const start = async () => {
+      setRunStreamStatus('connecting');
+      try {
+        const response = await api.listRunEvents(activeSelectedRunId, { actorId: selectedRunActorId });
+        if (stopped) return;
+        mergeRunEvents(response.events);
+        openStream(nextRunEventCursor(response.events));
+      } catch (cause) {
+        if (stopped) return;
+        setRunStreamStatus('blocked');
+        setRunConsoleError(cause instanceof Error ? cause.message : 'Unable to load run events');
+      }
+    };
+
+    void start();
+
+    return () => {
+      stopped = true;
+      closeStream();
+      if (runStreamRetryRef.current !== undefined) {
+        clearTimeout(runStreamRetryRef.current);
+        runStreamRetryRef.current = undefined;
+      }
+    };
+  }, [activeSelectedRunId, selectedRunActorId]);
+
   const completionText = useMemo(
     () => JSON.stringify(hasActiveCockpit ? (cockpit.completion_state ?? {}) : {}, null, 2),
     [cockpit.completion_state, hasActiveCockpit],
@@ -195,6 +303,10 @@ export function App() {
     setSelectedRunId('');
     setSelectedReviewId('');
     setRunDetail(null);
+    setRunEvents([]);
+    setRunInput('');
+    setRunStreamStatus('idle');
+    setRunConsoleError('');
     setReviewDetail(null);
     setPackageForm(toPackageForm(emptyPackage));
   }
@@ -312,6 +424,25 @@ export function App() {
       if (runSessionId) setSelectedRunId(runSessionId);
       const reviewPacketId = getNestedString(response, ['workflow_result', 'reviewPacketId']);
       if (reviewPacketId) setSelectedReviewId(reviewPacketId);
+    });
+  }
+
+  function sendRunConsoleInput(event: FormEvent) {
+    event.preventDefault();
+    const message = runInput.trim();
+    if (!activeSelectedRunId || !message) return;
+    void runAction('Sent run input', async () => {
+      await api.sendRunInput(activeSelectedRunId, selectedRunActorId, message, latestActiveTurnId(activeRunSummary, runEvents));
+      setRunInput('');
+    });
+  }
+
+  function runControlCommand(command: 'cancel' | 'resume') {
+    if (!activeSelectedRunId) return;
+    const reason = command === 'cancel' ? 'Operator requested cancellation from web console.' : 'Operator requested resume from web console.';
+    void runAction(command === 'cancel' ? 'Cancel requested' : 'Resume requested', async () => {
+      if (command === 'cancel') await api.cancelRun(activeSelectedRunId, selectedRunActorId, reason);
+      else await api.resumeRun(activeSelectedRunId, selectedRunActorId, reason);
     });
   }
 
@@ -531,6 +662,19 @@ export function App() {
             <button disabled={!selectedPackage || !activeSelectedRunId} onClick={() => runPackage('rerun')}>Rerun</button>
             <button disabled={!selectedPackage || !activeSelectedRunId} onClick={() => runPackage('force')}>Force Rerun</button>
           </div>
+          <RunConsole
+            actorId={selectedRunActorId}
+            error={runConsoleError}
+            events={runEvents}
+            input={runInput}
+            now={now}
+            onCancel={() => runControlCommand('cancel')}
+            onInputChange={setRunInput}
+            onResume={() => runControlCommand('resume')}
+            onSend={sendRunConsoleInput}
+            run={activeRunSummary}
+            streamStatus={runStreamStatus}
+          />
           <RunDetail run={activeRunDetail} failedChecks={failedChecks} />
           <ReviewDetail review={activeReviewDetail} />
           <div className="review-controls">
@@ -602,6 +746,115 @@ function EntitySummary({ title, entity, revisions }: { title: string; entity: Sp
   );
 }
 
+function RunConsole({
+  actorId,
+  error,
+  events,
+  input,
+  now,
+  onCancel,
+  onInputChange,
+  onResume,
+  onSend,
+  run,
+  streamStatus,
+}: {
+  actorId: string;
+  error: string;
+  events: RunEvent[];
+  input: string;
+  now: number;
+  onCancel: () => void;
+  onInputChange: (value: string) => void;
+  onResume: () => void;
+  onSend: (event: FormEvent) => void;
+  run: RunSession | null;
+  streamStatus: string;
+}) {
+  const metadata = run?.runtime_metadata;
+  const continuationNotice = latestContinuationNotice(events);
+  const currentPlanStep = latestPayloadString(events, ['current_step', 'plan_step', 'step', 'status']);
+  const activeTurnId = latestActiveTurnId(run, events);
+  const threadId = metadata?.codex_thread_id ?? latestPayloadString(events, ['thread_id']);
+  const workerId = metadata?.worker_id ?? latestPayloadString(events, ['worker_id']);
+  const lastEventAt = events.at(-1)?.created_at ?? metadata?.last_event_at ?? run?.updated_at;
+  const displayEvents = events.filter((event) => event.event_type !== 'watchdog_heartbeat');
+
+  return (
+    <div className="run-console">
+      <div className="run-console-head">
+        <div>
+          <h3>Run Console</h3>
+          <span>{run ? run.id : 'No run selected'}</span>
+        </div>
+        <span className={`stream-pill ${streamStatus}`}>{streamStatus}</span>
+      </div>
+      <div className="run-console-grid">
+        <Metric label="Status" value={run?.status ?? 'none'} />
+        <Metric label="Driver" value={`${metadata?.driver_kind ?? run?.executor_type ?? 'unknown'} / ${metadata?.driver_status ?? 'unknown'}`} />
+        <Metric label="Danger" value={metadata?.effective_dangerous_mode ?? 'unknown'} />
+        <Metric label="Worker" value={workerId ? `${workerId} / ${metadata?.driver_status ?? 'active'}` : 'none'} />
+        <Metric label="Thread" value={threadId ?? 'none'} />
+        <Metric label="Turn" value={activeTurnId ?? 'none'} />
+        <Metric label="Last Event" value={formatAge(lastEventAt, now)} />
+        <Metric label="Plan Step" value={currentPlanStep ?? 'none'} />
+      </div>
+      {continuationNotice && <div className="run-console-notice">{continuationNotice}</div>}
+      {error && <div className="run-console-error">{error}</div>}
+      <div className="run-event-list">
+        {displayEvents.length === 0 && <EmptyState text={events.length === 0 ? 'No run events loaded' : 'Only heartbeat events received'} />}
+        {displayEvents.map((event) => <RunEventRow event={event} key={event.id} />)}
+      </div>
+      <form className="run-input-row" onSubmit={onSend}>
+        <label>
+          Input as {actorId}
+          <textarea value={input} onChange={(event) => onInputChange(event.target.value)} placeholder="Send input to the active run" />
+        </label>
+        <div className="run-console-actions">
+          <button type="submit" disabled={!run || !input.trim()}>Send</button>
+          <button type="button" disabled={!run} onClick={onCancel}>Cancel</button>
+          <button type="button" disabled={!run} onClick={onResume}>Resume</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function RunEventRow({ event }: { event: RunEvent }) {
+  const type = event.event_type ?? 'event';
+  const payload = event.payload ?? {};
+  if (type === 'agent_message_delta' || type === 'agent_message_completed') {
+    return (
+      <article className="run-event-row agent">
+        <span>{event.source ?? 'agent'} / {type}</span>
+        <p>{payloadText(payload, ['message', 'text', 'content']) || event.summary || 'No message text'}</p>
+      </article>
+    );
+  }
+  if (type === 'command_output_delta') {
+    return (
+      <article className="run-event-row terminal">
+        <span>{payloadText(payload, ['command']) || event.summary || 'Command output'}</span>
+        <pre>{payloadText(payload, ['text', 'delta', 'output']) || event.summary || ''}</pre>
+      </article>
+    );
+  }
+  if (type.startsWith('tool_call') || type.startsWith('command_')) {
+    return (
+      <article className="run-event-row compact">
+        <strong>{type}</strong>
+        <span>{payloadText(payload, ['tool', 'tool_name', 'command', 'status']) || event.summary || event.source || 'event'}</span>
+      </article>
+    );
+  }
+  return (
+    <article className="run-event-row compact">
+      <strong>{type}</strong>
+      <span>{event.summary || payloadText(payload, ['status', 'message', 'reason']) || event.source || 'event'}</span>
+    </article>
+  );
+}
+
 function RunDetail({ run, failedChecks }: { run: RunSession | null; failedChecks: CheckResult[] }) {
   if (!run) return <EmptyState text="No run detail loaded" />;
   return (
@@ -640,8 +893,9 @@ function ReviewDetail({ review }: { review: ReviewPacket | null }) {
 }
 
 function ArtifactList({ artifacts }: { artifacts: ArtifactRef[] }) {
-  if (artifacts.length === 0) return <EmptyState text="No artifacts" />;
-  return <div className="artifact-list">{artifacts.map((artifact, index) => <span key={`${artifact.name ?? 'artifact'}-${index}`}>{artifact.kind ?? 'artifact'}: {artifact.name ?? artifact.local_ref ?? artifact.storage_uri}</span>)}</div>;
+  const visibleArtifacts = visibleRunArtifacts(artifacts);
+  if (visibleArtifacts.length === 0) return <EmptyState text="No artifacts" />;
+  return <div className="artifact-list">{visibleArtifacts.map((artifact, index) => <span key={`${artifact.name ?? 'artifact'}-${index}`}>{artifact.kind ?? 'artifact'}: {artifact.name ?? artifact.local_ref ?? artifact.storage_uri}</span>)}</div>;
 }
 
 function defaultRevisionForm(mode: SpecPlanMode) {
@@ -778,6 +1032,40 @@ function getNestedString(source: Record<string, unknown>, path: string[]) {
     cursor = (cursor as Record<string, unknown>)[key];
   }
   return typeof cursor === 'string' ? cursor : undefined;
+}
+
+function payloadText(payload: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  }
+  return undefined;
+}
+
+function latestPayloadString(events: RunEvent[], keys: string[]) {
+  for (const event of [...events].reverse()) {
+    const value = payloadText(event.payload ?? {}, keys);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function latestActiveTurnId(run: RunSession | null, events: RunEvent[]) {
+  return run?.runtime_metadata?.active_turn_id ?? latestPayloadString(events, ['active_turn_id', 'turn_id', 'turnId']);
+}
+
+function formatAge(value: string | undefined, now: number) {
+  if (!value) return 'none';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const seconds = Math.max(0, Math.floor((now - date.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 function formatDate(value?: string) {
