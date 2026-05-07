@@ -11,6 +11,7 @@
     "dev:executor": "pnpm --filter @forgeloop/executor-gateway start:dev",
     "dev:worker": "pnpm --filter @forgeloop/workflow-worker start:dev",
     "dev:web": "pnpm --filter @forgeloop/web dev",
+    "db:push": "drizzle-kit push --config packages/db/drizzle.config.ts",
     "smoke:p0": "vitest run tests/smoke",
     "dogfood:p0": "tsx scripts/p0-dogfood.ts"
   },
@@ -37,6 +38,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/supertest": "^7.2.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "drizzle-kit": "^0.31.10",
     "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",

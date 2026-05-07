@@ -1,9 +1,10 @@
-import { and, asc, eq, getTableColumns, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, notInArray, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
   Artifact,
   Decision,
+  DomainError as DomainErrorType,
   ExecutionPackage,
   ExecutionPackageDependency,
   ObjectEvent,
@@ -12,12 +13,16 @@ import type {
   Project,
   ProjectRepo,
   ReviewPacket,
+  RunCommand,
+  RunEvent,
   RunSession,
+  RunWorkerLease,
   Spec,
   SpecRevision,
   StatusHistory,
   WorkItem,
 } from '@forgeloop/domain';
+import { DomainError } from '@forgeloop/domain';
 
 import * as schema from '../schema';
 import {
@@ -31,7 +36,11 @@ import {
   project_repos,
   projects,
   review_packets,
+  run_commands,
+  run_event_counters,
+  run_events,
   run_sessions,
+  run_worker_leases,
   spec_revisions,
   specs,
   status_histories,
@@ -66,6 +75,18 @@ const fromDbRecord = <T>(record: Record<string, unknown>): T =>
       .filter(([, value]) => value !== null)
       .map(([key, value]) => [camelToSnake(key), value]),
   ) as T;
+
+const recoverableRunSessionStatuses: RunSession['status'][] = [
+  'queued',
+  'running',
+  'waiting_for_input',
+  'stalled',
+  'resuming',
+  'cancel_requested',
+];
+const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
+const invalidLease = (runSessionId: string): DomainErrorType =>
+  new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
 
 export class DrizzleP0Repository implements P0Repository {
   constructor(private readonly db: ForgeloopDrizzleDatabase) {}
@@ -178,6 +199,324 @@ export class DrizzleP0Repository implements P0Repository {
     );
   }
 
+  async listRecoverableRunSessions(): Promise<RunSession[]> {
+    return this.listWhere<RunSession>(
+      run_sessions,
+      inArray(run_sessions.status, recoverableRunSessionStatuses),
+      run_sessions.createdAt,
+    );
+  }
+
+  async appendRunEvent(event: Omit<RunEvent, 'sequence' | 'cursor'>): Promise<RunEvent> {
+    return this.db.transaction((tx) => this.appendRunEventInTransaction(tx as ForgeloopDrizzleDatabase, event));
+  }
+
+  async listRunEvents(runSessionId: string, options: { after?: string; limit?: number } = {}): Promise<RunEvent[]> {
+    const conditions = [
+      eq(run_events.runSessionId, runSessionId),
+      options.after === undefined ? undefined : gt(run_events.cursor, options.after),
+    ].filter((condition) => condition !== undefined);
+    const query = this.db
+      .select()
+      .from(run_events)
+      .where(and(...conditions))
+      .orderBy(asc(run_events.sequence));
+    const rows = options.limit === undefined ? await query : await query.limit(options.limit);
+
+    return rows.map((row) => fromDbRecord<RunEvent>(row));
+  }
+
+  async getLatestRunEvent(runSessionId: string): Promise<RunEvent | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(run_events)
+      .where(eq(run_events.runSessionId, runSessionId))
+      .orderBy(desc(run_events.sequence))
+      .limit(1);
+
+    return row === undefined ? undefined : fromDbRecord<RunEvent>(row);
+  }
+
+  async appendWorkerRunEvent(
+    event: Omit<RunEvent, 'sequence' | 'cursor'>,
+    lease: { workerId: string; leaseToken: string },
+  ): Promise<RunEvent> {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
+      await repository.assertActiveRunWorkerLease(event.run_session_id, lease.workerId, lease.leaseToken, event.created_at);
+      return repository.appendRunEventInTransaction(tx as ForgeloopDrizzleDatabase, event);
+    });
+  }
+
+  async saveRunCommand(command: RunCommand): Promise<void> {
+    await this.upsert(run_commands, run_commands.id, command);
+  }
+
+  async claimNextRunCommand(
+    runSessionId: string,
+    workerId: string,
+    leaseToken: string,
+    now: string,
+    options: { reclaim_claimed_before?: string } = {},
+  ): Promise<{ command: RunCommand; reclaimed: boolean } | undefined> {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
+      await repository.assertActiveRunWorkerLease(runSessionId, workerId, leaseToken, now);
+
+      const pendingResult = await tx.execute(sql<Record<string, unknown>>`
+        with candidate as (
+          select id
+          from run_commands
+          where run_session_id = ${runSessionId}
+            and status = 'pending'
+          order by case when command_type = 'cancel' then 0 else 1 end, created_at asc
+          for update skip locked
+          limit 1
+        )
+        update run_commands
+        set status = 'claimed',
+            claimed_by_worker_id = ${workerId},
+            claimed_at = ${now},
+            updated_at = ${now}
+        from candidate
+        where run_commands.id = candidate.id
+        returning run_commands.*, false as reclaimed
+      `);
+      const pending = this.commandClaimFromRows(pendingResult.rows);
+      if (pending !== undefined) {
+        return pending;
+      }
+
+      if (options.reclaim_claimed_before === undefined) {
+        return undefined;
+      }
+
+      const staleResult = await tx.execute(sql<Record<string, unknown>>`
+        with candidate as (
+          select id
+          from run_commands
+          where run_session_id = ${runSessionId}
+            and status = 'claimed'
+            and claimed_at <= ${options.reclaim_claimed_before}
+          order by claimed_at asc
+          for update skip locked
+          limit 1
+        )
+        update run_commands
+        set claimed_by_worker_id = ${workerId},
+            claimed_at = ${now},
+            updated_at = ${now}
+        from candidate
+        where run_commands.id = candidate.id
+        returning run_commands.*, true as reclaimed
+      `);
+
+      return this.commandClaimFromRows(staleResult.rows);
+    });
+  }
+
+  async recordRunCommandDriverAck(
+    commandId: string,
+    lease: { workerId: string; leaseToken: string },
+    driverAck: Record<string, unknown>,
+    acknowledgedAt: string,
+  ): Promise<void> {
+    await this.updateFencedRunCommand(commandId, lease, acknowledgedAt, sql`
+      driver_ack = ${JSON.stringify(driverAck)}::jsonb,
+      updated_at = ${acknowledgedAt}
+    `);
+  }
+
+  async markRunCommandApplied(
+    commandId: string,
+    lease: { workerId: string; leaseToken: string },
+    appliedAt: string,
+    driverAck: Record<string, unknown>,
+  ): Promise<void> {
+    await this.updateFencedRunCommand(commandId, lease, appliedAt, sql`
+      status = 'applied',
+      applied_at = ${appliedAt},
+      driver_ack = ${JSON.stringify(driverAck)}::jsonb,
+      updated_at = ${appliedAt}
+    `);
+  }
+
+  async markRunCommandFailed(
+    commandId: string,
+    lease: { workerId: string; leaseToken: string },
+    failureReason: string,
+    failedAt: string,
+  ): Promise<void> {
+    await this.updateFencedRunCommand(commandId, lease, failedAt, sql`
+      status = 'failed',
+      failure_reason = ${failureReason},
+      updated_at = ${failedAt}
+    `);
+  }
+
+  async supersedePendingRunCommands(
+    runSessionId: string,
+    commandTypes: RunCommand['command_type'][],
+    now: string,
+  ): Promise<void> {
+    if (commandTypes.length === 0) {
+      return;
+    }
+
+    await this.db
+      .update(run_commands)
+      .set({ status: 'superseded', updatedAt: now })
+      .where(
+        and(
+          eq(run_commands.runSessionId, runSessionId),
+          eq(run_commands.status, 'pending'),
+          inArray(run_commands.commandType, commandTypes),
+        ),
+      );
+  }
+
+  async claimRunWorkerLease(input: {
+    run_session_id: string;
+    worker_id: string;
+    lease_token: string;
+    now: string;
+    expires_at: string;
+  }): Promise<RunWorkerLease> {
+    return this.db.transaction(async (tx) => {
+      const leaseId = `${input.run_session_id}:${input.worker_id}:${input.lease_token}`;
+      const result = await tx.execute(sql<Record<string, unknown>>`
+        insert into run_worker_leases (
+          id,
+          run_session_id,
+          worker_id,
+          lease_token,
+          heartbeat_at,
+          expires_at,
+          status
+        )
+        values (
+          ${leaseId},
+          ${input.run_session_id},
+          ${input.worker_id},
+          ${input.lease_token},
+          ${input.now},
+          ${input.expires_at},
+          'active'
+        )
+        on conflict (run_session_id)
+        do update set
+          id = excluded.id,
+          worker_id = excluded.worker_id,
+          lease_token = excluded.lease_token,
+          heartbeat_at = excluded.heartbeat_at,
+          expires_at = excluded.expires_at,
+          status = 'active'
+        where run_worker_leases.status <> 'active'
+          or run_worker_leases.expires_at <= excluded.heartbeat_at
+          or run_worker_leases.worker_id = excluded.worker_id
+        returning *
+      `);
+
+      const row = result.rows[0];
+      if (row === undefined) {
+        throw invalidLease(input.run_session_id);
+      }
+
+      return fromDbRecord<RunWorkerLease>(row);
+    });
+  }
+
+  async heartbeatRunWorkerLease(
+    runSessionId: string,
+    workerId: string,
+    leaseToken: string,
+    heartbeatAt: string,
+    expiresAt: string,
+  ): Promise<void> {
+    const rows = await this.fencedLeaseUpdate(runSessionId, workerId, leaseToken, heartbeatAt, sql`
+      heartbeat_at = ${heartbeatAt},
+      expires_at = ${expiresAt}
+    `);
+    if (rows.length === 0) {
+      throw invalidLease(runSessionId);
+    }
+  }
+
+  async getRunWorkerLease(runSessionId: string): Promise<RunWorkerLease | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(run_worker_leases)
+      .where(eq(run_worker_leases.runSessionId, runSessionId))
+      .limit(1);
+
+    return row === undefined ? undefined : fromDbRecord<RunWorkerLease>(row);
+  }
+
+  async releaseRunWorkerLease(runSessionId: string, workerId: string, leaseToken: string, releasedAt: string): Promise<void> {
+    const rows = await this.fencedLeaseUpdate(runSessionId, workerId, leaseToken, releasedAt, sql`
+      heartbeat_at = ${releasedAt},
+      status = 'released'
+    `);
+    if (rows.length === 0) {
+      throw invalidLease(runSessionId);
+    }
+  }
+
+  async assertActiveRunWorkerLease(
+    runSessionId: string,
+    workerId: string,
+    leaseToken: string,
+    now: string,
+  ): Promise<void> {
+    const [row] = await this.db
+      .select()
+      .from(run_worker_leases)
+      .where(
+        and(
+          eq(run_worker_leases.runSessionId, runSessionId),
+          eq(run_worker_leases.workerId, workerId),
+          eq(run_worker_leases.leaseToken, leaseToken),
+          eq(run_worker_leases.status, 'active'),
+          gt(run_worker_leases.expiresAt, now),
+        ),
+      )
+      .limit(1);
+
+    if (row === undefined) {
+      throw invalidLease(runSessionId);
+    }
+  }
+
+  async withActiveRunWorkerLease<T>(
+    runSessionId: string,
+    lease: { workerId: string; leaseToken: string; now: string },
+    write: (repository: P0Repository) => Promise<T>,
+  ): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      const lockResult = await tx.execute(sql<Record<string, unknown>>`
+        select *
+        from run_worker_leases
+        where run_session_id = ${runSessionId}
+        for update
+      `);
+      const lockedLease = lockResult.rows[0];
+      if (
+        lockedLease === undefined ||
+        lockedLease.worker_id !== lease.workerId ||
+        lockedLease.lease_token !== lease.leaseToken ||
+        lockedLease.status !== 'active' ||
+        String(lockedLease.expires_at) <= lease.now
+      ) {
+        throw invalidLease(runSessionId);
+      }
+
+      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
+      const result = await write(repository);
+      await repository.assertActiveRunWorkerLease(runSessionId, lease.workerId, lease.leaseToken, lease.now);
+      return result;
+    });
+  }
+
   async saveReviewPacket(reviewPacket: ReviewPacket): Promise<void> {
     await this.upsert(review_packets, review_packets.id, reviewPacket);
   }
@@ -263,6 +602,110 @@ export class DrizzleP0Repository implements P0Repository {
       and(eq(decisions.objectType, objectType), eq(decisions.objectId, objectId)),
       decisions.createdAt,
     );
+  }
+
+  private async appendRunEventInTransaction(
+    db: ForgeloopDrizzleDatabase,
+    event: Omit<RunEvent, 'sequence' | 'cursor'>,
+  ): Promise<RunEvent> {
+    const counterResult = await db.execute(sql<{ allocated_sequence: number }>`
+      insert into run_event_counters (run_session_id, next_sequence)
+      values (${event.run_session_id}, 2)
+      on conflict (run_session_id)
+      do update set next_sequence = run_event_counters.next_sequence + 1
+      returning next_sequence - 1 as allocated_sequence
+    `);
+    const allocated = counterResult.rows[0]?.allocated_sequence;
+    if (allocated === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Could not allocate event sequence for run ${event.run_session_id}`);
+    }
+
+    const runEvent: RunEvent = {
+      ...event,
+      sequence: Number(allocated),
+      cursor: eventCursor(Number(allocated)),
+    };
+    const [row] = await db
+      .insert(run_events)
+      .values(toDbRecord(runEvent, run_events) as never)
+      .onConflictDoNothing()
+      .returning();
+
+    if (row === undefined) {
+      const existing = await new DrizzleP0Repository(db).getById<RunEvent>(run_events, run_events.id, event.id);
+      if (existing === undefined) {
+        throw new DomainError('INVALID_TRANSITION', `Run event ${event.id} could not be appended`);
+      }
+
+      return existing;
+    }
+
+    return fromDbRecord<RunEvent>(row);
+  }
+
+  private commandClaimFromRows(
+    rows: Record<string, unknown>[],
+  ): { command: RunCommand; reclaimed: boolean } | undefined {
+    const row = rows[0];
+    if (row === undefined) {
+      return undefined;
+    }
+
+    const { reclaimed, ...commandRow } = row;
+    return { command: fromDbRecord<RunCommand>(commandRow), reclaimed: reclaimed === true };
+  }
+
+  private async updateFencedRunCommand(
+    commandId: string,
+    lease: { workerId: string; leaseToken: string },
+    now: string,
+    setClause: ReturnType<typeof sql>,
+  ): Promise<void> {
+    const result = await this.db.transaction((tx) =>
+      tx.execute(sql<Record<string, unknown>>`
+        update run_commands
+        set ${setClause}
+        where id = ${commandId}
+          and claimed_by_worker_id = ${lease.workerId}
+          and exists (
+            select 1
+            from run_worker_leases
+            where run_worker_leases.run_session_id = run_commands.run_session_id
+              and run_worker_leases.worker_id = ${lease.workerId}
+              and run_worker_leases.lease_token = ${lease.leaseToken}
+              and run_worker_leases.status = 'active'
+              and run_worker_leases.expires_at > ${now}
+          )
+        returning *
+      `),
+    );
+
+    if (result.rows.length === 0) {
+      throw new DomainError('INVALID_TRANSITION', `Run command ${commandId} is not owned by worker ${lease.workerId}`);
+    }
+  }
+
+  private async fencedLeaseUpdate(
+    runSessionId: string,
+    workerId: string,
+    leaseToken: string,
+    now: string,
+    setClause: ReturnType<typeof sql>,
+  ): Promise<Record<string, unknown>[]> {
+    const result = await this.db.transaction((tx) =>
+      tx.execute(sql<Record<string, unknown>>`
+        update run_worker_leases
+        set ${setClause}
+        where run_session_id = ${runSessionId}
+          and worker_id = ${workerId}
+          and lease_token = ${leaseToken}
+          and status = 'active'
+          and expires_at > ${now}
+        returning *
+      `),
+    );
+
+    return result.rows;
   }
 
   private async upsert(table: AnyPgTable, target: AnyPgColumn, entity: object): Promise<void> {
