@@ -237,7 +237,8 @@ export class RunWorker {
         return;
       }
       if (control.stopped) {
-        await this.stallStoppedRun(started, input, control);
+        const latest = (await this.repository.getRunSession(started.id)) ?? primed.currentRunSession;
+        await this.stallStoppedRun(latest, input, control);
         terminalOrStopped = true;
         return;
       }

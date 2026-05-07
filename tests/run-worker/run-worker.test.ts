@@ -652,4 +652,62 @@ describe('RunWorker', () => {
       worker_id: 'worker-1',
     });
   });
+
+  it('preserves primed runtime metadata when stop path stalls before terminal completion', async () => {
+    const repository = new FailingHeartbeatRepository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        codex_thread_id: 'thread-original',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const driver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'App-server recovery requested fallback.',
+            payload: {},
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+            codex_thread_id: 'thread-primed',
+            active_turn_id: 'turn-primed',
+          },
+        },
+        { kind: 'delay', ms: 1_000 },
+        { kind: 'terminal', status: 'succeeded', summary: 'Should not complete.' },
+      ],
+    });
+    const worker = runWorker({
+      repository,
+      driver,
+      heartbeatIntervalMs: 5,
+      idleThresholdMs: 30_000,
+    });
+
+    await expect(Promise.race([worker.drainOnce(), delay(300).then(() => 'timeout')])).resolves.not.toBe('timeout');
+
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Worker stopped before terminal completion.',
+      runtime_metadata: expect.objectContaining({
+        driver_kind: 'exec_fallback',
+        codex_thread_id: 'thread-primed',
+        active_turn_id: 'turn-primed',
+      }),
+    });
+    expect(await repository.getRunWorkerLease(runSession.id)).toMatchObject({ status: 'released' });
+  });
 });
