@@ -945,6 +945,117 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
+  it('captures failed runner forbidden workspace changes as path_violation evidence', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
+        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async ({ workspacePath }) => {
+            await mkdir(join(workspacePath, 'packages/contracts/src'), { recursive: true });
+            await writeFile(join(workspacePath, 'packages/contracts/src/failed.ts'), 'export const bad = true;\n');
+
+            return {
+              status: 'failed',
+              summary: 'Runner failed after forbidden change.',
+              failure: {
+                kind: 'executor_process_failed',
+                message: 'Runner failed after forbidden change.',
+                retryable: true,
+              },
+            };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      checks: [],
+      failure: {
+        kind: 'path_violation',
+        message: expect.stringContaining('packages/contracts/src/failed.ts'),
+        retryable: false,
+      },
+      changed_files: [
+        {
+          repo_id: 'repo-1',
+          path: 'packages/contracts/src/failed.ts',
+          change_kind: 'added',
+        },
+      ],
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({ kind: 'diff' }),
+        expect.objectContaining({ kind: 'changed_files' }),
+        expect.objectContaining({ kind: 'execution_summary' }),
+      ]),
+    });
+    const diffArtifact = result.artifacts.find((artifact) => artifact.kind === 'diff');
+    await expect(readFile(diffArtifact?.local_ref ?? '', 'utf8')).resolves.toContain('packages/contracts/src/failed.ts');
+  });
+
+  it('captures failed runner allowed workspace changes with the original runner failure', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
+        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async ({ workspacePath }) => {
+            await writeFile(join(workspacePath, 'packages/executor/src/failed-but-allowed.ts'), 'export const ok = true;\n');
+
+            return {
+              status: 'failed',
+              summary: 'Runner failed after allowed change.',
+              failure: {
+                kind: 'executor_process_failed',
+                message: 'Runner failed after allowed change.',
+                retryable: true,
+              },
+            };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      checks: [],
+      failure: {
+        kind: 'executor_process_failed',
+        message: 'Runner failed after allowed change.',
+        retryable: true,
+      },
+      changed_files: [
+        {
+          repo_id: 'repo-1',
+          path: 'packages/executor/src/failed-but-allowed.ts',
+          change_kind: 'added',
+        },
+      ],
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({ kind: 'diff' }),
+        expect.objectContaining({ kind: 'changed_files' }),
+        expect.objectContaining({ kind: 'execution_summary' }),
+      ]),
+    });
+    const changedFilesArtifact = result.artifacts.find((artifact) => artifact.kind === 'changed_files');
+    await expect(readFile(changedFilesArtifact?.local_ref ?? '', 'utf8')).resolves.toContain(
+      'packages/executor/src/failed-but-allowed.ts',
+    );
+  });
+
   it('returns final path_violation when checks mutate forbidden files and captures the final diff', async () => {
     const { repo, head } = await createGitRepo();
     const result = await runLocalCodexExecutor(

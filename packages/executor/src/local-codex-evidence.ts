@@ -427,14 +427,34 @@ const sourceRepoMutationFailure = (): ExecutorFailure => ({
 });
 
 export const captureFailedLocalCodexEvidence: CaptureFailedLocalCodexEvidence = async (input) => {
+  let capture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
+  try {
+    capture = await captureDiffArtifacts(
+      input.environment,
+      input.runSpec,
+      input.workspacePath,
+      input.artifactRoot,
+      input.summary,
+      input.checkEnv,
+    );
+  } catch (error) {
+    return diffCaptureFailure(input, error);
+  }
+
+  const pathFailure = pathViolation(input.runSpec, capture.changedFiles);
   const sourceRepoGuard = await verifySourceRepoUnchanged(input.environment, input.sourceRepoSnapshot);
-  const failure = sourceRepoGuard.unchanged ? input.failure : sourceRepoMutationFailure();
+  const failure = !sourceRepoGuard.unchanged
+    ? sourceRepoMutationFailure()
+    : pathFailure ?? input.failure;
 
   return executorFailureResult({
     runSpec: input.runSpec,
     startedAt: input.startedAt,
     summary: failure.message,
     failure,
+    changedFiles: capture.changedFiles,
+    checks: [],
+    artifacts: capture.artifacts,
     rawMetadata: rawMetadataFor(input, sourceRepoGuard.afterPorcelain),
   });
 };
