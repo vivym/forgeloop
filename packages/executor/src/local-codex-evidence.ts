@@ -45,6 +45,12 @@ export interface LocalCodexEvidenceInput {
 
 export type CaptureLocalCodexEvidence = (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
 
+export interface FailedLocalCodexEvidenceInput extends LocalCodexEvidenceInput {
+  failure: ExecutorFailure;
+}
+
+export type CaptureFailedLocalCodexEvidence = (input: FailedLocalCodexEvidenceInput) => Promise<ExecutorResult>;
+
 const nowIso = () => new Date().toISOString();
 
 const safePathSegment = (value: string): string => {
@@ -419,6 +425,19 @@ const sourceRepoMutationFailure = (): ExecutorFailure => ({
   message: 'Source repo changed outside the run worktree.',
   retryable: false,
 });
+
+export const captureFailedLocalCodexEvidence: CaptureFailedLocalCodexEvidence = async (input) => {
+  const sourceRepoGuard = await verifySourceRepoUnchanged(input.environment, input.sourceRepoSnapshot);
+  const failure = sourceRepoGuard.unchanged ? input.failure : sourceRepoMutationFailure();
+
+  return executorFailureResult({
+    runSpec: input.runSpec,
+    startedAt: input.startedAt,
+    summary: failure.message,
+    failure,
+    rawMetadata: rawMetadataFor(input, sourceRepoGuard.afterPorcelain),
+  });
+};
 
 export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input) => {
   let initialChangedFiles: ChangedFile[];

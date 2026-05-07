@@ -12,12 +12,11 @@ import {
   runLocalCodexPreflight,
   type LocalCodexEnvironment,
 } from './local-codex-preflight.js';
-import { captureLocalCodexEvidence } from './local-codex-evidence.js';
 import {
-  snapshotSourceRepoStatus,
-  verifySourceRepoUnchanged,
-  type SourceRepoSnapshot,
-} from './source-repo-guard.js';
+  captureFailedLocalCodexEvidence,
+  captureLocalCodexEvidence,
+} from './local-codex-evidence.js';
+import { snapshotSourceRepoStatus } from './source-repo-guard.js';
 
 const EXECUTOR_VERSION = '0.1.0';
 const GIT_OUTPUT_MAX_BUFFER = 1024 * 1024 * 50;
@@ -224,20 +223,6 @@ const neutralizeGitRemotes = async (environment: LocalCodexEnvironment, workspac
   );
 };
 
-const rawMetadataFor = (input: {
-  workspacePath: string;
-  baseRef: string;
-  sourceRepoSnapshot?: SourceRepoSnapshot;
-  sourceRepoAfterStatus?: string | null;
-  effectiveDangerousMode: 'confirmed' | 'unconfirmed' | 'not_requested';
-}): Record<string, string | number | boolean | null> => ({
-  workspace_path: input.workspacePath,
-  base_ref: input.baseRef,
-  source_repo_before_status: input.sourceRepoSnapshot?.beforePorcelain ?? null,
-  source_repo_after_status: input.sourceRepoAfterStatus ?? null,
-  effective_dangerous_mode: input.effectiveDangerousMode,
-});
-
 export const runLocalCodexExecutor = async (
   runSpec: RunSpec,
   options: LocalCodexExecutorOptions,
@@ -308,34 +293,24 @@ export const runLocalCodexExecutor = async (
   });
 
   if (runnerResult.status !== 'succeeded') {
-    const sourceRepoGuard = await verifySourceRepoUnchanged(environment, sourceRepoSnapshot);
-    const sourceRepoFailure: ExecutorFailure | undefined = sourceRepoGuard.unchanged
-      ? undefined
-      : {
-          kind: 'path_violation',
-          message: 'Source repo changed outside the run worktree.',
-          retryable: false,
-        };
-
-    return executorFailureResult({
+    return captureFailedLocalCodexEvidence({
       runSpec,
+      workspacePath: preflight.workspacePath,
+      baseRef: preflight.resolvedBaseRef,
+      artifactRoot: options.artifactRoot,
+      summary: runnerResult.summary,
       startedAt,
-      summary: sourceRepoFailure?.message ?? runnerResult.summary,
+      environment,
+      checkEnv,
+      sourceRepoSnapshot,
+      effectiveDangerousMode,
       failure:
-        sourceRepoFailure ??
         runnerResult.failure ??
         ({
           kind: 'executor_process_failed',
           message: runnerResult.summary,
           retryable: true,
         } satisfies ExecutorFailure),
-      rawMetadata: rawMetadataFor({
-        workspacePath: preflight.workspacePath,
-        baseRef: preflight.resolvedBaseRef,
-        sourceRepoSnapshot,
-        sourceRepoAfterStatus: sourceRepoGuard.afterPorcelain,
-        effectiveDangerousMode,
-      }),
     });
   }
 

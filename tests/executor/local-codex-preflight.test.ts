@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -280,6 +281,13 @@ describe('runLocalCodexPreflight', () => {
 });
 
 describe('runLocalCodexExecutor', () => {
+  it('keeps post-terminal source repo mutation checks inside the evidence module', () => {
+    const executorSource = readFileSync('packages/executor/src/local-codex-executor.ts', 'utf8');
+
+    expect(executorSource).not.toContain('verifySourceRepoUnchanged');
+    expect(executorSource).not.toContain('Source repo changed outside the run worktree.');
+  });
+
   it('returns preflight_failed without invoking Codex when preflight is invalid', async () => {
     let invoked = false;
     const runner: CodexRunner = {
@@ -889,6 +897,50 @@ describe('runLocalCodexExecutor', () => {
       raw_metadata: {
         source_repo_before_status: '',
         source_repo_after_status: expect.stringContaining('packages/domain/src/types.ts'),
+      },
+    });
+  });
+
+  it('returns path_violation from evidence capture when a failed runner mutates the source repo', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
+        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async () => {
+            await writeFile(join(repo, 'README.md'), 'source mutation\n');
+
+            return {
+              status: 'failed',
+              summary: 'Runner failed after mutation.',
+              failure: {
+                kind: 'executor_process_failed',
+                message: 'Runner failed after mutation.',
+                retryable: true,
+              },
+            };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      checks: [],
+      failure: {
+        kind: 'path_violation',
+        message: 'Source repo changed outside the run worktree.',
+        retryable: false,
+      },
+      raw_metadata: {
+        source_repo_before_status: '',
+        source_repo_after_status: expect.stringContaining('README.md'),
       },
     });
   });
