@@ -27,3 +27,37 @@ export const latestContinuationNotice = (
 
 export const visibleRunArtifacts = <T extends { kind?: string; raw_ref?: unknown }>(artifacts: T[]): T[] =>
   artifacts.filter((artifact) => artifact.kind !== 'logs' && artifact.raw_ref === undefined);
+
+export const runArtifactsForDetail = <T extends { kind?: string; raw_ref?: unknown }>(run: {
+  artifacts?: T[];
+  log_refs?: T[];
+}): T[] => visibleRunArtifacts(run.artifacts ?? []);
+
+const payloadText = (payload: Record<string, unknown> | undefined, keys: string[]): string | undefined => {
+  if (payload === undefined) return undefined;
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  }
+  return undefined;
+};
+
+export const latestPlanStep = (events: Array<{ event_type?: string; payload?: Record<string, unknown> }>): string | undefined => {
+  const planEvent = [...events].reverse().find((event) => event.event_type === 'plan_updated');
+  return payloadText(planEvent?.payload, ['current_step', 'plan_step', 'step', 'status']);
+};
+
+export const workerLeaseLabel = (
+  metadata: { worker_id?: string } | undefined,
+  events: Array<{ event_type?: string; payload?: Record<string, unknown> }>,
+): string => {
+  const leaseEvent = [...events].reverse().find(
+    (event) => event.event_type === 'worker_lease_acquired' || event.event_type === 'watchdog_heartbeat',
+  );
+  const workerId = payloadText(leaseEvent?.payload, ['worker_id', 'workerId']) ?? metadata?.worker_id;
+  if (!workerId) return 'none';
+
+  const leaseStatus = payloadText(leaseEvent?.payload, ['lease_status', 'leaseStatus', 'status']);
+  return `${workerId} / ${leaseStatus ?? 'status unavailable'}`;
+};

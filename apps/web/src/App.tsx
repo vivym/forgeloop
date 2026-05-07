@@ -26,7 +26,16 @@ import {
   type WorkItem,
   type WorkItemKind,
 } from './api';
-import { appendRunEvents, isActiveCockpit, latestContinuationNotice, nextRunEventCursor, visibleRunArtifacts } from './workbenchState';
+import {
+  appendRunEvents,
+  isActiveCockpit,
+  latestContinuationNotice,
+  latestPlanStep,
+  nextRunEventCursor,
+  runArtifactsForDetail,
+  visibleRunArtifacts,
+  workerLeaseLabel,
+} from './workbenchState';
 
 const actorDefault = 'actor-owner';
 const reviewerDefault = 'actor-reviewer';
@@ -773,10 +782,9 @@ function RunConsole({
 }) {
   const metadata = run?.runtime_metadata;
   const continuationNotice = latestContinuationNotice(events);
-  const currentPlanStep = latestPayloadString(events, ['current_step', 'plan_step', 'step', 'status']);
+  const currentPlanStep = latestPlanStep(events);
   const activeTurnId = latestActiveTurnId(run, events);
   const threadId = metadata?.codex_thread_id ?? latestPayloadString(events, ['thread_id']);
-  const workerId = metadata?.worker_id ?? latestPayloadString(events, ['worker_id']);
   const lastEventAt = events.at(-1)?.created_at ?? metadata?.last_event_at ?? run?.updated_at;
   const displayEvents = events.filter((event) => event.event_type !== 'watchdog_heartbeat');
 
@@ -793,7 +801,7 @@ function RunConsole({
         <Metric label="Status" value={run?.status ?? 'none'} />
         <Metric label="Driver" value={`${metadata?.driver_kind ?? run?.executor_type ?? 'unknown'} / ${metadata?.driver_status ?? 'unknown'}`} />
         <Metric label="Danger" value={metadata?.effective_dangerous_mode ?? 'unknown'} />
-        <Metric label="Worker" value={workerId ? `${workerId} / ${metadata?.driver_status ?? 'active'}` : 'none'} />
+        <Metric label="Worker Lease" value={workerLeaseLabel(metadata, events)} />
         <Metric label="Thread" value={threadId ?? 'none'} />
         <Metric label="Turn" value={activeTurnId ?? 'none'} />
         <Metric label="Last Event" value={formatAge(lastEventAt, now)} />
@@ -866,7 +874,7 @@ function RunDetail({ run, failedChecks }: { run: RunSession | null; failedChecks
       <h4>Failed checks</h4>
       <PillList values={failedChecks.map((check) => `${check.check_id}: ${check.status}`)} empty="No failed blocking checks" />
       <h4>Artifacts</h4>
-      <ArtifactList artifacts={[...(run.artifacts ?? []), ...(run.log_refs ?? [])]} />
+      <ArtifactList artifacts={runArtifactsForDetail(run)} />
     </div>
   );
 }

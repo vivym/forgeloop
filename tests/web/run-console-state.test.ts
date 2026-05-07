@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   appendRunEvents,
   latestContinuationNotice,
+  latestPlanStep,
+  runArtifactsForDetail,
+  workerLeaseLabel,
   nextRunEventCursor,
   visibleRunArtifacts,
 } from '../../apps/web/src/workbenchState';
@@ -61,5 +64,51 @@ describe('run console state', () => {
     ]);
 
     expect(artifacts).toEqual([{ kind: 'diff', path: 'artifacts/diff.patch' }]);
+  });
+
+  it('excludes run log refs from run detail artifact views', () => {
+    const artifacts = runArtifactsForDetail({
+      artifacts: [{ kind: 'diff', name: 'diff.patch' }],
+      log_refs: [{ kind: 'diff', name: 'raw-codex.jsonl' }],
+    });
+
+    expect(artifacts).toEqual([{ kind: 'diff', name: 'diff.patch' }]);
+  });
+
+  it('derives worker lease labels without using driver status as lease status', () => {
+    expect(
+      workerLeaseLabel(
+        { worker_id: 'worker-1', driver_status: 'active' },
+        [
+          {
+            id: 'event-1',
+            sequence: 1,
+            event_type: 'worker_lease_acquired',
+            payload: { worker_id: 'worker-2', lease_status: 'active' },
+          },
+        ],
+      ),
+    ).toBe('worker-2 / active');
+
+    expect(workerLeaseLabel({ worker_id: 'worker-1', driver_status: 'active' }, [])).toBe('worker-1 / status unavailable');
+  });
+
+  it('derives the current plan step only from plan_updated events', () => {
+    const events = appendRunEvents([], [
+      {
+        id: 'event-1',
+        sequence: 1,
+        event_type: 'plan_updated',
+        payload: { current_step: 'Implement console' },
+      },
+      {
+        id: 'event-2',
+        sequence: 2,
+        event_type: 'command_completed',
+        payload: { status: 'failed' },
+      },
+    ]);
+
+    expect(latestPlanStep(events)).toBe('Implement console');
   });
 });
