@@ -32,6 +32,10 @@ type SmokeContext = {
   planRevisionId: string;
 };
 
+type PublicRunEvent = {
+  event_type: string;
+};
+
 const createApprovedSpecAndPlan = async (
   app: INestApplication,
   kind: 'feature' | 'bugfix' | 'test_refactor' = 'feature',
@@ -123,6 +127,27 @@ const runPackage = async (
       .expect(201)
   ).body;
 
+const expectAcceptedRunWithVisibleLiveEvent = async (
+  app: INestApplication,
+  run: Record<string, unknown>,
+): Promise<{ run_session_id: string }> => {
+  expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
+  expect(run).not.toHaveProperty('workflow_result');
+
+  const runSessionId = run.run_session_id;
+  if (typeof runSessionId !== 'string') {
+    throw new Error('Run response did not include a run_session_id');
+  }
+
+  const events = (
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(200)
+  ).body.events as PublicRunEvent[];
+  expect(events.map((event) => event.event_type)).toEqual(expect.arrayContaining(['run_queued']));
+  expect(events.some((event) => event.event_type === 'run_queued' || event.event_type === 'driver_started')).toBe(true);
+
+  return { run_session_id: runSessionId };
+};
+
 const repositoryFor = (app: INestApplication) =>
   (app.get(P0Service) as unknown as {
     repository: {
@@ -181,12 +206,11 @@ describe('P0 smoke delivery loop', () => {
     const executionPackage = await createReadyPackage(app, planRevisionId);
 
     const run = await runPackage(app, executionPackage.id);
-    expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
-    expect(run).not.toHaveProperty('workflow_result');
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    const acceptedRun = await expectAcceptedRunWithVisibleLiveEvent(app, run);
+    const reviewPacketId = (await waitForReviewPacket(app, acceptedRun.run_session_id)).id;
     expect(reviewPacketId).toEqual(expect.stringContaining('review-packet'));
 
-    const runSession = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
+    const runSession = (await request(server).get(`/run-sessions/${acceptedRun.run_session_id}`).expect(200)).body;
     expect(runSession).toMatchObject({
       status: 'succeeded',
       executor_type: 'mock',
@@ -198,6 +222,7 @@ describe('P0 smoke delivery loop', () => {
     });
     expect(runSession.changed_files).not.toHaveLength(0);
     expect(runSession.check_results).toEqual([expect.objectContaining({ check_id: 'smoke', status: 'succeeded' })]);
+    expect(runSession.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'diff' })]));
 
     const reviewPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
     expect(reviewPacket).toMatchObject({
@@ -231,7 +256,8 @@ describe('P0 smoke delivery loop', () => {
     const executionPackage = await createReadyPackage(app, planRevisionId, 'Fix the P0 smoke bug.');
 
     const firstRun = await runPackage(app, executionPackage.id);
-    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
+    const firstAcceptedRun = await expectAcceptedRunWithVisibleLiveEvent(app, firstRun);
+    const firstReviewPacketId = (await waitForReviewPacket(app, firstAcceptedRun.run_session_id)).id;
     await request(server)
       .post(`/review-packets/${firstReviewPacketId}/request-changes`)
       .send({
@@ -250,12 +276,13 @@ describe('P0 smoke delivery loop', () => {
       })
       .expect(201);
 
-    const rerun = await runPackage(app, executionPackage.id, 'rerun', { previous_run_session_id: firstRun.run_session_id });
-    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
-    expect(rerun.run_session_id).not.toBe(firstRun.run_session_id);
+    const rerun = await runPackage(app, executionPackage.id, 'rerun', { previous_run_session_id: firstAcceptedRun.run_session_id });
+    const acceptedRerun = await expectAcceptedRunWithVisibleLiveEvent(app, rerun);
+    const rerunReviewPacketId = (await waitForReviewPacket(app, acceptedRerun.run_session_id)).id;
+    expect(acceptedRerun.run_session_id).not.toBe(firstAcceptedRun.run_session_id);
     expect(rerunReviewPacketId).not.toBe(firstReviewPacketId);
 
-    const rerunSession = (await request(server).get(`/run-sessions/${rerun.run_session_id}`).expect(200)).body;
+    const rerunSession = (await request(server).get(`/run-sessions/${acceptedRerun.run_session_id}`).expect(200)).body;
     expect(rerunSession.run_spec.review_context).toEqual({
       latest_decision: 'changes_requested',
       requested_changes: [
@@ -270,7 +297,7 @@ describe('P0 smoke delivery loop', () => {
 
     const cockpit = (await request(server).get(`/work-items/${workItem.id}/cockpit`).expect(200)).body;
     expect(cockpit.run_sessions.map((item: { id: string }) => item.id)).toEqual(
-      expect.arrayContaining([firstRun.run_session_id, rerun.run_session_id]),
+      expect.arrayContaining([firstAcceptedRun.run_session_id, acceptedRerun.run_session_id]),
     );
     expect(cockpit.review_packets).toEqual(
       expect.arrayContaining([
@@ -287,15 +314,17 @@ describe('P0 smoke delivery loop', () => {
     const executionPackage = await createReadyPackage(app, planRevisionId, 'Refresh P0 smoke coverage.');
 
     const firstRun = await runPackage(app, executionPackage.id);
-    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
+    const firstAcceptedRun = await expectAcceptedRunWithVisibleLiveEvent(app, firstRun);
+    const firstReviewPacketId = (await waitForReviewPacket(app, firstAcceptedRun.run_session_id)).id;
     const forceRun = await runPackage(app, executionPackage.id, 'force-rerun', {
-      previous_run_session_id: firstRun.run_session_id,
+      previous_run_session_id: firstAcceptedRun.run_session_id,
       force: true,
       force_reason: 'Replace stale packet before human review.',
     });
-    const forceReviewPacketId = (await waitForReviewPacket(app, forceRun.run_session_id)).id;
+    const acceptedForceRun = await expectAcceptedRunWithVisibleLiveEvent(app, forceRun);
+    const forceReviewPacketId = (await waitForReviewPacket(app, acceptedForceRun.run_session_id)).id;
 
-    expect(forceRun.run_session_id).not.toBe(firstRun.run_session_id);
+    expect(acceptedForceRun.run_session_id).not.toBe(firstAcceptedRun.run_session_id);
     expect(forceReviewPacketId).not.toBe(firstReviewPacketId);
 
     const archivedPacket = (await request(server).get(`/review-packets/${firstReviewPacketId}`).expect(200)).body;
@@ -304,7 +333,7 @@ describe('P0 smoke delivery loop', () => {
     expect(replacementPacket).toMatchObject({ status: 'ready', decision: 'none' });
 
     await approveReviewPacket(app, replacementPacket.id, '2026-05-05T04:00:00.000Z');
-    const replacementRunSession = (await request(server).get(`/run-sessions/${forceRun.run_session_id}`).expect(200)).body;
+    const replacementRunSession = (await request(server).get(`/run-sessions/${acceptedForceRun.run_session_id}`).expect(200)).body;
     expect(replacementRunSession).toMatchObject({
       status: 'succeeded',
       executor_result: { status: 'succeeded' },

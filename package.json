@@ -13,7 +13,7 @@
     "dev:web": "pnpm --filter @forgeloop/web dev",
     "db:push": "drizzle-kit push --config packages/db/drizzle.config.ts",
     "smoke:p0": "vitest run tests/smoke",
-    "dogfood:p0": "tsx scripts/p0-dogfood.ts"
+    "dogfood:p0": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/p0-dogfood.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",
