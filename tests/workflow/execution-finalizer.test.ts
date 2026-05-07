@@ -13,6 +13,7 @@ class LeasingRepository extends InMemoryP0Repository {
   calls = 0;
   insideLease = false;
   leaseReadCount = 0;
+  leaseCheckTimes: string[] = [];
 
   override async getRunSession(runSessionId: string) {
     if (this.insideLease) {
@@ -28,6 +29,7 @@ class LeasingRepository extends InMemoryP0Repository {
     write: (repository: LeasingRepository) => Promise<T>,
   ): Promise<T> {
     this.calls += 1;
+    this.leaseCheckTimes.push(lease.now);
     return super.withActiveRunWorkerLease(runSessionId, lease, async (repository) => {
       this.insideLease = true;
       try {
@@ -396,6 +398,39 @@ describe('execution finalizer', () => {
     expect(finalResult).toEqual({ runSessionId, status: 'succeeded', reviewPacketId: `review-packet:${runSessionId}` });
     expect(selfReviewRanInsideLease).toBe(false);
     expect(repo.calls).toBe(2);
+  });
+
+  it('refreshes the worker lease check timestamp before post-review writes', async () => {
+    const repo = new LeasingRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = succeededExecutorResult(context.runSession.id);
+    const runSessionId = context.runSession.id;
+    const lease = await repo.claimRunWorkerLease({
+      run_session_id: runSessionId,
+      worker_id: 'worker-1',
+      lease_token: 'lease-1',
+      now: '2026-05-07T00:00:00.000Z',
+      expires_at: '2026-05-07T00:00:02.000Z',
+    });
+    const times = [
+      '2026-05-07T00:00:00.000Z',
+      '2026-05-07T00:00:01.000Z',
+      '2026-05-07T00:00:03.000Z',
+    ];
+
+    await expect(
+      finalizePackageRunWithExecutorResult({
+        repository: repo,
+        runSessionId,
+        executorResult: result,
+        selfReview: async () => succeededSelfReview(),
+        workerLease: { workerId: lease.worker_id, leaseToken: lease.lease_token },
+        now: () => times.shift() ?? '2026-05-07T00:00:03.000Z',
+      }),
+    ).rejects.toThrow('Run session run-session-1 does not have an active worker lease');
+    expect(repo.calls).toBe(2);
+    expect(repo.leaseCheckTimes).toEqual(['2026-05-07T00:00:01.000Z', '2026-05-07T00:00:03.000Z']);
+    expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(0);
   });
 
   it('rejects a stale worker lease when finalizing without now', async () => {

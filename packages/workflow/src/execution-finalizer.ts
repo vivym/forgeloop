@@ -576,7 +576,10 @@ export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecuto
   const withLeaseFence = <T>(write: (repository: PackageExecutionRepository) => Promise<T>): Promise<T> =>
     input.workerLease === undefined
       ? write(input.repository)
-      : input.repository.withActiveRunWorkerLease(input.runSessionId, { ...input.workerLease, now: at }, write);
+      : input.repository.withActiveRunWorkerLease(input.runSessionId, {
+          ...input.workerLease,
+          now: input.now?.() ?? new Date().toISOString(),
+        }, write);
 
   const prepared = await withLeaseFence((repository) =>
     prepareFinalization(repository, input.runSessionId, parsedExecutorResult, at),
