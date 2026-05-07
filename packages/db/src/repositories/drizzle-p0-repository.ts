@@ -374,6 +374,31 @@ export class DrizzleP0Repository implements P0Repository {
       );
   }
 
+  async supersedePendingRunCommandsForWorker(
+    runSessionId: string,
+    commandTypes: RunCommand['command_type'][],
+    lease: { workerId: string; leaseToken: string },
+    now: string,
+  ): Promise<void> {
+    if (commandTypes.length === 0) {
+      return;
+    }
+
+    await this.db.transaction(async (tx) => {
+      await this.lockActiveRunWorkerLease(tx as ForgeloopDrizzleDatabase, runSessionId, lease.workerId, lease.leaseToken, now);
+      await tx
+        .update(run_commands)
+        .set({ status: 'superseded', updatedAt: now })
+        .where(
+          and(
+            eq(run_commands.runSessionId, runSessionId),
+            eq(run_commands.status, 'pending'),
+            inArray(run_commands.commandType, commandTypes),
+          ),
+        );
+    });
+  }
+
   async claimRunWorkerLease(input: {
     run_session_id: string;
     worker_id: string;

@@ -16,6 +16,8 @@ export interface FakeCodexSessionDriverOptions {
   failResumeWith?: Error;
   failInputWith?: Error;
   neverCompletesUntilWatchdog?: boolean;
+  deferStartUntilIteration?: boolean;
+  deferResumeUntilIteration?: boolean;
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,6 +37,8 @@ export class FakeCodexSessionDriver implements CodexSessionDriver {
   private readonly failResumeWith: Error | undefined;
   private readonly failInputWith: Error | undefined;
   private readonly neverCompletesUntilWatchdog: boolean;
+  private readonly deferStartUntilIteration: boolean;
+  private readonly deferResumeUntilIteration: boolean;
 
   constructor(options: FakeCodexSessionDriverOptions = {}) {
     this.kind = options.kind ?? 'fake';
@@ -45,9 +49,15 @@ export class FakeCodexSessionDriver implements CodexSessionDriver {
     this.failResumeWith = options.failResumeWith;
     this.failInputWith = options.failInputWith;
     this.neverCompletesUntilWatchdog = options.neverCompletesUntilWatchdog ?? false;
+    this.deferStartUntilIteration = options.deferStartUntilIteration ?? false;
+    this.deferResumeUntilIteration = options.deferResumeUntilIteration ?? false;
   }
 
   startRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
+    if (this.deferStartUntilIteration) {
+      return this.deferredStream('startRun', input, this.failStartWith);
+    }
+
     this.callOrder.push('startRun');
     this.startCalls.push(input);
     if (this.failStartWith !== undefined) {
@@ -58,6 +68,10 @@ export class FakeCodexSessionDriver implements CodexSessionDriver {
   }
 
   resumeRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
+    if (this.deferResumeUntilIteration) {
+      return this.deferredStream('resumeRun', input, this.failResumeWith);
+    }
+
     this.callOrder.push('resumeRun');
     this.resumeCalls.push(input);
     if (this.failResumeWith !== undefined) {
@@ -87,6 +101,24 @@ export class FakeCodexSessionDriver implements CodexSessionDriver {
     return this.cancelAcks.shift() ?? { cancelled: true };
   }
 
+  private async *deferredStream(
+    method: 'startRun' | 'resumeRun',
+    input: CodexDriverStartInput,
+    failure: Error | undefined,
+  ): AsyncIterable<CodexDriverStreamItem> {
+    this.callOrder.push(method);
+    if (method === 'startRun') {
+      this.startCalls.push(input);
+    } else {
+      this.resumeCalls.push(input);
+    }
+    if (failure !== undefined) {
+      throw failure;
+    }
+
+    yield* this.stream();
+  }
+
   private async *stream(): AsyncIterable<CodexDriverStreamItem> {
     for (const item of this.script) {
       if (item.kind === 'delay') {
@@ -98,7 +130,7 @@ export class FakeCodexSessionDriver implements CodexSessionDriver {
     }
 
     while (this.neverCompletesUntilWatchdog) {
-      await delay(1_000);
+      await delay(5);
     }
   }
 }

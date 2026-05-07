@@ -135,7 +135,7 @@ const applyCancelCommand = async (
 ): Promise<void> => {
   const lease = { workerId: input.workerId, leaseToken: input.leaseToken };
   const ack = await input.driver.cancelRun({ runtimeMetadata: input.runtimeMetadata });
-  await input.repository.supersedePendingRunCommands(input.runSessionId, ['input'], at);
+  await input.repository.supersedePendingRunCommandsForWorker(input.runSessionId, ['input'], lease, at);
   await input.repository.markRunCommandApplied(command.id, lease, at, ack);
 };
 

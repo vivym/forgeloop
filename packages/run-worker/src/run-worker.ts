@@ -25,6 +25,7 @@ export interface RunWorkerInput {
   selfReview: (input: SelfReviewInput) => Promise<SelfReviewResult>;
   now?: () => IsoDateTime;
   heartbeatIntervalMs?: number;
+  commandPollIntervalMs?: number;
   leaseDurationMs?: number;
   idleThresholdMs?: number;
   artifactRoot?: string;
@@ -36,8 +37,34 @@ interface OwnedRun {
   leaseToken: string;
 }
 
+interface RunControl {
+  stopped: boolean;
+  stalled: boolean;
+  stoppedPromise: Promise<void>;
+  stop: () => void;
+  stall: () => void;
+  cancelStream?: () => Promise<void> | void;
+}
+
+interface OpenedDriverStream {
+  driver: CodexSessionDriver;
+  runtimeMetadata: RunRuntimeMetadata;
+  stream: AsyncIterable<CodexDriverStreamItem>;
+  isRecoveryFallback?: boolean;
+}
+
+interface PrimedDriverStream {
+  driver: CodexSessionDriver;
+  runtimeMetadata: RunRuntimeMetadata;
+  iterator: AsyncIterator<CodexDriverStreamItem>;
+  currentRunSession: RunSession;
+  firstTerminal?: Extract<CodexDriverStreamItem, { kind: 'terminal' }>;
+  stalled?: boolean;
+}
+
 const terminalStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const nowIso = () => new Date().toISOString();
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const baseRuntimeMetadata = (runSession: RunSession, workerId: string): RunRuntimeMetadata => ({
   durability_mode: runSession.runtime_metadata?.durability_mode ?? 'durable',
@@ -108,6 +135,7 @@ export class RunWorker {
   private readonly selfReview: RunWorkerInput['selfReview'];
   private readonly now: () => string;
   private readonly heartbeatIntervalMs: number;
+  private readonly commandPollIntervalMs: number;
   private readonly leaseDurationMs: number;
   private readonly idleThresholdMs: number;
   private readonly artifactRoot: string;
@@ -122,6 +150,7 @@ export class RunWorker {
     this.selfReview = input.selfReview;
     this.now = input.now ?? nowIso;
     this.heartbeatIntervalMs = input.heartbeatIntervalMs ?? 5_000;
+    this.commandPollIntervalMs = input.commandPollIntervalMs ?? 750;
     this.leaseDurationMs = input.leaseDurationMs ?? 60_000;
     this.idleThresholdMs = input.idleThresholdMs ?? 120_000;
     this.artifactRoot = input.artifactRoot ?? '.forgeloop/artifacts';
@@ -172,7 +201,8 @@ export class RunWorker {
 
   async runOne(input: OwnedRun): Promise<void> {
     let terminalOrStopped = false;
-    const heartbeat = this.startHeartbeat(input);
+    const control = this.createRunControl();
+    const heartbeat = this.startHeartbeat(input, control);
 
     try {
       const loaded = await this.repository.getRunSession(input.runSessionId);
@@ -188,29 +218,53 @@ export class RunWorker {
 
       const wasQueued = loaded.status === 'queued';
       const started = wasQueued ? await this.startQueuedRun(loaded, input) : loaded;
-      const runtimeMetadata = mergeMetadata(started, input.workerId, { driver_kind: started.runtime_metadata?.driver_kind ?? 'fake' });
+      const runtimeMetadata = mergeMetadata(started, input.workerId, {
+        driver_kind: started.runtime_metadata?.driver_kind ?? 'fake',
+      });
       const driver = this.driverFactory({ runSession: started, runtimeMetadata });
-      const stream = await this.openDriverStream(driver, started, runtimeMetadata, input, wasQueued ? 'start' : 'resume');
+      const opened = await this.openDriverStream(driver, started, runtimeMetadata, input, wasQueued ? 'start' : 'resume');
+      const primed = await this.primeDriverStream(opened, started, input, wasQueued ? 'start' : 'resume');
+
+      if (primed.stalled === true) {
+        terminalOrStopped = true;
+        return;
+      }
+
+      control.cancelStream = async () => {
+        await primed.iterator.return?.();
+      };
 
       const commandInput = {
         repository: this.repository,
         runSessionId: started.id,
         workerId: input.workerId,
         leaseToken: input.leaseToken,
-        driver,
-        runtimeMetadata,
+        driver: primed.driver,
+        runtimeMetadata: primed.runtimeMetadata,
         now: this.now,
       };
-      await applyPendingRunCommands(
-        loaded.status === 'queued'
-          ? commandInput
-          : {
-              ...commandInput,
-              reclaimClaimedBefore: this.now(),
-            },
-      );
+      const commandPolling =
+        primed.firstTerminal === undefined
+          ? this.startCommandPolling(
+              loaded.status === 'queued'
+                ? commandInput
+                : {
+                    ...commandInput,
+                    reclaimClaimedBefore: this.now(),
+                  },
+              control,
+            )
+          : { done: Promise.resolve() };
 
-      const terminal = await this.consumeStream(stream, started, input);
+      const terminal =
+        primed.firstTerminal ?? (await this.consumeStream(primed.iterator, primed.currentRunSession, input, control));
+      control.stop();
+      await commandPolling.done;
+
+      if (control.stalled) {
+        terminalOrStopped = true;
+        return;
+      }
       if (terminal !== undefined) {
         terminalOrStopped = true;
         await this.finalizeTerminal(started, terminal, input);
@@ -222,7 +276,7 @@ export class RunWorker {
       }
       terminalOrStopped = true;
     } finally {
-      heartbeat.stop();
+      control.stop();
       await heartbeat.done;
       if (terminalOrStopped) {
         try {
@@ -263,7 +317,7 @@ export class RunWorker {
     runtimeMetadata: RunRuntimeMetadata,
     lease: OwnedRun,
     mode: 'start' | 'resume',
-  ): Promise<AsyncIterable<CodexDriverStreamItem>> {
+  ): Promise<OpenedDriverStream> {
     const runSpec = runSession.run_spec;
     if (runSpec === undefined) {
       throw new Error(`Run session ${runSession.id} does not have a run spec`);
@@ -276,80 +330,213 @@ export class RunWorker {
     };
 
     if (mode === 'start') {
-      return driver.startRun(input);
+      return { driver, runtimeMetadata, stream: driver.startRun(input) };
     }
 
     try {
-      return driver.resumeRun(input);
+      return { driver, runtimeMetadata, stream: driver.resumeRun(input) };
     } catch (error) {
       if (runtimeMetadata.driver_kind !== 'app_server') {
         throw error;
       }
 
-      const fallback = this.execFallbackDriverFactory({ runSession, runtimeMetadata: { ...runtimeMetadata, driver_kind: 'exec_fallback' } });
+      const fallbackMetadata = { ...runtimeMetadata, driver_kind: 'exec_fallback' as const };
+      const fallback = this.execFallbackDriverFactory({ runSession, runtimeMetadata: fallbackMetadata });
+      const at = this.now();
       await this.repository.appendWorkerRunEvent(
         {
-          id: `run-event:${runSession.id}:driver-fallback-used:${this.now()}`,
+          id: `run-event:${runSession.id}:driver-fallback-used:${at}`,
           run_session_id: runSession.id,
           event_type: 'driver_fallback_used',
           source: 'worker',
           visibility: 'public',
           summary: 'Worker switched to exec fallback recovery.',
           payload: { reason: error instanceof Error ? error.message : String(error) },
-          created_at: this.now(),
+          created_at: at,
         },
         { workerId: lease.workerId, leaseToken: lease.leaseToken },
       );
-      return fallback.resumeRun(input);
+
+      return {
+        driver: fallback,
+        runtimeMetadata: fallbackMetadata,
+        stream: fallback.resumeRun({
+          ...input,
+          runtimeMetadata: fallbackMetadata,
+        }),
+        isRecoveryFallback: true,
+      };
+    }
+  }
+
+  private async primeDriverStream(
+    opened: OpenedDriverStream,
+    runSession: RunSession,
+    lease: OwnedRun,
+    mode: 'start' | 'resume',
+  ): Promise<PrimedDriverStream> {
+    const iterator = opened.stream[Symbol.asyncIterator]();
+
+    try {
+      const first = await iterator.next();
+      if (first.done === true) {
+        return { ...opened, iterator, currentRunSession: runSession };
+      }
+
+      const handled = await this.handleStreamItem(first.value, runSession, lease);
+      if (
+        handled.terminal?.status === 'failed' &&
+        mode === 'resume' &&
+        (opened.runtimeMetadata.driver_kind === 'app_server' || opened.isRecoveryFallback === true)
+      ) {
+        await iterator.return?.();
+        if (opened.isRecoveryFallback === true) {
+          await this.stallRun(runSession, lease, 'Driver recovery failed.', handled.terminal.failure?.message ?? handled.terminal.summary);
+          return { ...opened, iterator, currentRunSession: handled.currentRunSession, stalled: true };
+        }
+        return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, handled.terminal);
+      }
+
+      return {
+        ...opened,
+        iterator,
+        currentRunSession: handled.currentRunSession,
+        ...(handled.terminal === undefined ? {} : { firstTerminal: handled.terminal }),
+      };
+    } catch (error) {
+      if (mode !== 'resume' || opened.runtimeMetadata.driver_kind !== 'app_server') {
+        throw error;
+      }
+
+      return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, error);
+    }
+  }
+
+  private async openFallbackAfterRecoveryFailure(
+    runtimeMetadata: RunRuntimeMetadata,
+    runSession: RunSession,
+    lease: OwnedRun,
+    reason: unknown,
+  ): Promise<PrimedDriverStream> {
+    const fallbackMetadata = { ...runtimeMetadata, driver_kind: 'exec_fallback' as const };
+    const fallback = this.execFallbackDriverFactory({ runSession, runtimeMetadata: fallbackMetadata });
+    const at = this.now();
+    await this.repository.appendWorkerRunEvent(
+      {
+        id: `run-event:${runSession.id}:driver-fallback-used:${at}`,
+        run_session_id: runSession.id,
+        event_type: 'driver_fallback_used',
+        source: 'worker',
+        visibility: 'public',
+        summary: 'Worker switched to exec fallback recovery.',
+        payload: { reason: reason instanceof Error ? reason.message : String(reason) },
+        created_at: at,
+      },
+      { workerId: lease.workerId, leaseToken: lease.leaseToken },
+    );
+
+    try {
+      const opened = await this.openDriverStream(fallback, runSession, fallbackMetadata, lease, 'resume');
+      const iterator = opened.stream[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      if (first.done === true) {
+        return { ...opened, iterator, currentRunSession: runSession };
+      }
+
+      const handled = await this.handleStreamItem(first.value, runSession, lease);
+      if (handled.terminal?.status === 'failed') {
+        await iterator.return?.();
+        await this.stallRun(runSession, lease, 'Driver recovery failed.', handled.terminal.failure?.message ?? handled.terminal.summary);
+        return { ...opened, iterator, currentRunSession: handled.currentRunSession, stalled: true };
+      }
+
+      return {
+        ...opened,
+        iterator,
+        currentRunSession: handled.currentRunSession,
+        ...(handled.terminal === undefined ? {} : { firstTerminal: handled.terminal }),
+      };
+    } catch (error) {
+      await this.stallRun(runSession, lease, 'Driver recovery failed.', error);
+      return {
+        driver: fallback,
+        runtimeMetadata: fallbackMetadata,
+        iterator: (async function* empty() {})()[Symbol.asyncIterator](),
+        currentRunSession: runSession,
+        stalled: true,
+      };
     }
   }
 
   private async consumeStream(
-    stream: AsyncIterable<CodexDriverStreamItem>,
+    iterator: AsyncIterator<CodexDriverStreamItem>,
     runSession: RunSession,
     lease: OwnedRun,
+    control: RunControl,
   ): Promise<Extract<CodexDriverStreamItem, { kind: 'terminal' }> | undefined> {
     let current = runSession;
-    for await (const item of stream) {
-      if (item.kind === 'event') {
-        const at = this.now();
-        const event = await this.repository.appendWorkerRunEvent(
-          {
-            id: `run-event:${runSession.id}:${item.event.event_type}:${at}`,
-            run_session_id: runSession.id,
-            event_type: item.event.event_type,
-            source: item.event.source,
-            visibility: item.event.visibility,
-            summary: item.event.summary,
-            payload: item.event.payload,
-            ...(item.event.raw_ref === undefined ? {} : { raw_ref: JSON.stringify(item.event.raw_ref) }),
-            created_at: at,
-          },
-          { workerId: lease.workerId, leaseToken: lease.leaseToken },
-        );
-        current = await this.updateRuntimeMetadata(current, lease, {
-          ...item.runtimeMetadata,
-          last_event_at: event.created_at,
-          last_event_cursor: event.cursor,
-        });
-
-        if (item.event.event_type === 'waiting_for_input') {
-          await this.saveRunSessionFenced(
-            {
-              ...current,
-              status: 'waiting_for_input',
-              updated_at: event.created_at,
-            },
-            lease,
-          );
-        }
-        continue;
+    while (!control.stopped) {
+      const item = await Promise.race([iterator.next(), control.stoppedPromise.then(() => undefined)]);
+      if (item === undefined) {
+        return undefined;
+      }
+      if (item.done === true) {
+        return undefined;
       }
 
-      return item;
+      const handled = await this.handleStreamItem(item.value, current, lease);
+      current = handled.currentRunSession;
+      if (handled.terminal !== undefined) {
+        return handled.terminal;
+      }
     }
 
     return undefined;
+  }
+
+  private async handleStreamItem(
+    item: CodexDriverStreamItem,
+    runSession: RunSession,
+    lease: OwnedRun,
+  ): Promise<{
+    currentRunSession: RunSession;
+    terminal?: Extract<CodexDriverStreamItem, { kind: 'terminal' }>;
+  }> {
+    if (item.kind !== 'event') {
+      return { currentRunSession: runSession, terminal: item };
+    }
+
+    const at = this.now();
+    const event = await this.repository.appendWorkerRunEvent(
+      {
+        id: `run-event:${runSession.id}:${item.event.event_type}:${at}`,
+        run_session_id: runSession.id,
+        event_type: item.event.event_type,
+        source: item.event.source,
+        visibility: item.event.visibility,
+        summary: item.event.summary,
+        payload: item.event.payload,
+        ...(item.event.raw_ref === undefined ? {} : { raw_ref: JSON.stringify(item.event.raw_ref) }),
+        created_at: at,
+      },
+      { workerId: lease.workerId, leaseToken: lease.leaseToken },
+    );
+    let current = await this.updateRuntimeMetadata(runSession, lease, {
+      ...item.runtimeMetadata,
+      last_event_at: event.created_at,
+      last_event_cursor: event.cursor,
+    });
+
+    if (item.event.event_type === 'waiting_for_input') {
+      current = {
+        ...current,
+        status: 'waiting_for_input',
+        updated_at: event.created_at,
+      };
+      await this.saveRunSessionFenced(current, lease);
+    }
+
+    return { currentRunSession: current };
   }
 
   private async finalizeTerminal(
@@ -396,12 +583,11 @@ export class RunWorker {
     });
   }
 
-  private startHeartbeat(lease: OwnedRun): { stop: () => void; done: Promise<void> } {
-    let stopped = false;
+  private startHeartbeat(lease: OwnedRun, control: RunControl): { done: Promise<void> } {
     const beat = async () => {
-      while (!stopped) {
-        await new Promise((resolve) => setTimeout(resolve, this.heartbeatIntervalMs));
-        if (stopped) {
+      while (!control.stopped) {
+        await delay(this.heartbeatIntervalMs);
+        if (control.stopped) {
           return;
         }
 
@@ -421,18 +607,61 @@ export class RunWorker {
             },
             { workerId: lease.workerId, leaseToken: lease.leaseToken },
           );
+          const runSession = await this.repository.getRunSession(lease.runSessionId);
+          if (runSession !== undefined && (await this.stallIfIdle(runSession, lease))) {
+            control.stall();
+            void control.cancelStream?.();
+          }
         } catch {
-          stopped = true;
+          control.stop();
         }
       }
     };
 
-    return {
+    return { done: beat() };
+  }
+
+  private startCommandPolling(
+    input: Parameters<typeof applyPendingRunCommands>[0],
+    control: RunControl,
+  ): { done: Promise<void> } {
+    const done = (async () => {
+      while (!control.stopped) {
+        try {
+          await applyPendingRunCommands(input);
+        } catch {
+          control.stop();
+          return;
+        }
+
+        await delay(this.commandPollIntervalMs);
+      }
+    })();
+
+    return { done };
+  }
+
+  private createRunControl(): RunControl {
+    let resolveStopped: (() => void) | undefined;
+    const stoppedPromise = new Promise<void>((resolve) => {
+      resolveStopped = resolve;
+    });
+    const control: RunControl = {
+      stopped: false,
+      stalled: false,
+      stoppedPromise,
       stop: () => {
-        stopped = true;
+        control.stopped = true;
+        resolveStopped?.();
       },
-      done: beat(),
+      stall: () => {
+        control.stalled = true;
+        control.stopped = true;
+        resolveStopped?.();
+      },
     };
+
+    return control;
   }
 
   private async stallIfIdle(runSession: RunSession, lease: OwnedRun): Promise<boolean> {

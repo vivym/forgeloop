@@ -20,6 +20,7 @@ const runWorker = (input: {
   workerId?: string;
   now?: () => string;
   heartbeatIntervalMs?: number;
+  commandPollIntervalMs?: number;
   idleThresholdMs?: number;
   leaseDurationMs?: number;
   evidenceCollector?: () => Promise<ExecutorResult>;
@@ -38,6 +39,7 @@ const runWorker = (input: {
     selfReview: async () => succeededSelfReview(),
     now: input.now ?? (() => new Date().toISOString()),
     heartbeatIntervalMs: input.heartbeatIntervalMs ?? 10,
+    commandPollIntervalMs: input.commandPollIntervalMs ?? 10,
     leaseDurationMs: input.leaseDurationMs ?? 60_000,
     idleThresholdMs: input.idleThresholdMs ?? 30_000,
   });
@@ -136,6 +138,52 @@ describe('RunWorker', () => {
     expect((await repository.listRunEvents(runSession.id)).filter((event) => event.event_type === 'watchdog_heartbeat').length).toBeGreaterThan(1);
   });
 
+  it('polls active commands while a long driver stream is running', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    const driver = new FakeCodexSessionDriver({
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Driver resumed.',
+            payload: {},
+          },
+          runtimeMetadata: { driver_kind: 'fake', active_turn_id: 'turn-active' },
+        },
+        { kind: 'delay', ms: 60 },
+        { kind: 'terminal', status: 'succeeded', summary: 'Done.' },
+      ],
+      inputAcks: [{ continuity: { turn_id: 'turn-after-input' } }],
+    });
+    const worker = runWorker({ repository, driver, commandPollIntervalMs: 5 });
+
+    const pending = worker.drainOnce();
+    await delay(15);
+    await repository.saveRunCommand({
+      id: 'run-command:late-input',
+      run_session_id: runSession.id,
+      command_type: 'input',
+      status: 'pending',
+      actor_id: 'actor-owner',
+      payload: { message: 'late steering input' },
+      target_turn_id: 'turn-active',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await pending;
+
+    expect(driver.inputs).toEqual([
+      expect.objectContaining({
+        message: 'late steering input',
+        targetTurnId: 'turn-active',
+      }),
+    ]);
+  });
+
   it('reclaims expired running lease before recovery', async () => {
     const repository = new InMemoryP0Repository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
@@ -190,7 +238,21 @@ describe('RunWorker', () => {
       expires_at: '2026-05-08T00:00:05.000Z',
     });
     const driver = new FakeCodexSessionDriver({
-      script: [{ kind: 'terminal', status: 'succeeded', summary: 'Recovered.' }],
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'thread_resumed',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Thread resumed.',
+            payload: {},
+          },
+        },
+        { kind: 'delay', ms: 20 },
+        { kind: 'terminal', status: 'succeeded', summary: 'Recovered.' },
+      ],
       inputAcks: [{ continuity: { thread_id: 'thread-existing', turn_id: 'turn-after-input' } }],
     });
     const worker = runWorker({
@@ -212,7 +274,7 @@ describe('RunWorker', () => {
     expect(driver.callOrder).toEqual(['resumeRun', 'sendInput']);
   });
 
-  it('marks app-server recovery and exec fallback failure as stalled', async () => {
+  it('marks synchronous app-server recovery and exec fallback failure as stalled', async () => {
     const repository = new InMemoryP0Repository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.saveRunSession({
@@ -249,5 +311,117 @@ describe('RunWorker', () => {
       summary: 'Driver recovery failed.',
     });
     expect((await repository.listRunEvents(runSession.id)).map((event) => event.event_type)).toContain('stalled');
+  });
+
+  it('marks async app-server and exec fallback terminal recovery failures as stalled', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        codex_thread_id: 'thread-existing',
+        active_turn_id: 'turn-existing',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'terminal',
+          status: 'failed',
+          summary: 'App-server resume failed.',
+          failure: { kind: 'executor_error', message: 'app server unavailable', retryable: true },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'terminal',
+          status: 'failed',
+          summary: 'Exec fallback resume failed.',
+          failure: { kind: 'executor_error', message: 'exec resume unavailable', retryable: true },
+        },
+      ],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(appServerDriver.resumeCalls).toHaveLength(1);
+    expect(execFallbackDriver.resumeCalls).toHaveLength(1);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Driver recovery failed.',
+    });
+    expect((await repository.listReviewPacketsForPackage(runSession.execution_package_id))).toHaveLength(0);
+  });
+
+  it('watchdog stalls a long active stream when Codex activity goes stale', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    let currentTime = Date.parse('2026-05-08T00:00:00.000Z');
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        ...runSession.runtime_metadata!,
+        driver_kind: 'fake',
+        driver_status: 'active',
+        last_event_at: new Date(currentTime).toISOString(),
+      },
+    });
+    const driver = new FakeCodexSessionDriver({
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Driver resumed.',
+            payload: {},
+          },
+        },
+      ],
+      neverCompletesUntilWatchdog: true,
+    });
+    const worker = runWorker({
+      repository,
+      driver,
+      heartbeatIntervalMs: 5,
+      commandPollIntervalMs: 5,
+      idleThresholdMs: 10_000,
+      now: () => new Date(currentTime).toISOString(),
+    });
+
+    const pending = worker.drainOnce();
+    await delay(15);
+    currentTime += 20_000;
+    await expect(Promise.race([pending, delay(500).then(() => 'timeout')])).resolves.not.toBe('timeout');
+
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Codex activity stalled.',
+    });
   });
 });

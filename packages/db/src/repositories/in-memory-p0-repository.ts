@@ -312,6 +312,24 @@ export class InMemoryP0Repository implements P0Repository {
     commandTypes: RunCommand['command_type'][],
     now: string,
   ): Promise<void> {
+    this.supersedePendingRunCommandsUnfenced(runSessionId, commandTypes, now);
+  }
+
+  async supersedePendingRunCommandsForWorker(
+    runSessionId: string,
+    commandTypes: RunCommand['command_type'][],
+    lease: { workerId: string; leaseToken: string },
+    now: string,
+  ): Promise<void> {
+    await this.assertActiveRunWorkerLease(runSessionId, lease.workerId, lease.leaseToken, now);
+    this.supersedePendingRunCommandsUnfenced(runSessionId, commandTypes, now);
+  }
+
+  private supersedePendingRunCommandsUnfenced(
+    runSessionId: string,
+    commandTypes: RunCommand['command_type'][],
+    now: string,
+  ): void {
     for (const command of valuesFor(this.runCommands)) {
       if (
         command.run_session_id === runSessionId &&

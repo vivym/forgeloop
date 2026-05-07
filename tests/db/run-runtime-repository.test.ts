@@ -341,4 +341,42 @@ describe('run runtime repository behavior', () => {
       }),
     ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'INVALID_TRANSITION' });
   });
+
+  it('fences worker supersession of pending commands by worker id and lease token', async () => {
+    const repository = createRepository();
+
+    await repository.claimRunWorkerLease({
+      run_session_id: 'run-session-1',
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now,
+      expires_at: '2026-05-05T00:00:10.000Z',
+    });
+    await repository.saveRunCommand(runCommand({ id: 'input-1', command_type: 'input' }));
+    await repository.claimRunWorkerLease({
+      run_session_id: 'run-session-1',
+      worker_id: 'worker-2',
+      lease_token: 'lease-token-2',
+      now: '2026-05-05T00:00:11.000Z',
+      expires_at: '2026-05-05T00:01:00.000Z',
+    });
+
+    await expect(
+      repository.supersedePendingRunCommandsForWorker(
+        'run-session-1',
+        ['input'],
+        { workerId: 'worker-1', leaseToken: 'lease-token-1' },
+        '2026-05-05T00:00:12.000Z',
+      ),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'INVALID_TRANSITION' });
+
+    await repository.supersedePendingRunCommandsForWorker(
+      'run-session-1',
+      ['input'],
+      { workerId: 'worker-2', leaseToken: 'lease-token-2' },
+      '2026-05-05T00:00:13.000Z',
+    );
+
+    expect(await repository.claimNextRunCommand('run-session-1', 'worker-2', 'lease-token-2', '2026-05-05T00:00:14.000Z')).toBeUndefined();
+  });
 });

@@ -86,6 +86,12 @@ export interface P0Repository {
     failedAt: string,
   ): Promise<void>;
   supersedePendingRunCommands(runSessionId: string, commandTypes: RunCommand['command_type'][], now: string): Promise<void>;
+  supersedePendingRunCommandsForWorker(
+    runSessionId: string,
+    commandTypes: RunCommand['command_type'][],
+    lease: { workerId: string; leaseToken: string },
+    now: string,
+  ): Promise<void>;
 
   claimRunWorkerLease(input: {
     run_session_id: string;
