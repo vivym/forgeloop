@@ -44,6 +44,18 @@ const runWorker = (input: {
     idleThresholdMs: input.idleThresholdMs ?? 30_000,
   });
 
+class FailingClaimRepository extends InMemoryP0Repository {
+  override async claimNextRunCommand(): Promise<undefined> {
+    throw new Error('injected command polling failure');
+  }
+}
+
+class FailingHeartbeatRepository extends InMemoryP0Repository {
+  override async heartbeatRunWorkerLease(): Promise<void> {
+    throw new Error('injected heartbeat failure');
+  }
+}
+
 describe('RunWorker', () => {
   it('discovers queued runs, emits live events, and finalizes only after terminal driver completion', async () => {
     const repository = new InMemoryP0Repository();
@@ -182,6 +194,39 @@ describe('RunWorker', () => {
         targetTurnId: 'turn-active',
       }),
     ]);
+  });
+
+  it('stalls and releases lease when active command polling fails', async () => {
+    const repository = new FailingClaimRepository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    const driver = new FakeCodexSessionDriver({
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Driver resumed.',
+            payload: {},
+          },
+        },
+        { kind: 'delay', ms: 1_000 },
+        { kind: 'terminal', status: 'succeeded', summary: 'Should not complete.' },
+      ],
+    });
+    const worker = runWorker({ repository, driver, commandPollIntervalMs: 5 });
+
+    await expect(Promise.race([worker.drainOnce(), delay(300).then(() => 'timeout')])).resolves.not.toBe('timeout');
+
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Worker stopped before terminal completion.',
+    });
+    expect(await repository.getRunWorkerLease(runSession.id)).toMatchObject({
+      status: 'released',
+      worker_id: 'worker-1',
+    });
   });
 
   it('reclaims expired running lease before recovery', async () => {
@@ -574,5 +619,37 @@ describe('RunWorker', () => {
       summary: 'Codex activity stalled.',
     });
     expect(await repository.getRunWorkerLease(runSession.id)).toMatchObject({ status: 'released' });
+  });
+
+  it('stalls and releases lease when priming is stopped before the first item', async () => {
+    const repository = new FailingHeartbeatRepository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    const driver = new FakeCodexSessionDriver({
+      script: [
+        { kind: 'delay', ms: 1_000 },
+        {
+          kind: 'terminal',
+          status: 'succeeded',
+          summary: 'Should not wait for this.',
+        },
+      ],
+    });
+    const worker = runWorker({
+      repository,
+      driver,
+      heartbeatIntervalMs: 5,
+      idleThresholdMs: 30_000,
+    });
+
+    await expect(Promise.race([worker.drainOnce(), delay(300).then(() => 'timeout')])).resolves.not.toBe('timeout');
+
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Worker stopped before terminal completion.',
+    });
+    expect(await repository.getRunWorkerLease(runSession.id)).toMatchObject({
+      status: 'released',
+      worker_id: 'worker-1',
+    });
   });
 });

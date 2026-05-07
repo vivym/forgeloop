@@ -40,8 +40,10 @@ interface OwnedRun {
 interface RunControl {
   stopped: boolean;
   stalled: boolean;
+  failure?: unknown;
   stoppedPromise: Promise<void>;
   stop: () => void;
+  fail: (error: unknown) => void;
   stall: () => void;
   cancelStream?: () => Promise<void> | void;
 }
@@ -235,6 +237,8 @@ export class RunWorker {
         return;
       }
       if (control.stopped) {
+        await this.stallStoppedRun(started, input, control);
+        terminalOrStopped = true;
         return;
       }
 
@@ -279,8 +283,13 @@ export class RunWorker {
         await this.finalizeTerminal(started, terminal, input);
         return;
       }
+      const latest = (await this.repository.getRunSession(started.id)) ?? primed.currentRunSession;
+      if (stoppedBeforeStreamEndHandling) {
+        await this.stallStoppedRun(latest, input, control);
+        terminalOrStopped = true;
+        return;
+      }
       if (!stoppedBeforeStreamEndHandling) {
-        const latest = (await this.repository.getRunSession(started.id)) ?? primed.currentRunSession;
         if (!terminalStatuses.has(latest.status)) {
           await this.stallRun(latest, input, 'Driver stream ended before terminal completion.');
         }
@@ -684,8 +693,9 @@ export class RunWorker {
             control.stall();
             void control.cancelStream?.();
           }
-        } catch {
-          control.stop();
+        } catch (error) {
+          control.fail(error);
+          void control.cancelStream?.();
         }
       }
     };
@@ -701,8 +711,9 @@ export class RunWorker {
       while (!control.stopped) {
         try {
           await applyPendingRunCommands(input);
-        } catch {
-          control.stop();
+        } catch (error) {
+          control.fail(error);
+          void control.cancelStream?.();
           return;
         }
 
@@ -723,6 +734,11 @@ export class RunWorker {
       stalled: false,
       stoppedPromise,
       stop: () => {
+        control.stopped = true;
+        resolveStopped?.();
+      },
+      fail: (error: unknown) => {
+        control.failure = error;
         control.stopped = true;
         resolveStopped?.();
       },
@@ -754,6 +770,14 @@ export class RunWorker {
 
     await this.stallRun(runSession, lease, 'Codex activity stalled.');
     return true;
+  }
+
+  private async stallStoppedRun(runSession: RunSession, lease: OwnedRun, control: RunControl): Promise<void> {
+    if (terminalStatuses.has(runSession.status)) {
+      return;
+    }
+
+    await this.stallRun(runSession, lease, 'Worker stopped before terminal completion.', control.failure);
   }
 
   private async stallRun(runSession: RunSession, lease: OwnedRun, summary: string, error?: unknown): Promise<void> {
