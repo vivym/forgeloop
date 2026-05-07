@@ -420,74 +420,90 @@ const ensureTerminalRunSideEffects = async (
 const isLatestRunForPackage = (runSession: RunSessionRecord, executionPackage: ExecutionPackageRecord): boolean =>
   executionPackage.last_run_session_id === runSession.id;
 
-const writeFinalization = async (
-  repository: PackageExecutionRepository,
-  runSessionId: string,
-  write: (repository: PackageExecutionRepository) => Promise<ExecutePackageRunResult>,
-  workerLease?: { workerId: string; leaseToken: string },
-  at?: string,
-): Promise<ExecutePackageRunResult> => {
-  if (workerLease === undefined || at === undefined) {
-    return write(repository);
-  }
-
-  return repository.withActiveRunWorkerLease(runSessionId, { ...workerLease, now: at }, write);
-};
-
 export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecutorResult = async (input) => {
   const at = input.now?.() ?? new Date().toISOString();
   const context = await loadRunContext(input.repository, input.runSessionId);
   const parsedExecutorResult = executorResultSchema.parse(input.executorResult);
-  const runSpec = runSpecSchema.parse(context.runSession.run_spec ?? buildRunSpec(context, {}));
   const currentResult = context.runSession.executor_result;
-  const needsPersistence =
-    !terminalStatuses.has(context.runSession.status) || !executorResultsEqual(currentResult, parsedExecutorResult);
-
+  const terminalMatches =
+    terminalStatuses.has(context.runSession.status) && executorResultsEqual(currentResult, parsedExecutorResult);
+  const runSpec = runSpecSchema.parse(context.runSession.run_spec ?? buildRunSpec(context, {}));
   const finalize = async (repository: PackageExecutionRepository): Promise<ExecutePackageRunResult> => {
-    const terminalRunSession = needsPersistence
-      ? await persistExecutorResult(repository, context.runSession, context.executionPackage, parsedExecutorResult, at)
-      : context.runSession;
+    if (terminalMatches) {
+      if (context.runSession.status !== 'succeeded') {
+        return { runSessionId: context.runSession.id, status: context.runSession.status };
+      }
 
-    if (!needsPersistence) {
-      await ensureTerminalRunSideEffects(repository, terminalRunSession, context.executionPackage, parsedExecutorResult, at);
+      const latestRun = isLatestRunForPackage(context.runSession, context.executionPackage);
+      let reviewPacket = await repository.getReviewPacket(`review-packet:${context.runSession.id}`);
+      if (reviewPacket === undefined) {
+        const selfReviewResult = await runSelfReview(
+          repository,
+          context.runSession,
+          context.executionPackage,
+          runSpec,
+          input.selfReview,
+          at,
+        );
+        reviewPacket = await createReviewPacket(
+          repository,
+          context.runSession,
+          context.executionPackage,
+          runSpec,
+          selfReviewResult,
+          at,
+        );
+      }
+
+      const desiredPackageStatus = 'review/awaiting_human/awaiting_human_review';
+      if (latestRun && statusForPackage(context.executionPackage) !== desiredPackageStatus) {
+        await updatePackageAfterSuccess(repository, context.runSession, context.executionPackage, at);
+      }
+
+      return { runSessionId: context.runSession.id, status: context.runSession.status, reviewPacketId: reviewPacket.id };
     }
 
-    const latestRun = isLatestRunForPackage(terminalRunSession, context.executionPackage);
+    const terminalRunSession = await persistExecutorResult(
+      repository,
+      context.runSession,
+      context.executionPackage,
+      parsedExecutorResult,
+      at,
+    );
 
     if (terminalRunSession.status !== 'succeeded') {
-      if (latestRun) {
+      if (isLatestRunForPackage(terminalRunSession, context.executionPackage)) {
         await updatePackageAfterFailure(repository, terminalRunSession, context.executionPackage, at);
       }
       return { runSessionId: terminalRunSession.id, status: terminalRunSession.status };
     }
 
-    let reviewPacket = await repository.getReviewPacket(`review-packet:${terminalRunSession.id}`);
-
-    if (reviewPacket === undefined) {
-      const selfReviewResult = await runSelfReview(
-        repository,
-        terminalRunSession,
-        context.executionPackage,
-        runSpec,
-        input.selfReview,
-        at,
-      );
-      reviewPacket = await createReviewPacket(
-        repository,
-        terminalRunSession,
-        context.executionPackage,
-        runSpec,
-        selfReviewResult,
-        at,
-      );
-    }
-
-    if (latestRun) {
+    const selfReviewResult = await runSelfReview(
+      repository,
+      terminalRunSession,
+      context.executionPackage,
+      runSpec,
+      input.selfReview,
+      at,
+    );
+    const reviewPacket = await createReviewPacket(
+      repository,
+      terminalRunSession,
+      context.executionPackage,
+      runSpec,
+      selfReviewResult,
+      at,
+    );
+    if (isLatestRunForPackage(terminalRunSession, context.executionPackage)) {
       await updatePackageAfterSuccess(repository, terminalRunSession, context.executionPackage, at);
     }
 
-    return { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: reviewPacket!.id };
+    return { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: reviewPacket.id };
   };
 
-  return writeFinalization(input.repository, input.runSessionId, finalize, input.workerLease, at);
+  if (input.workerLease === undefined || input.now === undefined) {
+    return finalize(input.repository);
+  }
+
+  return input.repository.withActiveRunWorkerLease(input.runSessionId, { ...input.workerLease, now: at }, finalize);
 };
