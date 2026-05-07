@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { executorTypeSchema } from './executor';
+import { executorTypeSchema, jsonObjectSchema } from './executor';
 import {
   requestedChangeSchema,
   reviewDecisionPayloadSchema,
@@ -108,6 +108,94 @@ export const forceRerunPackageRequestSchema = rerunPackageRequestSchema.extend({
 });
 export type ForceRerunPackageRequest = z.infer<typeof forceRerunPackageRequestSchema>;
 
+export const runEventTypeSchema = z.enum([
+  'run_queued',
+  'worker_lease_acquired',
+  'driver_started',
+  'thread_started',
+  'thread_resumed',
+  'turn_started',
+  'turn_status_changed',
+  'agent_message_delta',
+  'agent_message_completed',
+  'plan_updated',
+  'tool_call_started',
+  'tool_call_progress',
+  'tool_call_completed',
+  'command_started',
+  'command_output_delta',
+  'command_completed',
+  'waiting_for_input',
+  'user_input',
+  'watchdog_heartbeat',
+  'watchdog_idle_detected',
+  'stalled',
+  'resuming',
+  'cancel_requested',
+  'cancelled',
+  'codex_warning',
+  'driver_fallback_used',
+  'executor_result_started',
+  'required_check_started',
+  'required_check_completed',
+  'artifact_captured',
+  'run_succeeded',
+  'run_failed',
+]);
+export type RunEventType = z.infer<typeof runEventTypeSchema>;
+
+export const runEventSourceSchema = z.enum(['api', 'worker', 'codex', 'executor', 'watchdog', 'user']);
+export type RunEventSource = z.infer<typeof runEventSourceSchema>;
+
+export const runEventVisibilitySchema = z.enum(['public', 'internal']);
+export type RunEventVisibility = z.infer<typeof runEventVisibilitySchema>;
+
+export const publicRunEventSchema = z
+  .object({
+    event_id: z.string().min(1),
+    run_session_id: z.string().min(1),
+    execution_package_id: z.string().min(1),
+    sequence: z.number().int().nonnegative(),
+    event_type: runEventTypeSchema,
+    source: runEventSourceSchema,
+    visibility: z.literal('public'),
+    occurred_at: isoDateTimeSchema,
+    payload: jsonObjectSchema,
+  })
+  .strict();
+export type PublicRunEvent = z.infer<typeof publicRunEventSchema>;
+
+export const runEventListResponseSchema = z
+  .object({
+    events: z.array(publicRunEventSchema),
+    next_cursor: z.string().min(1).optional(),
+    has_more: z.boolean(),
+  })
+  .strict();
+export type RunEventListResponse = z.infer<typeof runEventListResponseSchema>;
+
+export const runAcceptedResponseSchema = z
+  .object({
+    status: z.literal('accepted'),
+    run_session_id: z.string().min(1),
+    execution_package_id: z.string().min(1),
+  })
+  .strict();
+export type RunAcceptedResponse = z.infer<typeof runAcceptedResponseSchema>;
+
+export const runCommandTypeSchema = z.enum(['input', 'cancel', 'resume']);
+export type RunCommandType = z.infer<typeof runCommandTypeSchema>;
+
+export const runOperatorCommandResponseSchema = z
+  .object({
+    status: z.literal('accepted'),
+    command_id: z.string().min(1),
+    run_session_id: z.string().min(1),
+    command_type: runCommandTypeSchema,
+  })
+  .strict();
+export type RunOperatorCommandResponse = z.infer<typeof runOperatorCommandResponseSchema>;
+
 const runCommandResponseBaseSchema = z.object({
   command_id: z.string().min(1),
   execution_package_id: z.string().min(1),
@@ -134,14 +222,14 @@ export const runCommandResponseSchema = z.discriminatedUnion('status', [
 ]);
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 
-export const runPackageResponseSchema = runCommandResponseSchema;
-export type RunPackageResponse = RunCommandResponse;
+export const runPackageResponseSchema = runAcceptedResponseSchema;
+export type RunPackageResponse = RunAcceptedResponse;
 
-export const rerunPackageResponseSchema = runCommandResponseSchema;
-export type RerunPackageResponse = RunCommandResponse;
+export const rerunPackageResponseSchema = runAcceptedResponseSchema;
+export type RerunPackageResponse = RunAcceptedResponse;
 
-export const forceRerunPackageResponseSchema = runCommandResponseSchema;
-export type ForceRerunPackageResponse = RunCommandResponse;
+export const forceRerunPackageResponseSchema = runAcceptedResponseSchema;
+export type ForceRerunPackageResponse = RunAcceptedResponse;
 
 const reviewDecisionRequestBaseSchema = z.object({
   review_packet_id: z.string().min(1),

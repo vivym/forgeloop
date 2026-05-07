@@ -8,6 +8,10 @@ import type {
   FailureKind,
   RequiredCheckSpec,
   RequestedChange,
+  RunCommandType,
+  RunEventSource,
+  RunEventType,
+  RunEventVisibility,
   RunSpec,
   SelfReviewResult,
 } from '@forgeloop/contracts';
@@ -208,7 +212,36 @@ export interface ExecutionPackageDependency {
   depends_on_package_id: string;
 }
 
-export type RunSessionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+export type RunSessionStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting_for_input'
+  | 'stalled'
+  | 'resuming'
+  | 'cancel_requested'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled';
+
+export type RunDriverKind = 'app_server' | 'exec_fallback' | 'fake';
+export type RunDriverStatus = 'not_started' | 'starting' | 'active' | 'waiting_for_input' | 'stalled' | 'terminal';
+export type EffectiveDangerousMode = 'confirmed' | 'unconfirmed' | 'not_requested';
+
+export interface RunRuntimeMetadata {
+  durability_mode: 'durable' | 'ephemeral';
+  driver_kind?: RunDriverKind;
+  driver_status?: RunDriverStatus;
+  codex_thread_id?: string;
+  active_turn_id?: string;
+  workspace_path?: string;
+  app_server_endpoint?: string;
+  worker_id?: string;
+  last_event_cursor?: string;
+  last_event_at?: IsoDateTime;
+  recovery_attempt_count?: number;
+  effective_dangerous_mode?: EffectiveDangerousMode;
+}
 
 export interface RunSession {
   id: string;
@@ -225,10 +258,47 @@ export interface RunSession {
   summary?: string;
   failure_kind?: FailureKind;
   failure_reason?: string;
+  runtime_metadata?: RunRuntimeMetadata;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   started_at?: IsoDateTime;
   finished_at?: IsoDateTime;
+}
+
+export interface RunEvent {
+  id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  sequence: number;
+  event_type: RunEventType;
+  source: RunEventSource;
+  visibility: RunEventVisibility;
+  occurred_at: IsoDateTime;
+  payload: Record<string, unknown>;
+  raw_ref?: string;
+}
+
+export interface RunCommand {
+  id: string;
+  run_session_id: string;
+  command_type: RunCommandType;
+  status: 'queued' | 'claimed' | 'acknowledged' | 'completed' | 'failed';
+  payload: Record<string, unknown>;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  claimed_at?: IsoDateTime;
+  completed_at?: IsoDateTime;
+  driver_ack?: Record<string, unknown>;
+}
+
+export interface RunWorkerLease {
+  id: string;
+  run_session_id: string;
+  worker_id: string;
+  lease_token: string;
+  acquired_at: IsoDateTime;
+  expires_at: IsoDateTime;
+  released_at?: IsoDateTime;
 }
 
 export type ReviewPacketStatus = 'ready' | 'in_review' | 'completed' | 'archived';

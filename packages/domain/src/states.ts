@@ -158,7 +158,15 @@ export type RunSessionTransition =
       failure_reason?: string;
     })
   | (Timestamped & {
-      type: 'workflow_start' | 'cancel';
+      type:
+        | 'workflow_start'
+        | 'worker_started'
+        | 'waiting_for_input'
+        | 'stalled'
+        | 'resume_requested'
+        | 'cancel_requested'
+        | 'recovered'
+        | 'cancel';
     })
   | RunSessionTerminalExecutorResultTransition
   | RunSessionTerminalLegacyTransition;
@@ -347,6 +355,14 @@ const assertWorkItemCompletion = (workItem: WorkItem, completion: WorkItemComple
     });
   }
 };
+
+const isNonTerminalRunSessionStatus = (status: RunSession['status']): boolean =>
+  status === 'queued' ||
+  status === 'running' ||
+  status === 'waiting_for_input' ||
+  status === 'stalled' ||
+  status === 'resuming' ||
+  status === 'cancel_requested';
 
 export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkItemTransition): WorkItem => {
   const at = timestampFor(event);
@@ -714,8 +730,39 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
 
   switch (event.type) {
     case 'workflow_start':
-      if (runSession.status === 'queued') {
-        return { ...runSession, status: 'running', started_at: at, updated_at: at };
+    case 'worker_started':
+      if (runSession.status === 'queued' || runSession.status === 'stalled' || runSession.status === 'resuming') {
+        return {
+          ...runSession,
+          status: 'running',
+          ...(runSession.started_at === undefined ? { started_at: at } : {}),
+          updated_at: at,
+        };
+      }
+      break;
+    case 'waiting_for_input':
+      if (runSession.status === 'running' || runSession.status === 'resuming') {
+        return { ...runSession, status: 'waiting_for_input', updated_at: at };
+      }
+      break;
+    case 'stalled':
+      if (runSession.status === 'running' || runSession.status === 'resuming' || runSession.status === 'waiting_for_input') {
+        return { ...runSession, status: 'stalled', updated_at: at };
+      }
+      break;
+    case 'resume_requested':
+      if (runSession.status === 'waiting_for_input' || runSession.status === 'stalled' || runSession.status === 'resuming') {
+        return { ...runSession, status: 'resuming', updated_at: at };
+      }
+      break;
+    case 'recovered':
+      if (runSession.status === 'stalled' || runSession.status === 'resuming') {
+        return { ...runSession, status: 'running', updated_at: at };
+      }
+      break;
+    case 'cancel_requested':
+      if (isNonTerminalRunSessionStatus(runSession.status)) {
+        return { ...runSession, status: 'cancel_requested', updated_at: at };
       }
       break;
     case 'executor_success':
@@ -780,7 +827,14 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       }
       break;
     case 'cancel':
-      if (runSession.status === 'queued' || runSession.status === 'running') {
+      if (
+        runSession.status === 'queued' ||
+        runSession.status === 'running' ||
+        runSession.status === 'waiting_for_input' ||
+        runSession.status === 'stalled' ||
+        runSession.status === 'resuming' ||
+        runSession.status === 'cancel_requested'
+      ) {
         return { ...runSession, status: 'cancelled', finished_at: at, updated_at: at };
       }
       break;
