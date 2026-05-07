@@ -377,6 +377,82 @@ describe('RunWorker', () => {
     expect((await repository.listReviewPacketsForPackage(runSession.execution_package_id))).toHaveLength(0);
   });
 
+  it('uses exec fallback when app-server recovery emits fallback event and ends', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        codex_thread_id: 'thread-existing',
+        active_turn_id: 'turn-existing',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server resume failed; fallback is required.',
+            payload: { reason: 'thread/resume failed' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+          },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'thread_resumed',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Exec fallback resumed thread.',
+            payload: { thread_id: 'thread-existing' },
+          },
+        },
+        { kind: 'terminal', status: 'succeeded', summary: 'Exec fallback completed.' },
+      ],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(appServerDriver.resumeCalls).toHaveLength(1);
+    expect(execFallbackDriver.resumeCalls).toHaveLength(1);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'succeeded',
+      summary: 'Executor completed the package.',
+    });
+  });
+
   it('watchdog stalls a long active stream when Codex activity goes stale', async () => {
     const repository = new InMemoryP0Repository();
     const { runSession } = await seedReadyStartedPackageRun(repository);

@@ -66,6 +66,11 @@ const terminalStatuses = new Set<RunSession['status']>(['succeeded', 'failed', '
 const nowIso = () => new Date().toISOString();
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const isFallbackRequiredEvent = (item: CodexDriverStreamItem): boolean =>
+  item.kind === 'event' &&
+  item.event.event_type === 'driver_fallback_used' &&
+  item.runtimeMetadata?.driver_kind === 'exec_fallback';
+
 const baseRuntimeMetadata = (runSession: RunSession, workerId: string): RunRuntimeMetadata => ({
   durability_mode: runSession.runtime_metadata?.durability_mode ?? 'durable',
   recovery_attempt_count: runSession.runtime_metadata?.recovery_attempt_count ?? 0,
@@ -385,6 +390,35 @@ export class RunWorker {
 
       const handled = await this.handleStreamItem(first.value, runSession, lease);
       if (
+        mode === 'resume' &&
+        opened.runtimeMetadata.driver_kind === 'app_server' &&
+        first.value.kind === 'event' &&
+        isFallbackRequiredEvent(first.value)
+      ) {
+        const next = await iterator.next();
+        if (next.done === true) {
+          return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, first.value.event.summary);
+        }
+
+        const nextHandled = await this.handleStreamItem(next.value, handled.currentRunSession, lease);
+        if (nextHandled.terminal !== undefined) {
+          if (nextHandled.terminal.status === 'failed') {
+            await iterator.return?.();
+            return this.openFallbackAfterRecoveryFailure(opened.runtimeMetadata, runSession, lease, nextHandled.terminal);
+          }
+
+          return {
+            ...opened,
+            iterator,
+            currentRunSession: nextHandled.currentRunSession,
+            firstTerminal: nextHandled.terminal,
+          };
+        }
+
+        return { ...opened, iterator, currentRunSession: nextHandled.currentRunSession };
+      }
+
+      if (
         handled.terminal?.status === 'failed' &&
         mode === 'resume' &&
         (opened.runtimeMetadata.driver_kind === 'app_server' || opened.isRecoveryFallback === true)
@@ -440,7 +474,8 @@ export class RunWorker {
       const iterator = opened.stream[Symbol.asyncIterator]();
       const first = await iterator.next();
       if (first.done === true) {
-        return { ...opened, iterator, currentRunSession: runSession };
+        await this.stallRun(runSession, lease, 'Driver recovery failed.', 'Exec fallback ended before recovery completed.');
+        return { ...opened, iterator, currentRunSession: runSession, stalled: true };
       }
 
       const handled = await this.handleStreamItem(first.value, runSession, lease);
