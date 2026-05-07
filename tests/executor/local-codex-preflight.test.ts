@@ -401,6 +401,43 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
+  it('returns executor_error when required check execution throws', async () => {
+    const { repo, head } = await createGitRepo();
+    const artifactRoot = await makeTempDir();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
+        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+      }),
+      {
+        artifactRoot,
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async () => {
+            await rm(artifactRoot, { recursive: true, force: true });
+            await writeFile(artifactRoot, 'artifact root is now a file');
+
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'executor_error',
+        message: expect.stringContaining('Required check execution failed'),
+        retryable: true,
+      },
+      raw_metadata: {
+        source_repo_before_status: '',
+        source_repo_after_status: '',
+      },
+    });
+  });
+
   it('treats a missing non-blocking check command as a check failure without failing execution', async () => {
     const { repo, head } = await createGitRepo();
     const nonBlockingCheck = blockingCheck({
@@ -510,32 +547,40 @@ describe('runLocalCodexExecutor', () => {
       const { stdout, stderr } = await execFileAsync(command, [...args], options);
       return { stdout: String(stdout), stderr: String(stderr) };
     };
+    const originalGithubToken = process.env.GITHUB_TOKEN;
     process.env.GITHUB_TOKEN = 'secret-token';
 
-    const result = await runLocalCodexExecutor(
-      createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [],
-        context: { required_checks: [] },
-      }),
-      {
-        artifactRoot: await makeTempDir(),
-        codexHome,
-        environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
-      },
-    );
+    try {
+      const result = await runLocalCodexExecutor(
+        createRunSpec({
+          repo: { local_path: repo, base_commit_sha: head },
+          required_checks: [],
+          context: { required_checks: [] },
+        }),
+        {
+          artifactRoot: await makeTempDir(),
+          codexHome,
+          environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
+        },
+      );
 
-    delete process.env.GITHUB_TOKEN;
-    expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
-    const codexExecCall = commandCalls.find(
-      (call) => call.command === 'codex' && call.args[0] === 'exec',
-    );
-    expect(codexExecCall?.args).toEqual(
-      expect.arrayContaining(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox']),
-    );
-    expect(codexExecCall?.args).not.toContain('workspace-write');
-    expect(codexExecCall?.timeout).toBeUndefined();
-    expect(codexExecCall?.env).not.toHaveProperty('GITHUB_TOKEN');
+      expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+      const codexExecCall = commandCalls.find(
+        (call) => call.command === 'codex' && call.args[0] === 'exec',
+      );
+      expect(codexExecCall?.args).toEqual(
+        expect.arrayContaining(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox']),
+      );
+      expect(codexExecCall?.args).not.toContain('workspace-write');
+      expect(codexExecCall?.timeout).toBeUndefined();
+      expect(codexExecCall?.env).not.toHaveProperty('GITHUB_TOKEN');
+    } finally {
+      if (originalGithubToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalGithubToken;
+      }
+    }
   });
 
   it('uses the same explicit Codex auth env for readiness and default invocation', async () => {

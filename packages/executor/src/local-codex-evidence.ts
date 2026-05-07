@@ -432,6 +432,12 @@ const sourceRepoVerificationFailure = (error: unknown): ExecutorFailure => ({
   retryable: false,
 });
 
+const requiredCheckExecutionFailure = (error: unknown): ExecutorFailure => ({
+  kind: 'executor_error',
+  message: `Required check execution failed: ${error instanceof Error ? error.message : 'unknown required check execution error'}`,
+  retryable: true,
+});
+
 const sourceRepoVerificationFailureResult = (
   input: LocalCodexEvidenceInput,
   error: unknown,
@@ -574,7 +580,39 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
     });
   }
 
-  const checkRun = await runChecks(input.runSpec, input.workspacePath, input.artifactRoot, input.checkEnv);
+  let checkRun: { checks: CheckResult[]; artifacts: ArtifactRef[] };
+  try {
+    checkRun = await runChecks(input.runSpec, input.workspacePath, input.artifactRoot, input.checkEnv);
+  } catch (error) {
+    let changedFiles = initialChangedFiles;
+    try {
+      changedFiles = await collectChangedFiles(input.environment, input.runSpec, input.workspacePath, input.checkEnv);
+    } catch {
+      changedFiles = initialChangedFiles;
+    }
+
+    const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
+      changedFiles,
+      checks: [],
+      artifacts: [],
+    });
+    if (!sourceRepoVerification.ok) {
+      return sourceRepoVerification.result;
+    }
+    const sourceRepoGuard = sourceRepoVerification.guard;
+    const failure = sourceRepoGuard.unchanged ? requiredCheckExecutionFailure(error) : sourceRepoMutationFailure();
+
+    return executorFailureResult({
+      runSpec: input.runSpec,
+      startedAt: input.startedAt,
+      summary: failure.message,
+      failure,
+      changedFiles,
+      checks: [],
+      artifacts: [],
+      rawMetadata: rawMetadataFor(input, sourceRepoGuard.afterPorcelain),
+    });
+  }
   let finalCapture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
   try {
     finalCapture = await captureDiffArtifacts(

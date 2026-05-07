@@ -36,6 +36,20 @@ const splitNul = (value: string): string[] => value.split('\0').filter(Boolean);
 
 const isIgnoredRunWorktreePath = (path: string): boolean => path === '.worktrees' || path.startsWith('.worktrees/');
 
+const porcelainPayload = (line: string): string => (line.length > 3 ? line.slice(3) : line);
+
+const porcelainLineIsSourceContent = (line: string): boolean =>
+  porcelainPayload(line)
+    .split(' -> ')
+    .every((path) => !isIgnoredRunWorktreePath(path));
+
+const normalizeSourcePorcelain = (porcelain: string): string =>
+  porcelain
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .filter(porcelainLineIsSourceContent)
+    .join('\n');
+
 const hashUntrackedPath = async (hash: ReturnType<typeof createHash>, repoPath: string, path: string) => {
   if (isIgnoredRunWorktreePath(path)) {
     hash.update('ignored-run-worktree\0');
@@ -101,7 +115,7 @@ const dirtyFingerprint = async (
   const hash = createHash('sha256');
 
   hash.update('porcelain\0');
-  hash.update(porcelain);
+  hash.update(normalizeSourcePorcelain(porcelain));
   hash.update('\0worktree-diff\0');
   hash.update(worktreeDiff.stdout);
   hash.update('\0cached-diff\0');
@@ -138,7 +152,7 @@ export const sourceRepoWasMutated = (input: {
   beforeDirtyFingerprint?: string;
   afterDirtyFingerprint?: string;
 }): boolean =>
-  input.beforePorcelain !== input.afterPorcelain ||
+  normalizeSourcePorcelain(input.beforePorcelain) !== normalizeSourcePorcelain(input.afterPorcelain) ||
   (input.beforeDirtyFingerprint !== undefined &&
     input.afterDirtyFingerprint !== undefined &&
     input.beforeDirtyFingerprint !== input.afterDirtyFingerprint);

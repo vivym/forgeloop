@@ -45,6 +45,21 @@ describe('Codex persistent worktrees', () => {
     ).toBe(true);
   });
 
+  it('ignores run worktree porcelain while still detecting normal source porcelain changes', () => {
+    expect(
+      sourceRepoWasMutated({
+        beforePorcelain: '',
+        afterPorcelain: '?? .worktrees/run-b/packages/executor/src/file.ts\n',
+      }),
+    ).toBe(false);
+    expect(
+      sourceRepoWasMutated({
+        beforePorcelain: '',
+        afterPorcelain: '?? packages/executor/src/file.ts\n',
+      }),
+    ).toBe(true);
+  });
+
   it('detects source repo mutation when dirty porcelain stays the same but content changes', async () => {
     const repo = await makeTempDir();
     await execGit(repo, ['init', '-b', 'main']);
