@@ -1,9 +1,9 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 
 import type { ExecutorFailure, RunSpec } from '../../contracts/src/executor.js';
+import { preparePersistentGitWorktree } from './codex-worktree.js';
 
 export type CommandChecker = (command: string) => Promise<boolean>;
 
@@ -32,7 +32,6 @@ export interface CodexRuntimeReadyOptions {
 export interface CodexInvocation {
   workspacePath: string;
   prompt: string;
-  timeoutSeconds: number;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -96,16 +95,6 @@ const failure = (message: string, retryable = false): LocalCodexPreflightFailure
     retryable,
   },
 });
-
-const safePathSegment = (value: string): string => {
-  const sanitized = value
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/\.\.+/g, '-')
-    .replace(/^\.+/, '')
-    .replace(/^-+|-+$/g, '');
-
-  return sanitized.length > 0 ? sanitized : 'run-session';
-};
 
 const execFileCommandRunner: CommandRunner = async (command, args, options) =>
   new Promise((resolve, reject) => {
@@ -187,46 +176,38 @@ const isWritableDirectory = async (path: string): Promise<boolean> => {
 export const createDefaultLocalCodexEnvironment = (
   options: DefaultLocalCodexEnvironmentOptions = {},
 ): LocalCodexEnvironment => {
-  const workspaceRoot = options.workspaceRoot ?? join(tmpdir(), 'forgeloop-workspaces');
+  const workspaceRoot = options.workspaceRoot;
   const runCommand = options.commandRunner ?? execFileCommandRunner;
-
-  return {
+  const environment: LocalCodexEnvironment = {
     commandExists: commandExists(runCommand),
     isCodexRuntimeReady: isCodexRuntimeReady(runCommand),
     isGitRepo: isGitRepo(runCommand),
     resolveGitRef: resolveGitRef(runCommand),
     isWorkspaceClean: isWorkspaceClean(runCommand),
     isWritableDirectory,
-    runCodex: async ({ workspacePath, prompt, timeoutSeconds, env }) => {
+    runCodex: async ({ workspacePath, prompt, env }) => {
       const commandOptions: CommandRunOptions = {
         cwd: workspacePath,
-        timeout: timeoutSeconds * 1000,
         maxBuffer: 1024 * 1024 * 10,
       };
       if (env !== undefined) {
         commandOptions.env = env;
       }
 
-      await runCommand('codex', ['exec', '--sandbox', 'workspace-write', '--skip-git-repo-check', prompt], commandOptions);
+      await runCommand('codex', ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', prompt], commandOptions);
     },
     runCommand,
     prepareWorkspace: async ({ repoPath, baseRef, runSessionId }) => {
-      try {
-        await mkdir(workspaceRoot, { recursive: true });
-        const workspacePath = await mkdtemp(join(workspaceRoot, `${safePathSegment(runSessionId)}-`));
-        await rm(workspacePath, { recursive: true, force: true });
-        await runCommand('git', ['clone', '--no-checkout', repoPath, workspacePath]);
-        await runCommand('git', ['checkout', '--detach', baseRef], { cwd: workspacePath });
+      const input = { repoPath, baseRef, runSessionId };
 
-        return { ok: true, workspacePath };
-      } catch (error) {
-        return {
-          ok: false,
-          message: error instanceof Error ? error.message : 'workspace prepare failed',
-        };
-      }
+      return preparePersistentGitWorktree(
+        environment,
+        workspaceRoot === undefined ? input : { ...input, workspaceRoot },
+      );
     },
   };
+
+  return environment;
 };
 
 export const runLocalCodexPreflight = async (
@@ -274,11 +255,11 @@ export const runLocalCodexPreflight = async (
   });
 
   if (!prepared.ok) {
-    return failure(`Disposable workspace preparation failed: ${prepared.message}`, true);
+    return failure(`Persistent workspace preparation failed: ${prepared.message}`, true);
   }
 
   if (!(await environment.isWorkspaceClean(prepared.workspacePath))) {
-    return failure(`Disposable workspace is not clean: ${prepared.workspacePath}`);
+    return failure(`Persistent workspace is not clean: ${prepared.workspacePath}`);
   }
 
   return {

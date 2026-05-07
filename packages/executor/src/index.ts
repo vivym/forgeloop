@@ -7,3 +7,6 @@ export * from './codex-event-normalizer.js';
 export * from './codex-raw-log-store.js';
 export * from './codex-app-server-driver.js';
 export * from './codex-exec-fallback-driver.js';
+export * from './codex-worktree.js';
+export * from './source-repo-guard.js';
+export * from './local-codex-evidence.js';

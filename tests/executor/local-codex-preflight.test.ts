@@ -53,7 +53,7 @@ const createPassingEnvironment = (overrides: Partial<LocalCodexEnvironment> = {}
 });
 
 const createGitBackedTestEnvironment = (
-  workspaceRoot: string,
+  workspaceRoot: string | undefined,
   overrides: Partial<LocalCodexEnvironment> = {},
 ): LocalCodexEnvironment => {
   const environment = createDefaultLocalCodexEnvironment({ workspaceRoot });
@@ -211,7 +211,7 @@ describe('runLocalCodexPreflight', () => {
     expect(result.stdout).toBe('stdin-closed');
   });
 
-  it('sanitizes disposable workspace path segments from run session ids', async () => {
+  it('sanitizes persistent workspace path segments from run session ids', async () => {
     const repo = await makeTempDir();
     const workspaceRoot = await makeTempDir();
     const result = await runLocalCodexPreflight(
@@ -235,7 +235,7 @@ describe('runLocalCodexPreflight', () => {
     expect(result.workspacePath).not.toContain('..');
   });
 
-  it('fails when disposable workspace preparation fails', async () => {
+  it('fails when persistent workspace preparation fails', async () => {
     const repo = await makeTempDir();
     const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
       artifactRoot: await makeTempDir(),
@@ -248,7 +248,7 @@ describe('runLocalCodexPreflight', () => {
     expect(result.failure?.message).toContain('git worktree add failed');
   });
 
-  it('fails when the disposable workspace starts dirty', async () => {
+  it('fails when the persistent workspace starts dirty', async () => {
     const repo = await makeTempDir();
     const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
       artifactRoot: await makeTempDir(),
@@ -258,7 +258,7 @@ describe('runLocalCodexPreflight', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.failure?.message).toContain('Disposable workspace is not clean');
+    expect(result.failure?.message).toContain('Persistent workspace is not clean');
   });
 
   it('does not fail preflight when a required check command is missing', async () => {
@@ -308,7 +308,7 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
-  it('captures fake runner changes, patch artifact, and successful checks in a disposable workspace', async () => {
+  it('captures fake runner changes, patch artifact, and successful checks in a persistent workspace', async () => {
     const { repo, head } = await createGitRepo();
     const artifactRoot = await makeTempDir();
     const runner: CodexRunner = {
@@ -479,16 +479,21 @@ describe('runLocalCodexExecutor', () => {
     expect(prompt).toContain('pnpm test tests/executor');
   });
 
-  it('uses workspace-write sandbox and sanitized environment for the default Codex invocation', async () => {
+  it('uses dangerous JSON exec without a main-run timeout and sanitized environment for the default Codex invocation', async () => {
     const { repo, head } = await createGitRepo();
     const workspaceRoot = await makeTempDir();
     const codexHome = join(await makeTempDir(), '.codex');
-    const commandCalls: Array<{ command: string; args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+    const commandCalls: Array<{
+      command: string;
+      args: readonly string[];
+      env?: NodeJS.ProcessEnv;
+      timeout?: number;
+    }> = [];
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const execFileAsync = promisify(execFile);
     const commandRunner: CommandRunner = async (command, args, options) => {
-      commandCalls.push({ command, args, env: options?.env });
+      commandCalls.push({ command, args, env: options?.env, timeout: options?.timeout });
 
       if (command === 'codex') {
         return { stdout: '', stderr: '' };
@@ -517,8 +522,11 @@ describe('runLocalCodexExecutor', () => {
     const codexExecCall = commandCalls.find(
       (call) => call.command === 'codex' && call.args[0] === 'exec',
     );
-    expect(codexExecCall?.args).toContain('workspace-write');
-    expect(codexExecCall?.args).not.toContain('danger-full-access');
+    expect(codexExecCall?.args).toEqual(
+      expect.arrayContaining(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox']),
+    );
+    expect(codexExecCall?.args).not.toContain('workspace-write');
+    expect(codexExecCall?.timeout).toBeUndefined();
     expect(codexExecCall?.env).not.toHaveProperty('GITHUB_TOKEN');
   });
 
@@ -644,10 +652,10 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
-  it('neutralizes git remotes in the disposable workspace before runner and checks execute', async () => {
+  it('disables git remote pushes in the persistent workspace without removing source remotes', async () => {
     const { repo, head } = await createGitRepo();
     await execGit(repo, ['remote', 'add', 'origin', 'https://example.com/repo.git']);
-    let runnerRemotes = 'not checked';
+    let runnerPushUrl = 'not checked';
 
     const result = await runLocalCodexExecutor(
       createRunSpec({
@@ -660,8 +668,8 @@ describe('runLocalCodexExecutor', () => {
         environment: createGitBackedTestEnvironment(await makeTempDir()),
         runner: {
           run: async ({ workspacePath }) => {
-            const { stdout } = await execGit(workspacePath, ['remote']);
-            runnerRemotes = stdout;
+            const { stdout } = await execGit(workspacePath, ['remote', 'get-url', '--push', 'origin']);
+            runnerPushUrl = stdout.trim();
             return { status: 'succeeded', summary: 'Runner completed.' };
           },
         },
@@ -669,10 +677,31 @@ describe('runLocalCodexExecutor', () => {
     );
 
     expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
-    expect(runnerRemotes.trim()).toBe('');
+    expect(runnerPushUrl).toBe('DISABLED_BY_FORGELOOP');
     await expect(execGit(repo, ['remote', 'get-url', 'origin'])).resolves.toMatchObject({
       stdout: 'https://example.com/repo.git\n',
     });
+  });
+
+  it('uses .worktrees under the source repo by default for compatibility runs', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(undefined),
+        runner: {
+          run: async () => ({ status: 'succeeded', summary: 'Runner completed.' }),
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+    expect(result.raw_metadata.workspace_path).toBe(join(repo, '.worktrees', 'run-session-1'));
   });
 
   it('runs required checks with hermetic home and without ambient auth credentials', async () => {
@@ -825,6 +854,42 @@ describe('runLocalCodexExecutor', () => {
       status: 'failed',
       failure: { kind: 'path_violation' },
       changed_files: [{ path: 'README.md' }],
+    });
+  });
+
+  it('returns path_violation when the source repo changes outside the run worktree', async () => {
+    const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(
+      createRunSpec({
+        repo: { local_path: repo, base_commit_sha: head },
+        required_checks: [],
+        context: { required_checks: [] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
+        runner: {
+          run: async () => {
+            await mkdir(join(repo, 'packages/domain/src'), { recursive: true });
+            await writeFile(join(repo, 'packages/domain/src/types.ts'), 'export const mutated = true;\n');
+
+            return { status: 'succeeded', summary: 'Runner completed.' };
+          },
+        },
+      },
+    );
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'path_violation',
+        message: 'Source repo changed outside the run worktree.',
+        retryable: false,
+      },
+      raw_metadata: {
+        source_repo_before_status: '',
+        source_repo_after_status: expect.stringContaining('packages/domain/src/types.ts'),
+      },
     });
   });
 
