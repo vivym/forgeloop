@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ExecutorResult } from '@forgeloop/contracts';
 import { InMemoryP0Repository, type TraceEventRecord } from '../../packages/db/src';
 import type { Artifact, Decision, ReviewPacket } from '../../packages/domain/src/index';
@@ -187,6 +187,7 @@ describe('execution finalizer', () => {
   });
 
   it('keeps terminal records when finalizer trace writes fail', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const repo = new TraceFailingRepository();
     const context = await seedReadyStartedPackageRun(repo);
     const result = succeededExecutorResult(context.runSession.id);
@@ -201,26 +202,34 @@ describe('execution finalizer', () => {
     };
     await repo.saveDecision(preexistingDecision);
 
-    const finalResult = await finalizePackageRunWithExecutorResult({
-      repository: repo,
-      runSessionId: context.runSession.id,
-      executorResult: result,
-      selfReview: async () => succeededSelfReview(),
-      now: () => '2026-05-07T00:00:00.000Z',
-    });
+    try {
+      const finalResult = await finalizePackageRunWithExecutorResult({
+        repository: repo,
+        runSessionId: context.runSession.id,
+        executorResult: result,
+        selfReview: async () => succeededSelfReview(),
+        now: () => '2026-05-07T00:00:00.000Z',
+      });
 
-    expect(finalResult).toEqual({
-      runSessionId: context.runSession.id,
-      status: 'succeeded',
-      reviewPacketId: `review-packet:${context.runSession.id}`,
-    });
-    expect(await repo.getRunSession(context.runSession.id)).toMatchObject({ status: 'succeeded', summary: result.summary });
-    expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(1);
-    expect(await repo.listArtifactsForObject('run_session', context.runSession.id)).toHaveLength(result.artifacts.length);
-    expect(await repo.listDecisionsForObject(preexistingDecision.object_type, preexistingDecision.object_id)).toEqual([
-      preexistingDecision,
-    ]);
-    expect(await repo.listTraceEventsForSubject('run_session', context.runSession.id)).toEqual([]);
+      expect(finalResult).toEqual({
+        runSessionId: context.runSession.id,
+        status: 'succeeded',
+        reviewPacketId: `review-packet:${context.runSession.id}`,
+      });
+      expect(await repo.getRunSession(context.runSession.id)).toMatchObject({ status: 'succeeded', summary: result.summary });
+      expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(1);
+      expect(await repo.listArtifactsForObject('run_session', context.runSession.id)).toHaveLength(result.artifacts.length);
+      expect(await repo.listDecisionsForObject(preexistingDecision.object_type, preexistingDecision.object_id)).toEqual([
+        preexistingDecision,
+      ]);
+      expect(await repo.listTraceEventsForSubject('run_session', context.runSession.id)).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[forgeloop:p0.trace] best-effort trace write failed',
+        expect.objectContaining({ source: 'workflow-finalizer', error: 'trace store unavailable' }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('is idempotent when retrying a succeeded executor result after partial persistence', async () => {

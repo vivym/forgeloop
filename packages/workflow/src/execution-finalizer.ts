@@ -213,11 +213,20 @@ const persistArtifacts = async (
 
 const terminalTraceEventId = (runSessionId: string): string => `trace-event:run-terminal:${runSessionId}`;
 const replacementTraceEventId = (runSessionId: string): string => `trace-event:run-replacement:${runSessionId}`;
+type TraceWarningSink = { warn: (...values: unknown[]) => void };
+
+const warnTraceWriteFailure = (error: unknown): void => {
+  (globalThis as { console?: TraceWarningSink }).console?.warn('[forgeloop:p0.trace] best-effort trace write failed', {
+    source: 'workflow-finalizer',
+    error: error instanceof Error ? error.message : String(error),
+  });
+};
 
 const bestEffortTraceWrite = async (write: () => Promise<void>): Promise<void> => {
   try {
     await write();
-  } catch {
+  } catch (error) {
+    warnTraceWriteFailure(error);
     // Primary P0 records are authoritative; trace rows can be reconstructed when absent.
   }
 };

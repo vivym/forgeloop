@@ -640,7 +640,7 @@ export class DrizzleP0Repository implements P0Repository {
     return this.listWhere<TraceEventRecord>(
       trace_events,
       and(eq(trace_events.subjectType, subjectType), eq(trace_events.subjectId, subjectId)),
-      trace_events.createdAt,
+      [trace_events.createdAt, trace_events.id],
     );
   }
 
@@ -649,7 +649,10 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]> {
-    return this.listWhere<TraceLinkRecord>(trace_links, eq(trace_links.traceEventId, traceEventId), trace_links.createdAt);
+    return this.listWhere<TraceLinkRecord>(trace_links, eq(trace_links.traceEventId, traceEventId), [
+      trace_links.createdAt,
+      trace_links.id,
+    ]);
   }
 
   async saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void> {
@@ -660,7 +663,7 @@ export class DrizzleP0Repository implements P0Repository {
     return this.listWhere<TraceArtifactRefRecord>(
       trace_artifact_refs,
       eq(trace_artifact_refs.traceEventId, traceEventId),
-      trace_artifact_refs.createdAt,
+      [trace_artifact_refs.createdAt, trace_artifact_refs.id],
     );
   }
 
@@ -810,10 +813,13 @@ export class DrizzleP0Repository implements P0Repository {
     return row === undefined ? undefined : fromDbRecord<T>(row);
   }
 
-  private async listWhere<T>(table: AnyPgTable, where?: unknown, orderBy?: AnyPgColumn): Promise<T[]> {
+  private async listWhere<T>(table: AnyPgTable, where?: unknown, orderBy?: AnyPgColumn | AnyPgColumn[]): Promise<T[]> {
     const query = this.db.select().from(table);
     const filtered = where === undefined ? query : query.where(where as never);
-    const rows = orderBy === undefined ? await filtered : await filtered.orderBy(asc(orderBy));
+    const rows =
+      orderBy === undefined
+        ? await filtered
+        : await filtered.orderBy(...(Array.isArray(orderBy) ? orderBy : [orderBy]).map((column) => asc(column)));
 
     return rows.map((row) => fromDbRecord<T>(row));
   }

@@ -28,6 +28,8 @@ const clone = <T>(value: T): T => structuredClone(value);
 const valuesFor = <T>(records: Map<string, T>): T[] => [...records.values()].map(clone);
 
 const byCreatedAt = <T extends { created_at: string }>(left: T, right: T) => left.created_at.localeCompare(right.created_at);
+const byCreatedAtThenId = <T extends { created_at: string; id: string }>(left: T, right: T) =>
+  byCreatedAt(left, right) || left.id.localeCompare(right.id);
 const recoverableRunSessionStatuses = new Set<RunSession['status']>([
   'queued',
   'running',
@@ -510,7 +512,7 @@ export class InMemoryP0Repository implements P0Repository {
   async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
     return valuesFor(this.traceEvents)
       .filter((traceEvent) => traceEvent.subject_type === subjectType && traceEvent.subject_id === subjectId)
-      .sort(byCreatedAt);
+      .sort(byCreatedAtThenId);
   }
 
   async saveTraceLink(traceLink: TraceLinkRecord): Promise<void> {
@@ -520,7 +522,7 @@ export class InMemoryP0Repository implements P0Repository {
   async listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]> {
     return valuesFor(this.traceLinks)
       .filter((traceLink) => traceLink.trace_event_id === traceEventId)
-      .sort(byCreatedAt);
+      .sort(byCreatedAtThenId);
   }
 
   async saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void> {
@@ -530,7 +532,7 @@ export class InMemoryP0Repository implements P0Repository {
   async listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]> {
     return valuesFor(this.traceArtifactRefs)
       .filter((traceArtifactRef) => traceArtifactRef.trace_event_id === traceEventId)
-      .sort(byCreatedAt);
+      .sort(byCreatedAtThenId);
   }
 
   private cloneMaybe<T>(value: T | undefined): T | undefined {

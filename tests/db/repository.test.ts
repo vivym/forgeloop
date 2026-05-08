@@ -336,7 +336,7 @@ const traceEvent: TraceEventRecord = {
   actor_id: 'actor-owner',
   summary: 'Run run-session-2 supersedes run-session-1.',
   payload: {
-    mode: 'rerun',
+    mode: 'rerun_package',
     execution_package_id: executionPackage.id,
     work_item_id: workItem.id,
     new_run_session_id: 'run-session-2',
@@ -538,6 +538,30 @@ describe('P0Repository in-memory adapter', () => {
     expect(await repository.listTraceEventsForSubject('run_session', 'run-session-2')).toEqual([traceEvent]);
     expect(await repository.listTraceLinks(traceEvent.id)).toEqual(traceLinks);
     expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([traceArtifactRef]);
+  });
+
+  it('orders trace rows by creation time and id for deterministic projections', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    const firstEvent: TraceEventRecord = { ...traceEvent, id: 'trace-event-a' };
+    const secondEvent: TraceEventRecord = { ...traceEvent, id: 'trace-event-b' };
+    const firstLink: TraceLinkRecord = { ...traceLinks[0]!, id: 'trace-link-a' };
+    const secondLink: TraceLinkRecord = { ...traceLinks[0]!, id: 'trace-link-b' };
+    const firstArtifactRef: TraceArtifactRefRecord = { ...traceArtifactRef, id: 'trace-artifact-ref-a' };
+    const secondArtifactRef: TraceArtifactRefRecord = { ...traceArtifactRef, id: 'trace-artifact-ref-b' };
+
+    await repository.saveTraceEvent(secondEvent);
+    await repository.saveTraceEvent(firstEvent);
+    await repository.saveTraceLink(secondLink);
+    await repository.saveTraceLink(firstLink);
+    await repository.saveTraceArtifactRef(secondArtifactRef);
+    await repository.saveTraceArtifactRef(firstArtifactRef);
+
+    expect(await repository.listTraceEventsForSubject(traceEvent.subject_type, traceEvent.subject_id)).toEqual([
+      firstEvent,
+      secondEvent,
+    ]);
+    expect(await repository.listTraceLinks(traceEvent.id)).toEqual([firstLink, secondLink]);
+    expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([firstArtifactRef, secondArtifactRef]);
   });
 });
 

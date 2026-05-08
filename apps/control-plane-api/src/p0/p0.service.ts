@@ -81,7 +81,7 @@ type TimelineEntry = {
 };
 
 type RunReplacementRecordedPayload = {
-  mode: 'rerun' | 'force_rerun';
+  mode: 'rerun_package' | 'force_rerun_package';
   execution_package_id: string;
   work_item_id: string;
   new_run_session_id: string;
@@ -95,6 +95,9 @@ const actorOrSystem = (actorId: string | undefined): string => actorId ?? 'syste
 
 const statusForPackage = (executionPackage: ExecutionPackage): string =>
   `${executionPackage.phase}/${executionPackage.activity_state}/${executionPackage.gate_state}`;
+
+const traceReplacementModeFor = (mode: 'rerun' | 'force_rerun'): RunReplacementRecordedPayload['mode'] =>
+  mode === 'rerun' ? 'rerun_package' : 'force_rerun_package';
 
 export type RunDurabilityMode = RunRuntimeMetadata['durability_mode'];
 
@@ -1286,7 +1289,11 @@ export class P0Service {
   private async bestEffortTraceWrite(write: () => Promise<void>): Promise<void> {
     try {
       await write();
-    } catch {
+    } catch (error) {
+      console.warn('[forgeloop:p0.trace] best-effort trace write failed', {
+        source: 'control-plane-api',
+        error: error instanceof Error ? error.message : String(error),
+      });
       // P0 delivery tables are authoritative; trace rows are projected from them when absent.
     }
   }
@@ -1304,7 +1311,7 @@ export class P0Service {
     await this.bestEffortTraceWrite(async () => {
       const traceEventId = `trace-event:run-replacement:${input.newRunSessionId}`;
       const payload: RunReplacementRecordedPayload = {
-        mode: input.mode,
+        mode: traceReplacementModeFor(input.mode),
         execution_package_id: input.executionPackage.id,
         work_item_id: input.executionPackage.work_item_id,
         new_run_session_id: input.newRunSessionId,

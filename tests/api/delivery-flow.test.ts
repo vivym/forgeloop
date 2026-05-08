@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
@@ -644,7 +644,7 @@ describe('P0 control plane API', () => {
       subject_type: 'run_session',
       subject_id: rerun.run_session_id,
       payload: {
-        mode: 'rerun',
+        mode: 'rerun_package',
         execution_package_id: executionPackage.id,
         work_item_id: workItem.id,
         new_run_session_id: rerun.run_session_id,
@@ -682,48 +682,58 @@ describe('P0 control plane API', () => {
   });
 
   it('commits rerun primary records when replacement trace writes fail', async () => {
-    const service = app.get(P0Service);
-    const repository = new FailingTraceRepository();
-    (service as unknown as { repository: FailingTraceRepository }).repository = repository;
-    (app.get(RUN_WORKER) as unknown as { repository: FailingTraceRepository }).repository = repository;
-    const server = app.getHttpServer();
-    const { workItem } = await createProjectRepoWorkItem(app);
-    await approveSpec(app, workItem.id);
-    const { planRevisionId } = await approvePlan(app, workItem.id);
-    const executionPackage = await createManualPackage(app, planRevisionId);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const service = app.get(P0Service);
+      const repository = new FailingTraceRepository();
+      (service as unknown as { repository: FailingTraceRepository }).repository = repository;
+      (app.get(RUN_WORKER) as unknown as { repository: FailingTraceRepository }).repository = repository;
+      const server = app.getHttpServer();
+      const { workItem } = await createProjectRepoWorkItem(app);
+      await approveSpec(app, workItem.id);
+      const { planRevisionId } = await approvePlan(app, workItem.id);
+      const executionPackage = await createManualPackage(app, planRevisionId);
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
-    const firstRun = (
+      await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+      const firstRun = (
+        await request(server)
+          .post(`/execution-packages/${executionPackage.id}/run`)
+          .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+          .expect(201)
+      ).body;
+      const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
       await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
-        .expect(201)
-    ).body;
-    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
-    await request(server)
-      .post(`/review-packets/${firstReviewPacketId}/request-changes`)
-      .send({
-        summary: 'Rerun required.',
-        reviewed_by_actor_id: actorReviewer,
-        reviewed_at: '2026-05-05T03:00:00.000Z',
-        requested_changes: [{ title: 'Rerun', description: 'Primary records must survive trace failure.' }],
-      })
-      .expect(201);
+        .post(`/review-packets/${firstReviewPacketId}/request-changes`)
+        .send({
+          summary: 'Rerun required.',
+          reviewed_by_actor_id: actorReviewer,
+          reviewed_at: '2026-05-05T03:00:00.000Z',
+          requested_changes: [{ title: 'Rerun', description: 'Primary records must survive trace failure.' }],
+        })
+        .expect(201);
 
-    const rerun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
-        .expect(201)
-    ).body;
-    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
-    const persistedPackage = await repository.getExecutionPackage(executionPackage.id);
-    const persistedRerun = await repository.getRunSession(rerun.run_session_id);
-    const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
+      warnSpy.mockClear();
+      const rerun = (
+        await request(server)
+          .post(`/execution-packages/${executionPackage.id}/rerun`)
+          .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+          .expect(201)
+      ).body;
+      const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
+      const persistedPackage = await repository.getExecutionPackage(executionPackage.id);
+      const persistedRerun = await repository.getRunSession(rerun.run_session_id);
+      const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
 
-    expect(persistedPackage?.last_run_session_id).toBe(rerun.run_session_id);
-    expect(persistedRerun?.run_spec?.review_context.latest_decision).toBe('changes_requested');
-    expect(reviewPackets.map((packet) => packet.id)).toEqual(expect.arrayContaining([firstReviewPacketId, rerunReviewPacketId]));
+      expect(persistedPackage?.last_run_session_id).toBe(rerun.run_session_id);
+      expect(persistedRerun?.run_spec?.review_context.latest_decision).toBe('changes_requested');
+      expect(reviewPackets.map((packet) => packet.id)).toEqual(expect.arrayContaining([firstReviewPacketId, rerunReviewPacketId]));
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[forgeloop:p0.trace] best-effort trace write failed',
+        expect.objectContaining({ source: 'control-plane-api', error: 'trace store unavailable' }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('enforces owner-only force-rerun and archives the current open ReviewPacket', async () => {
