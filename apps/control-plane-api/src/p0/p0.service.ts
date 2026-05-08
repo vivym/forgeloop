@@ -34,6 +34,7 @@ import {
 import type { P0Repository, TraceLinkRecord } from '@forgeloop/db';
 import type {
   ArtifactRef,
+  EvidenceChainResponse,
   ExecutorType,
   PublicRunEvent,
   RunAcceptedResponse,
@@ -68,6 +69,7 @@ import type {
   RunInputDto,
   RunPackageDto,
 } from './dto';
+import { buildEvidenceChain } from './evidence-chain';
 import { serializePublicArtifactRef, serializePublicRunSession } from './run-session-serialization';
 
 type TimelineEntry = {
@@ -928,6 +930,15 @@ export class P0Service {
       }
     }
     return entries.sort((left, right) => left.created_at.localeCompare(right.created_at));
+  }
+
+  async evidenceChain(workItemId: string, reviewPacketId?: string): Promise<EvidenceChainResponse> {
+    const workItem = await this.getWorkItem(workItemId);
+    const response = await buildEvidenceChain(this.repository, workItem, {
+      ...(reviewPacketId === undefined ? {} : { reviewPacketId }),
+      generatedAt: this.now(),
+    });
+    return this.requireFound(response, `ReviewPacket ${reviewPacketId}`);
   }
 
   private async createExecutionPackageFromContext(

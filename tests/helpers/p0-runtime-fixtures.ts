@@ -3,11 +3,13 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { ArtifactRef, CheckResult, ExecutorResult, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
 import type {
+  Artifact,
   ExecutionPackage,
   Plan,
   PlanRevision,
   Project,
   ProjectRepo,
+  ReviewPacket,
   RunCommand,
   RunSession,
   Spec,
@@ -524,4 +526,333 @@ export const seedAppWithRunSession = async (
   }
 
   return { app, repo, runSessionId: run.run_session_id };
+};
+
+const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository }> => {
+  const repo = new InMemoryP0Repository();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(P0_REPOSITORY)
+    .useValue(repo)
+    .overrideProvider(RUN_WORKER)
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined })
+    .compile();
+  const app = moduleRef.createNestApplication();
+  await app.init();
+
+  return { app, repo };
+};
+
+const runSessionForEvidence = (
+  executionPackageId: string,
+  id: string,
+  input: Partial<RunSession> = {},
+): RunSession => ({
+  id,
+  execution_package_id: executionPackageId,
+  requested_by_actor_id: actorOwner,
+  status: 'succeeded',
+  executor_type: 'mock',
+  changed_files: [{ repo_id: 'repo-1', path: 'apps/control-plane-api/src/p0/p0.service.ts', change_kind: 'modified' }],
+  check_results: successfulChecks(),
+  artifacts: [
+    {
+      kind: 'execution_summary',
+      name: 'Execution summary',
+      content_type: 'text/markdown',
+      local_ref: `artifacts/${id}/summary.md`,
+      digest: `sha256:${id}:summary`,
+    },
+  ],
+  log_refs: [],
+  summary: `Run ${id} completed.`,
+  created_at: now,
+  updated_at: later,
+  finished_at: later,
+  ...input,
+});
+
+const reviewPacketForEvidence = (
+  executionPackage: ExecutionPackage,
+  runSession: RunSession,
+  input: Partial<ReviewPacket> = {},
+): ReviewPacket => ({
+  id: `review-packet:${runSession.id}`,
+  run_session_id: runSession.id,
+  execution_package_id: executionPackage.id,
+  reviewer_actor_id: executionPackage.reviewer_actor_id,
+  spec_revision_id: executionPackage.spec_revision_id,
+  plan_revision_id: executionPackage.plan_revision_id,
+  status: 'ready',
+  decision: 'none',
+  changed_files: runSession.changed_files,
+  check_result_summary: 'Required checks passed.',
+  self_review: succeededSelfReview(),
+  risk_notes: [],
+  requested_changes: [],
+  created_at: runSession.finished_at ?? runSession.updated_at,
+  updated_at: runSession.finished_at ?? runSession.updated_at,
+  ...input,
+});
+
+export const seedEvidenceChainBase = async (): Promise<{
+  app: INestApplication;
+  repo: InMemoryP0Repository;
+  records: ReturnType<typeof baseRecords>;
+  executionPackage: ExecutionPackage;
+}> => {
+  const { app, repo } = await createTestApp();
+  const records = baseRecords();
+  await saveBaseRecords(repo, records.executionPackage, records);
+
+  return { app, repo, records, executionPackage: records.executionPackage };
+};
+
+export const seedEvidenceChainScenario = async (): Promise<{
+  app: INestApplication;
+  repo: InMemoryP0Repository;
+  workItemId: string;
+  executionPackageId: string;
+  currentReviewPacketId: string;
+  changesRequestedReviewPacketId: string;
+  unlinkedReviewPacketId: string;
+}> => {
+  const { app, repo, records } = await seedEvidenceChainBase();
+  const executionPackage: ExecutionPackage = {
+    ...records.executionPackage,
+    required_artifact_kinds: ['execution_summary', 'logs', 'diff'],
+    last_run_session_id: 'run-session-approved',
+    phase: 'review',
+    activity_state: 'awaiting_human',
+    gate_state: 'review_approved',
+    resolution: 'completed',
+    updated_at: '2026-05-05T00:05:00.000Z',
+  };
+  await repo.saveExecutionPackage(executionPackage);
+
+  const changesRequestedRun = runSessionForEvidence(executionPackage.id, 'run-session-changes-requested', {
+    created_at: '2026-05-05T00:01:00.000Z',
+    updated_at: '2026-05-05T00:02:00.000Z',
+    finished_at: '2026-05-05T00:02:00.000Z',
+    summary: 'Initial run completed before review changes were requested.',
+    log_refs: [
+      {
+        kind: 'logs',
+        name: 'Raw Codex log',
+        content_type: 'application/jsonl',
+        local_ref: 'artifacts/run-session-changes-requested/raw-codex.jsonl',
+      },
+    ],
+  });
+  const unlinkedRun = runSessionForEvidence(executionPackage.id, 'run-session-unlinked-history', {
+    status: 'failed',
+    failure_kind: 'required_check_failed',
+    failure_reason: 'Unit tests failed.',
+    check_results: [
+      {
+        check_id: 'unit-tests',
+        command: 'pnpm test tests/workflow',
+        status: 'failed',
+        exit_code: 1,
+        duration_seconds: 3,
+        blocks_review: true,
+      },
+    ],
+    artifacts: [],
+    created_at: '2026-05-05T00:03:00.000Z',
+    updated_at: '2026-05-05T00:03:30.000Z',
+    finished_at: '2026-05-05T00:03:30.000Z',
+    summary: 'Unlinked historical rerun failed checks.',
+  });
+  const approvedRun = runSessionForEvidence(executionPackage.id, 'run-session-approved', {
+    created_at: '2026-05-05T00:04:00.000Z',
+    updated_at: '2026-05-05T00:05:00.000Z',
+    finished_at: '2026-05-05T00:05:00.000Z',
+    summary: 'Rerun addressed requested changes and passed review.',
+    log_refs: [
+      {
+        kind: 'logs',
+        name: 'Raw Codex log',
+        content_type: 'application/jsonl',
+        local_ref: 'artifacts/run-session-approved/raw-codex.jsonl',
+      },
+    ],
+  });
+
+  await repo.saveRunSession(changesRequestedRun);
+  await repo.saveRunSession(unlinkedRun);
+  await repo.saveRunSession(approvedRun);
+
+  const changesRequestedPacket = reviewPacketForEvidence(executionPackage, changesRequestedRun, {
+    id: 'review-packet-changes-requested',
+    status: 'completed',
+    decision: 'changes_requested',
+    summary: 'Changes requested for missing validation.',
+    reviewed_by_actor_id: actorReviewer,
+    reviewed_at: '2026-05-05T00:02:30.000Z',
+    requested_changes: [{ summary: 'Add missing validation coverage.', severity: 'blocking' }],
+    completed_at: '2026-05-05T00:02:30.000Z',
+    updated_at: '2026-05-05T00:02:30.000Z',
+  });
+  const unlinkedPacket = reviewPacketForEvidence(executionPackage, unlinkedRun, {
+    id: 'review-packet-unlinked-history',
+    status: 'ready',
+    decision: 'none',
+    check_result_summary: 'Required checks failed.',
+    risk_notes: ['Unlinked historical rerun should remain visible.'],
+  });
+  const approvedPacket = reviewPacketForEvidence(executionPackage, approvedRun, {
+    id: 'review-packet-approved',
+    status: 'completed',
+    decision: 'approved',
+    summary: 'Rerun approved.',
+    reviewed_by_actor_id: actorReviewer,
+    reviewed_at: '2026-05-05T00:05:30.000Z',
+    completed_at: '2026-05-05T00:05:30.000Z',
+    updated_at: '2026-05-05T00:05:30.000Z',
+  });
+
+  await repo.saveReviewPacket(changesRequestedPacket);
+  await repo.saveReviewPacket(unlinkedPacket);
+  await repo.saveReviewPacket(approvedPacket);
+  await repo.saveDecision({
+    id: 'decision-review-packet-changes-requested',
+    object_type: 'review_packet',
+    object_id: changesRequestedPacket.id,
+    actor_id: actorReviewer,
+    decision: 'changes_requested',
+    summary: 'Changes requested for missing validation.',
+    created_at: '2026-05-05T00:02:30.000Z',
+  });
+  await repo.saveDecision({
+    id: 'decision-review-packet-approved',
+    object_type: 'review_packet',
+    object_id: approvedPacket.id,
+    actor_id: actorReviewer,
+    decision: 'approved',
+    summary: 'Rerun approved.',
+    created_at: '2026-05-05T00:05:30.000Z',
+  });
+
+  const artifacts: Artifact[] = [
+    {
+      id: 'artifact-approved-summary',
+      object_type: 'run_session',
+      object_id: approvedRun.id,
+      ref: approvedRun.artifacts[0]!,
+      created_at: '2026-05-05T00:05:00.000Z',
+    },
+    {
+      id: 'artifact-approved-raw-metadata',
+      object_type: 'run_session',
+      object_id: approvedRun.id,
+      ref: {
+        kind: 'raw_metadata',
+        name: 'Raw metadata',
+        content_type: 'application/json',
+        local_ref: 'artifacts/run-session-approved/raw-metadata.json',
+        raw_ref: { local_ref: 'artifacts/run-session-approved/internal.jsonl' },
+      } as never,
+      created_at: '2026-05-05T00:05:01.000Z',
+    },
+    {
+      id: 'artifact-changes-summary',
+      object_type: 'run_session',
+      object_id: changesRequestedRun.id,
+      ref: changesRequestedRun.artifacts[0]!,
+      created_at: '2026-05-05T00:02:00.000Z',
+    },
+  ];
+  for (const artifact of artifacts) {
+    await repo.saveArtifact(artifact);
+  }
+
+  await repo.appendRunEvent({
+    id: 'run-event-approved-public',
+    run_session_id: approvedRun.id,
+    event_type: 'run_succeeded',
+    source: 'executor',
+    visibility: 'public',
+    summary: 'Run succeeded.',
+    payload: { status: 'succeeded', internal_output: 'summary only' },
+    created_at: '2026-05-05T00:05:00.000Z',
+  });
+  await repo.appendRunEvent({
+    id: 'run-event-approved-internal',
+    run_session_id: approvedRun.id,
+    event_type: 'command_output_delta',
+    source: 'codex',
+    visibility: 'internal',
+    summary: 'Raw command output.',
+    payload: { text: 'secret command output' },
+    raw_ref: 'local://raw-command-output.jsonl',
+    created_at: '2026-05-05T00:05:01.000Z',
+  });
+
+  await repo.saveTraceEvent({
+    id: 'trace-event:run-replacement:run-session-approved',
+    event_type: 'run_replacement_recorded',
+    subject_type: 'run_session',
+    subject_id: approvedRun.id,
+    actor_id: actorOwner,
+    summary: 'Run run-session-approved replaces run-session-changes-requested.',
+    payload: {
+      mode: 'rerun_package',
+      execution_package_id: executionPackage.id,
+      work_item_id: records.workItem.id,
+      new_run_session_id: approvedRun.id,
+      previous_run_session_id: changesRequestedRun.id,
+      previous_review_packet_id: changesRequestedPacket.id,
+      new_review_packet_id: approvedPacket.id,
+    },
+    created_at: '2026-05-05T00:04:00.000Z',
+  });
+  await repo.saveTraceLink({
+    id: 'trace-link:approved:belongs-to-work-item',
+    trace_event_id: 'trace-event:run-replacement:run-session-approved',
+    relationship: 'belongs_to',
+    object_type: 'work_item',
+    object_id: records.workItem.id,
+    created_at: '2026-05-05T00:04:00.000Z',
+  });
+  await repo.saveTraceLink({
+    id: 'trace-link:approved:generated-by-run',
+    trace_event_id: 'trace-event:run-replacement:run-session-approved',
+    relationship: 'generated_by',
+    object_type: 'run_session',
+    object_id: approvedRun.id,
+    created_at: '2026-05-05T00:04:00.000Z',
+  });
+  await repo.saveTraceLink({
+    id: 'trace-link:approved:supersedes-run',
+    trace_event_id: 'trace-event:run-replacement:run-session-approved',
+    relationship: 'supersedes',
+    object_type: 'run_session',
+    object_id: changesRequestedRun.id,
+    created_at: '2026-05-05T00:04:00.000Z',
+  });
+  await repo.saveTraceLink({
+    id: 'trace-link:approved:replaces-packet',
+    trace_event_id: 'trace-event:run-replacement:run-session-approved',
+    relationship: 'replaces',
+    object_type: 'review_packet',
+    object_id: changesRequestedPacket.id,
+    created_at: '2026-05-05T00:04:00.000Z',
+  });
+  await repo.saveTraceArtifactRef({
+    id: 'trace-artifact-ref:approved-summary',
+    trace_event_id: 'trace-event:run-replacement:run-session-approved',
+    artifact_id: 'artifact-approved-summary',
+    ref: approvedRun.artifacts[0]!,
+    created_at: '2026-05-05T00:05:00.000Z',
+  });
+
+  return {
+    app,
+    repo,
+    workItemId: records.workItem.id,
+    executionPackageId: executionPackage.id,
+    currentReviewPacketId: approvedPacket.id,
+    changesRequestedReviewPacketId: changesRequestedPacket.id,
+    unlinkedReviewPacketId: unlinkedPacket.id,
+  };
 };

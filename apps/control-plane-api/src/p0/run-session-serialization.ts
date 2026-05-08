@@ -1,11 +1,26 @@
-import type { ArtifactRef } from '@forgeloop/contracts';
+import type { ArtifactRef, EvidenceChainRedactionReason } from '@forgeloop/contracts';
 import type { RunSession } from '@forgeloop/domain';
 
 type ArtifactWithRawRef = ArtifactRef & { raw_ref?: unknown };
 
+export const artifactRedactionReason = (artifact: ArtifactRef): EvidenceChainRedactionReason | undefined => {
+  const candidate = artifact as ArtifactWithRawRef;
+  if (artifact.kind === 'logs') {
+    return 'logs_artifact';
+  }
+  if (artifact.kind === 'raw_metadata') {
+    return 'raw_metadata_artifact';
+  }
+  if (candidate.raw_ref !== undefined) {
+    return 'raw_ref';
+  }
+
+  return undefined;
+};
+
 export const serializePublicArtifactRef = (artifact: ArtifactRef): ArtifactRef | undefined => {
   const candidate = artifact as ArtifactWithRawRef;
-  if (artifact.kind === 'logs' || candidate.raw_ref !== undefined) {
+  if (artifactRedactionReason(artifact) !== undefined) {
     return undefined;
   }
 

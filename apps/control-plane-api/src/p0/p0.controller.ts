@@ -86,6 +86,11 @@ export class P0Controller {
     return this.service.timeline(workItemId);
   }
 
+  @Get('work-items/:workItemId/evidence-chain')
+  evidenceChain(@Param('workItemId') workItemId: string, @Query('review_packet_id') reviewPacketId?: string) {
+    return this.service.evidenceChain(workItemId, reviewPacketId);
+  }
+
   @Post('work-items/:workItemId/specs')
   createSpec(@Param('workItemId') workItemId: string) {
     return this.service.createSpec(workItemId);
