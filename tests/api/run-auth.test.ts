@@ -1,0 +1,435 @@
+import { createHmac } from 'node:crypto';
+import http from 'node:http';
+
+import type { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { vi } from 'vitest';
+
+import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import {
+  P0_DEMO_ACTOR_ID_FALLBACK,
+  P0_REPOSITORY,
+  RUN_DURABILITY_MODE,
+  RUN_WORKER,
+} from '../../apps/control-plane-api/src/p0/p0.service';
+import type { InMemoryP0Repository } from '../../packages/db/src';
+import { seedAppWithRunSession, seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+
+const actorHeaderName = 'X-Forgeloop-Actor-Id';
+const actorOwner = 'actor-owner';
+const actorReviewer = 'actor-reviewer';
+const actorQa = 'actor-qa';
+const actorStranger = 'actor-stranger';
+
+const apps: INestApplication[] = [];
+
+const track = async <T extends { app: INestApplication }>(value: Promise<T>): Promise<T> => {
+  const resolved = await value;
+  apps.push(resolved.app);
+  return resolved;
+};
+
+const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository }> => {
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(RUN_WORKER)
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined })
+    .overrideProvider(RUN_DURABILITY_MODE)
+    .useValue('durable')
+    .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+    .useValue(false)
+    .compile();
+  const app = moduleRef.createNestApplication();
+  await app.init();
+  return { app, repo: app.get(P0_REPOSITORY) as InMemoryP0Repository };
+};
+
+const startDurableRun = async (
+  app: INestApplication,
+): Promise<{ executionPackageId: string; runSessionId: string }> => {
+  const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+  const response = await request(app.getHttpServer())
+    .post(`/execution-packages/${executionPackage.id}/run`)
+    .set(actorHeaderName, actorOwner)
+    .send({ requested_by_actor_id: actorStranger, workflow_only: true })
+    .expect(201);
+
+  return { executionPackageId: executionPackage.id, runSessionId: response.body.run_session_id as string };
+};
+
+const expectSseFirstEvent = async (
+  app: INestApplication,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<string> =>
+  await new Promise((resolve, reject) => {
+    const server = app.getHttpServer();
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : undefined;
+    if (typeof port !== 'number') {
+      reject(new Error('Expected test HTTP server to be listening on a port'));
+      return;
+    }
+
+    const req = http.get(
+      {
+        host: '127.0.0.1',
+        port,
+        path,
+        headers: { Accept: 'text/event-stream', ...headers },
+      },
+      (res) => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`Expected SSE 200, received ${res.statusCode}`));
+          res.resume();
+          return;
+        }
+
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+          if (body.includes('\n\n')) {
+            req.destroy();
+            resolve(body);
+          }
+        });
+      },
+    );
+    req.setTimeout(2_000, () => {
+      req.destroy(new Error('Timed out waiting for SSE event'));
+    });
+    req.on('error', reject);
+  });
+
+const base64url = (value: string | Buffer): string => Buffer.from(value).toString('base64url');
+
+const decodeTokenPayload = (token: string): Record<string, unknown> => {
+  const [encodedPayload] = token.split('.');
+  return JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as Record<string, unknown>;
+};
+
+const signedToken = (payload: Record<string, unknown>, secret: string): string => {
+  const encodedPayload = base64url(JSON.stringify(payload));
+  const signature = createHmac('sha256', secret).update(encodedPayload).digest('base64url');
+  return `${encodedPayload}.${signature}`;
+};
+
+describe('durable run actor auth', () => {
+  afterEach(async () => {
+    await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  it('requires authenticated actor context to start durable runs', async () => {
+    const { app } = await track(bootDurableApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+
+    await request(app.getHttpServer())
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .set(actorHeaderName, actorOwner)
+      .send({ requested_by_actor_id: actorStranger, workflow_only: true })
+      .expect(201);
+  });
+
+  it('uses authenticated viewer context for durable event backfill', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events`)
+      .set(actorHeaderName, actorStranger)
+      .expect(403);
+
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(401);
+
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events`)
+      .set(actorHeaderName, actorOwner)
+      .expect(200);
+  });
+
+  it('uses authenticated operator context for durable input, cancel, and resume commands', async () => {
+    const { app, repo } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/input`)
+      .send({ actor_id: actorOwner, message: 'continue' })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/cancel`)
+      .send({ actor_id: actorOwner, reason: 'stop' })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/resume`)
+      .send({ actor_id: actorOwner, reason: 'resume' })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/input`)
+      .set(actorHeaderName, actorOwner)
+      .send({ message: 'continue' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/cancel`)
+      .set(actorHeaderName, actorOwner)
+      .send({ reason: 'stop' })
+      .expect(201);
+
+    const { runSessionId: resumableRunSessionId } = await startDurableRun(app);
+    const resumableRunSession = await repo.getRunSession(resumableRunSessionId);
+    expect(resumableRunSession).toBeDefined();
+    await repo.saveRunSession({ ...resumableRunSession!, status: 'waiting_for_input' });
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${resumableRunSessionId}/resume`)
+      .set(actorHeaderName, actorOwner)
+      .send({ reason: 'resume' })
+      .expect(201);
+  });
+
+  it('allows authenticated durable viewers but restricts operator-only commands', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events`)
+      .set(actorHeaderName, actorQa)
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/input`)
+      .set(actorHeaderName, actorQa)
+      .send({ message: 'continue' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/cancel`)
+      .set(actorHeaderName, actorQa)
+      .send({ reason: 'stop' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/resume`)
+      .set(actorHeaderName, actorQa)
+      .send({ reason: 'resume' })
+      .expect(403);
+  });
+
+  it('creates short-lived stream tokens for authenticated durable viewers and accepts them for SSE', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+    await new Promise<void>((resolve) => app.getHttpServer().listen(0, '127.0.0.1', resolve));
+
+    const response = await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/events/stream-token`)
+      .set(actorHeaderName, actorOwner)
+      .send({})
+      .expect(201);
+
+    expect(response.body).toMatchObject({
+      token: expect.any(String),
+      expires_at: expect.any(String),
+    });
+    const tokenPayload = decodeTokenPayload(response.body.token as string);
+    expect(tokenPayload).toMatchObject({
+      run_session_id: runSessionId,
+      actor_id: actorOwner,
+      expires_at: response.body.expires_at,
+      nonce: expect.any(String),
+    });
+    expect(tokenPayload.nonce).not.toBe('');
+
+    const sseBody = await expectSseFirstEvent(
+      app,
+      `/run-sessions/${runSessionId}/events/stream?stream_token=${encodeURIComponent(response.body.token)}`,
+    );
+    expect(sseBody).toContain('run_queued');
+  });
+
+  it('uses authenticated viewer context for durable SSE streams', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+    await new Promise<void>((resolve) => app.getHttpServer().listen(0, '127.0.0.1', resolve));
+
+    const sseBody = await expectSseFirstEvent(app, `/run-sessions/${runSessionId}/events/stream`, {
+      [actorHeaderName]: actorOwner,
+    });
+    expect(sseBody).toContain('run_queued');
+  });
+
+  it('rejects body or query actor identity for durable stream-token creation', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/events/stream-token`)
+      .query({ actor_id: actorOwner })
+      .send({})
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/events/stream-token`)
+      .send({ actor_id: actorOwner })
+      .expect(401);
+  });
+
+  it('rejects durable SSE query actor identity without a token or authenticated actor header', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events/stream`)
+      .set('Accept', 'text/event-stream')
+      .query({ actor_id: actorOwner })
+      .expect(401);
+  });
+
+  it('rejects expired and wrong-run stream tokens', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+    const wrongRunToken = signedToken(
+      {
+        run_session_id: 'run-session-other',
+        actor_id: actorOwner,
+        expires_at: '2999-01-01T00:00:00.000Z',
+        nonce: 'wrong-run-nonce',
+      },
+      'forgeloop-dev-auth-fallback',
+    );
+    const expiredToken = signedToken(
+      {
+        run_session_id: runSessionId,
+        actor_id: actorOwner,
+        expires_at: '2000-01-01T00:00:00.000Z',
+        nonce: 'expired-nonce',
+      },
+      'forgeloop-dev-auth-fallback',
+    );
+    const emptyNonceToken = signedToken(
+      {
+        run_session_id: runSessionId,
+        actor_id: actorOwner,
+        expires_at: '2999-01-01T00:00:00.000Z',
+        nonce: '',
+      },
+      'forgeloop-dev-auth-fallback',
+    );
+
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events/stream`)
+      .set('Accept', 'text/event-stream')
+      .query({ stream_token: wrongRunToken })
+      .expect(401);
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events/stream`)
+      .set('Accept', 'text/event-stream')
+      .query({ stream_token: expiredToken })
+      .expect(401);
+    await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events/stream`)
+      .set('Accept', 'text/event-stream')
+      .query({ stream_token: emptyNonceToken })
+      .expect(401);
+  });
+
+  it('rejects a stream token after sixty seconds of wall-clock time', async () => {
+    const { app } = await track(bootDurableApp());
+    const { runSessionId } = await startDurableRun(app);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-05T00:00:00.000Z'));
+    try {
+      const response = await request(app.getHttpServer())
+        .post(`/run-sessions/${runSessionId}/events/stream-token`)
+        .set(actorHeaderName, actorOwner)
+        .send({})
+        .expect(201);
+
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      await request(app.getHttpServer())
+        .get(`/run-sessions/${runSessionId}/events`)
+        .query({ stream_token: response.body.token })
+        .expect(401);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports production configuration errors when stream-token secret is missing', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalSecret = process.env.FORGELOOP_DEV_AUTH_SECRET;
+    process.env.NODE_ENV = 'production';
+    delete process.env.FORGELOOP_DEV_AUTH_SECRET;
+    try {
+      const { app } = await track(bootDurableApp());
+      const { runSessionId } = await startDurableRun(app);
+
+      await request(app.getHttpServer())
+        .post(`/run-sessions/${runSessionId}/events/stream-token`)
+        .set(actorHeaderName, actorOwner)
+        .send({})
+        .expect(500);
+    } finally {
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      if (originalSecret === undefined) {
+        delete process.env.FORGELOOP_DEV_AUTH_SECRET;
+      } else {
+        process.env.FORGELOOP_DEV_AUTH_SECRET = originalSecret;
+      }
+    }
+  });
+
+  it('uses deterministic fallback stream-token signing outside production', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalSecret = process.env.FORGELOOP_DEV_AUTH_SECRET;
+    process.env.NODE_ENV = 'test';
+    delete process.env.FORGELOOP_DEV_AUTH_SECRET;
+    try {
+      const { app } = await track(bootDurableApp());
+      const { runSessionId } = await startDurableRun(app);
+      const response = await request(app.getHttpServer())
+        .post(`/run-sessions/${runSessionId}/events/stream-token`)
+        .set(actorHeaderName, actorOwner)
+        .send({})
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .get(`/run-sessions/${runSessionId}/events`)
+        .query({ stream_token: response.body.token })
+        .expect(200);
+    } finally {
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      if (originalSecret === undefined) {
+        delete process.env.FORGELOOP_DEV_AUTH_SECRET;
+      } else {
+        process.env.FORGELOOP_DEV_AUTH_SECRET = originalSecret;
+      }
+    }
+  });
+});
+
+describe('volatile demo actor fallback', () => {
+  afterEach(async () => {
+    await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  it('still accepts body and query actor identity', async () => {
+    const { app, runSessionId } = await track(seedAppWithRunSession());
+
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(200);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/input`)
+      .send({ actor_id: actorOwner, message: 'continue' })
+      .expect(201);
+  });
+});

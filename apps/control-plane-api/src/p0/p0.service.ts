@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
 import {
@@ -45,6 +47,13 @@ import type { RunWorker } from '@forgeloop/run-worker';
 import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
 import { Observable } from 'rxjs';
 
+import {
+  createRunEventStreamToken as signRunEventStreamToken,
+  resolveRunEventStreamTokenSecret,
+  type ActorContext,
+  type RunEventStreamTokenPayload,
+  verifyRunEventStreamToken,
+} from './actor-context';
 import type {
   ActorCommandDto,
   CreateExecutionPackageDto,
@@ -85,6 +94,14 @@ export const P0_DEMO_ACTOR_ID_FALLBACK = Symbol('P0_DEMO_ACTOR_ID_FALLBACK');
 
 const terminalRunStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const streamPollMs = 500;
+const runEventStreamTokenTtlMs = 60_000;
+
+type RunEventAccessOptions = {
+  after?: string;
+  actorId?: string;
+  actorContext?: ActorContext;
+  streamToken?: string;
+};
 
 @Injectable()
 export class P0Service {
@@ -477,12 +494,18 @@ export class P0Service {
     return updated;
   }
 
-  async runPackage(packageId: string, dto: RunPackageDto, mode: 'run' | 'rerun' | 'force_rerun'): Promise<RunAcceptedResponse> {
+  async runPackage(
+    packageId: string,
+    dto: RunPackageDto,
+    mode: 'run' | 'rerun' | 'force_rerun',
+    actorContext: ActorContext = {},
+  ): Promise<RunAcceptedResponse> {
     const executionPackage = await this.getExecutionPackage(packageId);
     const reviewPackets = await this.repository.listReviewPacketsForPackage(packageId);
-    const requestedByActorId = this.resolveRunActor(
-      dto.requested_by_actor_id === undefined ? {} : { demoActorId: dto.requested_by_actor_id },
-    );
+    const requestedByActorId = this.resolveRunActor({
+      ...(actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: actorContext.authenticatedActorId }),
+      ...(dto.requested_by_actor_id === undefined ? {} : { demoActorId: dto.requested_by_actor_id }),
+    });
     const validation = this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode, requestedByActorId);
     if (mode === 'force_rerun' && validation.currentOpenReviewPacket !== undefined) {
       try {
@@ -607,9 +630,13 @@ export class P0Service {
     );
   }
 
-  async listRunEvents(runSessionId: string, options: { after?: string; actorId?: string } = {}): Promise<RunEventListResponse> {
+  async listRunEvents(runSessionId: string, options: RunEventAccessOptions = {}): Promise<RunEventListResponse> {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
-    const actorId = this.resolveRunActor(options.actorId === undefined ? {} : { demoActorId: options.actorId });
+    const actorId = this.resolveStreamActor(runSession, {
+      ...(options.actorContext === undefined ? {} : { actorContext: options.actorContext }),
+      ...(options.actorId === undefined ? {} : { demoActorId: options.actorId }),
+      ...(options.streamToken === undefined ? {} : { streamToken: options.streamToken }),
+    });
     await this.assertRunViewerAllowed(runSession, actorId);
     const events = this.publicRunEvents(
       await this.repository.listRunEvents(runSessionId, options.after === undefined ? {} : { after: options.after }),
@@ -621,8 +648,8 @@ export class P0Service {
     };
   }
 
-  async streamRunEvents(runSessionId: string, options: { after?: string; actorId?: string } = {}): Promise<Observable<MessageEvent>> {
-    await this.assertRunEventViewer(runSessionId, options.actorId);
+  async streamRunEvents(runSessionId: string, options: RunEventAccessOptions = {}): Promise<Observable<MessageEvent>> {
+    await this.assertRunEventViewer(runSessionId, options);
 
     return new Observable<MessageEvent>((subscriber) => {
       let stopped = false;
@@ -634,6 +661,8 @@ export class P0Service {
           const response = await this.listRunEvents(runSessionId, {
             ...(cursor === undefined ? {} : { after: cursor }),
             ...(options.actorId === undefined ? {} : { actorId: options.actorId }),
+            ...(options.streamToken === undefined ? {} : { streamToken: options.streamToken }),
+            ...(options.actorContext === undefined ? {} : { actorContext: options.actorContext }),
           });
           for (const event of response.events) {
             cursor = event.cursor;
@@ -659,35 +688,79 @@ export class P0Service {
     });
   }
 
-  private async assertRunEventViewer(runSessionId: string, actorIdInput: string | undefined): Promise<void> {
+  private async assertRunEventViewer(runSessionId: string, options: RunEventAccessOptions): Promise<void> {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
-    const actorId = this.resolveRunActor(actorIdInput === undefined ? {} : { demoActorId: actorIdInput });
+    const actorId = this.resolveStreamActor(runSession, {
+      ...(options.actorContext === undefined ? {} : { actorContext: options.actorContext }),
+      ...(options.actorId === undefined ? {} : { demoActorId: options.actorId }),
+      ...(options.streamToken === undefined ? {} : { streamToken: options.streamToken }),
+    });
     await this.assertRunViewerAllowed(runSession, actorId);
   }
 
-  async createRunInputCommand(runSessionId: string, dto: RunInputDto): Promise<RunOperatorCommandResponse> {
+  async createRunInputCommand(
+    runSessionId: string,
+    dto: RunInputDto,
+    actorContext: ActorContext = {},
+  ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'input', {
-      ...(dto.actor_id === undefined ? {} : { actorId: dto.actor_id }),
+      actorContext,
+      ...(dto.actor_id === undefined ? {} : { demoActorId: dto.actor_id }),
       payload: { message: dto.message },
       ...(dto.target_turn_id === undefined ? {} : { targetTurnId: dto.target_turn_id }),
       eventSummary: 'User input submitted.',
     });
   }
 
-  async createRunCancelCommand(runSessionId: string, dto: RunControlDto): Promise<RunOperatorCommandResponse> {
+  async createRunCancelCommand(
+    runSessionId: string,
+    dto: RunControlDto,
+    actorContext: ActorContext = {},
+  ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'cancel', {
-      ...(dto.actor_id === undefined ? {} : { actorId: dto.actor_id }),
+      actorContext,
+      ...(dto.actor_id === undefined ? {} : { demoActorId: dto.actor_id }),
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Cancel requested.',
     });
   }
 
-  async createRunResumeCommand(runSessionId: string, dto: RunControlDto): Promise<RunOperatorCommandResponse> {
+  async createRunResumeCommand(
+    runSessionId: string,
+    dto: RunControlDto,
+    actorContext: ActorContext = {},
+  ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'resume', {
-      ...(dto.actor_id === undefined ? {} : { actorId: dto.actor_id }),
+      actorContext,
+      ...(dto.actor_id === undefined ? {} : { demoActorId: dto.actor_id }),
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Run resume requested.',
     });
+  }
+
+  async createRunEventStreamToken(
+    runSessionId: string,
+    actorContext: ActorContext = {},
+    options: { demoActorId?: string } = {},
+  ): Promise<{ token: string; expires_at: string }> {
+    const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
+    const actorId = this.resolveRunActor({
+      ...(actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: actorContext.authenticatedActorId }),
+      ...(options.demoActorId === undefined ? {} : { demoActorId: options.demoActorId }),
+    });
+    await this.assertRunViewerAllowed(runSession, actorId);
+
+    const expiresAt = new Date(Date.now() + runEventStreamTokenTtlMs).toISOString();
+    const payload: RunEventStreamTokenPayload = {
+      run_session_id: runSession.id,
+      actor_id: actorId,
+      expires_at: expiresAt,
+      nonce: randomUUID(),
+    };
+    return {
+      token: signRunEventStreamToken(payload, resolveRunEventStreamTokenSecret(process.env)),
+      expires_at: expiresAt,
+    };
   }
 
   async getReviewPacket(reviewPacketId: string): Promise<ReviewPacket> {
@@ -1013,6 +1086,31 @@ export class P0Service {
     throw new UnauthorizedException('Authenticated actor is required');
   }
 
+  private resolveStreamActor(
+    runSession: RunSession,
+    input: { actorContext?: ActorContext; demoActorId?: string; streamToken?: string },
+  ): string {
+    if (input.streamToken !== undefined) {
+      let payload: RunEventStreamTokenPayload;
+      try {
+        payload = verifyRunEventStreamToken(input.streamToken, resolveRunEventStreamTokenSecret(process.env));
+      } catch (error) {
+        throw new UnauthorizedException(error instanceof Error ? error.message : 'Invalid run event stream token');
+      }
+
+      if (payload.run_session_id !== runSession.id) {
+        throw new UnauthorizedException('Run event stream token does not match run session');
+      }
+
+      return payload.actor_id;
+    }
+
+    return this.resolveRunActor({
+      ...(input.actorContext?.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
+      ...(input.demoActorId === undefined ? {} : { demoActorId: input.demoActorId }),
+    });
+  }
+
   private async assertRunViewerAllowed(runSession: RunSession, actorId: string): Promise<void> {
     const executionPackage = await this.getExecutionPackage(runSession.execution_package_id);
     const workItem = await this.getWorkItem(executionPackage.work_item_id);
@@ -1045,7 +1143,8 @@ export class P0Service {
     runSessionId: string,
     commandType: RunCommand['command_type'],
     input: {
-      actorId?: string;
+      actorContext?: ActorContext;
+      demoActorId?: string;
       payload: Record<string, unknown>;
       targetTurnId?: string;
       eventSummary: string;
@@ -1053,7 +1152,10 @@ export class P0Service {
   ): Promise<RunOperatorCommandResponse> {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
     this.assertRunCommandTargetIsNonTerminal(runSession);
-    const actorId = this.resolveRunActor(input.actorId === undefined ? {} : { demoActorId: input.actorId });
+    const actorId = this.resolveRunActor({
+      ...(input.actorContext?.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
+      ...(input.demoActorId === undefined ? {} : { demoActorId: input.demoActorId }),
+    });
     await this.assertRunOperatorAllowed(runSession, actorId);
 
     const at = this.now();

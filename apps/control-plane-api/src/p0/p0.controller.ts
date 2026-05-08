@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Sse } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, Patch, Post, Query, Sse } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
 import type { Observable } from 'rxjs';
 
@@ -30,6 +30,7 @@ import type {
   RunInputDto,
   RunPackageDto,
 } from './dto';
+import { actorContextFromHeaders } from './actor-context';
 import { P0Service } from './p0.service';
 import { ZodValidationPipe } from './zod-validation.pipe';
 
@@ -218,18 +219,30 @@ export class P0Controller {
   }
 
   @Post('execution-packages/:packageId/run')
-  runPackage(@Param('packageId') packageId: string, @Body(new ZodValidationPipe(runPackageSchema)) body: RunPackageDto) {
-    return this.service.runPackage(packageId, body, 'run');
+  runPackage(
+    @Param('packageId') packageId: string,
+    @Body(new ZodValidationPipe(runPackageSchema)) body: RunPackageDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.runPackage(packageId, body, 'run', actorContextFromHeaders(headers));
   }
 
   @Post('execution-packages/:packageId/rerun')
-  rerunPackage(@Param('packageId') packageId: string, @Body(new ZodValidationPipe(runPackageSchema)) body: RunPackageDto) {
-    return this.service.runPackage(packageId, body, 'rerun');
+  rerunPackage(
+    @Param('packageId') packageId: string,
+    @Body(new ZodValidationPipe(runPackageSchema)) body: RunPackageDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.runPackage(packageId, body, 'rerun', actorContextFromHeaders(headers));
   }
 
   @Post('execution-packages/:packageId/force-rerun')
-  forceRerunPackage(@Param('packageId') packageId: string, @Body(new ZodValidationPipe(runPackageSchema)) body: RunPackageDto) {
-    return this.service.runPackage(packageId, body, 'force_rerun');
+  forceRerunPackage(
+    @Param('packageId') packageId: string,
+    @Body(new ZodValidationPipe(runPackageSchema)) body: RunPackageDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.runPackage(packageId, body, 'force_rerun', actorContextFromHeaders(headers));
   }
 
   @Get('run-sessions/:runSessionId')
@@ -242,10 +255,14 @@ export class P0Controller {
     @Param('runSessionId') runSessionId: string,
     @Query('after') after?: string,
     @Query('actor_id') actorId?: string,
+    @Query('stream_token') streamToken?: string,
+    @Headers() headers?: Record<string, string | string[] | undefined>,
   ) {
     return this.service.listRunEvents(runSessionId, {
       ...(after === undefined ? {} : { after }),
       ...(actorId === undefined ? {} : { actorId }),
+      ...(streamToken === undefined ? {} : { streamToken }),
+      actorContext: actorContextFromHeaders(headers ?? {}),
     });
   }
 
@@ -254,35 +271,57 @@ export class P0Controller {
     @Param('runSessionId') runSessionId: string,
     @Query('after') after?: string,
     @Query('actor_id') actorId?: string,
+    @Query('stream_token') streamToken?: string,
+    @Headers() headers?: Record<string, string | string[] | undefined>,
   ): Promise<Observable<MessageEvent>> {
     return this.service.streamRunEvents(runSessionId, {
       ...(after === undefined ? {} : { after }),
       ...(actorId === undefined ? {} : { actorId }),
+      ...(streamToken === undefined ? {} : { streamToken }),
+      actorContext: actorContextFromHeaders(headers ?? {}),
     });
+  }
+
+  @Post('run-sessions/:runSessionId/events/stream-token')
+  createRunEventStreamToken(
+    @Param('runSessionId') runSessionId: string,
+    @Query('actor_id') actorId?: string,
+    @Body() body?: { actor_id?: string },
+    @Headers() headers?: Record<string, string | string[] | undefined>,
+  ) {
+    const demoActorId = actorId ?? body?.actor_id;
+    return this.service.createRunEventStreamToken(
+      runSessionId,
+      actorContextFromHeaders(headers ?? {}),
+      demoActorId === undefined ? {} : { demoActorId },
+    );
   }
 
   @Post('run-sessions/:runSessionId/input')
   sendRunInput(
     @Param('runSessionId') runSessionId: string,
     @Body(new ZodValidationPipe(runInputSchema)) body: RunInputDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.service.createRunInputCommand(runSessionId, body);
+    return this.service.createRunInputCommand(runSessionId, body, actorContextFromHeaders(headers));
   }
 
   @Post('run-sessions/:runSessionId/cancel')
   cancelRun(
     @Param('runSessionId') runSessionId: string,
     @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.service.createRunCancelCommand(runSessionId, body);
+    return this.service.createRunCancelCommand(runSessionId, body, actorContextFromHeaders(headers));
   }
 
   @Post('run-sessions/:runSessionId/resume')
   resumeRun(
     @Param('runSessionId') runSessionId: string,
     @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.service.createRunResumeCommand(runSessionId, body);
+    return this.service.createRunResumeCommand(runSessionId, body, actorContextFromHeaders(headers));
   }
 
   @Get('review-packets/:reviewPacketId')
