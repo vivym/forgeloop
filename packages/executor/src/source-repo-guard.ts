@@ -175,8 +175,7 @@ export const sourceDirtyEntriesFromPorcelain = (porcelain: string): string[] =>
       .map((line) => line.trimEnd())
       .filter(Boolean)
       .flatMap(porcelainPayloadPaths)
-      .map((path) => path.trim())
-      .filter(Boolean)
+      .filter((path) => path.length > 0)
       .filter((path) => !isIgnoredRunWorktreePath(path)),
   );
 

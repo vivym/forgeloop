@@ -295,6 +295,34 @@ describe('p0 local Codex dogfood script helpers', () => {
       },
     });
 
+    const nearMisses = await preflightLocalCodexDogfood({
+      env: strictReadyEnv,
+      repoPath: '/repo',
+      runCommand: async (command, args) => {
+        if (command === 'git' && args[0] === 'status') {
+          return {
+            stdout: '?? " .superpowers/file"\n?? ".superpowers/file "\n',
+            stderr: '',
+          };
+        }
+
+        return successfulStrictPreflightCommand(command, args);
+      },
+    });
+
+    expect(nearMisses).toMatchObject({
+      ok: false,
+      blockers: [
+        {
+          code: 'source_dirty_blocked',
+          details: {
+            allowed_dirty_entries: [],
+            blocked_dirty_entries: [' .superpowers/file', '.superpowers/file '],
+          },
+        },
+      ],
+    });
+
     const refused = await preflightLocalCodexDogfood({
       env: {
         ...strictReadyEnv,
@@ -344,6 +372,11 @@ describe('p0 local Codex dogfood script helpers', () => {
     ]);
     expect(parseDirtySourceFiles('?? "a -> b.txt"\n?? ".worktrees/run -> session/README.md"\n')).toEqual([
       'a -> b.txt',
+    ]);
+    expect(parseDirtySourceFiles('?? ".worktrees "\n?? " .worktrees"\n?? " "\n')).toEqual([
+      '.worktrees ',
+      ' .worktrees',
+      ' ',
     ]);
   });
 

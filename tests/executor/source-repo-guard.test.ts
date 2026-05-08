@@ -68,6 +68,14 @@ describe('source repo guard', () => {
     expect(sourceDirtyEntriesFromPorcelain('?? ".worktrees/run -> session/README.md"\n')).toEqual([]);
   });
 
+  it('preserves decoded path whitespace before ignored-worktree filtering', () => {
+    expect(
+      sourceDirtyEntriesFromPorcelain(
+        '?? ".worktrees "\n?? " .worktrees"\n?? " "\n?? " .superpowers/file"\n?? ".superpowers/file "\n',
+      ),
+    ).toEqual(['.worktrees ', ' .worktrees', ' ', ' .superpowers/file', '.superpowers/file ']);
+  });
+
   it('does not report .worktrees contents as source checkout dirtiness', async () => {
     const repo = await createGitRepo();
     await mkdir(join(repo, '.worktrees', 'run-session-1'), { recursive: true });

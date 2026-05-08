@@ -134,8 +134,12 @@ export const evaluateLocalCodexDogfoodEnablement = (env: Env): {
 
 export const parseDirtySourceFiles = (porcelain: string): string[] => sourceDirtyEntriesFromPorcelain(porcelain);
 
-const matchesStrictDirtyAllowlist = (path: string): boolean =>
-  STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST.some((pattern) => {
+const matchesStrictDirtyAllowlist = (path: string): boolean => {
+  if (path !== path.trim()) {
+    return false;
+  }
+
+  return STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST.some((pattern) => {
     if (pattern.endsWith('/**')) {
       const prefix = pattern.slice(0, -'/**'.length);
 
@@ -144,6 +148,7 @@ const matchesStrictDirtyAllowlist = (path: string): boolean =>
 
     return path === pattern;
   });
+};
 
 const classifyStrictDirtySource = (dirtyFiles: string[]): StrictDirtySourceSummary => {
   const allowed_dirty_entries = dirtyFiles.filter(matchesStrictDirtyAllowlist);
