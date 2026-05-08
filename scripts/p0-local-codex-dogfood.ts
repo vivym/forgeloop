@@ -145,8 +145,8 @@ const matchesStrictDirtyAllowlist = (path: string): boolean =>
     return path === pattern;
   });
 
-const classifyStrictDirtySource = (dirtyFiles: string[], allowDirty: boolean): StrictDirtySourceSummary => {
-  const allowed_dirty_entries = allowDirty ? dirtyFiles.filter(matchesStrictDirtyAllowlist) : [];
+const classifyStrictDirtySource = (dirtyFiles: string[]): StrictDirtySourceSummary => {
+  const allowed_dirty_entries = dirtyFiles.filter(matchesStrictDirtyAllowlist);
   const allowed = new Set(allowed_dirty_entries);
   const blocked_dirty_entries = dirtyFiles.filter((path) => !allowed.has(path));
 
@@ -312,7 +312,7 @@ export const preflightLocalCodexDogfood = async (input: {
     dirtyFiles = [];
   }
 
-  dirtySource = classifyStrictDirtySource(dirtyFiles, input.env.FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY === '1');
+  dirtySource = classifyStrictDirtySource(dirtyFiles);
   if (dirtySource.blocked_dirty_entries.length > 0) {
     blockers.push(
       strictBlocker('source_dirty_blocked', 'Source checkout is dirty', {
@@ -321,9 +321,31 @@ export const preflightLocalCodexDogfood = async (input: {
     );
   }
 
+  if (blockers.length > 0) {
+    return strictFailure({
+      repoPath,
+      blockers,
+      dirtyFiles,
+      dirtySource,
+      unexpectedDirtyFiles: dirtySource.blocked_dirty_entries.length === 0 ? undefined : dirtySource.blocked_dirty_entries,
+      worktreeProbePath,
+    });
+  }
+
   const durableRepoBlocker = await checkDurableRepositoryAvailable({ env: input.env, repoPath, runCommand });
   if (durableRepoBlocker !== undefined) {
     blockers.push(durableRepoBlocker);
+  }
+
+  if (blockers.length > 0) {
+    return strictFailure({
+      repoPath,
+      blockers,
+      dirtyFiles,
+      dirtySource,
+      unexpectedDirtyFiles: dirtySource.blocked_dirty_entries.length === 0 ? undefined : dirtySource.blocked_dirty_entries,
+      worktreeProbePath,
+    });
   }
 
   const worktreeProbe = await probeWorktreeCreation({ repoPath, runCommand });
@@ -350,9 +372,9 @@ export const preflightLocalCodexDogfood = async (input: {
     dirtyFiles,
     dirtySource,
     worktreeProbePath,
-    ...(dirtySource.allowed_dirty_entries.length === 0
-      ? {}
-      : { dirtyOverride: { allowed: true as const, dirtyFiles: dirtySource.allowed_dirty_entries } }),
+    ...(input.env.FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY === '1' && dirtySource.allowed_dirty_entries.length > 0
+      ? { dirtyOverride: { allowed: true as const, dirtyFiles: dirtySource.allowed_dirty_entries } }
+      : {}),
   };
 };
 

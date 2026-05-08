@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   createDefaultLocalCodexEnvironment,
+  sourceDirtyEntriesFromPorcelain,
   snapshotSourceRepoStatus,
   verifySourceRepoUnchanged,
 } from '../../packages/executor/src/index';
@@ -40,6 +41,14 @@ afterEach(async () => {
 });
 
 describe('source repo guard', () => {
+  it('decodes Git-quoted paths before filtering ignored worktree entries', () => {
+    expect(
+      sourceDirtyEntriesFromPorcelain(
+        '?? ".worktrees/run session/README.md"\n?? ".superpowers/state file.json"\n?? "packages/workflow/src/activity file.ts"\n',
+      ),
+    ).toEqual(['.superpowers/state file.json', 'packages/workflow/src/activity file.ts']);
+  });
+
   it('does not report .worktrees contents as source checkout dirtiness', async () => {
     const repo = await createGitRepo();
     await mkdir(join(repo, '.worktrees', 'run-session-1'), { recursive: true });

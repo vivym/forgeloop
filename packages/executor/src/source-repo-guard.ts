@@ -38,18 +38,92 @@ const splitNul = (value: string): string[] => value.split('\0').filter(Boolean);
 export const isIgnoredRunWorktreePath = (path: string): boolean =>
   path === CODEX_RUN_WORKTREE_DIR || path.startsWith(`${CODEX_RUN_WORKTREE_DIR}/`);
 
+const decodeGitQuotedPath = (path: string): string => {
+  const trimmed = path.trim();
+  if (trimmed.length < 2 || trimmed[0] !== '"' || trimmed[trimmed.length - 1] !== '"') {
+    return trimmed;
+  }
+
+  let result = '';
+  for (let index = 1; index < trimmed.length - 1; index += 1) {
+    const current = trimmed[index];
+    if (current !== '\\') {
+      result += current;
+      continue;
+    }
+
+    index += 1;
+    if (index >= trimmed.length - 1) {
+      break;
+    }
+
+    const escaped = trimmed[index];
+    if (escaped >= '0' && escaped <= '7') {
+      let octal = escaped;
+      while (index + 1 < trimmed.length - 1 && octal.length < 3) {
+        const next = trimmed[index + 1];
+        if (next < '0' || next > '7') {
+          break;
+        }
+        index += 1;
+        octal += next;
+      }
+      result += String.fromCharCode(Number.parseInt(octal, 8));
+      continue;
+    }
+
+    switch (escaped) {
+      case 'n':
+        result += '\n';
+        break;
+      case 't':
+        result += '\t';
+        break;
+      case 'r':
+        result += '\r';
+        break;
+      case 'b':
+        result += '\b';
+        break;
+      case 'f':
+        result += '\f';
+        break;
+      case 'a':
+        result += '\u0007';
+        break;
+      case 'v':
+        result += '\v';
+        break;
+      case '\\':
+        result += '\\';
+        break;
+      case '"':
+        result += '"';
+        break;
+      default:
+        result += escaped;
+        break;
+    }
+  }
+
+  return result;
+};
+
 const porcelainPayload = (line: string): string => (line.length > 3 ? line.slice(3) : line);
 
+const porcelainPayloadPaths = (line: string): string[] => porcelainPayload(line)
+  .split(' -> ')
+  .map(decodeGitQuotedPath);
+
 const porcelainLineIsSourceContent = (line: string): boolean =>
-  porcelainPayload(line)
-    .split(' -> ')
-    .every((path) => !isIgnoredRunWorktreePath(path));
+  porcelainPayloadPaths(line).every((path) => !isIgnoredRunWorktreePath(path));
 
 const normalizeSourcePorcelain = (porcelain: string): string =>
   porcelain
     .split('\n')
     .filter((line) => line.length > 0)
     .filter(porcelainLineIsSourceContent)
+    .map((line) => porcelainPayloadPaths(line).join(' -> '))
     .join('\n');
 
 const unique = (values: string[]): string[] => [...new Set(values)];
@@ -60,7 +134,7 @@ export const sourceDirtyEntriesFromPorcelain = (porcelain: string): string[] =>
       .split('\n')
       .map((line) => line.trimEnd())
       .filter(Boolean)
-      .flatMap((line) => porcelainPayload(line).split(' -> '))
+      .flatMap(porcelainPayloadPaths)
       .map((path) => path.trim())
       .filter(Boolean)
       .filter((path) => !isIgnoredRunWorktreePath(path)),

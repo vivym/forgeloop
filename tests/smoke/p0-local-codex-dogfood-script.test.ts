@@ -120,22 +120,34 @@ describe('p0 local Codex dogfood script helpers', () => {
   });
 
   it('preflight reports strict blockers for unconfirmed dangerous mode, dirty source, durable repo, and worktree creation', async () => {
+    const dangerousModeCalls: Array<{ command: string; args: string[] }> = [];
     await expect(
       preflightLocalCodexDogfood({
-        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' },
+        env: {
+          FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1',
+          FORGELOOP_DATABASE_URL: 'postgresql://localhost:5432/forgeloop',
+        },
         repoPath: '/repo',
-        runCommand: successfulStrictPreflightCommand,
+        runCommand: async (command, args) => {
+          dangerousModeCalls.push({ command, args });
+
+          return successfulStrictPreflightCommand(command, args);
+        },
       }),
     ).resolves.toMatchObject({
       ok: false,
       blockers: [{ code: 'dangerous_mode_unconfirmed' }],
     });
+    expect(dangerousModeCalls).not.toContainEqual({ command: 'pnpm', args: ['db:push'] });
+    expect(dangerousModeCalls.some((call) => call.command === 'git' && call.args[0] === 'worktree')).toBe(false);
 
+    const sourceDirtyCalls: Array<{ command: string; args: string[] }> = [];
     await expect(
       preflightLocalCodexDogfood({
-        env: strictReadyEnv,
+        env: { ...strictReadyEnv, FORGELOOP_DATABASE_URL: 'postgresql://localhost:5432/forgeloop' },
         repoPath: '/repo',
         runCommand: async (command, args) => {
+          sourceDirtyCalls.push({ command, args });
           if (command === 'git' && args[0] === 'status') {
             return { stdout: ' M README.md\n?? .worktrees/run-session/README.md\n', stderr: '' };
           }
@@ -156,6 +168,8 @@ describe('p0 local Codex dogfood script helpers', () => {
         },
       ],
     });
+    expect(sourceDirtyCalls).not.toContainEqual({ command: 'pnpm', args: ['db:push'] });
+    expect(sourceDirtyCalls.some((call) => call.command === 'git' && call.args[0] === 'worktree')).toBe(false);
 
     await expect(
       preflightLocalCodexDogfood({
@@ -219,10 +233,7 @@ describe('p0 local Codex dogfood script helpers', () => {
     });
 
     const accepted = await preflightLocalCodexDogfood({
-      env: {
-        ...strictReadyEnv,
-        FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY: '1',
-      },
+      env: strictReadyEnv,
       repoPath: '/repo',
       runCommand: async (command, args) => {
         if (command === 'git' && args[0] === 'status') {
@@ -239,13 +250,6 @@ describe('p0 local Codex dogfood script helpers', () => {
 
     expect(accepted).toMatchObject({
       ok: true,
-      dirtyOverride: {
-        allowed: true,
-        dirtyFiles: [
-          'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
-          '.superpowers/state.json',
-        ],
-      },
       dirtySource: {
         allowed_dirty_entries: [
           'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
@@ -255,6 +259,7 @@ describe('p0 local Codex dogfood script helpers', () => {
         dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
       },
     });
+    expect(accepted).not.toHaveProperty('dirtyOverride');
     expect(
       renderLocalCodexDogfoodReport({
         status: 'SKIPPED',
@@ -264,9 +269,31 @@ describe('p0 local Codex dogfood script helpers', () => {
         liveEvents: [],
         sourceGuardInjection: undefined,
       }),
-    ).toContain(
-      '- Dirty override: ENABLED for docs/superpowers/reports/p0-dogfood-work-items-completion.md, .superpowers/state.json',
-    );
+    ).toContain('- Dirty override: not used');
+
+    const quotedAccepted = await preflightLocalCodexDogfood({
+      env: strictReadyEnv,
+      repoPath: '/repo',
+      runCommand: async (command, args) => {
+        if (command === 'git' && args[0] === 'status') {
+          return {
+            stdout:
+              '?? ".superpowers/state file.json"\n?? ".worktrees/run session/README.md"\n',
+            stderr: '',
+          };
+        }
+
+        return successfulStrictPreflightCommand(command, args);
+      },
+    });
+
+    expect(quotedAccepted).toMatchObject({
+      ok: true,
+      dirtySource: {
+        allowed_dirty_entries: ['.superpowers/state file.json'],
+        blocked_dirty_entries: [],
+      },
+    });
 
     const refused = await preflightLocalCodexDogfood({
       env: {
@@ -306,13 +333,14 @@ describe('p0 local Codex dogfood script helpers', () => {
   it('parses porcelain dirty paths including renames while ignoring .worktrees', () => {
     expect(
       parseDirtySourceFiles(
-        ' M README.md\n?? scripts/p0-local-codex-dogfood.ts\nR  old.ts -> package.json\n?? .worktrees/run-session/README.md\n',
+        ' M README.md\n?? scripts/p0-local-codex-dogfood.ts\nR  old.ts -> package.json\n?? .worktrees/run-session/README.md\n?? ".worktrees/run session/README.md"\n?? ".superpowers/state file.json"\n',
       ),
     ).toEqual([
       'README.md',
       'scripts/p0-local-codex-dogfood.ts',
       'old.ts',
       'package.json',
+      '.superpowers/state file.json',
     ]);
   });
 
