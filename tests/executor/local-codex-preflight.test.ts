@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { executorResultSchema } from '@forgeloop/contracts';
 import {
   createDefaultLocalCodexEnvironment,
+  createLocalCodexCheckEnv,
   runLocalCodexExecutor,
   runLocalCodexPreflight,
   type CommandChecker,
@@ -883,6 +884,26 @@ describe('runLocalCodexExecutor', () => {
     const checkEnv = JSON.parse(await readFile(envJsonPath, 'utf8'));
     expect(checkEnv.CODEX_HOME).toBeUndefined();
     expect(checkEnv.HOME).not.toBe(codexInvocationEnv?.HOME);
+  });
+
+  it('creates a local Codex check env that preserves PATH for required checks', async () => {
+    const { repo, head } = await createGitRepo();
+    const environment = createGitBackedTestEnvironment(undefined);
+    const prepared = await environment.prepareWorkspace({
+      repoPath: repo,
+      baseRef: head,
+      runSessionId: 'run-session-check-env',
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      return;
+    }
+
+    const checkEnv = await createLocalCodexCheckEnv(environment, prepared.workspacePath);
+
+    expect(checkEnv.PATH).toBe(process.env.PATH);
+    expect(checkEnv.CODEX_HOME).toBeUndefined();
+    expect(checkEnv.HOME).not.toBe(process.env.HOME);
   });
 
   it('records forbidden blocking checks as failed without executing them', async () => {

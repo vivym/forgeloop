@@ -1,6 +1,8 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
@@ -9,14 +11,36 @@ import {
   buildCodexExecFallbackCommand,
   buildSourceGuardInjectionPlan,
   evaluateLocalCodexDogfoodEnablement,
+  extractPersistedTerminalEvidence,
   parseDirtySourceFiles,
   preflightLocalCodexDogfood,
   recordLiveEventObservation,
   renderLocalCodexDogfoodReport,
+  resolveReviewPacketReference,
+  runSourceGuardInjection,
+  runSessionRuntimeMetadataReport,
   selectCodexExecutionMode,
   validateLocalCodexRuntimeMetadata,
   validateTerminalEvidence,
 } from '../../scripts/p0-local-codex-dogfood';
+
+const execFile = promisify(execFileCallback);
+
+const execGit = async (cwd: string, args: readonly string[]): Promise<string> => {
+  const { stdout } = await execFile('git', [...args], { cwd });
+  return String(stdout);
+};
+
+const createGitRepo = async (): Promise<{ repo: string; head: string }> => {
+  const repo = await mkdtemp(join(tmpdir(), 'forgeloop-local-codex-dogfood-'));
+  await execGit(repo, ['init', '-b', 'main']);
+  await execGit(repo, ['config', 'user.email', 'test@example.com']);
+  await execGit(repo, ['config', 'user.name', 'Test User']);
+  await writeFile(join(repo, 'README.md'), '# Test Repo\n');
+  await execGit(repo, ['add', '.']);
+  await execGit(repo, ['commit', '-m', 'initial']);
+  return { repo, head: (await execGit(repo, ['rev-parse', 'HEAD'])).trim() };
+};
 
 describe('p0 local Codex dogfood script helpers', () => {
   it('documents disabled-by-default behavior with a clear skipped status and neutral exit code', () => {
@@ -99,7 +123,11 @@ describe('p0 local Codex dogfood script helpers', () => {
           return { stdout: 'ok', stderr: '' };
         }
         if (command === 'git' && args[0] === 'status') {
-          return { stdout: ' M README.md\n?? scripts/p0-local-codex-dogfood.ts\n', stderr: '' };
+          return {
+            stdout:
+              ' M README.md\n?? scripts/p0-local-codex-dogfood.ts\n M packages/executor/src/local-codex-executor.ts\n M tests/executor/local-codex-preflight.test.ts\n',
+            stderr: '',
+          };
         }
         return { stdout: '', stderr: '' };
       },
@@ -109,7 +137,12 @@ describe('p0 local Codex dogfood script helpers', () => {
       ok: true,
       dirtyOverride: {
         allowed: true,
-        dirtyFiles: ['README.md', 'scripts/p0-local-codex-dogfood.ts'],
+        dirtyFiles: [
+          'README.md',
+          'scripts/p0-local-codex-dogfood.ts',
+          'packages/executor/src/local-codex-executor.ts',
+          'tests/executor/local-codex-preflight.test.ts',
+        ],
       },
     });
     expect(
@@ -121,7 +154,9 @@ describe('p0 local Codex dogfood script helpers', () => {
         liveEvents: [],
         sourceGuardInjection: undefined,
       }),
-    ).toContain('- Dirty override: ENABLED for README.md, scripts/p0-local-codex-dogfood.ts');
+    ).toContain(
+      '- Dirty override: ENABLED for README.md, scripts/p0-local-codex-dogfood.ts, packages/executor/src/local-codex-executor.ts, tests/executor/local-codex-preflight.test.ts',
+    );
 
     const refused = await preflightLocalCodexDogfood({
       env: {
@@ -134,7 +169,7 @@ describe('p0 local Codex dogfood script helpers', () => {
           return { stdout: 'ok', stderr: '' };
         }
         if (command === 'git' && args[0] === 'status') {
-          return { stdout: ' M packages/domain/src/types.ts\n', stderr: '' };
+          return { stdout: ' M packages/workflow/src/activities.ts\n', stderr: '' };
         }
         return { stdout: '', stderr: '' };
       },
@@ -142,7 +177,7 @@ describe('p0 local Codex dogfood script helpers', () => {
 
     expect(refused).toMatchObject({
       ok: false,
-      unexpectedDirtyFiles: ['packages/domain/src/types.ts'],
+      unexpectedDirtyFiles: ['packages/workflow/src/activities.ts'],
     });
   });
 
@@ -176,19 +211,68 @@ describe('p0 local Codex dogfood script helpers', () => {
   });
 
   it('validates runtime metadata assertions for local_codex, worktree path, app-server attempt, and dangerous mode', () => {
+    const validateWithRunSession = validateLocalCodexRuntimeMetadata as (
+      input: Parameters<typeof validateLocalCodexRuntimeMetadata>[0],
+      options?: { expectedRunSessionId: string },
+    ) => void;
+
     expect(() =>
-      validateLocalCodexRuntimeMetadata({
-        executor_type: 'local_codex',
-        runtime_metadata: {
-          workspace_path: '/repo/.worktrees/run-1',
-          app_server_attempted: true,
-          selected_execution_mode: 'exec_fallback',
-          effective_dangerous_mode: 'confirmed',
-          exec_fallback_dangerous_bypass: true,
-          app_server_fallback_reason: 'connection refused',
-        },
-      }),
+      validateLocalCodexRuntimeMetadata(
+        runSessionRuntimeMetadataReport({
+          executor_type: 'local_codex',
+          runtime_metadata: {
+            workspace_path: '/repo/.worktrees/run-1',
+            effective_dangerous_mode: 'confirmed',
+          },
+        }),
+      ),
+    ).toThrow(/app_server_attempted/);
+
+    expect(() =>
+      validateWithRunSession(
+        runSessionRuntimeMetadataReport({
+          executor_type: 'local_codex',
+          runtime_metadata: {
+            workspace_path: '/repo/.worktrees/run-1',
+            app_server_attempted: true,
+            selected_execution_mode: 'exec_fallback',
+            effective_dangerous_mode: 'confirmed',
+            exec_fallback_dangerous_bypass: true,
+            app_server_fallback_reason: 'connection refused',
+          },
+        }),
+        { expectedRunSessionId: 'run-1' },
+      ),
     ).not.toThrow();
+
+    expect(() =>
+      validateWithRunSession(
+        runSessionRuntimeMetadataReport({
+          executor_type: 'local_codex',
+          runtime_metadata: {
+            workspace_path: '/repo/.worktrees/local-codex-dogfood-123',
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+            effective_dangerous_mode: 'confirmed',
+          },
+        }),
+        { expectedRunSessionId: 'run-session-1' },
+      ),
+    ).toThrow(/run-session-id worktree/);
+
+    expect(() =>
+      validateWithRunSession(
+        runSessionRuntimeMetadataReport({
+          executor_type: 'local_codex',
+          runtime_metadata: {
+            workspace_path: '/repo/.worktrees/run-1',
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+          },
+        }),
+        { expectedRunSessionId: 'run-1' },
+      ),
+    ).toThrow(/dangerous mode/);
 
     expect(() =>
       validateLocalCodexRuntimeMetadata({
@@ -227,10 +311,10 @@ describe('p0 local Codex dogfood script helpers', () => {
     });
   });
 
-  it('requires public live events before terminal state, not only after polling completion', () => {
+  it('requires public live events observed while the run is non-terminal, not only after polling completion', () => {
     const observed = recordLiveEventObservation([
-      { event_type: 'worker_lease_acquired', visibility: 'internal', status: 'running' },
-      { event_type: 'turn_started', visibility: 'public', status: 'running' },
+      { event_type: 'worker_lease_acquired', visibility: 'internal', runStatusAtObservation: 'running' },
+      { event_type: 'turn_started', visibility: 'public', runStatusAtObservation: 'running' },
       { event_type: 'executor_succeeded', visibility: 'public', status: 'succeeded' },
     ]);
 
@@ -241,11 +325,45 @@ describe('p0 local Codex dogfood script helpers', () => {
     });
 
     expect(() =>
-      recordLiveEventObservation([{ event_type: 'executor_succeeded', visibility: 'public', status: 'succeeded' }]),
+      recordLiveEventObservation([
+        { event_type: 'turn_started', visibility: 'public' },
+        { event_type: 'executor_succeeded', visibility: 'public', status: 'succeeded' },
+      ]),
     ).toThrow(/public non-terminal live event/);
+
+    expect(() =>
+      recordLiveEventObservation([
+        { event_type: 'run_queued', visibility: 'public', runStatusAtObservation: 'queued' },
+        { event_type: 'executor_succeeded', visibility: 'public', status: 'succeeded' },
+      ]),
+    ).toThrow(/Codex live progress/);
   });
 
-  it('validates terminal evidence includes changed files, checks, artifacts, and Review Packet path', () => {
+  it('validates persisted terminal evidence includes changed files, checks, artifacts, and Review Packet path', () => {
+    expect(() =>
+      extractPersistedTerminalEvidence({
+        runSession: {
+          changed_files: [],
+          check_results: [],
+          artifacts: [],
+        },
+        reviewPacket: { id: 'review-packet-1', path: 'http://api.local/review-packets/review-packet-1' },
+      }),
+    ).toThrow(/changed files/);
+
+    expect(
+      extractPersistedTerminalEvidence({
+        runSession: {
+          changed_files: [{ repo_id: 'repo-1', path: 'README.md', change_kind: 'modified' }],
+          check_results: [{ check_id: 'dogfood-required', status: 'succeeded' }],
+          artifacts: [{ kind: 'diff', local_ref: 'artifacts/diff.patch' }],
+        },
+        reviewPacket: { id: 'review-packet-1', path: 'http://api.local/review-packets/review-packet-1' },
+      }),
+    ).toMatchObject({
+      review_packet: { artifact_path: 'http://api.local/review-packets/review-packet-1' },
+    });
+
     expect(() =>
       validateTerminalEvidence({
         changed_files: [{ repo_id: 'repo-1', path: 'README.md', change_kind: 'modified' }],
@@ -264,6 +382,30 @@ describe('p0 local Codex dogfood script helpers', () => {
     ).toThrow(/changed files/);
   });
 
+  it('resolves Review Packet references only from persisted artifacts or cockpit state', () => {
+    expect(
+      resolveReviewPacketReference({
+        apiUrl: 'http://api.local',
+        runSession: {
+          artifacts: [{ kind: 'review_packet', name: 'review-packet.md', local_ref: 'artifacts/review-packet.md' }],
+        },
+      }),
+    ).toEqual({ id: 'review-packet.md', path: 'artifacts/review-packet.md' });
+
+    expect(
+      resolveReviewPacketReference({
+        apiUrl: 'http://api.local',
+        runSession: { artifacts: [] },
+        cockpit: { review_packets: [{ id: 'review-packet:run-session-1' }] },
+      }),
+    ).toEqual({
+      id: 'review-packet:run-session-1',
+      path: 'http://api.local/review-packets/review-packet%3Arun-session-1',
+    });
+
+    expect(resolveReviewPacketReference({ apiUrl: 'http://api.local', runSession: { artifacts: [] } })).toBeUndefined();
+  });
+
   it('plans a harmless source-checkout mutation and cleanup path', async () => {
     const repoPath = await mkdtemp(join(tmpdir(), 'forgeloop-source-guard-plan-'));
 
@@ -276,6 +418,37 @@ describe('p0 local Codex dogfood script helpers', () => {
       expect(plan.relativePath).toBe('.forgeloop/dogfood-source-guard-probe.txt');
     } finally {
       await rm(repoPath, { recursive: true, force: true });
+    }
+  });
+
+  it('runs source guard injection through local Codex evidence capture and cleans up the source checkout', async () => {
+    const { repo, head } = await createGitRepo();
+
+    try {
+      const result = await runSourceGuardInjection({
+        repoPath: repo,
+        baseCommitSha: head,
+        runCommand: async (command, args, options = {}) => {
+          const { stdout, stderr } = await execFile(command, args, {
+            cwd: options.cwd,
+            env: options.env,
+            timeout: options.timeoutMs,
+            maxBuffer: 1024 * 1024 * 10,
+          });
+          return { stdout: String(stdout), stderr: String(stderr) };
+        },
+      });
+
+      expect(result).toMatchObject({
+        relativePath: '.forgeloop/dogfood-source-guard-probe.txt',
+        cleanedUp: true,
+        failureKind: 'path_violation',
+      });
+      expect(await execGit(repo, ['status', '--porcelain', '--untracked-files=all'])).not.toContain(
+        '.forgeloop/dogfood-source-guard-probe.txt',
+      );
+    } finally {
+      await rm(repo, { recursive: true, force: true });
     }
   });
 });

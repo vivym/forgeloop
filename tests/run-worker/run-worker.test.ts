@@ -1,9 +1,14 @@
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
-import type { ExecutorResult } from '@forgeloop/contracts';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
 import { InMemoryP0Repository } from '../../packages/db/src';
-import type { CodexSessionDriver, RunRuntimeMetadata } from '../../packages/executor/src';
+import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 import {
@@ -14,6 +19,55 @@ import {
   succeededSelfReview,
 } from '../helpers/p0-runtime-fixtures';
 
+const execFile = promisify(execFileCallback);
+const tempRoots: string[] = [];
+
+const makeTempDir = async (): Promise<string> => {
+  const dir = await mkdtemp(join(tmpdir(), 'forgeloop-run-worker-'));
+  tempRoots.push(dir);
+  return dir;
+};
+
+const execGit = async (cwd: string, args: readonly string[]) => {
+  const { stdout } = await execFile('git', [...args], { cwd });
+  return String(stdout);
+};
+
+const createGitRepo = async (): Promise<{ repo: string; head: string }> => {
+  const repo = await makeTempDir();
+  await execGit(repo, ['init', '-b', 'main']);
+  await execGit(repo, ['config', 'user.email', 'test@example.com']);
+  await execGit(repo, ['config', 'user.name', 'Test User']);
+  await writeFile(join(repo, 'README.md'), '# Test Repo\n');
+  await execGit(repo, ['add', '.']);
+  await execGit(repo, ['commit', '-m', 'initial']);
+  const head = (await execGit(repo, ['rev-parse', 'HEAD'])).trim();
+  return { repo, head };
+};
+
+const localCodexRunSpec = (runSpec: RunSpec, repo: string, head: string): RunSpec => ({
+  ...runSpec,
+  executor_type: 'local_codex',
+  workflow_only: false,
+  repo: {
+    ...runSpec.repo,
+    local_path: repo,
+    base_branch: 'main',
+    base_commit_sha: head,
+  },
+  allowed_paths: ['README.md'],
+  forbidden_paths: ['.git', '.env', 'node_modules'],
+  required_checks: [],
+  context: {
+    ...runSpec.context,
+    required_checks: [],
+  },
+});
+
+afterEach(async () => {
+  await Promise.all(tempRoots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
 const runWorker = (input: {
   repository: InMemoryP0Repository;
   driver: CodexSessionDriver;
@@ -23,7 +77,7 @@ const runWorker = (input: {
   commandPollIntervalMs?: number;
   idleThresholdMs?: number;
   leaseDurationMs?: number;
-  evidenceCollector?: () => Promise<ExecutorResult>;
+  evidenceCollector?: (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
 }) =>
   new RunWorker({
     repository: input.repository,
@@ -194,6 +248,56 @@ describe('RunWorker', () => {
         targetTurnId: 'turn-active',
       }),
     ]);
+  });
+
+  it('delivers queued app-server input with runtime metadata from the primed thread event', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedQueuedPackageRun(repository);
+    const driver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'thread_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'App-server thread started.',
+            payload: { thread_id: 'thread-from-start' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'app_server',
+            driver_status: 'active',
+            codex_thread_id: 'thread-from-start',
+            active_turn_id: 'turn-from-start',
+            effective_dangerous_mode: 'confirmed',
+          },
+        },
+        { kind: 'delay', ms: 60 },
+        { kind: 'terminal', status: 'succeeded', summary: 'Done.' },
+      ],
+    });
+    const worker = runWorker({ repository, driver, commandPollIntervalMs: 5 });
+
+    const pending = worker.drainOnce();
+    await delay(15);
+    await repository.saveRunCommand({
+      id: 'run-command:queued-app-server-input',
+      run_session_id: runSession.id,
+      command_type: 'input',
+      status: 'pending',
+      actor_id: 'actor-owner',
+      payload: { message: 'continue after app-server start' },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await pending;
+
+    expect(driver.inputs[0]?.runtimeMetadata).toMatchObject({
+      codex_thread_id: 'thread-from-start',
+      active_turn_id: 'turn-from-start',
+    });
   });
 
   it('stalls and releases lease when active command polling fails', async () => {
@@ -495,6 +599,528 @@ describe('RunWorker', () => {
     expect(await repository.getRunSession(runSession.id)).toMatchObject({
       status: 'succeeded',
       summary: 'Executor completed the package.',
+    });
+  });
+
+  it('uses exec fallback when app-server start emits fallback event and ends', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedQueuedPackageRun(repository);
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server failed preflight; fallback is required.',
+            payload: { reason: 'app-server connection refused' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+          },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'thread_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Exec fallback started thread.',
+            payload: { thread_id: 'thread-fallback' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'active',
+            codex_thread_id: 'thread-fallback',
+            effective_dangerous_mode: 'confirmed',
+          },
+        },
+        { kind: 'terminal', status: 'succeeded', summary: 'Exec fallback completed.' },
+      ],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => ({
+        ...succeededExecutorResult(runSpec.run_session_id),
+        executor_type: runSpec.executor_type,
+      }),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    const completed = await repository.getRunSession(runSession.id);
+    expect(appServerDriver.startCalls).toHaveLength(1);
+    expect(execFallbackDriver.startCalls).toHaveLength(1);
+    expect(execFallbackDriver.resumeCalls).toHaveLength(0);
+    expect(completed).toMatchObject({
+      status: 'succeeded',
+      summary: 'Executor completed the package.',
+      runtime_metadata: expect.objectContaining({
+        app_server_attempted: true,
+        selected_execution_mode: 'exec_fallback',
+        app_server_fallback_reason: 'app-server connection refused',
+        exec_fallback_dangerous_bypass: true,
+        effective_dangerous_mode: 'confirmed',
+      }),
+    });
+  });
+
+  it('uses a run-session worktree and snapshots the source checkout before app-server execution', async () => {
+    const repository = new InMemoryP0Repository();
+    const { repo, head } = await createGitRepo();
+    const { runSession } = await seedQueuedPackageRun(repository);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: repo,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: undefined,
+    });
+
+    const startInputs: CodexDriverStartInput[] = [];
+    let evidenceInput: LocalCodexEvidenceInput | undefined;
+    const driver: CodexSessionDriver = {
+      kind: 'app_server',
+      startRun: async function* (input) {
+        startInputs.push(input);
+        await mkdir(join(repo, 'source-mutation'), { recursive: true });
+        await writeFile(join(repo, 'source-mutation', 'during-run.txt'), 'mutated during run\n');
+        yield { kind: 'terminal', status: 'succeeded', summary: 'App-server completed.' };
+      },
+      resumeRun: async function* () {
+        throw new Error('resume should not be called');
+      },
+      sendInput: async () => ({}),
+      cancelRun: async () => ({}),
+    };
+    const worker = runWorker({
+      repository,
+      driver,
+      evidenceCollector: async (input) => {
+        evidenceInput = input;
+        return {
+          ...succeededExecutorResult(input.runSpec.run_session_id),
+          executor_type: 'local_codex',
+        };
+      },
+    });
+
+    await worker.drainOnce();
+
+    expect(startInputs[0]?.workspacePath).toBe(join(repo, '.worktrees', runSession.id));
+    expect(evidenceInput?.workspacePath).toBe(join(repo, '.worktrees', runSession.id));
+    expect(evidenceInput?.sourceRepoSnapshot).toMatchObject({
+      repoPath: repo,
+      beforePorcelain: '',
+    });
+  });
+
+  it('uses exec fallback when app-server emits a fallback event after initial progress', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedQueuedPackageRun(repository);
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'thread_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'App-server started a thread.',
+            payload: { thread_id: 'thread-app-server' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'app_server',
+            driver_status: 'active',
+            codex_thread_id: 'thread-app-server',
+            effective_dangerous_mode: 'confirmed',
+          },
+        },
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server turn failed; fallback is required.',
+            payload: { reason: 'turn/start failed' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+          },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'thread_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Exec fallback started thread.',
+            payload: { thread_id: 'thread-fallback' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'active',
+            codex_thread_id: 'thread-fallback',
+            effective_dangerous_mode: 'confirmed',
+          },
+        },
+        { kind: 'terminal', status: 'succeeded', summary: 'Exec fallback completed.' },
+      ],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => ({
+        ...succeededExecutorResult(runSpec.run_session_id),
+        executor_type: runSpec.executor_type,
+      }),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(appServerDriver.startCalls).toHaveLength(1);
+    expect(execFallbackDriver.startCalls).toHaveLength(1);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'succeeded',
+      runtime_metadata: expect.objectContaining({
+        selected_execution_mode: 'exec_fallback',
+        app_server_fallback_reason: 'turn/start failed',
+      }),
+    });
+  });
+
+  it('resumes a dirty local Codex worktree instead of rejecting it before recovery', async () => {
+    const repository = new InMemoryP0Repository();
+    const { repo, head } = await createGitRepo();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    const workspacePath = join(repo, '.worktrees', runSession.id);
+    await execGit(repo, ['worktree', 'add', '--detach', workspacePath, head]);
+    await writeFile(join(workspacePath, 'README.md'), '# Dirty Recovery Worktree\n');
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: workspacePath,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        codex_thread_id: 'thread-existing',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferResumeUntilIteration: true,
+      script: [{ kind: 'terminal', status: 'succeeded', summary: 'Recovered app-server turn completed.' }],
+    });
+    const worker = runWorker({
+      repository,
+      driver: appServerDriver,
+      evidenceCollector: async ({ runSpec }) => ({
+        ...succeededExecutorResult(runSpec.run_session_id),
+        executor_type: 'local_codex',
+      }),
+    });
+
+    await worker.drainOnce();
+
+    expect(appServerDriver.resumeCalls[0]?.workspacePath).toBe(workspacePath);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'succeeded',
+    });
+  });
+
+  it('starts exec fallback when recovery has no persisted Codex thread id', async () => {
+    const repository = new InMemoryP0Repository();
+    const { repo, head } = await createGitRepo();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    const workspacePath = join(repo, '.worktrees', runSession.id);
+    await execGit(repo, ['worktree', 'add', '--detach', workspacePath, head]);
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: workspacePath,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server resume requires a thread id; fallback is required.',
+            payload: {},
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+          },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferStartUntilIteration: true,
+      script: [{ kind: 'terminal', status: 'succeeded', summary: 'Exec fallback restarted.' }],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => ({
+        ...succeededExecutorResult(runSpec.run_session_id),
+        executor_type: 'local_codex',
+      }),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(execFallbackDriver.startCalls).toHaveLength(1);
+    expect(execFallbackDriver.resumeCalls).toHaveLength(0);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'succeeded',
+      runtime_metadata: expect.objectContaining({
+        selected_execution_mode: 'exec_fallback',
+      }),
+    });
+  });
+
+  it('preserves fallback metadata when recovery fallback stalls', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        codex_thread_id: 'thread-existing',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server resume failed; fallback is required.',
+            payload: { reason: 'thread/resume failed' },
+          },
+          runtimeMetadata: { driver_kind: 'exec_fallback', driver_status: 'starting' },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'terminal',
+          status: 'failed',
+          summary: 'Exec fallback resume failed.',
+          failure: { kind: 'executor_error', message: 'exec resume unavailable', retryable: true },
+        },
+      ],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      runtime_metadata: expect.objectContaining({
+        selected_execution_mode: 'exec_fallback',
+        app_server_fallback_reason: 'thread/resume failed',
+        exec_fallback_dangerous_bypass: true,
+      }),
+    });
+  });
+
+  it('stalls local Codex finalization instead of late-snapshotting when pre-run source snapshot is missing', async () => {
+    const repository = new InMemoryP0Repository();
+    const { repo, head } = await createGitRepo();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    let evidenceCalled = false;
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: repo,
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const driver = new FakeCodexSessionDriver({
+      kind: 'fake',
+      script: [{ kind: 'terminal', status: 'succeeded', summary: 'Terminal without source snapshot.' }],
+    });
+    const worker = runWorker({
+      repository,
+      driver,
+      evidenceCollector: async ({ runSpec }) => {
+        evidenceCalled = true;
+        return succeededExecutorResult(runSpec.run_session_id);
+      },
+    });
+
+    await worker.drainOnce();
+
+    expect(evidenceCalled).toBe(false);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Driver recovery failed.',
+    });
+  });
+
+  it('finalizes start fallback terminal failure instead of leaving the run stalled', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedQueuedPackageRun(repository);
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server failed preflight; fallback is required.',
+            payload: { reason: 'app-server connection refused' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+          },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'terminal',
+          status: 'failed',
+          summary: 'Exec fallback failed.',
+          failure: { kind: 'executor_error', message: 'codex exec failed', retryable: true },
+        },
+      ],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => ({
+        ...succeededExecutorResult(runSpec.run_session_id),
+        executor_type: runSpec.executor_type,
+      }),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(execFallbackDriver.startCalls).toHaveLength(1);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'failed',
+      summary: 'Exec fallback failed.',
+      failure_kind: 'executor_error',
     });
   });
 

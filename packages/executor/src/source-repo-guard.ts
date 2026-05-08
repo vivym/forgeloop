@@ -122,7 +122,7 @@ const dirtyFingerprint = async (
   hash.update(cachedDiff.stdout);
   hash.update('\0untracked\0');
 
-  for (const path of splitNul(untracked.stdout).sort()) {
+  for (const path of splitNul(untracked.stdout).filter((path) => !isIgnoredRunWorktreePath(path)).sort()) {
     await hashUntrackedPath(hash, repoPath, path);
   }
 

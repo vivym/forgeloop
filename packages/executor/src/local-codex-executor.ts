@@ -86,7 +86,7 @@ const createHermeticEnv = async (root: string, extraEnv: NodeJS.ProcessEnv = {})
   };
 };
 
-const createCheckEnv = async (
+export const createLocalCodexCheckEnv = async (
   environment: LocalCodexEnvironment,
   workspacePath: string,
 ): Promise<NodeJS.ProcessEnv> => {
@@ -308,7 +308,7 @@ export const runLocalCodexExecutor = async (
     });
   }
 
-  const checkEnv = await createCheckEnv(environment, preflight.workspacePath);
+  const checkEnv = await createLocalCodexCheckEnv(environment, preflight.workspacePath);
   await applyRemoteNeutralization({
     environment,
     workspacePath: preflight.workspacePath,

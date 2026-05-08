@@ -1,6 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +46,8 @@ type ObservedRunEvent = {
   visibility?: string;
   status?: string;
   cursor?: string;
+  runStatusAtObservation?: string;
+  payload?: Record<string, unknown>;
 };
 
 const execFile = promisify(execFileCallback);
@@ -58,9 +59,13 @@ export const TASK5_EXPECTED_DIRTY_FILES = [
   'package.json',
   'README.md',
   'tests/smoke/p0-local-codex-dogfood-script.test.ts',
+  'tests/run-worker/run-worker.test.ts',
+  'packages/domain/src/types.ts',
+  'packages/executor/src/local-codex-executor.ts',
   'packages/executor/src/source-repo-guard.ts',
   'packages/executor/src/local-codex-evidence.ts',
   'packages/run-worker/src/run-worker.ts',
+  'tests/executor/local-codex-preflight.test.ts',
   'tests/executor/source-repo-guard.test.ts',
 ] as const;
 
@@ -88,6 +93,16 @@ const nowIso = (): string => new Date().toISOString();
 const unique = (values: string[]): string[] => [...new Set(values)];
 
 const isTerminalStatus = (status: unknown): boolean => typeof status === 'string' && terminalStatuses.has(status);
+
+const codexLiveProgressEventTypes = new Set([
+  'thread_started',
+  'thread_resumed',
+  'turn_started',
+  'agent_message_delta',
+  'agent_message_completed',
+  'command_output_delta',
+  'driver_fallback_used',
+]);
 
 export const evaluateLocalCodexDogfoodEnablement = (env: Env): {
   enabled: boolean;
@@ -276,7 +291,10 @@ export const buildBoundedLocalCodexRunPackage = (input: {
   };
 };
 
-export const validateLocalCodexRuntimeMetadata = (input: RuntimeMetadataReport): void => {
+export const validateLocalCodexRuntimeMetadata = (
+  input: RuntimeMetadataReport,
+  options: { expectedRunSessionId?: string } = {},
+): void => {
   if (input.executor_type !== 'local_codex') {
     throw new Error('Runtime metadata assertion failed: expected executor_type local_codex.');
   }
@@ -286,6 +304,12 @@ export const validateLocalCodexRuntimeMetadata = (input: RuntimeMetadataReport):
   if (typeof workspacePath !== 'string' || !workspacePath.includes('/.worktrees/')) {
     throw new Error('Runtime metadata assertion failed: expected worktree workspace_path.');
   }
+  if (
+    options.expectedRunSessionId !== undefined &&
+    !workspacePath.endsWith(`/.worktrees/${options.expectedRunSessionId}`)
+  ) {
+    throw new Error('Runtime metadata assertion failed: expected run-session-id worktree workspace_path.');
+  }
 
   if (metadata.app_server_attempted !== true) {
     throw new Error('Runtime metadata assertion failed: expected app_server_attempted=true.');
@@ -293,6 +317,10 @@ export const validateLocalCodexRuntimeMetadata = (input: RuntimeMetadataReport):
 
   if (metadata.selected_execution_mode !== 'app_server' && metadata.selected_execution_mode !== 'exec_fallback') {
     throw new Error('Runtime metadata assertion failed: selected_execution_mode is required.');
+  }
+
+  if (metadata.effective_dangerous_mode !== 'confirmed') {
+    throw new Error('Runtime metadata assertion failed: expected confirmed dangerous mode.');
   }
 
   if (metadata.selected_execution_mode === 'exec_fallback') {
@@ -305,6 +333,11 @@ export const validateLocalCodexRuntimeMetadata = (input: RuntimeMetadataReport):
   }
 };
 
+export const runSessionRuntimeMetadataReport = (runSession: RuntimeMetadataReport): RuntimeMetadataReport => ({
+  executor_type: runSession.executor_type,
+  runtime_metadata: runSession.runtime_metadata,
+});
+
 export const recordLiveEventObservation = (
   events: ObservedRunEvent[],
 ): { sawPublicPreTerminalEvent: true; preTerminalPublicEvents: string[]; terminalEventType: string } => {
@@ -312,13 +345,20 @@ export const recordLiveEventObservation = (
   const effectiveTerminalIndex = terminalIndex < 0 ? events.length : terminalIndex;
   const preTerminalPublicEvents = events
     .slice(0, effectiveTerminalIndex)
-    .filter((event) => event.visibility === 'public')
+    .filter(
+      (event) =>
+        event.visibility === 'public' &&
+        typeof event.event_type === 'string' &&
+        codexLiveProgressEventTypes.has(event.event_type) &&
+        typeof event.runStatusAtObservation === 'string' &&
+        !isTerminalStatus(event.runStatusAtObservation),
+    )
     .map((event) => event.event_type)
     .filter((eventType): eventType is string => eventType !== undefined && eventType.length > 0);
   const terminalEvent = terminalIndex < 0 ? undefined : events[terminalIndex]?.event_type;
 
   if (preTerminalPublicEvents.length === 0) {
-    throw new Error('Run did not expose a public non-terminal live event before terminal completion.');
+    throw new Error('Run did not expose a public non-terminal live event with Codex live progress before terminal completion.');
   }
 
   return {
@@ -326,6 +366,50 @@ export const recordLiveEventObservation = (
     preTerminalPublicEvents,
     terminalEventType: terminalEvent ?? 'unknown',
   };
+};
+
+export const extractPersistedTerminalEvidence = (input: {
+  runSession: Record<string, unknown>;
+  reviewPacket?: { id?: string; path?: string };
+}): TerminalEvidenceReport => {
+  const evidence = {
+    changed_files: Array.isArray(input.runSession.changed_files)
+      ? (input.runSession.changed_files as Array<Partial<ChangedFile>>)
+      : [],
+    check_results: Array.isArray(input.runSession.check_results)
+      ? (input.runSession.check_results as Array<Partial<CheckResult>>)
+      : [],
+    artifacts: Array.isArray(input.runSession.artifacts) ? (input.runSession.artifacts as Array<Partial<ArtifactRef>>) : [],
+    review_packet:
+      input.reviewPacket?.path === undefined
+        ? undefined
+        : {
+            id: input.reviewPacket.id,
+            artifact_path: input.reviewPacket.path,
+          },
+  };
+  validateTerminalEvidence(evidence);
+
+  return evidence;
+};
+
+export const resolveReviewPacketReference = (input: {
+  apiUrl: string;
+  runSession: Record<string, unknown>;
+  cockpit?: { review_packets?: Array<{ id?: string }> };
+}): { id?: string; path: string } | undefined => {
+  const artifacts = Array.isArray(input.runSession.artifacts) ? (input.runSession.artifacts as ArtifactRef[]) : [];
+  const reviewPacketArtifact = artifacts.find((artifact) => artifact.kind === 'review_packet');
+  if (typeof reviewPacketArtifact?.local_ref === 'string' && reviewPacketArtifact.local_ref.length > 0) {
+    return { id: reviewPacketArtifact.name, path: reviewPacketArtifact.local_ref };
+  }
+
+  const reviewPacketId = input.cockpit?.review_packets?.find((packet) => typeof packet.id === 'string')?.id;
+  if (reviewPacketId !== undefined) {
+    return { id: reviewPacketId, path: `${input.apiUrl}/review-packets/${encodeURIComponent(reviewPacketId)}` };
+  }
+
+  return undefined;
 };
 
 export const validateTerminalEvidence = (input: TerminalEvidenceReport): void => {
@@ -371,7 +455,7 @@ export const renderLocalCodexDogfoodReport = (input: {
   runtimeMetadata?: Record<string, unknown>;
   terminalEvidence?: TerminalEvidenceReport;
   liveEvents?: ObservedRunEvent[];
-  sourceGuardInjection?: { relativePath: string; cleanedUp: boolean };
+  sourceGuardInjection?: { relativePath: string; cleanedUp: boolean; failureKind?: string };
   error?: string;
 }): string => {
   const lines = [
@@ -410,7 +494,9 @@ export const renderLocalCodexDogfoodReport = (input: {
 
   if (input.sourceGuardInjection !== undefined) {
     lines.push(
-      `- Source guard injection: ${input.sourceGuardInjection.relativePath} cleanup=${String(input.sourceGuardInjection.cleanedUp)}`,
+      `- Source guard injection: ${input.sourceGuardInjection.relativePath} cleanup=${String(input.sourceGuardInjection.cleanedUp)}${
+        input.sourceGuardInjection.failureKind === undefined ? '' : ` failure=${input.sourceGuardInjection.failureKind}`
+      }`,
     );
   }
 
@@ -552,89 +638,6 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
   return executionPackage.id;
 };
 
-const prepareDogfoodWorktree = async (input: {
-  runCommand: CommandRunner;
-  sourceRepoPath: string;
-  baseCommitSha: string;
-}): Promise<string> => {
-  const workspacePath = join(input.sourceRepoPath, '.worktrees', `local-codex-dogfood-${Date.now()}`);
-  await mkdir(join(input.sourceRepoPath, '.worktrees'), { recursive: true });
-  await input.runCommand('git', ['worktree', 'add', '--detach', workspacePath, input.baseCommitSha], {
-    cwd: input.sourceRepoPath,
-    timeoutMs: 60_000,
-  });
-
-  return workspacePath;
-};
-
-const changedFilesFromPorcelain = (repoId: string, porcelain: string): ChangedFile[] =>
-  parseDirtySourceFiles(porcelain).map((path) => ({
-    repo_id: repoId,
-    path,
-    change_kind: porcelain.includes(`?? ${path}`) ? 'added' : 'modified',
-  }));
-
-const collectScriptTerminalEvidence = async (input: {
-  runCommand: CommandRunner;
-  workspacePath: string;
-  runSession: Record<string, unknown>;
-}): Promise<TerminalEvidenceReport> => {
-  const existingChangedFiles = input.runSession.changed_files as ChangedFile[] | undefined;
-  const existingChecks = input.runSession.check_results as CheckResult[] | undefined;
-  const existingArtifacts = input.runSession.artifacts as ArtifactRef[] | undefined;
-  const runSpec = input.runSession.run_spec as { repo?: { repo_id?: string }; run_session_id?: string } | undefined;
-
-  const { stdout: status } = await input.runCommand('git', ['status', '--porcelain', '--untracked-files=all'], {
-    cwd: input.workspacePath,
-    timeoutMs: 15_000,
-  });
-  const changedFiles =
-    existingChangedFiles !== undefined && existingChangedFiles.length > 0
-      ? existingChangedFiles
-      : changedFilesFromPorcelain(runSpec?.repo?.repo_id ?? 'forgeloop-source', status);
-
-  const checks =
-    existingChecks !== undefined && existingChecks.length > 0
-      ? existingChecks
-      : [
-          {
-            check_id: 'dogfood-required',
-            command: 'node -e "process.exit(0)"',
-            status: 'succeeded' as const,
-            exit_code: 0,
-            duration_seconds: 0,
-            blocks_review: true,
-          },
-        ];
-
-  if (existingArtifacts !== undefined && existingArtifacts.length > 0) {
-    return { changed_files: changedFiles, check_results: checks, artifacts: existingArtifacts };
-  }
-
-  const artifactRoot = join(tmpdir(), 'forgeloop-local-codex-dogfood-artifacts', runSpec?.run_session_id ?? `${Date.now()}`);
-  await mkdir(artifactRoot, { recursive: true });
-  const { stdout: diff } = await input.runCommand('git', ['diff', 'HEAD'], {
-    cwd: input.workspacePath,
-    timeoutMs: 15_000,
-  });
-  const diffPath = join(artifactRoot, 'diff.patch');
-  const changedFilesPath = join(artifactRoot, 'changed-files.json');
-  const summaryPath = join(artifactRoot, 'execution-summary.md');
-  await writeFile(diffPath, diff, 'utf8');
-  await writeFile(changedFilesPath, JSON.stringify(changedFiles, null, 2), 'utf8');
-  await writeFile(summaryPath, String(input.runSession.summary ?? 'Local Codex dogfood terminal evidence.'), 'utf8');
-
-  return {
-    changed_files: changedFiles,
-    check_results: checks,
-    artifacts: [
-      { kind: 'diff', name: 'diff.patch', content_type: 'text/x-diff', local_ref: diffPath },
-      { kind: 'changed_files', name: 'changed-files.json', content_type: 'application/json', local_ref: changedFilesPath },
-      { kind: 'execution_summary', name: 'execution-summary.md', content_type: 'text/markdown', local_ref: summaryPath },
-    ],
-  };
-};
-
 const pollRunToTerminal = async (
   apiUrl: string,
   runSessionId: string,
@@ -644,6 +647,8 @@ const pollRunToTerminal = async (
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < 300_000) {
+    const runSession = await requestJson<Record<string, unknown>>(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}`);
+    const runStatusAtObservation = typeof runSession.status === 'string' ? runSession.status : undefined;
     const response = await requestJson<{ events: ObservedRunEvent[] }>(
       apiUrl,
       `/run-sessions/${encodeURIComponent(runSessionId)}/events?actor_id=local-codex-dogfood-actor${
@@ -652,13 +657,12 @@ const pollRunToTerminal = async (
     );
     const events = response.events;
     for (const event of events) {
-      liveEvents.push(event);
+      liveEvents.push({ ...event, runStatusAtObservation });
       if (typeof event.cursor === 'string') {
         after = event.cursor;
       }
     }
 
-    const runSession = await requestJson<Record<string, unknown>>(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}`);
     if (isTerminalStatus(runSession.status)) {
       return { runSession, liveEvents };
     }
@@ -669,28 +673,121 @@ const pollRunToTerminal = async (
   throw new Error('Timed out waiting for real local Codex run terminal status.');
 };
 
-const runSourceGuardInjection = async (repoPath: string): Promise<{ relativePath: string; cleanedUp: boolean }> => {
-  const { createDefaultLocalCodexEnvironment, snapshotSourceRepoStatus, verifySourceRepoUnchanged } = await import('@forgeloop/executor');
-  const environment = createDefaultLocalCodexEnvironment();
-  const plan = buildSourceGuardInjectionPlan(repoPath);
-  const before = await snapshotSourceRepoStatus(environment, repoPath);
+const waitForReviewPacketReference = async (input: {
+  apiUrl: string;
+  runSession: Record<string, unknown>;
+  timeoutMs?: number;
+}): Promise<{ id?: string; path: string }> => {
+  const runSpec = input.runSession.run_spec as { work_item_id?: string } | undefined;
+  const startedAt = Date.now();
 
-  await plan.inject();
-  try {
-    const mutated = await verifySourceRepoUnchanged(environment, before);
-    if (mutated.unchanged) {
-      throw new Error('Source guard injection did not create a detectable source checkout mutation.');
+  while (Date.now() - startedAt < (input.timeoutMs ?? 60_000)) {
+    const artifactReference = resolveReviewPacketReference({ apiUrl: input.apiUrl, runSession: input.runSession });
+    if (artifactReference !== undefined) {
+      return artifactReference;
     }
+
+    if (typeof runSpec?.work_item_id === 'string') {
+      const cockpit = await requestJson<{ review_packets?: Array<{ id?: string }> }>(
+        input.apiUrl,
+        `/work-items/${encodeURIComponent(runSpec.work_item_id)}/cockpit`,
+      );
+      const cockpitReference = resolveReviewPacketReference({ apiUrl: input.apiUrl, runSession: input.runSession, cockpit });
+      if (cockpitReference !== undefined) {
+        return cockpitReference;
+      }
+    }
+
+    await delay(500);
+  }
+
+  throw new Error('Timed out waiting for persisted Review Packet.');
+};
+
+export const runSourceGuardInjection = async (input: {
+  repoPath: string;
+  baseCommitSha: string;
+  runCommand?: CommandRunner;
+}): Promise<{ relativePath: string; cleanedUp: boolean; failureKind: string }> => {
+  const {
+    captureLocalCodexEvidence,
+    createDefaultLocalCodexEnvironment,
+    createLocalCodexCheckEnv,
+    snapshotSourceRepoStatus,
+    verifySourceRepoUnchanged,
+  } = await import('../packages/executor/src/index.js');
+  const runCommand = input.runCommand ?? defaultRunCommand;
+  const commandRunner = (command: string, args: readonly string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number } = {}) =>
+    runCommand(command, [...args], {
+      cwd: options.cwd,
+      env: options.env,
+      timeoutMs: options.timeout,
+    });
+  const environment = createDefaultLocalCodexEnvironment({ commandRunner });
+  const runSessionId = `local-codex-dogfood-source-guard-${Date.now()}`;
+  const workspacePath = join(resolve(input.repoPath), '.worktrees', runSessionId);
+  const plan = buildSourceGuardInjectionPlan(input.repoPath);
+  const before = await snapshotSourceRepoStatus(environment, input.repoPath);
+
+  await mkdir(join(resolve(input.repoPath), '.worktrees'), { recursive: true });
+  await runCommand('git', ['worktree', 'add', '--detach', workspacePath, input.baseCommitSha], {
+    cwd: input.repoPath,
+    timeoutMs: 60_000,
+  });
+
+  let failureKind = '';
+  let cleanedUp = false;
+  try {
+    await plan.inject();
+    const result = await captureLocalCodexEvidence({
+      runSpec: {
+        ...buildBoundedLocalCodexRunPackage({ repoPath: input.repoPath, baseCommitSha: input.baseCommitSha }),
+        run_session_id: runSessionId,
+        repo: {
+          repo_id: 'forgeloop-source',
+          local_path: input.repoPath,
+          base_branch: 'HEAD',
+          base_commit_sha: input.baseCommitSha,
+        },
+        required_checks: [],
+        context: {
+          spec_revision_summary: 'Opt-in real local Codex dogfood source guard.',
+          plan_revision_summary: 'Verify source repo mutation detection around evidence capture.',
+          package_instructions: 'No workspace mutation is required for the source guard injection check.',
+          required_checks: [],
+        },
+        idempotency_key: runSessionId,
+      } as RunSpec,
+      workspacePath,
+      baseRef: input.baseCommitSha,
+      artifactRoot: join(workspacePath, '.forgeloop', 'source-guard-artifacts'),
+      summary: 'Source guard injection evidence capture.',
+      startedAt: nowIso(),
+      environment,
+      checkEnv: await createLocalCodexCheckEnv(environment, workspacePath),
+      sourceRepoSnapshot: before,
+      effectiveDangerousMode: 'not_requested',
+    });
+    if (result.status !== 'failed' || result.failure?.kind !== 'path_violation') {
+      throw new Error('Source guard injection did not fail evidence capture with path_violation.');
+    }
+
+    failureKind = result.failure.kind;
   } finally {
     await plan.cleanup();
+    cleanedUp = true;
+    const afterCleanup = await verifySourceRepoUnchanged(environment, before);
+    if (!afterCleanup.unchanged) {
+      throw new Error('Source guard injection cleanup did not restore source checkout state.');
+    }
+    await runCommand('git', ['worktree', 'remove', '--force', workspacePath], {
+      cwd: input.repoPath,
+      timeoutMs: 60_000,
+    }).catch(() => undefined);
+    await rm(workspacePath, { recursive: true, force: true });
   }
 
-  const afterCleanup = await verifySourceRepoUnchanged(environment, before);
-  if (!afterCleanup.unchanged) {
-    throw new Error('Source guard injection cleanup did not restore source checkout state.');
-  }
-
-  return { relativePath: plan.relativePath, cleanedUp: true };
+  return { relativePath: plan.relativePath, cleanedUp, failureKind };
 };
 
 export const main = async (env: Env = process.env, runCommand: CommandRunner = defaultRunCommand): Promise<number> => {
@@ -719,10 +816,9 @@ export const main = async (env: Env = process.env, runCommand: CommandRunner = d
       timeoutMs: 15_000,
     });
     const baseCommitSha = baseStdout.trim();
-    const sourceGuardInjection = await runSourceGuardInjection(repoPath);
-    const dogfoodWorkspacePath = await prepareDogfoodWorktree({ runCommand, sourceRepoPath: repoPath, baseCommitSha });
+    const sourceGuardInjection = await runSourceGuardInjection({ repoPath, baseCommitSha, runCommand });
     api = await startApi();
-    const executionPackageId = await createPackageThroughApi(api.apiUrl, dogfoodWorkspacePath, baseCommitSha);
+    const executionPackageId = await createPackageThroughApi(api.apiUrl, repoPath, baseCommitSha);
     const run = await requestJson<{ run_session_id: string }>(api.apiUrl, `/execution-packages/${encodeURIComponent(executionPackageId)}/run`, {
       method: 'POST',
       body: {
@@ -733,75 +829,23 @@ export const main = async (env: Env = process.env, runCommand: CommandRunner = d
       headers: { 'X-Forgeloop-Actor-Id': 'local-codex-dogfood-actor' },
     });
     const { runSession, liveEvents } = await pollRunToTerminal(api.apiUrl, run.run_session_id);
-    const fallbackEvent = liveEvents.find((event) => event.event_type === 'driver_fallback_used');
-    const runtimeMetadata = {
-      ...((runSession.runtime_metadata as Record<string, unknown> | undefined) ?? {}),
-      workspace_path:
-        typeof (runSession.runtime_metadata as Record<string, unknown> | undefined)?.workspace_path === 'string'
-          ? (runSession.runtime_metadata as Record<string, unknown>).workspace_path
-          : dogfoodWorkspacePath,
-      app_server_attempted: true,
-      selected_execution_mode: fallbackEvent === undefined ? 'app_server' : 'exec_fallback',
-      ...(fallbackEvent === undefined
-        ? {}
-        : {
-            app_server_fallback_reason:
-              typeof (fallbackEvent as { payload?: Record<string, unknown> }).payload?.reason === 'string'
-                ? (fallbackEvent as { payload?: Record<string, unknown> }).payload?.reason
-                : fallbackEvent.summary,
-            exec_fallback_dangerous_bypass: true,
-            effective_dangerous_mode: 'confirmed',
-          }),
-    };
-    const runSpec = runSession.run_spec as { work_item_id?: string } | undefined;
-    const collectedEvidence = await collectScriptTerminalEvidence({ runCommand, workspacePath: dogfoodWorkspacePath, runSession });
-    const reviewPacketArtifact = collectedEvidence.artifacts?.find(
-      (artifact) => artifact.kind === 'review_packet',
-    );
-    let reviewPacketPath = reviewPacketArtifact?.local_ref;
-    if (reviewPacketPath === undefined && typeof runSpec?.work_item_id === 'string') {
-      const cockpit = await requestJson<{ review_packets?: Array<{ id?: string }> }>(
-        api.apiUrl,
-        `/work-items/${encodeURIComponent(runSpec.work_item_id)}/cockpit`,
+    const runtimeMetadataReport = runSessionRuntimeMetadataReport({
+      executor_type: runSession.executor_type as string | undefined,
+      runtime_metadata: runSession.runtime_metadata as Record<string, unknown> | undefined,
+    });
+    validateLocalCodexRuntimeMetadata(runtimeMetadataReport, { expectedRunSessionId: run.run_session_id });
+    const runtimeMetadata = runtimeMetadataReport.runtime_metadata ?? {};
+    if (runSession.status !== 'succeeded') {
+      throw new Error(
+        `Real local Codex run ended with status ${String(runSession.status)}: ${String(
+          runSession.failure_reason ?? runSession.summary ?? 'no failure summary',
+        )}`,
       );
-      const reviewPacketId = cockpit.review_packets?.[0]?.id;
-      if (reviewPacketId !== undefined) {
-        reviewPacketPath = `${api.apiUrl}/review-packets/${encodeURIComponent(reviewPacketId)}`;
-      }
     }
-    if (reviewPacketPath === undefined) {
-      const reviewPacketRoot = join(tmpdir(), 'forgeloop-local-codex-dogfood-artifacts', `review-packet-${Date.now()}`);
-      await mkdir(reviewPacketRoot, { recursive: true });
-      reviewPacketPath = join(reviewPacketRoot, 'review-packet.md');
-      await writeFile(
-        reviewPacketPath,
-        [
-          '# Local Codex Dogfood Review Packet',
-          '',
-          `- RunSession: ${String(runSession.id ?? 'unknown')}`,
-          `- Workspace: ${dogfoodWorkspacePath}`,
-          `- Changed files: ${(collectedEvidence.changed_files ?? []).map((file) => file.path).join(', ')}`,
-          `- Checks: ${(collectedEvidence.check_results ?? []).map((check) => check.check_id).join(', ')}`,
-          '',
-        ].join('\n'),
-        'utf8',
-      );
-      collectedEvidence.artifacts = [
-        ...(collectedEvidence.artifacts ?? []),
-        { kind: 'review_packet', name: 'review-packet.md', content_type: 'text/markdown', local_ref: reviewPacketPath },
-      ];
-    }
-    const terminalEvidence = {
-      ...collectedEvidence,
-      review_packet: {
-        id: 'review-packet-from-terminal-evidence',
-        artifact_path: reviewPacketPath,
-      },
-    };
+    const reviewPacket = await waitForReviewPacketReference({ apiUrl: api.apiUrl, runSession });
+    const terminalEvidence = extractPersistedTerminalEvidence({ runSession, reviewPacket });
 
-    validateLocalCodexRuntimeMetadata({ executor_type: runSession.executor_type as string | undefined, runtime_metadata: runtimeMetadata });
     recordLiveEventObservation(liveEvents);
-    validateTerminalEvidence(terminalEvidence);
 
     report = renderLocalCodexDogfoodReport({
       status: 'PASS',

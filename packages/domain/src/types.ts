@@ -244,6 +244,13 @@ export interface RunRuntimeMetadata {
   last_event_at?: IsoDateTime;
   recovery_attempt_count: number;
   effective_dangerous_mode: EffectiveDangerousMode;
+  app_server_attempted?: boolean;
+  selected_execution_mode?: 'app_server' | 'exec_fallback' | 'fake';
+  app_server_fallback_reason?: string;
+  exec_fallback_dangerous_bypass?: boolean;
+  source_repo_path?: string;
+  source_repo_before_status?: string;
+  source_repo_before_dirty_fingerprint?: string;
 }
 
 export interface RunSession {
