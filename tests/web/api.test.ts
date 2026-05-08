@@ -128,8 +128,8 @@ describe('Forgeloop web API client', () => {
     } satisfies Partial<ForgeloopApiError>);
   });
 
-  it('propagates actor ids to run event and operator command endpoints', async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+  it('propagates actor ids as headers to run event and operator command endpoints', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('/events')) {
         return new Response(JSON.stringify({ events: [{ id: 'event-1', sequence: 1 }] }), { status: 200 });
       }
@@ -144,26 +144,39 @@ describe('Forgeloop web API client', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      'http://api.local/run-sessions/run-1/events?actor_id=actor+owner&after=0000000001',
+      'http://api.local/run-sessions/run-1/events?after=0000000001',
       {
         method: 'GET',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner' },
       },
     );
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/run-sessions/run-1/input', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ actor_id: 'actor-owner', message: 'continue', target_turn_id: 'turn-1' }),
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      body: JSON.stringify({ message: 'continue', target_turn_id: 'turn-1' }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/run-sessions/run-1/cancel', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ actor_id: 'actor-owner', reason: 'operator requested stop' }),
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      body: JSON.stringify({ reason: 'operator requested stop' }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/run-sessions/run-1/resume', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ actor_id: 'actor-owner', reason: 'operator requested resume' }),
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      body: JSON.stringify({ reason: 'operator requested resume' }),
+    });
+  });
+
+  it('propagates actor ids as headers to package run commands while preserving required body actor fields', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await api.runPackage('package-1', { requested_by_actor_id: 'actor-owner', workflow_only: true });
+
+    expect(fetchMock).toHaveBeenCalledWith('http://api.local/execution-packages/package-1/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      body: JSON.stringify({ requested_by_actor_id: 'actor-owner', workflow_only: true }),
     });
   });
 
@@ -179,7 +192,7 @@ describe('Forgeloop web API client', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('opens run event streams with actor ids and parses incoming messages', () => {
+  it('opens run event streams with stream tokens and parses incoming messages', async () => {
     const instances: Array<{ url: string; close: ReturnType<typeof vi.fn>; onmessage?: (event: MessageEvent) => void; onerror?: (error: Event) => void }> = [];
     class MockEventSource {
       readonly url: string;
@@ -193,13 +206,20 @@ describe('Forgeloop web API client', () => {
       }
     }
     vi.stubGlobal('EventSource', MockEventSource);
-    const api = createForgeloopApi({ baseUrl: 'http://api.local' });
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ token: 'stream-token-1', expires_at: '2026-05-08T00:00:00.000Z' }), { status: 201 }),
+    );
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
     const onEvent = vi.fn();
     const onError = vi.fn();
 
-    const stream = api.openRunEventStream('run-1', { actorId: 'actor owner', after: '0000000001' }, { onEvent, onError });
+    const stream = await api.openRunEventStream('run-1', { actorId: 'actor owner', after: '0000000001' }, { onEvent, onError });
 
-    expect(instances[0]?.url).toBe('http://api.local/run-sessions/run-1/events/stream?actor_id=actor+owner&after=0000000001');
+    expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events/stream-token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner' },
+    });
+    expect(instances[0]?.url).toBe('http://api.local/run-sessions/run-1/events/stream?stream_token=stream-token-1&after=0000000001');
     instances[0]?.onmessage?.({ data: JSON.stringify({ id: 'event-1', sequence: 1 }) } as MessageEvent);
     const error = new Event('error');
     instances[0]?.onerror?.(error);
@@ -210,7 +230,7 @@ describe('Forgeloop web API client', () => {
     expect(instances[0]?.close).toHaveBeenCalled();
   });
 
-  it('routes malformed run event stream messages to the error handler', () => {
+  it('routes malformed run event stream messages to the error handler', async () => {
     const instances: Array<{ url: string; close: ReturnType<typeof vi.fn>; onmessage?: (event: MessageEvent) => void; onerror?: (error: Event) => void }> = [];
     class MockEventSource {
       readonly url: string;
@@ -224,14 +244,39 @@ describe('Forgeloop web API client', () => {
       }
     }
     vi.stubGlobal('EventSource', MockEventSource);
-    const api = createForgeloopApi({ baseUrl: 'http://api.local' });
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ token: 'stream-token-1', expires_at: '2026-05-08T00:00:00.000Z' }), { status: 201 }),
+    );
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
     const onEvent = vi.fn();
     const onError = vi.fn();
 
-    api.openRunEventStream('run-1', { actorId: 'actor-owner' }, { onEvent, onError });
+    await api.openRunEventStream('run-1', { actorId: 'actor-owner' }, { onEvent, onError });
     instances[0]?.onmessage?.({ data: '{not-json' } as MessageEvent);
 
     expect(onEvent).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(expect.any(SyntaxError));
+  });
+
+  it('routes malformed stream token responses to the error handler', async () => {
+    class MockEventSource {
+      readonly close = vi.fn();
+
+      constructor() {
+        throw new Error('EventSource should not open without a stream token');
+      }
+    }
+    vi.stubGlobal('EventSource', MockEventSource);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ token: 123 }), { status: 201 }));
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+
+    await expect(api.openRunEventStream('run-1', { actorId: 'actor-owner' }, { onEvent, onError })).rejects.toThrow(
+      'Malformed run event stream token response',
+    );
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
   });
 });

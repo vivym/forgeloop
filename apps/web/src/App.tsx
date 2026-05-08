@@ -18,6 +18,7 @@ import {
   type RequestedChange,
   type ReviewPacket,
   type RunEvent,
+  type RunEventStream,
   type RunPackageBody,
   type RunSession,
   type SpecPlan,
@@ -71,7 +72,7 @@ export function App() {
   const selectedWorkItemIdRef = useRef('');
   const refreshRequestIdRef = useRef(0);
   const runEventCursorRef = useRef<string | undefined>(undefined);
-  const runStreamRef = useRef<EventSource | null>(null);
+  const runStreamRef = useRef<RunEventStream | null>(null);
   const runStreamRetryRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [projectFilter, setProjectFilter] = useState('');
   const [manualWorkItemId, setManualWorkItemId] = useState('');
@@ -220,15 +221,14 @@ export function App() {
       if (runStreamRetryRef.current !== undefined) clearTimeout(runStreamRetryRef.current);
       runStreamRetryRef.current = setTimeout(() => {
         runStreamRetryRef.current = undefined;
-        openStream(runEventCursorRef.current);
+        void openStream(runEventCursorRef.current);
       }, 1500);
     };
-    const openStream = (after?: string) => {
+    const openStream = async (after?: string) => {
       if (stopped) return;
       try {
         setRunStreamStatus('connecting');
-        let stream: EventSource;
-        stream = api.openRunEventStream(
+        const stream = await api.openRunEventStream(
           activeSelectedRunId,
           { actorId: selectedRunActorId, ...(after === undefined ? {} : { after }) },
           {
@@ -243,9 +243,14 @@ export function App() {
             },
           },
         );
+        if (stopped) {
+          stream.close();
+          return;
+        }
         runStreamRef.current = stream;
         setRunStreamStatus('live');
       } catch (cause) {
+        if (stopped) return;
         setRunStreamStatus('blocked');
         setRunConsoleError(cause instanceof Error ? cause.message : 'Unable to open run event stream');
       }
@@ -256,7 +261,7 @@ export function App() {
         const response = await api.listRunEvents(activeSelectedRunId, { actorId: selectedRunActorId });
         if (stopped) return;
         mergeRunEvents(response.events);
-        openStream(nextRunEventCursor(response.events));
+        void openStream(nextRunEventCursor(response.events));
       } catch (cause) {
         if (stopped) return;
         setRunStreamStatus('blocked');
