@@ -794,7 +794,7 @@ function RunConsole({
   const displayEvents = events.filter((event) => event.event_type !== 'watchdog_heartbeat');
 
   return (
-    <div className="run-console">
+    <div className="run-console" data-testid="run-console">
       <div className="run-console-head">
         <div>
           <h3>Run Console</h3>
@@ -814,19 +814,24 @@ function RunConsole({
       </div>
       {continuationNotice && <div className="run-console-notice">{continuationNotice}</div>}
       {error && <div className="run-console-error">{error}</div>}
-      <div className="run-event-list">
+      <div className="run-event-list" data-testid="run-console-events">
         {displayEvents.length === 0 && <EmptyState text={events.length === 0 ? 'No run events loaded' : 'Only heartbeat events received'} />}
         {displayEvents.map((event) => <RunEventRow event={event} key={event.id} />)}
       </div>
       <form className="run-input-row" onSubmit={onSend}>
         <label>
           Input as {actorId}
-          <textarea value={input} onChange={(event) => onInputChange(event.target.value)} placeholder="Send input to the active run" />
+          <textarea
+            data-testid="run-console-input"
+            value={input}
+            onChange={(event) => onInputChange(event.target.value)}
+            placeholder="Send input to the active run"
+          />
         </label>
         <div className="run-console-actions">
-          <button type="submit" disabled={!run || !input.trim()}>Send</button>
-          <button type="button" disabled={!run} onClick={onCancel}>Cancel</button>
-          <button type="button" disabled={!run} onClick={onResume}>Resume</button>
+          <button type="submit" data-testid="run-console-send" disabled={!run || !input.trim()}>Send</button>
+          <button type="button" data-testid="run-console-cancel" disabled={!run} onClick={onCancel}>Cancel</button>
+          <button type="button" data-testid="run-console-resume" disabled={!run} onClick={onResume}>Resume</button>
         </div>
       </form>
     </div>
@@ -838,7 +843,7 @@ function RunEventRow({ event }: { event: RunEvent }) {
   const payload = event.payload ?? {};
   if (type === 'agent_message_delta' || type === 'agent_message_completed') {
     return (
-      <article className="run-event-row agent">
+      <article className="run-event-row agent" data-event-cursor={event.cursor}>
         <span>{event.source ?? 'agent'} / {type}</span>
         <p>{payloadText(payload, ['message', 'text', 'content']) || event.summary || 'No message text'}</p>
       </article>
@@ -846,7 +851,7 @@ function RunEventRow({ event }: { event: RunEvent }) {
   }
   if (type === 'command_output_delta') {
     return (
-      <article className="run-event-row terminal">
+      <article className="run-event-row terminal" data-event-cursor={event.cursor}>
         <span>{payloadText(payload, ['command']) || event.summary || 'Command output'}</span>
         <pre>{payloadText(payload, ['text', 'delta', 'output']) || event.summary || ''}</pre>
       </article>
@@ -854,14 +859,14 @@ function RunEventRow({ event }: { event: RunEvent }) {
   }
   if (type.startsWith('tool_call') || type.startsWith('command_')) {
     return (
-      <article className="run-event-row compact">
+      <article className="run-event-row compact" data-event-cursor={event.cursor}>
         <strong>{type}</strong>
         <span>{payloadText(payload, ['tool', 'tool_name', 'command', 'status']) || event.summary || event.source || 'event'}</span>
       </article>
     );
   }
   return (
-    <article className="run-event-row compact">
+    <article className="run-event-row compact" data-event-cursor={event.cursor}>
       <strong>{type}</strong>
       <span>{event.summary || payloadText(payload, ['status', 'message', 'reason']) || event.source || 'event'}</span>
     </article>

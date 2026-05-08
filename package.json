@@ -12,6 +12,7 @@
     "dev:worker": "pnpm --filter @forgeloop/workflow-worker start:dev",
     "dev:web": "pnpm --filter @forgeloop/web dev",
     "db:push": "drizzle-kit push --config packages/db/drizzle.config.ts",
+    "e2e:run-console": "vitest run tests/e2e/run-console.e2e.test.ts",
     "smoke:p0": "vitest run tests/smoke",
     "dogfood:p0": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/p0-dogfood.ts"
   },
@@ -32,6 +33,7 @@
   },
   "devDependencies": {
     "@nestjs/testing": "^11.1.19",
+    "@playwright/test": "^1.59.1",
     "@types/node": "^25.6.0",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.14",
