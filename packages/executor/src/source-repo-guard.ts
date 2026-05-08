@@ -109,21 +109,61 @@ const decodeGitQuotedPath = (path: string): string => {
   return result;
 };
 
+const porcelainStatus = (line: string): string => (line.length >= 2 ? line.slice(0, 2) : line);
+
 const porcelainPayload = (line: string): string => (line.length > 3 ? line.slice(3) : line);
 
-const porcelainPayloadPaths = (line: string): string[] => porcelainPayload(line)
-  .split(' -> ')
-  .map(decodeGitQuotedPath);
+const splitGitPorcelainPaths = (payload: string): string[] => {
+  const paths: string[] = [];
+  let startIndex = 0;
+  let inQuotes = false;
+  let escaped = false;
+  const renameSeparator = ' -> ';
+
+  for (let index = 0; index < payload.length; index += 1) {
+    const char = payload[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (inQuotes && char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && payload.startsWith(renameSeparator, index)) {
+      paths.push(payload.slice(startIndex, index));
+      index += renameSeparator.length - 1;
+      startIndex = index + 1;
+    }
+  }
+
+  paths.push(payload.slice(startIndex));
+  return paths;
+};
+
+const porcelainPayloadPaths = (line: string): string[] =>
+  splitGitPorcelainPaths(porcelainPayload(line)).map(decodeGitQuotedPath);
 
 const porcelainLineIsSourceContent = (line: string): boolean =>
   porcelainPayloadPaths(line).every((path) => !isIgnoredRunWorktreePath(path));
+
+const normalizeSourcePorcelainLine = (line: string): string =>
+  `${porcelainStatus(line)} ${porcelainPayloadPaths(line).join(' -> ')}`;
 
 const normalizeSourcePorcelain = (porcelain: string): string =>
   porcelain
     .split('\n')
     .filter((line) => line.length > 0)
     .filter(porcelainLineIsSourceContent)
-    .map((line) => porcelainPayloadPaths(line).join(' -> '))
+    .map(normalizeSourcePorcelainLine)
     .join('\n');
 
 const unique = (values: string[]): string[] => [...new Set(values)];

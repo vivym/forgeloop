@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createDefaultLocalCodexEnvironment,
   sourceDirtyEntriesFromPorcelain,
+  sourceRepoWasMutated,
   snapshotSourceRepoStatus,
   verifySourceRepoUnchanged,
 } from '../../packages/executor/src/index';
@@ -41,12 +42,30 @@ afterEach(async () => {
 });
 
 describe('source repo guard', () => {
+  it('detects source mutation when only the porcelain status changes', () => {
+    expect(
+      sourceRepoWasMutated({
+        beforePorcelain: ' M README.md\n',
+        afterPorcelain: ' D README.md\n',
+      }),
+    ).toBe(true);
+  });
+
   it('decodes Git-quoted paths before filtering ignored worktree entries', () => {
     expect(
       sourceDirtyEntriesFromPorcelain(
         '?? ".worktrees/run session/README.md"\n?? ".superpowers/state file.json"\n?? "packages/workflow/src/activity file.ts"\n',
       ),
     ).toEqual(['.superpowers/state file.json', 'packages/workflow/src/activity file.ts']);
+  });
+
+  it('keeps Git-quoted filenames containing rename arrows as one path', () => {
+    expect(sourceDirtyEntriesFromPorcelain('?? "a -> b.txt"\n')).toEqual(['a -> b.txt']);
+    expect(sourceDirtyEntriesFromPorcelain('R  "old -> name.txt" -> "new -> name.txt"\n')).toEqual([
+      'old -> name.txt',
+      'new -> name.txt',
+    ]);
+    expect(sourceDirtyEntriesFromPorcelain('?? ".worktrees/run -> session/README.md"\n')).toEqual([]);
   });
 
   it('does not report .worktrees contents as source checkout dirtiness', async () => {

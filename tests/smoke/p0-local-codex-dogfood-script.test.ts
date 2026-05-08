@@ -342,6 +342,9 @@ describe('p0 local Codex dogfood script helpers', () => {
       'package.json',
       '.superpowers/state file.json',
     ]);
+    expect(parseDirtySourceFiles('?? "a -> b.txt"\n?? ".worktrees/run -> session/README.md"\n')).toEqual([
+      'a -> b.txt',
+    ]);
   });
 
   it('builds the Codex exec fallback command with JSON and dangerous bypass flags', () => {
