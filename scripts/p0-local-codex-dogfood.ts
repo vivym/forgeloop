@@ -6,6 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import type { ArtifactRef, ChangedFile, CheckResult, RunSpec } from '@forgeloop/contracts';
+import {
+  sourceDirtyEntriesFromPorcelain,
+  worktreePathForRun,
+  type StrictPreflightBlocker,
+  type StrictPreflightResult,
+} from '../packages/executor/src/index.js';
 
 type Env = Record<string, string | undefined>;
 
@@ -16,18 +22,29 @@ type CommandRunner = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 type PreflightResult =
-  | {
+  | (StrictPreflightResult & {
       ok: true;
       repoPath: string;
       dirtyFiles: string[];
+      dirtySource: StrictDirtySourceSummary;
       dirtyOverride?: { allowed: true; dirtyFiles: string[] };
-    }
-  | {
+      worktreeProbePath: string;
+    })
+  | (StrictPreflightResult & {
       ok: false;
       message: string;
+      repoPath: string;
       dirtyFiles?: string[];
+      dirtySource?: StrictDirtySourceSummary;
       unexpectedDirtyFiles?: string[];
-    };
+      worktreeProbePath?: string;
+    });
+
+type StrictDirtySourceSummary = {
+  allowed_dirty_entries: string[];
+  blocked_dirty_entries: string[];
+  dirty_allowlist_source: typeof STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
+};
 
 type RuntimeMetadataReport = {
   executor_type?: string;
@@ -54,22 +71,12 @@ const execFile = promisify(execFileCallback);
 
 const terminalStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
 
-export const TASK5_EXPECTED_DIRTY_FILES = [
-  'scripts/p0-local-codex-dogfood.ts',
-  'package.json',
-  'README.md',
-  'tests/smoke/p0-local-codex-dogfood-script.test.ts',
-  'tests/run-worker/run-worker.test.ts',
-  'packages/domain/src/types.ts',
-  'packages/executor/src/local-codex-executor.ts',
-  'packages/executor/src/source-repo-guard.ts',
-  'packages/executor/src/local-codex-evidence.ts',
-  'packages/run-worker/src/run-worker.ts',
-  'tests/executor/local-codex-preflight.test.ts',
-  'tests/executor/source-repo-guard.test.ts',
+export const STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST';
+export const STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST = [
+  'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
+  '.superpowers/**',
 ] as const;
-
-const expectedDirtyFileSet = new Set<string>(TASK5_EXPECTED_DIRTY_FILES);
+const DANGEROUS_MODE_CONFIRMATION_ENV = 'FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE';
 
 const defaultRunCommand: CommandRunner = async (command, args, options = {}) => {
   const childOptions: Parameters<typeof execFile>[2] = { maxBuffer: 1024 * 1024 * 10 };
@@ -89,8 +96,6 @@ const defaultRunCommand: CommandRunner = async (command, args, options = {}) => 
 const isMainModule = (): boolean => process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 const nowIso = (): string => new Date().toISOString();
-
-const unique = (values: string[]): string[] => [...new Set(values)];
 
 const isTerminalStatus = (status: unknown): boolean => typeof status === 'string' && terminalStatuses.has(status);
 
@@ -127,18 +132,30 @@ export const evaluateLocalCodexDogfoodEnablement = (env: Env): {
   };
 };
 
-const porcelainPayload = (line: string): string => (line.length > 3 ? line.slice(3).trim() : line.trim());
+export const parseDirtySourceFiles = (porcelain: string): string[] => sourceDirtyEntriesFromPorcelain(porcelain);
 
-export const parseDirtySourceFiles = (porcelain: string): string[] =>
-  unique(
-    porcelain
-      .split('\n')
-      .map((line) => line.trimEnd())
-      .filter(Boolean)
-      .flatMap((line) => porcelainPayload(line).split(' -> '))
-      .map((path) => path.trim())
-      .filter(Boolean),
-  );
+const matchesStrictDirtyAllowlist = (path: string): boolean =>
+  STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST.some((pattern) => {
+    if (pattern.endsWith('/**')) {
+      const prefix = pattern.slice(0, -'/**'.length);
+
+      return path === prefix || path.startsWith(`${prefix}/`);
+    }
+
+    return path === pattern;
+  });
+
+const classifyStrictDirtySource = (dirtyFiles: string[], allowDirty: boolean): StrictDirtySourceSummary => {
+  const allowed_dirty_entries = allowDirty ? dirtyFiles.filter(matchesStrictDirtyAllowlist) : [];
+  const allowed = new Set(allowed_dirty_entries);
+  const blocked_dirty_entries = dirtyFiles.filter((path) => !allowed.has(path));
+
+  return {
+    allowed_dirty_entries,
+    blocked_dirty_entries,
+    dirty_allowlist_source: STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE,
+  };
+};
 
 const commandExists = async (runCommand: CommandRunner, command: string, cwd: string): Promise<boolean> => {
   try {
@@ -149,6 +166,89 @@ const commandExists = async (runCommand: CommandRunner, command: string, cwd: st
   }
 };
 
+const strictBlocker = (
+  code: StrictPreflightBlocker['code'],
+  message: string,
+  details?: Record<string, unknown>,
+): StrictPreflightBlocker => ({
+  code,
+  message,
+  ...(details === undefined ? {} : { details }),
+});
+
+const strictFailure = (input: {
+  repoPath: string;
+  blockers: StrictPreflightBlocker[];
+  dirtyFiles?: string[];
+  dirtySource?: StrictDirtySourceSummary;
+  unexpectedDirtyFiles?: string[];
+  worktreeProbePath?: string;
+}): PreflightResult => ({
+  ok: false,
+  repoPath: input.repoPath,
+  blockers: input.blockers,
+  message: input.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join('; '),
+  ...(input.dirtyFiles === undefined ? {} : { dirtyFiles: input.dirtyFiles }),
+  ...(input.dirtySource === undefined ? {} : { dirtySource: input.dirtySource }),
+  ...(input.unexpectedDirtyFiles === undefined ? {} : { unexpectedDirtyFiles: input.unexpectedDirtyFiles }),
+  ...(input.worktreeProbePath === undefined ? {} : { worktreeProbePath: input.worktreeProbePath }),
+});
+
+const checkDurableRepositoryAvailable = async (input: {
+  env: Env;
+  repoPath: string;
+  runCommand: CommandRunner;
+}): Promise<StrictPreflightBlocker | undefined> => {
+  if (input.env.FORGELOOP_DATABASE_URL?.trim() === undefined || input.env.FORGELOOP_DATABASE_URL.trim().length === 0) {
+    return undefined;
+  }
+
+  try {
+    await input.runCommand('pnpm', ['db:push'], {
+      cwd: input.repoPath,
+      env: { FORGELOOP_DATABASE_URL: input.env.FORGELOOP_DATABASE_URL },
+      timeoutMs: 60_000,
+    });
+
+    return undefined;
+  } catch (error) {
+    return strictBlocker('durable_repo_unavailable', 'Durable repository is unavailable for FORGELOOP_DATABASE_URL', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
+const probeWorktreeCreation = async (input: {
+  repoPath: string;
+  runCommand: CommandRunner;
+}): Promise<{ workspacePath: string; blocker?: StrictPreflightBlocker }> => {
+  const runSessionId = `strict-preflight-${Date.now()}`;
+  const workspacePath = worktreePathForRun(input.repoPath, runSessionId);
+
+  try {
+    await input.runCommand('git', ['worktree', 'add', '--detach', workspacePath, 'HEAD'], {
+      cwd: input.repoPath,
+      timeoutMs: 60_000,
+    });
+
+    return { workspacePath };
+  } catch (error) {
+    return {
+      workspacePath,
+      blocker: strictBlocker('worktree_create_failed', 'Unable to create isolated local Codex worktree', {
+        workspace_path: workspacePath,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    };
+  } finally {
+    await input.runCommand('git', ['worktree', 'remove', '--force', workspacePath], {
+      cwd: input.repoPath,
+      timeoutMs: 60_000,
+    }).catch(() => undefined);
+    await rm(workspacePath, { recursive: true, force: true }).catch(() => undefined);
+  }
+};
+
 export const preflightLocalCodexDogfood = async (input: {
   env: Env;
   repoPath: string;
@@ -156,22 +256,47 @@ export const preflightLocalCodexDogfood = async (input: {
 }): Promise<PreflightResult> => {
   const runCommand = input.runCommand ?? defaultRunCommand;
   const repoPath = resolve(input.repoPath);
+  const blockers: StrictPreflightBlocker[] = [];
+  let codexCommandAvailable = true;
+  let dirtyFiles: string[] | undefined;
+  let dirtySource: StrictDirtySourceSummary | undefined;
+  let worktreeProbePath: string | undefined;
 
   if (!(await commandExists(runCommand, 'git', repoPath))) {
-    return { ok: false, message: 'Missing required command: git' };
+    return strictFailure({
+      repoPath,
+      blockers: [strictBlocker('worktree_create_failed', 'Missing required command: git')],
+    });
   }
 
   if (!(await commandExists(runCommand, 'codex', repoPath))) {
-    return { ok: false, message: 'Missing required command: codex' };
+    codexCommandAvailable = false;
+    blockers.push(strictBlocker('missing_codex_command', 'Missing required command: codex'));
   }
 
-  try {
-    await runCommand('codex', ['login', 'status'], { cwd: repoPath, timeoutMs: 15_000 });
-  } catch {
-    return { ok: false, message: 'Codex runtime is not authenticated or ready for local execution' };
+  if (codexCommandAvailable) {
+    try {
+      await runCommand('codex', ['login', 'status'], { cwd: repoPath, timeoutMs: 15_000 });
+    } catch {
+      blockers.push(
+        strictBlocker('codex_not_authenticated', 'Codex runtime is not authenticated or ready for local execution'),
+      );
+    }
   }
 
-  let dirtyFiles: string[];
+  if (input.env[DANGEROUS_MODE_CONFIRMATION_ENV] !== '1') {
+    blockers.push(
+      strictBlocker(
+        'dangerous_mode_unconfirmed',
+        `Dangerous local Codex execution mode is unconfirmed; set ${DANGEROUS_MODE_CONFIRMATION_ENV}=1 to acknowledge --dangerously-bypass-approvals-and-sandbox.`,
+        {
+          required_env: DANGEROUS_MODE_CONFIRMATION_ENV,
+          actual_value: input.env[DANGEROUS_MODE_CONFIRMATION_ENV] ?? null,
+        },
+      ),
+    );
+  }
+
   try {
     const { stdout } = await runCommand('git', ['status', '--porcelain', '--untracked-files=all'], {
       cwd: repoPath,
@@ -179,39 +304,55 @@ export const preflightLocalCodexDogfood = async (input: {
     });
     dirtyFiles = parseDirtySourceFiles(stdout);
   } catch (error) {
-    return {
-      ok: false,
-      message: `Unable to inspect source checkout cleanliness: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    blockers.push(
+      strictBlocker('source_dirty_blocked', 'Unable to inspect source checkout cleanliness', {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    dirtyFiles = [];
   }
 
-  if (dirtyFiles.length === 0) {
-    return { ok: true, repoPath, dirtyFiles };
+  dirtySource = classifyStrictDirtySource(dirtyFiles, input.env.FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY === '1');
+  if (dirtySource.blocked_dirty_entries.length > 0) {
+    blockers.push(
+      strictBlocker('source_dirty_blocked', 'Source checkout is dirty', {
+        ...dirtySource,
+      }),
+    );
   }
 
-  if (input.env.FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY !== '1') {
-    return {
-      ok: false,
-      message: 'Source checkout is dirty; set FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY=1 only for Task 5 files.',
+  const durableRepoBlocker = await checkDurableRepositoryAvailable({ env: input.env, repoPath, runCommand });
+  if (durableRepoBlocker !== undefined) {
+    blockers.push(durableRepoBlocker);
+  }
+
+  const worktreeProbe = await probeWorktreeCreation({ repoPath, runCommand });
+  worktreeProbePath = worktreeProbe.workspacePath;
+  if (worktreeProbe.blocker !== undefined) {
+    blockers.push(worktreeProbe.blocker);
+  }
+
+  if (blockers.length > 0) {
+    return strictFailure({
+      repoPath,
+      blockers,
       dirtyFiles,
-    };
-  }
-
-  const unexpectedDirtyFiles = dirtyFiles.filter((path) => !expectedDirtyFileSet.has(path));
-  if (unexpectedDirtyFiles.length > 0) {
-    return {
-      ok: false,
-      message: `Dirty override refused; unexpected dirty files: ${unexpectedDirtyFiles.join(', ')}`,
-      dirtyFiles,
-      unexpectedDirtyFiles,
-    };
+      dirtySource,
+      unexpectedDirtyFiles: dirtySource.blocked_dirty_entries.length === 0 ? undefined : dirtySource.blocked_dirty_entries,
+      worktreeProbePath,
+    });
   }
 
   return {
     ok: true,
+    blockers: [],
     repoPath,
     dirtyFiles,
-    dirtyOverride: { allowed: true, dirtyFiles },
+    dirtySource,
+    worktreeProbePath,
+    ...(dirtySource.allowed_dirty_entries.length === 0
+      ? {}
+      : { dirtyOverride: { allowed: true as const, dirtyFiles: dirtySource.allowed_dirty_entries } }),
   };
 };
 
@@ -471,8 +612,17 @@ export const renderLocalCodexDogfoodReport = (input: {
   }
 
   if (input.preflight?.ok === false) {
-    lines.push(`- Preflight blocker: ${input.preflight.message}`);
-    if (input.preflight.dirtyFiles !== undefined) {
+    for (const blocker of input.preflight.blockers) {
+      lines.push(`- Strict preflight blocker: ${blocker.code} - ${blocker.message}`);
+      if (blocker.details !== undefined) {
+        lines.push(`  - Details: ${JSON.stringify(blocker.details)}`);
+      }
+    }
+    if (input.preflight.dirtySource !== undefined) {
+      lines.push(`- Allowed dirty entries: ${input.preflight.dirtySource.allowed_dirty_entries.join(', ')}`);
+      lines.push(`- Blocked dirty entries: ${input.preflight.dirtySource.blocked_dirty_entries.join(', ')}`);
+      lines.push(`- Dirty allowlist source: ${input.preflight.dirtySource.dirty_allowlist_source}`);
+    } else if (input.preflight.dirtyFiles !== undefined) {
       lines.push(`- Dirty files: ${input.preflight.dirtyFiles.join(', ')}`);
     }
   }

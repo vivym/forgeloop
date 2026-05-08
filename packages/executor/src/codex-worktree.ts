@@ -3,6 +3,8 @@ import { basename, join, resolve } from 'node:path';
 
 import type { LocalCodexEnvironment, WorkspacePrepareResult } from './local-codex-preflight.js';
 
+export const CODEX_RUN_WORKTREE_DIR = '.worktrees';
+
 const safePathSegment = (value: string): string => {
   const sanitized = value
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -20,8 +22,11 @@ const parseRegisteredWorktreePaths = (porcelain: string): string[] =>
     .map((line) => line.slice('worktree '.length).trim())
     .filter(Boolean);
 
+export const worktreeRootForRepo = (repoPath: string, workspaceRoot?: string): string =>
+  resolve(workspaceRoot ?? join(repoPath, CODEX_RUN_WORKTREE_DIR));
+
 export const worktreePathForRun = (repoPath: string, runSessionId: string, workspaceRoot?: string): string =>
-  join(resolve(workspaceRoot ?? join(repoPath, '.worktrees')), safePathSegment(runSessionId));
+  join(worktreeRootForRepo(repoPath, workspaceRoot), safePathSegment(runSessionId));
 
 export const cleanupExistingWorktreeForRun = async (
   environment: LocalCodexEnvironment,

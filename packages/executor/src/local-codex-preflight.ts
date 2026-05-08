@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 
 import type { ExecutorFailure, RunSpec } from '../../contracts/src/executor.js';
 import { preparePersistentGitWorktree } from './codex-worktree.js';
+import { sourceDirtyEntriesFromPorcelain } from './source-repo-guard.js';
 
 export type CommandChecker = (command: string) => Promise<boolean>;
 
@@ -71,13 +72,34 @@ export interface LocalCodexPreflightOptions {
 
 export interface LocalCodexPreflightSuccess {
   ok: true;
+  blockers: [];
   workspacePath: string;
   resolvedBaseRef: string;
+}
+
+export type StrictPreflightBlockerCode =
+  | 'missing_codex_command'
+  | 'codex_not_authenticated'
+  | 'dangerous_mode_unconfirmed'
+  | 'source_dirty_blocked'
+  | 'durable_repo_unavailable'
+  | 'worktree_create_failed';
+
+export interface StrictPreflightBlocker {
+  code: StrictPreflightBlockerCode;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface StrictPreflightResult {
+  ok: boolean;
+  blockers: StrictPreflightBlocker[];
 }
 
 export interface LocalCodexPreflightFailure {
   ok: false;
   failure: ExecutorFailure;
+  blockers: StrictPreflightBlocker[];
 }
 
 export type LocalCodexPreflightResult = LocalCodexPreflightSuccess | LocalCodexPreflightFailure;
@@ -87,14 +109,37 @@ export interface DefaultLocalCodexEnvironmentOptions {
   commandRunner?: CommandRunner;
 }
 
-const failure = (message: string, retryable = false): LocalCodexPreflightFailure => ({
+const failure = (
+  message: string,
+  retryable = false,
+  blockers: StrictPreflightBlocker[] = [],
+): LocalCodexPreflightFailure => ({
   ok: false,
   failure: {
     kind: 'preflight_failed',
     message,
     retryable,
   },
+  blockers,
 });
+
+const blockerFailure = (
+  code: StrictPreflightBlockerCode,
+  message: string,
+  details?: Record<string, unknown>,
+  retryable = false,
+): LocalCodexPreflightFailure =>
+  failure(
+    message,
+    retryable,
+    [
+      {
+        code,
+        message,
+        ...(details === undefined ? {} : { details }),
+      },
+    ],
+  );
 
 const execFileCommandRunner: CommandRunner = async (command, args, options) =>
   new Promise((resolve, reject) => {
@@ -227,11 +272,14 @@ export const runLocalCodexPreflight = async (
   }
 
   if (!(await environment.commandExists('codex'))) {
-    return failure('Missing required command: codex');
+    return blockerFailure('missing_codex_command', 'Missing required command: codex');
   }
 
   if (!(await environment.isCodexRuntimeReady(options.codexEnv === undefined ? undefined : { env: options.codexEnv }))) {
-    return failure('Codex runtime is not authenticated or ready for local execution');
+    return blockerFailure(
+      'codex_not_authenticated',
+      'Codex runtime is not authenticated or ready for local execution',
+    );
   }
 
   if (!(await environment.isGitRepo(runSpec.repo.local_path))) {
@@ -248,6 +296,26 @@ export const runLocalCodexPreflight = async (
     return failure(`Cannot resolve Git ref ${baseRef} in ${runSpec.repo.local_path}`);
   }
 
+  let dirtyEntries: string[];
+  try {
+    const { stdout } = await environment.runCommand('git', ['status', '--porcelain', '--untracked-files=all'], {
+      cwd: runSpec.repo.local_path,
+      maxBuffer: 1024 * 1024 * 10,
+    });
+    dirtyEntries = sourceDirtyEntriesFromPorcelain(stdout);
+  } catch (error) {
+    return blockerFailure('source_dirty_blocked', 'Unable to inspect source checkout cleanliness', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  if (dirtyEntries.length > 0) {
+    return blockerFailure('source_dirty_blocked', 'Source checkout is dirty', {
+      allowed_dirty_entries: [],
+      blocked_dirty_entries: dirtyEntries,
+    });
+  }
+
   const prepared = await environment.prepareWorkspace({
     repoPath: runSpec.repo.local_path,
     baseRef,
@@ -255,7 +323,12 @@ export const runLocalCodexPreflight = async (
   });
 
   if (!prepared.ok) {
-    return failure(`Persistent workspace preparation failed: ${prepared.message}`, true);
+    return blockerFailure(
+      'worktree_create_failed',
+      `Persistent workspace preparation failed: ${prepared.message}`,
+      { error: prepared.message },
+      true,
+    );
   }
 
   if (!(await environment.isWorkspaceClean(prepared.workspacePath))) {
@@ -264,6 +337,7 @@ export const runLocalCodexPreflight = async (
 
   return {
     ok: true,
+    blockers: [],
     workspacePath: prepared.workspacePath,
     resolvedBaseRef: baseRef,
   };

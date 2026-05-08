@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, readlink } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 
 import type { LocalCodexEnvironment } from './local-codex-preflight.js';
+import { CODEX_RUN_WORKTREE_DIR } from './codex-worktree.js';
 
 export interface SourceRepoSnapshot {
   repoPath: string;
@@ -34,7 +35,8 @@ const assertSafeRepoPath = (repoPath: string, path: string): string => {
 
 const splitNul = (value: string): string[] => value.split('\0').filter(Boolean);
 
-const isIgnoredRunWorktreePath = (path: string): boolean => path === '.worktrees' || path.startsWith('.worktrees/');
+export const isIgnoredRunWorktreePath = (path: string): boolean =>
+  path === CODEX_RUN_WORKTREE_DIR || path.startsWith(`${CODEX_RUN_WORKTREE_DIR}/`);
 
 const porcelainPayload = (line: string): string => (line.length > 3 ? line.slice(3) : line);
 
@@ -49,6 +51,20 @@ const normalizeSourcePorcelain = (porcelain: string): string =>
     .filter((line) => line.length > 0)
     .filter(porcelainLineIsSourceContent)
     .join('\n');
+
+const unique = (values: string[]): string[] => [...new Set(values)];
+
+export const sourceDirtyEntriesFromPorcelain = (porcelain: string): string[] =>
+  unique(
+    porcelain
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .flatMap((line) => porcelainPayload(line).split(' -> '))
+      .map((path) => path.trim())
+      .filter(Boolean)
+      .filter((path) => !isIgnoredRunWorktreePath(path)),
+  );
 
 const hashUntrackedPath = async (hash: ReturnType<typeof createHash>, repoPath: string, path: string) => {
   if (isIgnoredRunWorktreePath(path)) {
@@ -137,11 +153,12 @@ export const snapshotSourceRepoStatus = async (
     cwd: repoPath,
     maxBuffer: 1024 * 1024 * 10,
   });
+  const beforePorcelain = normalizeSourcePorcelain(stdout);
   const beforeDirtyFingerprint = await dirtyFingerprint(environment, repoPath, stdout);
 
   return {
     repoPath,
-    beforePorcelain: stdout,
+    beforePorcelain,
     beforeDirtyFingerprint,
   };
 };
@@ -165,17 +182,18 @@ export const verifySourceRepoUnchanged = async (
     cwd: snapshot.repoPath,
     maxBuffer: 1024 * 1024 * 10,
   });
+  const afterPorcelain = normalizeSourcePorcelain(stdout);
   const afterDirtyFingerprint = await dirtyFingerprint(environment, snapshot.repoPath, stdout);
 
   return {
     unchanged: !sourceRepoWasMutated({
       beforePorcelain: snapshot.beforePorcelain,
-      afterPorcelain: stdout,
+      afterPorcelain,
       beforeDirtyFingerprint: snapshot.beforeDirtyFingerprint,
       afterDirtyFingerprint,
     }),
     beforePorcelain: snapshot.beforePorcelain,
-    afterPorcelain: stdout,
+    afterPorcelain,
     beforeDirtyFingerprint: snapshot.beforeDirtyFingerprint,
     afterDirtyFingerprint,
   };

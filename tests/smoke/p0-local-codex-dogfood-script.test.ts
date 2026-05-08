@@ -31,6 +31,36 @@ const execGit = async (cwd: string, args: readonly string[]): Promise<string> =>
   return String(stdout);
 };
 
+const strictReadyEnv = {
+  FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1',
+  FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE: '1',
+};
+
+type DogfoodRunCommand = NonNullable<Parameters<typeof preflightLocalCodexDogfood>[0]['runCommand']>;
+
+const successfulStrictPreflightCommand: DogfoodRunCommand = async (
+  command,
+  args,
+) => {
+  if (command === 'codex') {
+    return { stdout: 'ok', stderr: '' };
+  }
+  if (command === 'git' && args[0] === 'status') {
+    return { stdout: '', stderr: '' };
+  }
+  if (command === 'git' && args[0] === 'rev-parse') {
+    return { stdout: 'abc123\n', stderr: '' };
+  }
+  if (command === 'git' && args[0] === 'worktree') {
+    return { stdout: '', stderr: '' };
+  }
+  if (command === 'pnpm' && args[0] === 'db:push') {
+    return { stdout: 'schema pushed\n', stderr: '' };
+  }
+
+  return { stdout: '', stderr: '' };
+};
+
 const createGitRepo = async (): Promise<{ repo: string; head: string }> => {
   const repo = await mkdtemp(join(tmpdir(), 'forgeloop-local-codex-dogfood-'));
   await execGit(repo, ['init', '-b', 'main']);
@@ -52,9 +82,9 @@ describe('p0 local Codex dogfood script helpers', () => {
     });
   });
 
-  it('preflight requires the Codex command and authenticated runtime', async () => {
+  it('preflight reports strict blocker codes for missing Codex and unauthenticated runtime', async () => {
     const missingCodex = await preflightLocalCodexDogfood({
-      env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' },
+      env: strictReadyEnv,
       repoPath: '/repo',
       runCommand: async (command) => {
         if (command === 'git') {
@@ -66,11 +96,11 @@ describe('p0 local Codex dogfood script helpers', () => {
 
     expect(missingCodex).toMatchObject({
       ok: false,
-      message: 'Missing required command: codex',
+      blockers: [{ code: 'missing_codex_command' }],
     });
 
     const unavailableRuntime = await preflightLocalCodexDogfood({
-      env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' },
+      env: strictReadyEnv,
       repoPath: '/repo',
       runCommand: async (command, args) => {
         if (command === 'git') {
@@ -85,51 +115,125 @@ describe('p0 local Codex dogfood script helpers', () => {
 
     expect(unavailableRuntime).toMatchObject({
       ok: false,
-      message: 'Codex runtime is not authenticated or ready for local execution',
+      blockers: [{ code: 'codex_not_authenticated' }],
     });
   });
 
-  it('preflight refuses dirty source checkouts unless the dirty override is set', async () => {
+  it('preflight reports strict blockers for unconfirmed dangerous mode, dirty source, durable repo, and worktree creation', async () => {
+    await expect(
+      preflightLocalCodexDogfood({
+        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' },
+        repoPath: '/repo',
+        runCommand: successfulStrictPreflightCommand,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      blockers: [{ code: 'dangerous_mode_unconfirmed' }],
+    });
+
+    await expect(
+      preflightLocalCodexDogfood({
+        env: strictReadyEnv,
+        repoPath: '/repo',
+        runCommand: async (command, args) => {
+          if (command === 'git' && args[0] === 'status') {
+            return { stdout: ' M README.md\n?? .worktrees/run-session/README.md\n', stderr: '' };
+          }
+
+          return successfulStrictPreflightCommand(command, args);
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      blockers: [
+        {
+          code: 'source_dirty_blocked',
+          details: {
+            allowed_dirty_entries: [],
+            blocked_dirty_entries: ['README.md'],
+            dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
+          },
+        },
+      ],
+    });
+
+    await expect(
+      preflightLocalCodexDogfood({
+        env: { ...strictReadyEnv, FORGELOOP_DATABASE_URL: 'postgresql://localhost:5432/forgeloop' },
+        repoPath: '/repo',
+        runCommand: async (command, args) => {
+          if (command === 'pnpm' && args[0] === 'db:push') {
+            throw new Error('database unavailable');
+          }
+
+          return successfulStrictPreflightCommand(command, args);
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      blockers: [{ code: 'durable_repo_unavailable' }],
+    });
+
+    await expect(
+      preflightLocalCodexDogfood({
+        env: strictReadyEnv,
+        repoPath: '/repo',
+        runCommand: async (command, args) => {
+          if (command === 'git' && args[0] === 'worktree' && args[1] === 'add') {
+            throw new Error('worktree add failed');
+          }
+
+          return successfulStrictPreflightCommand(command, args);
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      blockers: [{ code: 'worktree_create_failed' }],
+    });
+  });
+
+  it('preflight refuses dirty source checkouts unless the strict dogfood dirty allowlist matches', async () => {
     const result = await preflightLocalCodexDogfood({
-      env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' },
+      env: strictReadyEnv,
       repoPath: '/repo',
       runCommand: async (command, args) => {
-        if (command === 'codex') {
-          return { stdout: 'ok', stderr: '' };
-        }
         if (command === 'git' && args[0] === 'status') {
           return { stdout: ' M README.md\n', stderr: '' };
         }
-        return { stdout: '', stderr: '' };
+
+        return successfulStrictPreflightCommand(command, args);
       },
     });
 
     expect(result).toMatchObject({
       ok: false,
-      message: 'Source checkout is dirty; set FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY=1 only for Task 5 files.',
-      dirtyFiles: ['README.md'],
+      blockers: [
+        {
+          code: 'source_dirty_blocked',
+          details: {
+            allowed_dirty_entries: [],
+            blocked_dirty_entries: ['README.md'],
+          },
+        },
+      ],
     });
-  });
 
-  it('accepts dirty override only for the Task 5 file set and records the exact file list', async () => {
     const accepted = await preflightLocalCodexDogfood({
       env: {
-        FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1',
+        ...strictReadyEnv,
         FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY: '1',
       },
       repoPath: '/repo',
       runCommand: async (command, args) => {
-        if (command === 'codex') {
-          return { stdout: 'ok', stderr: '' };
-        }
         if (command === 'git' && args[0] === 'status') {
           return {
             stdout:
-              ' M README.md\n?? scripts/p0-local-codex-dogfood.ts\n M packages/executor/src/local-codex-executor.ts\n M tests/executor/local-codex-preflight.test.ts\n',
+              ' M docs/superpowers/reports/p0-dogfood-work-items-completion.md\n?? .superpowers/state.json\n?? .worktrees/run-session/README.md\n',
             stderr: '',
           };
         }
-        return { stdout: '', stderr: '' };
+
+        return successfulStrictPreflightCommand(command, args);
       },
     });
 
@@ -138,11 +242,17 @@ describe('p0 local Codex dogfood script helpers', () => {
       dirtyOverride: {
         allowed: true,
         dirtyFiles: [
-          'README.md',
-          'scripts/p0-local-codex-dogfood.ts',
-          'packages/executor/src/local-codex-executor.ts',
-          'tests/executor/local-codex-preflight.test.ts',
+          'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
+          '.superpowers/state.json',
         ],
+      },
+      dirtySource: {
+        allowed_dirty_entries: [
+          'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
+          '.superpowers/state.json',
+        ],
+        blocked_dirty_entries: [],
+        dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
       },
     });
     expect(
@@ -155,34 +265,50 @@ describe('p0 local Codex dogfood script helpers', () => {
         sourceGuardInjection: undefined,
       }),
     ).toContain(
-      '- Dirty override: ENABLED for README.md, scripts/p0-local-codex-dogfood.ts, packages/executor/src/local-codex-executor.ts, tests/executor/local-codex-preflight.test.ts',
+      '- Dirty override: ENABLED for docs/superpowers/reports/p0-dogfood-work-items-completion.md, .superpowers/state.json',
     );
 
     const refused = await preflightLocalCodexDogfood({
       env: {
-        FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1',
+        ...strictReadyEnv,
         FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY: '1',
       },
       repoPath: '/repo',
       runCommand: async (command, args) => {
-        if (command === 'codex') {
-          return { stdout: 'ok', stderr: '' };
-        }
         if (command === 'git' && args[0] === 'status') {
           return { stdout: ' M packages/workflow/src/activities.ts\n', stderr: '' };
         }
-        return { stdout: '', stderr: '' };
+
+        return successfulStrictPreflightCommand(command, args);
       },
     });
 
     expect(refused).toMatchObject({
       ok: false,
-      unexpectedDirtyFiles: ['packages/workflow/src/activities.ts'],
+      blockers: [
+        {
+          code: 'source_dirty_blocked',
+          details: {
+            blocked_dirty_entries: ['packages/workflow/src/activities.ts'],
+          },
+        },
+      ],
     });
+    expect(
+      renderLocalCodexDogfoodReport({
+        status: 'FAIL',
+        preflight: refused,
+        error: 'strict preflight failed',
+      }),
+    ).toContain('- Strict preflight blocker: source_dirty_blocked');
   });
 
-  it('parses porcelain dirty paths including renames', () => {
-    expect(parseDirtySourceFiles(' M README.md\n?? scripts/p0-local-codex-dogfood.ts\nR  old.ts -> package.json\n')).toEqual([
+  it('parses porcelain dirty paths including renames while ignoring .worktrees', () => {
+    expect(
+      parseDirtySourceFiles(
+        ' M README.md\n?? scripts/p0-local-codex-dogfood.ts\nR  old.ts -> package.json\n?? .worktrees/run-session/README.md\n',
+      ),
+    ).toEqual([
       'README.md',
       'scripts/p0-local-codex-dogfood.ts',
       'old.ts',

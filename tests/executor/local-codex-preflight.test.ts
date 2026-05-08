@@ -164,6 +164,9 @@ describe('runLocalCodexPreflight', () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      blockers: [{ code: 'missing_codex_command' }],
+    });
     expect(result.failure?.message).toContain('Missing required command: codex');
   });
 
@@ -177,7 +180,39 @@ describe('runLocalCodexPreflight', () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      blockers: [{ code: 'codex_not_authenticated' }],
+    });
     expect(result.failure?.message).toContain('Codex runtime is not authenticated or ready');
+  });
+
+  it('fails strict preflight when the source checkout has unexpected dirtiness', async () => {
+    const repo = await makeTempDir();
+    const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
+      artifactRoot: await makeTempDir(),
+      environment: createPassingEnvironment({
+        runCommand: async (command, args) => {
+          if (command === 'git' && args[0] === 'status') {
+            return { stdout: ' M README.md\n?? .worktrees/run-session/README.md\n', stderr: '' };
+          }
+
+          return { stdout: '', stderr: '' };
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      blockers: [
+        {
+          code: 'source_dirty_blocked',
+          details: {
+            blocked_dirty_entries: ['README.md'],
+          },
+        },
+      ],
+    });
+    expect(result.failure?.message).toContain('Source checkout is dirty');
   });
 
   it('default readiness check uses Codex login status without exposing command output', async () => {
@@ -247,6 +282,9 @@ describe('runLocalCodexPreflight', () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      blockers: [{ code: 'worktree_create_failed' }],
+    });
     expect(result.failure?.message).toContain('git worktree add failed');
   });
 
@@ -1147,7 +1185,7 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
-  it('returns preflight failure and skips runner when source repo snapshot fails', async () => {
+  it('returns preflight failure and skips runner when source checkout cleanliness cannot be inspected', async () => {
     const { repo, head } = await createGitRepo();
     const baseEnvironment = createGitBackedTestEnvironment(await makeTempDir());
     const baseRunCommand = baseEnvironment.runCommand;
@@ -1185,7 +1223,7 @@ describe('runLocalCodexExecutor', () => {
       status: 'failed',
       failure: {
         kind: 'preflight_failed',
-        message: expect.stringContaining('Source repo status snapshot failed'),
+        message: expect.stringContaining('Unable to inspect source checkout cleanliness'),
         retryable: false,
       },
     });
