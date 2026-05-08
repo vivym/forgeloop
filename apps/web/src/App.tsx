@@ -336,11 +336,8 @@ export function App() {
     if (!workItemId) return;
     const requestId = ++refreshRequestIdRef.current;
     await runAction('Workbench refreshed', async () => {
-      const [cockpitResponse, timelineResponse, evidenceChainResponse] = await Promise.all([
-        api.getCockpit(workItemId),
-        api.getTimeline(workItemId),
-        api.getEvidenceChain(workItemId),
-      ]);
+      const evidenceChainRequest = api.getEvidenceChain(workItemId).catch(() => null);
+      const [cockpitResponse, timelineResponse] = await Promise.all([api.getCockpit(workItemId), api.getTimeline(workItemId)]);
       if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
       const spec = cockpitResponse.current_spec;
       const plan = cockpitResponse.current_plan;
@@ -351,7 +348,7 @@ export function App() {
       if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
       setCockpit(cockpitResponse);
       setTimeline(timelineResponse);
-      setEvidenceChain(evidenceChainResponse);
+      setEvidenceChain(null);
       setSpecRevisions(nextSpecRevisions);
       setPlanRevisions(nextPlanRevisions);
       const pkg = cockpitResponse.packages?.[0];
@@ -360,6 +357,10 @@ export function App() {
       setSelectedRunId((current) => (current && cockpitResponse.run_sessions?.some((item) => item.id === current) ? current : (run?.id ?? '')));
       const review = cockpitResponse.review_packets?.[0];
       setSelectedReviewId((current) => (current && cockpitResponse.review_packets?.some((item) => item.id === current) ? current : (review?.id ?? '')));
+      void evidenceChainRequest.then((evidenceChainResponse) => {
+        if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
+        setEvidenceChain(evidenceChainResponse);
+      });
     });
   }
 

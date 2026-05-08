@@ -39,20 +39,28 @@ describe('evidence chain state helpers', () => {
         source: 'review_packet',
         objectType: 'review_packet',
         objectId: 'review-current',
+        links: [{ object_type: 'run_session', object_id: 'run-current', relationship: 'generated_by' }],
       }),
       evidenceItem({
         id: 'current-run',
         source: 'run_event',
         objectType: 'run_session',
         objectId: 'run-current',
-        links: [{ object_type: 'review_packet', object_id: 'review-current', relationship: 'generated_by' }],
+        links: [{ object_type: 'execution_package', object_id: 'package-current', relationship: 'belongs_to' }],
+      }),
+      evidenceItem({
+        id: 'current-artifact',
+        source: 'artifact',
+        objectType: 'artifact',
+        objectId: 'artifact-current',
+        links: [{ object_type: 'run_session', object_id: 'run-current', relationship: 'generated_by' }],
       }),
     ]);
 
     const groups = groupEvidenceChainItems(response);
 
     expect(groups.map((group) => group.label)).toEqual(['Current focus', 'Superseded / history']);
-    expect(groups[0]?.items.map((item) => item.id)).toEqual(['current-review', 'current-run']);
+    expect(groups[0]?.items.map((item) => item.id)).toEqual(['current-review', 'current-run', 'current-artifact']);
     expect(groups[1]?.items.map((item) => item.id)).toEqual(['superseded-run']);
   });
 

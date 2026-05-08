@@ -150,9 +150,31 @@ describe('run console browser e2e', () => {
     },
     60_000,
   );
+
+  it(
+    'keeps the workbench usable when the evidence chain request fails',
+    async () => {
+      const vite = await startWeb('http://api.local');
+      viteServers.push(vite);
+
+      const { browser, process, profileDir } = await launchChromiumOverCdp();
+      browsers.push(browser);
+      browserProcesses.push(process);
+      browserProfileDirs.push(profileDir);
+      const page = await browser.newPage({ viewport: viewports[0] });
+      await routeEvidenceWorkbench(page, { failEvidenceChain: true });
+
+      await page.goto(requireViteUrl(vite));
+
+      await expectPage(page.getByText('Evidence Chain Workbench', { exact: false }).first()).toBeVisible();
+      await expectPage(page.getByText('Completion')).toBeVisible();
+      await expectPage(page.getByTestId('evidence-chain').getByText('No evidence chain loaded')).toBeVisible();
+    },
+    60_000,
+  );
 });
 
-async function routeEvidenceWorkbench(page: Page): Promise<void> {
+async function routeEvidenceWorkbench(page: Page, options: { failEvidenceChain?: boolean } = {}): Promise<void> {
   const now = '2026-05-08T00:00:00.000Z';
   const workItem = {
     id: 'work-item-1',
@@ -273,7 +295,11 @@ async function routeEvidenceWorkbench(page: Page): Promise<void> {
     if (path === '/work-items') return route.fulfill({ json: [workItem] });
     if (path === '/work-items/work-item-1/cockpit') return route.fulfill({ json: cockpit });
     if (path === '/work-items/work-item-1/timeline') return route.fulfill({ json: [] });
-    if (path === '/work-items/work-item-1/evidence-chain') return route.fulfill({ json: evidenceChain });
+    if (path === '/work-items/work-item-1/evidence-chain') {
+      return options.failEvidenceChain
+        ? route.fulfill({ status: 503, json: { message: 'Evidence Chain unavailable' } })
+        : route.fulfill({ json: evidenceChain });
+    }
     if (path === '/specs/spec-1/revisions') return route.fulfill({ json: [] });
     if (path === '/plans/plan-1/revisions') return route.fulfill({ json: [] });
     return route.fulfill({ status: 404, json: { message: `Unhandled test route ${path}` } });

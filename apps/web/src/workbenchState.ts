@@ -74,11 +74,12 @@ export interface EvidenceChainItemGroup {
 export const groupEvidenceChainItems = (response: EvidenceChainResponse | null | undefined): EvidenceChainItemGroup[] => {
   if (!response) return [];
   const focusReviewPacketIds = new Set(response.focus.review_packet_ids);
+  const currentObjectKeys = currentFocusObjectKeys(response, focusReviewPacketIds);
   const current: EvidenceChainItem[] = [];
   const history: EvidenceChainItem[] = [];
 
   for (const item of response.items) {
-    if (isCurrentFocusEvidence(item, focusReviewPacketIds)) current.push(item);
+    if (isCurrentFocusEvidence(item, currentObjectKeys)) current.push(item);
     else history.push(item);
   }
 
@@ -116,14 +117,33 @@ export const evidenceChainDisplayItem = (item: EvidenceChainItem): EvidenceChain
   };
 };
 
-const isCurrentFocusEvidence = (item: EvidenceChainItem, focusReviewPacketIds: Set<string>): boolean => {
-  if (focusReviewPacketIds.size === 0) return !isHistoryEvidence(item);
-  if (item.subject.object_type === 'review_packet' && focusReviewPacketIds.has(item.subject.object_id)) return true;
-  return item.links.some((link) => link.object_type === 'review_packet' && focusReviewPacketIds.has(link.object_id));
+const currentFocusObjectKeys = (response: EvidenceChainResponse, focusReviewPacketIds: Set<string>): Set<string> => {
+  const keys = new Set([...focusReviewPacketIds].map((id) => objectKey('review_packet', id)));
+
+  for (const item of response.items) {
+    const refs = [item.subject, ...item.links];
+    if (!refs.some((ref) => ref.object_type === 'review_packet' && focusReviewPacketIds.has(ref.object_id))) continue;
+
+    for (const ref of refs) {
+      if (ref.object_type === 'review_packet' || ref.object_type === 'run_session') {
+        keys.add(objectKey(ref.object_type, ref.object_id));
+      }
+    }
+  }
+
+  return keys;
+};
+
+const isCurrentFocusEvidence = (item: EvidenceChainItem, currentObjectKeys: Set<string>): boolean => {
+  if (currentObjectKeys.size === 0) return !isHistoryEvidence(item);
+  if (currentObjectKeys.has(objectKey(item.subject.object_type, item.subject.object_id))) return true;
+  return item.links.some((link) => currentObjectKeys.has(objectKey(link.object_type, link.object_id)));
 };
 
 const isHistoryEvidence = (item: EvidenceChainItem): boolean =>
   item.risk_flags.some((flag) => flag === 'superseded_run' || flag === 'stale_review_packet' || flag === 'changes_requested');
+
+const objectKey = (objectType: string, objectId: string): string => `${objectType}:${objectId}`;
 
 const labelForToken = (value: string): string => value.replace(/_/g, ' ');
 
