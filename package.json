@@ -14,7 +14,8 @@
     "db:push": "drizzle-kit push --config packages/db/drizzle.config.ts",
     "e2e:run-console": "vitest run tests/e2e/run-console.e2e.test.ts",
     "smoke:p0": "vitest run tests/smoke",
-    "dogfood:p0": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/p0-dogfood.ts"
+    "dogfood:p0": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/p0-dogfood.ts",
+    "dogfood:p0:durable": "tsx scripts/p0-durable-dogfood.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",

@@ -3,6 +3,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import type { INestApplication } from '@nestjs/common';
@@ -19,8 +20,8 @@ import type {
   Spec,
   SpecRevision,
   WorkItem,
-} from '@forgeloop/domain';
-import { transitionExecutionPackage, transitionRunSession } from '@forgeloop/domain';
+} from '../packages/domain/src';
+import { transitionExecutionPackage, transitionRunSession } from '../packages/domain/src';
 
 import { AppModule } from '../apps/control-plane-api/src/app.module';
 import {
@@ -36,6 +37,8 @@ import { FakeCodexSessionDriver, type FakeCodexScriptItem, RunWorker } from '../
 const execFile = promisify(execFileCallback);
 
 type JsonObject = Record<string, unknown>;
+
+export type DogfoodDurabilityMode = 'volatile_demo' | 'durable';
 
 type PublicRunEvent = {
   cursor: string;
@@ -55,11 +58,30 @@ type DogfoodResult = {
 
 type CheckStatus = 'passed' | 'failed' | 'skipped';
 
-type VerificationCheck = {
+export type VerificationCheck = {
   label: string;
   status: CheckStatus;
   details: string[];
 };
+
+export type PublicApiAuthEvidence = {
+  durablePublicApiHeaderAuth: boolean;
+  durableSseStreamTokenAuth: boolean;
+  volatileActorFallback: boolean;
+};
+
+type DogfoodRequestInit = {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: JsonObject;
+};
+
+type DogfoodRequest = {
+  path: string;
+  init: DogfoodRequestInit;
+};
+
+const actorHeaderName = 'X-Forgeloop-Actor-Id';
 
 const reportPath = resolve(process.env.FORGELOOP_REPORT_PATH ?? 'docs/superpowers/reports/p0-delivery-loop-verification.md');
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
@@ -82,6 +104,153 @@ const noopRunWorker = {
 } as RunWorker;
 
 const isObject = (value: unknown): value is JsonObject => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const durableModeFromEnv = (): DogfoodDurabilityMode => (databaseUrl === undefined || databaseUrl.length === 0 ? 'volatile_demo' : 'durable');
+
+const actorHeaders = (mode: DogfoodDurabilityMode, actorId: string): Record<string, string> =>
+  mode === 'durable' ? { [actorHeaderName]: actorId } : {};
+
+const maybeJsonHeaders = (body: JsonObject | undefined, headers: Record<string, string>): Record<string, string> =>
+  body === undefined ? headers : { 'content-type': 'application/json', ...headers };
+
+const runEventsPath = (
+  runSessionId: string,
+  options: { mode: DogfoodDurabilityMode; actorId: string; after?: string; streamToken?: string },
+): string => {
+  const params = new URLSearchParams();
+  if (options.mode === 'volatile_demo') {
+    params.set('actor_id', options.actorId);
+  }
+  if (options.streamToken !== undefined) {
+    params.set('stream_token', options.streamToken);
+  }
+  if (options.after !== undefined) {
+    params.set('after', options.after);
+  }
+  const query = params.toString();
+  return `/run-sessions/${encodeURIComponent(runSessionId)}/events${query.length === 0 ? '' : `?${query}`}`;
+};
+
+export const buildRunEventListRequest = (
+  runSessionId: string,
+  options: { mode: DogfoodDurabilityMode; actorId: string; after?: string },
+): DogfoodRequest => ({
+  path: runEventsPath(runSessionId, options),
+  init: { headers: actorHeaders(options.mode, options.actorId) },
+});
+
+export const buildRunPackageRequest = (
+  packageId: string,
+  options: { mode: DogfoodDurabilityMode; actorId: string },
+): DogfoodRequest => {
+  const body = { requested_by_actor_id: options.actorId, workflow_only: true, executor_type: 'mock' };
+  return {
+    path: `/execution-packages/${encodeURIComponent(packageId)}/run`,
+    init: {
+      method: 'POST',
+      headers: actorHeaders(options.mode, options.actorId),
+      body,
+    },
+  };
+};
+
+export const buildRunInputRequest = (
+  runSessionId: string,
+  options: { mode: DogfoodDurabilityMode; actorId: string; message: string },
+): DogfoodRequest => {
+  const body = options.mode === 'durable' ? { message: options.message } : { actor_id: options.actorId, message: options.message };
+  return {
+    path: `/run-sessions/${encodeURIComponent(runSessionId)}/input`,
+    init: {
+      method: 'POST',
+      headers: actorHeaders(options.mode, options.actorId),
+      body,
+    },
+  };
+};
+
+export const buildRunControlRequest = (
+  runSessionId: string,
+  command: 'cancel' | 'resume',
+  options: { mode: DogfoodDurabilityMode; actorId: string; reason: string },
+): DogfoodRequest => {
+  const body = options.mode === 'durable' ? { reason: options.reason } : { actor_id: options.actorId, reason: options.reason };
+  return {
+    path: `/run-sessions/${encodeURIComponent(runSessionId)}/${command}`,
+    init: {
+      method: 'POST',
+      headers: actorHeaders(options.mode, options.actorId),
+      body,
+    },
+  };
+};
+
+export const buildRunEventStreamTokenRequest = (
+  runSessionId: string,
+  options: { mode: DogfoodDurabilityMode; actorId: string },
+): DogfoodRequest => {
+  const body = options.mode === 'durable' ? undefined : { actor_id: options.actorId };
+  return {
+    path: `/run-sessions/${encodeURIComponent(runSessionId)}/events/stream-token`,
+    init: {
+      method: 'POST',
+      headers: actorHeaders(options.mode, options.actorId),
+      ...(body === undefined ? {} : { body }),
+    },
+  };
+};
+
+export const buildRunEventStreamRequest = (
+  apiUrl: string,
+  runSessionId: string,
+  options: { mode: DogfoodDurabilityMode; actorId: string; after?: string; streamToken?: string },
+): { url: string; headers: Record<string, string> } => {
+  const path =
+    options.mode === 'durable'
+      ? runEventsPath(runSessionId, { ...options, streamToken: options.streamToken })
+      : runEventsPath(runSessionId, options);
+  return {
+    url: `${apiUrl}${path.replace('/events', '/events/stream')}`,
+    headers: actorHeaders(options.mode, options.actorId),
+  };
+};
+
+export const publicApiAuthChecks = (mode: DogfoodDurabilityMode, evidence: PublicApiAuthEvidence): VerificationCheck[] => {
+  if (mode === 'durable') {
+    return [
+      {
+        label: 'Durable public API actor header auth',
+        status: evidence.durablePublicApiHeaderAuth ? 'passed' : 'failed',
+        details: [
+          evidence.durablePublicApiHeaderAuth
+            ? 'Run, event backfill, input, cancel, and resume public APIs were exercised with X-Forgeloop-Actor-Id.'
+            : 'Durable public API actor-header flow was not exercised.',
+        ],
+      },
+      {
+        label: 'Durable SSE stream-token auth',
+        status: evidence.durableSseStreamTokenAuth ? 'passed' : 'failed',
+        details: [
+          evidence.durableSseStreamTokenAuth
+            ? 'SSE first requested a stream token with X-Forgeloop-Actor-Id and opened the stream with stream_token.'
+            : 'Durable SSE stream-token flow was not exercised.',
+        ],
+      },
+    ];
+  }
+
+  return [
+    {
+      label: 'Volatile public API actor fallback',
+      status: evidence.volatileActorFallback ? 'passed' : 'failed',
+      details: [
+        evidence.volatileActorFallback
+          ? 'Volatile demo public APIs were exercised with legacy body/query actor fallback.'
+          : 'Volatile demo actor fallback was not exercised.',
+      ],
+    },
+  ];
+};
 
 const stringField = (value: JsonObject, field: string): string => {
   const raw = value[field];
@@ -111,11 +280,11 @@ const makeClock = (start: string): (() => string) => {
 const requestJson = async (
   apiUrl: string,
   path: string,
-  options: { method?: string; body?: JsonObject } = {},
+  options: { method?: string; body?: JsonObject; headers?: Record<string, string> } = {},
 ): Promise<JsonObject> => {
   const response = await fetch(`${apiUrl}${path}`, {
     method: options.method ?? 'GET',
-    headers: options.body === undefined ? undefined : { 'content-type': 'application/json' },
+    headers: maybeJsonHeaders(options.body, options.headers ?? {}),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const text = await response.text();
@@ -131,6 +300,36 @@ const requestJson = async (
   return payload;
 };
 
+const requestBuiltJson = (apiUrl: string, request: DogfoodRequest): Promise<JsonObject> =>
+  requestJson(apiUrl, request.path, {
+    method: request.init.method,
+    body: request.init.body,
+    headers: request.init.headers,
+  });
+
+export const requestRunEventStreamToken = async (
+  apiUrl: string,
+  runSessionId: string,
+  options: { mode: DogfoodDurabilityMode; actorId: string; fetchImpl?: typeof fetch },
+): Promise<string> => {
+  const request = buildRunEventStreamTokenRequest(runSessionId, options);
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const response = await fetchImpl(`${apiUrl}${request.path}`, {
+    method: request.init.method ?? 'POST',
+    headers: { 'content-type': 'application/json', ...(request.init.headers ?? {}) },
+    body: request.init.body === undefined ? undefined : JSON.stringify(request.init.body),
+  });
+  const text = await response.text();
+  const payload = text.length === 0 ? {} : JSON.parse(text);
+  if (!response.ok) {
+    throw new Error(`POST ${request.path} failed with ${response.status}: ${text}`);
+  }
+  if (!isObject(payload) || typeof payload.token !== 'string' || payload.token.trim().length === 0) {
+    throw new Error('Malformed run event stream token response');
+  }
+  return payload.token;
+};
+
 const runCommand = async (
   command: string,
   args: string[],
@@ -144,21 +343,22 @@ const runCommand = async (
   return { stdout: stdout.trim(), stderr: stderr.trim() };
 };
 
-const eventQuery = (after?: string): string => {
-  const params = new URLSearchParams({ actor_id: actorOwner });
-  if (after !== undefined) {
-    params.set('after', after);
+const listRunEvents = async (
+  apiUrl: string,
+  runSessionId: string,
+  after: string | undefined,
+  mode: DogfoodDurabilityMode,
+  evidence?: PublicApiAuthEvidence,
+): Promise<PublicRunEvent[]> => {
+  const request = buildRunEventListRequest(runSessionId, { mode, actorId: actorOwner, ...(after === undefined ? {} : { after }) });
+  if (mode === 'durable') {
+    evidence && (evidence.durablePublicApiHeaderAuth = true);
+  } else {
+    evidence && (evidence.volatileActorFallback = true);
   }
-  return params.toString();
-};
-
-const listRunEvents = async (apiUrl: string, runSessionId: string, after?: string): Promise<PublicRunEvent[]> => {
-  const response = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}/events?${eventQuery(after)}`);
+  const response = await requestBuiltJson(apiUrl, request);
   return arrayField(response, 'events') as PublicRunEvent[];
 };
-
-const eventSourceUrl = (apiUrl: string, runSessionId: string, after?: string): string =>
-  `${apiUrl}/run-sessions/${encodeURIComponent(runSessionId)}/events/stream?${eventQuery(after)}`;
 
 const parseSseData = (buffer: string): { events: PublicRunEvent[]; remaining: string } => {
   const events: PublicRunEvent[] = [];
@@ -186,15 +386,31 @@ const waitForSseEvent = async (
   apiUrl: string,
   runSessionId: string,
   predicate: (event: PublicRunEvent) => boolean,
-  options: { after?: string; label: string; timeoutMs?: number },
+  options: { after?: string; label: string; timeoutMs?: number; mode: DogfoodDurabilityMode; evidence?: PublicApiAuthEvidence },
 ): Promise<PublicRunEvent> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 5_000);
   let buffer = '';
 
   try {
-    const response = await fetch(eventSourceUrl(apiUrl, runSessionId, options.after), {
-      headers: { accept: 'text/event-stream' },
+    const streamToken =
+      options.mode === 'durable'
+        ? await requestRunEventStreamToken(apiUrl, runSessionId, { mode: options.mode, actorId: actorOwner })
+        : undefined;
+    const streamRequest = buildRunEventStreamRequest(apiUrl, runSessionId, {
+      mode: options.mode,
+      actorId: actorOwner,
+      ...(options.after === undefined ? {} : { after: options.after }),
+      ...(streamToken === undefined ? {} : { streamToken }),
+    });
+    if (options.mode === 'durable') {
+      options.evidence && (options.evidence.durableSseStreamTokenAuth = true);
+    } else {
+      options.evidence && (options.evidence.volatileActorFallback = true);
+    }
+
+    const response = await fetch(streamRequest.url, {
+      headers: { accept: 'text/event-stream', ...streamRequest.headers },
       signal: controller.signal,
     });
     if (!response.ok || response.body === null) {
@@ -234,14 +450,14 @@ const waitForEvent = async (
   apiUrl: string,
   runSessionId: string,
   predicate: (event: PublicRunEvent) => boolean,
-  options: { after?: string; label: string; timeoutMs?: number },
+  options: { after?: string; label: string; timeoutMs?: number; mode: DogfoodDurabilityMode; evidence?: PublicApiAuthEvidence },
 ): Promise<PublicRunEvent> => {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? 5_000;
   const seen = new Set<string>();
 
   for (;;) {
-    const events = await listRunEvents(apiUrl, runSessionId, options.after);
+    const events = await listRunEvents(apiUrl, runSessionId, options.after, options.mode, options.evidence);
     for (const event of events) {
       if (!seen.has(event.cursor)) {
         seen.add(event.cursor);
@@ -264,6 +480,8 @@ const waitForRunStatus = async (
   runSessionId: string,
   predicate: (status: string) => boolean,
   label: string,
+  mode: DogfoodDurabilityMode,
+  evidence?: PublicApiAuthEvidence,
 ): Promise<JsonObject> => {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const runSession = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}`);
@@ -275,7 +493,7 @@ const waitForRunStatus = async (
   }
 
   const latest = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}`);
-  const events = await listRunEvents(apiUrl, runSessionId);
+  const events = await listRunEvents(apiUrl, runSessionId, undefined, mode, evidence);
   const lastEvent = events.at(-1);
   throw new Error(
     `Timed out waiting for ${label} on ${runSessionId}; latest status=${String(latest.status)} summary=${String(
@@ -286,7 +504,7 @@ const waitForRunStatus = async (
 
 const createApiApp = async (
   repository: P0Repository,
-  options: { durabilityMode?: 'volatile_demo' | 'durable' } = {},
+  options: { durabilityMode?: DogfoodDurabilityMode } = {},
 ): Promise<{ app: INestApplication; apiUrl: string }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(P0_REPOSITORY)
@@ -484,15 +702,18 @@ const createReadyPackage = async (apiUrl: string, planRevisionId: string, label:
   return packageId;
 };
 
-const runPackage = async (apiUrl: string, packageId: string): Promise<string> => {
-  const run = await requestJson(apiUrl, `/execution-packages/${encodeURIComponent(packageId)}/run`, {
-    method: 'POST',
-    body: {
-      requested_by_actor_id: actorOwner,
-      workflow_only: true,
-      executor_type: 'mock',
-    },
-  });
+const runPackage = async (
+  apiUrl: string,
+  packageId: string,
+  mode: DogfoodDurabilityMode,
+  evidence?: PublicApiAuthEvidence,
+): Promise<string> => {
+  const run = await requestBuiltJson(apiUrl, buildRunPackageRequest(packageId, { mode, actorId: actorOwner }));
+  if (mode === 'durable') {
+    evidence && (evidence.durablePublicApiHeaderAuth = true);
+  } else {
+    evidence && (evidence.volatileActorFallback = true);
+  }
   if (run.status !== 'accepted') {
     throw new Error(`Run command did not return accepted: ${JSON.stringify(run)}`);
   }
@@ -520,11 +741,15 @@ const runControlCommand = async (
   runSessionId: string,
   command: 'cancel' | 'resume',
   reason: string,
+  mode: DogfoodDurabilityMode,
+  evidence?: PublicApiAuthEvidence,
 ): Promise<string> => {
-  const response = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}/${command}`, {
-    method: 'POST',
-    body: { actor_id: actorOwner, reason },
-  });
+  const response = await requestBuiltJson(apiUrl, buildRunControlRequest(runSessionId, command, { mode, actorId: actorOwner, reason }));
+  if (mode === 'durable') {
+    evidence && (evidence.durablePublicApiHeaderAuth = true);
+  } else {
+    evidence && (evidence.volatileActorFallback = true);
+  }
   if (response.status !== 'accepted' || response.command_type !== command) {
     throw new Error(`${command} command was not accepted: ${JSON.stringify(response)}`);
   }
@@ -545,8 +770,14 @@ const reviewPacketIdForRun = async (repository: P0Repository, runSessionId: stri
   return packet.id;
 };
 
-const assertFinalEvidence = async (apiUrl: string, repository: P0Repository, runSessionId: string): Promise<string> => {
-  const runSession = await waitForRunStatus(apiUrl, runSessionId, (status) => status === 'succeeded', 'terminal success');
+const assertFinalEvidence = async (
+  apiUrl: string,
+  repository: P0Repository,
+  runSessionId: string,
+  mode: DogfoodDurabilityMode,
+  evidence?: PublicApiAuthEvidence,
+): Promise<string> => {
+  const runSession = await waitForRunStatus(apiUrl, runSessionId, (status) => status === 'succeeded', 'terminal success', mode, evidence);
   const changedFiles = arrayField(runSession, 'changed_files');
   const checks = arrayField(runSession, 'check_results');
   const artifacts = arrayField(runSession, 'artifacts');
@@ -594,21 +825,31 @@ const assertRepositoryFinalEvidence = async (repository: P0Repository, runSessio
   }
 };
 
-const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, projectId: string): Promise<DogfoodResult> => {
+const dogfoodLiveInputRun = async (
+  apiUrl: string,
+  repository: P0Repository,
+  projectId: string,
+  mode: DogfoodDurabilityMode,
+  evidence: PublicApiAuthEvidence,
+): Promise<DogfoodResult> => {
   const notes: string[] = [];
   const planRevisionId = await createApprovedPlan(apiUrl, projectId, 'live input');
   const packageId = await createReadyPackage(apiUrl, planRevisionId, 'live input');
-  const runSessionId = await runPackage(apiUrl, packageId);
+  const runSessionId = await runPackage(apiUrl, packageId, mode, evidence);
   const queued = await waitForEvent(apiUrl, runSessionId, (event) => event.event_type === 'run_queued', {
     label: 'run_queued before terminal status',
+    mode,
+    evidence,
   });
   const sseDriverStarted = waitForSseEvent(apiUrl, runSessionId, (event) => event.event_type === 'driver_started', {
     after: queued.cursor,
     label: 'driver_started append',
+    mode,
+    evidence,
   });
 
   const driver = new FakeCodexSessionDriver({
-    script: [driverStarted('Fake driver started.'), waitingForInput(), { kind: 'delay', ms: 500 }, terminalSucceeded('Fake driver completed.')],
+    script: [driverStarted('Fake driver started.'), waitingForInput(), { kind: 'delay', ms: 2_500 }, terminalSucceeded('Fake driver completed.')],
     inputAcks: [{ continuity: { thread_id: 'dogfood-thread', turn_id: 'dogfood-turn-after-input' } }],
     cancelAcks: [{ cancelled: true, reason: 'dogfood cancel command accepted' }],
   });
@@ -619,24 +860,31 @@ const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, pro
   const waiting = await waitForEvent(apiUrl, runSessionId, (event) => event.event_type === 'waiting_for_input', {
     after: queued.cursor,
     label: 'waiting_for_input',
+    mode,
+    evidence,
   });
   const preTerminal = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}`);
   if (terminalRunStatuses.has(stringField(preTerminal, 'status'))) {
     notes.push('Run reached terminal status before waiting_for_input was observed.');
   }
 
-  const resumeCommandId = await runControlCommand(apiUrl, runSessionId, 'resume', 'Dogfood verifies Run Console resume command.');
+  const resumeCommandId = await runControlCommand(apiUrl, runSessionId, 'resume', 'Dogfood verifies Run Console resume command.', mode, evidence);
   await waitForEvent(
     apiUrl,
     runSessionId,
     (event) => event.event_type === 'resuming' && event.payload.command_id === resumeCommandId,
-    { after: waiting.cursor, label: 'resuming event' },
+    { after: waiting.cursor, label: 'resuming event', mode, evidence },
   );
 
-  const command = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}/input`, {
-    method: 'POST',
-    body: { actor_id: actorOwner, message: 'Continue with the fake dogfood path.' },
-  });
+  const command = await requestBuiltJson(
+    apiUrl,
+    buildRunInputRequest(runSessionId, { mode, actorId: actorOwner, message: 'Continue with the fake dogfood path.' }),
+  );
+  if (mode === 'durable') {
+    evidence.durablePublicApiHeaderAuth = true;
+  } else {
+    evidence.volatileActorFallback = true;
+  }
   const commandId = stringField(command, 'command_id');
   if (command.status !== 'accepted') {
     notes.push('Input command was not accepted.');
@@ -646,21 +894,21 @@ const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, pro
     apiUrl,
     runSessionId,
     (event) => event.event_type === 'user_input' && event.payload.command_id === commandId && event.summary === 'User input submitted.',
-    { after: waiting.cursor, label: 'submitted user_input event' },
+    { after: waiting.cursor, label: 'submitted user_input event', mode, evidence },
   );
   await waitForEvent(
     apiUrl,
     runSessionId,
     (event) => event.event_type === 'user_input' && event.payload.command_id === commandId && event.summary === 'User input delivered.',
-    { after: waiting.cursor, label: 'delivered user_input event' },
+    { after: waiting.cursor, label: 'delivered user_input event', mode, evidence },
   );
 
-  const cancelCommandId = await runControlCommand(apiUrl, runSessionId, 'cancel', 'Dogfood verifies Run Console cancel command.');
+  const cancelCommandId = await runControlCommand(apiUrl, runSessionId, 'cancel', 'Dogfood verifies Run Console cancel command.', mode, evidence);
   await waitForEvent(
     apiUrl,
     runSessionId,
     (event) => event.event_type === 'cancel_requested' && event.payload.command_id === cancelCommandId,
-    { after: waiting.cursor, label: 'cancel_requested event' },
+    { after: waiting.cursor, label: 'cancel_requested event', mode, evidence },
   );
 
   await workerRun;
@@ -671,7 +919,7 @@ const dogfoodLiveInputRun = async (apiUrl: string, repository: P0Repository, pro
     notes.push('Fake driver did not receive the cancel command exactly once.');
   }
 
-  const reviewPacketId = await assertFinalEvidence(apiUrl, repository, runSessionId);
+  const reviewPacketId = await assertFinalEvidence(apiUrl, repository, runSessionId, mode, evidence);
   return { label: 'live-input-fake-driver', packageId, runSessionId, reviewPacketId, status: notes.length === 0 ? 'passed' : 'failed', notes };
 };
 
@@ -680,19 +928,28 @@ const dogfoodRestartRun = async (
   apiUrl: string,
   repository: P0Repository,
   projectId: string,
+  mode: DogfoodDurabilityMode,
+  evidence: PublicApiAuthEvidence,
 ): Promise<{ app: INestApplication; apiUrl: string; result: DogfoodResult }> => {
   const notes: string[] = [];
   const planRevisionId = await createApprovedPlan(apiUrl, projectId, 'restart recovery');
   const packageId = await createReadyPackage(apiUrl, planRevisionId, 'restart recovery');
-  const runSessionId = await runPackage(apiUrl, packageId);
+  const runSessionId = await runPackage(apiUrl, packageId, mode, evidence);
   const queued = await waitForEvent(apiUrl, runSessionId, (event) => event.event_type === 'run_queued', {
     label: 'restart run_queued',
+    mode,
+    evidence,
   });
 
-  const command = await requestJson(apiUrl, `/run-sessions/${encodeURIComponent(runSessionId)}/input`, {
-    method: 'POST',
-    body: { actor_id: actorOwner, message: 'Already-applied input should not be replayed.' },
-  });
+  const command = await requestBuiltJson(
+    apiUrl,
+    buildRunInputRequest(runSessionId, { mode, actorId: actorOwner, message: 'Already-applied input should not be replayed.' }),
+  );
+  if (mode === 'durable') {
+    evidence.durablePublicApiHeaderAuth = true;
+  } else {
+    evidence.volatileActorFallback = true;
+  }
   const commandId = stringField(command, 'command_id');
   const oldLease = { workerId: 'dogfood-worker-old', leaseToken: 'dogfood-old-lease' };
   await repository.claimRunWorkerLease({
@@ -711,8 +968,8 @@ const dogfoodRestartRun = async (
   await repository.markRunCommandApplied(commandId, oldLease, '2026-05-08T02:00:03.000Z', driverAck);
 
   await app.close();
-  const restarted = await createApiApp(repository);
-  const afterRestartEvents = await listRunEvents(restarted.apiUrl, runSessionId, queued.cursor);
+  const restarted = await createApiApp(repository, { durabilityMode: mode });
+  const afterRestartEvents = await listRunEvents(restarted.apiUrl, runSessionId, queued.cursor, mode, evidence);
   console.log(`[dogfood] backfilled ${afterRestartEvents.length} events after API rebuild`);
   if (!afterRestartEvents.some((event) => event.event_type === 'user_input' && event.payload.command_id === commandId)) {
     notes.push('Restarted API did not backfill submitted input event by cursor.');
@@ -732,12 +989,12 @@ const dogfoodRestartRun = async (
   if (restartDriver.inputs.length !== 0) {
     notes.push('Restart worker duplicated already-applied input.');
   }
-  const restartBackfill = await listRunEvents(restarted.apiUrl, runSessionId, queued.cursor);
+  const restartBackfill = await listRunEvents(restarted.apiUrl, runSessionId, queued.cursor, mode, evidence);
   if (!restartBackfill.some((event) => event.event_type === 'driver_started')) {
     notes.push('Restarted API did not backfill worker events after recovery.');
   }
 
-  const reviewPacketId = await assertFinalEvidence(restarted.apiUrl, repository, runSessionId);
+  const reviewPacketId = await assertFinalEvidence(restarted.apiUrl, repository, runSessionId, mode, evidence);
   return {
     app: restarted.app,
     apiUrl: restarted.apiUrl,
@@ -1153,7 +1410,7 @@ const probeWebApp = async (): Promise<VerificationCheck[]> => {
   ];
 };
 
-const renderReport = (data: {
+export const renderReport = (data: {
   status: 'PASS' | 'FAIL';
   apiUrl?: string;
   results: DogfoodResult[];
@@ -1192,7 +1449,7 @@ const renderReport = (data: {
     '- `pnpm test`: all Vitest suites pass.',
     '- `pnpm build`: all workspace packages and apps compile.',
     '- `pnpm smoke:p0`: P0 smoke suite passes and observes public run events before waiting for terminal evidence.',
-    '- `pnpm dogfood:p0`: exits 0 only when volatile fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable repository checks run only when `FORGELOOP_DATABASE_URL` is set.',
+    '- `pnpm dogfood:p0`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.',
     '',
     '## Dogfood Preconditions',
     '',
@@ -1200,8 +1457,8 @@ const renderReport = (data: {
     `- Repo path: ${repoPath}`,
     `- Repo id: ${repoId}`,
     '- Volatile dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.',
-    '- Durable dogfood uses fresh Drizzle repository instances over the same Postgres database only when `FORGELOOP_DATABASE_URL` is set.',
-    '- Public durable API/SSE coverage is not claimed because authenticated actor injection for durable mode is not implemented yet.',
+    '- Durable dogfood uses X-Forgeloop-Actor-Id for public run APIs and stream_token for SSE when `FORGELOOP_DATABASE_URL` is set.',
+    '- Durable repository dogfood uses fresh Drizzle repository instances over the same Postgres database only when `FORGELOOP_DATABASE_URL` is set.',
     '- Real local_codex acceptance is separate from this deterministic fake-driver dogfood pass and requires a local Codex runtime.',
     '',
     '## Dogfood Results',
@@ -1225,20 +1482,37 @@ const writeReport = async (content: string): Promise<void> => {
 };
 
 const main = async (): Promise<number> => {
-  const repository = new InMemoryP0Repository();
+  const mode = durableModeFromEnv();
+  const publicApiAuthEvidence: PublicApiAuthEvidence = {
+    durablePublicApiHeaderAuth: false,
+    durableSseStreamTokenAuth: false,
+    volatileActorFallback: false,
+  };
+  let durableClient: DbClient | undefined;
+  const durableRepository = mode === 'durable' && databaseUrl !== undefined ? createDurableRepository(databaseUrl) : undefined;
+  if (durableRepository !== undefined) {
+    durableClient = durableRepository.client;
+  }
+  const repository = durableRepository?.repository ?? new InMemoryP0Repository();
   let app: INestApplication | undefined;
   let apiUrl: string | undefined;
   const results: DogfoodResult[] = [];
   const checks: VerificationCheck[] = [];
 
   try {
-    const started = await createApiApp(repository);
+    const dbPush = await runDbPushCheck();
+    checks.push(dbPush);
+    if (mode === 'durable' && dbPush.status !== 'passed') {
+      throw new Error('FORGELOOP_DATABASE_URL is set but DB schema push did not pass.');
+    }
+
+    const started = await createApiApp(repository, { durabilityMode: mode });
     app = started.app;
     apiUrl = started.apiUrl;
     const projectId = await createProjectAndRepo(apiUrl);
 
-    results.push(await dogfoodLiveInputRun(apiUrl, repository, projectId));
-    const restarted = await dogfoodRestartRun(app, apiUrl, repository, projectId);
+    results.push(await dogfoodLiveInputRun(apiUrl, repository, projectId, mode, publicApiAuthEvidence));
+    const restarted = await dogfoodRestartRun(app, apiUrl, repository, projectId, mode, publicApiAuthEvidence);
     app = restarted.app;
     apiUrl = restarted.apiUrl;
     results.push(restarted.result);
@@ -1248,8 +1522,7 @@ const main = async (): Promise<number> => {
       status: 'passed',
       details: ['Verified event backfill, SSE append, input submission/delivery, resume command, and cancel command through public run APIs.'],
     });
-    const dbPush = await runDbPushCheck();
-    checks.push(dbPush);
+    checks.push(...publicApiAuthChecks(mode, publicApiAuthEvidence));
     checks.push(await runDurableRepositoryCheck(dbPush));
     checks.push(...(await probeWebApp()));
 
@@ -1271,7 +1544,10 @@ const main = async (): Promise<number> => {
     return 1;
   } finally {
     await app?.close();
+    await durableClient?.pool.end();
   }
 };
 
-process.exitCode = await main();
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  process.exitCode = await main();
+}
