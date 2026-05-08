@@ -80,7 +80,14 @@ pnpm dogfood:p0
 - A replacement worker reclaims an expired recoverable run lease and does not duplicate already-applied input.
 - Final changed files, checks, artifacts, and Review Packet approval still complete.
 
-Real `local_codex` acceptance is separate from the deterministic fake-driver dogfood pass. For non-mock local Codex runs, start `pnpm dev:api` with `FORGELOOP_DATABASE_URL` when durability matters, bind a repo whose `local_path` points at a local checkout, run a package with `executor_type: local_codex` and `workflow_only: false`, and confirm retained workspace/base-ref evidence.
+Real `local_codex` acceptance is separate from the deterministic fake-driver dogfood pass. It is opt-in and disabled by default:
+
+```bash
+pnpm dogfood:p0:local-codex
+FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 pnpm dogfood:p0:local-codex
+```
+
+`pnpm dogfood:p0:local-codex` exits with a documented skipped status unless `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` is set. When enabled, it requires the local `codex` command and authenticated runtime, refuses a dirty source checkout, creates a bounded `executor_type: local_codex` package, attempts the `codex app-server` path before `codex exec --json --dangerously-bypass-approvals-and-sandbox` fallback, verifies public live events before terminal status, and checks terminal changed files, checks, artifacts, and Review Packet evidence. During Task 5 development only, `FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY=1` permits dirty files if and only if the dirty list is limited to the expected Task 5 files recorded by the script report.
 
 The dogfood script writes `docs/superpowers/reports/p0-delivery-loop-verification.md` with preflight notes, expected outcomes, and the last dogfood result summary.
 
