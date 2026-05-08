@@ -50,7 +50,6 @@ describe('evidence chain API', () => {
         'redacted_evidence',
         'superseded_run',
         'stale_review_packet',
-        'failed_required_check',
         'changes_requested',
         'unapproved_review_packet',
         'projection_partial',
@@ -77,12 +76,25 @@ describe('evidence chain API', () => {
     const missingArtifactItem = chain.items.find((item) => item.risk_flags.includes('missing_required_artifact'));
     expect(missingArtifactItem?.details?.missing_artifact_kinds).toContain('diff');
     expect(missingArtifactItem?.details?.missing_artifact_kinds ?? []).not.toContain('logs');
+    expect(chain.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          redacted: true,
+          details: expect.objectContaining({ redaction_reason: 'local_ref_only' }),
+        }),
+      ]),
+    );
 
     const serialized = JSON.stringify(chain);
+    expect(serialized).not.toContain('artifacts/run-session-approved/summary.md');
     expect(serialized).not.toContain('raw-codex.jsonl');
     expect(serialized).not.toContain('raw_ref');
     expect(serialized).not.toContain('secret command output');
     expect(serialized).not.toContain('local://raw-command-output.jsonl');
+
+    const runSessionResponse = await request(app.getHttpServer()).get('/run-sessions/run-session-approved').expect(200);
+    expect(JSON.stringify(runSessionResponse.body)).not.toContain('local_ref');
+    expect(JSON.stringify(runSessionResponse.body)).not.toContain('artifacts/run-session-approved/summary.md');
   });
 
   it('scopes explicit review packet focus and rejects packets outside the work item', async () => {
@@ -162,6 +174,208 @@ describe('evidence chain API', () => {
       redacted_count: 0,
     });
     expect(chain.summary.risk_flags).toEqual(expect.arrayContaining(['no_evidence', 'projection_partial']));
+  });
+
+  it('scopes current required artifact and check risks to the selected run only', async () => {
+    const { app, repo, workItemId, executionPackageId } = await track(seedEvidenceChainScenario());
+    const executionPackage = await repo.getExecutionPackage(executionPackageId);
+    const currentRun = await repo.getRunSession('run-session-approved');
+
+    await repo.saveRunSession({
+      ...currentRun!,
+      artifacts: [
+        ...currentRun!.artifacts,
+        {
+          kind: 'diff',
+          name: 'Diff',
+          content_type: 'text/x-patch',
+          local_ref: 'artifacts/run-session-approved/diff.patch',
+        },
+      ],
+    });
+    await repo.saveExecutionPackage({
+      ...executionPackage!,
+      required_artifact_kinds: ['execution_summary', 'logs', 'diff'],
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+
+    expect(chain.summary.risk_flags).not.toContain('missing_required_artifact');
+    expect(chain.summary.risk_flags).not.toContain('failed_required_check');
+    expect(chain.items.some((item) => item.risk_flags.includes('missing_required_artifact'))).toBe(false);
+    expect(chain.items.some((item) => item.risk_flags.includes('failed_required_check'))).toBe(false);
+  });
+
+  it('scopes explicit required artifact risk to the explicit packet run', async () => {
+    const { app, repo, workItemId, executionPackageId, changesRequestedReviewPacketId } = await track(seedEvidenceChainScenario());
+    const executionPackage = await repo.getExecutionPackage(executionPackageId);
+    const explicitRun = await repo.getRunSession('run-session-changes-requested');
+
+    await repo.saveRunSession({
+      ...explicitRun!,
+      artifacts: [
+        ...explicitRun!.artifacts,
+        {
+          kind: 'diff',
+          name: 'Diff',
+          content_type: 'text/x-patch',
+          local_ref: 'artifacts/run-session-changes-requested/diff.patch',
+        },
+      ],
+    });
+    await repo.saveExecutionPackage({
+      ...executionPackage!,
+      required_artifact_kinds: ['execution_summary', 'logs', 'diff'],
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/work-items/${workItemId}/evidence-chain`)
+      .query({ review_packet_id: changesRequestedReviewPacketId })
+      .expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+
+    expect(chain.focus).toEqual({ selection: 'explicit', review_packet_ids: [changesRequestedReviewPacketId] });
+    expect(chain.summary.risk_flags).not.toContain('missing_required_artifact');
+    expect(chain.items.some((item) => item.risk_flags.includes('missing_required_artifact'))).toBe(false);
+  });
+
+  it('flags missing required blocking check results on the selected run', async () => {
+    const { app, repo, workItemId, executionPackageId } = await track(seedEvidenceChainScenario());
+    const executionPackage = await repo.getExecutionPackage(executionPackageId);
+    const unlinkedRun = await repo.getRunSession('run-session-unlinked-history');
+
+    await repo.saveExecutionPackage({
+      ...executionPackage!,
+      required_checks: [
+        ...executionPackage!.required_checks,
+        {
+          check_id: 'contracts',
+          display_name: 'Contracts',
+          command: 'pnpm test tests/contracts',
+          timeout_seconds: 120,
+          blocks_review: true,
+        },
+      ],
+    });
+    await repo.saveRunSession({
+      ...unlinkedRun!,
+      check_results: [],
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+    const currentRunItem = chain.items.find((item) => item.id === 'evidence-item:run-session:run-session-approved');
+
+    expect(chain.summary.risk_flags).toContain('failed_required_check');
+    expect(currentRunItem?.risk_flags).toContain('failed_required_check');
+    expect(currentRunItem?.details?.failed_check_ids).toContain('contracts');
+  });
+
+  it('includes public lifecycle status history and object events', async () => {
+    const { app, repo, workItemId, executionPackageId } = await track(seedEvidenceChainScenario());
+    await repo.appendStatusHistory({
+      id: 'status-history-evidence-test',
+      object_type: 'execution_package',
+      object_id: executionPackageId,
+      from_status: 'execution/ai_running/none',
+      to_status: 'review/awaiting_human/review_approved',
+      actor_id: 'actor-owner',
+      created_at: '2026-05-05T00:05:45.000Z',
+    });
+    await repo.appendObjectEvent({
+      id: 'object-event-evidence-test',
+      object_type: 'execution_package',
+      object_id: executionPackageId,
+      event_type: 'package_review_completed',
+      actor_id: 'actor-reviewer',
+      metadata: { internal_payload: 'not public' },
+      created_at: '2026-05-05T00:05:46.000Z',
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+
+    expect(chain.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'status_history',
+          summary: 'execution/ai_running/none -> review/awaiting_human/review_approved',
+        }),
+        expect.objectContaining({
+          source: 'object_event',
+          summary: 'package_review_completed',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(chain)).not.toContain('internal_payload');
+  });
+
+  it('reports mixed projection when trace events are overlaid on read-time records', async () => {
+    const { app, repo, records, executionPackage } = await track(seedEvidenceChainBase());
+    const runSession = {
+      id: 'run-session-traced-current',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: 'actor-owner',
+      status: 'succeeded' as const,
+      executor_type: 'mock' as const,
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      summary: 'Trace-backed run completed.',
+      created_at: '2026-05-05T00:06:00.000Z',
+      updated_at: '2026-05-05T00:06:00.000Z',
+      finished_at: '2026-05-05T00:06:00.000Z',
+    };
+    await repo.saveExecutionPackage({
+      ...executionPackage,
+      last_run_session_id: runSession.id,
+      required_artifact_kinds: [],
+      required_checks: [],
+    });
+    await repo.saveRunSession(runSession);
+    await repo.saveReviewPacket({
+      id: 'review-packet-traced-current',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      reviewer_actor_id: executionPackage.reviewer_actor_id,
+      spec_revision_id: executionPackage.spec_revision_id,
+      plan_revision_id: executionPackage.plan_revision_id,
+      status: 'ready',
+      decision: 'none',
+      changed_files: [],
+      check_result_summary: 'No checks.',
+      self_review: succeededSelfReview(),
+      risk_notes: [],
+      requested_changes: [],
+      created_at: '2026-05-05T00:06:00.000Z',
+      updated_at: '2026-05-05T00:06:00.000Z',
+    });
+    await repo.saveTraceEvent({
+      id: 'trace-event-traced-current',
+      event_type: 'run_terminal_evidence_recorded',
+      subject_type: 'run_session',
+      subject_id: runSession.id,
+      actor_id: 'actor-owner',
+      summary: 'Trace event for current run.',
+      payload: { internal_payload: 'not public' },
+      created_at: '2026-05-05T00:06:00.000Z',
+    });
+    await repo.saveTraceLink({
+      id: 'trace-link-traced-current-run',
+      trace_event_id: 'trace-event-traced-current',
+      relationship: 'generated_by',
+      object_type: 'run_session',
+      object_id: runSession.id,
+      created_at: '2026-05-05T00:06:00.000Z',
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${records.workItem.id}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+
+    expect(chain.projection.source).toBe('mixed');
+    expect(chain.projection.partial).toBe(false);
   });
 
   it('returns 404 for missing work items', async () => {

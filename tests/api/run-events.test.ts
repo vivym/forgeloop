@@ -68,7 +68,13 @@ describe('run event API', () => {
     await repo.saveRunSession({
       ...runSession!,
       artifacts: [
-        { kind: 'diff', name: 'Diff', content_type: 'text/x-patch', local_ref: 'artifacts/diff.patch' },
+        {
+          kind: 'diff',
+          name: 'Diff',
+          content_type: 'text/x-patch',
+          storage_uri: 's3://forgeloop-test/diff.patch',
+          local_ref: 'artifacts/diff.patch',
+        },
         { kind: 'logs', name: 'Raw Codex log', content_type: 'application/jsonl', local_ref: 'artifacts/raw-codex.jsonl' },
       ],
       log_refs: [{ kind: 'logs', name: 'Raw Codex log', content_type: 'application/jsonl', local_ref: 'artifacts/raw-codex.jsonl' }],
@@ -77,7 +83,9 @@ describe('run event API', () => {
     const response = await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}`).expect(200);
 
     expect(response.body.artifacts.map((artifact: { kind: string }) => artifact.kind)).toEqual(['diff']);
+    expect(response.body.artifacts[0]).toMatchObject({ storage_uri: 's3://forgeloop-test/diff.patch' });
     expect(response.body.log_refs ?? []).toEqual([]);
+    expect(JSON.stringify(response.body)).not.toContain('local_ref');
     expect(JSON.stringify(response.body)).not.toContain('raw-codex.jsonl');
   });
 
@@ -138,7 +146,13 @@ describe('run event API', () => {
       id: 'artifact-public-diff',
       object_type: 'run_session',
       object_id: runSessionId,
-      ref: { kind: 'diff', name: 'Diff', content_type: 'text/x-patch', local_ref: 'artifacts/diff.patch' },
+      ref: {
+        kind: 'diff',
+        name: 'Diff',
+        content_type: 'text/x-patch',
+        storage_uri: 's3://forgeloop-test/diff.patch',
+        local_ref: 'artifacts/diff.patch',
+      },
       created_at: '2026-05-07T00:00:00.000Z',
     });
     await repo.saveArtifact({
@@ -170,10 +184,11 @@ describe('run event API', () => {
           kind: 'diff',
           name: 'Diff',
           content_type: 'text/x-patch',
-          local_ref: 'artifacts/diff.patch',
+          storage_uri: 's3://forgeloop-test/diff.patch',
         },
       }),
     ]);
+    expect(JSON.stringify(response.body)).not.toContain('local_ref');
     expect(JSON.stringify(response.body)).not.toContain('raw-codex.jsonl');
     expect(JSON.stringify(response.body)).not.toContain('raw_ref');
   });

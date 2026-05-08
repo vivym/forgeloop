@@ -14,6 +14,9 @@ export const artifactRedactionReason = (artifact: ArtifactRef): EvidenceChainRed
   if (candidate.raw_ref !== undefined) {
     return 'raw_ref';
   }
+  if (artifact.local_ref !== undefined && artifact.storage_uri === undefined) {
+    return 'local_ref_only';
+  }
 
   return undefined;
 };
@@ -24,7 +27,7 @@ export const serializePublicArtifactRef = (artifact: ArtifactRef): ArtifactRef |
     return undefined;
   }
 
-  const { raw_ref: _rawRef, ...publicArtifact } = candidate;
+  const { raw_ref: _rawRef, local_ref: _localRef, ...publicArtifact } = candidate;
   return publicArtifact;
 };
 

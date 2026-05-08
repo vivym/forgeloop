@@ -7,8 +7,9 @@ import type {
   EvidenceChainProjectionGapCode,
   EvidenceChainResponse,
   EvidenceChainRiskFlag,
+  RequiredCheckSpec,
 } from '@forgeloop/contracts';
-import type { Decision, ExecutionPackage, ReviewPacket, RunEvent, RunSession, WorkItem } from '@forgeloop/domain';
+import type { Decision, ExecutionPackage, ObjectEvent, ReviewPacket, RunEvent, RunSession, StatusHistory, WorkItem } from '@forgeloop/domain';
 import type { P0Repository, TraceEventRecord, TraceLinkRecord } from '@forgeloop/db';
 
 import { artifactRedactionReason, serializePublicArtifactRef } from './run-session-serialization';
@@ -100,15 +101,25 @@ const artifactPresence = (runSession: RunSession): Set<ArtifactKind> =>
 const runArtifactRefCount = (runs: RunSession[]): number =>
   runs.reduce((count, runSession) => count + runSession.artifacts.length + runSession.log_refs.length, 0);
 
-const failedBlockingChecks = (runSession: RunSession): string[] =>
-  runSession.check_results
-    .filter((check) => check.blocks_review && check.status !== 'succeeded')
-    .map((check) => check.check_id);
+type DomainObjectRef = {
+  objectType: EvidenceChainObjectType;
+  objectId: string;
+};
 
-const runRiskFlags = (runSession: RunSession, supersededRunIds: Set<string>): EvidenceChainRiskFlag[] =>
+const failedRequiredCheckIds = (requiredChecks: RequiredCheckSpec[], runSession: RunSession): string[] =>
+  requiredChecks.flatMap((requiredCheck) => {
+    if (!requiredCheck.blocks_review) {
+      return [];
+    }
+
+    const result = runSession.check_results.find((check) => check.check_id === requiredCheck.check_id);
+    return result?.status === 'succeeded' ? [] : [requiredCheck.check_id];
+  });
+
+const runRiskFlags = (runSession: RunSession, supersededRunIds: Set<string>, failedCheckIds: string[]): EvidenceChainRiskFlag[] =>
   riskFlags(
     supersededRunIds.has(runSession.id) ? 'superseded_run' : undefined,
-    failedBlockingChecks(runSession).length > 0 ? 'failed_required_check' : undefined,
+    failedCheckIds.length > 0 ? 'failed_required_check' : undefined,
   );
 
 const reviewPacketRiskFlags = (reviewPacket: ReviewPacket, replacedReviewPacketIds: Set<string>): EvidenceChainRiskFlag[] =>
@@ -165,6 +176,30 @@ const publicRunEventItem = (runEvent: RunEvent, runSession: RunSession, executio
   risk_flags: [],
   redacted: false,
   details: { run_status: runSession.status },
+});
+
+const statusHistoryItem = (statusHistory: StatusHistory): EvidenceChainItem => ({
+  id: `evidence-item:status-history:${statusHistory.id}`,
+  source: 'status_history',
+  subject: objectRef(statusHistory.object_type as EvidenceChainObjectType, statusHistory.object_id),
+  summary: `${statusHistory.from_status ?? 'none'} -> ${statusHistory.to_status}`,
+  created_at: statusHistory.created_at,
+  visibility: 'public',
+  links: [],
+  risk_flags: [],
+  redacted: false,
+});
+
+const objectEventItem = (objectEvent: ObjectEvent): EvidenceChainItem => ({
+  id: `evidence-item:object-event:${objectEvent.id}`,
+  source: 'object_event',
+  subject: objectRef(objectEvent.object_type as EvidenceChainObjectType, objectEvent.object_id),
+  summary: objectEvent.event_type,
+  created_at: objectEvent.created_at,
+  visibility: 'public',
+  links: [],
+  risk_flags: [],
+  redacted: false,
 });
 
 const redactionItem = (input: {
@@ -230,6 +265,21 @@ const loadPackageEvidence = async (repository: P0Repository, workItemId: string)
   );
 };
 
+const domainObjectRefs = (workItem: WorkItem, evidence: PackageEvidence[]): DomainObjectRef[] => {
+  const refs: DomainObjectRef[] = [{ objectType: 'work_item', objectId: workItem.id }];
+  for (const item of evidence) {
+    refs.push({ objectType: 'execution_package', objectId: item.executionPackage.id });
+    for (const runSession of item.runs) {
+      refs.push({ objectType: 'run_session', objectId: runSession.id });
+    }
+    for (const reviewPacket of item.reviewPackets) {
+      refs.push({ objectType: 'review_packet', objectId: reviewPacket.id });
+    }
+  }
+
+  return refs;
+};
+
 export const buildEvidenceChain = async (
   repository: P0Repository,
   workItem: WorkItem,
@@ -262,7 +312,7 @@ export const buildEvidenceChain = async (
   const scopedEvidence = packageEvidence.filter((evidence) => selectedPackageIds.has(evidence.executionPackage.id));
   const runs = scopedEvidence.flatMap((evidence) => evidence.runs);
   const reviewPackets = scopedEvidence.flatMap((evidence) => evidence.reviewPackets.filter((packet) => packet.status !== 'archived'));
-  const currentRunIds = new Set(selectedReviewPackets.map((packet) => packet.run_session_id));
+  const selectedRunIds = new Set(selectedReviewPackets.map((packet) => packet.run_session_id));
   const trace = await loadTraceProjection(repository, runs);
 
   if (trace.events.length === 0) {
@@ -273,7 +323,7 @@ export const buildEvidenceChain = async (
   }
 
   const historicalRunsWithoutLinks = runs.filter(
-    (run) => !currentRunIds.has(run.id) && !trace.supersededRunIds.has(run.id) && !trace.linkedRunIds.has(run.id),
+    (run) => !selectedRunIds.has(run.id) && !trace.supersededRunIds.has(run.id) && !trace.linkedRunIds.has(run.id),
   );
   if (historicalRunsWithoutLinks.length > 0) {
     gaps.add('missing_supersession_links');
@@ -285,7 +335,7 @@ export const buildEvidenceChain = async (
   const representedReviewPacketIds = new Set(reviewPackets.map((packet) => packet.id));
   const decisionIds = new Set<string>();
   const addItem = (item: EvidenceChainItem): void => {
-    items.push({ ...item, order: itemOrder(item, currentRunIds, trace.supersededRunIds) });
+    items.push({ ...item, order: itemOrder(item, selectedRunIds, trace.supersededRunIds) });
   };
 
   for (const traceEvent of trace.events) {
@@ -310,8 +360,9 @@ export const buildEvidenceChain = async (
 
   for (const evidence of scopedEvidence) {
     for (const runSession of evidence.runs) {
-      const runFlags = runRiskFlags(runSession, trace.supersededRunIds);
-      const failedCheckIds = failedBlockingChecks(runSession);
+      const selectedRun = selectedRunIds.has(runSession.id);
+      const failedCheckIds = selectedRun ? failedRequiredCheckIds(evidence.executionPackage.required_checks, runSession) : [];
+      const runFlags = runRiskFlags(runSession, trace.supersededRunIds, failedCheckIds);
       addItem({
         id: `evidence-item:run-session:${runSession.id}`,
         source: 'object_event',
@@ -334,7 +385,7 @@ export const buildEvidenceChain = async (
 
       const presentArtifacts = artifactPresence(runSession);
       const missingArtifactKinds = evidence.executionPackage.required_artifact_kinds.filter((kind) => !presentArtifacts.has(kind));
-      if (missingArtifactKinds.length > 0) {
+      if (selectedRun && missingArtifactKinds.length > 0) {
         addItem({
           id: `evidence-item:missing-artifacts:${runSession.id}`,
           source: 'artifact',
@@ -477,6 +528,15 @@ export const buildEvidenceChain = async (
     }
   }
 
+  for (const ref of domainObjectRefs(workItem, scopedEvidence)) {
+    for (const statusHistory of await repository.listStatusHistory(ref.objectId, ref.objectType)) {
+      addItem(statusHistoryItem(statusHistory));
+    }
+    for (const objectEvent of await repository.listObjectEvents(ref.objectId, ref.objectType)) {
+      addItem(objectEventItem(objectEvent));
+    }
+  }
+
   const partial = gaps.size > 0;
   const responseLevelFlags = riskFlags(items.length === 0 ? 'no_evidence' : undefined, partial ? 'projection_partial' : undefined);
   const sortedItems = items
@@ -492,7 +552,7 @@ export const buildEvidenceChain = async (
       review_packet_ids: selectedReviewPackets.map((packet) => packet.id),
     },
     projection: {
-      source: trace.events.length > 0 && gaps.size > 0 ? 'mixed' : trace.events.length > 0 ? 'trace_events' : 'read_time',
+      source: trace.events.length > 0 ? 'mixed' : 'read_time',
       version: 1,
       partial,
       gaps: [...gaps],
