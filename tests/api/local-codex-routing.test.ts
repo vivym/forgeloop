@@ -152,6 +152,8 @@ const waitForTerminalRunSession = async (app: INestApplication, runSessionId: st
   throw new Error(`Timed out waiting for terminal RunSession ${runSessionId}`);
 };
 
+const repositoryFor = (app: INestApplication): P0Repository => app.get(P0_REPOSITORY) as P0Repository;
+
 describe('control-plane local_codex routing', () => {
   let app: INestApplication;
   const mockAdapter = vi.fn((runSpec: RunSpec) => Promise.resolve(resultFor(runSpec, 'mock')));
@@ -222,13 +224,28 @@ describe('control-plane local_codex routing', () => {
       executor_result: {
         executor_type: 'local_codex',
         executor_version: 'test-local_codex',
+        raw_metadata: {},
+      },
+    });
+    expect(runSession).not.toHaveProperty('run_spec');
+    expect(runSession.artifacts).toEqual([]);
+
+    const persistedRunSession = await repositoryFor(app).getRunSession(run.run_session_id);
+    expect(persistedRunSession).toMatchObject({
+      run_spec: {
+        executor_type: 'local_codex',
+        workflow_only: false,
+      },
+      executor_result: {
+        executor_type: 'local_codex',
+        executor_version: 'test-local_codex',
         raw_metadata: {
           workspace_path: `/tmp/forgeloop-test/${run.run_session_id}/workspace`,
           base_ref: 'abc123',
         },
       },
+      artifacts: [expect.objectContaining({ kind: 'diff' }), expect.objectContaining({ kind: 'execution_summary' })],
     });
-    expect(runSession.artifacts).toEqual([expect.objectContaining({ kind: 'diff' }), expect.objectContaining({ kind: 'execution_summary' })]);
   });
 
   it('keeps workflow-only runs on the deterministic mock adapter even when local_codex is requested', async () => {
@@ -251,6 +268,16 @@ describe('control-plane local_codex routing', () => {
     expect(runSession).toMatchObject({
       status: 'succeeded',
       executor_type: 'mock',
+      executor_result: {
+        executor_type: 'mock',
+        executor_version: 'test-mock',
+        raw_metadata: {},
+      },
+    });
+    expect(runSession).not.toHaveProperty('run_spec');
+
+    const persistedRunSession = await repositoryFor(app).getRunSession(run.run_session_id);
+    expect(persistedRunSession).toMatchObject({
       run_spec: {
         executor_type: 'mock',
         workflow_only: true,
@@ -258,6 +285,7 @@ describe('control-plane local_codex routing', () => {
       executor_result: {
         executor_type: 'mock',
         executor_version: 'test-mock',
+        raw_metadata: { workflow_only: true },
       },
     });
   });

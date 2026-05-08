@@ -337,7 +337,10 @@ describe('P0 control plane API', () => {
     ).body;
     const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
     const rerunSession = (await request(server).get(`/run-sessions/${rerun.run_session_id}`).expect(200)).body;
-    expect(rerunSession.run_spec.review_context.latest_decision).toBe('changes_requested');
+    expect(rerunSession).not.toHaveProperty('run_spec');
+    expect((await repositoryFor(app).getRunSession(rerun.run_session_id))?.run_spec?.review_context.latest_decision).toBe(
+      'changes_requested',
+    );
 
     await request(server)
       .post(`/review-packets/${rerunReviewPacketId}/approve`)
@@ -356,9 +359,9 @@ describe('P0 control plane API', () => {
     expect(cockpit.next_actions).toContain('mark_packages_ready');
 
     const timeline = (await request(server).get(`/work-items/${workItem.id}/timeline`).expect(200)).body;
-    expect(timeline.map((entry: { source: string }) => entry.source)).toEqual(
-      expect.arrayContaining(['object_event', 'status_history', 'decision', 'artifact']),
-    );
+    const timelineSources = timeline.map((entry: { source: string }) => entry.source);
+    expect(timelineSources).toEqual(expect.arrayContaining(['object_event', 'status_history', 'decision']));
+    expect(timelineSources).not.toContain('artifact');
   });
 
   it('serves POST /projects when booted through the tsx runtime entrypoint', async () => {
@@ -512,7 +515,10 @@ describe('P0 control plane API', () => {
     const newRunSession = (await request(server).get(`/run-sessions/${newRun.run_session_id}`).expect(200)).body;
 
     expect(newRun.run_session_id).not.toBe(run.run_session_id);
-    expect(newRunSession.run_spec.objective).toBe('Edited package creates a fresh run spec.');
+    expect(newRunSession).not.toHaveProperty('run_spec');
+    expect((await repositoryFor(app).getRunSession(newRun.run_session_id))?.run_spec?.objective).toBe(
+      'Edited package creates a fresh run spec.',
+    );
   });
 
   it('archives an in-review ReviewPacket on package edit and preserves the previous RunSession', async () => {

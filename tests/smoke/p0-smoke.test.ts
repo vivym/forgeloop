@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import type { ReviewPacket } from '../../packages/domain/src';
+import type { ReviewPacket, RunSession } from '../../packages/domain/src';
 import type { RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
@@ -151,7 +151,7 @@ const expectAcceptedRunWithVisibleLiveEvent = async (
 const repositoryFor = (app: INestApplication) =>
   (app.get(P0Service) as unknown as {
     repository: {
-      getRunSession(runSessionId: string): Promise<{ execution_package_id: string } | undefined>;
+      getRunSession(runSessionId: string): Promise<RunSession | undefined>;
       listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
     };
   }).repository;
@@ -214,15 +214,19 @@ describe('P0 smoke delivery loop', () => {
     expect(runSession).toMatchObject({
       status: 'succeeded',
       executor_type: 'mock',
+    });
+    expect(runSession).not.toHaveProperty('run_spec');
+    expect(await repositoryFor(app).getRunSession(acceptedRun.run_session_id)).toMatchObject({
       run_spec: {
         spec_revision_id: specRevisionId,
         plan_revision_id: planRevisionId,
         workflow_only: true,
       },
+      artifacts: expect.arrayContaining([expect.objectContaining({ kind: 'diff' })]),
     });
     expect(runSession.changed_files).not.toHaveLength(0);
     expect(runSession.check_results).toEqual([expect.objectContaining({ check_id: 'smoke', status: 'succeeded' })]);
-    expect(runSession.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'diff' })]));
+    expect(runSession.artifacts).toEqual([]);
 
     const reviewPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
     expect(reviewPacket).toMatchObject({
@@ -245,9 +249,9 @@ describe('P0 smoke delivery loop', () => {
     expect(cockpit.review_packets[0]).toMatchObject({ id: reviewPacket.id, status: 'completed', decision: 'approved' });
 
     const timeline = (await request(server).get(`/work-items/${workItem.id}/timeline`).expect(200)).body;
-    expect(timeline.map((entry: { source: string }) => entry.source)).toEqual(
-      expect.arrayContaining(['object_event', 'status_history', 'decision', 'artifact']),
-    );
+    const timelineSources = timeline.map((entry: { source: string }) => entry.source);
+    expect(timelineSources).toEqual(expect.arrayContaining(['object_event', 'status_history', 'decision']));
+    expect(timelineSources).not.toContain('artifact');
   });
 
   it('records changes_requested, reruns with a new run session and review packet, then approves the rerun', async () => {
@@ -283,7 +287,8 @@ describe('P0 smoke delivery loop', () => {
     expect(rerunReviewPacketId).not.toBe(firstReviewPacketId);
 
     const rerunSession = (await request(server).get(`/run-sessions/${acceptedRerun.run_session_id}`).expect(200)).body;
-    expect(rerunSession.run_spec.review_context).toEqual({
+    expect(rerunSession).not.toHaveProperty('run_spec');
+    expect((await repositoryFor(app).getRunSession(acceptedRerun.run_session_id))?.run_spec?.review_context).toEqual({
       latest_decision: 'changes_requested',
       requested_changes: [
         expect.objectContaining({
