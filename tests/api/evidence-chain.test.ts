@@ -71,7 +71,9 @@ describe('evidence chain API', () => {
 
     const unlinkedPacket = chain.items.find((item) => item.subject.object_id === unlinkedReviewPacketId);
     expect(unlinkedPacket?.risk_flags).toContain('unapproved_review_packet');
-    expect(unlinkedPacket?.risk_flags).not.toContain('stale_review_packet');
+    expect(unlinkedPacket?.risk_flags).toContain('stale_review_packet');
+    const unlinkedRun = chain.items.find((item) => item.id === 'evidence-item:run-session:run-session-unlinked-history');
+    expect(unlinkedRun?.risk_flags).not.toContain('superseded_run');
 
     const missingArtifactItem = chain.items.find((item) => item.risk_flags.includes('missing_required_artifact'));
     expect(missingArtifactItem?.details?.missing_artifact_kinds).toContain('diff');
@@ -240,6 +242,37 @@ describe('evidence chain API', () => {
     expect(chain.items.some((item) => item.risk_flags.includes('missing_required_artifact'))).toBe(false);
   });
 
+  it('requires logs artifact presence from log refs rather than run artifacts', async () => {
+    const { app, repo, workItemId, executionPackageId } = await track(seedEvidenceChainScenario());
+    const executionPackage = await repo.getExecutionPackage(executionPackageId);
+    const currentRun = await repo.getRunSession('run-session-approved');
+
+    await repo.saveExecutionPackage({
+      ...executionPackage!,
+      required_artifact_kinds: ['logs'],
+    });
+    await repo.saveRunSession({
+      ...currentRun!,
+      log_refs: [],
+      artifacts: [
+        ...currentRun!.artifacts,
+        {
+          kind: 'logs',
+          name: 'Logs stored in the wrong collection',
+          content_type: 'application/jsonl',
+          storage_uri: 's3://forgeloop-test/logs.jsonl',
+        },
+      ],
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+    const missingArtifactItem = chain.items.find((item) => item.id === 'evidence-item:missing-artifacts:run-session-approved');
+
+    expect(chain.summary.risk_flags).toContain('missing_required_artifact');
+    expect(missingArtifactItem?.details?.missing_artifact_kinds).toEqual(['logs']);
+  });
+
   it('flags missing required blocking check results on the selected run', async () => {
     const { app, repo, workItemId, executionPackageId } = await track(seedEvidenceChainScenario());
     const executionPackage = await repo.getExecutionPackage(executionPackageId);
@@ -309,6 +342,42 @@ describe('evidence chain API', () => {
       ]),
     );
     expect(JSON.stringify(chain)).not.toContain('internal_payload');
+  });
+
+  it('reconstructs public persisted artifact rows without local refs', async () => {
+    const { app, repo, workItemId } = await track(seedEvidenceChainScenario());
+    await repo.saveArtifact({
+      id: 'artifact-public-persisted-diff',
+      object_type: 'run_session',
+      object_id: 'run-session-approved',
+      ref: {
+        kind: 'diff',
+        name: 'Persisted public diff',
+        content_type: 'text/x-patch',
+        storage_uri: 's3://forgeloop-test/persisted-diff.patch',
+        local_ref: 'artifacts/run-session-approved/persisted-diff.patch',
+      },
+      created_at: '2026-05-05T00:05:02.000Z',
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+
+    expect(chain.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'evidence-item:artifact-record:artifact-public-persisted-diff',
+          source: 'artifact',
+          subject: expect.objectContaining({
+            object_type: 'artifact',
+            object_id: 'artifact-public-persisted-diff',
+          }),
+          summary: 'Artifact diff: Persisted public diff.',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(chain)).not.toContain('persisted-diff.patch');
+    expect(JSON.stringify(chain)).not.toContain('"local_ref":');
   });
 
   it('reports mixed projection when trace events are overlaid on read-time records', async () => {

@@ -1,5 +1,4 @@
 import type {
-  ArtifactKind,
   ArtifactRef,
   EvidenceChainItem,
   EvidenceChainObjectRef,
@@ -9,7 +8,17 @@ import type {
   EvidenceChainRiskFlag,
   RequiredCheckSpec,
 } from '@forgeloop/contracts';
-import type { Decision, ExecutionPackage, ObjectEvent, ReviewPacket, RunEvent, RunSession, StatusHistory, WorkItem } from '@forgeloop/domain';
+import {
+  deriveRequiredArtifactPresence,
+  type Decision,
+  type ExecutionPackage,
+  type ObjectEvent,
+  type ReviewPacket,
+  type RunEvent,
+  type RunSession,
+  type StatusHistory,
+  type WorkItem,
+} from '@forgeloop/domain';
 import type { P0Repository, TraceEventRecord, TraceLinkRecord } from '@forgeloop/db';
 
 import { artifactRedactionReason, serializePublicArtifactRef } from './run-session-serialization';
@@ -92,12 +101,6 @@ const currentPacketFor = (
 const artifactKey = (runSessionId: string, artifact: ArtifactRef, index: number): string =>
   `${runSessionId}:${artifact.kind}:${artifact.name}:${artifact.digest ?? index}`;
 
-const artifactPresence = (runSession: RunSession): Set<ArtifactKind> =>
-  new Set([
-    ...runSession.artifacts.map((artifact) => artifact.kind),
-    ...runSession.log_refs.filter((artifact) => artifact.kind === 'logs').map((artifact) => artifact.kind),
-  ]);
-
 const runArtifactRefCount = (runs: RunSession[]): number =>
   runs.reduce((count, runSession) => count + runSession.artifacts.length + runSession.log_refs.length, 0);
 
@@ -122,11 +125,18 @@ const runRiskFlags = (runSession: RunSession, supersededRunIds: Set<string>, fai
     failedCheckIds.length > 0 ? 'failed_required_check' : undefined,
   );
 
-const reviewPacketRiskFlags = (reviewPacket: ReviewPacket, replacedReviewPacketIds: Set<string>): EvidenceChainRiskFlag[] =>
+const reviewPacketRiskFlags = (
+  reviewPacket: ReviewPacket,
+  executionPackage: ExecutionPackage,
+  replacedReviewPacketIds: Set<string>,
+): EvidenceChainRiskFlag[] =>
   riskFlags(
     reviewPacket.decision === 'changes_requested' ? 'changes_requested' : undefined,
     reviewPacket.decision !== 'approved' ? 'unapproved_review_packet' : undefined,
-    replacedReviewPacketIds.has(reviewPacket.id) ? 'stale_review_packet' : undefined,
+    replacedReviewPacketIds.has(reviewPacket.id) ||
+      (executionPackage.last_run_session_id !== undefined && reviewPacket.run_session_id !== executionPackage.last_run_session_id)
+      ? 'stale_review_packet'
+      : undefined,
   );
 
 const decisionRiskFlags = (decision: Decision): EvidenceChainRiskFlag[] =>
@@ -383,8 +393,7 @@ export const buildEvidenceChain = async (
         },
       });
 
-      const presentArtifacts = artifactPresence(runSession);
-      const missingArtifactKinds = evidence.executionPackage.required_artifact_kinds.filter((kind) => !presentArtifacts.has(kind));
+      const missingArtifactKinds = deriveRequiredArtifactPresence(evidence.executionPackage, runSession).missing_artifact_kinds;
       if (selectedRun && missingArtifactKinds.length > 0) {
         addItem({
           id: `evidence-item:missing-artifacts:${runSession.id}`,
@@ -488,12 +497,27 @@ export const buildEvidenceChain = async (
               reason: redactionReason,
             }),
           );
+        } else {
+          const publicArtifact = serializePublicArtifactRef(artifact.ref);
+          if (publicArtifact !== undefined) {
+            addItem({
+              id: `evidence-item:artifact-record:${artifact.id}`,
+              source: 'artifact',
+              subject: objectRef('artifact', artifact.id, 'generated_by'),
+              summary: `Artifact ${publicArtifact.kind}: ${publicArtifact.name}.`,
+              created_at: artifact.created_at,
+              visibility: 'public',
+              links: [objectRef(artifact.object_type as EvidenceChainObjectType, artifact.object_id, 'generated_by')],
+              risk_flags: [],
+              redacted: false,
+            });
+          }
         }
       }
     }
 
     for (const reviewPacket of evidence.reviewPackets.filter((packet) => packet.status !== 'archived')) {
-      const flags = reviewPacketRiskFlags(reviewPacket, trace.replacedReviewPacketIds);
+      const flags = reviewPacketRiskFlags(reviewPacket, evidence.executionPackage, trace.replacedReviewPacketIds);
       addItem({
         id: `evidence-item:review-packet:${reviewPacket.id}`,
         source: 'review_packet',
