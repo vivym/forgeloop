@@ -367,8 +367,12 @@ describe('execution finalizer', () => {
       runSessionId,
       executorResult: result,
       selfReview: async () => succeededSelfReview(),
-      now: () => '2026-05-07T00:00:00.000Z',
+      now: () => '2026-05-07T00:00:01.000Z',
     });
+    const traceEventsAfterFirst = await repo.listTraceEventsForSubject('run_session', runSessionId);
+    const terminalTraceEvent = traceEventsAfterFirst.find((event) => event.event_type === 'run_terminal_evidence_recorded');
+    const traceLinksAfterFirst = await repo.listTraceLinks(terminalTraceEvent!.id);
+    const traceArtifactRefsAfterFirst = await repo.listTraceArtifactRefs(terminalTraceEvent!.id);
     const packageAfterFirst = await repo.getExecutionPackage(packageId);
     const historiesAfterFirst = await repo.listStatusHistory(runSessionId, 'run_session');
     const eventsAfterFirst = await repo.listObjectEvents(runSessionId, 'run_session');
@@ -394,6 +398,9 @@ describe('execution finalizer', () => {
     expect(eventsAfterSecond).toEqual(eventsAfterFirst);
     expect(artifactsAfterSecond).toEqual(artifactsAfterFirst);
     expect(reviewPacketsAfterSecond).toEqual(reviewPacketsAfterFirst);
+    expect(terminalTraceEvent).toMatchObject({ created_at: terminalAt });
+    expect(traceLinksAfterFirst.every((link) => link.created_at === terminalAt)).toBe(true);
+    expect(traceArtifactRefsAfterFirst.every((artifactRef) => artifactRef.created_at === terminalAt)).toBe(true);
   });
 
   it('reconciles a matching terminal failed retry without replaying terminal side effects', async () => {
@@ -434,6 +441,9 @@ describe('execution finalizer', () => {
     const historiesAfterFirst = await repo.listStatusHistory(runSessionId, 'run_session');
     const eventsAfterFirst = await repo.listObjectEvents(runSessionId, 'run_session');
     const artifactsAfterFirst = await repo.listArtifactsForObject('run_session', runSessionId);
+    const terminalTraceEvent = (await repo.listTraceEventsForSubject('run_session', runSessionId)).find(
+      (event) => event.event_type === 'run_terminal_evidence_recorded',
+    );
 
     const second = await finalizePackageRunWithExecutorResult({
       repository: repo,
@@ -461,6 +471,7 @@ describe('execution finalizer', () => {
     expect(eventsAfterFirst).toHaveLength(0);
     expect(artifactsAfterFirst).toHaveLength(0);
     expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(0);
+    expect(terminalTraceEvent).toMatchObject({ created_at: terminalAt });
   });
 
   it('reconciles a matching terminal nonretryable failure to blocked without review packet', async () => {

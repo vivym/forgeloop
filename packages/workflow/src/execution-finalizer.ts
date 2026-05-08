@@ -216,6 +216,12 @@ const terminalTraceEventId = (runSessionId: string): string => `trace-event:run-
 const replacementTraceEventId = (runSessionId: string): string => `trace-event:run-replacement:${runSessionId}`;
 type TraceWarningSink = { warn: (...values: unknown[]) => void };
 
+const terminalTraceTimeFor = (runSession: RunSessionRecord, fallback: IsoDateTime): IsoDateTime =>
+  runSession.finished_at ?? runSession.updated_at ?? fallback;
+
+const reviewPacketTraceTimeFor = (reviewPacket: ReviewPacketRecord, fallback: IsoDateTime): IsoDateTime =>
+  reviewPacket.created_at ?? fallback;
+
 const warnTraceWriteFailure = (error: unknown): void => {
   (globalThis as { console?: TraceWarningSink }).console?.warn('[forgeloop:p0.trace] best-effort trace write failed', {
     source: 'workflow-finalizer',
@@ -639,13 +645,14 @@ const prepareFinalization = async (
 
   if (terminalRunSession.status !== 'succeeded') {
     await reconcileFailedPackageIfNeeded(repository, terminalRunSession, state.context.executionPackage, at);
+    const traceAt = terminalTraceTimeFor(terminalRunSession, at);
 
     return {
       kind: 'completed',
       result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status },
       traceWrites: [
         (traceRepository) =>
-          recordTerminalEvidenceTrace(traceRepository, state.context, terminalRunSession, parsedExecutorResult, undefined, at),
+          recordTerminalEvidenceTrace(traceRepository, state.context, terminalRunSession, parsedExecutorResult, undefined, traceAt),
       ],
     };
   }
@@ -655,13 +662,23 @@ const prepareFinalization = async (
     successPackageIsReconciled(state.context.executionPackage);
 
   if (state.reviewPacket !== undefined && packageReconciled) {
+    const traceAt = terminalTraceTimeFor(terminalRunSession, at);
+    const reviewTraceAt = reviewPacketTraceTimeFor(state.reviewPacket, traceAt);
+
     return {
       kind: 'completed',
       result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: state.reviewPacket.id },
       traceWrites: [
-        (traceRepository) => recordReplacementReviewPacketTrace(traceRepository, terminalRunSession, state.reviewPacket!, at),
+        (traceRepository) => recordReplacementReviewPacketTrace(traceRepository, terminalRunSession, state.reviewPacket!, reviewTraceAt),
         (traceRepository) =>
-          recordTerminalEvidenceTrace(traceRepository, state.context, terminalRunSession, parsedExecutorResult, state.reviewPacket, at),
+          recordTerminalEvidenceTrace(
+            traceRepository,
+            state.context,
+            terminalRunSession,
+            parsedExecutorResult,
+            state.reviewPacket,
+            traceAt,
+          ),
       ],
     };
   }
@@ -702,14 +719,16 @@ const completeSucceededFinalization = async (
     ));
 
   await reconcileSucceededPackageIfNeeded(repository, state.runSession, state.context.executionPackage, at);
+  const traceAt = terminalTraceTimeFor(state.runSession, at);
+  const reviewTraceAt = reviewPacketTraceTimeFor(reviewPacket, traceAt);
 
   return {
     kind: 'completed',
     result: { runSessionId: state.runSession.id, status: state.runSession.status, reviewPacketId: reviewPacket.id },
     traceWrites: [
-      (traceRepository) => recordReplacementReviewPacketTrace(traceRepository, state.runSession, reviewPacket, at),
+      (traceRepository) => recordReplacementReviewPacketTrace(traceRepository, state.runSession, reviewPacket, reviewTraceAt),
       (traceRepository) =>
-        recordTerminalEvidenceTrace(traceRepository, state.context, state.runSession, parsedExecutorResult, reviewPacket, at),
+        recordTerminalEvidenceTrace(traceRepository, state.context, state.runSession, parsedExecutorResult, reviewPacket, traceAt),
     ],
   };
 };
