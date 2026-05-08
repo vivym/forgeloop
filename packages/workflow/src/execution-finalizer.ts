@@ -197,19 +197,17 @@ const persistArtifacts = async (
   artifacts: ArtifactRef[],
   at: IsoDateTime,
 ): Promise<void> => {
-  await Promise.all(
-    artifacts.map((artifact, index) =>
-      repository.saveArtifact({
-        id: `artifact:${runSession.id}:${index}:${artifact.kind}:${artifact.name}`,
-        object_type: 'run_session',
-        object_id: runSession.id,
-        trace_subject_type: 'execution_package',
-        trace_subject_id: executionPackage.id,
-        ref: clone(artifact),
-        created_at: at,
-      }),
-    ),
-  );
+  for (const [index, artifact] of artifacts.entries()) {
+    await repository.saveArtifact({
+      id: `artifact:${runSession.id}:${index}:${artifact.kind}:${artifact.name}`,
+      object_type: 'run_session',
+      object_id: runSession.id,
+      trace_subject_type: 'execution_package',
+      trace_subject_id: executionPackage.id,
+      ref: clone(artifact),
+      created_at: at,
+    });
+  }
 };
 
 const runSelfReview = async (

@@ -107,6 +107,8 @@ type RunEventAccessOptions = {
 export class P0Service {
   private idCounter = 0;
   private timeCounter = 0;
+  private durableTimeMs = 0;
+  private readonly durableInstanceId = randomUUID().replace(/-/g, '').slice(0, 12);
   private readonly specRevisionIndex = new Map<string, string>();
   private readonly planRevisionIndex = new Map<string, string>();
 
@@ -1308,10 +1310,19 @@ export class P0Service {
 
   private id(prefix: string): string {
     this.idCounter += 1;
+    if (this.durabilityMode === 'durable') {
+      return `${prefix}-${this.durableInstanceId}-${this.idCounter}`;
+    }
     return `${prefix}-${this.idCounter}`;
   }
 
   private now(): string {
+    if (this.durabilityMode === 'durable') {
+      const current = Date.now();
+      this.durableTimeMs = current > this.durableTimeMs ? current : this.durableTimeMs + 1;
+      return new Date(this.durableTimeMs).toISOString();
+    }
+
     this.timeCounter += 1;
     return new Date(Date.UTC(2026, 4, 5, 0, 0, this.timeCounter)).toISOString();
   }

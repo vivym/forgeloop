@@ -192,6 +192,7 @@ export class RunWorker {
   private readonly idleThresholdMs: number;
   private readonly artifactRoot: string;
   private drainPromise: Promise<void> | undefined;
+  private drainAgainRequested = false;
 
   constructor(input: RunWorkerInput) {
     this.repository = input.repository;
@@ -210,11 +211,20 @@ export class RunWorker {
 
   kick(): void {
     if (this.drainPromise !== undefined) {
+      this.drainAgainRequested = true;
       return;
     }
 
-    this.drainPromise = this.drainOnce().finally(() => {
+    this.startBackgroundDrain();
+  }
+
+  private startBackgroundDrain(): void {
+    this.drainAgainRequested = false;
+    this.drainPromise = this.drainOnce().catch(() => undefined).finally(() => {
       this.drainPromise = undefined;
+      if (this.drainAgainRequested) {
+        this.startBackgroundDrain();
+      }
     });
   }
 

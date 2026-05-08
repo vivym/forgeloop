@@ -100,6 +100,14 @@ pnpm dogfood:p0:durable
 
 `pnpm dogfood:p0:durable` uses `FORGELOOP_DATABASE_URL` when provided and never drops that database. Without it, the script looks for a running Docker Postgres container with a published 5432 port, creates a temporary `forgeloop_dogfood_<timestamp>` database, runs schema push and `pnpm dogfood:p0`, verifies durable PASS markers in the generated report, then drops only the temporary database it created. Set `FORGELOOP_DOGFOOD_START_POSTGRES=1` to allow the script to start and remove a disposable Postgres container when no candidate exists.
 
+Run the three P0 dogfood Work Items from `docs/dogfood/p0-dogfood-work-items.md` with:
+
+```bash
+pnpm dogfood:p0:work-items
+```
+
+The script creates feature, bugfix, and test/refactor Work Items, approves their Spec and Plan records, runs Execution Packages, records Review Packets, and exercises `changes_requested -> rerun -> approve` for the browser Run Console item. It writes `docs/superpowers/reports/p0-dogfood-work-items-completion.md`.
+
 ## API
 
 Core P0 endpoints include:

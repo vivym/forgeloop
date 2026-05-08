@@ -2,6 +2,14 @@
 
 This runbook defines the first three real ForgeLoop P0 dogfood Work Items. The goal is to validate the product loop, not to maximize feature volume.
 
+Run the batch with:
+
+```bash
+pnpm dogfood:p0:work-items
+```
+
+The script writes the latest completion evidence to `docs/superpowers/reports/p0-dogfood-work-items-completion.md`.
+
 ## Batch Acceptance
 
 The batch is complete only when all three Work Items have:

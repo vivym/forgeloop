@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
 import { InMemoryP0Repository } from '../../packages/db/src';
+import { transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
 import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
@@ -111,6 +112,51 @@ class FailingHeartbeatRepository extends InMemoryP0Repository {
 }
 
 describe('RunWorker', () => {
+  it('runs a follow-up drain when kick is called during an active drain', async () => {
+    const repository = new InMemoryP0Repository();
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    const driver = new FakeCodexSessionDriver({
+      script: [{ kind: 'delay', ms: 20 }, { kind: 'terminal', status: 'succeeded', summary: 'Driver completed.' }],
+    });
+    const worker = runWorker({ repository, driver });
+
+    worker.kick();
+    await delay(1);
+
+    const { last_run_session_id, last_failure_summary, blocked_reason, ...readyBase } = executionPackage;
+    void last_run_session_id;
+    void last_failure_summary;
+    void blocked_reason;
+    const secondPackage = transitionExecutionPackage(
+      {
+        ...readyBase,
+        id: 'execution-package-2',
+        phase: 'ready',
+        activity_state: 'idle',
+        gate_state: 'none',
+        resolution: 'none',
+      },
+      { type: 'run', run_session_id: 'run-session-2', at: '2026-05-05T00:00:01.000Z' },
+    );
+    const secondRun = transitionRunSession(undefined, {
+      type: 'create',
+      id: 'run-session-2',
+      execution_package_id: secondPackage.id,
+      requested_by_actor_id: 'actor-owner',
+      executor_type: 'mock',
+      at: '2026-05-05T00:00:01.000Z',
+    });
+    await repository.saveExecutionPackage(secondPackage);
+    await repository.saveRunSession(secondRun);
+
+    worker.kick();
+    await delay(80);
+
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({ status: 'succeeded' });
+    expect(await repository.getRunSession(secondRun.id)).toMatchObject({ status: 'succeeded' });
+    expect(driver.startCalls.map((call) => call.runSpec.run_session_id)).toEqual([runSession.id, secondRun.id]);
+  });
+
   it('discovers queued runs, emits live events, and finalizes only after terminal driver completion', async () => {
     const repository = new InMemoryP0Repository();
     const { runSession } = await seedQueuedPackageRun(repository);

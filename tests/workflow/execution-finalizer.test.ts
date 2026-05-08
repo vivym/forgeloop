@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecutorResult } from '@forgeloop/contracts';
 import { InMemoryP0Repository } from '../../packages/db/src';
-import type { ReviewPacket } from '../../packages/domain/src/index';
+import type { Artifact, ReviewPacket } from '../../packages/domain/src/index';
 import { finalizePackageRunWithExecutorResult } from '../../packages/workflow/src';
 import {
   seedReadyStartedPackageRun,
@@ -38,6 +38,22 @@ class LeasingRepository extends InMemoryP0Repository {
         this.insideLease = false;
       }
     });
+  }
+}
+
+class ArtifactConcurrencyDetectingRepository extends InMemoryP0Repository {
+  inFlightArtifactWrites = 0;
+  maxConcurrentArtifactWrites = 0;
+
+  override async saveArtifact(artifact: Artifact): Promise<void> {
+    this.inFlightArtifactWrites += 1;
+    this.maxConcurrentArtifactWrites = Math.max(this.maxConcurrentArtifactWrites, this.inFlightArtifactWrites);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await super.saveArtifact(artifact);
+    } finally {
+      this.inFlightArtifactWrites -= 1;
+    }
   }
 }
 
@@ -84,6 +100,31 @@ const nonRetryableFailedExecutorResult = (runSessionId: string): ExecutorResult 
 });
 
 describe('execution finalizer', () => {
+  it('persists artifacts sequentially during leased finalization', async () => {
+    const repo = new ArtifactConcurrencyDetectingRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = succeededExecutorResult(context.runSession.id);
+    const lease = await repo.claimRunWorkerLease({
+      run_session_id: context.runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-07T00:00:00.000Z',
+      lease_duration_ms: 60_000,
+    });
+
+    await finalizePackageRunWithExecutorResult({
+      repository: repo,
+      runSessionId: context.runSession.id,
+      executorResult: result,
+      selfReview: async () => succeededSelfReview(),
+      workerLease: { workerId: lease.worker_id, leaseToken: lease.lease_token },
+      now: () => '2026-05-07T00:00:00.000Z',
+    });
+
+    expect(repo.maxConcurrentArtifactWrites).toBe(1);
+    expect(await repo.listArtifactsForObject('run_session', context.runSession.id)).toHaveLength(result.artifacts.length);
+  });
+
   it('is idempotent when retrying a succeeded executor result after partial persistence', async () => {
     const repo = new InMemoryP0Repository();
     const context = await seedReadyStartedPackageRun(repo);
