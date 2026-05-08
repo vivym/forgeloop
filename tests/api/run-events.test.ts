@@ -89,6 +89,39 @@ describe('run event API', () => {
     expect(JSON.stringify(response.body)).not.toContain('raw-codex.jsonl');
   });
 
+  it('redacts executor raw metadata from run-session detail responses', async () => {
+    const { app, runSessionId, repo } = await track(seedAppWithRunSession());
+    const runSession = await repo.getRunSession(runSessionId);
+    await repo.saveRunSession({
+      ...runSession!,
+      executor_result: {
+        run_session_id: runSessionId,
+        executor_type: 'local_codex',
+        executor_version: 'test-executor',
+        status: 'succeeded',
+        started_at: '2026-05-07T00:00:00.000Z',
+        finished_at: '2026-05-07T00:01:00.000Z',
+        summary: 'Completed.',
+        changed_files: [],
+        checks: [],
+        artifacts: [],
+        raw_metadata: {
+          workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-session-1',
+          source_repo_before_status: ' M packages/secret.ts',
+          effective_dangerous_mode: 'dangerously-bypass-approvals-and-sandbox',
+        },
+      },
+    });
+
+    const response = await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}`).expect(200);
+    const serialized = JSON.stringify(response.body);
+
+    expect(response.body.executor_result.raw_metadata).toEqual({});
+    expect(serialized).not.toContain('/Users/viv/projs');
+    expect(serialized).not.toContain('source_repo_before_status');
+    expect(serialized).not.toContain('dangerously-bypass-approvals-and-sandbox');
+  });
+
   it('exposes non-secret worker lease metadata on run-session detail responses', async () => {
     const { app, runSessionId, repo } = await track(seedAppWithRunSession());
     await repo.claimRunWorkerLease({

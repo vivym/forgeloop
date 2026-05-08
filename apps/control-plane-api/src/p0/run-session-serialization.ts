@@ -52,6 +52,7 @@ export const serializePublicRunSession = (runSession: RunSession): RunSession =>
         executor_result: {
           ...executorResult,
           artifacts: serializePublicArtifactRefs(executorResult.artifacts),
+          raw_metadata: {},
         },
       };
 };
