@@ -129,12 +129,15 @@ const reviewPacketRiskFlags = (
   reviewPacket: ReviewPacket,
   executionPackage: ExecutionPackage,
   replacedReviewPacketIds: Set<string>,
+  selectedReviewPacketIds: Set<string>,
 ): EvidenceChainRiskFlag[] =>
   riskFlags(
     reviewPacket.decision === 'changes_requested' ? 'changes_requested' : undefined,
     reviewPacket.decision !== 'approved' ? 'unapproved_review_packet' : undefined,
     replacedReviewPacketIds.has(reviewPacket.id) ||
-      (executionPackage.last_run_session_id !== undefined && reviewPacket.run_session_id !== executionPackage.last_run_session_id)
+      (selectedReviewPacketIds.has(reviewPacket.id) &&
+        executionPackage.last_run_session_id !== undefined &&
+        reviewPacket.run_session_id !== executionPackage.last_run_session_id)
       ? 'stale_review_packet'
       : undefined,
   );
@@ -618,7 +621,7 @@ export const buildEvidenceChain = async (
     }
 
     for (const reviewPacket of evidence.reviewPackets.filter((packet) => packet.status !== 'archived')) {
-      const flags = reviewPacketRiskFlags(reviewPacket, evidence.executionPackage, trace.replacedReviewPacketIds);
+      const flags = reviewPacketRiskFlags(reviewPacket, evidence.executionPackage, trace.replacedReviewPacketIds, selectedReviewPacketIds);
       addItem({
         id: `evidence-item:review-packet:${reviewPacket.id}`,
         source: 'review_packet',

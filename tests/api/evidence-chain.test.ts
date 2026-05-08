@@ -71,7 +71,7 @@ describe('evidence chain API', () => {
 
     const unlinkedPacket = chain.items.find((item) => item.subject.object_id === unlinkedReviewPacketId);
     expect(unlinkedPacket?.risk_flags).toContain('unapproved_review_packet');
-    expect(unlinkedPacket?.risk_flags).toContain('stale_review_packet');
+    expect(unlinkedPacket?.risk_flags).not.toContain('stale_review_packet');
     const unlinkedRun = chain.items.find((item) => item.id === 'evidence-item:run-session:run-session-unlinked-history');
     expect(unlinkedRun?.risk_flags).not.toContain('superseded_run');
 
@@ -229,6 +229,21 @@ describe('evidence chain API', () => {
     expect(subjectIds).not.toContain(unlinkedReviewPacketId);
     expect(itemIds).not.toContain('evidence-item:run-session:run-session-unlinked-history');
     expect(itemIds).not.toContain('evidence-item:review-packet:review-packet-unlinked-history');
+  });
+
+  it('marks an explicitly selected old packet stale when it is not current', async () => {
+    const { app, workItemId, unlinkedReviewPacketId } = await track(seedEvidenceChainScenario());
+
+    const response = await request(app.getHttpServer())
+      .get(`/work-items/${workItemId}/evidence-chain`)
+      .query({ review_packet_id: unlinkedReviewPacketId })
+      .expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+    const unlinkedPacket = chain.items.find((item) => item.subject.object_id === unlinkedReviewPacketId);
+
+    expect(chain.focus).toEqual({ selection: 'explicit', review_packet_ids: [unlinkedReviewPacketId] });
+    expect(unlinkedPacket?.risk_flags).toContain('stale_review_packet');
+    expect(unlinkedPacket?.risk_flags).toContain('unapproved_review_packet');
   });
 
   it('reports partial empty current projection for a work item with no review evidence', async () => {
