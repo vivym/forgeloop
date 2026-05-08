@@ -6,6 +6,7 @@ ForgeLoop is a P0 delivery-loop control plane for taking a Work Item through app
 
 ```bash
 pnpm install
+cp .env.example .env
 ```
 
 ## Local Infra
