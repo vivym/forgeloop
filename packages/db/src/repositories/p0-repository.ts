@@ -9,7 +9,10 @@ import type {
   Project,
   ProjectRepo,
   ReviewPacket,
+  RunCommand,
+  RunEvent,
   RunSession,
+  RunWorkerLease,
   Spec,
   SpecRevision,
   StatusHistory,
@@ -46,6 +49,72 @@ export interface P0Repository {
   saveRunSession(runSession: RunSession): Promise<void>;
   getRunSession(runSessionId: string): Promise<RunSession | undefined>;
   listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]>;
+  listRecoverableRunSessions(): Promise<RunSession[]>;
+
+  appendRunEvent(event: Omit<RunEvent, 'sequence' | 'cursor'>): Promise<RunEvent>;
+  listRunEvents(runSessionId: string, options?: { after?: string; limit?: number }): Promise<RunEvent[]>;
+  getLatestRunEvent(runSessionId: string): Promise<RunEvent | undefined>;
+  appendWorkerRunEvent(
+    event: Omit<RunEvent, 'sequence' | 'cursor'>,
+    lease: { workerId: string; leaseToken: string },
+  ): Promise<RunEvent>;
+
+  saveRunCommand(command: RunCommand): Promise<void>;
+  claimNextRunCommand(
+    runSessionId: string,
+    workerId: string,
+    leaseToken: string,
+    now: string,
+    options?: { reclaim_claimed_before?: string },
+  ): Promise<{ command: RunCommand; reclaimed: boolean } | undefined>;
+  recordRunCommandDriverAck(
+    commandId: string,
+    lease: { workerId: string; leaseToken: string },
+    driverAck: Record<string, unknown>,
+    acknowledgedAt: string,
+  ): Promise<void>;
+  markRunCommandApplied(
+    commandId: string,
+    lease: { workerId: string; leaseToken: string },
+    appliedAt: string,
+    driverAck: Record<string, unknown>,
+  ): Promise<void>;
+  markRunCommandFailed(
+    commandId: string,
+    lease: { workerId: string; leaseToken: string },
+    failureReason: string,
+    failedAt: string,
+  ): Promise<void>;
+  supersedePendingRunCommands(runSessionId: string, commandTypes: RunCommand['command_type'][], now: string): Promise<void>;
+  supersedePendingRunCommandsForWorker(
+    runSessionId: string,
+    commandTypes: RunCommand['command_type'][],
+    lease: { workerId: string; leaseToken: string },
+    now: string,
+  ): Promise<void>;
+
+  claimRunWorkerLease(input: {
+    run_session_id: string;
+    worker_id: string;
+    lease_token: string;
+    now: string;
+    expires_at: string;
+  }): Promise<RunWorkerLease>;
+  heartbeatRunWorkerLease(
+    runSessionId: string,
+    workerId: string,
+    leaseToken: string,
+    heartbeatAt: string,
+    expiresAt: string,
+  ): Promise<void>;
+  getRunWorkerLease(runSessionId: string): Promise<RunWorkerLease | undefined>;
+  releaseRunWorkerLease(runSessionId: string, workerId: string, leaseToken: string, releasedAt: string): Promise<void>;
+  assertActiveRunWorkerLease(runSessionId: string, workerId: string, leaseToken: string, now: string): Promise<void>;
+  withActiveRunWorkerLease<T>(
+    runSessionId: string,
+    lease: { workerId: string; leaseToken: string; now: string },
+    write: (repository: P0Repository) => Promise<T>,
+  ): Promise<T>;
 
   saveReviewPacket(reviewPacket: ReviewPacket): Promise<void>;
   getReviewPacket(reviewPacketId: string): Promise<ReviewPacket | undefined>;

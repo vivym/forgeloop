@@ -150,6 +150,23 @@ export interface RunSession {
   check_results?: CheckResult[];
   artifacts?: ArtifactRef[];
   log_refs?: ArtifactRef[];
+  runtime_metadata?: {
+    durability_mode?: 'durable' | 'volatile_demo';
+    driver_kind?: 'app_server' | 'exec_fallback' | 'fake';
+    driver_status?: 'not_started' | 'starting' | 'active' | 'waiting_for_input' | 'stalled' | 'terminal';
+    codex_thread_id?: string;
+    active_turn_id?: string;
+    workspace_path?: string;
+    app_server_endpoint?: string;
+    worker_id?: string;
+    worker_lease_status?: 'active' | 'released' | 'expired';
+    worker_lease_heartbeat_at?: string;
+    worker_lease_expires_at?: string;
+    last_event_cursor?: string;
+    last_event_at?: string;
+    recovery_attempt_count?: number;
+    effective_dangerous_mode?: 'confirmed' | 'unconfirmed' | 'not_requested';
+  };
   summary?: string;
   failure_kind?: string;
   failure_reason?: string;
@@ -157,6 +174,32 @@ export interface RunSession {
   updated_at?: string;
   started_at?: string;
   finished_at?: string;
+}
+
+export interface RunEvent {
+  id: string;
+  run_session_id?: string;
+  sequence: number;
+  cursor?: string;
+  event_type?: string;
+  source?: string;
+  visibility?: 'public';
+  summary?: string;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface RunEventListResponse {
+  events: RunEvent[];
+  next_cursor?: string;
+  has_more?: boolean;
+}
+
+export interface RunOperatorCommandResponse {
+  status?: string;
+  command_id?: string;
+  run_session_id?: string;
+  command_type?: 'input' | 'cancel' | 'resume';
 }
 
 export interface RequestedChange {
@@ -288,6 +331,15 @@ export interface ReviewDecisionBody {
   requested_changes?: RequestedChange[];
 }
 
+export interface RunEventStreamHandlers {
+  onEvent: (event: RunEvent) => void;
+  onError: (error: Event | Error) => void;
+}
+
+export interface RunEventStream {
+  close: () => void;
+}
+
 type FetchLike = typeof fetch;
 
 export class ForgeloopApiError extends Error {
@@ -311,12 +363,42 @@ const defaultBaseUrl = () => import.meta.env.VITE_FORGELOOP_API_URL || 'http://l
 
 const normalizeBaseUrl = (baseUrl: string) => baseUrl.replace(/\/+$/, '');
 
+const requiredActorId = (actorId: string) => {
+  const trimmed = actorId.trim();
+  if (!trimmed) throw new Error('actorId is required');
+  return trimmed;
+};
+
+const actorHeader = (actorId?: string) =>
+  actorId === undefined ? {} : { 'X-Forgeloop-Actor-Id': requiredActorId(actorId) };
+
+const runEventsQuery = (options: { after?: string; streamToken?: string }) => {
+  const params = new URLSearchParams();
+  if (options.streamToken) params.set('stream_token', options.streamToken);
+  if (options.after) params.set('after', options.after);
+  return params.toString();
+};
+
+const requireRunEventStreamToken = (payload: unknown) => {
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('token' in payload) ||
+    typeof payload.token !== 'string' ||
+    payload.token.trim().length === 0
+  ) {
+    throw new Error('Malformed run event stream token response');
+  }
+
+  return payload.token;
+};
+
 export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
   const baseUrl = normalizeBaseUrl(options.baseUrl ?? defaultBaseUrl());
   const fetchImpl = options.fetch ?? fetch;
 
-  async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-    const headers = { 'content-type': 'application/json' };
+  async function request<T>(path: string, init: { method?: string; body?: unknown; actorId?: string } = {}): Promise<T> {
+    const headers = { 'content-type': 'application/json', ...actorHeader(init.actorId) };
     const response = await fetchImpl(`${baseUrl}${path}`, {
       method: init.method ?? 'GET',
       headers,
@@ -384,13 +466,96 @@ export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
     markPackageReady: (packageId: string, body: ActorCommandBody) =>
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}/mark-ready`, { method: 'POST', body }),
     runPackage: (packageId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/run`, { method: 'POST', body }),
+      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/run`, {
+        method: 'POST',
+        body,
+        actorId: body.requested_by_actor_id,
+      }),
     rerunPackage: (packageId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/rerun`, { method: 'POST', body }),
+      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/rerun`, {
+        method: 'POST',
+        body,
+        actorId: body.requested_by_actor_id,
+      }),
     forceRerunPackage: (packageId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/force-rerun`, { method: 'POST', body }),
+      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/force-rerun`, {
+        method: 'POST',
+        body,
+        actorId: body.requested_by_actor_id,
+      }),
 
     getRunSession: (runSessionId: string) => request<RunSession>(`/run-sessions/${encodeURIComponent(runSessionId)}`),
+    listRunEvents: async (runSessionId: string, options: { after?: string; actorId: string }) =>
+      request<RunEventListResponse>(
+        `/run-sessions/${encodeURIComponent(runSessionId)}/events${options.after ? `?${runEventsQuery({ after: options.after })}` : ''}`,
+        { actorId: options.actorId },
+      ),
+    sendRunInput: async (runSessionId: string, actorId: string, message: string, targetTurnId?: string) =>
+      request<RunOperatorCommandResponse>(`/run-sessions/${encodeURIComponent(runSessionId)}/input`, {
+        method: 'POST',
+        body: {
+          message,
+          ...(targetTurnId ? { target_turn_id: targetTurnId } : {}),
+        },
+        actorId,
+      }),
+    cancelRun: async (runSessionId: string, actorId: string, reason?: string) =>
+      request<RunOperatorCommandResponse>(`/run-sessions/${encodeURIComponent(runSessionId)}/cancel`, {
+        method: 'POST',
+        body: {
+          ...(reason ? { reason } : {}),
+        },
+        actorId,
+      }),
+    resumeRun: async (runSessionId: string, actorId: string, reason?: string) =>
+      request<RunOperatorCommandResponse>(`/run-sessions/${encodeURIComponent(runSessionId)}/resume`, {
+        method: 'POST',
+        body: {
+          ...(reason ? { reason } : {}),
+        },
+        actorId,
+      }),
+    createRunEventStreamToken: async (runSessionId: string, actorId: string) =>
+      request<{ token: string; expires_at: string }>(`/run-sessions/${encodeURIComponent(runSessionId)}/events/stream-token`, {
+        method: 'POST',
+        actorId,
+      }),
+    openRunEventStream: async (
+      runSessionId: string,
+      options: { after?: string; actorId: string },
+      handlers: RunEventStreamHandlers,
+    ): Promise<RunEventStream> => {
+      let token: string;
+      try {
+        token = requireRunEventStreamToken(
+          await request<unknown>(`/run-sessions/${encodeURIComponent(runSessionId)}/events/stream-token`, {
+            method: 'POST',
+            actorId: options.actorId,
+          }),
+        );
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        handlers.onError(normalized);
+        throw normalized;
+      }
+      const eventSource = new EventSource(
+        `${baseUrl}/run-sessions/${encodeURIComponent(runSessionId)}/events/stream?${runEventsQuery({
+          streamToken: token,
+          ...(options.after === undefined ? {} : { after: options.after }),
+        })}`,
+      );
+      eventSource.onmessage = (message) => {
+        try {
+          handlers.onEvent(JSON.parse(message.data) as RunEvent);
+        } catch (error) {
+          handlers.onError(error instanceof Event ? error : error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      eventSource.onerror = (error) => {
+        handlers.onError(error);
+      };
+      return eventSource;
+    },
     getReviewPacket: (reviewPacketId: string) => request<ReviewPacket>(`/review-packets/${encodeURIComponent(reviewPacketId)}`),
     approveReviewPacket: (reviewPacketId: string, body: ReviewDecisionBody) =>
       request<Record<string, unknown>>(`/review-packets/${encodeURIComponent(reviewPacketId)}/approve`, { method: 'POST', body }),

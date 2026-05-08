@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@forgeloop/contracts": "workspace:*",
+    "@forgeloop/domain": "workspace:*",
     "zod": "^4.4.3"
   }
 }

@@ -8,9 +8,10 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
+import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
+import type { RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -149,6 +150,30 @@ const createManualPackage = async (
     .body;
 };
 
+const repositoryFor = (app: INestApplication): InMemoryP0Repository =>
+  (app.get(P0Service) as unknown as { repository: InMemoryP0Repository }).repository;
+
+const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
+  const repository = repositoryFor(app);
+  const worker = app.get(RUN_WORKER) as RunWorker;
+  void worker.drainOnce();
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const runSession = await repository.getRunSession(runSessionId);
+    if (runSession !== undefined) {
+      const packet = (await repository.listReviewPacketsForPackage(runSession.execution_package_id)).find(
+        (item) => item.run_session_id === runSessionId,
+      );
+      if (packet !== undefined) {
+        return packet;
+      }
+    }
+    await delay(10);
+  }
+
+  throw new Error(`Timed out waiting for ReviewPacket for ${runSessionId}`);
+};
+
 const getAvailablePort = async (): Promise<number> =>
   new Promise((resolve, reject) => {
     const server = createServer();
@@ -274,8 +299,9 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
-    expect(firstRun).toMatchObject({ status: 'accepted', workflow_result: { status: 'succeeded' } });
-    const firstReviewPacketId = firstRun.workflow_result.reviewPacketId;
+    expect(firstRun).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
+    expect(firstRun).not.toHaveProperty('workflow_result');
+    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
     await request(server).get(`/run-sessions/${firstRun.run_session_id}`).expect(200);
     await request(server).get(`/review-packets/${firstReviewPacketId}`).expect(200);
 
@@ -303,11 +329,12 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
+    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
     const rerunSession = (await request(server).get(`/run-sessions/${rerun.run_session_id}`).expect(200)).body;
     expect(rerunSession.run_spec.review_context.latest_decision).toBe('changes_requested');
 
     await request(server)
-      .post(`/review-packets/${rerun.workflow_result.reviewPacketId}/approve`)
+      .post(`/review-packets/${rerunReviewPacketId}/approve`)
       .send({
         summary: 'Approved for handoff.',
         reviewed_by_actor_id: actorReviewer,
@@ -359,8 +386,9 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
-      .post(`/review-packets/${run.workflow_result.reviewPacketId}/approve`)
+      .post(`/review-packets/${reviewPacketId}/approve`)
       .send({
         summary: 'Approved once.',
         reviewed_by_actor_id: actorReviewer,
@@ -368,7 +396,7 @@ describe('P0 control plane API', () => {
       })
       .expect(201);
     await request(server)
-      .post(`/review-packets/${run.workflow_result.reviewPacketId}/approve`)
+      .post(`/review-packets/${reviewPacketId}/approve`)
       .send({
         summary: 'Approved twice.',
         reviewed_by_actor_id: actorReviewer,
@@ -427,8 +455,9 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
-      .post(`/review-packets/${run.workflow_result.reviewPacketId}/request-changes`)
+      .post(`/review-packets/${reviewPacketId}/request-changes`)
       .send({
         summary: 'Invalid review decision.',
         reviewed_by_actor_id: actorReviewer,
@@ -436,7 +465,7 @@ describe('P0 control plane API', () => {
         requested_changes: { title: 'Wrong shape' },
       })
       .expect(400);
-    expect((await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body).toMatchObject({
+    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body).toMatchObject({
       status: 'ready',
       decision: 'none',
     });
@@ -456,13 +485,14 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .patch(`/execution-packages/${executionPackage.id}`)
       .send({ objective: 'Edited package creates a fresh run spec.' })
       .expect(200);
 
     const oldRun = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
-    const archivedPacket = (await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body;
+    const archivedPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
     expect(oldRun.status).toBe('succeeded');
     expect(archivedPacket.status).toBe('archived');
 
@@ -495,7 +525,8 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
-    const readyPacket = await repository.getReviewPacket(run.workflow_result.reviewPacketId);
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    const readyPacket = await repository.getReviewPacket(reviewPacketId);
     await repository.saveReviewPacket({ ...readyPacket!, status: 'in_review' });
 
     await request(server)
@@ -504,9 +535,7 @@ describe('P0 control plane API', () => {
       .expect(200);
 
     expect((await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body.status).toBe('succeeded');
-    expect((await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body.status).toBe(
-      'archived',
-    );
+    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('archived');
   });
 
   it('validates run, rerun, and force-rerun request bodies and previous run ids', async () => {
@@ -525,8 +554,9 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
-      .post(`/review-packets/${run.workflow_result.reviewPacketId}/request-changes`)
+      .post(`/review-packets/${reviewPacketId}/request-changes`)
       .send({
         summary: 'Rerun required.',
         reviewed_by_actor_id: actorReviewer,
@@ -550,6 +580,7 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, previous_run_session_id: run.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
+    await waitForReviewPacket(app, rerun.run_session_id);
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
@@ -581,6 +612,7 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
       .send({
@@ -605,10 +637,9 @@ describe('P0 control plane API', () => {
         .expect(201)
     ).body;
 
-    expect((await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body.status).toBe(
-      'archived',
-    );
-    expect(forceRun.workflow_result.reviewPacketId).not.toBe(run.workflow_result.reviewPacketId);
+    const forceReviewPacketId = (await waitForReviewPacket(app, forceRun.run_session_id)).id;
+    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('archived');
+    expect(forceReviewPacketId).not.toBe(reviewPacketId);
   });
 
   it('rejects force-rerun after completed review and leaves the completed packet immutable', async () => {
@@ -625,8 +656,9 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
-      .post(`/review-packets/${run.workflow_result.reviewPacketId}/approve`)
+      .post(`/review-packets/${reviewPacketId}/approve`)
       .send({
         summary: 'Completed review.',
         reviewed_by_actor_id: actorReviewer,
@@ -645,7 +677,7 @@ describe('P0 control plane API', () => {
       })
       .expect(400);
 
-    expect((await request(server).get(`/review-packets/${run.workflow_result.reviewPacketId}`).expect(200)).body).toMatchObject({
+    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body).toMatchObject({
       status: 'completed',
       decision: 'approved',
       summary: 'Completed review.',
@@ -656,6 +688,7 @@ describe('P0 control plane API', () => {
     const service = app.get(P0Service);
     const repository = new SequencingRepository();
     (service as unknown as { repository: SequencingRepository }).repository = repository;
+    (app.get(RUN_WORKER) as unknown as { repository: SequencingRepository }).repository = repository;
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
@@ -669,6 +702,7 @@ describe('P0 control plane API', () => {
         .send({ requested_by_actor_id: actorOwner, workflow_only: true })
         .expect(201)
     ).body;
+    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     repository.operations.length = 0;
 
     const forceRun = (
@@ -684,7 +718,7 @@ describe('P0 control plane API', () => {
         .expect(201)
     ).body;
 
-    expect(repository.operations.indexOf(`archiveReviewPacket:${run.workflow_result.reviewPacketId}`)).toBeLessThan(
+    expect(repository.operations.indexOf(`archiveReviewPacket:${reviewPacketId}`)).toBeLessThan(
       repository.operations.indexOf(`saveRunSession:${forceRun.run_session_id}`),
     );
   });

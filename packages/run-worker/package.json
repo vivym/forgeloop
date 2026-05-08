@@ -1,0 +1,18 @@
+{
+  "name": "@forgeloop/run-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@forgeloop/contracts": "workspace:*",
+    "@forgeloop/db": "workspace:*",
+    "@forgeloop/domain": "workspace:*",
+    "@forgeloop/executor": "workspace:*",
+    "@forgeloop/workflow": "workspace:*"
+  }
+}

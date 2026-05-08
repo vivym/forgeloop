@@ -1,7 +1,6 @@
 import {
   executorResultSchema,
   runSpecSchema,
-  selfReviewResultSchema,
   type ArtifactKind,
   type ArtifactRef,
   type ChangedFile,
@@ -15,10 +14,12 @@ import {
   type SelfReviewInput,
   type SelfReviewResult,
 } from '@forgeloop/contracts';
+import type { RunSessionStatus } from '@forgeloop/domain';
+
+import { finalizePackageRunWithExecutorResult } from './execution-finalizer';
 
 type IsoDateTime = string;
 
-type RunSessionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review';
 type ExecutionPackageActivityState = 'idle' | 'awaiting_ai' | 'ai_running' | 'blocked' | 'awaiting_human';
 type ExecutionPackageGateState = 'none' | 'not_submitted' | 'awaiting_human_review' | 'review_approved' | 'changes_requested';
@@ -192,6 +193,11 @@ export interface PackageExecutionRepository {
   appendObjectEvent(objectEvent: ObjectEventRecord): Promise<void>;
   appendStatusHistory(statusHistory: StatusHistoryRecord): Promise<void>;
   saveArtifact(artifact: ArtifactRecord): Promise<void>;
+  withActiveRunWorkerLease<T>(
+    runSessionId: string,
+    lease: { workerId: string; leaseToken: string; now: string },
+    write: (repository: PackageExecutionRepository) => Promise<T>,
+  ): Promise<T>;
 }
 
 export type PackageRunExecutor = (runSpec: RunSpec) => Promise<ExecutorResult>;
@@ -208,6 +214,23 @@ export interface ExecutePackageRunInput {
   timeoutSeconds?: number;
   forceRerun?: boolean;
 }
+
+export interface BuildPackageRunSpecInput {
+  repository: PackageExecutionRepository;
+  runSessionId: string;
+  defaultExecutorType?: ExecutorType;
+  workflowOnly?: boolean;
+  now?: () => IsoDateTime;
+  forceRerun?: boolean;
+}
+
+export interface StartPackageRunResult {
+  runSession: RunSessionRecord;
+  executionPackage: ExecutionPackageRecord;
+  runSpec: RunSpec;
+}
+
+export type BuildAndStartPackageRun = (input: BuildPackageRunSpecInput) => Promise<StartPackageRunResult>;
 
 export interface ExecutePackageRunActivityInput {
   runSessionId: string;
@@ -331,7 +354,7 @@ const latestRequestedChanges = (reviewPackets: ReviewPacketRecord[]): RunSpec['r
   };
 };
 
-const loadRunContext = async (
+export const loadRunContext = async (
   repository: PackageExecutionRepository,
   runSessionId: string,
 ): Promise<LoadedRunContext> => {
@@ -523,35 +546,45 @@ const persistArtifacts = async (
         ref: clone(artifact),
         created_at: at,
       }),
-    ),
-  );
+  ),
+);
 };
 
-const terminalStatusFor = (result: ExecutorResult): RunSessionStatus => {
-  if (result.status === 'succeeded') {
-    return 'succeeded';
-  }
-  if (result.status === 'timed_out') {
-    return 'timed_out';
-  }
-  if (result.status === 'cancelled') {
-    return 'cancelled';
-  }
-  return 'failed';
+export const buildAndStartPackageRun = async (input: BuildPackageRunSpecInput): Promise<StartPackageRunResult> => {
+  const at = input.now?.() ?? new Date().toISOString();
+  const context = await loadRunContext(input.repository, input.runSessionId);
+  const runSpec = buildRunSpec(context, input);
+
+  await archiveOpenReviewPacket(input.repository, context.runSession, context.executionPackage.id, at);
+
+  const started = await startWorkflow(input.repository, context.runSession, context.executionPackage, runSpec, at);
+  return {
+    runSession: started.runSession,
+    executionPackage: started.executionPackage,
+    runSpec,
+  };
 };
 
-const terminalEventTypeFor = (status: RunSessionStatus): string => {
-  switch (status) {
-    case 'succeeded':
-      return 'executor_succeeded';
-    case 'timed_out':
-      return 'executor_timed_out';
-    case 'cancelled':
-      return 'executor_cancelled';
-    default:
-      return 'executor_failed';
+const runExecutorAndNormalize = async (
+  executor: PackageRunExecutor,
+  runSpec: RunSpec,
+  runSession: RunSessionRecord,
+  at: IsoDateTime,
+): Promise<ExecutorResult> => {
+  try {
+    const parsedExecutorResult = executorResultSchema.parse(await executor(runSpec));
+
+    if (parsedExecutorResult.run_session_id !== runSession.id) {
+      throw new Error(`ExecutorResult run_session_id ${parsedExecutorResult.run_session_id} does not match ${runSession.id}`);
+    }
+
+    return validateExecutorResultForRunSpec(runSpec, parsedExecutorResult);
+  } catch (error) {
+    return executorFailureResult(runSpec, runSession, error, at);
   }
 };
+
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const failureSummaryForError = (error: unknown): string => {
   const message = errorMessage(error);
@@ -664,394 +697,44 @@ const validateExecutorResultForRunSpec = (runSpec: RunSpec, result: ExecutorResu
   return result;
 };
 
-const persistExecutorResult = async (
-  repository: PackageExecutionRepository,
-  runSession: RunSessionRecord,
-  executionPackage: ExecutionPackageRecord,
-  result: ExecutorResult,
-  at: IsoDateTime,
-): Promise<RunSessionRecord> => {
-  const terminalStatus = terminalStatusFor(result);
-  const persisted: RunSessionRecord = {
-    ...runSession,
-    status: terminalStatus,
-    executor_type: result.executor_type,
-    executor_result: result,
-    changed_files: result.changed_files.map(clone),
-    check_results: result.checks.map(clone),
-    artifacts: result.artifacts.filter((artifact) => artifact.kind !== 'logs').map(clone),
-    log_refs: result.artifacts.filter((artifact) => artifact.kind === 'logs').map(clone),
-    summary: result.summary,
-    finished_at: at,
-    updated_at: at,
-    ...(result.failure !== undefined
-      ? {
-          failure_kind: result.failure.kind,
-          failure_reason: result.failure.message,
-        }
-      : {}),
-  };
-
-  if (result.failure === undefined) {
-    delete persisted.failure_kind;
-    delete persisted.failure_reason;
-  }
-
-  await repository.saveRunSession(persisted);
-  await repository.appendStatusHistory(
-    history({
-      id: `status-history:${runSession.id}:${terminalStatus}`,
-      objectType: 'run_session',
-      objectId: runSession.id,
-      fromStatus: 'running',
-      toStatus: terminalStatus,
-      actorId: runSession.requested_by_actor_id,
-      reason: result.failure?.message,
-      at,
-    }),
-  );
-  await repository.appendObjectEvent(event(persisted, terminalEventTypeFor(terminalStatus), at, { summary: result.summary }));
-  await persistArtifacts(repository, persisted, executionPackage, result.artifacts, at);
-
-  return persisted;
-};
-
-const displayNameForCheck = (runSpec: RunSpec, checkResult: CheckResult): string =>
-  runSpec.required_checks.find((check) => check.check_id === checkResult.check_id)?.display_name ?? checkResult.check_id;
-
-const sentenceList = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
-
-const checkSummaryFor = (runSpec: RunSpec, checks: CheckResult[]): string => {
-  const passed = checks.filter((check) => check.status === 'succeeded').length;
-  const failedBlocking = checks.filter((check) => check.blocks_review && check.status !== 'succeeded').length;
-  const failedNonBlocking = checks.filter((check) => !check.blocks_review && check.status !== 'succeeded').length;
-  const parts: string[] = [];
-
-  if (passed > 0) {
-    parts.push(sentenceList(passed, 'check passed', 'checks passed'));
-  }
-  if (failedBlocking > 0) {
-    parts.push(sentenceList(failedBlocking, 'blocking check failed', 'blocking checks failed'));
-  }
-  if (failedNonBlocking > 0) {
-    parts.push(sentenceList(failedNonBlocking, 'non-blocking check failed', 'non-blocking checks failed'));
-  }
-
-  return parts.length === 0 ? 'No checks ran.' : `${parts.join('; ')}.`;
-};
-
-const nonBlockingRiskNotes = (runSpec: RunSpec, checks: CheckResult[]): string[] =>
-  checks
-    .filter((check) => !check.blocks_review && check.status !== 'succeeded')
-    .map((check) => `Non-blocking check failed: ${displayNameForCheck(runSpec, check)}.`);
-
-const fallbackSelfReview = (message: string): SelfReviewResult => ({
-  status: 'failed',
-  summary: 'AI self-review failed.',
-  spec_plan_alignment: 'AI self-review did not complete.',
-  test_assessment: 'AI self-review did not complete.',
-  risk_notes: [],
-  follow_up_questions: [],
-  failure_message: message,
-});
-
-const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
-const runSelfReview = async (
-  repository: PackageExecutionRepository,
-  runSession: RunSessionRecord,
-  executionPackage: ExecutionPackageRecord,
-  runSpec: RunSpec,
-  selfReview: PackageRunSelfReview,
-  at: IsoDateTime,
-): Promise<SelfReviewResult> => {
-  const input: SelfReviewInput = {
-    run_session_id: runSession.id,
-    execution_package_id: executionPackage.id,
-    spec_revision_id: runSpec.spec_revision_id,
-    plan_revision_id: runSpec.plan_revision_id,
-    run_summary: runSession.summary ?? 'Executor completed.',
-    changed_files: runSession.changed_files.map(clone),
-    check_results: runSession.check_results.map(clone),
-    artifact_refs: runSession.artifacts.map(clone),
-    requested_changes_context: runSpec.review_context.requested_changes.map(clone),
-  };
-
-  try {
-    const result = selfReviewResultSchema.parse(await selfReview(input));
-
-    if (result.status === 'failed') {
-      await repository.appendObjectEvent(
-        event(runSession, 'self_review_failed', at, { failure_message: result.failure_message ?? result.summary }),
-      );
-    }
-
-    return result;
-  } catch (error) {
-    const result = fallbackSelfReview(errorMessage(error));
-    await repository.appendObjectEvent(event(runSession, 'self_review_failed', at, { failure_message: result.failure_message }));
-    return result;
-  }
-};
-
-const createReviewPacket = async (
-  repository: PackageExecutionRepository,
-  runSession: RunSessionRecord,
-  executionPackage: ExecutionPackageRecord,
-  runSpec: RunSpec,
-  selfReviewResult: SelfReviewResult,
-  at: IsoDateTime,
-): Promise<ReviewPacketRecord> => {
-  const id = `review-packet:${runSession.id}`;
-  const existing = await repository.getReviewPacket(id);
-
-  if (existing !== undefined) {
-    return existing;
-  }
-
-  const failedSelfReviewNote =
-    selfReviewResult.status === 'failed'
-      ? [`AI self-review failed: ${selfReviewResult.failure_message ?? selfReviewResult.summary}.`]
-      : [];
-  const reviewPacket: ReviewPacketRecord = {
-    id,
-    run_session_id: runSession.id,
-    execution_package_id: executionPackage.id,
-    reviewer_actor_id: executionPackage.reviewer_actor_id,
-    spec_revision_id: runSpec.spec_revision_id,
-    plan_revision_id: runSpec.plan_revision_id,
-    status: 'ready',
-    decision: 'none',
-    changed_files: runSession.changed_files.map(clone),
-    check_result_summary: checkSummaryFor(runSpec, runSession.check_results),
-    self_review: clone(selfReviewResult),
-    risk_notes: [...selfReviewResult.risk_notes, ...nonBlockingRiskNotes(runSpec, runSession.check_results), ...failedSelfReviewNote],
-    requested_changes: [],
-    created_at: at,
-    updated_at: at,
-  };
-
-  await repository.saveReviewPacket(reviewPacket);
-  await repository.appendObjectEvent(event(runSession, 'review_packet_created', at, { review_packet_id: reviewPacket.id }));
-
-  return reviewPacket;
-};
-
-const updatePackageAfterSuccess = async (
-  repository: PackageExecutionRepository,
-  runSession: RunSessionRecord,
-  executionPackage: ExecutionPackageRecord,
-  at: IsoDateTime,
-): Promise<ExecutionPackageRecord> => {
-  const fromStatus = statusForPackage(executionPackage);
-  const updated: ExecutionPackageRecord = {
-    ...executionPackage,
-    phase: 'review',
-    activity_state: 'awaiting_human',
-    gate_state: 'awaiting_human_review',
-    resolution: 'none',
-    updated_at: at,
-  };
-
-  await repository.saveExecutionPackage(updated);
-  await repository.appendStatusHistory(
-    history({
-      id: `status-history:${executionPackage.id}:${runSession.id}:execution-succeeded`,
-      objectType: 'execution_package',
-      objectId: executionPackage.id,
-      fromStatus,
-      toStatus: statusForPackage(updated),
-      actorId: runSession.requested_by_actor_id,
-      at,
-    }),
-  );
-
-  return updated;
-};
-
-const updatePackageAfterFailure = async (
-  repository: PackageExecutionRepository,
-  runSession: RunSessionRecord,
-  executionPackage: ExecutionPackageRecord,
-  at: IsoDateTime,
-): Promise<ExecutionPackageRecord> => {
-  const fromStatus = statusForPackage(executionPackage);
-  const failureSummary = runSession.failure_reason ?? runSession.summary ?? 'Execution failed.';
-  const blockingCheckFailed = runSession.failure_kind === 'required_check_failed';
-  const retryable = runSession.executor_result?.failure?.retryable ?? true;
-  const updated: ExecutionPackageRecord =
-    blockingCheckFailed || retryable
-      ? {
-          ...executionPackage,
-          phase: 'ready',
-          activity_state: 'idle',
-          gate_state: 'none',
-          last_failure_summary: failureSummary,
-          updated_at: at,
-        }
-      : {
-          ...executionPackage,
-          activity_state: 'blocked',
-          blocked_reason: failureSummary,
-          updated_at: at,
-        };
-
-  await repository.saveExecutionPackage(updated);
-  await repository.appendStatusHistory(
-    history({
-      id: `status-history:${executionPackage.id}:${runSession.id}:execution-failed`,
-      objectType: 'execution_package',
-      objectId: executionPackage.id,
-      fromStatus,
-      toStatus: statusForPackage(updated),
-      actorId: runSession.requested_by_actor_id,
-      reason: failureSummary,
-      at,
-    }),
-  );
-
-  return updated;
-};
-
-const isLatestRunForPackage = (runSession: RunSessionRecord, executionPackage: ExecutionPackageRecord): boolean =>
-  executionPackage.last_run_session_id === runSession.id;
-
-const ensureTerminalRunSideEffects = async (
-  repository: PackageExecutionRepository,
-  runSession: RunSessionRecord,
-  executionPackage: ExecutionPackageRecord,
-  executorResult: ExecutorResult,
-  at: IsoDateTime,
-): Promise<void> => {
-  const terminalStatus = terminalStatusFor(executorResult);
-
-  await repository.appendStatusHistory(
-    history({
-      id: `status-history:${runSession.id}:${terminalStatus}`,
-      objectType: 'run_session',
-      objectId: runSession.id,
-      fromStatus: 'running',
-      toStatus: terminalStatus,
-      actorId: runSession.requested_by_actor_id,
-      reason: executorResult.failure?.message,
-      at,
-    }),
-  );
-  await repository.appendObjectEvent(
-    event(runSession, terminalEventTypeFor(terminalStatus), at, { summary: executorResult.summary }),
-  );
-  await persistArtifacts(repository, runSession, executionPackage, executorResult.artifacts, at);
-};
-
-const reconcileTerminalRun = async (
-  input: ExecutePackageRunInput,
-  context: LoadedRunContext,
-  at: IsoDateTime,
-): Promise<ExecutePackageRunResult> => {
-  const executorResult = assertFound(context.runSession.executor_result, `ExecutorResult ${context.runSession.id}`);
-  const parsedExecutorResult = executorResultSchema.parse(executorResult);
-  const runSpec = runSpecSchema.parse(context.runSession.run_spec ?? buildRunSpec(context, input));
-
-  await ensureTerminalRunSideEffects(input.repository, context.runSession, context.executionPackage, parsedExecutorResult, at);
-  const isLatestRun = isLatestRunForPackage(context.runSession, context.executionPackage);
-
-  if (context.runSession.status !== 'succeeded') {
-    if (isLatestRun) {
-      await updatePackageAfterFailure(input.repository, context.runSession, context.executionPackage, at);
-    }
-    return { runSessionId: context.runSession.id, status: context.runSession.status };
-  }
-
-  let reviewPacket = await input.repository.getReviewPacket(`review-packet:${context.runSession.id}`);
-
-  if (reviewPacket === undefined) {
-    const selfReviewResult = await runSelfReview(
-      input.repository,
-      context.runSession,
-      context.executionPackage,
-      runSpec,
-      input.selfReview,
-      at,
-    );
-    reviewPacket = await createReviewPacket(
-      input.repository,
-      context.runSession,
-      context.executionPackage,
-      runSpec,
-      selfReviewResult,
-      at,
-    );
-  }
-
-  if (isLatestRun) {
-    await updatePackageAfterSuccess(input.repository, context.runSession, context.executionPackage, at);
-  }
-
-  return { runSessionId: context.runSession.id, status: context.runSession.status, reviewPacketId: reviewPacket.id };
-};
-
 export const executePackageRun = async (input: ExecutePackageRunInput): Promise<ExecutePackageRunResult> => {
   const at = input.now?.() ?? new Date().toISOString();
   const context = await loadRunContext(input.repository, input.runSessionId);
 
   if (terminalStatuses.has(context.runSession.status)) {
-    return reconcileTerminalRun(input, context, at);
+    return finalizePackageRunWithExecutorResult({
+      repository: input.repository,
+      runSessionId: input.runSessionId,
+      executorResult: assertFound(context.runSession.executor_result, `ExecutorResult ${context.runSession.id}`),
+      selfReview: input.selfReview,
+      now: () => at,
+    });
   }
 
-  const runSpec = buildRunSpec(context, input);
-  await archiveOpenReviewPacket(input.repository, context.runSession, context.executionPackage.id, at);
-
-  const started = await startWorkflow(input.repository, context.runSession, context.executionPackage, runSpec, at);
-  let executorResult: ExecutorResult;
-
-  try {
-    const parsedExecutorResult = executorResultSchema.parse(await input.executor(runSpec));
-
-    if (parsedExecutorResult.run_session_id !== started.runSession.id) {
-      throw new Error(`ExecutorResult run_session_id ${parsedExecutorResult.run_session_id} does not match ${started.runSession.id}`);
-    }
-
-    executorResult = validateExecutorResultForRunSpec(runSpec, parsedExecutorResult);
-  } catch (error) {
-    executorResult = executorFailureResult(runSpec, started.runSession, error, at);
+  const buildInput: BuildPackageRunSpecInput = {
+    repository: input.repository,
+    runSessionId: input.runSessionId,
+    now: () => at,
+  };
+  if (input.defaultExecutorType !== undefined) {
+    buildInput.defaultExecutorType = input.defaultExecutorType;
+  }
+  if (input.workflowOnly !== undefined) {
+    buildInput.workflowOnly = input.workflowOnly;
+  }
+  if (input.forceRerun !== undefined) {
+    buildInput.forceRerun = input.forceRerun;
   }
 
-  const terminalRunSession = await persistExecutorResult(
-    input.repository,
-    started.runSession,
-    started.executionPackage,
+  const started = await buildAndStartPackageRun(buildInput);
+  const executorResult = await runExecutorAndNormalize(input.executor, started.runSpec, started.runSession, at);
+  return finalizePackageRunWithExecutorResult({
+    repository: input.repository,
+    runSessionId: started.runSession.id,
     executorResult,
-    at,
-  );
-
-  if (terminalRunSession.status !== 'succeeded') {
-    if (isLatestRunForPackage(terminalRunSession, started.executionPackage)) {
-      await updatePackageAfterFailure(input.repository, terminalRunSession, started.executionPackage, at);
-    }
-    return { runSessionId: terminalRunSession.id, status: terminalRunSession.status };
-  }
-
-  const selfReviewResult = await runSelfReview(
-    input.repository,
-    terminalRunSession,
-    started.executionPackage,
-    runSpec,
-    input.selfReview,
-    at,
-  );
-  const reviewPacket = await createReviewPacket(
-    input.repository,
-    terminalRunSession,
-    started.executionPackage,
-    runSpec,
-    selfReviewResult,
-    at,
-  );
-  if (isLatestRunForPackage(terminalRunSession, started.executionPackage)) {
-    await updatePackageAfterSuccess(input.repository, terminalRunSession, started.executionPackage, at);
-  }
-
-  return { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: reviewPacket.id };
+    selfReview: input.selfReview,
+    now: () => at,
+  });
 };
 
 export const createPackageExecutionActivities = (

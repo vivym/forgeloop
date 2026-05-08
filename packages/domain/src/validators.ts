@@ -4,7 +4,7 @@ import {
   type ExecutionPackageDependency,
   type Project,
   type ReviewPacket,
-} from './types';
+} from './types.js';
 
 export interface ExecutionPackageValidationOptions {
   referenced_repo_ids?: readonly string[];

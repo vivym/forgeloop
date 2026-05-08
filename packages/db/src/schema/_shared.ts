@@ -41,7 +41,18 @@ export const execution_package_gate_state_values = [
 ] as const;
 export const execution_package_resolution_values = ['none', 'completed'] as const;
 
-export const run_session_status_values = ['queued', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled'] as const;
+export const run_session_status_values = [
+  'queued',
+  'running',
+  'waiting_for_input',
+  'stalled',
+  'resuming',
+  'cancel_requested',
+  'succeeded',
+  'failed',
+  'timed_out',
+  'cancelled',
+] as const;
 export const review_packet_status_values = ['ready', 'in_review', 'completed', 'archived'] as const;
 export const review_packet_decision_values = ['none', 'approved', 'changes_requested'] as const;
 export const decision_values = ['approved', 'changes_requested'] as const;

@@ -343,6 +343,156 @@ pre {
   padding-top: 10px;
 }
 
+.run-console {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #edf0f3;
+  padding-top: 10px;
+  min-width: 0;
+}
+
+.run-console-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.run-console-head div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.run-console-head span,
+.run-console-notice,
+.run-console-error,
+.run-event-row span,
+.run-event-row p {
+  overflow-wrap: anywhere;
+}
+
+.stream-pill {
+  flex: 0 0 auto;
+  min-width: 78px;
+  border: 1px solid #c9d2dc;
+  border-radius: 999px;
+  background: #f7f9fb;
+  color: #4f5964;
+  font-size: 12px;
+  padding: 4px 8px;
+  text-align: center;
+}
+
+.stream-pill.live {
+  border-color: #8eb59a;
+  background: #eef7f0;
+  color: #315f3d;
+}
+
+.stream-pill.retrying,
+.stream-pill.blocked {
+  border-color: #d69b9b;
+  background: #fff1f1;
+  color: #8a2d2d;
+}
+
+.run-console-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.run-console-notice,
+.run-console-error {
+  border: 1px solid #d8c17b;
+  border-radius: 6px;
+  background: #fff9e6;
+  color: #5d4a05;
+  padding: 7px 8px;
+}
+
+.run-console-error {
+  border-color: #d69b9b;
+  background: #fff1f1;
+  color: #8a2d2d;
+}
+
+.run-event-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 260px;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid #d8dee5;
+  border-radius: 6px;
+  background: #fbfcfd;
+  padding: 8px;
+}
+
+.run-event-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border-left: 3px solid #7f93a8;
+  background: #ffffff;
+  padding: 7px 8px;
+}
+
+.run-event-row.agent {
+  border-left-color: #4d7f62;
+}
+
+.run-event-row.terminal {
+  border-left-color: #5f6770;
+}
+
+.run-event-row.compact {
+  grid-template-columns: minmax(130px, 0.35fr) minmax(0, 1fr);
+  align-items: center;
+}
+
+.run-event-row span,
+.run-event-row strong {
+  color: #59636e;
+  font-size: 12px;
+}
+
+.run-event-row pre {
+  max-height: 180px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #202124;
+  color: #edf0f3;
+}
+
+.run-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.run-input-row textarea {
+  min-height: 74px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-console-actions {
+  display: grid;
+  gap: 6px;
+  width: 104px;
+}
+
+.run-console-actions button {
+  width: 104px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .self-review {
   display: grid;
   gap: 4px;
@@ -395,8 +545,15 @@ pre {
   }
 
   .workbench-grid,
-  .form-grid.two {
+  .form-grid.two,
+  .run-console-grid,
+  .run-input-row {
     grid-template-columns: 1fr;
+  }
+
+  .run-console-actions,
+  .run-console-actions button {
+    width: 100%;
   }
 
   .run-review {

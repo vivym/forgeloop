@@ -334,12 +334,13 @@ export const executorResultSchema = z
     if (
       hasUnsuccessfulBlockingCheck &&
       result.status === 'failed' &&
-      result.failure?.kind !== 'required_check_failed'
+      result.failure?.kind !== 'required_check_failed' &&
+      result.failure?.kind !== 'path_violation'
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['failure', 'kind'],
-        message: 'unsuccessful blocking checks require required_check_failed failure kind',
+        message: 'unsuccessful blocking checks require required_check_failed failure kind unless a path_violation takes precedence',
       });
     }
 

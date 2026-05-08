@@ -570,35 +570,26 @@ describe('P0 delivery loop contracts', () => {
     expect(parsed.requested_changes_context).toEqual([]);
   });
 
-  it('parses run package command response DTOs', () => {
+  it('parses async accepted run package response DTOs', () => {
     const run = runPackageResponseSchema.parse({
-      command_id: 'command-run-package-1',
       execution_package_id: 'exec-package-1',
       run_session_id: 'run-session-1',
       status: 'accepted',
-      workflow_only: false,
-      idempotency_key: 'run-package-1',
     });
 
     const rerun = rerunPackageResponseSchema.parse({
-      command_id: 'command-rerun-package-1',
       execution_package_id: 'exec-package-1',
       run_session_id: 'run-session-2',
-      status: 'already_running',
-      workflow_only: false,
-      idempotency_key: 'rerun-package-1',
+      status: 'accepted',
     });
 
     const forceRerun = forceRerunPackageResponseSchema.parse({
-      command_id: 'command-force-rerun-package-1',
       execution_package_id: 'exec-package-1',
       run_session_id: 'run-session-3',
       status: 'accepted',
-      workflow_only: true,
-      idempotency_key: 'force-rerun-package-1',
     });
 
-    expect([run.status, rerun.status, forceRerun.status]).toEqual(['accepted', 'already_running', 'accepted']);
+    expect([run.status, rerun.status, forceRerun.status]).toEqual(['accepted', 'accepted', 'accepted']);
     expect([run.run_session_id, rerun.run_session_id, forceRerun.run_session_id]).toEqual([
       'run-session-1',
       'run-session-2',
@@ -606,28 +597,24 @@ describe('P0 delivery loop contracts', () => {
     ]);
   });
 
-  it('parses rejected run command responses without run sessions', () => {
-    const parsed = runPackageResponseSchema.parse({
-      command_id: 'command-run-package-1',
-      execution_package_id: 'exec-package-1',
-      status: 'rejected',
-      workflow_only: false,
-      idempotency_key: 'run-package-1',
-      rejection_reason: 'Execution package is not runnable.',
-    });
-
-    expect(parsed.status).toBe('rejected');
-    expect(parsed.rejection_reason).toBe('Execution package is not runnable.');
-  });
-
-  it('rejects accepted run command responses without run sessions', () => {
+  it('rejects accepted run package responses without run sessions', () => {
     expect(
       runPackageResponseSchema.safeParse({
-        command_id: 'command-run-package-1',
         execution_package_id: 'exec-package-1',
         status: 'accepted',
-        workflow_only: false,
-        idempotency_key: 'run-package-1',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects workflow results on accepted run package responses', () => {
+    expect(
+      runPackageResponseSchema.safeParse({
+        execution_package_id: 'exec-package-1',
+        run_session_id: 'run-session-1',
+        status: 'accepted',
+        workflow_result: {
+          status: 'succeeded',
+        },
       }).success,
     ).toBe(false);
   });
@@ -690,7 +677,29 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
   });
 
-  it('rejects unsuccessful blocking checks with a non-required-check failure kind', () => {
+  it('allows path_violation to take precedence over unsuccessful blocking checks', () => {
+    const parsed = executorResultSchema.parse({
+      ...validExecutorResult,
+      status: 'failed',
+      checks: [
+        {
+          ...validCheckResult,
+          status: 'failed',
+          exit_code: 1,
+          blocks_review: true,
+        },
+      ],
+      failure: {
+        kind: 'path_violation',
+        message: 'Source repo changed outside the run worktree.',
+        retryable: false,
+      },
+    });
+
+    expect(parsed.failure?.kind).toBe('path_violation');
+  });
+
+  it('rejects unsuccessful blocking checks with an unrelated non-required-check failure kind', () => {
     expect(
       executorResultSchema.safeParse({
         ...validExecutorResult,

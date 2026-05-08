@@ -15,8 +15,12 @@ import {
   review_packet_decision_values,
   review_packet_status_values,
   review_packets,
+  run_commands,
+  run_event_counters,
+  run_events,
   run_session_status_values,
   run_sessions,
+  run_worker_leases,
   spec_plan_gate_state_values,
   spec_plan_status_values,
   spec_revisions,
@@ -42,6 +46,10 @@ const requiredTables = {
   execution_packages,
   execution_package_dependencies,
   run_sessions,
+  run_events,
+  run_event_counters,
+  run_commands,
+  run_worker_leases,
   review_packets,
   object_events,
   status_histories,
@@ -72,7 +80,11 @@ describe('P0 Drizzle schema', () => {
         'project_repos',
         'projects',
         'review_packets',
+        'run_commands',
+        'run_event_counters',
+        'run_events',
         'run_sessions',
+        'run_worker_leases',
         'spec_revisions',
         'specs',
         'status_histories',
@@ -110,7 +122,18 @@ describe('P0 Drizzle schema', () => {
       'review_approved',
       'changes_requested',
     ]);
-    expect(run_session_status_values).toEqual(['queued', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled']);
+    expect(run_session_status_values).toEqual([
+      'queued',
+      'running',
+      'waiting_for_input',
+      'stalled',
+      'resuming',
+      'cancel_requested',
+      'succeeded',
+      'failed',
+      'timed_out',
+      'cancelled',
+    ]);
     expect(review_packet_status_values).toEqual(['ready', 'in_review', 'completed', 'archived']);
     expect(review_packet_decision_values).toEqual(['none', 'approved', 'changes_requested']);
   });
@@ -125,6 +148,7 @@ describe('P0 Drizzle schema', () => {
     expect(columnType(execution_packages, 'allowedPaths')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'runSpec')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'executorResult')).toBe('PgJsonb');
+    expect(columnType(run_sessions, 'runtimeMetadata')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'changedFiles')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'checkResults')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'artifacts')).toBe('PgJsonb');
@@ -133,6 +157,10 @@ describe('P0 Drizzle schema', () => {
     expect(columnType(review_packets, 'riskNotes')).toBe('PgJsonb');
     expect(columnType(review_packets, 'requestedChanges')).toBe('PgJsonb');
     expect(columnType(object_events, 'metadata')).toBe('PgJsonb');
+    expect(columnType(run_events, 'payload')).toBe('PgJsonb');
+    expect(columnType(run_events, 'rawRef')).toBe('PgJsonb');
+    expect(columnType(run_commands, 'payload')).toBe('PgJsonb');
+    expect(columnType(run_commands, 'driverAck')).toBe('PgJsonb');
   });
 
   it('includes future artifact trace subject link columns', () => {

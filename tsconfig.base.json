@@ -15,6 +15,7 @@
       "@forgeloop/domain": ["packages/domain/src/index.ts"],
       "@forgeloop/db": ["packages/db/src/index.ts"],
       "@forgeloop/executor": ["packages/executor/src/index.ts"],
+      "@forgeloop/run-worker": ["packages/run-worker/src/index.ts"],
       "@forgeloop/workflow": ["packages/workflow/src/index.ts"]
     }
   }

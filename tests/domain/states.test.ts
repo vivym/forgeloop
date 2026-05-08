@@ -1416,12 +1416,12 @@ describe('domain state transitions', () => {
       expect(session.run_spec).not.toBe(runSpecInput);
     });
 
-    it('allows queued or running sessions to be cancelled', () => {
+    it('allows running sessions to be cancelled', () => {
       const queued = createSession();
       const running = transitionRunSession(queued, { type: 'workflow_start' });
 
-      expect(transitionRunSession(queued, { type: 'cancel' }).status).toBe('cancelled');
       expect(transitionRunSession(running, { type: 'cancel' }).status).toBe('cancelled');
+      expectDomainError(() => transitionRunSession(queued, { type: 'cancel' }), 'INVALID_TRANSITION');
     });
 
     it('rejects invalid RunSession transitions', () => {

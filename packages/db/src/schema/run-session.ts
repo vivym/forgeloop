@@ -11,6 +11,7 @@ export const run_sessions = pgTable('run_sessions', {
   executorType: text('executor_type'),
   executorResult: jsonb('executor_result').$type<RunSession['executor_result']>(),
   runSpec: jsonb('run_spec').$type<RunSession['run_spec']>(),
+  runtimeMetadata: jsonb('runtime_metadata').$type<RunSession['runtime_metadata']>(),
   changedFiles: jsonb('changed_files').$type<RunSession['changed_files']>().notNull(),
   checkResults: jsonb('check_results').$type<RunSession['check_results']>().notNull(),
   artifacts: jsonb('artifacts').$type<RunSession['artifacts']>().notNull(),

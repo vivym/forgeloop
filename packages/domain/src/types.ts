@@ -8,6 +8,10 @@ import type {
   FailureKind,
   RequiredCheckSpec,
   RequestedChange,
+  RunCommandType,
+  RunEventSource,
+  RunEventType,
+  RunEventVisibility,
   RunSpec,
   SelfReviewResult,
 } from '@forgeloop/contracts';
@@ -208,7 +212,46 @@ export interface ExecutionPackageDependency {
   depends_on_package_id: string;
 }
 
-export type RunSessionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+export type RunSessionStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting_for_input'
+  | 'stalled'
+  | 'resuming'
+  | 'cancel_requested'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled';
+
+export type RunDriverKind = 'app_server' | 'exec_fallback' | 'fake';
+export type RunDriverStatus = 'not_started' | 'starting' | 'active' | 'waiting_for_input' | 'stalled' | 'terminal';
+export type EffectiveDangerousMode = 'confirmed' | 'unconfirmed' | 'not_requested';
+
+export interface RunRuntimeMetadata {
+  durability_mode: 'durable' | 'volatile_demo';
+  driver_kind?: RunDriverKind;
+  driver_status?: RunDriverStatus;
+  codex_thread_id?: string;
+  active_turn_id?: string;
+  workspace_path?: string;
+  app_server_endpoint?: string;
+  worker_id?: string;
+  worker_lease_status?: RunWorkerLeaseStatus;
+  worker_lease_heartbeat_at?: IsoDateTime;
+  worker_lease_expires_at?: IsoDateTime;
+  last_event_cursor?: string;
+  last_event_at?: IsoDateTime;
+  recovery_attempt_count: number;
+  effective_dangerous_mode: EffectiveDangerousMode;
+  app_server_attempted?: boolean;
+  selected_execution_mode?: 'app_server' | 'exec_fallback' | 'fake';
+  app_server_fallback_reason?: string;
+  exec_fallback_dangerous_bypass?: boolean;
+  source_repo_path?: string;
+  source_repo_before_status?: string;
+  source_repo_before_dirty_fingerprint?: string;
+}
 
 export interface RunSession {
   id: string;
@@ -225,10 +268,55 @@ export interface RunSession {
   summary?: string;
   failure_kind?: FailureKind;
   failure_reason?: string;
+  runtime_metadata?: RunRuntimeMetadata;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   started_at?: IsoDateTime;
   finished_at?: IsoDateTime;
+}
+
+export interface RunEvent {
+  id: string;
+  run_session_id: string;
+  sequence: number;
+  cursor: string;
+  event_type: RunEventType;
+  source: RunEventSource;
+  visibility: RunEventVisibility;
+  summary: string;
+  payload: Record<string, unknown>;
+  raw_ref?: string;
+  created_at: IsoDateTime;
+}
+
+export interface RunCommand {
+  id: string;
+  run_session_id: string;
+  command_type: RunCommandType;
+  status: 'pending' | 'claimed' | 'applied' | 'failed' | 'superseded';
+  actor_id: string;
+  payload: Record<string, unknown>;
+  target_thread_id?: string;
+  target_turn_id?: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  claimed_by_worker_id?: string;
+  claimed_at?: IsoDateTime;
+  applied_at?: IsoDateTime;
+  failure_reason?: string;
+  driver_ack?: Record<string, unknown>;
+}
+
+export type RunWorkerLeaseStatus = 'active' | 'released' | 'expired';
+
+export interface RunWorkerLease {
+  id: string;
+  run_session_id: string;
+  worker_id: string;
+  lease_token: string;
+  heartbeat_at: IsoDateTime;
+  expires_at: IsoDateTime;
+  status: RunWorkerLeaseStatus;
 }
 
 export type ReviewPacketStatus = 'ready' | 'in_review' | 'completed' | 'archived';

@@ -12,6 +12,7 @@
     "@forgeloop/db": "workspace:*",
     "@forgeloop/domain": "workspace:*",
     "@forgeloop/executor": "workspace:*",
+    "@forgeloop/run-worker": "workspace:*",
     "@forgeloop/workflow": "workspace:*",
     "@nestjs/common": "^11.1.19",
     "@nestjs/core": "^11.1.19",
