@@ -30,6 +30,7 @@ type IsoDateTime = string;
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 type LoadedRunContext = Awaited<ReturnType<typeof loadRunContext>>;
+type TraceWrite = (repository: PackageExecutionRepository) => Promise<void>;
 
 export interface FinalizePackageRunWithExecutorResultInput {
   repository: PackageExecutionRepository;
@@ -326,6 +327,12 @@ const recordReplacementReviewPacketTrace = async (
     await repository.saveTraceLink(traceLink(replacementEvent.id, 'generated_by', 'review_packet', reviewPacket.id, at));
   });
 
+const flushTraceWrites = async (repository: PackageExecutionRepository, writes: TraceWrite[]): Promise<void> => {
+  for (const write of writes) {
+    await write(repository);
+  }
+};
+
 const runSelfReview = async (
   runSession: RunSessionRecord,
   executionPackage: ExecutionPackageRecord,
@@ -571,11 +578,13 @@ interface PendingSuccessFinalization {
   executionPackage: ExecutionPackageRecord;
   runSpec: RunSpec;
   needsSelfReview: boolean;
+  traceWrites: TraceWrite[];
 }
 
 interface CompletedFinalization {
   kind: 'completed';
   result: ExecutePackageRunResult;
+  traceWrites: TraceWrite[];
 }
 
 type PreparedFinalization = CompletedFinalization | PendingSuccessFinalization;
@@ -630,9 +639,15 @@ const prepareFinalization = async (
 
   if (terminalRunSession.status !== 'succeeded') {
     await reconcileFailedPackageIfNeeded(repository, terminalRunSession, state.context.executionPackage, at);
-    await recordTerminalEvidenceTrace(repository, state.context, terminalRunSession, parsedExecutorResult, undefined, at);
 
-    return { kind: 'completed', result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status } };
+    return {
+      kind: 'completed',
+      result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status },
+      traceWrites: [
+        (traceRepository) =>
+          recordTerminalEvidenceTrace(traceRepository, state.context, terminalRunSession, parsedExecutorResult, undefined, at),
+      ],
+    };
   }
 
   const packageReconciled =
@@ -640,12 +655,14 @@ const prepareFinalization = async (
     successPackageIsReconciled(state.context.executionPackage);
 
   if (state.reviewPacket !== undefined && packageReconciled) {
-    await recordReplacementReviewPacketTrace(repository, terminalRunSession, state.reviewPacket, at);
-    await recordTerminalEvidenceTrace(repository, state.context, terminalRunSession, parsedExecutorResult, state.reviewPacket, at);
-
     return {
       kind: 'completed',
       result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: state.reviewPacket.id },
+      traceWrites: [
+        (traceRepository) => recordReplacementReviewPacketTrace(traceRepository, terminalRunSession, state.reviewPacket!, at),
+        (traceRepository) =>
+          recordTerminalEvidenceTrace(traceRepository, state.context, terminalRunSession, parsedExecutorResult, state.reviewPacket, at),
+      ],
     };
   }
 
@@ -655,6 +672,7 @@ const prepareFinalization = async (
     executionPackage: state.context.executionPackage,
     runSpec: state.runSpec,
     needsSelfReview: state.reviewPacket === undefined,
+    traceWrites: [],
   };
 };
 
@@ -665,7 +683,7 @@ const completeSucceededFinalization = async (
   runSpec: RunSpec,
   selfReviewResult: SelfReviewResult | undefined,
   at: IsoDateTime,
-): Promise<ExecutePackageRunResult> => {
+): Promise<CompletedFinalization> => {
   const state = await loadFinalizationState(repository, runSessionId, parsedExecutorResult);
 
   if (!state.terminalMatches || state.runSession.status !== 'succeeded') {
@@ -684,10 +702,16 @@ const completeSucceededFinalization = async (
     ));
 
   await reconcileSucceededPackageIfNeeded(repository, state.runSession, state.context.executionPackage, at);
-  await recordReplacementReviewPacketTrace(repository, state.runSession, reviewPacket, at);
-  await recordTerminalEvidenceTrace(repository, state.context, state.runSession, parsedExecutorResult, reviewPacket, at);
 
-  return { runSessionId: state.runSession.id, status: state.runSession.status, reviewPacketId: reviewPacket.id };
+  return {
+    kind: 'completed',
+    result: { runSessionId: state.runSession.id, status: state.runSession.status, reviewPacketId: reviewPacket.id },
+    traceWrites: [
+      (traceRepository) => recordReplacementReviewPacketTrace(traceRepository, state.runSession, reviewPacket, at),
+      (traceRepository) =>
+        recordTerminalEvidenceTrace(traceRepository, state.context, state.runSession, parsedExecutorResult, reviewPacket, at),
+    ],
+  };
 };
 
 export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecutorResult = async (input) => {
@@ -706,6 +730,7 @@ export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecuto
   );
 
   if (prepared.kind === 'completed') {
+    await flushTraceWrites(input.repository, prepared.traceWrites);
     return prepared.result;
   }
 
@@ -713,7 +738,10 @@ export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecuto
     ? await runSelfReview(prepared.runSession, prepared.executionPackage, prepared.runSpec, input.selfReview)
     : undefined;
 
-  return withLeaseFence((repository) =>
+  const completed = await withLeaseFence((repository) =>
     completeSucceededFinalization(repository, input.runSessionId, parsedExecutorResult, prepared.runSpec, selfReviewResult, at),
   );
+  await flushTraceWrites(input.repository, [...prepared.traceWrites, ...completed.traceWrites]);
+
+  return completed.result;
 };

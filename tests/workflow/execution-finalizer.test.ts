@@ -63,6 +63,15 @@ class TraceFailingRepository extends InMemoryP0Repository {
   }
 }
 
+class TraceFailingLeasedRepository extends LeasingRepository {
+  traceEventWriteInsideLease = false;
+
+  override async saveTraceEvent(_event: TraceEventRecord): Promise<void> {
+    this.traceEventWriteInsideLease ||= this.insideLease;
+    throw new Error('trace store unavailable');
+  }
+}
+
 const retryableFailedExecutorResult = (
   runSessionId: string,
   rawMetadata: ExecutorResult['raw_metadata'] = {},
@@ -223,6 +232,47 @@ describe('execution finalizer', () => {
         preexistingDecision,
       ]);
       expect(await repo.listTraceEventsForSubject('run_session', context.runSession.id)).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[forgeloop:p0.trace] best-effort trace write failed',
+        expect.objectContaining({ source: 'workflow-finalizer', error: 'trace store unavailable' }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('keeps leased terminal records when finalizer trace writes fail after the lease transaction', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const repo = new TraceFailingLeasedRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = succeededExecutorResult(context.runSession.id);
+    const lease = await repo.claimRunWorkerLease({
+      run_session_id: context.runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-07T00:00:00.000Z',
+      lease_duration_ms: 60_000,
+    });
+
+    try {
+      const finalResult = await finalizePackageRunWithExecutorResult({
+        repository: repo,
+        runSessionId: context.runSession.id,
+        executorResult: result,
+        selfReview: async () => succeededSelfReview(),
+        workerLease: { workerId: lease.worker_id, leaseToken: lease.lease_token },
+        now: () => '2026-05-07T00:00:00.000Z',
+      });
+
+      expect(finalResult).toEqual({
+        runSessionId: context.runSession.id,
+        status: 'succeeded',
+        reviewPacketId: `review-packet:${context.runSession.id}`,
+      });
+      expect(repo.traceEventWriteInsideLease).toBe(false);
+      expect(await repo.getRunSession(context.runSession.id)).toMatchObject({ status: 'succeeded', summary: result.summary });
+      expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(1);
+      expect(await repo.listArtifactsForObject('run_session', context.runSession.id)).toHaveLength(result.artifacts.length);
       expect(warnSpy).toHaveBeenCalledWith(
         '[forgeloop:p0.trace] best-effort trace write failed',
         expect.objectContaining({ source: 'workflow-finalizer', error: 'trace store unavailable' }),
