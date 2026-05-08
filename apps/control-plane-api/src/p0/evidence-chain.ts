@@ -99,7 +99,7 @@ const currentPacketFor = (
 };
 
 const artifactKey = (runSessionId: string, artifact: ArtifactRef, index: number): string =>
-  `${runSessionId}:${artifact.kind}:${artifact.name}:${artifact.digest ?? index}`;
+  `${runSessionId}:${artifact.kind}:${artifact.digest ?? index}`;
 
 const runArtifactRefCount = (runs: RunSession[]): number =>
   runs.reduce((count, runSession) => count + runSession.artifacts.length + runSession.log_refs.length, 0);

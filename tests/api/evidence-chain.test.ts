@@ -90,6 +90,8 @@ describe('evidence chain API', () => {
     const serialized = JSON.stringify(chain);
     expect(serialized).not.toContain('artifacts/run-session-approved/summary.md');
     expect(serialized).not.toContain('raw-codex.jsonl');
+    expect(serialized).not.toContain('Raw Codex log');
+    expect(serialized).not.toContain('Execution summary');
     expect(serialized).not.toContain('raw_ref');
     expect(serialized).not.toContain('secret command output');
     expect(serialized).not.toContain('local://raw-command-output.jsonl');

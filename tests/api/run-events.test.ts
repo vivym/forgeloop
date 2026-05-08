@@ -92,8 +92,46 @@ describe('run event API', () => {
   it('redacts executor raw metadata from run-session detail responses', async () => {
     const { app, runSessionId, repo } = await track(seedAppWithRunSession());
     const runSession = await repo.getRunSession(runSessionId);
+    const stdoutRef = {
+      kind: 'logs' as const,
+      name: 'stdout',
+      content_type: 'text/plain',
+      local_ref: '/Users/viv/projs/forgeloop/.worktrees/run-session-1/stdout.log',
+    };
     await repo.saveRunSession({
       ...runSession!,
+      run_spec: {
+        ...runSession!.run_spec!,
+        repo: {
+          ...runSession!.run_spec!.repo,
+          local_path: '/Users/viv/projs/forgeloop',
+        },
+      },
+      runtime_metadata: {
+        ...runSession!.runtime_metadata!,
+        workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-session-1',
+        source_repo_path: '/Users/viv/projs/forgeloop',
+        source_repo_before_status: ' M packages/secret.ts',
+        effective_dangerous_mode: 'confirmed',
+        app_server_endpoint: 'http://127.0.0.1:62000',
+      },
+      check_results: [
+        {
+          check_id: 'unit',
+          command: 'pnpm test',
+          status: 'succeeded',
+          exit_code: 0,
+          duration_seconds: 1,
+          blocks_review: true,
+          stdout: stdoutRef,
+          stderr: {
+            kind: 'raw_metadata',
+            name: 'stderr',
+            content_type: 'text/plain',
+            local_ref: '/Users/viv/projs/forgeloop/.worktrees/run-session-1/stderr.log',
+          },
+        },
+      ],
       executor_result: {
         run_session_id: runSessionId,
         executor_type: 'local_codex',
@@ -103,7 +141,17 @@ describe('run event API', () => {
         finished_at: '2026-05-07T00:01:00.000Z',
         summary: 'Completed.',
         changed_files: [],
-        checks: [],
+        checks: [
+          {
+            check_id: 'unit',
+            command: 'pnpm test',
+            status: 'succeeded',
+            exit_code: 0,
+            duration_seconds: 1,
+            blocks_review: true,
+            stdout: stdoutRef,
+          },
+        ],
         artifacts: [],
         raw_metadata: {
           workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-session-1',
@@ -116,8 +164,18 @@ describe('run event API', () => {
     const response = await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}`).expect(200);
     const serialized = JSON.stringify(response.body);
 
+    expect(response.body).not.toHaveProperty('run_spec');
+    expect(response.body.check_results[0]).not.toHaveProperty('stdout');
+    expect(response.body.check_results[0]).not.toHaveProperty('stderr');
+    expect(response.body.executor_result.checks[0]).not.toHaveProperty('stdout');
     expect(response.body.executor_result.raw_metadata).toEqual({});
+    expect(response.body.runtime_metadata).not.toHaveProperty('workspace_path');
+    expect(response.body.runtime_metadata).not.toHaveProperty('source_repo_path');
+    expect(response.body.runtime_metadata).not.toHaveProperty('source_repo_before_status');
+    expect(response.body.runtime_metadata).not.toHaveProperty('effective_dangerous_mode');
+    expect(response.body.runtime_metadata).not.toHaveProperty('app_server_endpoint');
     expect(serialized).not.toContain('/Users/viv/projs');
+    expect(serialized).not.toContain('run_spec');
     expect(serialized).not.toContain('source_repo_before_status');
     expect(serialized).not.toContain('dangerously-bypass-approvals-and-sandbox');
   });
