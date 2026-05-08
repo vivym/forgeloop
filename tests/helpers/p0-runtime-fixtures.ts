@@ -823,6 +823,14 @@ export const seedEvidenceChainScenario = async (): Promise<{
     created_at: '2026-05-05T00:04:00.000Z',
   });
   await repo.saveTraceLink({
+    id: 'trace-link:approved:generated-by-review-packet',
+    trace_event_id: 'trace-event:run-replacement:run-session-approved',
+    relationship: 'generated_by',
+    object_type: 'review_packet',
+    object_id: approvedPacket.id,
+    created_at: '2026-05-05T00:04:00.000Z',
+  });
+  await repo.saveTraceLink({
     id: 'trace-link:approved:supersedes-run',
     trace_event_id: 'trace-event:run-replacement:run-session-approved',
     relationship: 'supersedes',

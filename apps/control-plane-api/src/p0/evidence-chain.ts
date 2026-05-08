@@ -37,9 +37,9 @@ type PackageEvidence = {
 type TraceProjection = {
   events: TraceEventRecord[];
   linksByTraceEventId: Map<string, TraceLinkRecord[]>;
+  artifactRefCountByTraceEventId: Map<string, number>;
   supersededRunIds: Set<string>;
   replacedReviewPacketIds: Set<string>;
-  linkedRunIds: Set<string>;
   traceArtifactRefCount: number;
 };
 
@@ -239,18 +239,15 @@ const loadTraceProjection = async (repository: P0Repository, runs: RunSession[])
     await Promise.all(runs.map((runSession) => repository.listTraceEventsForSubject('run_session', runSession.id)))
   ).flat();
   const linksByTraceEventId = new Map<string, TraceLinkRecord[]>();
+  const artifactRefCountByTraceEventId = new Map<string, number>();
   const supersededRunIds = new Set<string>();
   const replacedReviewPacketIds = new Set<string>();
-  const linkedRunIds = new Set<string>();
   let traceArtifactRefCount = 0;
 
   for (const event of events) {
     const links = await repository.listTraceLinks(event.id);
     linksByTraceEventId.set(event.id, links);
     for (const link of links) {
-      if (link.object_type === 'run_session') {
-        linkedRunIds.add(link.object_id);
-      }
       if (link.relationship === 'supersedes' && link.object_type === 'run_session') {
         supersededRunIds.add(link.object_id);
       }
@@ -258,10 +255,12 @@ const loadTraceProjection = async (repository: P0Repository, runs: RunSession[])
         replacedReviewPacketIds.add(link.object_id);
       }
     }
-    traceArtifactRefCount += (await repository.listTraceArtifactRefs(event.id)).length;
+    const artifactRefCount = (await repository.listTraceArtifactRefs(event.id)).length;
+    artifactRefCountByTraceEventId.set(event.id, artifactRefCount);
+    traceArtifactRefCount += artifactRefCount;
   }
 
-  return { events, linksByTraceEventId, supersededRunIds, replacedReviewPacketIds, linkedRunIds, traceArtifactRefCount };
+  return { events, linksByTraceEventId, artifactRefCountByTraceEventId, supersededRunIds, replacedReviewPacketIds, traceArtifactRefCount };
 };
 
 const loadPackageEvidence = async (repository: P0Repository, workItemId: string): Promise<PackageEvidence[]> => {
@@ -288,6 +287,96 @@ const domainObjectRefs = (workItem: WorkItem, evidence: PackageEvidence[]): Doma
   }
 
   return refs;
+};
+
+const explicitScopeFor = (
+  evidence: PackageEvidence[],
+  selectedReviewPackets: ReviewPacket[],
+  trace: TraceProjection,
+): { runIds: Set<string>; reviewPacketIds: Set<string>; traceEventIds: Set<string> } => {
+  const runIds = new Set(selectedReviewPackets.map((packet) => packet.run_session_id));
+  const reviewPacketIds = new Set(selectedReviewPackets.map((packet) => packet.id));
+  const traceEventIds = new Set<string>();
+  const packageReviewPackets = evidence.flatMap((item) => item.reviewPackets);
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    for (const reviewPacket of packageReviewPackets) {
+      if (runIds.has(reviewPacket.run_session_id) && !reviewPacketIds.has(reviewPacket.id)) {
+        reviewPacketIds.add(reviewPacket.id);
+        changed = true;
+      }
+    }
+
+    for (const traceEvent of trace.events) {
+      const links = trace.linksByTraceEventId.get(traceEvent.id) ?? [];
+      const traceRunIds = new Set([
+        ...(traceEvent.subject_type === 'run_session' ? [traceEvent.subject_id] : []),
+        ...links.filter((link) => link.object_type === 'run_session').map((link) => link.object_id),
+      ]);
+      const traceReviewPacketIds = new Set([
+        ...(traceEvent.subject_type === 'review_packet' ? [traceEvent.subject_id] : []),
+        ...links.filter((link) => link.object_type === 'review_packet').map((link) => link.object_id),
+      ]);
+      const intersects =
+        [...traceRunIds].some((runId) => runIds.has(runId)) ||
+        [...traceReviewPacketIds].some((reviewPacketId) => reviewPacketIds.has(reviewPacketId));
+
+      if (!intersects) {
+        continue;
+      }
+
+      if (!traceEventIds.has(traceEvent.id)) {
+        traceEventIds.add(traceEvent.id);
+        changed = true;
+      }
+
+      for (const runId of traceRunIds) {
+        if (!runIds.has(runId)) {
+          runIds.add(runId);
+          changed = true;
+        }
+      }
+
+      for (const reviewPacketId of traceReviewPacketIds) {
+        if (!reviewPacketIds.has(reviewPacketId)) {
+          reviewPacketIds.add(reviewPacketId);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return { runIds, reviewPacketIds, traceEventIds };
+};
+
+const filterTraceProjection = (trace: TraceProjection, traceEventIds: Set<string>): TraceProjection => {
+  const events = trace.events.filter((event) => traceEventIds.has(event.id));
+  const linksByTraceEventId = new Map<string, TraceLinkRecord[]>();
+  const artifactRefCountByTraceEventId = new Map<string, number>();
+  const supersededRunIds = new Set<string>();
+  const replacedReviewPacketIds = new Set<string>();
+  let traceArtifactRefCount = 0;
+
+  for (const event of events) {
+    const links = trace.linksByTraceEventId.get(event.id) ?? [];
+    linksByTraceEventId.set(event.id, links);
+    for (const link of links) {
+      if (link.relationship === 'supersedes' && link.object_type === 'run_session') {
+        supersededRunIds.add(link.object_id);
+      }
+      if (link.relationship === 'replaces' && link.object_type === 'review_packet') {
+        replacedReviewPacketIds.add(link.object_id);
+      }
+    }
+    const artifactRefCount = trace.artifactRefCountByTraceEventId.get(event.id) ?? 0;
+    artifactRefCountByTraceEventId.set(event.id, artifactRefCount);
+    traceArtifactRefCount += artifactRefCount;
+  }
+
+  return { events, linksByTraceEventId, artifactRefCountByTraceEventId, supersededRunIds, replacedReviewPacketIds, traceArtifactRefCount };
 };
 
 export const buildEvidenceChain = async (
@@ -319,11 +408,23 @@ export const buildEvidenceChain = async (
       ? packageEvidence.map((evidence) => evidence.executionPackage.id)
       : selectedReviewPackets.map((packet) => packet.execution_package_id),
   );
-  const scopedEvidence = packageEvidence.filter((evidence) => selectedPackageIds.has(evidence.executionPackage.id));
+  const packageScopedEvidence = packageEvidence.filter((evidence) => selectedPackageIds.has(evidence.executionPackage.id));
+  const packageScopedRuns = packageScopedEvidence.flatMap((evidence) => evidence.runs);
+  const packageTrace = await loadTraceProjection(repository, packageScopedRuns);
+  const explicitScope =
+    input.reviewPacketId === undefined ? undefined : explicitScopeFor(packageScopedEvidence, selectedReviewPackets, packageTrace);
+  const scopedEvidence =
+    explicitScope === undefined
+      ? packageScopedEvidence
+      : packageScopedEvidence.map((evidence) => ({
+          executionPackage: evidence.executionPackage,
+          runs: evidence.runs.filter((run) => explicitScope.runIds.has(run.id)),
+          reviewPackets: evidence.reviewPackets.filter((packet) => explicitScope.reviewPacketIds.has(packet.id)),
+        }));
   const runs = scopedEvidence.flatMap((evidence) => evidence.runs);
   const reviewPackets = scopedEvidence.flatMap((evidence) => evidence.reviewPackets.filter((packet) => packet.status !== 'archived'));
   const selectedRunIds = new Set(selectedReviewPackets.map((packet) => packet.run_session_id));
-  const trace = await loadTraceProjection(repository, runs);
+  const trace = explicitScope === undefined ? packageTrace : filterTraceProjection(packageTrace, explicitScope.traceEventIds);
 
   if (trace.events.length === 0) {
     gaps.add('missing_trace_events');
@@ -333,7 +434,7 @@ export const buildEvidenceChain = async (
   }
 
   const historicalRunsWithoutLinks = runs.filter(
-    (run) => !selectedRunIds.has(run.id) && !trace.supersededRunIds.has(run.id) && !trace.linkedRunIds.has(run.id),
+    (run) => !selectedRunIds.has(run.id) && !trace.supersededRunIds.has(run.id),
   );
   if (historicalRunsWithoutLinks.length > 0) {
     gaps.add('missing_supersession_links');

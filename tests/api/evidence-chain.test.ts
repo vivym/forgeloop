@@ -155,6 +155,82 @@ describe('evidence chain API', () => {
       .expect(404);
   });
 
+  it('does not treat terminal trace links as supersession coverage', async () => {
+    const { app, repo, workItemId } = await track(seedEvidenceChainScenario());
+    await repo.saveTraceEvent({
+      id: 'trace-event-unlinked-terminal',
+      event_type: 'run_terminal_evidence_recorded',
+      subject_type: 'run_session',
+      subject_id: 'run-session-unlinked-history',
+      actor_id: 'actor-owner',
+      summary: 'Terminal evidence recorded for unlinked historical run.',
+      payload: { run_session_id: 'run-session-unlinked-history' },
+      created_at: '2026-05-05T00:03:30.000Z',
+    });
+    await repo.saveTraceLink({
+      id: 'trace-link-unlinked-terminal-generated-by',
+      trace_event_id: 'trace-event-unlinked-terminal',
+      relationship: 'generated_by',
+      object_type: 'run_session',
+      object_id: 'run-session-unlinked-history',
+      created_at: '2026-05-05T00:03:30.000Z',
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+    const unlinkedRun = chain.items.find((item) => item.id === 'evidence-item:run-session:run-session-unlinked-history');
+
+    expect(chain.projection.partial).toBe(true);
+    expect(chain.projection.gaps).toContain('missing_supersession_links');
+    expect(unlinkedRun?.risk_flags).not.toContain('superseded_run');
+  });
+
+  it('limits explicit focus to the selected packet and persisted replacement relations', async () => {
+    const {
+      app,
+      repo,
+      workItemId,
+      executionPackageId,
+      currentReviewPacketId,
+      changesRequestedReviewPacketId,
+      unlinkedReviewPacketId,
+    } = await track(seedEvidenceChainScenario());
+    await repo.saveTraceEvent({
+      id: 'trace-event:run-replacement:run-session-approved',
+      event_type: 'run_replacement_recorded',
+      subject_type: 'run_session',
+      subject_id: 'run-session-approved',
+      actor_id: 'actor-owner',
+      summary: 'Run run-session-approved replaces run-session-changes-requested.',
+      payload: {
+        mode: 'rerun_package',
+        execution_package_id: executionPackageId,
+        work_item_id: workItemId,
+        new_run_session_id: 'run-session-approved',
+        previous_run_session_id: 'run-session-changes-requested',
+        previous_review_packet_id: changesRequestedReviewPacketId,
+        new_review_packet_id: currentReviewPacketId,
+        triggering_review_packet_id: unlinkedReviewPacketId,
+      },
+      created_at: '2026-05-05T00:04:00.000Z',
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/work-items/${workItemId}/evidence-chain`)
+      .query({ review_packet_id: currentReviewPacketId })
+      .expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+    const itemIds = chain.items.map((item) => item.id);
+    const subjectIds = chain.items.map((item) => item.subject.object_id);
+
+    expect(chain.focus).toEqual({ selection: 'explicit', review_packet_ids: [currentReviewPacketId] });
+    expect(subjectIds).toContain(currentReviewPacketId);
+    expect(subjectIds).toContain(changesRequestedReviewPacketId);
+    expect(subjectIds).not.toContain(unlinkedReviewPacketId);
+    expect(itemIds).not.toContain('evidence-item:run-session:run-session-unlinked-history');
+    expect(itemIds).not.toContain('evidence-item:review-packet:review-packet-unlinked-history');
+  });
+
   it('reports partial empty current projection for a work item with no review evidence', async () => {
     const { app, records } = await track(seedEvidenceChainBase());
 
