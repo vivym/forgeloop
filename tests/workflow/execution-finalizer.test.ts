@@ -294,6 +294,10 @@ describe('execution finalizer', () => {
       selfReview: async () => succeededSelfReview(),
       now: () => '2026-05-07T00:00:00.000Z',
     });
+    const traceEventsAfterFirst = await repo.listTraceEventsForSubject('run_session', context.runSession.id);
+    const terminalTraceEvent = traceEventsAfterFirst.find((event) => event.event_type === 'run_terminal_evidence_recorded');
+    const traceLinksAfterFirst = await repo.listTraceLinks(terminalTraceEvent!.id);
+    const traceArtifactRefsAfterFirst = await repo.listTraceArtifactRefs(terminalTraceEvent!.id);
     const second = await finalizePackageRunWithExecutorResult({
       repository: repo,
       runSessionId: context.runSession.id,
@@ -304,6 +308,9 @@ describe('execution finalizer', () => {
 
     expect(second).toEqual(first);
     expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(1);
+    expect(await repo.listTraceEventsForSubject('run_session', context.runSession.id)).toEqual(traceEventsAfterFirst);
+    expect(await repo.listTraceLinks(terminalTraceEvent!.id)).toEqual(traceLinksAfterFirst);
+    expect(await repo.listTraceArtifactRefs(terminalTraceEvent!.id)).toEqual(traceArtifactRefsAfterFirst);
   });
 
   it('does not replay terminal side effects when retrying a matching succeeded terminal run', async () => {

@@ -631,8 +631,9 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
 
     expect(captures[0]?.values.actorId).toBeNull();
     expect(captures[0]?.set?.actorId).toBeNull();
+    expect(captures[0]?.set?.createdAt).toBeUndefined();
     expect(captures[1]?.values.artifactId).toBeNull();
-    expect(captures[1]?.set?.artifactId).toBeNull();
+    expect(captures[1]?.set).toBeUndefined();
   });
 
   it('maps database nulls back to omitted optional domain properties', async () => {

@@ -506,7 +506,8 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async saveTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
-    this.traceEvents.set(traceEvent.id, clone(traceEvent));
+    const existing = this.traceEvents.get(traceEvent.id);
+    this.traceEvents.set(traceEvent.id, clone({ ...traceEvent, created_at: existing?.created_at ?? traceEvent.created_at }));
   }
 
   async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
@@ -516,7 +517,9 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async saveTraceLink(traceLink: TraceLinkRecord): Promise<void> {
-    this.traceLinks.set(traceLink.id, clone(traceLink));
+    if (!this.traceLinks.has(traceLink.id)) {
+      this.traceLinks.set(traceLink.id, clone(traceLink));
+    }
   }
 
   async listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]> {
@@ -526,7 +529,9 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void> {
-    this.traceArtifactRefs.set(traceArtifactRef.id, clone(traceArtifactRef));
+    if (!this.traceArtifactRefs.has(traceArtifactRef.id)) {
+      this.traceArtifactRefs.set(traceArtifactRef.id, clone(traceArtifactRef));
+    }
   }
 
   async listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]> {

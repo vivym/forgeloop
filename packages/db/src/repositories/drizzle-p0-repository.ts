@@ -633,7 +633,12 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async saveTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
-    await this.upsert(trace_events, trace_events.id, traceEvent);
+    const record = toDbRecord(traceEvent, trace_events);
+    const { createdAt: _createdAt, ...set } = record;
+    await this.db
+      .insert(trace_events)
+      .values(record as never)
+      .onConflictDoUpdate({ target: trace_events.id, set: set as never });
   }
 
   async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
@@ -645,7 +650,7 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async saveTraceLink(traceLink: TraceLinkRecord): Promise<void> {
-    await this.upsert(trace_links, trace_links.id, traceLink);
+    await this.db.insert(trace_links).values(toDbRecord(traceLink, trace_links) as never).onConflictDoNothing();
   }
 
   async listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]> {
@@ -656,7 +661,10 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void> {
-    await this.upsert(trace_artifact_refs, trace_artifact_refs.id, traceArtifactRef);
+    await this.db
+      .insert(trace_artifact_refs)
+      .values(toDbRecord(traceArtifactRef, trace_artifact_refs) as never)
+      .onConflictDoNothing();
   }
 
   async listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]> {
