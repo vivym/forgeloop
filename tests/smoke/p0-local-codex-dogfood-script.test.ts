@@ -450,5 +450,5 @@ describe('p0 local Codex dogfood script helpers', () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

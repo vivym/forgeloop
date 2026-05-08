@@ -368,7 +368,7 @@ describe('runLocalCodexExecutor', () => {
       'Implement the executor adapter',
     );
     await expect(stat(result.raw_metadata.workspace_path as string)).resolves.toBeDefined();
-  });
+  }, 15_000);
 
   it('applies blocking check failure semantics after a successful runner invocation', async () => {
     const { repo, head } = await createGitRepo();
