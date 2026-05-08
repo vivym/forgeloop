@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
-import { executorTypeSchema, jsonObjectSchema } from './executor.js';
+import { artifactKindSchema, executorTypeSchema, jsonObjectSchema } from './executor.js';
 import {
+  reviewDecisionSchema,
   requestedChangeSchema,
   reviewDecisionPayloadSchema,
   reviewSubmitDecisionSchema,
@@ -231,6 +232,158 @@ export type RerunPackageResponse = RunAcceptedResponse;
 
 export const forceRerunPackageResponseSchema = runAcceptedResponseSchema;
 export type ForceRerunPackageResponse = RunAcceptedResponse;
+
+export const evidenceChainSourceSchema = z.enum([
+  'run_event',
+  'status_history',
+  'artifact',
+  'decision',
+  'review_packet',
+  'object_event',
+  'trace_event',
+]);
+export type EvidenceChainSource = z.infer<typeof evidenceChainSourceSchema>;
+
+export const evidenceChainObjectTypeSchema = z.enum([
+  'work_item',
+  'execution_package',
+  'run_session',
+  'review_packet',
+  'artifact',
+  'decision',
+  'required_check',
+  'trace_event',
+]);
+export type EvidenceChainObjectType = z.infer<typeof evidenceChainObjectTypeSchema>;
+
+export const evidenceChainRiskFlagSchema = z.enum([
+  'no_evidence',
+  'missing_required_artifact',
+  'redacted_evidence',
+  'superseded_run',
+  'stale_review_packet',
+  'unapproved_review_packet',
+  'failed_required_check',
+  'changes_requested',
+  'projection_partial',
+]);
+export type EvidenceChainRiskFlag = z.infer<typeof evidenceChainRiskFlagSchema>;
+
+export const evidenceChainRedactionReasonSchema = z.enum([
+  'internal_event',
+  'raw_ref',
+  'logs_artifact',
+  'raw_metadata_artifact',
+  'local_ref_only',
+  'internal_payload',
+]);
+export type EvidenceChainRedactionReason = z.infer<typeof evidenceChainRedactionReasonSchema>;
+
+export const evidenceChainProjectionGapCodeSchema = z.enum([
+  'missing_supersession_links',
+  'missing_last_run_session',
+  'missing_trace_events',
+  'missing_trace_artifact_refs',
+]);
+export type EvidenceChainProjectionGapCode = z.infer<typeof evidenceChainProjectionGapCodeSchema>;
+
+export const evidenceChainTraceLinkRelationshipSchema = z.enum([
+  'belongs_to',
+  'generated_by',
+  'supports',
+  'supersedes',
+  'replaces',
+  'redacted_from',
+]);
+export type EvidenceChainTraceLinkRelationship = z.infer<typeof evidenceChainTraceLinkRelationshipSchema>;
+
+export const evidenceChainObjectRefSchema = z
+  .object({
+    object_type: evidenceChainObjectTypeSchema,
+    object_id: z.string().min(1),
+    relationship: evidenceChainTraceLinkRelationshipSchema.optional(),
+  })
+  .strict();
+export type EvidenceChainObjectRef = z.infer<typeof evidenceChainObjectRefSchema>;
+
+export const evidenceChainItemSchema = z
+  .object({
+    id: z.string().min(1),
+    source: evidenceChainSourceSchema,
+    subject: evidenceChainObjectRefSchema,
+    summary: z.string().min(1),
+    created_at: isoDateTimeSchema,
+    visibility: z.literal('public'),
+    links: z.array(evidenceChainObjectRefSchema),
+    risk_flags: z.array(evidenceChainRiskFlagSchema),
+    redacted: z.boolean(),
+    details: z
+      .object({
+        decision: reviewDecisionSchema.optional(),
+        run_status: z.string().min(1).optional(),
+        missing_artifact_kinds: z.array(artifactKindSchema).optional(),
+        required_check_ids: z.array(z.string().min(1)).optional(),
+        failed_check_ids: z.array(z.string().min(1)).optional(),
+        redaction_reason: evidenceChainRedactionReasonSchema.optional(),
+        replacement: z
+          .object({
+            new_run_session_id: z.string().min(1).optional(),
+            previous_run_session_id: z.string().min(1).optional(),
+            new_review_packet_id: z.string().min(1).optional(),
+            previous_review_packet_id: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        projection_gap_codes: z.array(evidenceChainProjectionGapCodeSchema).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type EvidenceChainItem = z.infer<typeof evidenceChainItemSchema>;
+
+export const evidenceChainResponseSchema = z
+  .object({
+    work_item_id: z.string().min(1),
+    generated_at: isoDateTimeSchema,
+    focus: z
+      .object({
+        selection: z.enum(['explicit', 'current']),
+        review_packet_ids: z.array(z.string().min(1)),
+      })
+      .strict(),
+    projection: z
+      .object({
+        source: z.enum(['trace_events', 'read_time', 'mixed']),
+        version: z.literal(1),
+        partial: z.boolean(),
+        gaps: z.array(evidenceChainProjectionGapCodeSchema),
+      })
+      .strict(),
+    summary: z
+      .object({
+        total_items: z.number().int().nonnegative(),
+        run_count: z.number().int().nonnegative(),
+        review_packet_count: z.number().int().nonnegative(),
+        decision_count: z.number().int().nonnegative(),
+        artifact_count: z.number().int().nonnegative(),
+        risk_flags: z.array(evidenceChainRiskFlagSchema),
+        redacted_count: z.number().int().nonnegative(),
+      })
+      .strict(),
+    items: z.array(evidenceChainItemSchema),
+  })
+  .strict()
+  .superRefine((response, ctx) => {
+    if (response.summary.total_items !== response.items.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['summary', 'total_items'],
+        message: 'EvidenceChainResponse summary.total_items must equal items.length',
+      });
+    }
+  });
+export type EvidenceChainResponse = z.infer<typeof evidenceChainResponseSchema>;
 
 const reviewDecisionRequestBaseSchema = z.object({
   review_packet_id: z.string().min(1),

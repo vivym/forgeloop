@@ -4,6 +4,7 @@ import {
   changedFileSchema,
   checkResultSchema,
   commandInventoryResponseSchema,
+  evidenceChainResponseSchema,
   executorResultSchema,
   failureKindSchema,
   approveReviewPacketRequestSchema,
@@ -1037,5 +1038,35 @@ describe('P0 delivery loop contracts', () => {
         previous_path: 'packages/contracts/src/executor.ts',
       }).success,
     ).toBe(false);
+  });
+
+  it('parses the public Evidence Chain response DTO from the contract barrel', () => {
+    const parsed = evidenceChainResponseSchema.parse({
+      work_item_id: 'work-item-1',
+      generated_at: '2026-05-08T01:00:00.000Z',
+      focus: {
+        selection: 'explicit',
+        review_packet_ids: ['review-packet-1'],
+      },
+      projection: {
+        source: 'read_time',
+        version: 1,
+        partial: false,
+        gaps: [],
+      },
+      summary: {
+        total_items: 0,
+        run_count: 0,
+        review_packet_count: 0,
+        decision_count: 0,
+        artifact_count: 0,
+        risk_flags: ['no_evidence'],
+        redacted_count: 0,
+      },
+      items: [],
+    });
+
+    expect(parsed.focus.selection).toBe('explicit');
+    expect(parsed.summary.risk_flags).toEqual(['no_evidence']);
   });
 });

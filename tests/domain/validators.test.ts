@@ -39,6 +39,13 @@ const diffArtifact = {
   local_ref: 'artifacts/run-session/diff.patch',
 } as const;
 
+const logsArtifact = {
+  kind: 'logs',
+  name: 'executor log',
+  content_type: 'text/plain',
+  local_ref: 'artifacts/run-session/executor.log',
+} as const;
+
 const project: Project = {
   id: 'project-1',
   name: 'Forgeloop',
@@ -422,6 +429,45 @@ describe('domain completion derivation', () => {
       workItem,
       [packageBase()],
       [successfulRun({ artifacts: [executionSummaryArtifact] })],
+      [approvedReviewPacket()],
+    );
+
+    expect(completion.done).toBe(false);
+    expect(completion.incomplete_reasons).toContain('package package-1 is missing artifact diff');
+  });
+
+  it('satisfies required logs with run log refs instead of artifacts', () => {
+    const completion = deriveWorkItemCompletion(
+      workItem,
+      [packageBase({ required_artifact_kinds: ['execution_summary', 'diff', 'logs'] })],
+      [successfulRun()],
+      [approvedReviewPacket()],
+    );
+
+    expect(completion).toEqual({
+      done: true,
+      resolution: 'completed',
+      incomplete_reasons: [],
+    });
+  });
+
+  it('does not satisfy required logs from run artifacts', () => {
+    const completion = deriveWorkItemCompletion(
+      workItem,
+      [packageBase({ required_artifact_kinds: ['logs'] })],
+      [successfulRun({ artifacts: [logsArtifact], log_refs: [] })],
+      [approvedReviewPacket()],
+    );
+
+    expect(completion.done).toBe(false);
+    expect(completion.incomplete_reasons).toContain('package package-1 is missing artifact logs');
+  });
+
+  it('does not satisfy non-log required artifacts from run log refs', () => {
+    const completion = deriveWorkItemCompletion(
+      workItem,
+      [packageBase({ required_artifact_kinds: ['diff'] })],
+      [successfulRun({ artifacts: [], log_refs: [diffArtifact] })],
       [approvedReviewPacket()],
     );
 

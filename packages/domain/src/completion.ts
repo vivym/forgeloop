@@ -1,4 +1,13 @@
-import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem, WorkItemResolution } from './types.js';
+import type { ArtifactKind } from '@forgeloop/contracts';
+
+import type {
+  ExecutionPackage,
+  RequiredArtifactPresence,
+  ReviewPacket,
+  RunSession,
+  WorkItem,
+  WorkItemResolution,
+} from './types.js';
 
 export interface WorkItemCompletion {
   done: boolean;
@@ -19,11 +28,37 @@ const hasApprovedReviewForRun = (
       reviewPacket.decision === 'approved',
   );
 
-const missingRequiredArtifactReasons = (executionPackage: ExecutionPackage, runSession: RunSession): string[] => {
-  const artifactKinds = new Set(runSession.artifacts.map((artifact) => artifact.kind));
+export const deriveRequiredArtifactPresence = (
+  executionPackage: Pick<ExecutionPackage, 'required_artifact_kinds'>,
+  runSession: Pick<RunSession, 'artifacts' | 'log_refs'>,
+): RequiredArtifactPresence => {
+  const artifactKinds = new Set<ArtifactKind>(runSession.artifacts.map((artifact) => artifact.kind));
+  const logKinds = new Set<ArtifactKind>(runSession.log_refs.map((artifact) => artifact.kind));
+  const presentArtifactKinds = new Set<ArtifactKind>();
+  const missingArtifactKinds: ArtifactKind[] = [];
 
-  return executionPackage.required_artifact_kinds
-    .filter((requiredArtifactKind) => !artifactKinds.has(requiredArtifactKind))
+  for (const requiredArtifactKind of executionPackage.required_artifact_kinds) {
+    const isPresent =
+      requiredArtifactKind === 'logs' ? logKinds.has(requiredArtifactKind) : artifactKinds.has(requiredArtifactKind);
+
+    if (isPresent) {
+      presentArtifactKinds.add(requiredArtifactKind);
+    } else {
+      missingArtifactKinds.push(requiredArtifactKind);
+    }
+  }
+
+  return {
+    required_artifact_kinds: [...executionPackage.required_artifact_kinds],
+    present_artifact_kinds: [...presentArtifactKinds],
+    missing_artifact_kinds: missingArtifactKinds,
+  };
+};
+
+const missingRequiredArtifactReasons = (executionPackage: ExecutionPackage, runSession: RunSession): string[] => {
+  const artifactPresence = deriveRequiredArtifactPresence(executionPackage, runSession);
+
+  return artifactPresence.missing_artifact_kinds
     .map((requiredArtifactKind) => `package ${executionPackage.id} is missing artifact ${requiredArtifactKind}`);
 };
 

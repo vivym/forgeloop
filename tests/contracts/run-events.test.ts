@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  evidenceChainTraceLinkRelationshipSchema,
   publicRunEventSchema,
   runAcceptedResponseSchema,
   runEventListResponseSchema,
@@ -86,5 +87,10 @@ describe('long-running run event contracts', () => {
 
     expect(parsed.command_type).toBe(commandType);
     expect(parsed.status).toBe('accepted');
+  });
+
+  it('shares the restricted trace relationship enum for run-event evidence links', () => {
+    expect(evidenceChainTraceLinkRelationshipSchema.parse('generated_by')).toBe('generated_by');
+    expect(evidenceChainTraceLinkRelationshipSchema.safeParse('emitted_by').success).toBe(false);
   });
 });

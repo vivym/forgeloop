@@ -275,6 +275,12 @@ export interface RunSession {
   finished_at?: IsoDateTime;
 }
 
+export interface RequiredArtifactPresence {
+  required_artifact_kinds: ArtifactKind[];
+  present_artifact_kinds: ArtifactKind[];
+  missing_artifact_kinds: ArtifactKind[];
+}
+
 export interface RunEvent {
   id: string;
   run_session_id: string;
