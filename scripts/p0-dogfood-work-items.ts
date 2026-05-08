@@ -151,6 +151,33 @@ const strictDogfoodBlocker = (
   ...(details === undefined ? {} : { details }),
 });
 
+const safeStrictBlockerDetailKeys = new Set([
+  'actual_qualifying_work_items',
+  'allowed_dirty_entries',
+  'blocked_dirty_entries',
+  'dirty_allowlist_source',
+  'execution_package_id',
+  'executor_type',
+  'incomplete_reasons',
+  'missing_artifact_kinds',
+  'required_artifact_kinds',
+  'required_env',
+  'required_qualifying_work_items',
+  'run_session_id',
+  'status',
+  'workflow_only',
+  'work_item_id',
+]);
+
+const redactedStrictBlockerDetails = (details: Record<string, unknown>): Record<string, unknown> => {
+  const redacted = Object.fromEntries(
+    Object.entries(details).filter(([key]) => safeStrictBlockerDetailKeys.has(key)),
+  );
+  return Object.keys(redacted).length === Object.keys(details).length
+    ? redacted
+    : { ...redacted, redacted_detail_keys: Object.keys(details).filter((key) => !safeStrictBlockerDetailKeys.has(key)).sort() };
+};
+
 const approvedReviewPacketForRun = (
   executionPackage: ExecutionPackage,
   runSession: RunSession,
@@ -179,6 +206,7 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
     );
     const completion = deriveWorkItemCompletion(workItem, packagesForWorkItem, input.runSessions, input.reviewPackets);
     const workItemBlockers: StrictDogfoodBlocker[] = [];
+    let qualifyingPackage: StrictQualifyingWorkItem | undefined;
 
     if (!completion.done) {
       workItemBlockers.push(
@@ -280,19 +308,20 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
       workItemBlockers.push(...runBlockers);
 
       if (completion.done && runBlockers.length === 0 && missingArtifactKinds.length === 0 && approvedPacket !== undefined) {
-        qualifyingWorkItems.push({
+        qualifyingPackage ??= {
           workItemId: workItem.id,
           executionPackageId: executionPackage.id,
           runSessionId: runSession.id,
           reviewPacketId: approvedPacket.id,
           executorType: 'local_codex',
           workflowOnly: false,
-        });
-        break;
+        };
       }
     }
 
-    if (!qualifyingWorkItems.some((item) => item.workItemId === workItem.id)) {
+    if (completion.done && workItemBlockers.length === 0 && qualifyingPackage !== undefined) {
+      qualifyingWorkItems.push(qualifyingPackage);
+    } else {
       candidateBlockers.push(...workItemBlockers);
     }
   }
@@ -731,6 +760,18 @@ export const runP0DogfoodWorkItems = async (): Promise<DogfoodCompletionResult> 
 };
 
 export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): string => {
+  const evidenceLines = result.items.length === 0
+    ? [
+        '- No Work Items were created in this run.',
+        '- Strict preflight blockers prevented batch execution before product workflow records were created.',
+      ]
+    : [
+        '- All three Work Items have approved SpecRevision and PlanRevision records.',
+        '- All three Work Items have at least one Execution Package, RunSession, Review Packet, human review decision, and timeline evidence.',
+        '- The Browser Run Console Work Item exercised `changes_requested -> rerun -> approve`.',
+        '- Default mode uses `executor_type: mock` with `workflow_only=true` to validate the product workflow without creating extra source changes.',
+        '- Strict mode requires at least two `local_codex` / `workflow_only=false` Work Items with completed approved Review Packets and required artifacts.',
+      ];
   const strictLines = [
     '## Strict local_codex Acceptance',
     '',
@@ -773,7 +814,7 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
                   `- ${blocker.code}: ${blocker.message}`,
                   ...(blocker.details === undefined
                     ? []
-                    : [`  - details: \`${JSON.stringify(blocker.details).replace(/`/g, '\\`')}\``]),
+                    : [`  - details: \`${JSON.stringify(redactedStrictBlockerDetails(blocker.details)).replace(/`/g, '\\`')}\``]),
                 ]),
               ]),
           ...(result.strictAcceptance.dirtySource === undefined
@@ -824,11 +865,7 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
     '',
     '## Evidence',
     '',
-    '- All three Work Items have approved SpecRevision and PlanRevision records.',
-    '- All three Work Items have at least one Execution Package, RunSession, Review Packet, human review decision, and timeline evidence.',
-    '- The Browser Run Console Work Item exercised `changes_requested -> rerun -> approve`.',
-    '- Default mode uses `executor_type: mock` with `workflow_only=true` to validate the product workflow without creating extra source changes.',
-    '- Strict mode requires at least two `local_codex` / `workflow_only=false` Work Items with completed approved Review Packets and required artifacts.',
+    ...evidenceLines,
     '',
     '## P1 Decision Summary',
     '',

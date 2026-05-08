@@ -297,6 +297,41 @@ describe('p0 dogfood work items script', () => {
     expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'work_item_completion_incomplete' })]));
   });
 
+  it('does not count a Work Item when another package on it completed through mock or workflow_only evidence', () => {
+    const evaluate = evaluateStrictLocalCodexAcceptance();
+    const first = qualifyingBundle(1);
+    const second = qualifyingBundle(2);
+    const extraPackage = executionPackage({
+      id: 'package-1-extra',
+      workItemId: first.item.id,
+      lastRunSessionId: 'run-1-extra',
+    });
+    const extraRun = runSession({
+      id: 'run-1-extra',
+      packageId: extraPackage.id,
+      workItemId: first.item.id,
+      executorType: 'mock',
+      workflowOnly: true,
+    });
+    const extraPacket = reviewPacket({
+      id: 'review-packet-1-extra',
+      packageId: extraPackage.id,
+      runSessionId: extraRun.id,
+    });
+    const result = evaluate({
+      ...strictInput(first, second),
+      executionPackages: [first.pkg, extraPackage, second.pkg],
+      runSessions: [first.run, extraRun, second.run],
+      reviewPackets: [first.packet, extraPacket, second.packet],
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.qualifyingWorkItems).toHaveLength(1);
+    expect(result.qualifyingWorkItems[0]?.workItemId).toBe(second.item.id);
+    expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'run_session_not_local_codex' })]));
+    expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'run_session_workflow_only' })]));
+  });
+
   it('fails when a qualifying local_codex Work Item is missing a required artifact kind', () => {
     const evaluate = evaluateStrictLocalCodexAcceptance();
     const result = evaluate(
@@ -311,7 +346,7 @@ describe('p0 dogfood work items script', () => {
     expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'required_artifact_missing' })]));
   });
 
-  it('renders strict blocker details and dirty allowlist source when strict mode fails', () => {
+  it('renders strict preflight blockers without claiming Work Items completed or leaking raw details', () => {
     const rendered = dogfoodWorkItemsScript.renderDogfoodCompletionReport({
       generatedAt: at,
       durabilityMode: 'volatile_demo',
@@ -329,6 +364,8 @@ describe('p0 dogfood work items script', () => {
               allowed_dirty_entries: ['docs/superpowers/reports/p0-dogfood-work-items-completion.md'],
               blocked_dirty_entries: ['README.md'],
               dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
+              error: 'secret failure from /Users/viv/projs/forgeloop/.worktrees/run-1',
+              workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-1',
             },
           },
         ],
@@ -338,22 +375,7 @@ describe('p0 dogfood work items script', () => {
           dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
         },
       },
-      items: [
-        {
-          key: 'feature-ci-gate',
-          title: 'Remote CI gate',
-          kind: 'feature',
-          workItemId: 'work-item-1',
-          packageId: 'package-1',
-          executorType: 'local_codex',
-          workflowOnly: false,
-          runSessionIds: ['run-1'],
-          reviewPacketIds: ['review-packet-1'],
-          finalDecision: 'approved',
-          exercisedChangesRequestedRerun: false,
-          timelineSources: ['artifact', 'decision', 'object_event', 'status_history'],
-        },
-      ],
+      items: [],
     });
 
     expect(rendered).toContain('Strict local_codex acceptance: failed');
@@ -362,6 +384,12 @@ describe('p0 dogfood work items script', () => {
     expect(rendered).toContain('allowed_dirty_entries');
     expect(rendered).toContain('blocked_dirty_entries');
     expect(rendered).toContain('STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST');
+    expect(rendered).toContain('No Work Items were created in this run.');
+    expect(rendered).toContain('Strict preflight blockers prevented batch execution');
+    expect(rendered).not.toContain('All three Work Items have approved SpecRevision');
+    expect(rendered).not.toContain('secret failure');
+    expect(rendered).not.toContain('/Users/viv/projs/forgeloop');
+    expect(rendered).toContain('redacted_detail_keys');
   });
 
   it('documents the strict dirty source allowlist and final P1 decision in the runbook', async () => {
