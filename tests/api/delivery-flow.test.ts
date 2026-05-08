@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository } from '../../packages/db/src/index';
+import { InMemoryP0Repository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import type { RunWorker } from '../../packages/run-worker/src';
 
@@ -249,6 +249,12 @@ class SequencingRepository extends InMemoryP0Repository {
       this.operations.push(`archiveReviewPacket:${reviewPacket.id}`);
     }
     await super.saveReviewPacket(reviewPacket);
+  }
+}
+
+class FailingTraceRepository extends InMemoryP0Repository {
+  override async saveTraceEvent(_event: TraceEventRecord): Promise<void> {
+    throw new Error('trace store unavailable');
   }
 }
 
@@ -596,6 +602,128 @@ describe('P0 control plane API', () => {
         workflow_only: true,
       })
       .expect(400);
+  });
+
+  it('records rerun replacement trace links and updates the payload when the new ReviewPacket is created', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const executionPackage = await createManualPackage(app, planRevisionId);
+
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    const firstRun = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
+    await request(server)
+      .post(`/review-packets/${firstReviewPacketId}/request-changes`)
+      .send({
+        summary: 'Rerun required.',
+        reviewed_by_actor_id: actorReviewer,
+        reviewed_at: '2026-05-05T03:00:00.000Z',
+        requested_changes: [{ title: 'Rerun', description: 'Exercise trace replacement links.' }],
+      })
+      .expect(201);
+
+    const rerun = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/rerun`)
+        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+        .expect(201)
+    ).body;
+    const repository = repositoryFor(app);
+    const queuedReplacementEvent = (await repository.listTraceEventsForSubject('run_session', rerun.run_session_id)).find(
+      (event) => event.event_type === 'run_replacement_recorded',
+    );
+
+    expect(queuedReplacementEvent).toMatchObject({
+      subject_type: 'run_session',
+      subject_id: rerun.run_session_id,
+      payload: {
+        mode: 'rerun',
+        execution_package_id: executionPackage.id,
+        work_item_id: workItem.id,
+        new_run_session_id: rerun.run_session_id,
+        previous_run_session_id: firstRun.run_session_id,
+        previous_review_packet_id: firstReviewPacketId,
+        triggering_review_packet_id: firstReviewPacketId,
+      },
+    });
+    expect(queuedReplacementEvent?.payload).not.toHaveProperty('new_review_packet_id');
+    expect(await repository.listTraceLinks(queuedReplacementEvent!.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ relationship: 'belongs_to', object_type: 'work_item', object_id: workItem.id }),
+        expect.objectContaining({
+          relationship: 'belongs_to',
+          object_type: 'execution_package',
+          object_id: executionPackage.id,
+        }),
+        expect.objectContaining({ relationship: 'generated_by', object_type: 'run_session', object_id: rerun.run_session_id }),
+        expect.objectContaining({ relationship: 'supersedes', object_type: 'run_session', object_id: firstRun.run_session_id }),
+        expect.objectContaining({ relationship: 'replaces', object_type: 'review_packet', object_id: firstReviewPacketId }),
+      ]),
+    );
+
+    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
+    const updatedReplacementEvent = (await repository.listTraceEventsForSubject('run_session', rerun.run_session_id)).find(
+      (event) => event.event_type === 'run_replacement_recorded',
+    );
+
+    expect(updatedReplacementEvent?.payload).toMatchObject({ new_review_packet_id: rerunReviewPacketId });
+    expect(await repository.listTraceLinks(updatedReplacementEvent!.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ relationship: 'generated_by', object_type: 'review_packet', object_id: rerunReviewPacketId }),
+      ]),
+    );
+  });
+
+  it('commits rerun primary records when replacement trace writes fail', async () => {
+    const service = app.get(P0Service);
+    const repository = new FailingTraceRepository();
+    (service as unknown as { repository: FailingTraceRepository }).repository = repository;
+    (app.get(RUN_WORKER) as unknown as { repository: FailingTraceRepository }).repository = repository;
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const executionPackage = await createManualPackage(app, planRevisionId);
+
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    const firstRun = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .expect(201)
+    ).body;
+    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
+    await request(server)
+      .post(`/review-packets/${firstReviewPacketId}/request-changes`)
+      .send({
+        summary: 'Rerun required.',
+        reviewed_by_actor_id: actorReviewer,
+        reviewed_at: '2026-05-05T03:00:00.000Z',
+        requested_changes: [{ title: 'Rerun', description: 'Primary records must survive trace failure.' }],
+      })
+      .expect(201);
+
+    const rerun = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/rerun`)
+        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+        .expect(201)
+    ).body;
+    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
+    const persistedPackage = await repository.getExecutionPackage(executionPackage.id);
+    const persistedRerun = await repository.getRunSession(rerun.run_session_id);
+    const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
+
+    expect(persistedPackage?.last_run_session_id).toBe(rerun.run_session_id);
+    expect(persistedRerun?.run_spec?.review_context.latest_decision).toBe('changes_requested');
+    expect(reviewPackets.map((packet) => packet.id)).toEqual(expect.arrayContaining([firstReviewPacketId, rerunReviewPacketId]));
   });
 
   it('enforces owner-only force-rerun and archives the current open ReviewPacket', async () => {

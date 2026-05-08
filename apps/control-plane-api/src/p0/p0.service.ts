@@ -31,7 +31,7 @@ import {
   validateForceRerunAllowed,
   validatePackageEditAllowed,
 } from '@forgeloop/domain';
-import type { P0Repository } from '@forgeloop/db';
+import type { P0Repository, TraceLinkRecord } from '@forgeloop/db';
 import type {
   ArtifactRef,
   ExecutorType,
@@ -78,6 +78,17 @@ type TimelineEntry = {
   summary: string;
   created_at: string;
   payload: ObjectEvent | StatusHistory | Decision | ArtifactRef;
+};
+
+type RunReplacementRecordedPayload = {
+  mode: 'rerun' | 'force_rerun';
+  execution_package_id: string;
+  work_item_id: string;
+  new_run_session_id: string;
+  previous_run_session_id: string;
+  triggering_review_packet_id?: string;
+  previous_review_packet_id?: string;
+  new_review_packet_id?: string;
 };
 
 const actorOrSystem = (actorId: string | undefined): string => actorId ?? 'system';
@@ -509,6 +520,10 @@ export class P0Service {
       ...(dto.requested_by_actor_id === undefined ? {} : { demoActorId: dto.requested_by_actor_id }),
     });
     const validation = this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode, requestedByActorId);
+    const previousReviewPacket =
+      mode === 'run'
+        ? undefined
+        : reviewPackets.find((reviewPacket) => reviewPacket.run_session_id === validation.previousRunSessionId);
     if (mode === 'force_rerun' && validation.currentOpenReviewPacket !== undefined) {
       try {
         validateForceRerunAllowed(executionPackage, reviewPackets, validation.requestedByActorId);
@@ -571,6 +586,19 @@ export class P0Service {
     await this.event('execution_package', packageId, mode === 'force_rerun' ? 'force_rerun_requested' : `${mode}_requested`, validation.requestedByActorId, {
       run_session_id: runSessionId,
     });
+    if (mode !== 'run' && validation.previousRunSessionId !== undefined) {
+      const triggeringReviewPacket = validation.currentOpenReviewPacket ?? previousReviewPacket;
+      await this.recordRunReplacementTrace({
+        mode,
+        executionPackage: queuedPackage,
+        previousRunSessionId: validation.previousRunSessionId,
+        newRunSessionId: runSessionId,
+        requestedByActorId: validation.requestedByActorId,
+        ...(previousReviewPacket === undefined ? {} : { previousReviewPacket }),
+        ...(triggeringReviewPacket === undefined ? {} : { triggeringReviewPacket }),
+        at: queuedAt,
+      });
+    }
 
     this.kickRunWorker();
     return {
@@ -587,7 +615,7 @@ export class P0Service {
     dto: RunPackageDto,
     mode: 'run' | 'rerun' | 'force_rerun',
     requestedByActorId: string,
-  ): { requestedByActorId: string; currentOpenReviewPacket?: ReviewPacket } {
+  ): { requestedByActorId: string; previousRunSessionId?: string; currentOpenReviewPacket?: ReviewPacket } {
     if (dto.execution_package_id !== undefined && dto.execution_package_id !== packageId) {
       throw new BadRequestException('execution_package_id must match packageId path parameter');
     }
@@ -602,7 +630,7 @@ export class P0Service {
     }
 
     if (mode === 'rerun') {
-      return { requestedByActorId };
+      return { requestedByActorId, previousRunSessionId };
     }
 
     if (dto.force !== true) {
@@ -621,7 +649,7 @@ export class P0Service {
       throw new BadRequestException('force-rerun requires a current open ready or in_review ReviewPacket');
     }
 
-    return { requestedByActorId, currentOpenReviewPacket };
+    return { requestedByActorId, previousRunSessionId, currentOpenReviewPacket };
   }
 
   async getRunSession(runSessionId: string): Promise<RunSession> {
@@ -1236,6 +1264,83 @@ export class P0Service {
     const updated = transitionReviewPacket(reviewPacket, { type: 'archive_for_newer_run', at: this.now() });
     await this.repository.saveReviewPacket(updated);
     await this.event('review_packet', reviewPacket.id, 'review_packet_archived', reviewPacket.reviewer_actor_id, { reason });
+  }
+
+  private traceLink(
+    traceEventId: string,
+    relationship: TraceLinkRecord['relationship'],
+    objectType: string,
+    objectId: string,
+    at: string,
+  ): TraceLinkRecord {
+    return {
+      id: `trace-link:${traceEventId}:${relationship}:${objectType}:${objectId}`,
+      trace_event_id: traceEventId,
+      relationship,
+      object_type: objectType,
+      object_id: objectId,
+      created_at: at,
+    };
+  }
+
+  private async bestEffortTraceWrite(write: () => Promise<void>): Promise<void> {
+    try {
+      await write();
+    } catch {
+      // P0 delivery tables are authoritative; trace rows are projected from them when absent.
+    }
+  }
+
+  private async recordRunReplacementTrace(input: {
+    mode: 'rerun' | 'force_rerun';
+    executionPackage: ExecutionPackage;
+    previousRunSessionId: string;
+    newRunSessionId: string;
+    requestedByActorId: string;
+    previousReviewPacket?: ReviewPacket;
+    triggeringReviewPacket?: ReviewPacket;
+    at: string;
+  }): Promise<void> {
+    await this.bestEffortTraceWrite(async () => {
+      const traceEventId = `trace-event:run-replacement:${input.newRunSessionId}`;
+      const payload: RunReplacementRecordedPayload = {
+        mode: input.mode,
+        execution_package_id: input.executionPackage.id,
+        work_item_id: input.executionPackage.work_item_id,
+        new_run_session_id: input.newRunSessionId,
+        previous_run_session_id: input.previousRunSessionId,
+        ...(input.triggeringReviewPacket === undefined ? {} : { triggering_review_packet_id: input.triggeringReviewPacket.id }),
+        ...(input.previousReviewPacket === undefined ? {} : { previous_review_packet_id: input.previousReviewPacket.id }),
+      };
+
+      await this.repository.saveTraceEvent({
+        id: traceEventId,
+        event_type: 'run_replacement_recorded',
+        subject_type: 'run_session',
+        subject_id: input.newRunSessionId,
+        actor_id: input.requestedByActorId,
+        summary: `Run ${input.newRunSessionId} replaces ${input.previousRunSessionId}.`,
+        payload,
+        created_at: input.at,
+      });
+
+      const links = [
+        this.traceLink(traceEventId, 'belongs_to', 'work_item', input.executionPackage.work_item_id, input.at),
+        this.traceLink(traceEventId, 'belongs_to', 'execution_package', input.executionPackage.id, input.at),
+        this.traceLink(traceEventId, 'generated_by', 'run_session', input.newRunSessionId, input.at),
+        this.traceLink(traceEventId, 'supersedes', 'run_session', input.previousRunSessionId, input.at),
+      ];
+      if (input.previousReviewPacket !== undefined) {
+        links.push(this.traceLink(traceEventId, 'replaces', 'review_packet', input.previousReviewPacket.id, input.at));
+      }
+      if (input.triggeringReviewPacket !== undefined) {
+        links.push(this.traceLink(traceEventId, 'belongs_to', 'review_packet', input.triggeringReviewPacket.id, input.at));
+      }
+
+      for (const link of links) {
+        await this.repository.saveTraceLink(link);
+      }
+    });
   }
 
   private nextActions(packages: ExecutionPackage[], reviewPackets: ReviewPacket[]): string[] {

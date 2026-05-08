@@ -171,6 +171,36 @@ export interface ArtifactRecord {
   created_at: IsoDateTime;
 }
 
+export type TraceLinkRelationship = 'belongs_to' | 'generated_by' | 'supports' | 'supersedes' | 'replaces' | 'redacted_from';
+
+export interface TraceEventRecord {
+  id: string;
+  event_type: string;
+  subject_type: string;
+  subject_id: string;
+  actor_id?: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  created_at: IsoDateTime;
+}
+
+export interface TraceLinkRecord {
+  id: string;
+  trace_event_id: string;
+  relationship: TraceLinkRelationship;
+  object_type: string;
+  object_id: string;
+  created_at: IsoDateTime;
+}
+
+export interface TraceArtifactRefRecord {
+  id: string;
+  trace_event_id: string;
+  artifact_id?: string;
+  ref: ArtifactRef;
+  created_at: IsoDateTime;
+}
+
 export interface PackageExecutionRepository {
   getWorkItem(workItemId: string): Promise<WorkItemRecord | undefined>;
   getSpec(specId: string): Promise<SpecRecord | undefined>;
@@ -193,6 +223,12 @@ export interface PackageExecutionRepository {
   appendObjectEvent(objectEvent: ObjectEventRecord): Promise<void>;
   appendStatusHistory(statusHistory: StatusHistoryRecord): Promise<void>;
   saveArtifact(artifact: ArtifactRecord): Promise<void>;
+  saveTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
+  listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]>;
+  saveTraceLink(traceLink: TraceLinkRecord): Promise<void>;
+  listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]>;
+  saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void>;
+  listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]>;
   withActiveRunWorkerLease<T>(
     runSessionId: string,
     lease: { workerId: string; leaseToken: string; now: string },

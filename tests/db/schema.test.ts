@@ -29,6 +29,10 @@ import {
   plan_revisions,
   plans,
   artifacts,
+  trace_artifact_refs,
+  trace_events,
+  trace_link_relationship_values,
+  trace_links,
   work_item_phase_values,
   work_items,
 } from '../../packages/db/src/index';
@@ -55,6 +59,9 @@ const requiredTables = {
   status_histories,
   artifacts,
   decisions,
+  trace_events,
+  trace_links,
+  trace_artifact_refs,
 };
 
 const columnType = (table: TableLike, columnName: string) => {
@@ -88,6 +95,9 @@ describe('P0 Drizzle schema', () => {
         'spec_revisions',
         'specs',
         'status_histories',
+        'trace_artifact_refs',
+        'trace_events',
+        'trace_links',
         'work_items',
       ].sort(),
     );
@@ -136,6 +146,14 @@ describe('P0 Drizzle schema', () => {
     ]);
     expect(review_packet_status_values).toEqual(['ready', 'in_review', 'completed', 'archived']);
     expect(review_packet_decision_values).toEqual(['none', 'approved', 'changes_requested']);
+    expect(trace_link_relationship_values).toEqual([
+      'belongs_to',
+      'generated_by',
+      'supports',
+      'supersedes',
+      'replaces',
+      'redacted_from',
+    ]);
   });
 
   it('uses JSONB for representative structured P0 fields', () => {
@@ -161,10 +179,25 @@ describe('P0 Drizzle schema', () => {
     expect(columnType(run_events, 'rawRef')).toBe('PgJsonb');
     expect(columnType(run_commands, 'payload')).toBe('PgJsonb');
     expect(columnType(run_commands, 'driverAck')).toBe('PgJsonb');
+    expect(columnType(trace_events, 'payload')).toBe('PgJsonb');
+    expect(columnType(trace_artifact_refs, 'ref')).toBe('PgJsonb');
   });
 
   it('includes future artifact trace subject link columns', () => {
     expect(columnType(artifacts, 'traceSubjectType')).toBe('PgText');
     expect(columnType(artifacts, 'traceSubjectId')).toBe('PgText');
+  });
+
+  it('defines trace evidence tables with relationship and subject columns', () => {
+    expect(columnType(trace_events, 'eventType')).toBe('PgText');
+    expect(columnType(trace_events, 'subjectType')).toBe('PgText');
+    expect(columnType(trace_events, 'subjectId')).toBe('PgText');
+    expect(columnType(trace_events, 'summary')).toBe('PgText');
+    expect(columnType(trace_links, 'traceEventId')).toBe('PgText');
+    expect(columnType(trace_links, 'relationship')).toBe('PgEnumColumn');
+    expect(columnType(trace_links, 'objectType')).toBe('PgText');
+    expect(columnType(trace_links, 'objectId')).toBe('PgText');
+    expect(columnType(trace_artifact_refs, 'traceEventId')).toBe('PgText');
+    expect(columnType(trace_artifact_refs, 'artifactId')).toBe('PgText');
   });
 });

@@ -44,9 +44,12 @@ import {
   spec_revisions,
   specs,
   status_histories,
+  trace_artifact_refs,
+  trace_events,
+  trace_links,
   work_items,
 } from '../schema';
-import type { P0Repository } from './p0-repository';
+import type { P0Repository, TraceArtifactRefRecord, TraceEventRecord, TraceLinkRecord } from './p0-repository';
 
 export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 
@@ -626,6 +629,38 @@ export class DrizzleP0Repository implements P0Repository {
       decisions,
       and(eq(decisions.objectType, objectType), eq(decisions.objectId, objectId)),
       decisions.createdAt,
+    );
+  }
+
+  async saveTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
+    await this.upsert(trace_events, trace_events.id, traceEvent);
+  }
+
+  async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
+    return this.listWhere<TraceEventRecord>(
+      trace_events,
+      and(eq(trace_events.subjectType, subjectType), eq(trace_events.subjectId, subjectId)),
+      trace_events.createdAt,
+    );
+  }
+
+  async saveTraceLink(traceLink: TraceLinkRecord): Promise<void> {
+    await this.upsert(trace_links, trace_links.id, traceLink);
+  }
+
+  async listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]> {
+    return this.listWhere<TraceLinkRecord>(trace_links, eq(trace_links.traceEventId, traceEventId), trace_links.createdAt);
+  }
+
+  async saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void> {
+    await this.upsert(trace_artifact_refs, trace_artifact_refs.id, traceArtifactRef);
+  }
+
+  async listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]> {
+    return this.listWhere<TraceArtifactRefRecord>(
+      trace_artifact_refs,
+      eq(trace_artifact_refs.traceEventId, traceEventId),
+      trace_artifact_refs.createdAt,
     );
   }
 

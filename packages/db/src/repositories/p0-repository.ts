@@ -19,6 +19,38 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
+import type { trace_link_relationship_values } from '../schema/_shared';
+
+export type TraceLinkRelationship = (typeof trace_link_relationship_values)[number];
+
+export interface TraceEventRecord {
+  id: string;
+  event_type: string;
+  subject_type: string;
+  subject_id: string;
+  actor_id?: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface TraceLinkRecord {
+  id: string;
+  trace_event_id: string;
+  relationship: TraceLinkRelationship;
+  object_type: string;
+  object_id: string;
+  created_at: string;
+}
+
+export interface TraceArtifactRefRecord {
+  id: string;
+  trace_event_id: string;
+  artifact_id?: string;
+  ref: Artifact['ref'];
+  created_at: string;
+}
+
 export interface P0Repository {
   saveProject(project: Project): Promise<void>;
   getProject(projectId: string): Promise<Project | undefined>;
@@ -132,4 +164,11 @@ export interface P0Repository {
 
   saveDecision(decision: Decision): Promise<void>;
   listDecisionsForObject(objectType: string, objectId: string): Promise<Decision[]>;
+
+  saveTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
+  listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]>;
+  saveTraceLink(traceLink: TraceLinkRecord): Promise<void>;
+  listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]>;
+  saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void>;
+  listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]>;
 }

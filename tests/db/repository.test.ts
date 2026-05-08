@@ -17,7 +17,14 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
-import { DrizzleP0Repository, InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import {
+  DrizzleP0Repository,
+  InMemoryP0Repository,
+  type P0Repository,
+  type TraceArtifactRefRecord,
+  type TraceEventRecord,
+  type TraceLinkRecord,
+} from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 
@@ -321,6 +328,67 @@ const decision: Decision = {
   created_at: now,
 };
 
+const traceEvent: TraceEventRecord = {
+  id: 'trace-event-1',
+  event_type: 'run_replacement_recorded',
+  subject_type: 'run_session',
+  subject_id: 'run-session-2',
+  actor_id: 'actor-owner',
+  summary: 'Run run-session-2 supersedes run-session-1.',
+  payload: {
+    mode: 'rerun',
+    execution_package_id: executionPackage.id,
+    work_item_id: workItem.id,
+    new_run_session_id: 'run-session-2',
+    previous_run_session_id: runSession.id,
+    previous_review_packet_id: reviewPacket.id,
+  },
+  created_at: now,
+};
+
+const traceLinks: TraceLinkRecord[] = [
+  {
+    id: 'trace-link-1',
+    trace_event_id: traceEvent.id,
+    relationship: 'belongs_to',
+    object_type: 'execution_package',
+    object_id: executionPackage.id,
+    created_at: now,
+  },
+  {
+    id: 'trace-link-2',
+    trace_event_id: traceEvent.id,
+    relationship: 'generated_by',
+    object_type: 'run_session',
+    object_id: 'run-session-2',
+    created_at: now,
+  },
+  {
+    id: 'trace-link-3',
+    trace_event_id: traceEvent.id,
+    relationship: 'supersedes',
+    object_type: 'run_session',
+    object_id: runSession.id,
+    created_at: now,
+  },
+  {
+    id: 'trace-link-4',
+    trace_event_id: traceEvent.id,
+    relationship: 'replaces',
+    object_type: 'review_packet',
+    object_id: reviewPacket.id,
+    created_at: now,
+  },
+];
+
+const traceArtifactRef: TraceArtifactRefRecord = {
+  id: 'trace-artifact-ref-1',
+  trace_event_id: traceEvent.id,
+  artifact_id: artifact.id,
+  ref: artifactRef,
+  created_at: now,
+};
+
 const createInsertCaptureRepository = () => {
   const captures: Array<{ values: Record<string, unknown>; set?: Record<string, unknown> }> = [];
   const db = {
@@ -457,6 +525,20 @@ describe('P0Repository in-memory adapter', () => {
 
     expect(await repository.listArtifactsForObject('run_session', runSession.id)).toEqual([artifactWithTraceSubject]);
   });
+
+  it('persists trace events, links, and artifact refs', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+
+    await repository.saveTraceEvent(traceEvent);
+    for (const link of traceLinks) {
+      await repository.saveTraceLink(link);
+    }
+    await repository.saveTraceArtifactRef(traceArtifactRef);
+
+    expect(await repository.listTraceEventsForSubject('run_session', 'run-session-2')).toEqual([traceEvent]);
+    expect(await repository.listTraceLinks(traceEvent.id)).toEqual(traceLinks);
+    expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([traceArtifactRef]);
+  });
 });
 
 describe('P0Repository Drizzle adapter persistence mapping', () => {
@@ -511,6 +593,22 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
     expect(captures[0]?.values.traceSubjectId).toBeNull();
     expect(captures[0]?.set?.traceSubjectType).toBeNull();
     expect(captures[0]?.set?.traceSubjectId).toBeNull();
+  });
+
+  it('writes omitted nullable trace fields as null', async () => {
+    const { repository, captures } = createInsertCaptureRepository();
+    const traceEventWithoutActor: TraceEventRecord = { ...traceEvent };
+    const traceArtifactRefWithoutArtifact: TraceArtifactRefRecord = { ...traceArtifactRef };
+    delete traceEventWithoutActor.actor_id;
+    delete traceArtifactRefWithoutArtifact.artifact_id;
+
+    await repository.saveTraceEvent(traceEventWithoutActor);
+    await repository.saveTraceArtifactRef(traceArtifactRefWithoutArtifact);
+
+    expect(captures[0]?.values.actorId).toBeNull();
+    expect(captures[0]?.set?.actorId).toBeNull();
+    expect(captures[1]?.values.artifactId).toBeNull();
+    expect(captures[1]?.set?.artifactId).toBeNull();
   });
 
   it('maps database nulls back to omitted optional domain properties', async () => {

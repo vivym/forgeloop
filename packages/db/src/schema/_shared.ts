@@ -56,6 +56,14 @@ export const run_session_status_values = [
 export const review_packet_status_values = ['ready', 'in_review', 'completed', 'archived'] as const;
 export const review_packet_decision_values = ['none', 'approved', 'changes_requested'] as const;
 export const decision_values = ['approved', 'changes_requested'] as const;
+export const trace_link_relationship_values = [
+  'belongs_to',
+  'generated_by',
+  'supports',
+  'supersedes',
+  'replaces',
+  'redacted_from',
+] as const;
 
 export const projectRepoStatus = pgEnum('project_repo_status', project_repo_status_values);
 export const workItemPhase = pgEnum('work_item_phase', work_item_phase_values);
@@ -78,5 +86,6 @@ export const runSessionStatus = pgEnum('run_session_status', run_session_status_
 export const reviewPacketStatus = pgEnum('review_packet_status', review_packet_status_values);
 export const reviewPacketDecision = pgEnum('review_packet_decision', review_packet_decision_values);
 export const decisionValue = pgEnum('decision_value', decision_values);
+export const traceLinkRelationship = pgEnum('trace_link_relationship', trace_link_relationship_values);
 
 export const timestampColumn = (name: string) => timestamp(name, { withTimezone: true, mode: 'string' });

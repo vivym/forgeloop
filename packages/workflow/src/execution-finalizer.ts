@@ -22,6 +22,7 @@ import type {
   ReviewPacketRecord,
   RunSessionRecord,
   StatusHistoryRecord,
+  TraceLinkRecord,
 } from './activities';
 import { buildRunSpec, loadRunContext } from './activities';
 
@@ -209,6 +210,112 @@ const persistArtifacts = async (
     });
   }
 };
+
+const terminalTraceEventId = (runSessionId: string): string => `trace-event:run-terminal:${runSessionId}`;
+const replacementTraceEventId = (runSessionId: string): string => `trace-event:run-replacement:${runSessionId}`;
+
+const bestEffortTraceWrite = async (write: () => Promise<void>): Promise<void> => {
+  try {
+    await write();
+  } catch {
+    // Primary P0 records are authoritative; trace rows can be reconstructed when absent.
+  }
+};
+
+const traceLink = (
+  traceEventId: string,
+  relationship: TraceLinkRecord['relationship'],
+  objectType: string,
+  objectId: string,
+  at: IsoDateTime,
+): TraceLinkRecord => ({
+  id: `trace-link:${traceEventId}:${relationship}:${objectType}:${objectId}`,
+  trace_event_id: traceEventId,
+  relationship,
+  object_type: objectType,
+  object_id: objectId,
+  created_at: at,
+});
+
+const recordTerminalEvidenceTrace = async (
+  repository: PackageExecutionRepository,
+  context: LoadedRunContext,
+  runSession: RunSessionRecord,
+  executorResult: ExecutorResult,
+  reviewPacket: ReviewPacketRecord | undefined,
+  at: IsoDateTime,
+): Promise<void> =>
+  bestEffortTraceWrite(async () => {
+    const id = terminalTraceEventId(runSession.id);
+    const payload: Record<string, unknown> = {
+      run_session_id: runSession.id,
+      execution_package_id: context.executionPackage.id,
+      work_item_id: context.workItem.id,
+      status: runSession.status,
+      artifact_count: executorResult.artifacts.length,
+    };
+    if (reviewPacket !== undefined) {
+      payload.review_packet_id = reviewPacket.id;
+    }
+
+    await repository.saveTraceEvent({
+      id,
+      event_type: 'run_terminal_evidence_recorded',
+      subject_type: 'run_session',
+      subject_id: runSession.id,
+      actor_id: runSession.requested_by_actor_id,
+      summary: `Terminal evidence recorded for run ${runSession.id}.`,
+      payload,
+      created_at: at,
+    });
+
+    const links = [
+      traceLink(id, 'belongs_to', 'work_item', context.workItem.id, at),
+      traceLink(id, 'belongs_to', 'execution_package', context.executionPackage.id, at),
+      traceLink(id, 'generated_by', 'run_session', runSession.id, at),
+    ];
+    if (reviewPacket !== undefined) {
+      links.push(traceLink(id, 'supports', 'review_packet', reviewPacket.id, at));
+    }
+
+    for (const link of links) {
+      await repository.saveTraceLink(link);
+    }
+
+    for (const [index, artifact] of executorResult.artifacts.entries()) {
+      await repository.saveTraceArtifactRef({
+        id: `trace-artifact-ref:${id}:${index}:${artifact.kind}:${artifact.name}`,
+        trace_event_id: id,
+        artifact_id: `artifact:${runSession.id}:${index}:${artifact.kind}:${artifact.name}`,
+        ref: clone(artifact),
+        created_at: at,
+      });
+    }
+  });
+
+const recordReplacementReviewPacketTrace = async (
+  repository: PackageExecutionRepository,
+  runSession: RunSessionRecord,
+  reviewPacket: ReviewPacketRecord,
+  at: IsoDateTime,
+): Promise<void> =>
+  bestEffortTraceWrite(async () => {
+    const replacementEvent = (await repository.listTraceEventsForSubject('run_session', runSession.id)).find(
+      (event) => event.id === replacementTraceEventId(runSession.id) || event.event_type === 'run_replacement_recorded',
+    );
+    if (replacementEvent === undefined) {
+      return;
+    }
+
+    await repository.saveTraceEvent({
+      ...replacementEvent,
+      payload: {
+        ...replacementEvent.payload,
+        new_review_packet_id: reviewPacket.id,
+      },
+    });
+    await repository.saveTraceLink(traceLink(replacementEvent.id, 'generated_by', 'review_packet', reviewPacket.id, at));
+  });
 
 const runSelfReview = async (
   runSession: RunSessionRecord,
@@ -514,6 +621,7 @@ const prepareFinalization = async (
 
   if (terminalRunSession.status !== 'succeeded') {
     await reconcileFailedPackageIfNeeded(repository, terminalRunSession, state.context.executionPackage, at);
+    await recordTerminalEvidenceTrace(repository, state.context, terminalRunSession, parsedExecutorResult, undefined, at);
 
     return { kind: 'completed', result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status } };
   }
@@ -523,6 +631,9 @@ const prepareFinalization = async (
     successPackageIsReconciled(state.context.executionPackage);
 
   if (state.reviewPacket !== undefined && packageReconciled) {
+    await recordReplacementReviewPacketTrace(repository, terminalRunSession, state.reviewPacket, at);
+    await recordTerminalEvidenceTrace(repository, state.context, terminalRunSession, parsedExecutorResult, state.reviewPacket, at);
+
     return {
       kind: 'completed',
       result: { runSessionId: terminalRunSession.id, status: terminalRunSession.status, reviewPacketId: state.reviewPacket.id },
@@ -564,6 +675,8 @@ const completeSucceededFinalization = async (
     ));
 
   await reconcileSucceededPackageIfNeeded(repository, state.runSession, state.context.executionPackage, at);
+  await recordReplacementReviewPacketTrace(repository, state.runSession, reviewPacket, at);
+  await recordTerminalEvidenceTrace(repository, state.context, state.runSession, parsedExecutorResult, reviewPacket, at);
 
   return { runSessionId: state.runSession.id, status: state.runSession.status, reviewPacketId: reviewPacket.id };
 };

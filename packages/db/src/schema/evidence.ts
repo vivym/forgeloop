@@ -1,7 +1,7 @@
 import { jsonb, pgTable, text } from 'drizzle-orm/pg-core';
 import type { Artifact, ObjectEvent } from '@forgeloop/domain';
 
-import { decisionValue, timestampColumn } from './_shared';
+import { decisionValue, timestampColumn, traceLinkRelationship } from './_shared';
 
 export const object_events = pgTable('object_events', {
   id: text('id').primaryKey(),
@@ -41,5 +41,33 @@ export const decisions = pgTable('decisions', {
   actorId: text('actor_id').notNull(),
   decision: decisionValue('decision').notNull(),
   summary: text('summary').notNull(),
+  createdAt: timestampColumn('created_at').notNull(),
+});
+
+export const trace_events = pgTable('trace_events', {
+  id: text('id').primaryKey(),
+  eventType: text('event_type').notNull(),
+  subjectType: text('subject_type').notNull(),
+  subjectId: text('subject_id').notNull(),
+  actorId: text('actor_id'),
+  summary: text('summary').notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  createdAt: timestampColumn('created_at').notNull(),
+});
+
+export const trace_links = pgTable('trace_links', {
+  id: text('id').primaryKey(),
+  traceEventId: text('trace_event_id').notNull(),
+  relationship: traceLinkRelationship('relationship').notNull(),
+  objectType: text('object_type').notNull(),
+  objectId: text('object_id').notNull(),
+  createdAt: timestampColumn('created_at').notNull(),
+});
+
+export const trace_artifact_refs = pgTable('trace_artifact_refs', {
+  id: text('id').primaryKey(),
+  traceEventId: text('trace_event_id').notNull(),
+  artifactId: text('artifact_id'),
+  ref: jsonb('ref').$type<Artifact['ref']>().notNull(),
   createdAt: timestampColumn('created_at').notNull(),
 });

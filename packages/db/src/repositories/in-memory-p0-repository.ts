@@ -21,7 +21,7 @@ import type {
 } from '@forgeloop/domain';
 import { DomainError } from '@forgeloop/domain';
 
-import type { P0Repository } from './p0-repository';
+import type { P0Repository, TraceArtifactRefRecord, TraceEventRecord, TraceLinkRecord } from './p0-repository';
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -59,6 +59,9 @@ export class InMemoryP0Repository implements P0Repository {
   private readonly statusHistories = new Map<string, StatusHistory>();
   private readonly artifacts = new Map<string, Artifact>();
   private readonly decisions = new Map<string, Decision>();
+  private readonly traceEvents = new Map<string, TraceEventRecord>();
+  private readonly traceLinks = new Map<string, TraceLinkRecord>();
+  private readonly traceArtifactRefs = new Map<string, TraceArtifactRefRecord>();
 
   async saveProject(project: Project): Promise<void> {
     this.projects.set(project.id, clone(project));
@@ -497,6 +500,36 @@ export class InMemoryP0Repository implements P0Repository {
   async listDecisionsForObject(objectType: string, objectId: string): Promise<Decision[]> {
     return valuesFor(this.decisions)
       .filter((decision) => decision.object_type === objectType && decision.object_id === objectId)
+      .sort(byCreatedAt);
+  }
+
+  async saveTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
+    this.traceEvents.set(traceEvent.id, clone(traceEvent));
+  }
+
+  async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
+    return valuesFor(this.traceEvents)
+      .filter((traceEvent) => traceEvent.subject_type === subjectType && traceEvent.subject_id === subjectId)
+      .sort(byCreatedAt);
+  }
+
+  async saveTraceLink(traceLink: TraceLinkRecord): Promise<void> {
+    this.traceLinks.set(traceLink.id, clone(traceLink));
+  }
+
+  async listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]> {
+    return valuesFor(this.traceLinks)
+      .filter((traceLink) => traceLink.trace_event_id === traceEventId)
+      .sort(byCreatedAt);
+  }
+
+  async saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void> {
+    this.traceArtifactRefs.set(traceArtifactRef.id, clone(traceArtifactRef));
+  }
+
+  async listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]> {
+    return valuesFor(this.traceArtifactRefs)
+      .filter((traceArtifactRef) => traceArtifactRef.trace_event_id === traceEventId)
       .sort(byCreatedAt);
   }
 
