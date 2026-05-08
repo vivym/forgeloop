@@ -180,6 +180,7 @@ pre {
 }
 
 .state-panel,
+.evidence-chain,
 .timeline {
   grid-column: span 1;
 }
@@ -502,6 +503,81 @@ pre {
   padding: 8px;
 }
 
+.evidence-chain {
+  align-content: start;
+}
+
+.evidence-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.evidence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.evidence-meta span,
+.redaction-marker {
+  border: 1px solid #d5dce3;
+  border-radius: 999px;
+  background: #f6f8fa;
+  color: #4f5964;
+  font-size: 12px;
+  padding: 3px 7px;
+}
+
+.redaction-marker {
+  border-color: #d8c17b;
+  background: #fff9e6;
+  color: #5d4a05;
+  justify-self: start;
+}
+
+.evidence-group-list,
+.evidence-item-list,
+.evidence-group {
+  display: grid;
+  gap: 8px;
+}
+
+.evidence-group h3 {
+  margin-top: 0;
+}
+
+.evidence-row {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border-left: 3px solid #67829d;
+  background: #fafbfc;
+  padding: 8px 10px;
+}
+
+.evidence-row.redacted {
+  border-left-color: #b08a20;
+}
+
+.evidence-row-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.evidence-row-main strong,
+.evidence-row-main span,
+.evidence-row time,
+.evidence-links {
+  overflow-wrap: anywhere;
+}
+
+.evidence-row-main span,
+.evidence-row time,
+.evidence-links {
+  color: #67717c;
+  font-size: 12px;
+}
+
 .timeline-list {
   display: grid;
   gap: 8px;
@@ -546,6 +622,7 @@ pre {
 
   .workbench-grid,
   .form-grid.two,
+  .evidence-metrics,
   .run-console-grid,
   .run-input-row {
     grid-template-columns: 1fr;

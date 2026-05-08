@@ -12,6 +12,7 @@ import {
   type CreatePlanRevisionBody,
   type CreateSpecRevisionBody,
   type CreateWorkItemBody,
+  type EvidenceChainResponse,
   type ExecutionPackage,
   type ExecutorType,
   type PlanRevision,
@@ -29,10 +30,14 @@ import {
 } from './api';
 import {
   appendRunEvents,
+  evidenceChainDisplayItem,
+  evidenceChainSummaryMetrics,
+  groupEvidenceChainItems,
   isActiveCockpit,
   latestContinuationNotice,
   latestPlanStep,
   nextRunEventCursor,
+  runArtifactDisplayLabel,
   runArtifactsForDetail,
   visibleRunArtifacts,
   workerLeaseLabel,
@@ -80,6 +85,7 @@ export function App() {
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [cockpit, setCockpit] = useState<CockpitResponse>({});
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const [evidenceChain, setEvidenceChain] = useState<EvidenceChainResponse | null>(null);
   const [specRevisions, setSpecRevisions] = useState<SpecRevision[]>([]);
   const [planRevisions, setPlanRevisions] = useState<PlanRevision[]>([]);
   const [selectedPackageId, setSelectedPackageId] = useState('');
@@ -311,6 +317,7 @@ export function App() {
     refreshRequestIdRef.current += 1;
     setCockpit({});
     setTimeline([]);
+    setEvidenceChain(null);
     setSpecRevisions([]);
     setPlanRevisions([]);
     setSelectedPackageId('');
@@ -329,7 +336,11 @@ export function App() {
     if (!workItemId) return;
     const requestId = ++refreshRequestIdRef.current;
     await runAction('Workbench refreshed', async () => {
-      const [cockpitResponse, timelineResponse] = await Promise.all([api.getCockpit(workItemId), api.getTimeline(workItemId)]);
+      const [cockpitResponse, timelineResponse, evidenceChainResponse] = await Promise.all([
+        api.getCockpit(workItemId),
+        api.getTimeline(workItemId),
+        api.getEvidenceChain(workItemId),
+      ]);
       if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
       const spec = cockpitResponse.current_spec;
       const plan = cockpitResponse.current_plan;
@@ -340,6 +351,7 @@ export function App() {
       if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
       setCockpit(cockpitResponse);
       setTimeline(timelineResponse);
+      setEvidenceChain(evidenceChainResponse);
       setSpecRevisions(nextSpecRevisions);
       setPlanRevisions(nextPlanRevisions);
       const pkg = cockpitResponse.packages?.[0];
@@ -569,6 +581,8 @@ export function App() {
           ) : <EmptyState text="Select a work item to load cockpit state" />}
         </section>
 
+        <EvidenceChainPanel evidenceChain={hasActiveCockpit ? evidenceChain : null} />
+
         <section className="panel spec-plan">
           <SectionHeader title="Spec/Plan" meta={specMode} />
           <div className="segmented">
@@ -760,6 +774,62 @@ function EntitySummary({ title, entity, revisions }: { title: string; entity: Sp
   );
 }
 
+function EvidenceChainPanel({ evidenceChain }: { evidenceChain: EvidenceChainResponse | null }) {
+  const groups = groupEvidenceChainItems(evidenceChain);
+
+  return (
+    <section className="panel evidence-chain" data-testid="evidence-chain">
+      <SectionHeader title="Evidence Chain" meta={evidenceChain ? `${evidenceChain.summary.total_items} items` : 'none'} />
+      {!evidenceChain ? (
+        <EmptyState text="No evidence chain loaded" />
+      ) : (
+        <>
+          <div className="state-grid evidence-metrics">
+            {evidenceChainSummaryMetrics(evidenceChain).map((metric) => (
+              <Metric key={metric.label} label={metric.label} value={metric.value} />
+            ))}
+          </div>
+          <div className="evidence-meta">
+            <span>{evidenceChain.focus.selection} focus</span>
+            <span>{evidenceChain.projection.source} v{evidenceChain.projection.version}</span>
+            {evidenceChain.projection.partial && <span>partial</span>}
+          </div>
+          <PillList values={evidenceChain.summary.risk_flags.map((flag) => flag.replace(/_/g, ' '))} empty="No risk flags" />
+          <div className="evidence-group-list">
+            {groups.length === 0 && <EmptyState text="No evidence items" />}
+            {groups.map((group) => (
+              <div className="evidence-group" data-testid={`evidence-group-${group.id}`} key={group.id}>
+                <h3>{group.label}</h3>
+                <div className="evidence-item-list">
+                  {group.items.map((item) => (
+                    <EvidenceChainRow item={item} key={item.id} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function EvidenceChainRow({ item }: { item: import('./api').EvidenceChainItem }) {
+  const display = evidenceChainDisplayItem(item);
+  return (
+    <article className={`evidence-row ${item.redacted ? 'redacted' : ''}`}>
+      <div className="evidence-row-main">
+        <strong>{display.summary}</strong>
+        <span>{display.sourceLabel} / {display.subjectLabel}</span>
+      </div>
+      <time>{formatDate(display.createdAt)}</time>
+      {display.redactionLabel && <span className="redaction-marker">{display.redactionLabel}</span>}
+      <PillList values={[...display.riskLabels, ...display.detailLabels]} empty="No item flags" />
+      {display.linkLabels.length > 0 && <span className="evidence-links">{display.linkLabels.join(' | ')}</span>}
+    </article>
+  );
+}
+
 function RunConsole({
   actorId,
   error,
@@ -913,7 +983,13 @@ function ReviewDetail({ review }: { review: ReviewPacket | null }) {
 function ArtifactList({ artifacts }: { artifacts: ArtifactRef[] }) {
   const visibleArtifacts = visibleRunArtifacts(artifacts);
   if (visibleArtifacts.length === 0) return <EmptyState text="No artifacts" />;
-  return <div className="artifact-list">{visibleArtifacts.map((artifact, index) => <span key={`${artifact.name ?? 'artifact'}-${index}`}>{artifact.kind ?? 'artifact'}: {artifact.name ?? artifact.local_ref ?? artifact.storage_uri}</span>)}</div>;
+  return (
+    <div className="artifact-list">
+      {visibleArtifacts.map((artifact, index) => (
+        <span key={`${artifact.name ?? artifact.kind ?? 'artifact'}-${index}`}>{runArtifactDisplayLabel(artifact)}</span>
+      ))}
+    </div>
+  );
 }
 
 function defaultRevisionForm(mode: SpecPlanMode) {

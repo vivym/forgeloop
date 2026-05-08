@@ -4,6 +4,7 @@ import {
   appendRunEvents,
   latestContinuationNotice,
   latestPlanStep,
+  runArtifactDisplayLabel,
   runArtifactsForDetail,
   workerLeaseLabel,
   nextRunEventCursor,
@@ -105,6 +106,15 @@ describe('run console state', () => {
     });
 
     expect(artifacts).toEqual([{ kind: 'diff', name: 'diff.patch' }]);
+  });
+
+  it('formats run artifacts without exposing local-only refs', () => {
+    expect(runArtifactDisplayLabel({ kind: 'diff', name: 'Public diff', local_ref: 'artifacts/run/diff.patch' })).toBe(
+      'diff: Public diff',
+    );
+    expect(runArtifactDisplayLabel({ kind: 'execution_summary', local_ref: 'artifacts/run/summary.md' })).toBe(
+      'execution_summary',
+    );
   });
 
   it('derives worker lease labels without using driver status as lease status', () => {

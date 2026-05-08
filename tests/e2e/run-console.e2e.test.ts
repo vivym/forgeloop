@@ -115,7 +115,170 @@ describe('run console browser e2e', () => {
     },
     60_000,
   );
+
+  it(
+    'renders evidence chain with current focus before superseded history and hides raw refs',
+    async () => {
+      const vite = await startWeb('http://api.local');
+      viteServers.push(vite);
+
+      const { browser, process, profileDir } = await launchChromiumOverCdp();
+      browsers.push(browser);
+      browserProcesses.push(process);
+      browserProfileDirs.push(profileDir);
+      const page = await browser.newPage({ viewport: viewports[0] });
+      await routeEvidenceWorkbench(page);
+
+      await page.goto(requireViteUrl(vite));
+
+      const evidence = page.getByTestId('evidence-chain');
+      await expectPage(evidence).toBeVisible();
+      await expectPage(evidence.getByTestId('evidence-group-current')).toBeVisible();
+      await expectPage(evidence.getByText('review-packet-approved', { exact: false }).first()).toBeVisible();
+      await expectPage(evidence.getByText('Redacted: logs artifact', { exact: false })).toBeVisible();
+
+      const currentGroup = await requiredBox(evidence.getByTestId('evidence-group-current'), 'current evidence group');
+      const historyGroup = await requiredBox(evidence.getByTestId('evidence-group-history'), 'history evidence group');
+      expectValue(currentGroup.y).toBeLessThan(historyGroup.y);
+
+      const evidenceText = await evidence.innerText();
+      expectValue(evidenceText).not.toContain('raw-codex');
+      expectValue(evidenceText).not.toContain('raw_ref');
+      expectValue(evidenceText).not.toContain('local_ref');
+      expectValue(evidenceText).not.toContain('local://');
+      expectValue(evidenceText).not.toContain('secret command output');
+    },
+    60_000,
+  );
 });
+
+async function routeEvidenceWorkbench(page: Page): Promise<void> {
+  const now = '2026-05-08T00:00:00.000Z';
+  const workItem = {
+    id: 'work-item-1',
+    project_id: 'project-1',
+    kind: 'feature',
+    title: 'Evidence Chain Workbench',
+    goal: 'Render evidence',
+    success_criteria: ['Evidence is visible'],
+    priority: 'P0',
+    risk: 'medium',
+    owner_actor_id: actorOwner,
+    phase: 'review',
+    activity_state: 'awaiting_human',
+    gate_state: 'review_approved',
+    resolution: 'completed',
+    current_spec_id: 'spec-1',
+    current_plan_id: 'plan-1',
+    created_at: now,
+    updated_at: now,
+  };
+  const cockpit = {
+    work_item: workItem,
+    current_spec: {
+      id: 'spec-1',
+      work_item_id: workItem.id,
+      entity_type: 'spec',
+      status: 'approved',
+      editing_state: 'idle',
+      gate_state: 'approved',
+      resolution: 'approved',
+      current_revision_id: 'spec-revision-1',
+    },
+    current_plan: {
+      id: 'plan-1',
+      work_item_id: workItem.id,
+      entity_type: 'plan',
+      status: 'approved',
+      editing_state: 'idle',
+      gate_state: 'approved',
+      resolution: 'approved',
+      current_revision_id: 'plan-revision-1',
+    },
+    packages: [],
+    run_sessions: [],
+    review_packets: [],
+    next_actions: [],
+    completion_state: {},
+  };
+  const evidenceChain = {
+    work_item_id: workItem.id,
+    generated_at: now,
+    focus: { selection: 'current', review_packet_ids: ['review-packet-approved'] },
+    projection: { source: 'mixed', version: 1, partial: true, gaps: ['missing_trace_artifact_refs'] },
+    summary: {
+      total_items: 4,
+      run_count: 2,
+      review_packet_count: 2,
+      decision_count: 1,
+      artifact_count: 1,
+      risk_flags: ['redacted_evidence', 'superseded_run', 'projection_partial'],
+      redacted_count: 1,
+    },
+    items: [
+      {
+        id: 'evidence-item:review-packet:review-packet-approved',
+        source: 'review_packet',
+        subject: { object_type: 'review_packet', object_id: 'review-packet-approved', relationship: 'supports' },
+        summary: 'Rerun approved.',
+        created_at: now,
+        visibility: 'public',
+        links: [{ object_type: 'run_session', object_id: 'run-session-approved', relationship: 'generated_by' }],
+        risk_flags: [],
+        redacted: false,
+        details: { decision: 'approved' },
+      },
+      {
+        id: 'evidence-item:redacted-log:run-session-approved:0',
+        source: 'artifact',
+        subject: { object_type: 'artifact', object_id: 'run-session-approved:logs:0', relationship: 'redacted_from' },
+        summary: 'Logs artifact redacted from public evidence.',
+        created_at: now,
+        visibility: 'public',
+        links: [{ object_type: 'review_packet', object_id: 'review-packet-approved', relationship: 'supports' }],
+        risk_flags: ['redacted_evidence'],
+        redacted: true,
+        details: { redaction_reason: 'logs_artifact' },
+      },
+      {
+        id: 'evidence-item:run-session:run-session-approved',
+        source: 'object_event',
+        subject: { object_type: 'run_session', object_id: 'run-session-approved', relationship: 'generated_by' },
+        summary: 'Rerun addressed requested changes and passed review.',
+        created_at: now,
+        visibility: 'public',
+        links: [{ object_type: 'review_packet', object_id: 'review-packet-approved', relationship: 'supports' }],
+        risk_flags: [],
+        redacted: false,
+        details: { run_status: 'succeeded', required_check_ids: ['unit-tests'] },
+      },
+      {
+        id: 'evidence-item:run-session:run-session-changes-requested',
+        source: 'object_event',
+        subject: { object_type: 'run_session', object_id: 'run-session-changes-requested', relationship: 'generated_by' },
+        summary: 'Initial run completed before review changes were requested.',
+        created_at: '2026-05-07T23:55:00.000Z',
+        visibility: 'public',
+        links: [{ object_type: 'review_packet', object_id: 'review-packet-changes-requested', relationship: 'generated_by' }],
+        risk_flags: ['superseded_run'],
+        redacted: false,
+        details: { run_status: 'succeeded' },
+      },
+    ],
+  };
+
+  await page.route('http://api.local/**', async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === '/work-items') return route.fulfill({ json: [workItem] });
+    if (path === '/work-items/work-item-1/cockpit') return route.fulfill({ json: cockpit });
+    if (path === '/work-items/work-item-1/timeline') return route.fulfill({ json: [] });
+    if (path === '/work-items/work-item-1/evidence-chain') return route.fulfill({ json: evidenceChain });
+    if (path === '/specs/spec-1/revisions') return route.fulfill({ json: [] });
+    if (path === '/plans/plan-1/revisions') return route.fulfill({ json: [] });
+    return route.fulfill({ status: 404, json: { message: `Unhandled test route ${path}` } });
+  });
+}
 
 function runSelect(page: Page) {
   return page.locator('section.run-review label').filter({ hasText: /^Run/ }).locator('select');

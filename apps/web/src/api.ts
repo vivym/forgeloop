@@ -1,3 +1,19 @@
+import type {
+  EvidenceChainItem,
+  EvidenceChainObjectRef,
+  EvidenceChainRedactionReason,
+  EvidenceChainResponse,
+  EvidenceChainRiskFlag,
+} from '@forgeloop/contracts';
+
+export type {
+  EvidenceChainItem,
+  EvidenceChainObjectRef,
+  EvidenceChainRedactionReason,
+  EvidenceChainResponse,
+  EvidenceChainRiskFlag,
+} from '@forgeloop/contracts';
+
 export type WorkItemKind = 'feature' | 'bugfix' | 'tech_debt' | 'test_refactor';
 export type ArtifactKind =
   | 'diff'
@@ -425,6 +441,12 @@ export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
     getWorkItem: (workItemId: string) => request<WorkItem>(`/work-items/${encodeURIComponent(workItemId)}`),
     getCockpit: (workItemId: string) => request<CockpitResponse>(`/work-items/${encodeURIComponent(workItemId)}/cockpit`),
     getTimeline: (workItemId: string) => request<TimelineEntry[]>(`/work-items/${encodeURIComponent(workItemId)}/timeline`),
+    getEvidenceChain: (workItemId: string, reviewPacketId?: string) =>
+      request<EvidenceChainResponse>(
+        `/work-items/${encodeURIComponent(workItemId)}/evidence-chain${
+          reviewPacketId ? `?${new URLSearchParams({ review_packet_id: reviewPacketId }).toString()}` : ''
+        }`,
+      ),
 
     createSpec: (workItemId: string) => request<SpecPlan>(`/work-items/${encodeURIComponent(workItemId)}/specs`, { method: 'POST' }),
     getSpec: (specId: string) => request<SpecPlan>(`/specs/${encodeURIComponent(specId)}`),

@@ -64,6 +64,42 @@ describe('Forgeloop web API client', () => {
     });
   });
 
+  it('fetches evidence chains with an optional focused review packet', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          work_item_id: 'work item/1',
+          generated_at: '2026-05-08T00:00:00.000Z',
+          focus: { selection: 'explicit', review_packet_ids: ['review packet/1'] },
+          projection: { source: 'trace_events', version: 1, partial: false, gaps: [] },
+          summary: {
+            total_items: 0,
+            run_count: 0,
+            review_packet_count: 0,
+            decision_count: 0,
+            artifact_count: 0,
+            risk_flags: [],
+            redacted_count: 0,
+          },
+          items: [],
+        }),
+        { status: 200 },
+      ),
+    );
+    const api = createForgeloopApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    const result = await api.getEvidenceChain('work item/1', 'review packet/1');
+
+    expect(result.focus.selection).toBe('explicit');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/root/work-items/work%20item%2F1/evidence-chain?review_packet_id=review+packet%2F1',
+      {
+        method: 'GET',
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  });
+
   it('patches execution package content without sending repo_id', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'package-1' }), { status: 200 }));
     const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
