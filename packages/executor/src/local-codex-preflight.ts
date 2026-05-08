@@ -221,7 +221,6 @@ const isWritableDirectory = async (path: string): Promise<boolean> => {
 export const createDefaultLocalCodexEnvironment = (
   options: DefaultLocalCodexEnvironmentOptions = {},
 ): LocalCodexEnvironment => {
-  const workspaceRoot = options.workspaceRoot;
   const runCommand = options.commandRunner ?? execFileCommandRunner;
   const environment: LocalCodexEnvironment = {
     commandExists: commandExists(runCommand),
@@ -245,10 +244,7 @@ export const createDefaultLocalCodexEnvironment = (
     prepareWorkspace: async ({ repoPath, baseRef, runSessionId }) => {
       const input = { repoPath, baseRef, runSessionId };
 
-      return preparePersistentGitWorktree(
-        environment,
-        workspaceRoot === undefined ? input : { ...input, workspaceRoot },
-      );
+      return preparePersistentGitWorktree(environment, input);
     },
   };
 

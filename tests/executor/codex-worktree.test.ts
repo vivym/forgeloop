@@ -36,6 +36,12 @@ describe('Codex persistent worktrees', () => {
     );
   });
 
+  it('ignores outside workspaceRoot overrides for the local Codex worktree boundary', () => {
+    expect(worktreePathForRun('/Users/viv/projs/forgeloop', 'run-session-1', '/tmp/outside-worktrees')).toBe(
+      '/Users/viv/projs/forgeloop/.worktrees/run-session-1',
+    );
+  });
+
   it('detects source repo mutation from porcelain status changes', () => {
     expect(
       sourceRepoWasMutated({

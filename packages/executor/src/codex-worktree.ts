@@ -22,8 +22,8 @@ const parseRegisteredWorktreePaths = (porcelain: string): string[] =>
     .map((line) => line.slice('worktree '.length).trim())
     .filter(Boolean);
 
-export const worktreeRootForRepo = (repoPath: string, workspaceRoot?: string): string =>
-  resolve(workspaceRoot ?? join(repoPath, CODEX_RUN_WORKTREE_DIR));
+export const worktreeRootForRepo = (repoPath: string, _workspaceRoot?: string): string =>
+  resolve(join(repoPath, CODEX_RUN_WORKTREE_DIR));
 
 export const worktreePathForRun = (repoPath: string, runSessionId: string, workspaceRoot?: string): string =>
   join(worktreeRootForRepo(repoPath, workspaceRoot), safePathSegment(runSessionId));

@@ -268,7 +268,8 @@ describe('runLocalCodexPreflight', () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.workspacePath.startsWith(workspaceRoot)).toBe(true);
+    expect(result.workspacePath).toBe(join(repo, '.worktrees', 'escape-run-session'));
+    expect(result.workspacePath.startsWith(workspaceRoot)).toBe(false);
     expect(result.workspacePath).not.toContain('..');
   });
 
