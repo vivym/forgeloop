@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
+import type { ArtifactKind } from '@forgeloop/contracts';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -11,9 +12,26 @@ import type { Test as SupertestTest } from 'supertest';
 import { AppModule } from '../apps/control-plane-api/src/app.module';
 import { P0_REPOSITORY, RUN_DURABILITY_MODE } from '../apps/control-plane-api/src/p0/p0.service';
 import type { P0Repository } from '../packages/db/src';
-import type { ReviewPacket, RunSession } from '../packages/domain/src';
+import {
+  deriveRequiredArtifactPresence,
+  deriveWorkItemCompletion,
+  type ExecutionPackage,
+  type ReviewPacket,
+  type RunSession,
+  type WorkItem,
+} from '../packages/domain/src';
+import {
+  preflightLocalCodexDogfood,
+  STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST,
+  STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE,
+} from './p0-local-codex-dogfood';
 
 type WorkItemKind = 'feature' | 'bugfix' | 'test_refactor';
+type DogfoodExecutorType = 'mock' | 'local_codex';
+type DogfoodRunMode = {
+  executorType: DogfoodExecutorType;
+  workflowOnly: boolean;
+};
 type DogfoodItemDefinition = {
   key: string;
   kind: WorkItemKind;
@@ -21,7 +39,7 @@ type DogfoodItemDefinition = {
   goal: string;
   successCriteria: string[];
   objective: string;
-  expectedExecutor: 'mock';
+  strictRunMode: DogfoodRunMode;
   requiresChangesRequestedRerun: boolean;
 };
 
@@ -31,6 +49,8 @@ type DogfoodItemResult = {
   kind: WorkItemKind;
   workItemId: string;
   packageId: string;
+  executorType: DogfoodExecutorType;
+  workflowOnly: boolean;
   runSessionIds: string[];
   reviewPacketIds: string[];
   finalDecision: 'approved';
@@ -38,13 +58,59 @@ type DogfoodItemResult = {
   timelineSources: string[];
 };
 
+type StrictDirtySourceSummary = {
+  allowed_dirty_entries: string[];
+  blocked_dirty_entries: string[];
+  dirty_allowlist_source: typeof STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
+};
+
+type StrictDogfoodBlocker = {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+};
+
+type StrictQualifyingWorkItem = {
+  workItemId: string;
+  executionPackageId: string;
+  runSessionId: string;
+  reviewPacketId: string;
+  executorType: 'local_codex';
+  workflowOnly: false;
+};
+
+type StrictDogfoodAcceptance =
+  | {
+      status: 'disabled';
+      qualifyingWorkItems: [];
+      blockers: [];
+      dirtySource?: StrictDirtySourceSummary;
+    }
+  | {
+      status: 'passed' | 'failed';
+      qualifyingWorkItems: StrictQualifyingWorkItem[];
+      blockers: StrictDogfoodBlocker[];
+      dirtySource?: StrictDirtySourceSummary;
+    };
+
 type DogfoodCompletionResult = {
   generatedAt: string;
   durabilityMode: string;
   projectId: string;
   repoId: string;
   commitSha: string;
+  strictAcceptance: StrictDogfoodAcceptance;
   items: DogfoodItemResult[];
+};
+
+type CompletedDogfoodItem = {
+  result: DogfoodItemResult;
+  records: {
+    workItem: WorkItem;
+    executionPackages: ExecutionPackage[];
+    runSessions: RunSession[];
+    reviewPackets: ReviewPacket[];
+  };
 };
 
 const execFile = promisify(execFileCallback);
@@ -70,6 +136,202 @@ const requiredChecks = [
   },
 ];
 
+const requiredArtifactKinds: ArtifactKind[] = ['diff', 'changed_files', 'check_output', 'execution_summary', 'review_packet'];
+
+export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
+export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST;
+
+const strictDogfoodBlocker = (
+  code: string,
+  message: string,
+  details?: Record<string, unknown>,
+): StrictDogfoodBlocker => ({
+  code,
+  message,
+  ...(details === undefined ? {} : { details }),
+});
+
+const approvedReviewPacketForRun = (
+  executionPackage: ExecutionPackage,
+  runSession: RunSession,
+  reviewPackets: readonly ReviewPacket[],
+): ReviewPacket | undefined =>
+  reviewPackets.find(
+    (reviewPacket) =>
+      reviewPacket.execution_package_id === executionPackage.id &&
+      reviewPacket.run_session_id === runSession.id &&
+      reviewPacket.status === 'completed' &&
+      reviewPacket.decision === 'approved',
+  );
+
+export const evaluateStrictLocalCodexAcceptance = (input: {
+  workItems: readonly WorkItem[];
+  executionPackages: readonly ExecutionPackage[];
+  runSessions: readonly RunSession[];
+  reviewPackets: readonly ReviewPacket[];
+}): Extract<StrictDogfoodAcceptance, { status: 'passed' | 'failed' }> => {
+  const candidateBlockers: StrictDogfoodBlocker[] = [];
+  const qualifyingWorkItems: StrictQualifyingWorkItem[] = [];
+
+  for (const workItem of input.workItems) {
+    const packagesForWorkItem = input.executionPackages.filter(
+      (executionPackage) => executionPackage.work_item_id === workItem.id,
+    );
+    const completion = deriveWorkItemCompletion(workItem, packagesForWorkItem, input.runSessions, input.reviewPackets);
+    const workItemBlockers: StrictDogfoodBlocker[] = [];
+
+    if (!completion.done) {
+      workItemBlockers.push(
+        strictDogfoodBlocker('work_item_completion_incomplete', 'Work Item has incomplete Execution Package evidence', {
+          work_item_id: workItem.id,
+          incomplete_reasons: completion.incomplete_reasons,
+        }),
+      );
+    }
+
+    for (const executionPackage of packagesForWorkItem) {
+      if (executionPackage.last_run_session_id === undefined) {
+        workItemBlockers.push(
+          strictDogfoodBlocker('package_missing_current_run', 'Execution Package has no current RunSession', {
+            work_item_id: workItem.id,
+            execution_package_id: executionPackage.id,
+          }),
+        );
+        continue;
+      }
+
+      const runSession = input.runSessions.find((candidate) => candidate.id === executionPackage.last_run_session_id);
+      if (runSession === undefined) {
+        workItemBlockers.push(
+          strictDogfoodBlocker('run_session_missing', 'Execution Package current RunSession was not found', {
+            work_item_id: workItem.id,
+            execution_package_id: executionPackage.id,
+            run_session_id: executionPackage.last_run_session_id,
+          }),
+        );
+        continue;
+      }
+
+      const executorType = runSession.executor_type ?? runSession.run_spec?.executor_type;
+      const workflowOnly = runSession.run_spec?.workflow_only;
+      const approvedPacket = approvedReviewPacketForRun(executionPackage, runSession, input.reviewPackets);
+      const missingArtifactKinds = deriveRequiredArtifactPresence(executionPackage, runSession).missing_artifact_kinds;
+      const runBlockers: StrictDogfoodBlocker[] = [];
+
+      if (executorType !== 'local_codex') {
+        runBlockers.push(
+          strictDogfoodBlocker('run_session_not_local_codex', 'Current RunSession was not executed by local_codex', {
+            work_item_id: workItem.id,
+            execution_package_id: executionPackage.id,
+            run_session_id: runSession.id,
+            executor_type: executorType ?? null,
+          }),
+        );
+      }
+
+      if (workflowOnly !== false) {
+        runBlockers.push(
+          strictDogfoodBlocker('run_session_workflow_only', 'Current RunSession is workflow_only or missing workflow metadata', {
+            work_item_id: workItem.id,
+            execution_package_id: executionPackage.id,
+            run_session_id: runSession.id,
+            workflow_only: workflowOnly ?? null,
+          }),
+        );
+      }
+
+      if (runSession.status !== 'succeeded') {
+        runBlockers.push(
+          strictDogfoodBlocker('run_session_not_succeeded', 'Current RunSession did not succeed', {
+            work_item_id: workItem.id,
+            execution_package_id: executionPackage.id,
+            run_session_id: runSession.id,
+            status: runSession.status,
+          }),
+        );
+      }
+
+      if (approvedPacket === undefined) {
+        runBlockers.push(
+          strictDogfoodBlocker(
+            'review_packet_missing_or_unapproved',
+            'Current RunSession has no completed approved Review Packet for the same package and run',
+            {
+              work_item_id: workItem.id,
+              execution_package_id: executionPackage.id,
+              run_session_id: runSession.id,
+            },
+          ),
+        );
+      }
+
+      if (missingArtifactKinds.length > 0) {
+        workItemBlockers.push(
+          strictDogfoodBlocker('required_artifact_missing', 'Current RunSession is missing required artifacts', {
+            work_item_id: workItem.id,
+            execution_package_id: executionPackage.id,
+            run_session_id: runSession.id,
+            required_artifact_kinds: executionPackage.required_artifact_kinds,
+            missing_artifact_kinds: missingArtifactKinds,
+          }),
+        );
+      }
+
+      workItemBlockers.push(...runBlockers);
+
+      if (completion.done && runBlockers.length === 0 && missingArtifactKinds.length === 0 && approvedPacket !== undefined) {
+        qualifyingWorkItems.push({
+          workItemId: workItem.id,
+          executionPackageId: executionPackage.id,
+          runSessionId: runSession.id,
+          reviewPacketId: approvedPacket.id,
+          executorType: 'local_codex',
+          workflowOnly: false,
+        });
+        break;
+      }
+    }
+
+    if (!qualifyingWorkItems.some((item) => item.workItemId === workItem.id)) {
+      candidateBlockers.push(...workItemBlockers);
+    }
+  }
+
+  if (qualifyingWorkItems.length >= 2) {
+    return { status: 'passed', qualifyingWorkItems, blockers: [] };
+  }
+
+  return {
+    status: 'failed',
+    qualifyingWorkItems,
+    blockers: [
+      ...candidateBlockers,
+      strictDogfoodBlocker('strict_minimum_not_met', 'Strict local_codex acceptance requires at least two qualifying Work Items', {
+        required_qualifying_work_items: 2,
+        actual_qualifying_work_items: qualifyingWorkItems.length,
+      }),
+    ],
+  };
+};
+
+const strictAcceptanceDisabled = (): StrictDogfoodAcceptance => ({
+  status: 'disabled',
+  qualifyingWorkItems: [],
+  blockers: [],
+});
+
+const strictAcceptanceFromPreflight = (
+  preflight: Awaited<ReturnType<typeof preflightLocalCodexDogfood>>,
+): StrictDogfoodAcceptance => ({
+  status: 'failed',
+  qualifyingWorkItems: [],
+  blockers: preflight.blockers.map((blocker) => strictDogfoodBlocker(blocker.code, blocker.message, blocker.details)),
+  ...(preflight.dirtySource === undefined ? {} : { dirtySource: preflight.dirtySource }),
+});
+
+const isStrictLocalCodexDogfoodEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  env.FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD === '1';
+
 export const dogfoodWorkItems: DogfoodItemDefinition[] = [
   {
     key: 'feature-ci-gate',
@@ -78,7 +340,7 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     goal: 'Protect main with install, test, and build checks on GitHub Actions.',
     successCriteria: ['CI workflow exists', 'The CI-equivalent local install/test/build commands pass'],
     objective: 'Validate the remote CI gate delivery path through ForgeLoop evidence and review handoff.',
-    expectedExecutor: 'mock',
+    strictRunMode: { executorType: 'local_codex', workflowOnly: false },
     requiresChangesRequestedRerun: false,
   },
   {
@@ -88,7 +350,7 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     goal: 'Close the documented durable DB and browser verification gaps for P0 readiness.',
     successCriteria: ['Durable schema push passes', 'Durable dogfood passes', 'Browser Run Console E2E passes'],
     objective: 'Validate durable verification closure through ForgeLoop evidence and review handoff.',
-    expectedExecutor: 'mock',
+    strictRunMode: { executorType: 'local_codex', workflowOnly: false },
     requiresChangesRequestedRerun: false,
   },
   {
@@ -98,7 +360,7 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     goal: 'Exercise Run Console backfill, SSE append, command submission, and review rerun handling.',
     successCriteria: ['Run Console E2E passes', 'The review flow exercises changes_requested -> rerun -> approve'],
     objective: 'Validate browser Run Console walkthrough and rerun review semantics.',
-    expectedExecutor: 'mock',
+    strictRunMode: { executorType: 'mock', workflowOnly: true },
     requiresChangesRequestedRerun: true,
   },
 ];
@@ -261,7 +523,7 @@ const createReadyPackage = async (
         reviewer_actor_id: actorReviewer,
         qa_owner_actor_id: actorQa,
         required_checks: requiredChecks,
-        required_artifact_kinds: ['diff', 'changed_files', 'check_output', 'execution_summary', 'review_packet'],
+        required_artifact_kinds: requiredArtifactKinds,
         allowed_paths: ['.github/**', 'docs/**', 'README.md', 'package.json', 'scripts/**', 'tests/**'],
         forbidden_paths: ['.git/**', 'node_modules/**', '.env'],
       })
@@ -279,10 +541,16 @@ const runPackage = async (
   packageId: string,
   path: 'run' | 'rerun' = 'run',
   body: Record<string, unknown> = {},
+  runMode: DogfoodRunMode = { executorType: 'mock', workflowOnly: true },
 ): Promise<string> => {
   const response = (
     await withActor(request(app.getHttpServer()).post(`/execution-packages/${packageId}/${path}`), actorOwner)
-      .send({ requested_by_actor_id: actorOwner, executor_type: 'mock', workflow_only: true, ...body })
+      .send({
+        requested_by_actor_id: actorOwner,
+        executor_type: runMode.executorType,
+        workflow_only: runMode.workflowOnly,
+        ...body,
+      })
       .expect(201)
   ).body as { status: string; run_session_id?: string };
   if (response.status !== 'accepted' || response.run_session_id === undefined) {
@@ -312,10 +580,11 @@ const completeDogfoodItem = async (
   app: INestApplication,
   projectId: string,
   item: DogfoodItemDefinition,
-): Promise<DogfoodItemResult> => {
+  runMode: DogfoodRunMode,
+): Promise<CompletedDogfoodItem> => {
   const { workItemId, planRevisionId } = await approveSpecAndPlan(app, projectId, item);
   const packageId = await createReadyPackage(app, planRevisionId, item);
-  const firstRunSessionId = await runPackage(app, packageId);
+  const firstRunSessionId = await runPackage(app, packageId, 'run', {}, runMode);
   const firstPacket = await waitForReviewPacket(app, firstRunSessionId);
   await expectSucceededRun(app, firstRunSessionId);
 
@@ -333,7 +602,13 @@ const completeDogfoodItem = async (
         suggested_validation: 'pnpm dogfood:p0:work-items',
       },
     ]);
-    const rerunSessionId = await runPackage(app, packageId, 'rerun', { previous_run_session_id: firstRunSessionId });
+    const rerunSessionId = await runPackage(
+      app,
+      packageId,
+      'rerun',
+      { previous_run_session_id: firstRunSessionId },
+      runMode,
+    );
     const rerunPacket = await waitForReviewPacket(app, rerunSessionId);
     await expectSucceededRun(app, rerunSessionId);
     await approveReviewPacket(app, rerunPacket.id, 'Approved after rerun evidence.');
@@ -345,8 +620,10 @@ const completeDogfoodItem = async (
   }
 
   const cockpit = (await withActor(request(app.getHttpServer()).get(`/work-items/${workItemId}/cockpit`), actorOwner).expect(200)).body as {
-    packages?: Array<{ id: string; resolution: string }>;
-    review_packets?: Array<{ id: string; decision: string }>;
+    work_item?: WorkItem;
+    packages?: ExecutionPackage[];
+    run_sessions?: RunSession[];
+    review_packets?: ReviewPacket[];
   };
   const packageRecord = cockpit.packages?.find((candidate) => candidate.id === packageId);
   if (packageRecord?.resolution !== 'completed') {
@@ -367,36 +644,86 @@ const completeDogfoodItem = async (
     }
   }
 
+  const workItem = cockpit.work_item;
+  const executionPackages = cockpit.packages ?? [];
+  const runSessions = cockpit.run_sessions ?? [];
+  const reviewPackets = cockpit.review_packets ?? [];
+  if (workItem === undefined) {
+    throw new Error(`Cockpit response for ${item.key} is missing Work Item record`);
+  }
+
   return {
-    key: item.key,
-    title: item.title,
-    kind: item.kind,
-    workItemId,
-    packageId,
-    runSessionIds,
-    reviewPacketIds,
-    finalDecision: 'approved',
-    exercisedChangesRequestedRerun,
-    timelineSources,
+    result: {
+      key: item.key,
+      title: item.title,
+      kind: item.kind,
+      workItemId,
+      packageId,
+      executorType: runMode.executorType,
+      workflowOnly: runMode.workflowOnly,
+      runSessionIds,
+      reviewPacketIds,
+      finalDecision: 'approved',
+      exercisedChangesRequestedRerun,
+      timelineSources,
+    },
+    records: {
+      workItem,
+      executionPackages,
+      runSessions,
+      reviewPackets,
+    },
   };
 };
 
 export const runP0DogfoodWorkItems = async (): Promise<DogfoodCompletionResult> => {
+  const strictEnabled = isStrictLocalCodexDogfoodEnabled();
+  let strictDirtySource: StrictDirtySourceSummary | undefined;
+  if (strictEnabled) {
+    const preflight = await preflightLocalCodexDogfood({ env: process.env, repoPath });
+    if (!preflight.ok) {
+      return {
+        generatedAt: new Date().toISOString(),
+        durabilityMode: process.env.FORGELOOP_DATABASE_URL === undefined ? 'volatile_demo' : 'durable',
+        projectId: 'not-created',
+        repoId,
+        commitSha: await getHeadSha(),
+        strictAcceptance: strictAcceptanceFromPreflight(preflight),
+        items: [],
+      };
+    }
+    strictDirtySource = preflight.dirtySource;
+  }
+
   const app = await createApp();
   try {
     const commitSha = await getHeadSha();
     const projectId = await createProject(app, commitSha);
-    const items: DogfoodItemResult[] = [];
+    const completedItems: CompletedDogfoodItem[] = [];
     for (const item of dogfoodWorkItems) {
-      items.push(await completeDogfoodItem(app, projectId, item));
+      const runMode = strictEnabled ? item.strictRunMode : { executorType: 'mock' as const, workflowOnly: true };
+      completedItems.push(await completeDogfoodItem(app, projectId, item, runMode));
     }
+    const strictAcceptance = strictEnabled
+      ? {
+          ...evaluateStrictLocalCodexAcceptance({
+            workItems: completedItems.map((item) => item.records.workItem),
+            executionPackages: completedItems.flatMap((item) => item.records.executionPackages),
+            runSessions: completedItems.flatMap((item) => item.records.runSessions),
+            reviewPackets: completedItems.flatMap((item) => item.records.reviewPackets),
+          }),
+          ...(strictDirtySource === undefined ? {} : { dirtySource: strictDirtySource }),
+        }
+      : strictAcceptanceDisabled();
+
     return {
       generatedAt: new Date().toISOString(),
       durabilityMode: app.get(RUN_DURABILITY_MODE) as string,
       projectId,
       repoId,
       commitSha,
-      items,
+      strictAcceptance,
+      items: completedItems.map((item) => item.result),
     };
   } finally {
     await app.close();
@@ -404,6 +731,63 @@ export const runP0DogfoodWorkItems = async (): Promise<DogfoodCompletionResult> 
 };
 
 export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): string => {
+  const strictLines = [
+    '## Strict local_codex Acceptance',
+    '',
+    `Strict local_codex acceptance: ${result.strictAcceptance.status}`,
+    ...(result.strictAcceptance.status === 'disabled'
+      ? [
+          '- strict runbook acceptance is not complete in this run.',
+          '- real local Codex acceptance is opt-in; set `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` to run strict mode.',
+        ]
+      : [
+          `- Qualifying local_codex Work Items: ${result.strictAcceptance.qualifyingWorkItems.length}`,
+          ...(result.strictAcceptance.qualifyingWorkItems.length === 0
+            ? []
+            : [
+                '',
+                '| Work Item | Execution Package | RunSession | Review Packet | executor_type | workflow_only |',
+                '|---|---|---|---|---|---|',
+                ...result.strictAcceptance.qualifyingWorkItems.map((item) =>
+                  [
+                    item.workItemId,
+                    item.executionPackageId,
+                    item.runSessionId,
+                    item.reviewPacketId,
+                    item.executorType,
+                    String(item.workflowOnly),
+                  ]
+                    .map((value) => String(value).replace(/\|/g, '\\|'))
+                    .join(' | ')
+                    .replace(/^/, '| ')
+                    .replace(/$/, ' |'),
+                ),
+              ]),
+          ...(result.strictAcceptance.blockers.length === 0
+            ? []
+            : [
+                '',
+                '### Strict Blockers',
+                '',
+                ...result.strictAcceptance.blockers.flatMap((blocker) => [
+                  `- ${blocker.code}: ${blocker.message}`,
+                  ...(blocker.details === undefined
+                    ? []
+                    : [`  - details: \`${JSON.stringify(blocker.details).replace(/`/g, '\\`')}\``]),
+                ]),
+              ]),
+          ...(result.strictAcceptance.dirtySource === undefined
+            ? []
+            : [
+                '',
+                '### Strict Dirty Source',
+                '',
+                `- allowed_dirty_entries: ${result.strictAcceptance.dirtySource.allowed_dirty_entries.join(', ') || 'none'}`,
+                `- blocked_dirty_entries: ${result.strictAcceptance.dirtySource.blocked_dirty_entries.join(', ') || 'none'}`,
+                `- dirty_allowlist_source: ${result.strictAcceptance.dirtySource.dirty_allowlist_source}`,
+              ]),
+        ]),
+  ];
   const lines = [
     '# P0 Dogfood Work Items Completion',
     '',
@@ -413,15 +797,19 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
     `Repo: ${result.repoId}`,
     `Commit: ${result.commitSha}`,
     '',
+    ...strictLines,
+    '',
     '## Summary',
     '',
-    '| Work Item | Kind | Package | Runs | Review Packets | Final Decision | Rerun Path | Timeline Evidence |',
-    '|---|---|---|---|---|---|---|---|',
+    '| Work Item | Kind | Package | executor_type | workflow_only | Runs | Review Packets | Final Decision | Rerun Path | Timeline Evidence |',
+    '|---|---|---|---|---|---|---|---|---|---|',
     ...result.items.map((item) =>
       [
         item.title,
         item.kind,
         item.packageId,
+        item.executorType,
+        String(item.workflowOnly),
         item.runSessionIds.join('<br>'),
         item.reviewPacketIds.join('<br>'),
         item.finalDecision,
@@ -439,7 +827,13 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
     '- All three Work Items have approved SpecRevision and PlanRevision records.',
     '- All three Work Items have at least one Execution Package, RunSession, Review Packet, human review decision, and timeline evidence.',
     '- The Browser Run Console Work Item exercised `changes_requested -> rerun -> approve`.',
-    '- These Work Item records use `executor_type: mock` with `workflow_only=true` to validate the product workflow without creating extra source changes. Real `local_codex` acceptance remains covered by `pnpm dogfood:p0:local-codex`.',
+    '- Default mode uses `executor_type: mock` with `workflow_only=true` to validate the product workflow without creating extra source changes.',
+    '- Strict mode requires at least two `local_codex` / `workflow_only=false` Work Items with completed approved Review Packets and required artifacts.',
+    '',
+    '## P1 Decision Summary',
+    '',
+    '- Decision: prioritize Trace / Evidence Plane for P1.',
+    '- Rationale: the P0 dogfood path showed that reviewers need a faster way to reconstruct cause and effect across runs, reruns, artifacts, and review decisions.',
   ];
   return `${lines.join('\n')}\n`;
 };
@@ -455,6 +849,13 @@ export const writeDogfoodCompletionReport = async (
 export const main = async (): Promise<number> => {
   const result = await runP0DogfoodWorkItems();
   await writeDogfoodCompletionReport(result);
+  if (result.strictAcceptance.status === 'failed') {
+    console.error(`P0 dogfood work items strict acceptance failed. Report: ${reportPath}`);
+    for (const blocker of result.strictAcceptance.blockers) {
+      console.error(`Strict blocker ${blocker.code}: ${blocker.message}`);
+    }
+    return 1;
+  }
   console.log(`P0 dogfood work items completed. Report: ${reportPath}`);
   return 0;
 };

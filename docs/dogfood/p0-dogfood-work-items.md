@@ -9,6 +9,8 @@ pnpm dogfood:p0:work-items
 ```
 
 The script writes the latest completion evidence to `docs/superpowers/reports/p0-dogfood-work-items-completion.md`.
+By default the command stays deterministic and runs all three Work Items with `executor_type: mock` and `workflow_only=true`.
+Set `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` to opt in to strict local Codex acceptance.
 
 ## Batch Acceptance
 
@@ -28,6 +30,28 @@ The batch must include:
 - At least one Work Item executed with `executor_type: mock` and `workflow_only=true`.
 - At least one flow that exercises `changes_requested -> rerun -> approve`.
 - A final written decision on whether P1 should prioritize Release, Trace/Evidence Plane, or Retrospective/Learning Loop.
+
+Default mode explicitly reports `Strict local_codex acceptance: disabled`; that deterministic run validates the workflow path but does not complete strict runbook acceptance. Strict mode is enabled only when `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1`.
+
+Strict mode is complete only when at least two Work Items satisfy the Work Item-level Strict Success Contract:
+
+- Every Execution Package on the Work Item is complete according to `deriveWorkItemCompletion(...).done`.
+- The current RunSession is `executor_type: local_codex`, `workflow_only=false`, and `status: succeeded`.
+- A Review Packet for the same Execution Package and RunSession is `status: completed` and `decision: approved`.
+- The current RunSession includes every `required_artifact_kinds` entry.
+
+Approved Review Packets for `mock` or `workflow_only=true` runs do not count toward strict acceptance. A successful local Codex RunSession without a completed approved Review Packet for the same package and run does not count.
+
+## Strict Dirty Source Allowlist
+
+Strict mode refuses unexpected source checkout dirtiness before starting real local Codex. The dogfood-only allowed dirty entries are:
+
+- `docs/superpowers/reports/p0-dogfood-work-items-completion.md`
+- `.superpowers/**`
+
+This allowlist is mirrored by the implementation constant `STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST`, which reuses `STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST`. The report records `allowed_dirty_entries`, `blocked_dirty_entries`, and `dirty_allowlist_source` when strict preflight fails or needs to explain dirty-source handling.
+
+The allowlist must not include application, package, script, spec, plan, or source files that real local Codex is expected to mutate inside `.worktrees/<run-session-id>`.
 
 ## Work Item 1: Feature - Remote CI Gate
 
@@ -137,3 +161,11 @@ After all three Work Items are complete, choose the next product surface by obse
 - Choose **Retrospective/Learning Loop** if the main gap is "the same mistakes repeat and are not codified into future execution."
 
 Do not start P1 productization until the three P0 dogfood Work Items have been reviewed.
+
+## Final P1 Decision Summary
+
+Decision: prioritize **Trace / Evidence Plane** for P1.
+
+Rationale: P0 dogfood made the product loop visible, but the reviewer experience still requires too much manual reconstruction across RunSessions, reruns, artifacts, status history, and Review Packets. The next product surface should make cause and effect readable without exposing raw logs or internal payloads.
+
+Release and Retrospective remain important follow-ups, but Trace / Evidence Plane is the smallest next step that strengthens review confidence and gives later Release and Learning workflows a reliable evidence spine.
