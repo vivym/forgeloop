@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import type { ArtifactKind } from '@forgeloop/contracts';
+import type { ArtifactKind, EvidenceChainResponse, EvidenceChainSource } from '@forgeloop/contracts';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -113,6 +113,8 @@ type CompletedDogfoodItem = {
   };
 };
 
+type ProductEvidenceSource = Extract<EvidenceChainSource, 'artifact' | 'decision' | 'object_event' | 'status_history'>;
+
 const execFile = promisify(execFileCallback);
 
 const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
@@ -137,6 +139,8 @@ const requiredChecks = [
 ];
 
 const requiredArtifactKinds: ArtifactKind[] = ['diff', 'changed_files', 'check_output', 'execution_summary', 'review_packet'];
+const publicTimelineEvidenceSources = ['decision', 'object_event', 'status_history'] as const satisfies readonly ProductEvidenceSource[];
+const productEvidenceSources = ['artifact', 'decision', 'object_event', 'status_history'] as const satisfies readonly ProductEvidenceSource[];
 
 export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
 export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST;
@@ -442,6 +446,21 @@ const expectSucceededRun = async (app: INestApplication, runSessionId: string): 
   return runSession;
 };
 
+const uniqueSortedSources = (items: readonly { source: string }[]): string[] => [...new Set(items.map((entry) => entry.source))].sort();
+
+const expectSources = (
+  workItemKey: string,
+  sourceLabel: string,
+  actualSources: readonly string[],
+  expectedSources: readonly ProductEvidenceSource[],
+): void => {
+  for (const expected of expectedSources) {
+    if (!actualSources.includes(expected)) {
+      throw new Error(`Work Item ${workItemKey} ${sourceLabel} is missing ${expected}`);
+    }
+  }
+};
+
 const createProject = async (app: INestApplication, commitSha: string): Promise<string> => {
   const server = app.getHttpServer();
   const project = (
@@ -666,12 +685,13 @@ const completeDogfoodItem = async (
   const timeline = (await withActor(request(app.getHttpServer()).get(`/work-items/${workItemId}/timeline`), actorOwner).expect(200)).body as Array<{
     source: string;
   }>;
-  const timelineSources = [...new Set(timeline.map((entry) => entry.source))].sort();
-  for (const expected of ['artifact', 'decision', 'object_event', 'status_history']) {
-    if (!timelineSources.includes(expected)) {
-      throw new Error(`Work Item ${item.key} timeline is missing ${expected}`);
-    }
-  }
+  const timelineSources = uniqueSortedSources(timeline);
+  expectSources(item.key, 'timeline', timelineSources, publicTimelineEvidenceSources);
+  const evidenceChain = (await withActor(request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`), actorOwner).expect(200))
+    .body as EvidenceChainResponse;
+  const evidenceChainSources = uniqueSortedSources(evidenceChain.items);
+  expectSources(item.key, 'Evidence Chain', evidenceChainSources, productEvidenceSources);
+  const reportEvidenceSources = [...new Set([...timelineSources, ...evidenceChainSources])].sort();
 
   const workItem = cockpit.work_item;
   const executionPackages = cockpit.packages ?? [];
@@ -694,7 +714,7 @@ const completeDogfoodItem = async (
       reviewPacketIds,
       finalDecision: 'approved',
       exercisedChangesRequestedRerun,
-      timelineSources,
+      timelineSources: reportEvidenceSources,
     },
     records: {
       workItem,
