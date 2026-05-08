@@ -46,7 +46,7 @@ const decodeGitQuotedPath = (path: string): string => {
 
   let result = '';
   for (let index = 1; index < trimmed.length - 1; index += 1) {
-    const current = trimmed[index];
+    const current = trimmed.charAt(index);
     if (current !== '\\') {
       result += current;
       continue;
@@ -57,11 +57,11 @@ const decodeGitQuotedPath = (path: string): string => {
       break;
     }
 
-    const escaped = trimmed[index];
+    const escaped = trimmed.charAt(index);
     if (escaped >= '0' && escaped <= '7') {
       let octal = escaped;
       while (index + 1 < trimmed.length - 1 && octal.length < 3) {
-        const next = trimmed[index + 1];
+        const next = trimmed.charAt(index + 1);
         if (next < '0' || next > '7') {
           break;
         }
