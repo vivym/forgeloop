@@ -61,6 +61,7 @@ interface PrimedDriverStream {
   runtimeMetadata: RunRuntimeMetadata;
   iterator: AsyncIterator<CodexDriverStreamItem>;
   currentRunSession: RunSession;
+  isRecoveryFallback?: boolean;
   firstTerminal?: Extract<CodexDriverStreamItem, { kind: 'terminal' }>;
   stalled?: boolean;
 }
@@ -768,6 +769,39 @@ export class RunWorker {
       opened.currentRunSession = current;
       opened.runtimeMetadata = current.runtime_metadata ?? opened.runtimeMetadata;
       if (handled.terminal !== undefined) {
+        if (
+          handled.terminal.status === 'failed' &&
+          (opened.runtimeMetadata.driver_kind === 'app_server' || opened.isRecoveryFallback === true)
+        ) {
+          await opened.iterator.return?.();
+          if (opened.isRecoveryFallback === true) {
+            await this.stallRun(
+              handled.currentRunSession,
+              lease,
+              'Driver recovery failed.',
+              handled.terminal.failure?.message ?? handled.terminal.summary,
+            );
+            return {
+              kind: 'switched',
+              stream: {
+                ...opened,
+                currentRunSession: handled.currentRunSession,
+                stalled: true,
+              },
+            };
+          }
+          return {
+            kind: 'switched',
+            stream: await this.openFallbackAfterRecoveryFailure(
+              opened.runtimeMetadata,
+              handled.currentRunSession,
+              lease,
+              handled.terminal,
+              control,
+              mode,
+            ),
+          };
+        }
         return { kind: 'terminal', terminal: handled.terminal };
       }
     }
