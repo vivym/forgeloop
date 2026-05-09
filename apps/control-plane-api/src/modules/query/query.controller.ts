@@ -1,10 +1,10 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Inject, Param } from '@nestjs/common';
 
 import { QueryService } from './query.service';
 
 @Controller('query')
 export class QueryController {
-  constructor(private readonly service: QueryService) {}
+  constructor(@Inject(QueryService) private readonly service: QueryService) {}
 
   @Get('work-item-cockpit/:workItemId')
   getWorkItemCockpit(@Param('workItemId') workItemId: string) {

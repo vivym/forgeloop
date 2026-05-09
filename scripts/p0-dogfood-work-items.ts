@@ -753,7 +753,10 @@ const completeDogfoodItem = async (
     await approveReviewPacket(app, firstPacket.id, 'Approved for P0 dogfood completion.');
   }
 
-  const cockpit = (await withActor(request(app.getHttpServer()).get(`/work-items/${workItemId}/cockpit`), actorOwner).expect(200)).body as {
+  const cockpit = (await withActor(
+    request(app.getHttpServer()).get(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
+    actorOwner,
+  ).expect(200)).body as {
     work_item?: WorkItem;
     packages?: ExecutionPackage[];
     run_sessions?: RunSession[];
@@ -768,7 +771,10 @@ const completeDogfoodItem = async (
     throw new Error(`Final ReviewPacket for ${item.key} is not approved`);
   }
 
-  const timeline = (await withActor(request(app.getHttpServer()).get(`/work-items/${workItemId}/timeline`), actorOwner).expect(200)).body as Array<{
+  const timeline = (await withActor(
+    request(app.getHttpServer()).get(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
+    actorOwner,
+  ).expect(200)).body as Array<{
     source: string;
   }>;
   const timelineSources = uniqueSortedSources(timeline);

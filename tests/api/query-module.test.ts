@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
 import { RUN_DURABILITY_MODE, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { P0_REPOSITORY } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
@@ -59,6 +60,26 @@ describe('query module', () => {
     const { app } = await track(createTestApp());
 
     await request(app.getHttpServer()).get('/query/work-item-cockpit/missing-work-item').expect(404);
+  });
+
+  it('does not depend on emitted constructor metadata to inject query routes', async () => {
+    const metadataReflect = Reflect as typeof Reflect & {
+      deleteMetadata?: (metadataKey: string, target: object) => boolean;
+      defineMetadata?: (metadataKey: string, metadataValue: unknown, target: object) => void;
+      getMetadata?: (metadataKey: string, target: object) => unknown;
+    };
+    const existingParamTypes = metadataReflect.getMetadata?.('design:paramtypes', QueryController);
+    metadataReflect.deleteMetadata?.('design:paramtypes', QueryController);
+
+    try {
+      const { app } = await track(createTestApp());
+
+      await request(app.getHttpServer()).get('/query/work-item-cockpit/missing-work-item').expect(404);
+    } finally {
+      if (existingParamTypes !== undefined) {
+        metadataReflect.defineMetadata?.('design:paramtypes', existingParamTypes, QueryController);
+      }
+    }
   });
 
   it('returns the work item replay from the query surface', async () => {

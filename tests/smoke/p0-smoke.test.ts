@@ -239,7 +239,7 @@ describe('P0 smoke delivery loop', () => {
 
     await approveReviewPacket(app, reviewPacket.id);
 
-    const cockpit = (await request(server).get(`/work-items/${workItem.id}/cockpit`).expect(200)).body;
+    const cockpit = (await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(200)).body;
     expect(cockpit.packages[0]).toMatchObject({
       id: executionPackage.id,
       phase: 'review',
@@ -248,7 +248,7 @@ describe('P0 smoke delivery loop', () => {
     });
     expect(cockpit.review_packets[0]).toMatchObject({ id: reviewPacket.id, status: 'completed', decision: 'approved' });
 
-    const timeline = (await request(server).get(`/work-items/${workItem.id}/timeline`).expect(200)).body;
+    const timeline = (await request(server).get(`/query/replay/work_item/${workItem.id}`).expect(200)).body;
     const timelineSources = timeline.map((entry: { source: string }) => entry.source);
     expect(timelineSources).toEqual(expect.arrayContaining(['object_event', 'status_history', 'decision']));
     expect(timelineSources).not.toContain('artifact');
@@ -300,7 +300,7 @@ describe('P0 smoke delivery loop', () => {
 
     await approveReviewPacket(app, rerunReviewPacketId, '2026-05-05T03:00:00.000Z');
 
-    const cockpit = (await request(server).get(`/work-items/${workItem.id}/cockpit`).expect(200)).body;
+    const cockpit = (await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(200)).body;
     expect(cockpit.run_sessions.map((item: { id: string }) => item.id)).toEqual(
       expect.arrayContaining([firstAcceptedRun.run_session_id, acceptedRerun.run_session_id]),
     );

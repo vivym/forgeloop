@@ -867,7 +867,7 @@ const waitForReviewPacketReference = async (input: {
     if (typeof runSpec?.work_item_id === 'string') {
       const cockpit = await requestJson<{ review_packets?: Array<{ id?: string }> }>(
         input.apiUrl,
-        `/work-items/${encodeURIComponent(runSpec.work_item_id)}/cockpit`,
+        `/query/work-item-cockpit/${encodeURIComponent(runSpec.work_item_id)}`,
       );
       const cockpitReference = resolveReviewPacketReference({ apiUrl: input.apiUrl, runSession: input.runSession, cockpit });
       if (cockpitReference !== undefined) {

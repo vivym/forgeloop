@@ -351,14 +351,14 @@ describe('P0 control plane API', () => {
       })
       .expect(201);
 
-    const cockpit = (await request(server).get(`/work-items/${workItem.id}/cockpit`).expect(200)).body;
+    const cockpit = (await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(200)).body;
     expect(cockpit.current_spec.current_revision_id).toBe(specRevisionId);
     expect(cockpit.current_plan.current_revision_id).toBe(planRevisionId);
     expect(cockpit.packages.find((item: { id: string }) => item.id === executionPackage.id).resolution).toBe('completed');
     expect(cockpit.completion_state.done).toBe(false);
     expect(cockpit.next_actions).toContain('mark_packages_ready');
 
-    const timeline = (await request(server).get(`/work-items/${workItem.id}/timeline`).expect(200)).body;
+    const timeline = (await request(server).get(`/query/replay/work_item/${workItem.id}`).expect(200)).body;
     const timelineSources = timeline.map((entry: { source: string }) => entry.source);
     expect(timelineSources).toEqual(expect.arrayContaining(['object_event', 'status_history', 'decision']));
     expect(timelineSources).not.toContain('artifact');
