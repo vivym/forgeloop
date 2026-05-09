@@ -152,6 +152,21 @@ const productEvidenceSources = ['artifact', 'decision', 'object_event', 'status_
 export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
 export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST;
 
+const boundedLocalCodexObjective = (input: {
+  itemKey: string;
+  validationFocus: string;
+}): string =>
+  [
+    `Make a minimal docs-only dogfood evidence update for ${input.itemKey}.`,
+    'Edit `docs/dogfood/p0-dogfood-work-items.md` and add or update one short bullet for this Work Item.',
+    `Mention this validation focus: ${input.validationFocus}.`,
+    'Do not run `pnpm dogfood:p0:work-items`.',
+    'Do not run `pnpm test`.',
+    'Do not run `pnpm build`.',
+    'Do not start servers or background processes.',
+    'ForgeLoop will run the required checks after your turn.',
+  ].join('\n');
+
 const strictDogfoodBlocker = (
   code: string,
   message: string,
@@ -379,7 +394,10 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     title: 'Remote CI gate',
     goal: 'Protect main with install, test, and build checks on GitHub Actions.',
     successCriteria: ['CI workflow exists', 'The CI-equivalent local install/test/build commands pass'],
-    objective: 'Validate the remote CI gate delivery path through ForgeLoop evidence and review handoff.',
+    objective: boundedLocalCodexObjective({
+      itemKey: 'Remote CI gate',
+      validationFocus: 'remote CI gate delivery path through ForgeLoop evidence and review handoff',
+    }),
     strictRunMode: { executorType: 'local_codex', workflowOnly: false },
     requiresChangesRequestedRerun: false,
   },
@@ -389,7 +407,10 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     title: 'Durable verification gaps',
     goal: 'Close the documented durable DB and browser verification gaps for P0 readiness.',
     successCriteria: ['Durable schema push passes', 'Durable dogfood passes', 'Browser Run Console E2E passes'],
-    objective: 'Validate durable verification closure through ForgeLoop evidence and review handoff.',
+    objective: boundedLocalCodexObjective({
+      itemKey: 'Durable verification gaps',
+      validationFocus: 'durable verification closure through ForgeLoop evidence and review handoff',
+    }),
     strictRunMode: { executorType: 'local_codex', workflowOnly: false },
     requiresChangesRequestedRerun: false,
   },

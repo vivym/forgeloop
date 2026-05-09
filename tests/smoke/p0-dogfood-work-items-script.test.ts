@@ -287,6 +287,25 @@ describe('p0 dogfood work items script', () => {
     ]);
   });
 
+  it('keeps strict local Codex work item objectives bounded and delegates checks to ForgeLoop', () => {
+    const items = (dogfoodWorkItemsScript as Record<string, unknown>).dogfoodWorkItems as Array<{
+      objective: string;
+      strictRunMode: { executorType: string; workflowOnly: boolean };
+    }>;
+    const strictLocalCodexItems = items.filter(
+      (item) => item.strictRunMode.executorType === 'local_codex' && item.strictRunMode.workflowOnly === false,
+    );
+
+    expect(strictLocalCodexItems).toHaveLength(2);
+    for (const item of strictLocalCodexItems) {
+      expect(item.objective).toContain('docs/dogfood/p0-dogfood-work-items.md');
+      expect(item.objective).toContain('Do not run `pnpm dogfood:p0:work-items`');
+      expect(item.objective).toContain('Do not run `pnpm test`');
+      expect(item.objective).toContain('Do not run `pnpm build`');
+      expect(item.objective).toContain('ForgeLoop will run the required checks after your turn');
+    }
+  });
+
   it('evaluates strict mode as passed only when at least two local_codex Work Items satisfy the Work Item contract', () => {
     const evaluate = evaluateStrictLocalCodexAcceptance();
     const accepted = evaluate(strictInput(qualifyingBundle(1), qualifyingBundle(2), qualifyingBundle(3, { executorType: 'mock', workflowOnly: true })));
