@@ -61,6 +61,7 @@ interface PrimedDriverStream {
   runtimeMetadata: RunRuntimeMetadata;
   iterator: AsyncIterator<CodexDriverStreamItem>;
   currentRunSession: RunSession;
+  isRecoveryFallback?: boolean;
   firstTerminal?: Extract<CodexDriverStreamItem, { kind: 'terminal' }>;
   stalled?: boolean;
 }
@@ -156,6 +157,14 @@ const sourceSnapshot = (runSession: RunSession): SourceRepoSnapshot => ({
   beforePorcelain: '',
   beforeDirtyFingerprint: '',
 });
+
+const closeDriverQuietly = async (driver: CodexSessionDriver): Promise<void> => {
+  try {
+    await driver.close?.();
+  } catch {
+    // Driver cleanup must not overwrite the authoritative run outcome.
+  }
+};
 
 const isRealLocalCodexDriverRun = (runSession: RunSession, driver: CodexSessionDriver): boolean =>
   runSession.run_spec?.executor_type === 'local_codex' &&
@@ -265,6 +274,7 @@ export class RunWorker {
     let terminalOrStopped = false;
     const control = this.createRunControl();
     const heartbeat = this.startHeartbeat(input, control);
+    const openedDrivers = new Set<CodexSessionDriver>();
 
     try {
       const loaded = await this.repository.getRunSession(input.runSessionId);
@@ -284,7 +294,13 @@ export class RunWorker {
       let runtimeMetadata = mergeMetadata(started, input.workerId, {
         driver_kind: started.runtime_metadata?.driver_kind ?? 'fake',
       });
-      const driver = this.driverFactory({ runSession: started, runtimeMetadata });
+      const resumeWithExecFallback =
+        !wasQueued &&
+        (runtimeMetadata.driver_kind === 'exec_fallback' || runtimeMetadata.selected_execution_mode === 'exec_fallback');
+      const driver = resumeWithExecFallback
+        ? this.execFallbackDriverFactory({ runSession: started, runtimeMetadata })
+        : this.driverFactory({ runSession: started, runtimeMetadata });
+      openedDrivers.add(driver);
       if (isRealLocalCodexDriverRun(started, driver)) {
         activeRunSession = await this.prepareLocalCodexRuntime(
           activeRunSession,
@@ -307,6 +323,7 @@ export class RunWorker {
       }
       const opened = await this.openDriverStream(driver, activeRunSession, runtimeMetadata, input, wasQueued ? 'start' : 'resume');
       const primed = await this.primeDriverStream(opened, activeRunSession, input, wasQueued ? 'start' : 'resume', control);
+      openedDrivers.add(primed.driver);
 
       if (primed.stalled === true) {
         terminalOrStopped = true;
@@ -361,6 +378,7 @@ export class RunWorker {
           break;
         }
         if (consumed.kind === 'switched') {
+          openedDrivers.add(consumed.stream.driver);
           if (consumed.stream.stalled === true) {
             streamStalled = true;
             currentStream = undefined;
@@ -412,6 +430,7 @@ export class RunWorker {
     } finally {
       control.stop();
       await heartbeat.done;
+      await Promise.all([...openedDrivers].map((driver) => closeDriverQuietly(driver)));
       if (terminalOrStopped) {
         try {
           await releaseLease(this.repository, input.runSessionId, input.workerId, input.leaseToken, this.now());
@@ -768,6 +787,39 @@ export class RunWorker {
       opened.currentRunSession = current;
       opened.runtimeMetadata = current.runtime_metadata ?? opened.runtimeMetadata;
       if (handled.terminal !== undefined) {
+        if (
+          handled.terminal.status === 'failed' &&
+          (opened.runtimeMetadata.driver_kind === 'app_server' || opened.isRecoveryFallback === true)
+        ) {
+          await opened.iterator.return?.();
+          if (opened.isRecoveryFallback === true) {
+            await this.stallRun(
+              handled.currentRunSession,
+              lease,
+              'Driver recovery failed.',
+              handled.terminal.failure?.message ?? handled.terminal.summary,
+            );
+            return {
+              kind: 'switched',
+              stream: {
+                ...opened,
+                currentRunSession: handled.currentRunSession,
+                stalled: true,
+              },
+            };
+          }
+          return {
+            kind: 'switched',
+            stream: await this.openFallbackAfterRecoveryFailure(
+              opened.runtimeMetadata,
+              handled.currentRunSession,
+              lease,
+              handled.terminal,
+              control,
+              mode,
+            ),
+          };
+        }
         return { kind: 'terminal', terminal: handled.terminal };
       }
     }

@@ -6,11 +6,31 @@ import { promisify } from 'node:util';
 
 import type { ArtifactKind } from '@forgeloop/contracts';
 import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem } from '@forgeloop/domain';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { InMemoryP0Repository } from '../../packages/db/src';
 import * as dogfoodWorkItemsScript from '../../scripts/p0-dogfood-work-items';
 
 const execFile = promisify(execFileCallback);
+
+const defaultDogfoodEnv = (reportPath: string): NodeJS.ProcessEnv => {
+  const {
+    FORGELOOP_DATABASE_URL: _databaseUrl,
+    FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: _strictEnabled,
+    FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE: _dangerousMode,
+    FORGELOOP_REPO_PATH: _repoPath,
+    ...env
+  } = process.env;
+  void _databaseUrl;
+  void _strictEnabled;
+  void _dangerousMode;
+  void _repoPath;
+
+  return {
+    ...env,
+    FORGELOOP_WORK_ITEM_DOGFOOD_REPORT_PATH: reportPath,
+  };
+};
 
 const at = '2026-05-08T00:00:00.000Z';
 const requiredArtifactKinds: ArtifactKind[] = [
@@ -209,7 +229,7 @@ describe('p0 dogfood work items script', () => {
       try {
         await execFile('pnpm', ['dogfood:p0:work-items'], {
           cwd: process.cwd(),
-          env: { ...process.env, FORGELOOP_WORK_ITEM_DOGFOOD_REPORT_PATH: reportPath },
+          env: defaultDogfoodEnv(reportPath),
           maxBuffer: 1024 * 1024 * 10,
           timeout: 30_000,
         });
@@ -232,6 +252,135 @@ describe('p0 dogfood work items script', () => {
     },
     45_000,
   );
+
+  it('waits longer than the old five-second window for a persisted Review Packet', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(at));
+    let packets: ReviewPacket[] = [];
+    try {
+      const candidate = (dogfoodWorkItemsScript as Record<string, unknown>).waitForReviewPacketFromRepository;
+      expect(candidate).toEqual(expect.any(Function));
+      const waitForReviewPacketFromRepository = candidate as (
+        repository: {
+          getRunSession(runSessionId: string): Promise<RunSession | undefined>;
+          listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
+        },
+        runSessionId: string,
+        options: { timeoutMs: number; pollIntervalMs: number },
+      ) => Promise<ReviewPacket>;
+      const run = runSession({ id: 'run-1', packageId: 'package-1', workItemId: 'work-item-1' });
+      const repository = {
+        getRunSession: vi.fn(async () => run),
+        listReviewPacketsForPackage: vi.fn(async () => packets),
+      };
+      const promise = waitForReviewPacketFromRepository(repository, 'run-1', {
+        timeoutMs: 10_000,
+        pollIntervalMs: 500,
+      });
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(settled).toBe(false);
+
+      packets = [reviewPacket({ id: 'review-packet-1', packageId: 'package-1', runSessionId: 'run-1' })];
+      await vi.advanceTimersByTimeAsync(500);
+
+      await expect(promise).resolves.toMatchObject({ id: 'review-packet-1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails fast when a RunSession stalls before a Review Packet exists', async () => {
+    const candidate = (dogfoodWorkItemsScript as Record<string, unknown>).waitForReviewPacketFromRepository;
+    expect(candidate).toEqual(expect.any(Function));
+    const waitForReviewPacketFromRepository = candidate as (
+      repository: {
+        getRunSession(runSessionId: string): Promise<RunSession | undefined>;
+        listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
+      },
+      runSessionId: string,
+      options: { timeoutMs: number; pollIntervalMs: number },
+    ) => Promise<ReviewPacket>;
+    const run = runSession({
+      id: 'run-stalled',
+      packageId: 'package-1',
+      workItemId: 'work-item-1',
+      status: 'stalled',
+    });
+    const repository = {
+      getRunSession: vi.fn(async () => run),
+      listReviewPacketsForPackage: vi.fn(async () => []),
+    };
+
+    await expect(
+      waitForReviewPacketFromRepository(repository, 'run-stalled', {
+        timeoutMs: 10_000,
+        pollIntervalMs: 500,
+      }),
+    ).rejects.toThrow('RunSession run-stalled ended with status stalled before ReviewPacket was created');
+  });
+
+  it('bootstraps worktree dependencies before running the strict dogfood smoke check', () => {
+    const candidate = (dogfoodWorkItemsScript as Record<string, unknown>).dogfoodRequiredChecks;
+    expect(candidate).toEqual(expect.any(Array));
+    expect(candidate).toEqual([
+      expect.objectContaining({
+        check_id: 'dogfood-work-item',
+        command: 'pnpm install --frozen-lockfile && pnpm smoke:p0',
+        timeout_seconds: 300,
+        blocks_review: true,
+      }),
+    ]);
+  });
+
+  it('keeps strict local Codex work item objectives bounded and delegates checks to ForgeLoop', () => {
+    const items = (dogfoodWorkItemsScript as Record<string, unknown>).dogfoodWorkItems as Array<{
+      objective: string;
+      strictRunMode: { executorType: string; workflowOnly: boolean };
+    }>;
+    const strictLocalCodexItems = items.filter(
+      (item) => item.strictRunMode.executorType === 'local_codex' && item.strictRunMode.workflowOnly === false,
+    );
+
+    expect(strictLocalCodexItems).toHaveLength(2);
+    for (const item of strictLocalCodexItems) {
+      expect(item.objective).toContain('docs/dogfood/p0-dogfood-work-items.md');
+      expect(item.objective).toContain('Do not run `pnpm dogfood:p0:work-items`');
+      expect(item.objective).toContain('Do not run `pnpm test`');
+      expect(item.objective).toContain('Do not run `pnpm build`');
+      expect(item.objective).toContain('ForgeLoop will run the required checks after your turn');
+    }
+  });
+
+  it('loads strict evaluation records from the repository with run metadata and artifacts intact', async () => {
+    const candidate = (dogfoodWorkItemsScript as Record<string, unknown>).loadCompletedDogfoodRecordsFromRepository;
+    expect(candidate).toEqual(expect.any(Function));
+    const loadCompletedDogfoodRecordsFromRepository = candidate as (
+      repository: InMemoryP0Repository,
+      workItemId: string,
+    ) => Promise<{
+      workItem: WorkItem;
+      executionPackages: ExecutionPackage[];
+      runSessions: RunSession[];
+      reviewPackets: ReviewPacket[];
+    }>;
+    const repository = new InMemoryP0Repository();
+    const bundle = qualifyingBundle(1);
+    await repository.saveWorkItem(bundle.item);
+    await repository.saveExecutionPackage(bundle.pkg);
+    await repository.saveRunSession(bundle.run);
+    await repository.saveReviewPacket(bundle.packet);
+
+    const records = await loadCompletedDogfoodRecordsFromRepository(repository, bundle.item.id);
+
+    expect(records.runSessions[0]?.run_spec?.workflow_only).toBe(false);
+    expect(records.runSessions[0]?.artifacts.map((artifact) => artifact.kind)).toEqual(requiredArtifactKinds);
+    expect(records.reviewPackets[0]).toMatchObject({ id: bundle.packet.id, decision: 'approved' });
+  });
 
   it('evaluates strict mode as passed only when at least two local_codex Work Items satisfy the Work Item contract', () => {
     const evaluate = evaluateStrictLocalCodexAcceptance();
@@ -332,7 +481,7 @@ describe('p0 dogfood work items script', () => {
     expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'run_session_workflow_only' })]));
   });
 
-  it('fails when a qualifying local_codex Work Item is missing a required artifact kind', () => {
+  it('counts an approved Review Packet as satisfying the strict review_packet artifact requirement', () => {
     const evaluate = evaluateStrictLocalCodexAcceptance();
     const result = evaluate(
       strictInput(
@@ -341,12 +490,25 @@ describe('p0 dogfood work items script', () => {
       ),
     );
 
+    expect(result.status).toBe('passed');
+    expect(result.qualifyingWorkItems).toHaveLength(2);
+  });
+
+  it('fails when a qualifying local_codex Work Item is missing a non-review required artifact kind', () => {
+    const evaluate = evaluateStrictLocalCodexAcceptance();
+    const result = evaluate(
+      strictInput(
+        qualifyingBundle(1),
+        qualifyingBundle(2, { artifacts: requiredArtifactKinds.filter((kind) => kind !== 'diff') }),
+      ),
+    );
+
     expect(result.status).toBe('failed');
     expect(result.qualifyingWorkItems).toHaveLength(1);
     expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'required_artifact_missing' })]));
   });
 
-  it('renders strict preflight blockers without claiming Work Items completed or leaking raw details', () => {
+  it('renders strict preflight blockers as blocked without claiming Work Items completed or leaking raw details', () => {
     const rendered = dogfoodWorkItemsScript.renderDogfoodCompletionReport({
       generatedAt: at,
       durabilityMode: 'volatile_demo',
@@ -354,7 +516,7 @@ describe('p0 dogfood work items script', () => {
       repoId: 'forgeloop',
       commitSha: 'abc123',
       strictAcceptance: {
-        status: 'failed',
+        status: 'blocked',
         qualifyingWorkItems: [],
         blockers: [
           {
@@ -365,7 +527,6 @@ describe('p0 dogfood work items script', () => {
               blocked_dirty_entries: ['README.md'],
               dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
               error: 'secret failure from /Users/viv/projs/forgeloop/.worktrees/run-1',
-              workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-1',
             },
           },
         ],
@@ -378,18 +539,19 @@ describe('p0 dogfood work items script', () => {
       items: [],
     });
 
-    expect(rendered).toContain('Strict local_codex acceptance: failed');
+    expect(rendered).toContain('Strict local_codex acceptance: blocked');
     expect(rendered).toContain('source_dirty_blocked');
-    expect(rendered).toContain('Source checkout is dirty');
-    expect(rendered).toContain('allowed_dirty_entries');
-    expect(rendered).toContain('blocked_dirty_entries');
-    expect(rendered).toContain('STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST');
-    expect(rendered).toContain('No Work Items were created in this run.');
     expect(rendered).toContain('Strict preflight blockers prevented batch execution');
+    expect(rendered).toContain('\n- Strict preflight blockers prevented batch execution.\n');
     expect(rendered).not.toContain('All three Work Items have approved SpecRevision');
     expect(rendered).not.toContain('secret failure');
     expect(rendered).not.toContain('/Users/viv/projs/forgeloop');
     expect(rendered).toContain('redacted_detail_keys');
+  });
+
+  it('prints status-specific strict acceptance exit messages', () => {
+    expect(dogfoodWorkItemsScript.strictAcceptanceExitMessage('blocked')).toContain('strict acceptance blocked');
+    expect(dogfoodWorkItemsScript.strictAcceptanceExitMessage('failed')).toContain('strict acceptance failed');
   });
 
   it('documents the strict dirty source allowlist and final P1 decision in the runbook', async () => {

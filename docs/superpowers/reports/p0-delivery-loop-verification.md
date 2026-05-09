@@ -1,7 +1,8 @@
 # P0 Delivery Loop Verification
 
-Generated: 2026-05-08T09:23:18.000Z
-Dogfood status: PASS
+Generated: 2026-05-09T05:35:24Z
+Deterministic dogfood status: PASS
+Strict local_codex status: PASS
 
 ## Commands
 
@@ -58,6 +59,12 @@ Dogfood status: PASS
   - Volatile demo public APIs were exercised with legacy body/query actor fallback.
 - Durable repository restart recovery: PASSED
   - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:p0:durable` exited 0 with: "Durable P0 dogfood passed using provided database forgeloop."
+- Strict local_codex dogfood: PASSED
+  - Command: `FORGELOOP_DATABASE_URL=... FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1 FORGELOOP_REPO_PATH="$CLOSURE_REPO_PATH" pnpm dogfood:p0:work-items`
+  - Report: `docs/superpowers/reports/p0-dogfood-work-items-completion.md`
+  - Evidence: command exited 0 on commit `df6776ee62621969cb5c0b65b2295b30c149d001`; report says `Strict local_codex acceptance: passed` with 2 qualifying local_codex Work Items.
+  - Review Packets: `review-packet:run-session-b2b234829e93-28` and `review-packet:run-session-b2b234829e93-56` completed with `approved`.
+  - Post-run process probe found no dogfood-owned `codex app-server` or `codex exec` children left behind.
 - Web app probe: PASSED
   - `pnpm e2e:run-console` started the API and Vite web app in-process and exercised the browser workbench.
 - Browser visual/text-overflow verification: PASSED
@@ -65,4 +72,5 @@ Dogfood status: PASS
 
 ## Actual Results
 
-- Last dogfood run finished with status PASS.
+- Deterministic dogfood run finished with status PASS.
+- Strict local_codex dogfood finished with status PASS.

@@ -87,6 +87,12 @@ type StrictDogfoodAcceptance =
       dirtySource?: StrictDirtySourceSummary;
     }
   | {
+      status: 'blocked';
+      qualifyingWorkItems: [];
+      blockers: StrictDogfoodBlocker[];
+      dirtySource?: StrictDirtySourceSummary;
+    }
+  | {
       status: 'passed' | 'failed';
       qualifyingWorkItems: StrictQualifyingWorkItem[];
       blockers: StrictDogfoodBlocker[];
@@ -128,15 +134,16 @@ const reportPath = resolve(
     'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
 );
 
-const requiredChecks = [
+export const dogfoodRequiredChecks = [
   {
     check_id: 'dogfood-work-item',
     display_name: 'P0 dogfood work item',
-    command: 'pnpm smoke:p0',
-    timeout_seconds: 120,
+    command: 'pnpm install --frozen-lockfile && pnpm smoke:p0',
+    timeout_seconds: 300,
     blocks_review: true,
   },
 ];
+const requiredChecks = dogfoodRequiredChecks;
 
 const requiredArtifactKinds: ArtifactKind[] = ['diff', 'changed_files', 'check_output', 'execution_summary', 'review_packet'];
 const publicTimelineEvidenceSources = ['decision', 'object_event', 'status_history'] as const satisfies readonly ProductEvidenceSource[];
@@ -144,6 +151,21 @@ const productEvidenceSources = ['artifact', 'decision', 'object_event', 'status_
 
 export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
 export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST;
+
+const boundedLocalCodexObjective = (input: {
+  itemKey: string;
+  validationFocus: string;
+}): string =>
+  [
+    `Make a minimal docs-only dogfood evidence update for ${input.itemKey}.`,
+    'Edit `docs/dogfood/p0-dogfood-work-items.md` and add or update one short bullet for this Work Item.',
+    `Mention this validation focus: ${input.validationFocus}.`,
+    'Do not run `pnpm dogfood:p0:work-items`.',
+    'Do not run `pnpm test`.',
+    'Do not run `pnpm build`.',
+    'Do not start servers or background processes.',
+    'ForgeLoop will run the required checks after your turn.',
+  ].join('\n');
 
 const strictDogfoodBlocker = (
   code: string,
@@ -195,6 +217,11 @@ const approvedReviewPacketForRun = (
       reviewPacket.decision === 'approved',
   );
 
+const packageForStrictArtifactEvaluation = (executionPackage: ExecutionPackage): ExecutionPackage => ({
+  ...executionPackage,
+  required_artifact_kinds: executionPackage.required_artifact_kinds.filter((kind) => kind !== 'review_packet'),
+});
+
 export const evaluateStrictLocalCodexAcceptance = (input: {
   workItems: readonly WorkItem[];
   executionPackages: readonly ExecutionPackage[];
@@ -208,7 +235,8 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
     const packagesForWorkItem = input.executionPackages.filter(
       (executionPackage) => executionPackage.work_item_id === workItem.id,
     );
-    const completion = deriveWorkItemCompletion(workItem, packagesForWorkItem, input.runSessions, input.reviewPackets);
+    const strictArtifactPackages = packagesForWorkItem.map(packageForStrictArtifactEvaluation);
+    const completion = deriveWorkItemCompletion(workItem, strictArtifactPackages, input.runSessions, input.reviewPackets);
     const workItemBlockers: StrictDogfoodBlocker[] = [];
     let qualifyingPackage: StrictQualifyingWorkItem | undefined;
 
@@ -247,7 +275,8 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
       const executorType = runSession.executor_type ?? runSession.run_spec?.executor_type;
       const workflowOnly = runSession.run_spec?.workflow_only;
       const approvedPacket = approvedReviewPacketForRun(executionPackage, runSession, input.reviewPackets);
-      const missingArtifactKinds = deriveRequiredArtifactPresence(executionPackage, runSession).missing_artifact_kinds;
+      const artifactPackage = packageForStrictArtifactEvaluation(executionPackage);
+      const missingArtifactKinds = deriveRequiredArtifactPresence(artifactPackage, runSession).missing_artifact_kinds;
       const runBlockers: StrictDogfoodBlocker[] = [];
 
       if (executorType !== 'local_codex') {
@@ -303,7 +332,7 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
             work_item_id: workItem.id,
             execution_package_id: executionPackage.id,
             run_session_id: runSession.id,
-            required_artifact_kinds: executionPackage.required_artifact_kinds,
+            required_artifact_kinds: artifactPackage.required_artifact_kinds,
             missing_artifact_kinds: missingArtifactKinds,
           }),
         );
@@ -356,7 +385,7 @@ const strictAcceptanceDisabled = (): StrictDogfoodAcceptance => ({
 const strictAcceptanceFromPreflight = (
   preflight: Awaited<ReturnType<typeof preflightLocalCodexDogfood>>,
 ): StrictDogfoodAcceptance => ({
-  status: 'failed',
+  status: 'blocked',
   qualifyingWorkItems: [],
   blockers: preflight.blockers.map((blocker) => strictDogfoodBlocker(blocker.code, blocker.message, blocker.details)),
   ...(preflight.dirtySource === undefined ? {} : { dirtySource: preflight.dirtySource }),
@@ -372,7 +401,10 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     title: 'Remote CI gate',
     goal: 'Protect main with install, test, and build checks on GitHub Actions.',
     successCriteria: ['CI workflow exists', 'The CI-equivalent local install/test/build commands pass'],
-    objective: 'Validate the remote CI gate delivery path through ForgeLoop evidence and review handoff.',
+    objective: boundedLocalCodexObjective({
+      itemKey: 'Remote CI gate',
+      validationFocus: 'remote CI gate delivery path through ForgeLoop evidence and review handoff',
+    }),
     strictRunMode: { executorType: 'local_codex', workflowOnly: false },
     requiresChangesRequestedRerun: false,
   },
@@ -382,7 +414,10 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     title: 'Durable verification gaps',
     goal: 'Close the documented durable DB and browser verification gaps for P0 readiness.',
     successCriteria: ['Durable schema push passes', 'Durable dogfood passes', 'Browser Run Console E2E passes'],
-    objective: 'Validate durable verification closure through ForgeLoop evidence and review handoff.',
+    objective: boundedLocalCodexObjective({
+      itemKey: 'Durable verification gaps',
+      validationFocus: 'durable verification closure through ForgeLoop evidence and review handoff',
+    }),
     strictRunMode: { executorType: 'local_codex', workflowOnly: false },
     requiresChangesRequestedRerun: false,
   },
@@ -412,10 +447,27 @@ const createApp = async (): Promise<INestApplication> => {
   return app;
 };
 
-const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
-  const repository = app.get(P0_REPOSITORY) as P0Repository;
+type ReviewPacketRepository = Pick<P0Repository, 'getRunSession' | 'listReviewPacketsForPackage'>;
 
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+type ReviewPacketWaitOptions = {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+};
+
+const terminalStatusesWithoutReviewPacket = new Set<RunSession['status']>(['failed', 'timed_out', 'cancelled', 'stalled']);
+
+const delay = (ms: number): Promise<void> => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+
+export const waitForReviewPacketFromRepository = async (
+  repository: ReviewPacketRepository,
+  runSessionId: string,
+  options: ReviewPacketWaitOptions = {},
+): Promise<ReviewPacket> => {
+  const timeoutMs = options.timeoutMs ?? 300_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
     const runSession = await repository.getRunSession(runSessionId);
     if (runSession !== undefined) {
       const packet = (await repository.listReviewPacketsForPackage(runSession.execution_package_id)).find(
@@ -424,11 +476,20 @@ const waitForReviewPacket = async (app: INestApplication, runSessionId: string):
       if (packet !== undefined) {
         return packet;
       }
+      if (terminalStatusesWithoutReviewPacket.has(runSession.status)) {
+        throw new Error(`RunSession ${runSessionId} ended with status ${runSession.status} before ReviewPacket was created`);
+      }
     }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+    await delay(pollIntervalMs);
   }
 
   throw new Error(`Timed out waiting for ReviewPacket for ${runSessionId}`);
+};
+
+const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
+  const repository = app.get(P0_REPOSITORY) as P0Repository;
+
+  return waitForReviewPacketFromRepository(repository, runSessionId);
 };
 
 const expectSucceededRun = async (app: INestApplication, runSessionId: string): Promise<RunSession> => {
@@ -624,6 +685,31 @@ const approveReviewPacket = async (
     .expect(201);
 };
 
+export const loadCompletedDogfoodRecordsFromRepository = async (
+  repository: P0Repository,
+  workItemId: string,
+): Promise<CompletedDogfoodItem['records']> => {
+  const workItem = await repository.getWorkItem(workItemId);
+  if (workItem === undefined) {
+    throw new Error(`Repository is missing Work Item ${workItemId}`);
+  }
+
+  const executionPackages = await repository.listExecutionPackagesForWorkItem(workItemId);
+  const runSessions = (await Promise.all(
+    executionPackages.map((executionPackage) => repository.listRunSessionsForPackage(executionPackage.id)),
+  )).flat();
+  const reviewPackets = (await Promise.all(
+    executionPackages.map((executionPackage) => repository.listReviewPacketsForPackage(executionPackage.id)),
+  )).flat();
+
+  return {
+    workItem,
+    executionPackages,
+    runSessions,
+    reviewPackets,
+  };
+};
+
 const completeDogfoodItem = async (
   app: INestApplication,
   projectId: string,
@@ -693,13 +779,10 @@ const completeDogfoodItem = async (
   expectSources(item.key, 'Evidence Chain', evidenceChainSources, productEvidenceSources);
   const reportEvidenceSources = [...new Set([...timelineSources, ...evidenceChainSources])].sort();
 
-  const workItem = cockpit.work_item;
-  const executionPackages = cockpit.packages ?? [];
-  const runSessions = cockpit.run_sessions ?? [];
-  const reviewPackets = cockpit.review_packets ?? [];
-  if (workItem === undefined) {
+  if (cockpit.work_item === undefined) {
     throw new Error(`Cockpit response for ${item.key} is missing Work Item record`);
   }
+  const records = await loadCompletedDogfoodRecordsFromRepository(app.get(P0_REPOSITORY) as P0Repository, workItemId);
 
   return {
     result: {
@@ -716,12 +799,7 @@ const completeDogfoodItem = async (
       exercisedChangesRequestedRerun,
       timelineSources: reportEvidenceSources,
     },
-    records: {
-      workItem,
-      executionPackages,
-      runSessions,
-      reviewPackets,
-    },
+    records,
   };
 };
 
@@ -783,7 +861,6 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
   const evidenceLines = result.items.length === 0
     ? [
         '- No Work Items were created in this run.',
-        '- Strict preflight blockers prevented batch execution before product workflow records were created.',
       ]
     : [
         '- All three Work Items have approved SpecRevision and PlanRevision records.',
@@ -803,6 +880,12 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
         ]
       : [
           `- Qualifying local_codex Work Items: ${result.strictAcceptance.qualifyingWorkItems.length}`,
+          ...(result.strictAcceptance.status === 'blocked'
+            ? ['- Strict preflight blockers prevented batch execution.']
+            : []),
+          ...(result.strictAcceptance.status === 'failed'
+            ? ['- Strict batch execution completed but did not meet strict acceptance.']
+            : []),
           ...(result.strictAcceptance.qualifyingWorkItems.length === 0
             ? []
             : [
@@ -903,11 +986,14 @@ export const writeDogfoodCompletionReport = async (
   await writeFile(path, renderDogfoodCompletionReport(result));
 };
 
+export const strictAcceptanceExitMessage = (status: 'blocked' | 'failed'): string =>
+  `P0 dogfood work items strict acceptance ${status}. Report: ${reportPath}`;
+
 export const main = async (): Promise<number> => {
   const result = await runP0DogfoodWorkItems();
   await writeDogfoodCompletionReport(result);
-  if (result.strictAcceptance.status === 'failed') {
-    console.error(`P0 dogfood work items strict acceptance failed. Report: ${reportPath}`);
+  if (result.strictAcceptance.status === 'failed' || result.strictAcceptance.status === 'blocked') {
+    console.error(strictAcceptanceExitMessage(result.strictAcceptance.status));
     for (const blocker of result.strictAcceptance.blockers) {
       console.error(`Strict blocker ${blocker.code}: ${blocker.message}`);
     }
