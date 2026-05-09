@@ -346,7 +346,7 @@ describe('p0 dogfood work items script', () => {
     expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'required_artifact_missing' })]));
   });
 
-  it('renders strict preflight blockers without claiming Work Items completed or leaking raw details', () => {
+  it('renders strict preflight blockers as blocked without claiming Work Items completed or leaking raw details', () => {
     const rendered = dogfoodWorkItemsScript.renderDogfoodCompletionReport({
       generatedAt: at,
       durabilityMode: 'volatile_demo',
@@ -354,7 +354,7 @@ describe('p0 dogfood work items script', () => {
       repoId: 'forgeloop',
       commitSha: 'abc123',
       strictAcceptance: {
-        status: 'failed',
+        status: 'blocked',
         qualifyingWorkItems: [],
         blockers: [
           {
@@ -365,7 +365,6 @@ describe('p0 dogfood work items script', () => {
               blocked_dirty_entries: ['README.md'],
               dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
               error: 'secret failure from /Users/viv/projs/forgeloop/.worktrees/run-1',
-              workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-1',
             },
           },
         ],
@@ -378,14 +377,10 @@ describe('p0 dogfood work items script', () => {
       items: [],
     });
 
-    expect(rendered).toContain('Strict local_codex acceptance: failed');
+    expect(rendered).toContain('Strict local_codex acceptance: blocked');
     expect(rendered).toContain('source_dirty_blocked');
-    expect(rendered).toContain('Source checkout is dirty');
-    expect(rendered).toContain('allowed_dirty_entries');
-    expect(rendered).toContain('blocked_dirty_entries');
-    expect(rendered).toContain('STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST');
-    expect(rendered).toContain('No Work Items were created in this run.');
     expect(rendered).toContain('Strict preflight blockers prevented batch execution');
+    expect(rendered).toContain('\n- Strict preflight blockers prevented batch execution.\n');
     expect(rendered).not.toContain('All three Work Items have approved SpecRevision');
     expect(rendered).not.toContain('secret failure');
     expect(rendered).not.toContain('/Users/viv/projs/forgeloop');

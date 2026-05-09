@@ -87,6 +87,12 @@ type StrictDogfoodAcceptance =
       dirtySource?: StrictDirtySourceSummary;
     }
   | {
+      status: 'blocked';
+      qualifyingWorkItems: [];
+      blockers: StrictDogfoodBlocker[];
+      dirtySource?: StrictDirtySourceSummary;
+    }
+  | {
       status: 'passed' | 'failed';
       qualifyingWorkItems: StrictQualifyingWorkItem[];
       blockers: StrictDogfoodBlocker[];
@@ -356,7 +362,7 @@ const strictAcceptanceDisabled = (): StrictDogfoodAcceptance => ({
 const strictAcceptanceFromPreflight = (
   preflight: Awaited<ReturnType<typeof preflightLocalCodexDogfood>>,
 ): StrictDogfoodAcceptance => ({
-  status: 'failed',
+  status: 'blocked',
   qualifyingWorkItems: [],
   blockers: preflight.blockers.map((blocker) => strictDogfoodBlocker(blocker.code, blocker.message, blocker.details)),
   ...(preflight.dirtySource === undefined ? {} : { dirtySource: preflight.dirtySource }),
@@ -783,7 +789,6 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
   const evidenceLines = result.items.length === 0
     ? [
         '- No Work Items were created in this run.',
-        '- Strict preflight blockers prevented batch execution before product workflow records were created.',
       ]
     : [
         '- All three Work Items have approved SpecRevision and PlanRevision records.',
@@ -803,6 +808,12 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
         ]
       : [
           `- Qualifying local_codex Work Items: ${result.strictAcceptance.qualifyingWorkItems.length}`,
+          ...(result.strictAcceptance.status === 'blocked'
+            ? ['- Strict preflight blockers prevented batch execution.']
+            : []),
+          ...(result.strictAcceptance.status === 'failed'
+            ? ['- Strict batch execution completed but did not meet strict acceptance.']
+            : []),
           ...(result.strictAcceptance.qualifyingWorkItems.length === 0
             ? []
             : [
@@ -906,7 +917,7 @@ export const writeDogfoodCompletionReport = async (
 export const main = async (): Promise<number> => {
   const result = await runP0DogfoodWorkItems();
   await writeDogfoodCompletionReport(result);
-  if (result.strictAcceptance.status === 'failed') {
+  if (result.strictAcceptance.status === 'failed' || result.strictAcceptance.status === 'blocked') {
     console.error(`P0 dogfood work items strict acceptance failed. Report: ${reportPath}`);
     for (const blocker of result.strictAcceptance.blockers) {
       console.error(`Strict blocker ${blocker.code}: ${blocker.message}`);
