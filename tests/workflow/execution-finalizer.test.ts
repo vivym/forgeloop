@@ -529,7 +529,7 @@ describe('execution finalizer', () => {
       worker_id: 'worker-1',
       lease_token: 'lease-1',
       now: terminalAt,
-      expires_at: '2026-05-09T00:10:00.000Z',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
     });
 
     await repo.saveRunSession({
