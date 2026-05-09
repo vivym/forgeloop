@@ -1,16 +1,20 @@
 # P0 Dogfood Work Items Completion
 
-Generated: 2026-05-08T17:07:46.920Z
-Durability mode: volatile_demo
+Generated: 2026-05-09T03:15:33Z
+Durability mode: durable_postgres
 Project: project-1
 Repo: forgeloop
-Commit: 2deb0c57b20843dbc181e1227aadd8f363a3b58b
+Commit: b110ab7c1650b6e64fb1913c9b77d3eee9d18cc6
 
 ## Strict local_codex Acceptance
 
-Strict local_codex acceptance: disabled
-- strict runbook acceptance is not complete in this run.
-- real local Codex acceptance is opt-in; set `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` to run strict mode.
+Strict local_codex acceptance: failed
+- Qualifying local_codex Work Items: 0
+- Strict batch execution did not complete strict acceptance.
+
+### Strict Blockers
+
+- strict_review_packet_timeout: Timed out waiting for ReviewPacket for `run-session-27b5e015731a-28`; command did not render a replacement strict report before remaining alive and being terminated with exit code 143.
 
 ## Summary
 
@@ -22,6 +26,9 @@ Strict local_codex acceptance: disabled
 
 ## Evidence
 
+- Strict mode was attempted with `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1`, `FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1`, and `FORGELOOP_REPO_PATH` pointed at the clean closure worktree.
+- Codex command availability, Codex login status, Docker durable services, and `pnpm db:push` passed before the strict attempt.
+- Strict acceptance did not pass because the run timed out waiting for a Review Packet and no qualifying local_codex Work Items could be confirmed from a generated strict report.
 - All three Work Items have approved SpecRevision and PlanRevision records.
 - All three Work Items have at least one Execution Package, RunSession, Review Packet, human review decision, and timeline evidence.
 - The Browser Run Console Work Item exercised `changes_requested -> rerun -> approve`.

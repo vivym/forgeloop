@@ -58,10 +58,10 @@ Dogfood status: PASS
   - Volatile demo public APIs were exercised with legacy body/query actor fallback.
 - Durable repository restart recovery: PASSED
   - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:p0:durable` exited 0 with: "Durable P0 dogfood passed using provided database forgeloop."
-- Strict local_codex dogfood: BLOCKED
+- Strict local_codex dogfood: FAILED
   - Command: `FORGELOOP_DATABASE_URL=... FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1 FORGELOOP_REPO_PATH="$CLOSURE_REPO_PATH" pnpm dogfood:p0:work-items`
   - Report: `docs/superpowers/reports/p0-dogfood-work-items-completion.md`
-  - Blocker: `Timed out waiting for ReviewPacket for run-session-27b5e015731a-28`; command did not render a new strict report before remaining alive and was terminated with exit code 143.
+  - Failure: `strict_review_packet_timeout` - timed out waiting for ReviewPacket for `run-session-27b5e015731a-28`; command did not render a new strict report before remaining alive and was terminated with exit code 143.
 - Web app probe: PASSED
   - `pnpm e2e:run-console` started the API and Vite web app in-process and exercised the browser workbench.
 - Browser visual/text-overflow verification: PASSED
