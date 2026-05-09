@@ -40,4 +40,5 @@ export interface CodexSessionDriver {
     targetTurnId?: string;
   }): Promise<Record<string, unknown>>;
   cancelRun(input: { runtimeMetadata: RunRuntimeMetadata }): Promise<Record<string, unknown>>;
+  close?(): Promise<void>;
 }

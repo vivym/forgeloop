@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
@@ -452,6 +453,10 @@ export class CodexAppServerDriver implements CodexSessionDriver {
     };
   }
 
+  async close(): Promise<void> {
+    await this.#transport.close?.();
+  }
+
   async *#streamNotifications(runSessionId: string): AsyncIterable<CodexDriverStreamItem> {
     const notifications = this.#transport.notifications?.();
     if (notifications === undefined) {
@@ -504,8 +509,13 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   #processError: Error | undefined = undefined;
   #initialized = false;
   #initializePromise: Promise<void> | undefined = undefined;
+  #resolveClosed: (() => void) | undefined;
+  readonly #closedPromise: Promise<void>;
 
   constructor(options: CodexAppServerProcessTransportOptions = {}) {
+    this.#closedPromise = new Promise((resolve) => {
+      this.#resolveClosed = resolve;
+    });
     this.#child = spawn(options.codexBinary ?? 'codex', options.args ?? ['app-server'], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -515,9 +525,11 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
     });
     this.#child.once('error', (error) => {
       this.#closeWithError(error);
+      this.#resolveClosed?.();
     });
     this.#child.once('close', () => {
       this.#closeWithError(new Error('Codex app-server process closed before the request completed.'));
+      this.#resolveClosed?.();
     });
   }
 
@@ -607,7 +619,14 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
 
   async close(): Promise<void> {
     this.#closeWithError(new Error('Codex app-server process was closed.'));
-    this.#child.kill('SIGTERM');
+    if (this.#child.exitCode === null && this.#child.signalCode === null) {
+      this.#child.kill('SIGTERM');
+    }
+    await Promise.race([this.#closedPromise, delay(1_000)]);
+    if (this.#child.exitCode === null && this.#child.signalCode === null) {
+      this.#child.kill('SIGKILL');
+      await Promise.race([this.#closedPromise, delay(1_000)]);
+    }
   }
 
   #handleLine(line: string): void {

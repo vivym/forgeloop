@@ -952,6 +952,105 @@ describe('RunWorker', () => {
     });
   });
 
+  it('closes the app-server driver after switching to exec fallback', async () => {
+    const repository = new InMemoryP0Repository();
+    const { runSession } = await seedQueuedPackageRun(repository);
+    let appServerCloseCalls = 0;
+    const appServerDriver: CodexSessionDriver & { close(): Promise<void> } = {
+      kind: 'app_server',
+      startRun: async function* (input) {
+        expect(input.runSpec.run_session_id).toBe(runSession.id);
+        yield {
+          kind: 'event',
+          event: {
+            event_type: 'thread_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'App-server started a thread.',
+            payload: { thread_id: 'thread-app-server' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'app_server',
+            driver_status: 'active',
+            codex_thread_id: 'thread-app-server',
+            effective_dangerous_mode: 'confirmed',
+          },
+        };
+        yield {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server turn failed; fallback is required.',
+            payload: { reason: 'turn/start failed' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+          },
+        };
+      },
+      resumeRun: async function* () {
+        throw new Error('resume should not be called');
+      },
+      sendInput: async () => ({}),
+      cancelRun: async () => ({}),
+      close: async () => {
+        appServerCloseCalls += 1;
+      },
+    };
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferStartUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'thread_started',
+            source: 'codex',
+            visibility: 'public',
+            summary: 'Exec fallback started thread.',
+            payload: { thread_id: 'thread-fallback' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'active',
+            codex_thread_id: 'thread-fallback',
+            effective_dangerous_mode: 'confirmed',
+          },
+        },
+        { kind: 'terminal', status: 'succeeded', summary: 'Exec fallback completed.' },
+      ],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => ({
+        ...succeededExecutorResult(runSpec.run_session_id),
+        executor_type: runSpec.executor_type,
+      }),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(appServerCloseCalls).toBe(1);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'succeeded',
+      runtime_metadata: expect.objectContaining({
+        selected_execution_mode: 'exec_fallback',
+      }),
+    });
+  });
+
   it('uses exec fallback when app-server emits a failed terminal after initial progress', async () => {
     const repository = new InMemoryP0Repository();
     const { runSession } = await seedQueuedPackageRun(repository);

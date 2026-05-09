@@ -158,6 +158,14 @@ const sourceSnapshot = (runSession: RunSession): SourceRepoSnapshot => ({
   beforeDirtyFingerprint: '',
 });
 
+const closeDriverQuietly = async (driver: CodexSessionDriver): Promise<void> => {
+  try {
+    await driver.close?.();
+  } catch {
+    // Driver cleanup must not overwrite the authoritative run outcome.
+  }
+};
+
 const isRealLocalCodexDriverRun = (runSession: RunSession, driver: CodexSessionDriver): boolean =>
   runSession.run_spec?.executor_type === 'local_codex' &&
   runSession.run_spec.workflow_only !== true &&
@@ -266,6 +274,7 @@ export class RunWorker {
     let terminalOrStopped = false;
     const control = this.createRunControl();
     const heartbeat = this.startHeartbeat(input, control);
+    const openedDrivers = new Set<CodexSessionDriver>();
 
     try {
       const loaded = await this.repository.getRunSession(input.runSessionId);
@@ -291,6 +300,7 @@ export class RunWorker {
       const driver = resumeWithExecFallback
         ? this.execFallbackDriverFactory({ runSession: started, runtimeMetadata })
         : this.driverFactory({ runSession: started, runtimeMetadata });
+      openedDrivers.add(driver);
       if (isRealLocalCodexDriverRun(started, driver)) {
         activeRunSession = await this.prepareLocalCodexRuntime(
           activeRunSession,
@@ -313,6 +323,7 @@ export class RunWorker {
       }
       const opened = await this.openDriverStream(driver, activeRunSession, runtimeMetadata, input, wasQueued ? 'start' : 'resume');
       const primed = await this.primeDriverStream(opened, activeRunSession, input, wasQueued ? 'start' : 'resume', control);
+      openedDrivers.add(primed.driver);
 
       if (primed.stalled === true) {
         terminalOrStopped = true;
@@ -367,6 +378,7 @@ export class RunWorker {
           break;
         }
         if (consumed.kind === 'switched') {
+          openedDrivers.add(consumed.stream.driver);
           if (consumed.stream.stalled === true) {
             streamStalled = true;
             currentStream = undefined;
@@ -418,6 +430,7 @@ export class RunWorker {
     } finally {
       control.stop();
       await heartbeat.done;
+      await Promise.all([...openedDrivers].map((driver) => closeDriverQuietly(driver)));
       if (terminalOrStopped) {
         try {
           await releaseLease(this.repository, input.runSessionId, input.workerId, input.leaseToken, this.now());
