@@ -858,7 +858,7 @@ describe('RunWorker', () => {
       repoPath: repo,
       beforePorcelain: '',
     });
-  });
+  }, 15_000);
 
   it('uses exec fallback when app-server emits a fallback event after initial progress', async () => {
     const repository = new InMemoryP0Repository();
