@@ -1,34 +1,37 @@
 # P0 Dogfood Work Items Completion
 
-Generated: 2026-05-09T03:15:33Z
-Durability mode: durable_postgres
-Project: project-1
+Generated: 2026-05-09T05:34:22.103Z
+Durability mode: durable
+Project: project-b2b234829e93-1
 Repo: forgeloop
-Commit: b110ab7c1650b6e64fb1913c9b77d3eee9d18cc6
+Commit: df6776ee62621969cb5c0b65b2295b30c149d001
 
 ## Strict local_codex Acceptance
 
-Strict local_codex acceptance: failed
-- Qualifying local_codex Work Items: 0
-- Strict batch execution did not complete strict acceptance.
+Strict local_codex acceptance: passed
+- Qualifying local_codex Work Items: 2
 
-### Strict Blockers
+| Work Item | Execution Package | RunSession | Review Packet | executor_type | workflow_only |
+|---|---|---|---|---|---|
+| work-item-b2b234829e93-5 | execution-package-b2b234829e93-25 | run-session-b2b234829e93-28 | review-packet:run-session-b2b234829e93-28 | local_codex | false |
+| work-item-b2b234829e93-33 | execution-package-b2b234829e93-53 | run-session-b2b234829e93-56 | review-packet:run-session-b2b234829e93-56 | local_codex | false |
 
-- strict_review_packet_timeout: Timed out waiting for ReviewPacket for `run-session-27b5e015731a-28`; command did not render a replacement strict report before remaining alive and being terminated with exit code 143.
+### Strict Dirty Source
+
+- allowed_dirty_entries: docs/superpowers/reports/p0-dogfood-work-items-completion.md
+- blocked_dirty_entries: none
+- dirty_allowlist_source: STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST
 
 ## Summary
 
 | Work Item | Kind | Package | executor_type | workflow_only | Runs | Review Packets | Final Decision | Rerun Path | Timeline Evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| Remote CI gate | feature | execution-package-25 | mock | true | run-session-28 | review-packet:run-session-28 | approved | approve | artifact, decision, object_event, status_history |
-| Durable verification gaps | bugfix | execution-package-53 | mock | true | run-session-56 | review-packet:run-session-56 | approved | approve | artifact, decision, object_event, status_history |
-| Browser Run Console walkthrough | test_refactor | execution-package-81 | mock | true | run-session-84<br>run-session-89 | review-packet:run-session-84<br>review-packet:run-session-89 | approved | changes_requested -> rerun -> approve | artifact, decision, object_event, status_history |
+| Remote CI gate | feature | execution-package-b2b234829e93-25 | local_codex | false | run-session-b2b234829e93-28 | review-packet:run-session-b2b234829e93-28 | approved | approve | artifact, decision, object_event, review_packet, run_event, status_history, trace_event |
+| Durable verification gaps | bugfix | execution-package-b2b234829e93-53 | local_codex | false | run-session-b2b234829e93-56 | review-packet:run-session-b2b234829e93-56 | approved | approve | artifact, decision, object_event, review_packet, run_event, status_history, trace_event |
+| Browser Run Console walkthrough | test_refactor | execution-package-b2b234829e93-81 | mock | true | run-session-b2b234829e93-84<br>run-session-b2b234829e93-89 | review-packet:run-session-b2b234829e93-84<br>review-packet:run-session-b2b234829e93-89 | approved | changes_requested -> rerun -> approve | artifact, decision, object_event, review_packet, run_event, status_history, trace_event |
 
 ## Evidence
 
-- Strict mode was attempted with `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1`, `FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1`, and `FORGELOOP_REPO_PATH` pointed at the clean closure worktree.
-- Codex command availability, Codex login status, Docker durable services, and `pnpm db:push` passed before the strict attempt.
-- Strict acceptance did not pass because the run timed out waiting for a Review Packet and no qualifying local_codex Work Items could be confirmed from a generated strict report.
 - All three Work Items have approved SpecRevision and PlanRevision records.
 - All three Work Items have at least one Execution Package, RunSession, Review Packet, human review decision, and timeline evidence.
 - The Browser Run Console Work Item exercised `changes_requested -> rerun -> approve`.

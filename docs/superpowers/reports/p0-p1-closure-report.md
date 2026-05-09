@@ -1,6 +1,6 @@
 # P0/P1 Closure Report
 
-Generated: 2026-05-09T03:33:53Z
+Generated: 2026-05-09T05:35:24Z
 
 ## Scope
 
@@ -10,17 +10,20 @@ Generated: 2026-05-09T03:33:53Z
 
 ## Strict Dogfood
 
-- Status: `FAILED`
+- Status: `PASS`
 - Report: `docs/superpowers/reports/p0-dogfood-work-items-completion.md`
 - Command: `FORGELOOP_DATABASE_URL=... FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1 FORGELOOP_REPO_PATH="$CLOSURE_REPO_PATH" pnpm dogfood:p0:work-items`
-- Outcome: `Strict local_codex dogfood reached Work Item execution but timed out waiting for ReviewPacket for run-session-27b5e015731a-28; no qualifying local_codex Work Items could be confirmed from a generated strict report.`
+- Outcome: command exited 0 on commit `df6776ee62621969cb5c0b65b2295b30c149d001`; report says `Strict local_codex acceptance: passed` with 2 qualifying local_codex Work Items, both backed by completed approved ReviewPackets.
+- Qualifying ReviewPackets: `review-packet:run-session-b2b234829e93-28`, `review-packet:run-session-b2b234829e93-56`.
+- Post-run process probe found no dogfood-owned `codex app-server` or `codex exec` children left behind.
 
 ## Verification
 
-- `pnpm test`: `PASS` - 42 files, 488 tests passed.
+- `pnpm test`: `PASS` - 42 files, 499 tests passed.
 - `pnpm build`: `PASS`
 - `git diff --check`: `PASS`
 - `pnpm db:push`: `PASS`
+- Strict `pnpm dogfood:p0:work-items`: `PASS` - command exited 0 and report recorded 2 qualifying local_codex Work Items.
 
 ## Plan Reconciliation
 
@@ -33,5 +36,5 @@ Generated: 2026-05-09T03:33:53Z
 ## Dirty Source Handling
 
 - Unrelated dirty files before closure: `none in closure worktree; original checkout had docs/superpowers/specs/2026-05-09-codex-unified-run-event-stream-design.md dirty before isolated worktree execution`
-- Closure-owned dirty files committed before strict dogfood: `none; Task 2 code changes were committed before strict dogfood`
+- Closure-owned dirty files committed before strict dogfood: `strict acceptance, fallback routing, durable record evaluation, ReviewPacket artifact accounting, and app-server driver cleanup fixes were committed before the passing strict dogfood run`
 - Dogfood-allowlisted dirty outputs: `docs/superpowers/reports/p0-dogfood-work-items-completion.md`
