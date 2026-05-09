@@ -387,6 +387,11 @@ describe('p0 dogfood work items script', () => {
     expect(rendered).toContain('redacted_detail_keys');
   });
 
+  it('prints status-specific strict acceptance exit messages', () => {
+    expect(dogfoodWorkItemsScript.strictAcceptanceExitMessage('blocked')).toContain('strict acceptance blocked');
+    expect(dogfoodWorkItemsScript.strictAcceptanceExitMessage('failed')).toContain('strict acceptance failed');
+  });
+
   it('documents the strict dirty source allowlist and final P1 decision in the runbook', async () => {
     const runbook = await readFile('docs/dogfood/p0-dogfood-work-items.md', 'utf8');
 

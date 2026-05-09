@@ -1,7 +1,8 @@
 # P0 Delivery Loop Verification
 
-Generated: 2026-05-08T09:23:18.000Z
-Dogfood status: PASS
+Generated: 2026-05-09T03:26:26Z
+Deterministic dogfood status: PASS
+Strict local_codex status: FAILED
 
 ## Commands
 
@@ -69,4 +70,5 @@ Dogfood status: PASS
 
 ## Actual Results
 
-- Last dogfood run finished with status PASS.
+- Deterministic dogfood run finished with status PASS.
+- Strict local_codex dogfood finished with status FAILED: `strict_review_packet_timeout`.

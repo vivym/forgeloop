@@ -914,11 +914,14 @@ export const writeDogfoodCompletionReport = async (
   await writeFile(path, renderDogfoodCompletionReport(result));
 };
 
+export const strictAcceptanceExitMessage = (status: 'blocked' | 'failed'): string =>
+  `P0 dogfood work items strict acceptance ${status}. Report: ${reportPath}`;
+
 export const main = async (): Promise<number> => {
   const result = await runP0DogfoodWorkItems();
   await writeDogfoodCompletionReport(result);
   if (result.strictAcceptance.status === 'failed' || result.strictAcceptance.status === 'blocked') {
-    console.error(`P0 dogfood work items strict acceptance failed. Report: ${reportPath}`);
+    console.error(strictAcceptanceExitMessage(result.strictAcceptance.status));
     for (const blocker of result.strictAcceptance.blockers) {
       console.error(`Strict blocker ${blocker.code}: ${blocker.message}`);
     }
