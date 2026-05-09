@@ -481,12 +481,25 @@ describe('p0 dogfood work items script', () => {
     expect(result.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'run_session_workflow_only' })]));
   });
 
-  it('fails when a qualifying local_codex Work Item is missing a required artifact kind', () => {
+  it('counts an approved Review Packet as satisfying the strict review_packet artifact requirement', () => {
     const evaluate = evaluateStrictLocalCodexAcceptance();
     const result = evaluate(
       strictInput(
         qualifyingBundle(1),
         qualifyingBundle(2, { artifacts: requiredArtifactKinds.filter((kind) => kind !== 'review_packet') }),
+      ),
+    );
+
+    expect(result.status).toBe('passed');
+    expect(result.qualifyingWorkItems).toHaveLength(2);
+  });
+
+  it('fails when a qualifying local_codex Work Item is missing a non-review required artifact kind', () => {
+    const evaluate = evaluateStrictLocalCodexAcceptance();
+    const result = evaluate(
+      strictInput(
+        qualifyingBundle(1),
+        qualifyingBundle(2, { artifacts: requiredArtifactKinds.filter((kind) => kind !== 'diff') }),
       ),
     );
 
