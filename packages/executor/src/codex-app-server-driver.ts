@@ -118,6 +118,28 @@ const turnCompletedTerminal = (notification: unknown): CodexDriverStreamItem | u
   };
 };
 
+const threadIdleTerminal = (notification: unknown): CodexDriverStreamItem | undefined => {
+  const body = notificationBody(notification);
+  const method = stringField(body, ['method']);
+  if (method !== 'thread/status/changed') {
+    return undefined;
+  }
+
+  const status = isRecord(body.status) ? stringField(body.status, ['type']) : stringField(body, ['status']);
+  if (status !== 'idle') {
+    return undefined;
+  }
+
+  return {
+    kind: 'terminal',
+    status: 'succeeded',
+    summary: 'Codex app-server thread became idle.',
+    runtimeMetadata: {
+      driver_status: 'terminal',
+    },
+  };
+};
+
 const notificationStreamEndedTerminal = (error?: unknown): CodexDriverStreamItem => {
   const message =
     error instanceof Error
@@ -447,7 +469,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
           yield { kind: 'event', event };
         }
 
-        const terminal = turnCompletedTerminal(notification);
+        const terminal = turnCompletedTerminal(notification) ?? threadIdleTerminal(notification);
         if (terminal !== undefined) {
           yield terminal;
           return;

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import type { ArtifactKind } from '@forgeloop/contracts';
 import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem } from '@forgeloop/domain';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import * as dogfoodWorkItemsScript from '../../scripts/p0-dogfood-work-items';
 
@@ -232,6 +232,47 @@ describe('p0 dogfood work items script', () => {
     },
     45_000,
   );
+
+  it('waits longer than the old five-second window for a persisted Review Packet', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(at));
+    let packets: ReviewPacket[] = [];
+    try {
+      const candidate = (dogfoodWorkItemsScript as Record<string, unknown>).waitForReviewPacketFromRepository;
+      expect(candidate).toEqual(expect.any(Function));
+      const waitForReviewPacketFromRepository = candidate as (
+        repository: {
+          getRunSession(runSessionId: string): Promise<RunSession | undefined>;
+          listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
+        },
+        runSessionId: string,
+        options: { timeoutMs: number; pollIntervalMs: number },
+      ) => Promise<ReviewPacket>;
+      const run = runSession({ id: 'run-1', packageId: 'package-1', workItemId: 'work-item-1' });
+      const repository = {
+        getRunSession: vi.fn(async () => run),
+        listReviewPacketsForPackage: vi.fn(async () => packets),
+      };
+      const promise = waitForReviewPacketFromRepository(repository, 'run-1', {
+        timeoutMs: 10_000,
+        pollIntervalMs: 500,
+      });
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(settled).toBe(false);
+
+      packets = [reviewPacket({ id: 'review-packet-1', packageId: 'package-1', runSessionId: 'run-1' })];
+      await vi.advanceTimersByTimeAsync(500);
+
+      await expect(promise).resolves.toMatchObject({ id: 'review-packet-1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('evaluates strict mode as passed only when at least two local_codex Work Items satisfy the Work Item contract', () => {
     const evaluate = evaluateStrictLocalCodexAcceptance();

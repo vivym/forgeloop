@@ -418,10 +418,27 @@ const createApp = async (): Promise<INestApplication> => {
   return app;
 };
 
-const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
-  const repository = app.get(P0_REPOSITORY) as P0Repository;
+type ReviewPacketRepository = Pick<P0Repository, 'getRunSession' | 'listReviewPacketsForPackage'>;
 
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+type ReviewPacketWaitOptions = {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+};
+
+const terminalStatusesWithoutReviewPacket = new Set<RunSession['status']>(['failed', 'timed_out', 'cancelled']);
+
+const delay = (ms: number): Promise<void> => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+
+export const waitForReviewPacketFromRepository = async (
+  repository: ReviewPacketRepository,
+  runSessionId: string,
+  options: ReviewPacketWaitOptions = {},
+): Promise<ReviewPacket> => {
+  const timeoutMs = options.timeoutMs ?? 300_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
     const runSession = await repository.getRunSession(runSessionId);
     if (runSession !== undefined) {
       const packet = (await repository.listReviewPacketsForPackage(runSession.execution_package_id)).find(
@@ -430,11 +447,20 @@ const waitForReviewPacket = async (app: INestApplication, runSessionId: string):
       if (packet !== undefined) {
         return packet;
       }
+      if (terminalStatusesWithoutReviewPacket.has(runSession.status)) {
+        throw new Error(`RunSession ${runSessionId} ended with status ${runSession.status} before ReviewPacket was created`);
+      }
     }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+    await delay(pollIntervalMs);
   }
 
   throw new Error(`Timed out waiting for ReviewPacket for ${runSessionId}`);
+};
+
+const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
+  const repository = app.get(P0_REPOSITORY) as P0Repository;
+
+  return waitForReviewPacketFromRepository(repository, runSessionId);
 };
 
 const expectSucceededRun = async (app: INestApplication, runSessionId: string): Promise<RunSession> => {
