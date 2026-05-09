@@ -3,8 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
 import {
-  type Artifact,
-  type Decision,
   type ExecutionPackage,
   type ObjectEvent,
   type Plan,
@@ -21,7 +19,6 @@ import {
   type StatusHistory,
   type WorkItem,
   DomainError,
-  deriveWorkItemCompletion,
   transitionExecutionPackage,
   transitionReviewPacket,
   transitionRunSession,
@@ -33,7 +30,6 @@ import {
 } from '@forgeloop/domain';
 import type { P0Repository, TraceLinkRecord } from '@forgeloop/db';
 import type {
-  ArtifactRef,
   EvidenceChainResponse,
   ExecutorType,
   PublicRunEvent,
@@ -70,17 +66,7 @@ import type {
   RunPackageDto,
 } from './dto';
 import { buildEvidenceChain } from './evidence-chain';
-import { serializePublicArtifactRef, serializePublicRunSession } from './run-session-serialization';
-
-type TimelineEntry = {
-  id: string;
-  source: 'object_event' | 'status_history' | 'decision' | 'artifact';
-  object_type: string;
-  object_id: string;
-  summary: string;
-  created_at: string;
-  payload: ObjectEvent | StatusHistory | Decision | ArtifactRef;
-};
+import { serializePublicRunSession } from './run-session-serialization';
 
 type RunReplacementRecordedPayload = {
   mode: 'rerun_package' | 'force_rerun_package';
@@ -833,105 +819,6 @@ export class P0Service {
     return { review_packet_id: reviewPacketId, status: 'completed', decision: 'changes_requested', recorded_at: updated.updated_at };
   }
 
-  async cockpit(workItemId: string): Promise<Record<string, unknown>> {
-    const workItem = await this.getWorkItem(workItemId);
-    const packages = await this.repository.listExecutionPackagesForWorkItem(workItem.id);
-    const runSessions = (await Promise.all(packages.map((item) => this.repository.listRunSessionsForPackage(item.id)))).flat();
-    const reviewPackets = (await Promise.all(packages.map((item) => this.repository.listReviewPacketsForPackage(item.id)))).flat();
-    const completionState = deriveWorkItemCompletion(workItem, packages, runSessions, reviewPackets);
-    return {
-      work_item: workItem,
-      current_spec: workItem.current_spec_id === undefined ? null : await this.repository.getSpec(workItem.current_spec_id),
-      current_plan: workItem.current_plan_id === undefined ? null : await this.repository.getPlan(workItem.current_plan_id),
-      packages,
-      run_sessions: (await Promise.all(runSessions.map((runSession) => this.withWorkerLeaseMetadata(runSession)))).map(
-        serializePublicRunSession,
-      ),
-      review_packets: reviewPackets,
-      next_actions: this.nextActions(packages, reviewPackets),
-      completion_state: completionState,
-    };
-  }
-
-  async timeline(workItemId: string): Promise<TimelineEntry[]> {
-    const workItem = await this.getWorkItem(workItemId);
-    const objectRefs: Array<{ objectType: string; objectId: string }> = [{ objectType: 'work_item', objectId: workItem.id }];
-    if (workItem.current_spec_id !== undefined) {
-      objectRefs.push({ objectType: 'spec', objectId: workItem.current_spec_id });
-      for (const revision of await this.repository.listSpecRevisions(workItem.current_spec_id)) {
-        objectRefs.push({ objectType: 'spec_revision', objectId: revision.id });
-      }
-    }
-    if (workItem.current_plan_id !== undefined) {
-      objectRefs.push({ objectType: 'plan', objectId: workItem.current_plan_id });
-      for (const revision of await this.repository.listPlanRevisions(workItem.current_plan_id)) {
-        objectRefs.push({ objectType: 'plan_revision', objectId: revision.id });
-      }
-    }
-    for (const executionPackage of await this.repository.listExecutionPackagesForWorkItem(workItem.id)) {
-      objectRefs.push({ objectType: 'execution_package', objectId: executionPackage.id });
-      for (const runSession of await this.repository.listRunSessionsForPackage(executionPackage.id)) {
-        objectRefs.push({ objectType: 'run_session', objectId: runSession.id });
-      }
-      for (const reviewPacket of await this.repository.listReviewPacketsForPackage(executionPackage.id)) {
-        objectRefs.push({ objectType: 'review_packet', objectId: reviewPacket.id });
-      }
-    }
-
-    const entries: TimelineEntry[] = [];
-    for (const ref of objectRefs) {
-      for (const item of await this.repository.listObjectEvents(ref.objectId, ref.objectType)) {
-        entries.push({
-          id: item.id,
-          source: 'object_event',
-          object_type: item.object_type,
-          object_id: item.object_id,
-          summary: item.event_type,
-          created_at: item.created_at,
-          payload: item,
-        });
-      }
-      for (const item of await this.repository.listStatusHistory(ref.objectId, ref.objectType)) {
-        entries.push({
-          id: item.id,
-          source: 'status_history',
-          object_type: item.object_type,
-          object_id: item.object_id,
-          summary: `${item.from_status ?? 'none'} -> ${item.to_status}`,
-          created_at: item.created_at,
-          payload: item,
-        });
-      }
-      for (const item of await this.repository.listDecisionsForObject(ref.objectType, ref.objectId)) {
-        entries.push({
-          id: item.id,
-          source: 'decision',
-          object_type: item.object_type,
-          object_id: item.object_id,
-          summary: item.summary,
-          created_at: item.created_at,
-          payload: item,
-        });
-      }
-      for (const item of await this.repository.listArtifactsForObject(ref.objectType, ref.objectId)) {
-        const publicArtifactRef = serializePublicArtifactRef(item.ref);
-        if (publicArtifactRef === undefined) {
-          continue;
-        }
-        entries.push({
-          id: item.id,
-          source: 'artifact',
-          object_type: item.object_type,
-          object_id: item.object_id,
-          summary: publicArtifactRef.name,
-          created_at: item.created_at,
-          payload: publicArtifactRef,
-        });
-      }
-    }
-    return entries.sort((left, right) => left.created_at.localeCompare(right.created_at));
-  }
-
   async evidenceChain(workItemId: string, reviewPacketId?: string): Promise<EvidenceChainResponse> {
     const workItem = await this.getWorkItem(workItemId);
     const response = await buildEvidenceChain(this.repository, workItem, {
@@ -1361,20 +1248,6 @@ export class P0Service {
         await this.repository.saveTraceLink(link);
       }
     });
-  }
-
-  private nextActions(packages: ExecutionPackage[], reviewPackets: ReviewPacket[]): string[] {
-    const actions = new Set<string>();
-    if (packages.some((item) => item.phase === 'draft')) {
-      actions.add('mark_packages_ready');
-    }
-    if (packages.some((item) => item.phase === 'ready')) {
-      actions.add('run_ready_packages');
-    }
-    if (reviewPackets.some((item) => item.status === 'ready' || item.status === 'in_review')) {
-      actions.add('approve_open_review_packets');
-    }
-    return [...actions];
   }
 
   private async event(

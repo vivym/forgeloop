@@ -495,7 +495,7 @@ describe('run event API', () => {
       created_at: '2026-05-07T00:00:02.000Z',
     });
 
-    const response = await request(app.getHttpServer()).get(`/work-items/${executionPackage!.work_item_id}/timeline`).expect(200);
+    const response = await request(app.getHttpServer()).get(`/query/replay/work_item/${executionPackage!.work_item_id}`).expect(200);
 
     expect(response.body.filter((entry: { source: string }) => entry.source === 'artifact')).toEqual([
       expect.objectContaining({
