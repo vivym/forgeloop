@@ -348,8 +348,10 @@ describe('Forgeloop web API client', () => {
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     const commandMethods = Object.keys(commandApi);
-    expect(commandMethods).not.toContain('getCockpit');
-    expect(commandMethods).not.toContain('getTimeline');
+    const retiredReadMethods = ['Cockpit', 'Timeline'].map((suffix) => `get${suffix}`);
+    for (const method of retiredReadMethods) {
+      expect(commandMethods).not.toContain(method);
+    }
     expect(commandMethods).not.toContain('getWorkItemCockpit');
     expect(commandMethods).not.toContain('getWorkItemReplay');
     expect(Object.keys(queryApi).sort()).toEqual(['getWorkItemCockpit', 'getWorkItemReplay']);
