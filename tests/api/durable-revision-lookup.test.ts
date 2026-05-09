@@ -14,8 +14,25 @@ import {
 } from '../../apps/control-plane-api/src/p0/p0.service';
 import { createDbClient, DrizzleP0Repository, type ForgeloopDb, plan_revisions, plans, specs } from '../../packages/db/src';
 
-const connectionString = process.env.FORGELOOP_DATABASE_URL;
-const describeIfDb = describe.skipIf(!connectionString);
+const connectionString =
+  process.env.FORGELOOP_TEST_DATABASE_URL?.trim() || process.env.FORGELOOP_DATABASE_URL?.trim() || undefined;
+
+const assertSafeTestDatabaseUrl = (url: string): void => {
+  const parsed = new URL(url);
+  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+  if (!databaseName.toLowerCase().includes('test')) {
+    throw new Error(
+      `durable revision lookup tests truncate P0 tables; refusing database "${databaseName}". ` +
+        'Set FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL to a disposable database whose name contains "test".',
+    );
+  }
+};
+
+if (connectionString !== undefined) {
+  assertSafeTestDatabaseUrl(connectionString);
+}
+
+const describeIfDb = describe.skipIf(connectionString === undefined);
 
 describeIfDb('durable revision lookup', () => {
   const apps: INestApplication[] = [];
@@ -147,7 +164,7 @@ describeIfDb('durable revision lookup', () => {
           scope_in: ['Control plane API'],
           scope_out: ['Web UI'],
           acceptance_criteria: ['API tests cover the delivery flow'],
-          risk_notes: ['Keep P0 in-memory for tests'],
+          risk_notes: ['Keep P0 durable for restart tests'],
           test_strategy_summary: 'Nest + Supertest API tests',
           author_actor_id: actorOwner,
         })
@@ -159,11 +176,12 @@ describeIfDb('durable revision lookup', () => {
     expect(generatedRevision.acceptance_criteria).toContain('Spec, plan, package, run, and review commands are available.');
     await request(server).get(`/specs/${spec.id}`).expect(200);
     await request(server).get(`/specs/${spec.id}/revisions`).expect(200);
-    await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200);
+    const generatedRevisionResponse = await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200);
+    expect(generatedRevisionResponse.body.id).toBe(generatedRevision.id);
     await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
     await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
 
-    return { specId: spec.id, specRevisionId: generatedRevision.id };
+    return { specId: spec.id, specRevisionId: generatedRevision.id, manualSpecRevisionId: manualRevision.id };
   };
 
   const createDraftPlan = async (app: INestApplication, workItemId: string) => {
@@ -183,7 +201,7 @@ describeIfDb('durable revision lookup', () => {
           split_strategy: 'One API package.',
           dependency_order: ['api-package'],
           test_matrix: ['pnpm test tests/api'],
-          risk_mitigations: ['Use in-memory repository in tests'],
+          risk_mitigations: ['Use durable repository in restart tests'],
           rollback_notes: 'Revert API app changes.',
           author_actor_id: actorOwner,
         })
@@ -195,11 +213,12 @@ describeIfDb('durable revision lookup', () => {
     expect(generatedRevision.test_matrix).toContain('pnpm test tests/api');
     await request(server).get(`/plans/${plan.id}`).expect(200);
     await request(server).get(`/plans/${plan.id}/revisions`).expect(200);
-    await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200);
+    const generatedRevisionResponse = await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200);
+    expect(generatedRevisionResponse.body.id).toBe(generatedRevision.id);
     await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
     await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
 
-    return { planId: plan.id, manualPlanRevisionId: manualRevision.id, planRevisionId: generatedRevision.id };
+    return { planId: plan.id, planRevisionId: generatedRevision.id, manualPlanRevisionId: manualRevision.id };
   };
 
   beforeEach(async () => {
@@ -250,18 +269,27 @@ describeIfDb('durable revision lookup', () => {
     await request(secondApp.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(201);
   });
 
-  it('resolves direct revision routes when parent current_revision_id is missing or stale', async () => {
+  it('resolves direct spec revision lookup when parent current_revision_id is missing', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     const { specId, specRevisionId } = await approveSpec(app, workItem.id);
-    const { planId, planRevisionId } = await approvePlan(app, workItem.id);
     await withDb(async (db) => {
       await db.update(specs).set({ currentRevisionId: null }).where(eq(specs.id, specId));
-      await db.update(plans).set({ currentRevisionId: 'missing-plan-revision' }).where(eq(plans.id, planId));
     });
 
     const specRevisionResponse = await request(app.getHttpServer()).get(`/spec-revisions/${specRevisionId}`).expect(200);
     expect(specRevisionResponse.body.id).toBe(specRevisionId);
+  });
+
+  it('resolves direct plan revision lookup when parent current_revision_id is stale', async () => {
+    const app = await createDurableApp();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planId, planRevisionId, manualPlanRevisionId } = await approvePlan(app, workItem.id);
+    await withDb(async (db) => {
+      await db.update(plans).set({ currentRevisionId: manualPlanRevisionId }).where(eq(plans.id, planId));
+    });
+
     const planRevisionResponse = await request(app.getHttpServer()).get(`/plan-revisions/${planRevisionId}`).expect(200);
     expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });

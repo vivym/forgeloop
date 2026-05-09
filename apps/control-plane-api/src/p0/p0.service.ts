@@ -986,8 +986,8 @@ export class P0Service {
     if (plan.status !== 'approved' || plan.current_revision_id === undefined) {
       throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
     }
-    if (plan.current_revision_id !== planRevisionId) {
-      await this.getPlanRevision(plan.current_revision_id);
+    const currentPlanRevision = await this.getPlanRevision(plan.current_revision_id);
+    if (currentPlanRevision.id !== planRevisionId) {
       throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
     }
     const workItem = await this.getWorkItem(plan.work_item_id);
@@ -998,7 +998,7 @@ export class P0Service {
       spec,
       specRevision: await this.getSpecRevision(spec.current_revision_id!),
       plan,
-      planRevision,
+      planRevision: currentPlanRevision,
     };
   }
 

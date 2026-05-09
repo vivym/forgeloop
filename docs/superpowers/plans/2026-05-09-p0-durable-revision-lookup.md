@@ -30,6 +30,7 @@ Final review fixes applied in the follow-up commit:
 - direct revision routes still resolve existing revision rows when the parent `current_revision_id` is missing or stale
 - `packageContext()` dereferences a nonmatching approved plan `current_revision_id` before returning the current-approved mismatch error
 - missing approved plan `current_revision_id` rows surface `NotFoundException`
+- durable API test cleanup is guarded behind a disposable database URL whose database name contains `test`; prefer `FORGELOOP_TEST_DATABASE_URL` for the test run
 
 ## Scope Guardrails
 
@@ -247,11 +248,12 @@ Current worktree status: completed in `167f084`.
 
 Create `tests/api/durable-revision-lookup.test.ts` with a local bootstrap helper that:
 
-- requires `FORGELOOP_DATABASE_URL`
-- uses `describe.skipIf(!process.env.FORGELOOP_DATABASE_URL)` so the normal test suite skips cleanly without Postgres
+- requires `FORGELOOP_TEST_DATABASE_URL` or `FORGELOOP_DATABASE_URL` to point at a disposable database whose database name contains `test`
+- uses `describe.skipIf(!connectionString)` so the normal test suite skips cleanly without Postgres
+- trims the configured URL before use and throws before truncating if the database name is not clearly test-only
 - creates a `DrizzleP0Repository` from `createDbClient({ connectionString })`
 - tracks every returned `pool` and closes each one with `await pool.end()` in `afterEach`
-- boots two fresh `AppModule` instances, each with a new tracked `DrizzleP0Repository` and pool against the same `FORGELOOP_DATABASE_URL`
+- boots two fresh `AppModule` instances, each with a new tracked `DrizzleP0Repository` and pool against the same test database URL
 - uses explicit provider overrides so the module does not allocate an untracked database pool
 - overrides `P0_REPOSITORY` with the tracked `DrizzleP0Repository`
 - overrides `RUN_WORKER` with `{ kick: () => undefined, drainOnce: async () => undefined }` so the test only exercises API and repository behavior
@@ -280,8 +282,25 @@ import {
 } from '../../apps/control-plane-api/src/p0/p0.service';
 import { createDbClient, DrizzleP0Repository, type ForgeloopDb, plans, specs } from '../../packages/db/src';
 
-const connectionString = process.env.FORGELOOP_DATABASE_URL;
-const describeIfDb = describe.skipIf(!connectionString);
+const connectionString =
+  process.env.FORGELOOP_TEST_DATABASE_URL?.trim() || process.env.FORGELOOP_DATABASE_URL?.trim() || undefined;
+
+const assertSafeTestDatabaseUrl = (url: string): void => {
+  const parsed = new URL(url);
+  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+  if (!databaseName.toLowerCase().includes('test')) {
+    throw new Error(
+      `durable revision lookup tests truncate P0 tables; refusing database "${databaseName}". ` +
+        'Set FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL to a disposable database whose name contains "test".',
+    );
+  }
+};
+
+if (connectionString !== undefined) {
+  assertSafeTestDatabaseUrl(connectionString);
+}
+
+const describeIfDb = describe.skipIf(connectionString === undefined);
 
 describeIfDb('durable revision lookup', () => {
   const apps: INestApplication[] = [];
@@ -539,8 +558,9 @@ Run:
 
 ```bash
 docker compose up -d postgres redis temporal
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm db:push
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "resolves revision routes after restart"
+docker compose exec -T postgres createdb -U forgeloop forgeloop_test || true
+FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm db:push
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "resolves revision routes after restart"
 ```
 
 Expected from the pre-service-refactor baseline: FAIL while `P0Service` still depends on the in-memory reverse indexes.
@@ -570,7 +590,7 @@ it('generates plan drafts after restart', async () => {
 Run:
 
 ```bash
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates plan drafts after restart"
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates plan drafts after restart"
 ```
 
 Expected from the pre-service-refactor baseline: FAIL while `generatePlanDraft()` still resolves the approved current spec revision through the in-memory reverse index.
@@ -600,7 +620,7 @@ it('generates packages after restart', async () => {
 Run:
 
 ```bash
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates packages after restart"
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates packages after restart"
 ```
 
 Expected from the pre-service-refactor baseline: FAIL while `packageContext()` still resolves the approved current plan revision through the in-memory reverse index.
@@ -704,7 +724,7 @@ it('returns 404 when approved plan current_revision_id points to a missing revis
 Run:
 
 ```bash
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "current_revision_id|missing revision"
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "current_revision_id|missing revision"
 ```
 
 Expected: treat these as characterization/regression tests. If any fixture returns an unexpected status or message, fix the fixture before refactoring. From the pre-service-refactor baseline, Steps 3, 5, and 7 are the red gates for the restart bug; in the current worktree after `8d5458a`, this command should be a regression verification and must pass after the review fixes above are applied.
@@ -731,10 +751,10 @@ Current worktree status after `8d5458a`: `getSpecRevision()` and `getPlanRevisio
 Run:
 
 ```bash
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "resolves revision routes after restart"
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates plan drafts after restart"
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates packages after restart"
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "current_revision_id|missing revision"
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "resolves revision routes after restart"
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates plan drafts after restart"
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "generates packages after restart"
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts -t "current_revision_id|missing revision"
 ```
 
 Expected: PASS.
@@ -761,7 +781,7 @@ Run:
 pnpm vitest run tests/db/repository.test.ts tests/api/durable-revision-lookup.test.ts
 ```
 
-Expected: PASS, with the durable API test only running when `FORGELOOP_DATABASE_URL` is present.
+Expected: PASS, with the durable API test only running when `FORGELOOP_TEST_DATABASE_URL` or a safe `FORGELOOP_DATABASE_URL` is present.
 
 - [ ] **Step 2: Run the full repository checks**
 
@@ -781,8 +801,9 @@ Do not close the task based only on a skipped no-env durable test. Rerun the dur
 
 ```bash
 docker compose up -d postgres redis temporal
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm db:push
-FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm vitest run tests/api/durable-revision-lookup.test.ts
+docker compose exec -T postgres createdb -U forgeloop forgeloop_test || true
+FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm db:push
+FORGELOOP_TEST_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop_test pnpm vitest run tests/api/durable-revision-lookup.test.ts
 ```
 
 Expected: PASS with the durable API tests actually executed, not skipped.
