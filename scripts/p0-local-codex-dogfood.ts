@@ -700,13 +700,13 @@ const requestJson = async <T>(apiUrl: string, path: string, init: { method?: str
   return (await response.json()) as T;
 };
 
-const startApi = async (): Promise<{ apiUrl: string; close: () => Promise<void> }> => {
-  const [{ Test }, { P0Module }, { RunWorkerLifecycleService }] = await Promise.all([
+export const startApi = async (): Promise<{ apiUrl: string; close: () => Promise<void> }> => {
+  const [{ Test }, { AppModule }, { RunWorkerLifecycleService }] = await Promise.all([
     import('@nestjs/testing'),
-    import('../apps/control-plane-api/src/p0/p0.module.js'),
+    import('../apps/control-plane-api/src/app.module.js'),
     import('../apps/control-plane-api/src/p0/run-worker-lifecycle.service.js'),
   ]);
-  const moduleRef = await Test.createTestingModule({ imports: [P0Module] })
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(RunWorkerLifecycleService)
     .useValue({ onModuleInit: () => undefined, onModuleDestroy: () => undefined })
     .compile();

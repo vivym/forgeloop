@@ -20,6 +20,7 @@ import {
   runSourceGuardInjection,
   runSessionRuntimeMetadataReport,
   selectCodexExecutionMode,
+  startApi,
   validateLocalCodexRuntimeMetadata,
   validateTerminalEvidence,
 } from '../../scripts/p0-local-codex-dogfood';
@@ -594,6 +595,20 @@ describe('p0 local Codex dogfood script helpers', () => {
     });
 
     expect(resolveReviewPacketReference({ apiUrl: 'http://api.local', runSession: { artifacts: [] } })).toBeUndefined();
+  });
+
+  it('starts the dogfood API with query routes registered', async () => {
+    const api = await startApi();
+    try {
+      const response = await fetch(`${api.apiUrl}/query/replay/release/missing-release`);
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        message: expect.stringContaining('Unsupported replay object type'),
+      });
+    } finally {
+      await api.close();
+    }
   });
 
   it('plans a harmless source-checkout mutation and cleanup path', async () => {
