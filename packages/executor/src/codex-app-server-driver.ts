@@ -132,10 +132,15 @@ const threadIdleTerminal = (notification: unknown): CodexDriverStreamItem | unde
 
   return {
     kind: 'terminal',
-    status: 'succeeded',
-    summary: 'Codex app-server thread became idle.',
+    status: 'failed',
+    summary: 'Codex app-server thread became idle before turn completion.',
     runtimeMetadata: {
       driver_status: 'terminal',
+    },
+    failure: {
+      kind: 'executor_error',
+      message: 'Codex app-server reported an idle thread before a turn/completed terminal notification.',
+      retryable: true,
     },
   };
 };

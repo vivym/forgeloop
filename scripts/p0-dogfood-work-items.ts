@@ -134,15 +134,16 @@ const reportPath = resolve(
     'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
 );
 
-const requiredChecks = [
+export const dogfoodRequiredChecks = [
   {
     check_id: 'dogfood-work-item',
     display_name: 'P0 dogfood work item',
-    command: 'pnpm smoke:p0',
-    timeout_seconds: 120,
+    command: 'pnpm install --frozen-lockfile && pnpm smoke:p0',
+    timeout_seconds: 300,
     blocks_review: true,
   },
 ];
+const requiredChecks = dogfoodRequiredChecks;
 
 const requiredArtifactKinds: ArtifactKind[] = ['diff', 'changed_files', 'check_output', 'execution_summary', 'review_packet'];
 const publicTimelineEvidenceSources = ['decision', 'object_event', 'status_history'] as const satisfies readonly ProductEvidenceSource[];

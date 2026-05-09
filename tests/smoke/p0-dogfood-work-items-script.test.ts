@@ -274,6 +274,19 @@ describe('p0 dogfood work items script', () => {
     }
   });
 
+  it('bootstraps worktree dependencies before running the strict dogfood smoke check', () => {
+    const candidate = (dogfoodWorkItemsScript as Record<string, unknown>).dogfoodRequiredChecks;
+    expect(candidate).toEqual(expect.any(Array));
+    expect(candidate).toEqual([
+      expect.objectContaining({
+        check_id: 'dogfood-work-item',
+        command: 'pnpm install --frozen-lockfile && pnpm smoke:p0',
+        timeout_seconds: 300,
+        blocks_review: true,
+      }),
+    ]);
+  });
+
   it('evaluates strict mode as passed only when at least two local_codex Work Items satisfy the Work Item contract', () => {
     const evaluate = evaluateStrictLocalCodexAcceptance();
     const accepted = evaluate(strictInput(qualifyingBundle(1), qualifyingBundle(2), qualifyingBundle(3, { executorType: 'mock', workflowOnly: true })));

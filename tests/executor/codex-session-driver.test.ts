@@ -332,7 +332,7 @@ describe('codex app-server driver input routing', () => {
     ]);
   });
 
-  it('terminates startRun when the app-server reports the thread idle without turn/completed', async () => {
+  it('fails startRun when the app-server reports the thread idle without turn/completed', async () => {
     const request = vi.fn(async (method: string) =>
       method === 'thread/start'
         ? {
@@ -376,8 +376,12 @@ describe('codex app-server driver input routing', () => {
       expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'codex_warning' }) }),
       expect.objectContaining({
         kind: 'terminal',
-        status: 'succeeded',
-        summary: 'Codex app-server thread became idle.',
+        status: 'failed',
+        summary: 'Codex app-server thread became idle before turn completion.',
+        failure: expect.objectContaining({
+          kind: 'executor_error',
+          retryable: true,
+        }),
       }),
     ]);
   });
