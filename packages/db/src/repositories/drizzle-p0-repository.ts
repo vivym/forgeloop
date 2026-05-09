@@ -153,6 +153,10 @@ export class DrizzleP0Repository implements P0Repository {
     await this.upsert(spec_revisions, spec_revisions.id, specRevision);
   }
 
+  async getSpecRevision(specRevisionId: string): Promise<SpecRevision | undefined> {
+    return this.getById(spec_revisions, spec_revisions.id, specRevisionId);
+  }
+
   async listSpecRevisions(specId: string): Promise<SpecRevision[]> {
     return this.listWhere<SpecRevision>(spec_revisions, eq(spec_revisions.specId, specId), spec_revisions.revisionNumber);
   }
@@ -167,6 +171,10 @@ export class DrizzleP0Repository implements P0Repository {
 
   async savePlanRevision(planRevision: PlanRevision): Promise<void> {
     await this.upsert(plan_revisions, plan_revisions.id, planRevision);
+  }
+
+  async getPlanRevision(planRevisionId: string): Promise<PlanRevision | undefined> {
+    return this.getById(plan_revisions, plan_revisions.id, planRevisionId);
   }
 
   async listPlanRevisions(planId: string): Promise<PlanRevision[]> {

@@ -421,6 +421,20 @@ const createSingleRowRepository = (row: Record<string, unknown>) => {
   return new DrizzleP0Repository(db as never);
 };
 
+const createEmptySelectRepository = () => {
+  const db = {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => [],
+        }),
+      }),
+    }),
+  };
+
+  return new DrizzleP0Repository(db as never);
+};
+
 describe('P0Repository in-memory adapter', () => {
   it('persists and queries a minimal P0 delivery flow', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
@@ -485,6 +499,28 @@ describe('P0Repository in-memory adapter', () => {
     expect((await repository.getProject(project.id))?.name).toBe(project.name);
     expect((await repository.getWorkItem(workItem.id))?.success_criteria).toEqual(workItem.success_criteria);
     expect((await repository.getRunSession(runSession.id))?.changed_files).toEqual(runSession.changed_files);
+  });
+
+  it('gets spec revisions by id and returns undefined for unknown ids', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    await repository.saveSpec(spec);
+    await repository.saveSpecRevision(specRevision);
+
+    const storedRevision = await repository.getSpecRevision(specRevision.id);
+    expect(storedRevision).toEqual(specRevision);
+    expect(storedRevision).not.toBe(specRevision);
+    expect(await repository.getSpecRevision('missing-spec-revision')).toBeUndefined();
+  });
+
+  it('gets plan revisions by id and returns undefined for unknown ids', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    await repository.savePlan(plan);
+    await repository.savePlanRevision(planRevision);
+
+    const storedRevision = await repository.getPlanRevision(planRevision.id);
+    expect(storedRevision).toEqual(planRevision);
+    expect(storedRevision).not.toBe(planRevision);
+    expect(await repository.getPlanRevision('missing-plan-revision')).toBeUndefined();
   });
 
   it('keeps the original object event when the same event id is appended again', async () => {
@@ -709,6 +745,61 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
     expect(mappedRunSession).not.toHaveProperty('failure_reason');
     expect(mappedReviewPacket).not.toHaveProperty('completed_at');
     expect(mappedReviewPacket).not.toHaveProperty('summary');
+  });
+
+  it('maps spec revisions fetched by id', async () => {
+    const repository = createSingleRowRepository({
+      id: specRevision.id,
+      specId: specRevision.spec_id,
+      workItemId: specRevision.work_item_id,
+      revisionNumber: specRevision.revision_number,
+      summary: specRevision.summary,
+      content: specRevision.content,
+      background: specRevision.background,
+      goals: specRevision.goals,
+      scopeIn: specRevision.scope_in,
+      scopeOut: specRevision.scope_out,
+      acceptanceCriteria: specRevision.acceptance_criteria,
+      riskNotes: specRevision.risk_notes,
+      testStrategySummary: specRevision.test_strategy_summary,
+      structuredDocument: specRevision.structured_document,
+      artifactRefs: specRevision.artifact_refs,
+      authorActorId: null,
+      createdAt: specRevision.created_at,
+    });
+
+    expect(await repository.getSpecRevision(specRevision.id)).toEqual(specRevision);
+  });
+
+  it('returns undefined for missing spec revisions fetched by id', async () => {
+    expect(await createEmptySelectRepository().getSpecRevision('missing-spec-revision')).toBeUndefined();
+  });
+
+  it('maps plan revisions fetched by id', async () => {
+    const repository = createSingleRowRepository({
+      id: planRevision.id,
+      planId: planRevision.plan_id,
+      workItemId: planRevision.work_item_id,
+      revisionNumber: planRevision.revision_number,
+      summary: planRevision.summary,
+      content: planRevision.content,
+      implementationSummary: planRevision.implementation_summary,
+      splitStrategy: planRevision.split_strategy,
+      dependencyOrder: planRevision.dependency_order,
+      testMatrix: planRevision.test_matrix,
+      riskMitigations: planRevision.risk_mitigations,
+      rollbackNotes: planRevision.rollback_notes,
+      structuredDocument: planRevision.structured_document,
+      artifactRefs: planRevision.artifact_refs,
+      authorActorId: null,
+      createdAt: planRevision.created_at,
+    });
+
+    expect(await repository.getPlanRevision(planRevision.id)).toEqual(planRevision);
+  });
+
+  it('returns undefined for missing plan revisions fetched by id', async () => {
+    expect(await createEmptySelectRepository().getPlanRevision('missing-plan-revision')).toBeUndefined();
   });
 
   it('normalizes PostgreSQL timestamp strings back to ISO datetime strings', async () => {
