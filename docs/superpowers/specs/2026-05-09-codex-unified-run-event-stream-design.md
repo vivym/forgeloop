@@ -28,7 +28,7 @@ RunSession
 
 ## 3. Non-Goals
 
-- Do not implement the active user-input write path in this phase.
+- Do not expand or redesign the active user-input write path in this phase. Existing input, cancel, and resume endpoints may continue to produce public events, but this phase only standardizes how readers consume those events.
 - Do not build a general-purpose event broker or message bus.
 - Do not guarantee byte-for-byte replay of raw app-server notifications.
 - Do not expose heartbeat noise, lease internals, or command plumbing in the default user-facing stream.
@@ -84,15 +84,18 @@ The worker does not need to preserve raw transport details in the public stream.
 `apps/control-plane-api`
 
 - Serves historical backfill for a `RunSession` using the existing `events`, `next_cursor`, and `has_more` response shape.
-- In phase 1, backfill is single-shot and returns the full visible history for the run; `has_more` is always `false`, and `next_cursor` is set to the last visible event cursor when events exist.
+- In phase 1, backfill is single-shot: without `after`, it returns the full public event history for the run; with `after`, it returns public events strictly after that cursor.
+- `has_more` is always `false`, and `next_cursor` is the durable stream high-watermark for the query, even when `events` is empty. If the stream has no durable events yet, return a beginning-of-stream sentinel cursor that can safely be used as `after` for the live subscription.
 - Serves SSE for live delivery; when `after` is present, it resumes from that cursor, and when `after` is omitted it starts from the current live tail.
+- Starting from the current live tail means the SSE subscription establishes its baseline at the latest durable cursor at connection open and only emits later events.
 - Respects a caller-provided `after` cursor for both reads.
 - Treats `last_event_cursor` as a live-tail recovery hint only; it must not be used to truncate the initial backfill history.
 
 `apps/web`
 
-- Opens a backfill request first, then an SSE stream for live output.
-- Updates its confirmed cursor after every successfully processed backfill or SSE event.
+- Opens a backfill request first, records the returned `next_cursor`, then opens an SSE stream with `after=<next_cursor>`.
+- Omits `after` only when intentionally tailing from the current live tail and accepting that earlier output is not part of that subscription.
+- Updates its confirmed cursor from the backfill `next_cursor`, then after every successfully processed SSE event.
 - Uses the latest confirmed cursor as the `after` value for subsequent reconnects.
 - If the client loses its local cursor, it performs a fresh backfill instead of relying on `last_event_cursor` to skip history.
 - Renders a compact, readable event timeline.
@@ -102,7 +105,9 @@ CLI consumer
 - Uses the same API shape as the Web client.
 - Tails the same event envelope.
 - Does not require a separate transport or event format.
+- Follows the same backfill-first, confirmed-cursor update sequence as the Web client.
 - Uses the same auth/stream-token flow as the Web client for the same user context: each SSE connection mints a short-lived stream token, and reconnects mint a fresh token when needed. It does not introduce a CLI-specific read protocol.
+- In phase 1, CLI means a developer-facing tail command or script in this repository, not a separately distributed product binary.
 
 ## 6. Event Model
 
@@ -120,7 +125,7 @@ These are the default user-visible classes for phase 1:
 
 ### 6.2 Reserved Input Semantics
 
-These kinds are reserved in the model so phase 2 can reuse the same stream contract:
+These input-adjacent names are reserved so phase 2 can reuse the same stream contract:
 
 - `waiting_for_input`
 - `user_input`
@@ -131,7 +136,9 @@ These kinds are reserved in the model so phase 2 can reuse the same stream contr
 
 `waiting_for_input` is a single persisted event kind. Phase 1 may emit it as a read-side observation when a run pauses for user attention; Phase 2 may also emit the same kind as part of the write-side input flow. Consumers treat it the same way in both phases.
 
-The other reserved kinds are phase-2 write-side semantics and must not appear as first-class emitted events in phase 1.
+`user_input` already exists in the current write path. Phase 1 must consume and render existing `user_input` events without expanding or redesigning input delivery.
+
+`steer_requested`, `steer_applied`, `command_queued`, and `command_acked` are phase-2 write-side semantics. Phase 1 should document the names as reserved only; it should not add them to the emitted event contract or produce them as first-class events.
 
 ### 6.3 Hidden by Default
 
@@ -144,15 +151,20 @@ These should stay out of the default user-facing stream:
 
 The data can still exist durably for diagnostics, but the default render path should stay focused.
 
+`visibility: "public"` remains a redaction and authorization boundary. It is not the same as "show by default." Phase 1 should implement a shared renderer classifier over `event_type` and `visibility`; it should not add a second persisted visibility field unless planning proves the current event vocabulary is insufficient. Web and CLI may coalesce or hide public-but-low-signal events without making them internal.
+
 ## 7. Reconnect and Backfill
 
 Reconnect behavior should be deterministic and cheap.
 
-- The client first performs an initial backfill without `after` to load the full visible history for the run.
-- The client updates its confirmed cursor after every successfully processed backfill or SSE event.
+- The client first performs an initial backfill without `after` to load the full public event history for the run.
+- The client records the backfill response `next_cursor` even when no events are returned and uses it as the initial SSE `after` cursor, avoiding a gap between the backfill response and the live subscription.
+- The client updates its confirmed cursor from each successful backfill response `next_cursor`, then after every successfully processed SSE event.
 - A reconnect uses `after=<cursor>` to continue from that point when the client still has its cursor.
 - If the client has lost its cursor after a disconnect, the server-stored `last_event_cursor` is a recovery hint for live-tail bookkeeping only; it must not truncate the initial history load.
-- The server must dedupe by cursor so repeated reconnects do not duplicate visible output.
+- The server must not emit the same cursor more than once within a single list response or SSE subscription.
+- Cross-reconnect overlap is expected when a client reconnects with a stale cursor; clients are responsible for merging that overlap by cursor.
+- Clients must also merge events by cursor, not only by id, because reconnects can replay already-rendered events when a client reconnects with a stale cursor.
 
 This gives the user a stable “continue from where I left off” experience without forcing every reconnect to replay hours of old output.
 
@@ -174,6 +186,8 @@ The default stream should not show:
 - other implementation details that are only useful for debugging
 
 This is the same principle used elsewhere in Forgeloop: keep the public surface comprehensible, and keep raw internals available only where they are explicitly needed.
+
+The public event stream means events the current caller is authorized to read after redaction, currently represented by `visibility: "public"`. The default visible timeline means the subset or coalesced view of that public stream that the shared renderer classifier treats as user-facing. API backfill and SSE deliver the public stream; Web and CLI render the default visible timeline.
 
 ## 9. Phase Split
 
@@ -197,7 +211,7 @@ Add the write path:
 - user input commands
 - steering into active turns when available
 - queued command persistence
-- `user_input`, `steer_requested`, `steer_applied`, `command_queued`, and `command_acked` as first-class write-side behaviors
+- standardized `user_input` write-side semantics, plus `steer_requested`, `steer_applied`, `command_queued`, and `command_acked` as first-class write-side behaviors
 - `waiting_for_input` as the same event kind emitted by the write-side input flow when a run pauses for operator attention
 
 The key constraint is that Phase 2 should extend the Phase 1 contract, not replace it.
@@ -216,7 +230,11 @@ This design is done when:
 - `RunSession` is the canonical stream center.
 - Web and CLI consume the same event envelope.
 - Live delivery works through SSE.
-- Backfill works through cursor-based replay.
-- Reconnects do not require full replay every time.
-- The default stream stays focused on user-comprehensible output.
-- The event model is already ready for later input/steering work.
+- Initial backfill loads the full public event history for a run and returns a usable `next_cursor` high-watermark even when no events are returned, including the empty-stream sentinel case.
+- Web and CLI open live SSE with the backfill `next_cursor` as `after`; SSE without `after` starts from the live tail at connection open and is not the normal backfill-to-live path.
+- Reconnects resume from the latest client-confirmed cursor when available and do not rely on `last_event_cursor` to skip initial history.
+- Server responses and live streams do not duplicate a cursor within a single response/subscription, and Web/CLI clients merge by cursor across reconnects.
+- Web and CLI use the same backfill-first sequence and the same short-lived SSE stream-token flow.
+- Web and CLI share a renderer classifier over `event_type` and `visibility` so the default stream stays focused on user-comprehensible output.
+- Existing `user_input` events remain consumable in phase 1 without expanding the input write path.
+- Phase-2-only steering and command event names are reserved in the design but are not added to the phase-1 emitted event contract.
