@@ -689,10 +689,13 @@ export class P0Service {
     return new Observable<MessageEvent>((subscriber) => {
       let stopped = false;
       let timeout: ReturnType<typeof setTimeout> | undefined;
-      let cursor = options.after;
+      let cursor: string | undefined;
 
       const poll = async (): Promise<void> => {
         try {
+          if (cursor === undefined) {
+            cursor = await this.resolveRunEventStreamCursor(runSessionId, options.after);
+          }
           const response = await this.listRunEvents(runSessionId, {
             ...(cursor === undefined ? {} : { after: cursor }),
             ...(options.actorId === undefined ? {} : { actorId: options.actorId }),
@@ -721,6 +724,15 @@ export class P0Service {
         }
       };
     });
+  }
+
+  private async resolveRunEventStreamCursor(runSessionId: string, after: string | undefined): Promise<string> {
+    if (after !== undefined) {
+      return after;
+    }
+
+    const latest = await this.repository.getLatestRunEvent(runSessionId);
+    return latest?.cursor ?? beginningOfStreamCursor;
   }
 
   private async assertRunEventViewer(runSessionId: string, options: RunEventAccessOptions): Promise<void> {

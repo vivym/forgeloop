@@ -1,3 +1,5 @@
+import http from 'node:http';
+
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -16,6 +18,58 @@ describe('run event API', () => {
     apps.push(resolved.app);
     return resolved;
   };
+
+  const expectSseFirstEvent = async (
+    app: INestApplication,
+    path: string,
+    headers: Record<string, string> = {},
+    onOpen?: () => Promise<void> | void,
+  ): Promise<string> =>
+    await new Promise((resolve, reject) => {
+      const server = app.getHttpServer();
+      const address = server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : undefined;
+      if (typeof port !== 'number') {
+        reject(new Error('Expected test HTTP server to be listening on a port'));
+        return;
+      }
+
+      const req = http.get(
+        {
+          host: '127.0.0.1',
+          port,
+          path,
+          headers: { Accept: 'text/event-stream', ...headers },
+        },
+        (res) => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`Expected SSE 200, received ${res.statusCode}`));
+            res.resume();
+            return;
+          }
+
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => {
+            body += chunk;
+            if (body.includes('\n\n')) {
+              req.destroy();
+              resolve(body);
+            }
+          });
+
+          if (onOpen !== undefined) {
+            setTimeout(() => {
+              void Promise.resolve(onOpen()).catch(reject);
+            }, 25);
+          }
+        },
+      );
+      req.setTimeout(2_000, () => {
+        req.destroy(new Error('Timed out waiting for SSE event'));
+      });
+      req.on('error', reject);
+    });
 
   const seedAppWithEmptyRunSession = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository; runSessionId: string }> => {
     const repo = new InMemoryP0Repository();
@@ -133,6 +187,70 @@ describe('run event API', () => {
     ]);
     expect(response.body.next_cursor).toBe(trailingInternalEvent.cursor);
     expect(response.body.has_more).toBe(false);
+  });
+
+  it('starts SSE without after at the live tail instead of replaying history', async () => {
+    const { app, runSessionId, repo } = await track(seedAppWithRunSession());
+    await new Promise<void>((resolve) => app.getHttpServer().listen(0, '127.0.0.1', resolve));
+
+    const sseBody = await expectSseFirstEvent(
+      app,
+      `/run-sessions/${runSessionId}/events/stream?actor_id=actor-owner`,
+      {},
+      async () => {
+        await repo.appendRunEvent({
+          id: 'run-event-live-tail',
+          run_session_id: runSessionId,
+          event_type: 'agent_message_delta',
+          source: 'codex',
+          visibility: 'public',
+          summary: 'Fresh live-tail event.',
+          payload: { text: 'fresh' },
+          raw_ref: 'local://tmp/raw.jsonl',
+          created_at: '2026-05-07T00:00:01.000Z',
+        });
+      },
+    );
+
+    expect(sseBody).toContain('Fresh live-tail event.');
+    expect(sseBody).toContain('agent_message_delta');
+    expect(sseBody).not.toContain('Run queued.');
+  });
+
+  it('resumes SSE strictly after the provided cursor', async () => {
+    const { app, runSessionId, repo } = await track(seedAppWithRunSession());
+    const historicalEvent = await repo.appendRunEvent({
+      id: 'run-event-after-cursor',
+      run_session_id: runSessionId,
+      event_type: 'agent_message_delta',
+      source: 'codex',
+      visibility: 'public',
+      summary: 'Cursor checkpoint event.',
+      payload: { text: 'checkpoint' },
+      raw_ref: 'local://tmp/raw.jsonl',
+      created_at: '2026-05-07T00:00:01.000Z',
+    });
+    const followupEvent = await repo.appendRunEvent({
+      id: 'run-event-after-cursor-followup',
+      run_session_id: runSessionId,
+      event_type: 'agent_message_delta',
+      source: 'codex',
+      visibility: 'public',
+      summary: 'Follow-up cursor event.',
+      payload: { text: 'followup' },
+      raw_ref: 'local://tmp/raw.jsonl',
+      created_at: '2026-05-07T00:00:02.000Z',
+    });
+    await new Promise<void>((resolve) => app.getHttpServer().listen(0, '127.0.0.1', resolve));
+
+    const sseBody = await expectSseFirstEvent(
+      app,
+      `/run-sessions/${runSessionId}/events/stream?actor_id=actor-owner&after=${encodeURIComponent(historicalEvent.cursor)}`,
+    );
+
+    expect(sseBody).toContain('Follow-up cursor event.');
+    expect(sseBody).toContain(followupEvent.id);
+    expect(sseBody).not.toContain('Cursor checkpoint event.');
   });
 
   it('redacts internal logs from run-session detail responses', async () => {
