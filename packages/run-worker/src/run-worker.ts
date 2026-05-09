@@ -285,7 +285,12 @@ export class RunWorker {
       let runtimeMetadata = mergeMetadata(started, input.workerId, {
         driver_kind: started.runtime_metadata?.driver_kind ?? 'fake',
       });
-      const driver = this.driverFactory({ runSession: started, runtimeMetadata });
+      const resumeWithExecFallback =
+        !wasQueued &&
+        (runtimeMetadata.driver_kind === 'exec_fallback' || runtimeMetadata.selected_execution_mode === 'exec_fallback');
+      const driver = resumeWithExecFallback
+        ? this.execFallbackDriverFactory({ runSession: started, runtimeMetadata })
+        : this.driverFactory({ runSession: started, runtimeMetadata });
       if (isRealLocalCodexDriverRun(started, driver)) {
         activeRunSession = await this.prepareLocalCodexRuntime(
           activeRunSession,
