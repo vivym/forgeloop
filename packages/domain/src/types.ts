@@ -525,6 +525,7 @@ export interface Release {
   work_item_ids: string[];
   execution_package_ids: string[];
   current_review_packet_ids?: string[];
+  current_run_session_ids?: string[];
   rollout_strategy?: string;
   rollback_plan?: string;
   observation_plan?: string;

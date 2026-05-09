@@ -288,6 +288,39 @@ describe('Release gate derivation', () => {
     expect(deriveCodes(overrides)).toContain(code);
   });
 
+  it('treats released execution packages as release-ready', () => {
+    expect(deriveCodes({ execution_packages: [executionPackage({ gate_state: 'released' })] })).not.toContain(
+      'package_not_release_ready',
+    );
+  });
+
+  it('derives failed_required_check when a selected run is missing a required check result', () => {
+    expect(
+      deriveCodes({
+        execution_packages: [
+          executionPackage({
+            required_checks: [
+              {
+                check_id: 'domain-tests',
+                display_name: 'Domain tests',
+                command: 'pnpm vitest run tests/domain',
+                timeout_seconds: 120,
+                blocks_review: true,
+              },
+              {
+                check_id: 'contracts-tests',
+                display_name: 'Contracts tests',
+                command: 'pnpm vitest run tests/contracts',
+                timeout_seconds: 120,
+                blocks_review: true,
+              },
+            ],
+          }),
+        ],
+      }),
+    ).toContain('failed_required_check');
+  });
+
   it('selects release evidence from current pointers, then last run review packet, then latest non-archived packet', () => {
     const archivedNewer = reviewPacket({
       id: 'review-packet-archived-newer',
@@ -310,6 +343,11 @@ describe('Release gate derivation', () => {
       run_session_id: 'run-session-current',
       created_at: '2026-05-04T00:00:00.000Z',
     });
+    const currentRun = reviewPacket({
+      id: 'review-packet-current-run',
+      run_session_id: 'run-session-current-pointer',
+      created_at: '2026-05-03T00:00:00.000Z',
+    });
 
     expect(
       selectReleaseReviewPacket(
@@ -322,6 +360,14 @@ describe('Release gate derivation', () => {
     expect(selectReleaseReviewPacket(release(), executionPackage(), [archivedNewer, latest, lastRun])?.id).toBe(
       'review-packet-last-run',
     );
+
+    expect(
+      selectReleaseReviewPacket(
+        release({ current_run_session_ids: ['run-session-current-pointer'] }),
+        executionPackage(),
+        [archivedNewer, latest, lastRun, currentRun],
+      )?.id,
+    ).toBe('review-packet-current-run');
 
     expect(
       selectReleaseReviewPacket(release(), executionPackage({ last_run_session_id: undefined }), [

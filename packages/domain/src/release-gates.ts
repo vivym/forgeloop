@@ -70,7 +70,7 @@ const sortNewestFirst = <T extends { created_at: string }>(items: readonly T[]):
   [...items].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
 
 export const selectReleaseReviewPacket = (
-  release: Pick<Release, 'current_review_packet_ids'>,
+  release: Pick<Release, 'current_review_packet_ids' | 'current_run_session_ids'>,
   executionPackage: Pick<ExecutionPackage, 'id' | 'last_run_session_id'>,
   reviewPackets: readonly ReviewPacket[],
 ): ReviewPacket | undefined => {
@@ -83,6 +83,13 @@ export const selectReleaseReviewPacket = (
   );
   if (currentReviewPacket !== undefined) {
     return currentReviewPacket;
+  }
+
+  const currentRunReviewPacket = sortNewestFirst(packagePackets).find(
+    (reviewPacket) => release.current_run_session_ids?.includes(reviewPacket.run_session_id) === true,
+  );
+  if (currentRunReviewPacket !== undefined) {
+    return currentRunReviewPacket;
   }
 
   if (executionPackage.last_run_session_id !== undefined) {
@@ -113,6 +120,21 @@ const missingRequiredArtifactKinds = (
   return executionPackage.required_artifact_kinds.filter((kind) =>
     kind === 'logs' ? !logKinds.has(kind) : !artifactKinds.has(kind),
   );
+};
+
+const hasFailedOrMissingRequiredCheck = (
+  executionPackage: Pick<ExecutionPackage, 'required_checks'>,
+  runSession: Pick<RunSession, 'check_results'> | undefined,
+): boolean => {
+  if (runSession === undefined) {
+    return false;
+  }
+
+  const checkResultsById = new Map(runSession.check_results.map((check) => [check.check_id, check]));
+  return executionPackage.required_checks.some((requiredCheck) => {
+    const result = checkResultsById.get(requiredCheck.check_id);
+    return result === undefined || result.status !== 'succeeded';
+  });
 };
 
 export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlocker[] => {
@@ -172,7 +194,7 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
   }
 
   for (const executionPackage of validExecutionPackages) {
-    if (executionPackage.gate_state !== 'release_ready') {
+    if (executionPackage.gate_state !== 'release_ready' && executionPackage.gate_state !== 'released') {
       blockers.push(blocker('package_not_release_ready', `Execution package ${executionPackage.id} is not release-ready.`, {
         type: 'execution_package',
         id: executionPackage.id,
@@ -194,7 +216,10 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
     }
 
     const selectedRunSession = runForReviewPacket(selectedReviewPacket, runSessions);
-    if (selectedRunSession?.check_results.some((check) => check.blocks_review && check.status !== 'succeeded') === true) {
+    if (
+      hasFailedOrMissingRequiredCheck(executionPackage, selectedRunSession) ||
+      selectedRunSession?.check_results.some((check) => check.blocks_review && check.status !== 'succeeded') === true
+    ) {
       blockers.push(blocker('failed_required_check', `Execution package ${executionPackage.id} has a failed required check.`, {
         type: 'execution_package',
         id: executionPackage.id,

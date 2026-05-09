@@ -97,6 +97,7 @@ export const releaseSchema = z
     work_item_ids: z.array(z.string().min(1)),
     execution_package_ids: z.array(z.string().min(1)),
     current_review_packet_ids: z.array(z.string().min(1)).optional(),
+    current_run_session_ids: z.array(z.string().min(1)).optional(),
     rollout_strategy: z.string().min(1).optional(),
     rollback_plan: z.string().min(1).optional(),
     observation_plan: z.string().min(1).optional(),
