@@ -10,6 +10,20 @@
 
 ---
 
+## Closure Status
+
+Updated: 2026-05-09
+
+This historical implementation plan was executed across later commits rather than by marking each checkbox in place. Current closure evidence lives in `docs/superpowers/reports/p0-p1-closure-report.md` and `docs/superpowers/reports/p0-dogfood-work-items-completion.md`.
+
+Status summary:
+
+- Shared Evidence Chain contracts, API, trace persistence, and Workbench UI are implemented and covered by tests.
+- Strict dogfood status is recorded in the dogfood completion report.
+- Release, Retrospective/Learning Loop, and broad Trace projector/backfill remain intentionally deferred.
+
+Do not infer open product scope from unchecked historical boxes below without checking the closure report and current tests.
+
 ## Source Documents
 
 - Spec: `docs/superpowers/specs/2026-05-08-p0-strict-and-trace-evidence-design.md`
