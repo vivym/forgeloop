@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createForgeloopApi, ForgeloopApiError } from '../../apps/web/src/api';
+import { createForgeloopCommandApi, createForgeloopQueryApi, ForgeloopApiError } from '../../apps/web/src/api';
 
 describe('Forgeloop web API client', () => {
   afterEach(() => {
@@ -16,7 +16,7 @@ describe('Forgeloop web API client', () => {
       }),
     );
 
-    const api = createForgeloopApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
     const result = await api.createWorkItem({
       project_id: 'project-1',
@@ -48,7 +48,7 @@ describe('Forgeloop web API client', () => {
 
   it('encodes query parameters and command request bodies', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify([]), { status: 200 }));
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await api.listWorkItems('project with spaces');
     await api.approveSpec('spec-1', { actor_id: 'actor-reviewer' });
@@ -86,7 +86,7 @@ describe('Forgeloop web API client', () => {
         { status: 200 },
       ),
     );
-    const api = createForgeloopApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
     const result = await api.getEvidenceChain('work item/1', 'review packet/1');
 
@@ -102,7 +102,7 @@ describe('Forgeloop web API client', () => {
 
   it('patches execution package content without sending repo_id', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'package-1' }), { status: 200 }));
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await api.patchExecutionPackage('package-1', {
       objective: 'Tighten package edit controls',
@@ -154,7 +154,7 @@ describe('Forgeloop web API client', () => {
         headers: { 'content-type': 'application/json' },
       }),
     );
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await expect(api.approveSpec('spec-1', {})).rejects.toMatchObject({
       name: 'ForgeloopApiError',
@@ -171,7 +171,7 @@ describe('Forgeloop web API client', () => {
       }
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await api.listRunEvents('run-1', { actorId: 'actor owner', after: '0000000001' });
     await api.sendRunInput('run-1', 'actor-owner', 'continue', 'turn-1');
@@ -205,7 +205,7 @@ describe('Forgeloop web API client', () => {
 
   it('includes explicit run event after cursors even for sentinel values', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ events: [], next_cursor: '0000000000', has_more: false }), { status: 200 }));
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await api.listRunEvents('run-1', { actorId: 'actor-owner', after: '0000000000' });
 
@@ -214,7 +214,7 @@ describe('Forgeloop web API client', () => {
 
   it('propagates actor ids as headers to package run commands while preserving required body actor fields', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await api.runPackage('package-1', { requested_by_actor_id: 'actor-owner', workflow_only: true });
 
@@ -227,7 +227,7 @@ describe('Forgeloop web API client', () => {
 
   it('rejects run event helpers before sending requests without an actor id', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await expect(api.listRunEvents('run-1', { actorId: '' })).rejects.toThrow('actorId is required');
     await expect(api.sendRunInput('run-1', '', 'continue')).rejects.toThrow('actorId is required');
@@ -254,7 +254,7 @@ describe('Forgeloop web API client', () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ token: 'stream-token-1', expires_at: '2026-05-08T00:00:00.000Z' }), { status: 201 }),
     );
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
     const onEvent = vi.fn();
     const onError = vi.fn();
 
@@ -292,7 +292,7 @@ describe('Forgeloop web API client', () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ token: 'stream-token-1', expires_at: '2026-05-08T00:00:00.000Z' }), { status: 201 }),
     );
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
     const onEvent = vi.fn();
     const onError = vi.fn();
 
@@ -313,7 +313,7 @@ describe('Forgeloop web API client', () => {
     }
     vi.stubGlobal('EventSource', MockEventSource);
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ token: 123 }), { status: 201 }));
-    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
     const onEvent = vi.fn();
     const onError = vi.fn();
 
@@ -323,5 +323,35 @@ describe('Forgeloop web API client', () => {
 
     expect(onEvent).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it('routes work item cockpit and replay reads through the query client', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    await queryApi.getWorkItemCockpit('work item/1');
+    await queryApi.getWorkItemReplay('work item/1');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/work-item-cockpit/work%20item%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/root/query/replay/work_item/work%20item%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  it('keeps command and query client method surfaces separate', () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    const commandApi = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    const commandMethods = Object.keys(commandApi);
+    expect(commandMethods).not.toContain('getCockpit');
+    expect(commandMethods).not.toContain('getTimeline');
+    expect(commandMethods).not.toContain('getWorkItemCockpit');
+    expect(commandMethods).not.toContain('getWorkItemReplay');
+    expect(Object.keys(queryApi).sort()).toEqual(['getWorkItemCockpit', 'getWorkItemReplay']);
   });
 });

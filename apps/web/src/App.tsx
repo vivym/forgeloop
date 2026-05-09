@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   api,
+  queryApi,
   type ActorCommandBody,
   type ArtifactKind,
   type ArtifactRef,
@@ -335,7 +336,10 @@ export function App() {
     const requestId = ++refreshRequestIdRef.current;
     await runAction('Workbench refreshed', async () => {
       const evidenceChainRequest = api.getEvidenceChain(workItemId).catch(() => null);
-      const [cockpitResponse, timelineResponse] = await Promise.all([api.getCockpit(workItemId), api.getTimeline(workItemId)]);
+      const [cockpitResponse, timelineResponse] = await Promise.all([
+        queryApi.getWorkItemCockpit(workItemId),
+        queryApi.getWorkItemReplay(workItemId),
+      ]);
       if (requestId !== refreshRequestIdRef.current || selectedWorkItemIdRef.current !== workItemId) return;
       const spec = cockpitResponse.current_spec;
       const plan = cockpitResponse.current_plan;

@@ -297,8 +297,8 @@ async function routeEvidenceWorkbench(page: Page, options: { failEvidenceChain?:
     const url = new URL(route.request().url());
     const path = url.pathname;
     if (path === '/work-items') return route.fulfill({ json: [workItem] });
-    if (path === '/work-items/work-item-1/cockpit') return route.fulfill({ json: cockpit });
-    if (path === '/work-items/work-item-1/timeline') return route.fulfill({ json: [] });
+    if (path === '/query/work-item-cockpit/work-item-1') return route.fulfill({ json: cockpit });
+    if (path === '/query/replay/work_item/work-item-1') return route.fulfill({ json: [] });
     if (path === '/work-items/work-item-1/evidence-chain') {
       return options.failEvidenceChain
         ? route.fulfill({ status: 503, json: { message: 'Evidence Chain unavailable' } })
