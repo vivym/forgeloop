@@ -14,6 +14,7 @@ import type {
 import {
   DomainError,
   deriveWorkItemCompletion,
+  executionPackageGateStates,
   transitionExecutionPackage,
   transitionReviewPacket,
   transitionRunSession,
@@ -23,6 +24,8 @@ import {
   type ReviewPacket,
   type RunSession,
   type WorkItem,
+  workItemKinds,
+  workItemPhases,
 } from '../../packages/domain/src/index';
 
 const expectDomainError = (fn: () => unknown, code: string) => {
@@ -38,6 +41,23 @@ const expectDomainError = (fn: () => unknown, code: string) => {
 };
 
 describe('domain state transitions', () => {
+  it('exports normalized work item and execution package state values', () => {
+    expect(workItemKinds).toEqual(['requirement', 'bug', 'tech_debt']);
+    expect(workItemPhases).toEqual([
+      'draft',
+      'triage',
+      'spec',
+      'plan',
+      'execution',
+      'release',
+      'observing',
+      'done',
+      'closed',
+    ]);
+    expect(executionPackageGateStates).toContain('release_ready');
+    expect(executionPackageGateStates).not.toContain('none');
+  });
+
   describe('WorkItem', () => {
     const requiredCheck = {
       check_id: 'domain-tests',
@@ -60,9 +80,9 @@ describe('domain state transitions', () => {
       owner_actor_id: 'actor-owner',
       reviewer_actor_id: 'actor-reviewer',
       qa_owner_actor_id: 'actor-qa',
-      phase: 'review',
+      phase: 'release',
       activity_state: 'idle',
-      gate_state: 'review_approved',
+      gate_state: 'release_ready',
       resolution: 'completed',
       required_checks: [requiredCheck],
       required_artifact_kinds: ['execution_summary', 'diff'],
@@ -161,7 +181,7 @@ describe('domain state transitions', () => {
         type: 'create',
         id: 'work-item-1',
         project_id: 'project-1',
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Ship domain rules',
         goal: 'Ship the P0 domain state machine.',
         success_criteria: ['Spec, plan, execution, and review gates are enforced.'],
@@ -219,7 +239,7 @@ describe('domain state transitions', () => {
         type: 'create',
         id: 'work-item-2',
         project_id: 'project-1',
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Handle review loops',
         goal: 'Support changes-requested review loops.',
         success_criteria: ['Spec and plan gates can be resubmitted after requested changes.'],
@@ -260,7 +280,7 @@ describe('domain state transitions', () => {
       const triage: WorkItem = {
         id: 'work-item-3',
         project_id: 'project-1',
-        kind: 'bugfix',
+        kind: 'bug',
         title: 'Triaged item',
         goal: 'Move a triaged item into spec review.',
         success_criteria: ['Triage items can submit a spec.'],
@@ -286,7 +306,7 @@ describe('domain state transitions', () => {
         type: 'create',
         id: 'work-item-4',
         project_id: 'project-1',
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Invalid plan approval',
         goal: 'Reject invalid plan approval.',
         success_criteria: ['Draft work items cannot approve a plan.'],
@@ -302,7 +322,7 @@ describe('domain state transitions', () => {
       const item: WorkItem = {
         id: 'work-item-1',
         project_id: 'project-1',
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Incomplete execution',
         goal: 'Block incomplete execution.',
         success_criteria: ['Completion requires derived evidence.'],
@@ -325,7 +345,7 @@ describe('domain state transitions', () => {
       const item: WorkItem = {
         id: 'work-item-1',
         project_id: 'project-1',
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Blind completion',
         goal: 'Block blind completion.',
         success_criteria: ['Completion cannot proceed without derived evidence.'],
@@ -663,9 +683,9 @@ describe('domain state transitions', () => {
       const review = createReviewPackage();
 
       expect(transitionExecutionPackage(review, { type: 'review_approved' })).toMatchObject({
-        phase: 'review',
+        phase: 'release',
         activity_state: 'idle',
-        gate_state: 'review_approved',
+        gate_state: 'release_ready',
         resolution: 'completed',
       });
 

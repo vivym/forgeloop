@@ -83,7 +83,7 @@ const packageBase = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackag
 const workItem: WorkItem = {
   id: 'work-item-1',
   project_id: 'project-1',
-  kind: 'feature',
+  kind: 'requirement',
   title: 'Domain rules',
   goal: 'Enforce domain state rules.',
   success_criteria: ['Completion and review validators reflect the P0 domain spec.'],
@@ -308,9 +308,9 @@ describe('domain validators', () => {
     'rejects force-rerun for a completed package even with an open %s review packet',
     (status) => {
       const completedPackage = packageBase({
-        phase: 'review',
+        phase: 'release',
         activity_state: 'idle',
-        gate_state: 'review_approved',
+        gate_state: 'release_ready',
         resolution: 'completed',
         last_run_session_id: 'run-session-1',
       });
@@ -370,9 +370,9 @@ describe('domain validators', () => {
 
   it('rejects force-rerun for a completed package even with an invalid open review tuple', () => {
     const completedPackage = packageBase({
-      phase: 'review',
+      phase: 'release',
       activity_state: 'idle',
-      gate_state: 'review_approved',
+      gate_state: 'release_ready',
       resolution: 'completed',
       last_run_session_id: 'run-session-1',
     });

@@ -1,6 +1,9 @@
 import {
   DomainError,
   type ExecutionPackage,
+  type Release,
+  type ReleaseBlocker,
+  type ReleaseDecisionIntent,
   type ReviewPacket,
   type RunSession,
   type SpecPlan,
@@ -20,6 +23,7 @@ import type {
   SelfReviewResult,
 } from '@forgeloop/contracts';
 import type { WorkItemCompletion } from './completion.js';
+import { isReleaseBlockerOverrideable } from './release-gates.js';
 
 const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
 
@@ -207,6 +211,51 @@ export type ReviewPacketTransition =
       reviewed_at: string;
       requested_changes: RequestedChange[];
     });
+
+export type ReleaseTransition =
+  | (Timestamped & {
+      type: 'create';
+      id: string;
+      org_id: string;
+      project_id: string;
+      title: string;
+      created_by_actor_id: string;
+    })
+  | (Timestamped & {
+      type: 'link_work_item';
+      work_item_id: string;
+    })
+  | (Timestamped & {
+      type: 'link_execution_package';
+      execution_package_id: string;
+    })
+  | (Timestamped & {
+      type: 'submit';
+      blockers: readonly ReleaseBlocker[];
+    })
+  | (Timestamped & {
+      type: 'approve';
+      approved_by_actor_id: string;
+      blockers: readonly ReleaseBlocker[];
+    })
+  | (Timestamped & {
+      type: 'override_approve';
+      approved_by_actor_id: string;
+      reason: string;
+      blockers: readonly ReleaseBlocker[];
+    })
+  | (Timestamped & {
+      type: 'start_observing';
+    })
+  | (Timestamped & {
+      type: 'close';
+      resolution: 'completed' | 'rolled_back' | 'cancelled';
+    });
+
+export interface ReleaseTransitionResult {
+  release: Release;
+  decision_intents: ReleaseDecisionIntent[];
+}
 
 const timestampFor = (event: Timestamped) => event.at ?? DEFAULT_TIMESTAMP;
 
@@ -614,7 +663,7 @@ export const transitionExecutionPackage = (
           ...executionPackage,
           phase: 'queued',
           activity_state: 'awaiting_ai',
-          gate_state: 'none',
+          gate_state: 'not_submitted',
           resolution: 'none',
           last_run_session_id: event.run_session_id,
           updated_at: at,
@@ -627,7 +676,7 @@ export const transitionExecutionPackage = (
           ...executionPackage,
           phase: 'queued',
           activity_state: 'awaiting_ai',
-          gate_state: 'none',
+          gate_state: 'not_submitted',
           resolution: 'none',
           last_run_session_id: event.run_session_id,
           updated_at: at,
@@ -645,7 +694,7 @@ export const transitionExecutionPackage = (
           ...executionPackage,
           phase: 'ready',
           activity_state: 'idle',
-          gate_state: 'none',
+          gate_state: 'not_submitted',
           last_failure_summary: event.failure_summary,
           updated_at: at,
         };
@@ -679,7 +728,7 @@ export const transitionExecutionPackage = (
           ...executionPackage,
           phase: 'ready',
           activity_state: 'idle',
-          gate_state: 'none',
+          gate_state: 'not_submitted',
           last_failure_summary: event.failure_summary,
           updated_at: at,
         };
@@ -689,8 +738,9 @@ export const transitionExecutionPackage = (
       if (isAwaitingHumanReview) {
         return {
           ...executionPackage,
+          phase: 'release',
           activity_state: 'idle',
-          gate_state: 'review_approved',
+          gate_state: 'release_ready',
           resolution: 'completed',
           updated_at: at,
         };
@@ -715,6 +765,199 @@ export const transitionExecutionPackage = (
     `${executionPackage.phase}/${executionPackage.activity_state}/${executionPackage.gate_state}`,
     event.type,
   );
+};
+
+const releaseResult = (release: Release, decisionIntents: ReleaseDecisionIntent[] = []): ReleaseTransitionResult => ({
+  release,
+  decision_intents: decisionIntents,
+});
+
+const hasBlockingReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolean => blockers.length > 0;
+
+const hasNonOverrideableReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolean =>
+  blockers.some((blocker) => !isReleaseBlockerOverrideable(blocker.code) || !blocker.overrideable);
+
+export const transitionRelease = (
+  release: Release | undefined,
+  event: ReleaseTransition,
+): ReleaseTransitionResult => {
+  const at = timestampFor(event);
+
+  if (release === undefined) {
+    if (event.type !== 'create') {
+      return invalidTransition('Release', 'none', event.type);
+    }
+
+    return releaseResult({
+      id: event.id,
+      org_id: event.org_id,
+      project_id: event.project_id,
+      title: event.title,
+      phase: 'draft',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      work_item_ids: [],
+      execution_package_ids: [],
+      created_by_actor_id: event.created_by_actor_id,
+      created_at: at,
+      updated_at: at,
+    });
+  }
+
+  if (event.type === 'create') {
+    return invalidTransition('Release', release.phase, event.type);
+  }
+
+  switch (event.type) {
+    case 'link_work_item': {
+      if (release.phase !== 'draft' && release.phase !== 'candidate') {
+        break;
+      }
+      const workItemIds = release.work_item_ids.includes(event.work_item_id)
+        ? release.work_item_ids
+        : [...release.work_item_ids, event.work_item_id];
+      return releaseResult({
+        ...release,
+        phase: 'candidate',
+        activity_state: 'idle',
+        gate_state: 'not_submitted',
+        resolution: 'none',
+        work_item_ids: workItemIds,
+        updated_at: at,
+      });
+    }
+    case 'link_execution_package': {
+      if (release.phase !== 'draft' && release.phase !== 'candidate') {
+        break;
+      }
+      const executionPackageIds = release.execution_package_ids.includes(event.execution_package_id)
+        ? release.execution_package_ids
+        : [...release.execution_package_ids, event.execution_package_id];
+      return releaseResult({
+        ...release,
+        phase: 'candidate',
+        activity_state: 'idle',
+        gate_state: 'not_submitted',
+        resolution: 'none',
+        execution_package_ids: executionPackageIds,
+        updated_at: at,
+      });
+    }
+    case 'submit':
+      if (release.phase === 'candidate' && !hasBlockingReleaseBlockers(event.blockers)) {
+        return releaseResult({
+          ...release,
+          phase: 'approval',
+          activity_state: 'awaiting_human',
+          gate_state: 'awaiting_approval',
+          resolution: 'none',
+          updated_at: at,
+        });
+      }
+      break;
+    case 'approve':
+      if (
+        release.phase === 'approval' &&
+        release.gate_state === 'awaiting_approval' &&
+        !hasBlockingReleaseBlockers(event.blockers)
+      ) {
+        return releaseResult(
+          {
+            ...release,
+            phase: 'rollout',
+            activity_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'none',
+            updated_at: at,
+          },
+          [
+            {
+              object_type: 'release',
+              object_id: release.id,
+              actor_id: event.approved_by_actor_id,
+              decision_type: 'release_approval',
+              outcome: 'approved',
+            },
+          ],
+        );
+      }
+      break;
+    case 'override_approve':
+      if (
+        release.phase === 'approval' &&
+        release.gate_state === 'awaiting_approval' &&
+        !hasNonOverrideableReleaseBlockers(event.blockers)
+      ) {
+        const intentBase = {
+          object_type: 'release' as const,
+          object_id: release.id,
+          actor_id: event.approved_by_actor_id,
+          outcome: 'override_approved' as const,
+          reason: event.reason,
+        };
+        return releaseResult(
+          {
+            ...release,
+            phase: 'rollout',
+            activity_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'none',
+            updated_at: at,
+          },
+          [
+            {
+              ...intentBase,
+              decision_type: 'manual_override',
+            },
+            {
+              ...intentBase,
+              decision_type: 'release_approval',
+            },
+          ],
+        );
+      }
+      break;
+    case 'start_observing':
+      if (release.phase === 'rollout' && release.gate_state === 'approved') {
+        return releaseResult({
+          ...release,
+          phase: 'observing',
+          activity_state: 'idle',
+          gate_state: 'rollout_succeeded',
+          resolution: 'none',
+          updated_at: at,
+        });
+      }
+      break;
+    case 'close':
+      if (event.resolution === 'completed' && release.phase === 'observing' && release.gate_state === 'rollout_succeeded') {
+        return releaseResult({
+          ...release,
+          phase: 'completed',
+          activity_state: 'idle',
+          resolution: 'completed',
+          closed_at: at,
+          updated_at: at,
+        });
+      }
+      if (
+        (event.resolution === 'rolled_back' || event.resolution === 'cancelled') &&
+        (release.phase === 'rollout' || release.phase === 'observing')
+      ) {
+        return releaseResult({
+          ...release,
+          phase: 'closed',
+          activity_state: 'idle',
+          resolution: event.resolution,
+          closed_at: at,
+          updated_at: at,
+        });
+      }
+      break;
+  }
+
+  return invalidTransition('Release', `${release.phase}/${release.activity_state}/${release.gate_state}`, event.type);
 };
 
 export const transitionRunSession = (runSession: RunSession | undefined, event: RunSessionTransition): RunSession => {

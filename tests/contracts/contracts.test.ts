@@ -4,15 +4,24 @@ import {
   changedFileSchema,
   checkResultSchema,
   commandInventoryResponseSchema,
+  closeReleaseRequestSchema,
+  createReleaseEvidenceRequestSchema,
+  createReleaseRequestSchema,
   evidenceChainResponseSchema,
   executorResultSchema,
   failureKindSchema,
   approveReviewPacketRequestSchema,
+  linkReleaseObjectResponseSchema,
+  overrideApproveReleaseRequestSchema,
+  patchReleaseRequestSchema,
+  releaseActorCommandRequestSchema,
+  releaseControlResponseSchema,
   forceRerunPackageRequestSchema,
   forceRerunPackageResponseSchema,
   requestReviewChangesRequestSchema,
   rerunPackageRequestSchema,
   rerunPackageResponseSchema,
+  reviewPacketDecisions,
   reviewDecisionPayloadSchema,
   runPackageRequestSchema,
   runPackageResponseSchema,
@@ -22,6 +31,16 @@ import {
 } from '@forgeloop/contracts';
 
 describe('P0 delivery loop contracts', () => {
+  it('exports normalized review packet decisions', () => {
+    expect(reviewPacketDecisions).toEqual([
+      'none',
+      'approved',
+      'changes_requested',
+      'need_more_context',
+      'escalate',
+    ]);
+  });
+
   const validArtifactRef = {
     kind: 'execution_summary',
     name: 'summary',
@@ -161,6 +180,107 @@ describe('P0 delivery loop contracts', () => {
     timeout_seconds: 300,
     idempotency_key: 'exec-package-1:run-session-1:748c32b',
   };
+
+  it('parses release request and response DTOs', () => {
+    expect(
+      createReleaseRequestSchema.parse({
+        project_id: 'project-1',
+        title: 'P1 release',
+        created_by_actor_id: 'actor-owner',
+        work_item_ids: ['work-item-1'],
+        execution_package_ids: ['package-1'],
+      }).work_item_ids,
+    ).toEqual(['work-item-1']);
+
+    expect(
+      patchReleaseRequestSchema.parse({
+        title: 'P1 release candidate',
+        rollout_strategy: 'Deploy behind a flag.',
+        rollback_plan: 'Disable the flag.',
+        observation_plan: 'Watch error rate.',
+      }).title,
+    ).toBe('P1 release candidate');
+
+    const control = releaseControlResponseSchema.parse({
+      release: {
+        id: 'release-1',
+        org_id: 'org-1',
+        project_id: 'project-1',
+        title: 'P1 release',
+        phase: 'approval',
+        activity_state: 'awaiting_human',
+        gate_state: 'awaiting_approval',
+        resolution: 'none',
+        work_item_ids: ['work-item-1'],
+        execution_package_ids: ['package-1'],
+        created_by_actor_id: 'actor-owner',
+        created_at: '2026-05-05T00:00:00.000Z',
+        updated_at: '2026-05-05T00:00:00.000Z',
+      },
+      blockers: [
+        {
+          code: 'missing_rollout_strategy',
+          category: 'planning',
+          overrideable: true,
+          message: 'Release is missing a rollout strategy.',
+        },
+      ],
+      decision_intents: [],
+    });
+
+    expect(control.release.gate_state).toBe('awaiting_approval');
+    expect(control.blockers[0]?.code).toBe('missing_rollout_strategy');
+
+    expect(
+      linkReleaseObjectResponseSchema.parse({
+        release_id: 'release-1',
+        object_type: 'work_item',
+        object_id: 'work-item-1',
+        linked: true,
+      }).linked,
+    ).toBe(true);
+  });
+
+  it('parses release command DTOs', () => {
+    expect(
+      releaseActorCommandRequestSchema.parse({
+        actor_id: 'actor-release-manager',
+        idempotency_key: 'release-1:submit',
+      }).actor_id,
+    ).toBe('actor-release-manager');
+
+    expect(
+      overrideApproveReleaseRequestSchema.parse({
+        actor_id: 'actor-release-manager',
+        reason: 'Reviewed risk manually.',
+        accepted_blocker_codes: ['stale_or_superseded_evidence'],
+      }).accepted_blocker_codes,
+    ).toEqual(['stale_or_superseded_evidence']);
+
+    expect(
+      closeReleaseRequestSchema.parse({
+        actor_id: 'actor-release-manager',
+        resolution: 'rolled_back',
+        summary: 'Rolled back after rollout failed.',
+      }).resolution,
+    ).toBe('rolled_back');
+  });
+
+  it('parses release evidence DTOs', () => {
+    const parsed = createReleaseEvidenceRequestSchema.parse({
+      evidence_type: 'review_packet',
+      summary: 'Approved review packet.',
+      object_ref: {
+        object_type: 'review_packet',
+        object_id: 'review-packet-1',
+        relationship: 'supports',
+      },
+      redacted: false,
+      status: 'current',
+    });
+
+    expect(parsed.object_ref.relationship).toBe('supports');
+  });
 
   it('parses a valid run spec', () => {
     const parsed = runSpecSchema.parse(validRunSpec);

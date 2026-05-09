@@ -7,7 +7,8 @@ const isoDateTimeSchema = z.string().datetime();
 export const reviewPacketStatusSchema = z.enum(['ready', 'in_review', 'completed', 'archived']);
 export type ReviewPacketStatus = z.infer<typeof reviewPacketStatusSchema>;
 
-export const reviewDecisionSchema = z.enum(['none', 'approved', 'changes_requested']);
+export const reviewPacketDecisions = ['none', 'approved', 'changes_requested', 'need_more_context', 'escalate'] as const;
+export const reviewDecisionSchema = z.enum(reviewPacketDecisions);
 export type ReviewDecision = z.infer<typeof reviewDecisionSchema>;
 
 export const reviewSubmitDecisionSchema = z.enum(['approved', 'changes_requested']);

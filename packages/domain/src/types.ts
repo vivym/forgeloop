@@ -70,9 +70,23 @@ export interface ProjectRepo {
   updated_at: IsoDateTime;
 }
 
-export type WorkItemPhase = 'draft' | 'triage' | 'spec' | 'plan' | 'execution' | 'done';
-export type WorkItemKind = 'feature' | 'bugfix' | 'tech_debt' | 'test_refactor';
-export type WorkItemActivityState = 'idle';
+export const workItemKinds = ['requirement', 'bug', 'tech_debt'] as const;
+export type WorkItemKind = (typeof workItemKinds)[number];
+
+export const workItemPhases = [
+  'draft',
+  'triage',
+  'spec',
+  'plan',
+  'execution',
+  'release',
+  'observing',
+  'done',
+  'closed',
+] as const;
+export type WorkItemPhase = (typeof workItemPhases)[number];
+
+export type WorkItemActivityState = 'idle' | 'awaiting_ai';
 export type WorkItemGateState =
   | 'none'
   | 'awaiting_spec_approval'
@@ -97,6 +111,9 @@ export interface WorkItem {
   resolution: WorkItemResolution;
   current_spec_id?: string;
   current_plan_id?: string;
+  archived_at?: IsoDateTime;
+  deleted_at?: IsoDateTime;
+  authorized?: boolean;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -169,14 +186,32 @@ export interface PlanRevision {
   created_at: IsoDateTime;
 }
 
-export type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review';
-export type ExecutionPackageActivityState = 'idle' | 'awaiting_ai' | 'ai_running' | 'blocked' | 'awaiting_human';
-export type ExecutionPackageGateState =
-  | 'none'
-  | 'not_submitted'
-  | 'awaiting_human_review'
-  | 'review_approved'
-  | 'changes_requested';
+export const executionPackagePhases = [
+  'draft',
+  'ready',
+  'queued',
+  'execution',
+  'review',
+  'integration',
+  'test_gate',
+  'release',
+  'archived',
+] as const;
+export type ExecutionPackagePhase = (typeof executionPackagePhases)[number];
+
+export const executionPackageActivityStates = ['idle', 'awaiting_ai', 'ai_running', 'blocked', 'awaiting_human'] as const;
+export type ExecutionPackageActivityState = (typeof executionPackageActivityStates)[number];
+
+export const executionPackageGateStates = [
+  'not_submitted',
+  'awaiting_human_review',
+  'review_approved',
+  'changes_requested',
+  'release_ready',
+  'released',
+] as const;
+export type ExecutionPackageGateState = (typeof executionPackageGateStates)[number];
+
 export type ExecutionPackageResolution = 'none' | 'completed';
 
 export interface ExecutionPackage {
@@ -203,6 +238,9 @@ export interface ExecutionPackage {
   last_run_session_id?: string;
   last_failure_summary?: string;
   blocked_reason?: string;
+  archived_at?: IsoDateTime;
+  deleted_at?: IsoDateTime;
+  authorized?: boolean;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -326,7 +364,8 @@ export interface RunWorkerLease {
 }
 
 export type ReviewPacketStatus = 'ready' | 'in_review' | 'completed' | 'archived';
-export type ReviewPacketDecision = 'none' | 'approved' | 'changes_requested';
+export const reviewPacketDecisions = ['none', 'approved', 'changes_requested', 'need_more_context', 'escalate'] as const;
+export type ReviewPacketDecision = (typeof reviewPacketDecisions)[number];
 
 export interface ReviewPacket {
   id: string;
@@ -386,7 +425,148 @@ export interface Decision {
   object_type: string;
   object_id: string;
   actor_id: string;
-  decision: 'approved' | 'changes_requested';
+  decision: 'approved' | 'changes_requested' | 'need_more_context' | 'escalate' | 'override_approved';
   summary: string;
   created_at: IsoDateTime;
+}
+
+export interface Organization {
+  id: string;
+  name: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface Actor {
+  id: string;
+  org_id: string;
+  display_name: string;
+  actor_type: 'human' | 'system' | 'ai';
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export const releasePhases = ['draft', 'candidate', 'approval', 'rollout', 'observing', 'completed', 'closed'] as const;
+export type ReleasePhase = (typeof releasePhases)[number];
+
+export const releaseActivityStates = [
+  'idle',
+  'awaiting_human',
+  'human_in_progress',
+  'rolling_out',
+  'paused',
+  'blocked',
+] as const;
+export type ReleaseActivityState = (typeof releaseActivityStates)[number];
+
+export const releaseGateStates = [
+  'not_submitted',
+  'awaiting_approval',
+  'changes_requested',
+  'approved',
+  'rollout_failed',
+  'rollout_succeeded',
+] as const;
+export type ReleaseGateState = (typeof releaseGateStates)[number];
+
+export const releaseResolutions = ['none', 'completed', 'rolled_back', 'cancelled'] as const;
+export type ReleaseResolution = (typeof releaseResolutions)[number];
+
+export const releaseEvidenceTypes = [
+  'test_report',
+  'review_packet',
+  'build',
+  'deployment',
+  'metric_snapshot',
+  'rollback_record',
+  'observation_note',
+] as const;
+export type ReleaseEvidenceType = (typeof releaseEvidenceTypes)[number];
+
+export const releaseEvidenceObjectTypes = [
+  'work_item',
+  'execution_package',
+  'run_session',
+  'review_packet',
+  'artifact',
+  'decision',
+] as const;
+export type ReleaseEvidenceObjectType = (typeof releaseEvidenceObjectTypes)[number];
+
+export const releaseEvidenceRelationships = ['supports', 'generated_by', 'observed', 'blocks', 'rollback_of'] as const;
+export type ReleaseEvidenceRelationship = (typeof releaseEvidenceRelationships)[number];
+
+export interface ReleaseEvidenceObjectRef {
+  object_type: ReleaseEvidenceObjectType;
+  object_id: string;
+  relationship: ReleaseEvidenceRelationship;
+}
+
+export interface ReleaseEvidence {
+  id: string;
+  release_id: string;
+  evidence_type: ReleaseEvidenceType;
+  summary: string;
+  object_ref: ReleaseEvidenceObjectRef;
+  redacted: boolean;
+  status: 'current' | 'stale' | 'superseded';
+  created_at: IsoDateTime;
+}
+
+export interface Release {
+  id: string;
+  org_id: string;
+  project_id: string;
+  title: string;
+  phase: ReleasePhase;
+  activity_state: ReleaseActivityState;
+  gate_state: ReleaseGateState;
+  resolution: ReleaseResolution;
+  work_item_ids: string[];
+  execution_package_ids: string[];
+  current_review_packet_ids?: string[];
+  rollout_strategy?: string;
+  rollback_plan?: string;
+  observation_plan?: string;
+  created_by_actor_id: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  closed_at?: IsoDateTime;
+}
+
+export const releaseBlockerCodes = [
+  'missing_work_item',
+  'missing_execution_package',
+  'empty_release_scope',
+  'work_item_not_complete',
+  'package_not_release_ready',
+  'missing_approved_review_packet',
+  'failed_required_check',
+  'missing_required_artifact',
+  'evidence_redacted',
+  'stale_or_superseded_evidence',
+  'missing_rollout_strategy',
+  'missing_rollback_plan',
+  'missing_observation_plan',
+] as const;
+export type ReleaseBlockerCode = (typeof releaseBlockerCodes)[number];
+
+export type ReleaseBlockerCategory = 'structural' | 'risk' | 'evidence' | 'planning';
+
+export interface ReleaseBlocker {
+  code: ReleaseBlockerCode;
+  category: ReleaseBlockerCategory;
+  overrideable: boolean;
+  message: string;
+  object_type?: string;
+  object_id?: string;
+}
+
+export interface ReleaseDecisionIntent {
+  object_type: 'release';
+  object_id: string;
+  actor_id: string;
+  decision_type: 'manual_override' | 'release_approval';
+  outcome: 'approved' | 'override_approved';
+  reason?: string;
 }
