@@ -11,6 +11,7 @@
     "dev:executor": "pnpm --filter @forgeloop/executor-gateway start:dev",
     "dev:worker": "pnpm --filter @forgeloop/workflow-worker start:dev",
     "dev:web": "pnpm --filter @forgeloop/web dev",
+    "tail:run-events": "tsx --tsconfig tsconfig.node.json scripts/tail-run-events.ts",
     "db:push": "drizzle-kit push --config packages/db/drizzle.config.ts",
     "e2e:run-console": "vitest run tests/e2e/run-console.e2e.test.ts",
     "smoke:p0": "vitest run tests/smoke",

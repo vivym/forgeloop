@@ -4,6 +4,7 @@ import {
   appendRunEvents,
   latestContinuationNotice,
   latestPlanStep,
+  renderableRunEvents,
   runArtifactDisplayLabel,
   runArtifactsForDetail,
   workerLeaseLabel,
@@ -23,6 +24,21 @@ describe('run console state', () => {
 
     expect(events.map((event) => event.id)).toEqual(['event-1', 'event-2']);
     expect(nextRunEventCursor(events)).toBe('0000000002');
+  });
+
+  it('replaces an overlapping run event when the cursor matches but the id changes', () => {
+    const events = appendRunEvents(
+      [{ id: 'event-old-id', sequence: 1, cursor: '0000000001', summary: 'old' }],
+      [
+        { id: 'event-new-id', sequence: 1, cursor: '0000000001', summary: 'replayed' },
+        { id: 'event-2', sequence: 2, cursor: '0000000002', summary: 'next' },
+      ],
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({ id: 'event-new-id', cursor: '0000000001', summary: 'replayed' }),
+      expect.objectContaining({ id: 'event-2', cursor: '0000000002', summary: 'next' }),
+    ]);
   });
 
   it('detects fallback continuation mode for UI labeling', () => {
@@ -151,5 +167,16 @@ describe('run console state', () => {
     ]);
 
     expect(latestPlanStep(events)).toBe('Implement console');
+  });
+
+  it('uses the shared classifier for default run console timeline events', () => {
+    const events = renderableRunEvents([
+      { id: 'event-1', sequence: 1, event_type: 'watchdog_heartbeat', visibility: 'public' },
+      { id: 'event-2', sequence: 2, event_type: 'worker_lease_acquired', visibility: 'public' },
+      { id: 'event-3', sequence: 3, event_type: 'user_input', visibility: 'public' },
+      { id: 'event-4', sequence: 4, event_type: 'agent_message_delta', visibility: 'internal' },
+    ]);
+
+    expect(events.map((event) => event.id)).toEqual(['event-3']);
   });
 });

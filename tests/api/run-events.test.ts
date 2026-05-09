@@ -129,6 +129,43 @@ describe('run event API', () => {
     });
   });
 
+  it('bridges an empty backfill to live SSE with the returned next cursor', async () => {
+    const { app, repo, runSessionId } = await track(seedAppWithEmptyRunSession());
+    await new Promise<void>((resolve) => app.getHttpServer().listen(0, '127.0.0.1', resolve));
+
+    const backfill = await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events`)
+      .query({ actor_id: 'actor-owner' })
+      .expect(200);
+
+    expect(backfill.body).toMatchObject({
+      events: [],
+      next_cursor: '0000000000',
+      has_more: false,
+    });
+
+    const sseBody = await expectSseFirstEvent(
+      app,
+      `/run-sessions/${runSessionId}/events/stream?actor_id=actor-owner&after=${encodeURIComponent(backfill.body.next_cursor as string)}`,
+      {},
+      async () => {
+        await repo.appendRunEvent({
+          id: 'run-event-empty-backfill-live',
+          run_session_id: runSessionId,
+          event_type: 'agent_message_delta',
+          source: 'codex',
+          visibility: 'public',
+          summary: 'First live event.',
+          payload: { text: 'first' },
+          created_at: '2026-05-07T00:00:04.000Z',
+        });
+      },
+    );
+
+    expect(sseBody).toContain('First live event.');
+    expect(sseBody).toContain('agent_message_delta');
+  });
+
   it('omits internal events from public backfill', async () => {
     const { app, runSessionId, repo } = await track(seedAppWithRunSession());
     await repo.appendRunEvent({

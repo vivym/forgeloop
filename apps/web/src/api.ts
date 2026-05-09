@@ -390,8 +390,8 @@ const actorHeader = (actorId?: string) =>
 
 const runEventsQuery = (options: { after?: string; streamToken?: string }) => {
   const params = new URLSearchParams();
-  if (options.streamToken) params.set('stream_token', options.streamToken);
-  if (options.after) params.set('after', options.after);
+  if (options.streamToken !== undefined) params.set('stream_token', options.streamToken);
+  if (options.after !== undefined) params.set('after', options.after);
   return params.toString();
 };
 
@@ -509,7 +509,9 @@ export function createForgeloopApi(options: ForgeloopApiOptions = {}) {
     getRunSession: (runSessionId: string) => request<RunSession>(`/run-sessions/${encodeURIComponent(runSessionId)}`),
     listRunEvents: async (runSessionId: string, options: { after?: string; actorId: string }) =>
       request<RunEventListResponse>(
-        `/run-sessions/${encodeURIComponent(runSessionId)}/events${options.after ? `?${runEventsQuery({ after: options.after })}` : ''}`,
+        `/run-sessions/${encodeURIComponent(runSessionId)}/events${
+          options.after === undefined ? '' : `?${runEventsQuery({ after: options.after })}`
+        }`,
         { actorId: options.actorId },
       ),
     sendRunInput: async (runSessionId: string, actorId: string, message: string, targetTurnId?: string) =>

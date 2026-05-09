@@ -76,10 +76,12 @@ describe('run console browser e2e', () => {
       const console = page.getByTestId('run-console');
       await expectVisibleText(console, 'run_queued');
 
+      const backfillCursor = await latestBackfillCursor(app, runSessionId);
       const initialCursor = await latestRenderedCursor(page);
       expectValue(initialCursor).toMatch(/^\d{10}$/);
 
-      await streamOpened;
+      const streamResponse = await streamOpened;
+      expectValue(streamResponse.url()).toContain(`after=${encodeURIComponent(backfillCursor)}`);
       const navigationCountAfterStreamOpen = mainFrameNavigationCount;
       const reloadSentinel = await installReloadSentinel(page);
 
@@ -90,7 +92,9 @@ describe('run console browser e2e', () => {
         .expect(201);
 
       const liveCursor = await latestApiCursor(app, runSessionId);
-      await expectPage(page.locator(`[data-event-cursor="${liveCursor}"]`)).toBeVisible();
+      const liveEventRow = page.locator(`[data-event-cursor="${liveCursor}"]`);
+      await expectPage(liveEventRow).toBeVisible();
+      await expectPage(liveEventRow).toHaveCount(1);
       expectValue(mainFrameNavigationCount).toBe(navigationCountAfterStreamOpen);
       expectValue(await reloadSentinelIsPresent(page, reloadSentinel)).toBe(true);
       expectValue(page.url()).toBe(webUrl);
@@ -466,6 +470,16 @@ async function latestApiCursor(app: INestApplication, runSessionId: string): Pro
     .expect(200);
   const cursor = response.body.events.at(-1)?.cursor;
   if (typeof cursor !== 'string') throw new Error('API did not return a latest run event cursor');
+  return cursor;
+}
+
+async function latestBackfillCursor(app: INestApplication, runSessionId: string): Promise<string> {
+  const response = await request(app.getHttpServer())
+    .get(`/run-sessions/${runSessionId}/events`)
+    .set('X-Forgeloop-Actor-Id', actorOwner)
+    .expect(200);
+  const cursor = response.body.next_cursor;
+  if (typeof cursor !== 'string') throw new Error('API did not return a backfill run event cursor');
   return cursor;
 }
 

@@ -36,7 +36,7 @@ import {
   isActiveCockpit,
   latestContinuationNotice,
   latestPlanStep,
-  nextRunEventCursor,
+  renderableRunEvents,
   runArtifactDisplayLabel,
   runArtifactsForDetail,
   visibleRunArtifacts,
@@ -209,11 +209,7 @@ export function App() {
 
     let stopped = false;
     const mergeRunEvents = (incoming: RunEvent[]) => {
-      setRunEvents((current) => {
-        const next = appendRunEvents(current, incoming);
-        runEventCursorRef.current = nextRunEventCursor(next);
-        return next;
-      });
+      setRunEvents((current) => appendRunEvents(current, incoming));
     };
     const closeStream = () => {
       runStreamRef.current?.close();
@@ -243,6 +239,7 @@ export function App() {
               setRunStreamStatus('live');
               setRunConsoleError('');
               mergeRunEvents([event]);
+              runEventCursorRef.current = event.cursor ?? runEventCursorRef.current;
             },
             onError: () => {
               scheduleReconnect();
@@ -267,7 +264,8 @@ export function App() {
         const response = await api.listRunEvents(activeSelectedRunId, { actorId: selectedRunActorId });
         if (stopped) return;
         mergeRunEvents(response.events);
-        void openStream(nextRunEventCursor(response.events));
+        runEventCursorRef.current = response.next_cursor;
+        void openStream(response.next_cursor);
       } catch (cause) {
         if (stopped) return;
         setRunStreamStatus('blocked');
@@ -862,7 +860,7 @@ function RunConsole({
   const activeTurnId = latestActiveTurnId(run, events);
   const threadId = metadata?.codex_thread_id ?? latestPayloadString(events, ['thread_id']);
   const lastEventAt = events.at(-1)?.created_at ?? metadata?.last_event_at ?? run?.updated_at;
-  const displayEvents = events.filter((event) => event.event_type !== 'watchdog_heartbeat');
+  const displayEvents = renderableRunEvents(events);
 
   return (
     <div className="run-console" data-testid="run-console">
@@ -886,7 +884,7 @@ function RunConsole({
       {continuationNotice && <div className="run-console-notice">{continuationNotice}</div>}
       {error && <div className="run-console-error">{error}</div>}
       <div className="run-event-list" data-testid="run-console-events">
-        {displayEvents.length === 0 && <EmptyState text={events.length === 0 ? 'No run events loaded' : 'Only heartbeat events received'} />}
+        {displayEvents.length === 0 && <EmptyState text={events.length === 0 ? 'No run events loaded' : 'No visible run events yet'} />}
         {displayEvents.map((event) => <RunEventRow event={event} key={event.id} />)}
       </div>
       <form className="run-input-row" onSubmit={onSend}>

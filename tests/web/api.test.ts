@@ -203,6 +203,15 @@ describe('Forgeloop web API client', () => {
     });
   });
 
+  it('includes explicit run event after cursors even for sentinel values', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ events: [], next_cursor: '0000000000', has_more: false }), { status: 200 }));
+    const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await api.listRunEvents('run-1', { actorId: 'actor-owner', after: '0000000000' });
+
+    expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events?after=0000000000', expect.any(Object));
+  });
+
   it('propagates actor ids as headers to package run commands while preserving required body actor fields', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const api = createForgeloopApi({ baseUrl: 'http://api.local', fetch: fetchMock });

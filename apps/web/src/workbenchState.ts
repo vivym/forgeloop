@@ -1,11 +1,15 @@
 import type { ArtifactRef, EvidenceChainItem, EvidenceChainResponse } from './api';
+export { renderableRunEvents } from '@forgeloop/contracts';
 
 export function isActiveCockpit(cockpit: { work_item?: { id?: string } | null }, selectedWorkItemId: string): boolean {
   return Boolean(selectedWorkItemId && cockpit.work_item?.id === selectedWorkItemId);
 }
 
-export const appendRunEvents = <T extends { id: string; sequence: number }>(current: T[], incoming: T[]): T[] =>
-  [...new Map([...current, ...incoming].map((event) => [event.id, event])).values()].sort(
+const runEventMergeKey = (event: { id: string; cursor?: string }): string =>
+  event.cursor === undefined ? `id:${event.id}` : `cursor:${event.cursor}`;
+
+export const appendRunEvents = <T extends { id: string; sequence: number; cursor?: string }>(current: T[], incoming: T[]): T[] =>
+  [...new Map([...current, ...incoming].map((event) => [runEventMergeKey(event), event])).values()].sort(
     (left, right) => left.sequence - right.sequence,
   );
 

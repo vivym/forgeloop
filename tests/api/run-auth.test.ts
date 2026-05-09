@@ -62,6 +62,7 @@ const expectSseFirstEvent = async (
   app: INestApplication,
   path: string,
   headers: Record<string, string> = {},
+  onOpen?: () => Promise<void> | void,
 ): Promise<string> =>
   await new Promise((resolve, reject) => {
     const server = app.getHttpServer();
@@ -95,6 +96,12 @@ const expectSseFirstEvent = async (
             resolve(body);
           }
         });
+
+        if (onOpen !== undefined) {
+          setTimeout(() => {
+            void Promise.resolve(onOpen()).catch(reject);
+          }, 25);
+        }
       },
     );
     req.setTimeout(2_000, () => {
@@ -219,7 +226,7 @@ describe('durable run actor auth', () => {
   });
 
   it('creates short-lived stream tokens for authenticated durable viewers and accepts them for SSE', async () => {
-    const { app } = await track(bootDurableApp());
+    const { app, repo } = await track(bootDurableApp());
     const { runSessionId } = await startDurableRun(app);
     await new Promise<void>((resolve) => app.getHttpServer().listen(0, '127.0.0.1', resolve));
 
@@ -245,19 +252,48 @@ describe('durable run actor auth', () => {
     const sseBody = await expectSseFirstEvent(
       app,
       `/run-sessions/${runSessionId}/events/stream?stream_token=${encodeURIComponent(response.body.token)}`,
+      {},
+      async () => {
+        await repo.appendRunEvent({
+          id: 'run-event-durable-stream-token',
+          run_session_id: runSessionId,
+          event_type: 'agent_message_delta',
+          source: 'codex',
+          visibility: 'public',
+          summary: 'Durable stream token event.',
+          payload: { text: 'durable' },
+          created_at: '2026-05-07T00:00:03.000Z',
+        });
+      },
     );
-    expect(sseBody).toContain('run_queued');
+    expect(sseBody).toContain('Durable stream token event.');
+    expect(sseBody).toContain('agent_message_delta');
   });
 
   it('uses authenticated viewer context for durable SSE streams', async () => {
-    const { app } = await track(bootDurableApp());
+    const { app, repo } = await track(bootDurableApp());
     const { runSessionId } = await startDurableRun(app);
     await new Promise<void>((resolve) => app.getHttpServer().listen(0, '127.0.0.1', resolve));
 
-    const sseBody = await expectSseFirstEvent(app, `/run-sessions/${runSessionId}/events/stream`, {
-      [actorHeaderName]: actorOwner,
-    });
-    expect(sseBody).toContain('run_queued');
+    const sseBody = await expectSseFirstEvent(
+      app,
+      `/run-sessions/${runSessionId}/events/stream`,
+      { [actorHeaderName]: actorOwner },
+      async () => {
+        await repo.appendRunEvent({
+          id: 'run-event-durable-header-stream',
+          run_session_id: runSessionId,
+          event_type: 'agent_message_delta',
+          source: 'codex',
+          visibility: 'public',
+          summary: 'Durable header stream event.',
+          payload: { text: 'durable header' },
+          created_at: '2026-05-07T00:00:04.000Z',
+        });
+      },
+    );
+    expect(sseBody).toContain('Durable header stream event.');
+    expect(sseBody).toContain('agent_message_delta');
   });
 
   it('rejects body or query actor identity for durable stream-token creation', async () => {
