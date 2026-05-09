@@ -983,7 +983,11 @@ export class P0Service {
   }> {
     const planRevision = await this.getPlanRevision(planRevisionId);
     const plan = await this.getPlan(planRevision.plan_id);
-    if (plan.status !== 'approved' || plan.current_revision_id !== planRevisionId) {
+    if (plan.status !== 'approved' || plan.current_revision_id === undefined) {
+      throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
+    }
+    if (plan.current_revision_id !== planRevisionId) {
+      await this.getPlanRevision(plan.current_revision_id);
       throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
     }
     const workItem = await this.getWorkItem(plan.work_item_id);

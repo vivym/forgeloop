@@ -199,7 +199,7 @@ describeIfDb('durable revision lookup', () => {
     await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
     await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
 
-    return { planId: plan.id, planRevisionId: generatedRevision.id };
+    return { planId: plan.id, manualPlanRevisionId: manualRevision.id, planRevisionId: generatedRevision.id };
   };
 
   beforeEach(async () => {
@@ -220,8 +220,10 @@ describeIfDb('durable revision lookup', () => {
     await closeApp(firstApp);
 
     const secondApp = await createDurableApp();
-    await request(secondApp.getHttpServer()).get(`/spec-revisions/${specRevisionId}`).expect(200);
-    await request(secondApp.getHttpServer()).get(`/plan-revisions/${planRevisionId}`).expect(200);
+    const specRevisionResponse = await request(secondApp.getHttpServer()).get(`/spec-revisions/${specRevisionId}`).expect(200);
+    expect(specRevisionResponse.body.id).toBe(specRevisionId);
+    const planRevisionResponse = await request(secondApp.getHttpServer()).get(`/plan-revisions/${planRevisionId}`).expect(200);
+    expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });
 
   it('generates plan drafts after restart', async () => {
@@ -246,6 +248,22 @@ describeIfDb('durable revision lookup', () => {
 
     const secondApp = await createDurableApp();
     await request(secondApp.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(201);
+  });
+
+  it('resolves direct revision routes when parent current_revision_id is missing or stale', async () => {
+    const app = await createDurableApp();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    const { specId, specRevisionId } = await approveSpec(app, workItem.id);
+    const { planId, planRevisionId } = await approvePlan(app, workItem.id);
+    await withDb(async (db) => {
+      await db.update(specs).set({ currentRevisionId: null }).where(eq(specs.id, specId));
+      await db.update(plans).set({ currentRevisionId: 'missing-plan-revision' }).where(eq(plans.id, planId));
+    });
+
+    const specRevisionResponse = await request(app.getHttpServer()).get(`/spec-revisions/${specRevisionId}`).expect(200);
+    expect(specRevisionResponse.body.id).toBe(specRevisionId);
+    const planRevisionResponse = await request(app.getHttpServer()).get(`/plan-revisions/${planRevisionId}`).expect(200);
+    expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });
 
   it('returns 400 when approved spec current_revision_id is missing', async () => {
@@ -291,13 +309,26 @@ describeIfDb('durable revision lookup', () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
+    const { planId, manualPlanRevisionId, planRevisionId } = await approvePlan(app, workItem.id);
+    await withDb(async (db) => {
+      await db.update(plans).set({ currentRevisionId: manualPlanRevisionId }).where(eq(plans.id, planId));
+    });
+
+    const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(400);
+    expect(response.body.message).toContain(`PlanRevision ${planRevisionId} is not current approved revision`);
+  });
+
+  it('returns 404 when approved plan current_revision_id points to a missing revision', async () => {
+    const app = await createDurableApp();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
     const { planId, planRevisionId } = await approvePlan(app, workItem.id);
     await withDb(async (db) => {
       await db.update(plans).set({ currentRevisionId: 'missing-plan-revision' }).where(eq(plans.id, planId));
     });
 
-    const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(400);
-    expect(response.body.message).toContain(`PlanRevision ${planRevisionId} is not current approved revision`);
+    const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(404);
+    expect(response.body.message).toContain('PlanRevision missing-plan-revision not found');
   });
 
   it('returns 404 when the approved plan revision row is missing', async () => {

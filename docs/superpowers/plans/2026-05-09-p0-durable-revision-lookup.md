@@ -22,14 +22,14 @@ This worktree has already executed the first implementation slice:
 - `167f084 fix: add durable revision lookup to repositories` completed the repository contract and adapter work from Task 1.
 - `8d5458a fix: make durable revision lookup restart-safe` completed the initial service refactor and durable API regression test scaffold from Task 2.
 
-The original red/green steps below still document the intended TDD path when replaying from the pre-change baseline. When continuing from this current worktree, do not treat Task 1 or Task 2 Steps 3/5/7 as expected failures. Treat them as verification gates that should now pass after the review fixes in this plan are applied.
+The original red/green steps below still document the intended TDD path when replaying from the pre-change baseline. When continuing from this current worktree, do not treat Task 1 or Task 2 Steps 3/5/7 as expected failures. Treat them as verification gates that should pass.
 
-Remaining review fixes before final handoff:
+Final review fixes applied in the follow-up commit:
 
-- strengthen direct route tests so they assert the returned revision id, not only HTTP 200
-- prove direct revision routes still resolve existing revision rows when the parent `current_revision_id` is missing or stale
-- fix the plan stale-pointer regression so it actually dereferences the approved plan parent's missing `current_revision_id`
-- remove unused durable API test helpers if they were copied from the original plan but are not used
+- direct route tests assert the returned revision id, not only HTTP 200
+- direct revision routes still resolve existing revision rows when the parent `current_revision_id` is missing or stale
+- `packageContext()` dereferences a nonmatching approved plan `current_revision_id` before returning the current-approved mismatch error
+- missing approved plan `current_revision_id` rows surface `NotFoundException`
 
 ## Scope Guardrails
 
