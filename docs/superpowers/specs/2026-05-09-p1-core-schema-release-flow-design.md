@@ -34,7 +34,7 @@ That would create the same kind of drift we just discovered in the architecture 
 - Build the Release surface as a full Release Flow MVP, not a cockpit-only read panel.
 - Release observation uses structured human/script writes, not real external monitoring integration.
 - Release gate uses a mixed model: the system derives blockers, and Release owner can override blockers with rationale.
-- All blockers are overrideable for Release state progression, but override never changes underlying facts or public API safety rules.
+- Evidence and risk blockers are overrideable for Release state progression, but override never changes underlying facts or public API safety rules. Structural preconditions such as empty Release scope are not release risk decisions and are not overrideable.
 - Core schema migration is in scope and should be done in one step.
 - Do not keep old P0 schema/status compatibility as long-term baggage.
 - Full migration scope covers landed core objects. Incident, Contract, and TestEvidence are not productized in this spec.
@@ -124,6 +124,10 @@ Migrate these landed core objects:
 - ExecutionPackage
 - ExecutionPackageDependency
 - RunSession
+- RunEvent
+- RunCommand
+- RunWorkerLease
+- RunEventCounter
 - ReviewPacket
 - Artifact
 - ObjectEvent
@@ -171,16 +175,34 @@ Required Actor fields:
 - `org_id`
 - `actor_type`
 - `display_name`
-- `email`
+- `email?`
 - `created_at`
 
 Existing API inputs that pass actor IDs can continue passing explicit actor IDs, but tests and dogfood setup must seed or create matching Actor records. Do not build login, permissions management, teams, invitations, or full identity administration in this spec.
 
+Required bootstrap records:
+
+- a deterministic default organization for local dogfood and tests;
+- deterministic human, system, and ai actors in that organization;
+- a repository helper or test fixture helper that creates these records before commands that write `created_by_actor_id`, `updated_by_actor_id`, `actor_id`, or `decided_by_actor_id`.
+
+Durable mode should reject writes that reference missing actor or organization rows with a clear validation error. Tests may use fixture helpers, but application code should not silently create arbitrary actors as a side effect of every command.
+
 ### ID Strategy
 
-Persisted core entity IDs should move to UUID-shaped IDs and Drizzle `uuid` columns where the architecture docs specify UUIDs. Domain types can continue to expose IDs as strings in TypeScript.
+Persisted aggregate entity IDs should move to UUID-shaped IDs and Drizzle `uuid` columns where the architecture docs specify UUIDs. Domain types can continue to expose IDs as strings in TypeScript.
 
-This applies to the migrated core entities and Release entities. Public synthetic IDs used only in assembled read models, such as Evidence Chain item IDs, can remain composite strings because they are not persisted entity primary keys.
+This applies to Organization, Actor, Project, WorkItem, Spec, SpecRevision, Plan, PlanRevision, ExecutionPackage, RunSession, ReviewPacket, Artifact, Decision, Release, and ReleaseEvidence.
+
+Runtime protocol rows may keep deterministic text identifiers where those identifiers are part of idempotency, cursoring, replay, or worker coordination:
+
+- RunEvent IDs and cursors;
+- RunCommand IDs and idempotency keys;
+- RunWorkerLease IDs, worker IDs, and lease tokens;
+- RunEventCounter keys;
+- TraceEvent, TraceLink, and trace artifact reference IDs when generated from deterministic evidence relationships.
+
+Public synthetic IDs used only in assembled read models, such as Evidence Chain item IDs, can remain composite strings because they are not persisted entity primary keys.
 
 The implementation plan should update tests and fixtures to use generated or UUID-shaped IDs instead of preserving old human-readable P0 fixture IDs as a compatibility contract.
 
@@ -207,7 +229,88 @@ Core aggregate tables should move toward the architecture base shape:
 
 Not every table needs every field. Link tables and append-only event tables should keep the lighter shape described in the architecture docs.
 
+Full aggregate base fields apply to:
+
+- Project
+- WorkItem
+- Spec
+- Plan
+- ExecutionPackage
+- RunSession
+- ReviewPacket
+- Release
+- ReleaseEvidence
+
+Reduced identity/audit shapes apply to:
+
+- Organization and Actor, which are anchors rather than product surfaces in this spec;
+- ReleaseWorkItem, ReleaseExecutionPackage, and ExecutionPackageDependency link tables;
+- RunEvent, RunCommand, RunWorkerLease, and RunEventCounter runtime-support tables;
+- ObjectEvent, StatusHistory, Artifact, Decision, TraceEvent, TraceLink, and trace artifact refs, which should follow their architecture-specific append-only or evidence-carrier shapes rather than blindly inheriting every aggregate field.
+
 Because this is not a live production database, existing dogfood data and test fixtures can be updated to the new shape instead of backfilled through a compatibility layer. Local durable database reset may be required and should be documented in the implementation plan. Do not drop a user-provided database implicitly from application code.
+
+### Project And ProjectRepo
+
+Project should follow the architecture container shape:
+
+- `org_id`
+- `key`
+- `code`
+- `title`
+- `description`
+- `kind`: `project | stream`
+- `status`: `active | paused | completed | archived`
+- `workflow_profile`: `backend_default | bugfix_fastlane | multi_end`
+- `owner_actor_id`
+- `team_id?`
+- `default_branch?`
+- `default_repo_ids`
+- base entity audit fields.
+
+ProjectRepo is a landed runtime dependency even though it is lighter than the architecture aggregate objects. It should remain the repository binding table used by dogfood and execution:
+
+- `id`
+- `org_id`
+- `project_id`
+- `repo_id`
+- `name`
+- `status`: `active | paused | archived`
+- `local_path`
+- `default_branch`
+- `remote_url?`
+- `base_commit_sha`
+- `created_at`
+- `updated_at`
+
+Release Flow must continue to respect ProjectRepo validation. ExecutionPackage `repo_id` must refer to a repo bound to the same Project.
+
+### Enum Migration Map
+
+No old enum aliases should remain as long-term compatibility. Fixtures, tests, scripts, web types, and API contracts must move to the new values in the same change.
+
+Required mappings:
+
+| Current value | Target value |
+| --- | --- |
+| WorkItem `feature` | `requirement` |
+| WorkItem `bugfix` | `bug` |
+| WorkItem `tech_debt` | `tech_debt` |
+| WorkItem `test_refactor` | `tech_debt` unless a test-specific requirement kind is introduced in the plan |
+| priority free-form string | `p0 | p1 | p2 | p3` |
+| risk free-form string | `low | medium | high | critical` |
+| Spec/Plan `draft | in_review | approved` | keep and add `rejected | superseded | archived` |
+| Spec/Plan resolution `none | approved` | add `rejected | superseded` |
+| ExecutionPackage phases through `review` | keep and add `integration | test_gate | release | archived` |
+| ExecutionPackage activity `awaiting_ai` | `ai_running` when work is active, otherwise `idle` |
+| ExecutionPackage gate `none` | `not_submitted` |
+| ExecutionPackage gate through `review_approved` | keep `not_submitted | awaiting_human_review | changes_requested | review_approved` and add integration/test/release gate values |
+| ReviewPacket status `ready | in_review | completed | archived` | keep and add `draft | escalated` |
+| ReviewPacket decision `none | approved | changes_requested` | keep and add `need_more_context | escalate` |
+
+RunSession status is a runtime execution protocol. Preserve current durable worker statuses, including `waiting_for_input`, `stalled`, `resuming`, `cancel_requested`, `timed_out`, and `cancelled`, even if the V0 architecture sketch has a smaller status set. These values are not historical baggage; they are required by current app-server, command, and SSE behavior.
+
+Artifact type migration must preserve current `ArtifactRef.kind` semantics. Map public physical artifact rows to architecture `artifact_type` values, but keep enough structured ref data to distinguish logs, raw metadata, local-only artifacts, and safe public/storage artifacts.
 
 ### WorkItem
 
@@ -268,6 +371,9 @@ ExecutionPackage should support delivery beyond review:
 
 ExecutionPackage should carry Release-ready fields:
 
+- `execution_owner_actor_id`, migrated from the current `owner_actor_id`;
+- `reviewer_actor_id`;
+- `qa_owner_actor_id`;
 - `surface_type`
 - `deploy_unit`
 - `base_branch`
@@ -341,12 +447,23 @@ Artifact should move toward being the unified physical evidence carrier:
 - owner object id;
 - artifact type;
 - storage URI;
+- ref metadata needed by current `ArtifactRef` semantics;
 - content type;
 - size;
 - checksum;
 - creator and created timestamp.
 
-Public serialization must still hide raw refs, local refs, raw metadata artifacts, logs artifacts, and local-only artifacts unless a safe public/storage URI is present. Release APIs must reuse the same public redaction behavior rather than adding a new serializer.
+The target Artifact shape must not discard current redaction inputs. It should either preserve a structured `ref` JSON payload or map these fields into first-class columns:
+
+- `kind`
+- `name`
+- `digest`
+- `storage_uri`
+- `local_ref`
+- `raw_ref`
+- any raw metadata marker used by current serializers.
+
+Public serialization must still hide raw refs, local refs, raw metadata artifacts, logs artifacts, and local-only artifacts unless a safe public/storage URI is present. Release APIs must reuse one shared public artifact serializer rather than adding a new serializer.
 
 ### ObjectEvent And StatusHistory
 
@@ -400,6 +517,23 @@ Required decision types for this spec:
 
 Release owner override must be represented as a Decision and must include the blocker snapshot in `evidence_refs` or a structured equivalent.
 
+ReviewPacket keeps its own `decision` field as the review snapshot state. Generalized Decision is the audit/replay record for approvals, changes requested, manual overrides, and rollback decisions. Spec, Plan, ReviewPacket, and Release commands that make an approval-style judgment should update the owning object's state and also write a generalized Decision row. The implementation should not remove ReviewPacket's snapshot decision field.
+
+Stable Decision outcome values required for this spec:
+
+- `approved`
+- `changes_requested`
+- `rejected`
+- `override_approved`
+- `rolled_back`
+- `cancelled`
+- `completed`
+
+Release override approval writes two Decision rows:
+
+- `manual_override` with outcome `override_approved`, rationale, blocker snapshot, and blocker fingerprint;
+- `release_approval` with outcome `override_approved`, rationale, and an evidence reference to the manual override Decision.
+
 ### Trace
 
 TraceEvent, TraceLink, and trace artifact references should remain the evidence graph substrate used by Evidence Chain.
@@ -412,6 +546,21 @@ Migration must preserve:
 - Evidence Chain risk flags and projection gap behavior.
 
 This spec does not require a broad Trace projector or backfill job beyond what is needed to keep current Evidence Chain behavior green after schema migration.
+
+This spec explicitly keeps the current compact Trace substrate. It does not migrate TraceEvent into the full V0 ledger shape. The implementation may add org/project fields or UUID-shaped aggregate references where needed, but it must not rewrite Trace into a separate canonical source of truth during this Release Flow migration.
+
+### TestEvidence Boundary
+
+Do not add a `test_evidences` table in this spec.
+
+Release gate test evidence is derived from:
+
+- RunSession `check_results`;
+- ExecutionPackage `required_checks`;
+- ExecutionPackage `required_test_gates`;
+- Artifact rows or artifact refs whose kind/type is `test_report` or equivalent.
+
+If future work needs exploratory, post-release, or QA-authored test evidence as a first-class object, it should get a separate spec. For this migration, no TestEvidence routes, UI, repository workflows, or table are added.
 
 ## Release Model
 
@@ -446,6 +595,62 @@ Release evidence:
 
 Observation does not get a separate table in this spec. Human/script observations are ReleaseEvidence rows with structured payload in `extra` or the architecture-equivalent JSON field.
 
+General ReleaseEvidence fields:
+
+- `release_id`
+- `evidence_type`
+- `summary`
+- `artifact_id?`
+- `object_ref?`
+- `extra`
+
+`object_ref` should use this shape when evidence points at an existing object:
+
+```ts
+type ReleaseEvidenceObjectRef = {
+  object_type: "work_item" | "execution_package" | "run_session" | "review_packet" | "artifact" | "decision";
+  object_id: string;
+  relationship: "supports" | "generated_by" | "observed" | "blocks" | "rollback_of";
+};
+```
+
+Required non-observation evidence semantics:
+
+- `review_packet`: requires `object_ref.object_type = "review_packet"`.
+- `test_report`: requires either `artifact_id`, a safe artifact ref, or `extra.check_refs`.
+- `build`: requires `summary` and either a safe artifact ref or structured build metadata in `extra.build`.
+- `deployment`: local expression only; requires `summary`, `extra.deployment.environment`, and `extra.deployment.result`.
+- `metric_snapshot`: requires `extra.observation.metrics`.
+- `rollback_record`: requires `summary` and rollback metadata in `extra.rollback`.
+
+ReleaseEvidence observation payloads must use this shape under `extra.observation`:
+
+```ts
+type ReleaseObservationPayload = {
+  source: "human" | "script";
+  severity: "info" | "warning" | "failure";
+  summary: string;
+  observed_at: string;
+  actor_id?: string;
+  links?: Array<{
+    object_type: "release" | "work_item" | "execution_package" | "run_session" | "review_packet";
+    object_id: string;
+    relationship: "observed" | "affected" | "supports" | "blocks";
+  }>;
+  metrics?: Record<string, number | string | boolean | null>;
+  notes?: string;
+};
+```
+
+`ReleaseEvidence.summary` should duplicate the short human-readable observation summary for list views. Structured details belong in `extra.observation`.
+
+Public ReleaseEvidence serialization should expose only:
+
+- id, release id, evidence type, summary, created metadata;
+- safe object refs;
+- safe artifact metadata after shared artifact redaction;
+- allowlisted `extra.observation`, `extra.deployment`, `extra.rollback`, `extra.build`, and `extra.check_refs` fields after recursive removal of `raw_ref`, `local_ref`, raw logs, local filesystem paths, tokens, secrets, and unrecognized raw payload keys.
+
 ## Release Gate
 
 Release cockpit should derive blockers from linked objects and evidence.
@@ -454,6 +659,7 @@ Required blocker codes:
 
 - `missing_work_item`
 - `missing_execution_package`
+- `empty_release_scope`
 - `work_item_not_complete`
 - `package_not_release_ready`
 - `missing_approved_review_packet`
@@ -465,7 +671,29 @@ Required blocker codes:
 - `missing_rollback_plan`
 - `missing_observation_plan`
 
-All blockers can be overridden for Release state progression. Override must not mutate underlying facts:
+Blocker predicates:
+
+- `missing_work_item`: a ReleaseWorkItem link points at a soft-deleted, archived, unauthorized, or absent WorkItem.
+- `missing_execution_package`: a ReleaseExecutionPackage link points at a soft-deleted, archived, unauthorized, or absent ExecutionPackage.
+- `empty_release_scope`: Release has zero valid linked WorkItems or zero valid linked ExecutionPackages.
+- `work_item_not_complete`: linked WorkItem does not have `resolution = completed` and the existing WorkItem completion derivation does not consider all linked packages complete.
+- `package_not_release_ready`: linked package is not `gate_state = release_ready | released`, unless it is already `resolution = completed` with an approved current review packet and all required checks/artifacts present.
+- `missing_approved_review_packet`: no current/latest non-archived ReviewPacket for the package has `decision = approved`.
+- `failed_required_check`: any blocking required check for the package's current/latest run is missing or not `succeeded`.
+- `missing_required_artifact`: any package required artifact kind is absent from current/latest run artifacts, review packet artifacts, or linked public Artifact rows.
+- `evidence_redacted`: the only evidence satisfying a release requirement is redacted from public output.
+- `stale_or_superseded_evidence`: Evidence Chain marks the run, review packet, artifact, decision, or trace link as stale or superseded.
+- `missing_rollout_strategy`: Release has no rollout strategy.
+- `missing_rollback_plan`: Release has no rollback plan.
+- `missing_observation_plan`: Release has no observation plan.
+
+For "current/latest" package evidence, prefer explicit package pointers in this order:
+
+1. `current_review_packet_id` / `current_run_session_id`;
+2. current `last_run_session_id` and the non-archived ReviewPacket for that run;
+3. latest non-archived ReviewPacket by creation time.
+
+All evidence and risk blockers can be overridden for Release state progression. Structural blockers are not overrideable when there is no meaningful Release candidate, such as `empty_release_scope`. Override must not mutate underlying facts:
 
 - failed checks remain failed;
 - missing evidence remains missing;
@@ -475,11 +703,51 @@ All blockers can be overridden for Release state progression. Override must not 
 
 Release cockpit must continue to show overridden blockers after approval.
 
+Override blocker snapshot schema:
+
+```ts
+type ReleaseBlocker = {
+  code:
+    | "missing_work_item"
+    | "missing_execution_package"
+    | "empty_release_scope"
+    | "work_item_not_complete"
+    | "package_not_release_ready"
+    | "missing_approved_review_packet"
+    | "failed_required_check"
+    | "missing_required_artifact"
+    | "evidence_redacted"
+    | "stale_or_superseded_evidence"
+    | "missing_rollout_strategy"
+    | "missing_rollback_plan"
+    | "missing_observation_plan";
+  subject: {
+    object_type: "release" | "work_item" | "execution_package" | "run_session" | "review_packet" | "artifact" | "decision";
+    object_id: string;
+  };
+  summary: string;
+  severity: "warning" | "blocking";
+  overrideable: boolean;
+  evidence_refs?: Array<{ object_type: string; object_id: string }>;
+};
+
+type ReleaseBlockerSnapshot = {
+  release_id: string;
+  generated_at: string;
+  blocker_fingerprint: string;
+  blockers: ReleaseBlocker[];
+};
+```
+
+`override-approve` must recompute blockers and compare the supplied `blocker_fingerprint` with the current blocker fingerprint. A stale snapshot should return a conflict response and must not approve the Release. Inline override payloads are allowed only on the `override-approve` route, not on plain `approve`.
+
 ## API Design
 
 Keep the command/query split.
 
-### Command API
+Simple Release resource reads live on the Release control surface. `GET /releases` and `GET /releases/:releaseId` return stored Release resources and lightweight links. Aggregated read models that compose risk, evidence, decisions, and replay belong under QueryModule.
+
+### Release CRUD And Control API
 
 Release command routes:
 
@@ -500,6 +768,105 @@ Release command routes:
 - `POST /releases/:releaseId/evidences`
 
 These routes should write ObjectEvent, StatusHistory, Decision, and ReleaseEvidence records where appropriate.
+
+All route responses should follow the current API style and return raw JSON objects rather than `{ data, meta }` wrappers unless an existing route already uses a wrapper.
+
+Required request and response shapes:
+
+```ts
+type CreateReleaseRequest = {
+  project_id: string;
+  title: string;
+  release_owner_actor_id: string;
+  release_type?: "normal" | "hotfix" | "emergency" | "gray";
+  scope_summary?: string;
+  rollout_strategy?: Record<string, unknown>;
+  rollback_plan?: Record<string, unknown>;
+  observation_plan?: Record<string, unknown>;
+};
+
+type PatchReleaseRequest = Partial<Pick<
+  CreateReleaseRequest,
+  "title" | "scope_summary" | "rollout_strategy" | "rollback_plan" | "observation_plan"
+>>;
+
+type ReleaseControlResponse = {
+  release: Release;
+  decisions?: Decision[];
+  blockers: ReleaseBlocker[];
+  overridden_blockers: ReleaseBlocker[];
+  next_actions: string[];
+};
+
+type LinkReleaseObjectResponse = {
+  release: Release;
+  linked_object: { object_type: "work_item" | "execution_package"; object_id: string };
+};
+
+type ReleaseActorCommandRequest = {
+  actor_id: string;
+  rationale?: string;
+};
+
+type OverrideApproveReleaseRequest = {
+  actor_id: string;
+  rationale: string;
+  blocker_snapshot: ReleaseBlockerSnapshot;
+};
+
+type CloseReleaseRequest = {
+  actor_id: string;
+  resolution: "completed" | "rolled_back" | "cancelled";
+  rationale: string;
+  override_without_observation?: boolean;
+};
+```
+
+`POST /releases/:releaseId/evidences` should accept:
+
+```ts
+type CreateReleaseEvidenceRequest = {
+  actor_id: string;
+  evidence_type: "test_report" | "review_packet" | "build" | "deployment" | "metric_snapshot" | "rollback_record" | "observation_note";
+  summary: string;
+  artifact_id?: string;
+  object_ref?: ReleaseEvidenceObjectRef;
+  extra?: Record<string, unknown>;
+};
+```
+
+Required control payload semantics:
+
+- `POST /releases/:releaseId/approve` requires `actor_id` and may include `rationale`. It succeeds only when no blockers are present.
+- `POST /releases/:releaseId/request-changes` requires `actor_id` and `rationale`, writes a `release_approval` Decision with a changes-requested outcome, and moves the gate to `changes_requested`.
+- `POST /releases/:releaseId/override-approve` requires `actor_id`, non-empty `rationale`, and the blocker snapshot being overridden. It writes `manual_override` and `release_approval` Decision evidence, then moves the Release into the approved rollout path without modifying underlying blocker facts.
+- `POST /releases/:releaseId/start-observing` requires `actor_id` and succeeds only for approved or override-approved Releases.
+- `POST /releases/:releaseId/close` requires `actor_id`, `resolution`, and `rationale`. `resolution` must be `completed`, `rolled_back`, or `cancelled`. `completed` moves `phase` to `completed` and `resolution` to `completed`; `rolled_back` and `cancelled` move `phase` to `closed` and set the matching terminal resolution.
+- `POST /releases/:releaseId/evidences` requires `actor_id`, `evidence_type`, `summary`, and, for `observation_note` or `metric_snapshot`, a valid `extra.observation` payload.
+
+Required lifecycle transitions:
+
+| Command | From | To |
+| --- | --- | --- |
+| create | none | `phase=draft`, `activity_state=idle`, `gate_state=not_submitted`, `resolution=none` |
+| link/unlink | draft/candidate/approval | recompute risk and keep phase unless no links remain |
+| submit-for-approval | draft/candidate/changes_requested | `phase=approval`, `activity_state=awaiting_human`, `gate_state=awaiting_approval`, `resolution=none` |
+| approve without blockers | approval | `phase=rollout`, `activity_state=idle`, `gate_state=approved`, `resolution=none` |
+| request-changes | approval | `phase=approval`, `activity_state=awaiting_human`, `gate_state=changes_requested`, `resolution=none` |
+| override-approve | approval | `phase=rollout`, `activity_state=idle`, `gate_state=approved`, `resolution=none` |
+| start-observing | rollout | `phase=observing`, `activity_state=idle`, `gate_state=rollout_succeeded`, `resolution=none`; set rollout timestamps |
+| close completed | observing | `phase=completed`, `activity_state=idle`, `resolution=completed` |
+| close rolled_back | rollout/observing | `phase=closed`, `activity_state=idle`, `resolution=rolled_back` |
+| close cancelled | draft/candidate/approval/rollout/observing | `phase=closed`, `activity_state=idle`, `resolution=cancelled` |
+
+Successful Release commands should write StatusHistory for each changed lifecycle field and ObjectEvent for the command-level action.
+
+Release scope rules:
+
+- A new Release starts in `draft` and may have zero links.
+- Adding the first valid WorkItem or ExecutionPackage moves the Release to `candidate` if it is still `draft`.
+- Removing links may leave a Release in `candidate`, but cockpit must show `empty_release_scope` if either valid WorkItem links or valid ExecutionPackage links are empty.
+- `submit-for-approval`, `approve`, and `override-approve` are invalid when `empty_release_scope` is present. Empty scope is not overrideable because there is no release candidate to approve.
 
 ### Query API
 
@@ -535,6 +902,25 @@ Release cockpit should return:
 
 The query composition belongs in `packages/db/src/queries/*` and the QueryModule service, not in the controller.
 
+Release cockpit response shape:
+
+```ts
+type ReleaseCockpitResponse = {
+  release: Release;
+  work_items: WorkItem[];
+  execution_packages: ExecutionPackage[];
+  latest_run_sessions: RunSession[];
+  current_review_packets: ReviewPacket[];
+  blockers: ReleaseBlocker[];
+  overridden_blockers: ReleaseBlocker[];
+  risk_summary: Record<string, unknown>;
+  decisions: PublicDecision[];
+  evidences: PublicReleaseEvidence[];
+  observations: PublicReleaseEvidence[];
+  next_actions: string[];
+};
+```
+
 ## Release Replay
 
 Release replay should assemble:
@@ -547,6 +933,15 @@ Release replay should assemble:
 - public artifacts only through existing redaction rules.
 
 It should not attempt to implement full Incident replay or manager-level process replay.
+
+Release replay must use an allowlist serializer for every payload-bearing row:
+
+- Decision: expose decision type, outcome, actor id, rationale, created_at, and redacted evidence refs only.
+- ReleaseEvidence: expose the public ReleaseEvidence serialization described above.
+- ObjectEvent: expose event type, actor id, occurred/created timestamp, reason, and allowlisted payload fields only.
+- StatusHistory: expose field name, from/to values, actor id, timestamp, reason, and allowlisted context fields only.
+
+The serializer must recursively remove `raw_ref`, `local_ref`, local filesystem paths, raw logs, raw metadata payloads, tokens, secrets, and any unrecognized raw payload key.
 
 ## Web UI Scope
 
@@ -575,6 +970,14 @@ Because the project is not live:
 - update existing tests to use new enum values and required fields;
 - document any needed local database reset command for developers.
 
+The implementation must add or document an explicit disposable-database reset path before requiring Drizzle verification. The reset path must:
+
+- operate only on the database named by an explicit disposable `FORGELOOP_DATABASE_URL`;
+- refuse to run against a non-local or unrecognized database unless a deliberate confirmation variable is set;
+- drop/truncate all old P0 and migrated tables in dependency order or recreate the disposable schema;
+- run schema push after reset;
+- update DB test setup/teardown so old hard-coded P0 table truncation does not miss newly added tables.
+
 Safety constraints:
 
 - do not silently drop a user-provided database from application code;
@@ -582,14 +985,48 @@ Safety constraints:
 - do not remove durable run-worker lease, run command, run event, or cursor behavior;
 - preserve artifact redaction tests.
 
+API and web contract migration:
+
+- Existing P0 user workflows should keep semantic command coverage, but request/response fields must move to the new schema in the same change.
+- `goal`, `success_criteria`, `priority`, `risk`, and `owner_actor_id` are still accepted conceptually, but `priority` and `risk` must be normalized to target enum values and persisted as target fields.
+- Web command and query clients, contract schemas, API DTOs, and tests must be updated in the same implementation plan. There is no old wire-contract compatibility guarantee beyond preserving the same user workflow.
+
+Durable revision lookup and frozen package revision semantics:
+
+- Spec and Plan revisions remain immutable.
+- ExecutionPackage `spec_revision_id` and `plan_revision_id` are frozen at package creation.
+- Existing package reruns and Release evidence queries must use the package's frozen revision pointers, not WorkItem's current revision pointers.
+- Creating a new package should still require current approved Spec/Plan revisions.
+- If WorkItem current pointers move after a package was created, Release cockpit should flag the package evidence as stale or superseded where appropriate, but direct revision lookup and package replay must still work.
+
+Runtime-support table acceptance:
+
+- RunEvent append and cursor allocation through `run_event_counters` must remain durable and ordered.
+- RunCommand creation, claim, apply/fail, supersede, and reclaim behavior must remain durable.
+- RunWorkerLease fenced acquire, heartbeat, release, expiry, and restart recovery must remain durable.
+- SSE and CLI event tailing must remain backfill-first and cursor-based.
+- These paths require Drizzle-backed acceptance tests, not only in-memory tests.
+
+Repository parity:
+
+- Add or preserve a shared repository contract suite that runs against both the in-memory repository and a disposable Postgres-backed Drizzle repository.
+- The suite must cover core entity CRUD, revision lookup, Release links, ReleaseEvidence, Decisions, ObjectEvents, StatusHistory, Trace links, run events, run commands, worker leases, and query helper inputs.
+
+Release link integrity:
+
+- Drizzle schema should use hard foreign keys for ReleaseWorkItem and ReleaseExecutionPackage membership.
+- Command routes must reject missing or soft-deleted linked objects.
+- `missing_work_item` and `missing_execution_package` blockers represent soft-deleted, archived, unauthorized, or intentionally corrupted in-memory/test rows, not normal physical foreign-key misses in the durable database.
+
 ## Error Handling
 
-- Linking a missing WorkItem or ExecutionPackage should fail the command and should also appear as a blocker if a stale link already exists in test data.
+- Linking a missing, archived, deleted, unauthorized, or cross-project WorkItem or ExecutionPackage should fail the command.
+- Existing Release links to soft-deleted, archived, unauthorized, or intentionally corrupted in-memory/test objects should appear as cockpit blockers.
 - Approving without blockers should write a release approval Decision and move the Release into the approved/rollout path.
-- Approving with blockers should fail unless the override route or override payload is used.
+- Approving with blockers should fail. Blocked approval is allowed only through `POST /releases/:releaseId/override-approve`.
 - Override approval requires a non-empty rationale and a snapshot of blocker codes.
 - Start observing requires an approved or override-approved Release.
-- Closing requires either completed observation or explicit cancellation/rollback rationale.
+- Closing requires `resolution` and `rationale`; `completed` should require at least one observation evidence row unless an explicit override rationale is included in the close request.
 - Public query serializers must omit raw/local evidence even when ReleaseEvidence points to artifacts.
 
 ## Testing
@@ -609,6 +1046,7 @@ Cover:
 
 Cover both in-memory and Drizzle repositories:
 
+- Organization and Actor bootstrap fixtures;
 - core entity round-trip with new fields;
 - spec/plan revision direct lookup after migration;
 - package dependency metadata;
@@ -618,6 +1056,7 @@ Cover both in-memory and Drizzle repositories:
 - ReleaseWorkItem and ReleaseExecutionPackage links;
 - ReleaseEvidence writes and reads;
 - Release cockpit query inputs.
+- run event counters, run commands, and worker leases in both backends.
 
 ### API Tests
 
@@ -650,6 +1089,15 @@ These must remain green:
 - RunEvent stream still uses backfill-first cursor semantics.
 - Strict or deterministic dogfood reports do not falsely claim success.
 
+### Dogfood Acceptance
+
+The migrated system must have a deterministic local dogfood path that proves:
+
+- P0 delivery workflow still creates WorkItem, Spec, Plan, ExecutionPackage, RunSession, ReviewPacket, Evidence Chain, and replay data in the migrated schema.
+- Release Flow can run locally from created/linked WorkItems through override approval, observing, observation evidence, and close.
+
+Strict `local_codex` dogfood should run when the local environment is configured. If strict mode is unavailable, the report must say blocked with concrete blocker details and must not claim strict success.
+
 ### Verification Commands
 
 Required before completion:
@@ -662,6 +1110,7 @@ If durable DB behavior changes:
 
 - run the repository's database push/migration verification against a disposable local database;
 - run the relevant dogfood script after updating fixtures.
+- run the shared repository contract suite against disposable Postgres.
 
 ## Acceptance Criteria
 
@@ -677,6 +1126,7 @@ If durable DB behavior changes:
   - start observing;
   - record observation;
   - close.
+- Deterministic migrated dogfood covers both the P0 delivery path and Release Flow path.
 - Release cockpit explains why a Release can or cannot proceed.
 - Overridden blockers remain visible.
 - Release replay shows Release decisions, evidence, status changes, and safe linked context.
@@ -690,8 +1140,7 @@ If durable DB behavior changes:
 - Drizzle and in-memory repositories may drift if migration is done in only one backend first.
 - Evidence Chain can regress if trace links, decisions, or artifacts change shape without updating serializers and query assembly.
 
-## Open Implementation Notes
+## Planning Requirements
 
-- Decide exact JSON field names for ReleaseEvidence observation payloads.
-- Decide whether generalized Decision should replace old ReviewPacket decision immediately or coexist with ReviewPacket's own decision field as the review snapshot state. The recommended model is to keep ReviewPacket decision for snapshot state and write generalized Decision for audit/replay.
-- Decide how much of BaseEntity to apply to append-only trace tables. Prefer the architecture-specific lighter shape for append-only rows.
+- The implementation plan should decide how to split this high-blast-radius migration into commits and verification checkpoints.
+- Release CRUD/control routes should live in a new ReleaseModule from the start. The existing P0 module remains the WorkItem/Spec/Plan/Package/Run/Review command surface during migration. Shared repository providers and QueryModule helpers can be reused.
