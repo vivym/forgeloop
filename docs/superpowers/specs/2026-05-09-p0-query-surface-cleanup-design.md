@@ -6,7 +6,7 @@ Draft for review.
 
 ## 1. Purpose
 
-ForgeLoop now has a dedicated QueryModule for work item cockpit and replay reads, but the web client and parts of the API still treat those reads as legacy `work-items` routes. Because the project is not live, this is the right time to remove the compatibility surface instead of carrying two ways to fetch the same read model.
+ForgeLoop is moving cockpit and replay reads into a dedicated QueryModule, but the web client and parts of the API still treat those reads as legacy `work-items` routes. Because the project is not live, this is the right time to remove the compatibility surface instead of carrying two ways to fetch the same read model.
 
 This design makes the query/read-model boundary the only cockpit and replay boundary end to end.
 
@@ -28,6 +28,25 @@ First, the API boundary is ambiguous. `P0Service` still exposes cockpit and time
 Second, the web client still calls the legacy routes from the general API client. This keeps read-model fetches coupled to the command-oriented P0 surface.
 
 Third, tests currently compare QueryModule output against the legacy routes. That proves compatibility, but it also makes the legacy routes look like the source of truth.
+
+## Baseline and Worktree State
+
+The implementation plan should start from the current query cleanup worktree:
+
+- branch: `feature/p0-query-surface-cleanup`
+- path: `/Users/viv/projs/forgeloop/.worktrees/p0-query-surface-cleanup`
+- spec commit base: `177b25e docs: add query surface cleanup design`
+- uncommitted WIP already present in that worktree:
+  - `apps/control-plane-api/src/modules/query/*`
+  - `packages/db/src/queries/*`
+  - `tests/api/query-module.test.ts`
+  - wiring edits in `apps/control-plane-api/src/app.module.ts`, `apps/control-plane-api/src/p0/p0.module.ts`, `apps/control-plane-api/src/p0/p0.service.ts`, and `packages/db/src/index.ts`
+
+That WIP is a useful starting point, not accepted final behavior. It currently keeps legacy routes alive, compares query responses against legacy responses, lacks explicit unsupported replay object type validation, and predates the durable revision lookup merge into `main`.
+
+Before writing or executing the implementation plan, merge or rebase current `main` into `feature/p0-query-surface-cleanup`. The current `main` includes durable revision lookup and the run-worker timeout stabilization. Conflict resolution must preserve those mainline changes.
+
+If the WIP is replayed from a clean `main` instead of merged in place, the plan must still include creation and wiring of QueryModule, the database query helpers, `packages/db/src/index.ts` exports, and QueryModule tests as explicit deliverables.
 
 ## 3. Goals
 
@@ -103,11 +122,13 @@ The following routes should be removed rather than kept as aliases:
 
 ### 6.2 Query composition
 
-`packages/db/src/queries/*` remains the read-model composition layer.
+`packages/db/src/queries/*` is the read-model composition layer. If those helpers already exist as WIP, keep and complete them; if the implementation starts from clean `main`, create them as part of this work.
 
 `QueryService` should call the query helpers, serialize public run session metadata, and map missing objects or invalid object types to HTTP errors. It should not duplicate query assembly logic.
 
 Unsupported replay object type validation should live in `QueryService`. It should not require changes to repository revision lookup, revision listing, or durable revision semantics.
+
+Replay responses must preserve the public artifact serialization/redaction behavior from the legacy work-item timeline route. In particular, `/query/replay/work_item/:objectId` must not expose `local_ref`, `raw_ref`, logs artifacts, raw metadata artifacts, or local-ref-only artifact rows. Public persisted artifact rows with safe remote/public references may still appear in replay entries.
 
 `P0Service` should no longer expose cockpit or timeline methods. Removing those methods should also remove any imports that exist only for cockpit or timeline assembly.
 
@@ -166,22 +187,22 @@ The cleanup should not alter revision-specific errors such as missing `current_r
 
 ## 9. Durable Revision Lookup Coordination
 
-This work is independent from the durable revision lookup work in the parallel worktree, currently represented by `/Users/viv/projs/forgeloop/.worktrees/p0-durable-revision-lookup-plan/docs/superpowers/plans/2026-05-09-p0-durable-revision-lookup.md` and the active-tree design `docs/superpowers/specs/2026-05-09-p0-durable-revision-lookup-design.md`.
+Durable revision lookup has already been merged into `main`. This query cleanup must be based on current `main` before implementation so it does not accidentally revert durable lookup behavior.
 
-That plan owns:
+The durable lookup work owns and must preserve:
 
 - `packages/db/src/repositories/p0-repository.ts`
 - `packages/db/src/repositories/in-memory-p0-repository.ts`
 - `packages/db/src/repositories/drizzle-p0-repository.ts`
 - `tests/db/repository.test.ts`
-- revision lookup behavior in `apps/control-plane-api/src/p0/p0.service.ts`
+- repository-backed direct revision lookup behavior in `apps/control-plane-api/src/p0/p0.service.ts`
 - `tests/api/durable-revision-lookup.test.ts`
 
 This query cleanup must not modify repository direct revision lookup, durable restart tests, spec revision routes, plan revision routes, or plan/spec generation restart semantics.
 
 This cleanup intentionally removes only legacy cockpit/timeline read routes. The durable revision lookup plan's route-path guardrail applies to spec/plan revision routes and generation flows, which this cleanup must not touch.
 
-The only expected overlapping file is `apps/control-plane-api/src/p0/p0.service.ts`. In that file, this cleanup is limited to deleting cockpit/timeline wrappers and related imports. If durable revision lookup has already changed `getSpecRevision()` or `getPlanRevision()`, those changes must be preserved.
+The only expected overlapping file is `apps/control-plane-api/src/p0/p0.service.ts`. In that file, this cleanup is limited to deleting cockpit/timeline wrappers and related imports. `getSpecRevision()` and `getPlanRevision()` must remain repository-backed, and service-side reverse indexes such as `specRevisionIndex` or `planRevisionIndex` must not be reintroduced.
 
 ## 10. Testing
 
@@ -196,6 +217,7 @@ They should cover:
 - successful work item replay response from `/query/replay/work_item/:objectId`
 - unsupported replay object type returning `400`
 - missing supported object returning `404`
+- replay artifact redaction matching the legacy public timeline behavior by updating the existing raw-log timeline redaction test to call `/query/replay/work_item/:objectId`
 
 The unsupported object type test should not depend on any seeded object existing. It should prove the request is rejected at the object-type boundary.
 
@@ -218,7 +240,23 @@ The implementation should search for and remove references in production code, s
 - `getCockpit`
 - `getTimeline`
 
-Negative route assertions may reference the removed routes. This removal spec may reference the routes it removes. Historical superseded specs may retain references only if they are clearly non-canonical.
+The required verification search is:
+
+```bash
+rg -n 'work-items/.*/cockpit|work-items/.*/timeline|/work-items/.*cockpit|/work-items/.*timeline|getCockpit|getTimeline|cockpit\(workItemId|timeline\(workItemId' apps packages tests scripts docs/superpowers
+```
+
+Allowed matches after cleanup:
+
+- this spec file, because it names the removed routes
+- negative route assertions that prove the legacy routes return `404`
+- historical prior dated specs or plans that are not current implementation guidance
+
+Not allowed after cleanup:
+
+- production code in `apps/`, `packages/`, or `scripts/`
+- positive tests that call legacy cockpit/timeline routes expecting success
+- active implementation docs for this work other than this removal spec
 
 ### 10.3 Frontend checks
 
@@ -249,8 +287,9 @@ If durable revision lookup tests exist in the active branch, this cleanup should
 - Unsupported replay object types return `400`.
 - Supported but missing replay objects return `404`.
 - Missing work item cockpit returns `404`.
+- Query replay preserves public artifact redaction and does not expose `local_ref`, `raw_ref`, logs artifacts, raw metadata artifacts, or local-ref-only artifact rows.
 - QueryModule tests no longer depend on legacy routes.
 - Existing cockpit/timeline API tests are updated to the query surface.
-- No production code, scripts, active docs other than this removal spec, or positive tests reference legacy cockpit or timeline work-item routes. Negative route assertions may reference the removed routes. Historical superseded specs may retain references only if they are clearly non-canonical.
+- The required legacy route reference search has only the allowed matches listed in Section 10.2.
 - Durable revision lookup files and semantics are left untouched except for deleting `P0Service` cockpit/timeline methods and their related imports.
 - Any durable lookup changes to `getSpecRevision()`, `getPlanRevision()`, or reverse-index removal are preserved.
