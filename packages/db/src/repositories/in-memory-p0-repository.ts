@@ -106,6 +106,10 @@ export class InMemoryP0Repository implements P0Repository {
     this.specRevisions.set(specRevision.id, clone(specRevision));
   }
 
+  async getSpecRevision(specRevisionId: string): Promise<SpecRevision | undefined> {
+    return this.cloneMaybe(this.specRevisions.get(specRevisionId));
+  }
+
   async listSpecRevisions(specId: string): Promise<SpecRevision[]> {
     return valuesFor(this.specRevisions)
       .filter((specRevision) => specRevision.spec_id === specId)
@@ -122,6 +126,10 @@ export class InMemoryP0Repository implements P0Repository {
 
   async savePlanRevision(planRevision: PlanRevision): Promise<void> {
     this.planRevisions.set(planRevision.id, clone(planRevision));
+  }
+
+  async getPlanRevision(planRevisionId: string): Promise<PlanRevision | undefined> {
+    return this.cloneMaybe(this.planRevisions.get(planRevisionId));
   }
 
   async listPlanRevisions(planId: string): Promise<PlanRevision[]> {

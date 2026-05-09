@@ -65,11 +65,13 @@ export interface P0Repository {
   saveSpec(spec: Spec): Promise<void>;
   getSpec(specId: string): Promise<Spec | undefined>;
   saveSpecRevision(specRevision: SpecRevision): Promise<void>;
+  getSpecRevision(specRevisionId: string): Promise<SpecRevision | undefined>;
   listSpecRevisions(specId: string): Promise<SpecRevision[]>;
 
   savePlan(plan: Plan): Promise<void>;
   getPlan(planId: string): Promise<Plan | undefined>;
   savePlanRevision(planRevision: PlanRevision): Promise<void>;
+  getPlanRevision(planRevisionId: string): Promise<PlanRevision | undefined>;
   listPlanRevisions(planId: string): Promise<PlanRevision[]>;
 
   saveExecutionPackage(executionPackage: ExecutionPackage): Promise<void>;
