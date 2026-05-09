@@ -126,8 +126,6 @@ export class P0Service {
   private timeCounter = 0;
   private durableTimeMs = 0;
   private readonly durableInstanceId = randomUUID().replace(/-/g, '').slice(0, 12);
-  private readonly specRevisionIndex = new Map<string, string>();
-  private readonly planRevisionIndex = new Map<string, string>();
 
   constructor(
     @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
@@ -233,12 +231,7 @@ export class P0Service {
   }
 
   async getSpecRevision(specRevisionId: string): Promise<SpecRevision> {
-    const specId = this.specRevisionIndex.get(specRevisionId);
-    if (specId === undefined) {
-      throw new NotFoundException(`SpecRevision ${specRevisionId} not found`);
-    }
-    const revision = (await this.repository.listSpecRevisions(specId)).find((item) => item.id === specRevisionId);
-    return this.requireFound(revision, `SpecRevision ${specRevisionId}`);
+    return this.requireFound(await this.repository.getSpecRevision(specRevisionId), `SpecRevision ${specRevisionId}`);
   }
 
   async createSpecRevision(specId: string, dto: CreateSpecRevisionDto): Promise<SpecRevision> {
@@ -346,12 +339,7 @@ export class P0Service {
   }
 
   async getPlanRevision(planRevisionId: string): Promise<PlanRevision> {
-    const planId = this.planRevisionIndex.get(planRevisionId);
-    if (planId === undefined) {
-      throw new NotFoundException(`PlanRevision ${planRevisionId} not found`);
-    }
-    const revision = (await this.repository.listPlanRevisions(planId)).find((item) => item.id === planRevisionId);
-    return this.requireFound(revision, `PlanRevision ${planRevisionId}`);
+    return this.requireFound(await this.repository.getPlanRevision(planRevisionId), `PlanRevision ${planRevisionId}`);
   }
 
   async createPlanRevision(planId: string, dto: CreatePlanRevisionDto): Promise<PlanRevision> {
@@ -1063,7 +1051,6 @@ export class P0Service {
     };
     await this.repository.saveSpecRevision(revision);
     await this.repository.saveSpec({ ...spec, current_revision_id: revision.id, updated_at: this.now() });
-    this.specRevisionIndex.set(revision.id, spec.id);
     return revision;
   }
 
@@ -1091,7 +1078,6 @@ export class P0Service {
     };
     await this.repository.savePlanRevision(revision);
     await this.repository.savePlan({ ...plan, current_revision_id: revision.id, updated_at: this.now() });
-    this.planRevisionIndex.set(revision.id, plan.id);
     return revision;
   }
 
