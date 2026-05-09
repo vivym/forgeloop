@@ -24,10 +24,10 @@ const runtimeMetadata = (overrides: Partial<RunRuntimeMetadata> = {}): RunRuntim
   ...overrides,
 });
 
-const withTimeout = async <T>(promise: Promise<T>, message: string): Promise<T> =>
+const withTimeout = async <T>(promise: Promise<T>, message: string, timeoutMs = 250): Promise<T> =>
   Promise.race([
     promise,
-    delay(250).then(() => {
+    delay(timeoutMs).then(() => {
       throw new Error(message);
     }),
   ]);
@@ -159,6 +159,41 @@ setInterval(() => {}, 1000);
     await waitForProcessExit(pid);
 
     expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it('yields a terminal item when exec JSONL emits dotted turn.completed before process close', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'forgeloop-codex-exec-'));
+    const pidPath = join(directory, 'pid.txt');
+    const binaryPath = join(directory, 'codex-fake.js');
+    await writeFile(
+      binaryPath,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } }));
+setInterval(() => {}, 1000);
+`,
+    );
+    await chmod(binaryPath, 0o755);
+
+    const driver = new CodexExecFallbackDriver({ codexBinary: binaryPath });
+    const iterator = driver.startRun({ runSpec: createRunSpec(), workspacePath: directory })[Symbol.asyncIterator]();
+    try {
+      await expect(
+        withTimeout(iterator.next(), 'Codex exec dotted turn.completed did not terminate.', 2_000),
+      ).resolves.toMatchObject({
+        value: {
+          kind: 'terminal',
+          status: 'succeeded',
+          summary: 'Codex exec fallback turn completed.',
+        },
+      });
+    } finally {
+      await iterator.return?.();
+    }
+
+    const pid = Number(await readFile(pidPath, 'utf8'));
+    await waitForProcessExit(pid);
   });
 });
 

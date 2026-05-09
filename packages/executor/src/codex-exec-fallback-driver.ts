@@ -34,6 +34,50 @@ const failureFromSpawnError = (error: Error): ExecutorFailure => ({
   retryable: true,
 });
 
+const parseJsonRecord = (line: string): Record<string, unknown> | undefined => {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const stringField = (record: Record<string, unknown>, keys: readonly string[]): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string') {
+      return value;
+    }
+  }
+
+  return undefined;
+};
+
+const terminalFromExecJsonLine = (line: string): CodexDriverStreamItem | undefined => {
+  const parsed = parseJsonRecord(line);
+  if (parsed === undefined) {
+    return undefined;
+  }
+
+  const type = stringField(parsed, ['type', 'event_type', 'eventType', 'kind']);
+  const method = stringField(parsed, ['method']);
+  if (type !== 'turn.completed' && type !== 'turn_completed' && method !== 'turn/completed') {
+    return undefined;
+  }
+
+  return {
+    kind: 'terminal',
+    status: 'succeeded',
+    summary: 'Codex exec fallback turn completed.',
+    runtimeMetadata: {
+      driver_status: 'terminal',
+    },
+  };
+};
+
 const waitForChildSpawn = async (child: ChildProcess): Promise<void> =>
   new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -179,6 +223,12 @@ export class CodexExecFallbackDriver implements CodexSessionDriver {
           source: 'exec_fallback',
           payload: line,
         });
+
+        const terminalItem = terminalFromExecJsonLine(line);
+        if (terminalItem !== undefined) {
+          yield terminalItem;
+          return;
+        }
 
         for (const event of normalizeCodexExecJsonLine(line)) {
           if (rawRef !== undefined) {
