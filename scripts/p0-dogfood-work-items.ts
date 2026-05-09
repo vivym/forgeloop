@@ -447,7 +447,7 @@ type ReviewPacketWaitOptions = {
   pollIntervalMs?: number;
 };
 
-const terminalStatusesWithoutReviewPacket = new Set<RunSession['status']>(['failed', 'timed_out', 'cancelled']);
+const terminalStatusesWithoutReviewPacket = new Set<RunSession['status']>(['failed', 'timed_out', 'cancelled', 'stalled']);
 
 const delay = (ms: number): Promise<void> => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
@@ -678,6 +678,31 @@ const approveReviewPacket = async (
     .expect(201);
 };
 
+export const loadCompletedDogfoodRecordsFromRepository = async (
+  repository: P0Repository,
+  workItemId: string,
+): Promise<CompletedDogfoodItem['records']> => {
+  const workItem = await repository.getWorkItem(workItemId);
+  if (workItem === undefined) {
+    throw new Error(`Repository is missing Work Item ${workItemId}`);
+  }
+
+  const executionPackages = await repository.listExecutionPackagesForWorkItem(workItemId);
+  const runSessions = (await Promise.all(
+    executionPackages.map((executionPackage) => repository.listRunSessionsForPackage(executionPackage.id)),
+  )).flat();
+  const reviewPackets = (await Promise.all(
+    executionPackages.map((executionPackage) => repository.listReviewPacketsForPackage(executionPackage.id)),
+  )).flat();
+
+  return {
+    workItem,
+    executionPackages,
+    runSessions,
+    reviewPackets,
+  };
+};
+
 const completeDogfoodItem = async (
   app: INestApplication,
   projectId: string,
@@ -747,13 +772,10 @@ const completeDogfoodItem = async (
   expectSources(item.key, 'Evidence Chain', evidenceChainSources, productEvidenceSources);
   const reportEvidenceSources = [...new Set([...timelineSources, ...evidenceChainSources])].sort();
 
-  const workItem = cockpit.work_item;
-  const executionPackages = cockpit.packages ?? [];
-  const runSessions = cockpit.run_sessions ?? [];
-  const reviewPackets = cockpit.review_packets ?? [];
-  if (workItem === undefined) {
+  if (cockpit.work_item === undefined) {
     throw new Error(`Cockpit response for ${item.key} is missing Work Item record`);
   }
+  const records = await loadCompletedDogfoodRecordsFromRepository(app.get(P0_REPOSITORY) as P0Repository, workItemId);
 
   return {
     result: {
@@ -770,12 +792,7 @@ const completeDogfoodItem = async (
       exercisedChangesRequestedRerun,
       timelineSources: reportEvidenceSources,
     },
-    records: {
-      workItem,
-      executionPackages,
-      runSessions,
-      reviewPackets,
-    },
+    records,
   };
 };
 
