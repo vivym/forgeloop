@@ -16,6 +16,21 @@
 - Related previous plan: `docs/superpowers/plans/2026-05-07-codex-long-running-execution.md`
 - Relevant implementation skills: @superpowers:subagent-driven-development, @superpowers:executing-plans, @superpowers:test-driven-development, @superpowers:systematic-debugging, @superpowers:verification-before-completion
 
+## Closure Status
+
+Updated: 2026-05-09
+
+This plan was implemented across later commits and verified in `docs/superpowers/reports/codex-unified-run-event-stream-closure-report.md`.
+
+Status summary:
+
+- Phase 1 read stream is implemented: required backfill `next_cursor`, live-tail SSE baseline, Web backfill-first reconnect flow, shared timeline classifier, and repo-local `tail:run-events` command.
+- Focused verification passed on 2026-05-09: `pnpm test tests/contracts/run-events.test.ts tests/contracts/run-event-rendering.test.ts tests/api/run-events.test.ts tests/web/api.test.ts tests/web/run-console-state.test.ts tests/smoke/tail-run-events-script.test.ts tests/e2e/run-console.e2e.test.ts`.
+- Phase 2 input/steering semantics remain intentionally out of scope. Existing `user_input` and `waiting_for_input` events are consumable; `steer_requested`, `steer_applied`, `command_queued`, and `command_acked` were not added as phase-1 emitted events.
+- Durable revision lookup work is tracked separately in `docs/superpowers/specs/2026-05-09-p0-durable-revision-lookup-design.md`; do not infer any revision lookup task from this stream plan.
+
+Do not infer open product scope from unchecked historical boxes below without checking the closure report and current tests.
+
 ## Baseline
 
 This plan was written in a clean worktree:
