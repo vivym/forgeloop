@@ -12,7 +12,7 @@ import {
   RUN_DURABILITY_MODE,
   RUN_WORKER,
 } from '../../apps/control-plane-api/src/p0/p0.service';
-import { createDbClient, DrizzleP0Repository, type ForgeloopDb, plans, specs } from '../../packages/db/src';
+import { createDbClient, DrizzleP0Repository, type ForgeloopDb, plan_revisions, plans, specs } from '../../packages/db/src';
 
 const connectionString = process.env.FORGELOOP_DATABASE_URL;
 const describeIfDb = describe.skipIf(!connectionString);
@@ -23,17 +23,6 @@ describeIfDb('durable revision lookup', () => {
 
   const actorOwner = 'actor-owner';
   const actorReviewer = 'actor-reviewer';
-  const actorQa = 'actor-qa';
-
-  const requiredChecks = [
-    {
-      check_id: 'unit',
-      display_name: 'Unit tests',
-      command: 'pnpm test tests/api',
-      timeout_seconds: 120,
-      blocks_review: true,
-    },
-  ];
 
   const createTrackedClient = () => {
     const client = createDbClient({ connectionString: connectionString! });
@@ -213,28 +202,6 @@ describeIfDb('durable revision lookup', () => {
     return { planId: plan.id, planRevisionId: generatedRevision.id };
   };
 
-  const createManualPackage = async (
-    app: INestApplication,
-    planRevisionId: string,
-    overrides: Record<string, unknown> = {},
-  ) => {
-    const body = {
-      repo_id: 'repo-1',
-      objective: 'Implement the P0 API package.',
-      owner_actor_id: actorOwner,
-      reviewer_actor_id: actorReviewer,
-      qa_owner_actor_id: actorQa,
-      required_checks: requiredChecks,
-      required_artifact_kinds: ['execution_summary'],
-      allowed_paths: ['apps/control-plane-api/**', 'tests/api/**'],
-      forbidden_paths: ['packages/db/**'],
-      ...overrides,
-    };
-
-    return (await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/execution-packages`).send(body).expect(201))
-      .body;
-  };
-
   beforeEach(async () => {
     await truncateDb();
   });
@@ -320,16 +287,29 @@ describeIfDb('durable revision lookup', () => {
     expect(response.body.message).toContain(`PlanRevision ${planRevisionId} is not current approved revision`);
   });
 
-  it('returns 404 when approved plan current_revision_id points to a missing revision', async () => {
+  it('returns 400 when approved plan current_revision_id points away from the requested revision', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
-    const { planId } = await approvePlan(app, workItem.id);
+    const { planId, planRevisionId } = await approvePlan(app, workItem.id);
     await withDb(async (db) => {
       await db.update(plans).set({ currentRevisionId: 'missing-plan-revision' }).where(eq(plans.id, planId));
     });
 
-    const response = await request(app.getHttpServer()).post('/plan-revisions/missing-plan-revision/generate-packages').send({}).expect(404);
-    expect(response.body.message).toContain('PlanRevision missing-plan-revision not found');
+    const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(400);
+    expect(response.body.message).toContain(`PlanRevision ${planRevisionId} is not current approved revision`);
+  });
+
+  it('returns 404 when the approved plan revision row is missing', async () => {
+    const app = await createDurableApp();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    await approveSpec(app, workItem.id);
+    const { planRevisionId } = await approvePlan(app, workItem.id);
+    await withDb(async (db) => {
+      await db.delete(plan_revisions).where(eq(plan_revisions.id, planRevisionId));
+    });
+
+    const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(404);
+    expect(response.body.message).toContain(`PlanRevision ${planRevisionId} not found`);
   });
 });
