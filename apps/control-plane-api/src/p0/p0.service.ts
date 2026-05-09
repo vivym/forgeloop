@@ -111,6 +111,7 @@ export const P0_DEMO_ACTOR_ID_FALLBACK = Symbol('P0_DEMO_ACTOR_ID_FALLBACK');
 const terminalRunStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const streamPollMs = 500;
 const runEventStreamTokenTtlMs = 60_000;
+const beginningOfStreamCursor = '0000000000';
 
 type RunEventAccessOptions = {
   after?: string;
@@ -673,12 +674,11 @@ export class P0Service {
       ...(options.streamToken === undefined ? {} : { streamToken: options.streamToken }),
     });
     await this.assertRunViewerAllowed(runSession, actorId);
-    const events = this.publicRunEvents(
-      await this.repository.listRunEvents(runSessionId, options.after === undefined ? {} : { after: options.after }),
-    );
+    const rawEvents = await this.repository.listRunEvents(runSessionId, options.after === undefined ? {} : { after: options.after });
+    const events = this.publicRunEvents(rawEvents);
     return {
       events,
-      ...(events.at(-1)?.cursor === undefined ? {} : { next_cursor: events.at(-1)!.cursor }),
+      next_cursor: rawEvents.at(-1)?.cursor ?? options.after ?? beginningOfStreamCursor,
       has_more: false,
     };
   }

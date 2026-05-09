@@ -1,8 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { seedAppWithRunSession } from '../helpers/p0-runtime-fixtures';
+import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { P0_REPOSITORY, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { InMemoryP0Repository } from '../../packages/db/src';
+
+import { seedAppWithRunSession, seedQueuedPackageRun } from '../helpers/p0-runtime-fixtures';
 
 describe('run event API', () => {
   const apps: INestApplication[] = [];
@@ -10,6 +15,21 @@ describe('run event API', () => {
     const resolved = await value;
     apps.push(resolved.app);
     return resolved;
+  };
+
+  const seedAppWithEmptyRunSession = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository; runSessionId: string }> => {
+    const repo = new InMemoryP0Repository();
+    const { runSession } = await seedQueuedPackageRun(repo);
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(P0_REPOSITORY)
+      .useValue(repo)
+      .overrideProvider(RUN_WORKER)
+      .useValue({ kick: () => undefined, drainOnce: async () => undefined })
+      .compile();
+    const app = moduleRef.createNestApplication();
+    await app.init();
+
+    return { app, repo, runSessionId: runSession.id };
   };
 
   afterEach(async () => {
@@ -40,6 +60,21 @@ describe('run event API', () => {
     expect(event).not.toHaveProperty('raw_ref');
   });
 
+  it('returns the beginning-of-stream cursor for an empty backfill', async () => {
+    const { app, runSessionId } = await track(seedAppWithEmptyRunSession());
+
+    const response = await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events`)
+      .query({ actor_id: 'actor-owner' })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      events: [],
+      next_cursor: '0000000000',
+      has_more: false,
+    });
+  });
+
   it('omits internal events from public backfill', async () => {
     const { app, runSessionId, repo } = await track(seedAppWithRunSession());
     await repo.appendRunEvent({
@@ -60,6 +95,44 @@ describe('run event API', () => {
       .expect(200);
 
     expect(response.body.events.map((event: { event_type: string }) => event.event_type)).toEqual(['run_queued']);
+  });
+
+  it('advances the backfill cursor past filtered internal trailing events', async () => {
+    const { app, runSessionId, repo } = await track(seedAppWithRunSession());
+    await repo.appendRunEvent({
+      id: 'run-event-public',
+      run_session_id: runSessionId,
+      event_type: 'agent_message_delta',
+      source: 'codex',
+      visibility: 'public',
+      summary: 'Codex output.',
+      payload: { text: 'hello' },
+      raw_ref: 'local://tmp/raw.jsonl',
+      created_at: '2026-05-07T00:00:00.000Z',
+    });
+    const trailingInternalEvent = await repo.appendRunEvent({
+      id: 'run-event-internal',
+      run_session_id: runSessionId,
+      event_type: 'codex_warning',
+      source: 'codex',
+      visibility: 'internal',
+      summary: 'Internal raw notification.',
+      payload: { detail: 'hidden' },
+      raw_ref: 'local://tmp/raw.jsonl',
+      created_at: '2026-05-07T00:00:01.000Z',
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/run-sessions/${runSessionId}/events`)
+      .query({ actor_id: 'actor-owner' })
+      .expect(200);
+
+    expect(response.body.events.map((event: { event_type: string }) => event.event_type)).toEqual([
+      'run_queued',
+      'agent_message_delta',
+    ]);
+    expect(response.body.next_cursor).toBe(trailingInternalEvent.cursor);
+    expect(response.body.has_more).toBe(false);
   });
 
   it('redacts internal logs from run-session detail responses', async () => {

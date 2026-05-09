@@ -207,7 +207,7 @@ export interface RunEvent {
 
 export interface RunEventListResponse {
   events: RunEvent[];
-  next_cursor?: string;
+  next_cursor: string;
   has_more?: boolean;
 }
 

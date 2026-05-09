@@ -65,16 +65,23 @@ describe('long-running run event contracts', () => {
     ).toBe(false);
   });
 
-  it('parses run event list responses', () => {
+  it('requires next_cursor on run event list responses', () => {
+    expect(
+      runEventListResponseSchema.safeParse({
+        events: [publicEvent],
+        has_more: false,
+      }).success,
+    ).toBe(false);
+
     const parsed = runEventListResponseSchema.parse({
       events: [publicEvent],
       next_cursor: 'cursor-2',
-      has_more: true,
+      has_more: false,
     });
 
     expect(parsed.events).toHaveLength(1);
     expect(parsed.next_cursor).toBe('cursor-2');
-    expect(parsed.has_more).toBe(true);
+    expect(parsed.has_more).toBe(false);
   });
 
   it.each(['input', 'cancel', 'resume'] as const)('parses accepted %s operator command responses', (commandType) => {

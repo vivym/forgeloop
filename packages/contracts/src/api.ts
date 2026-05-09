@@ -170,7 +170,7 @@ export type PublicRunEvent = z.infer<typeof publicRunEventSchema>;
 export const runEventListResponseSchema = z
   .object({
     events: z.array(publicRunEventSchema),
-    next_cursor: z.string().min(1).optional(),
+    next_cursor: z.string().min(1),
     has_more: z.boolean(),
   })
   .strict();
