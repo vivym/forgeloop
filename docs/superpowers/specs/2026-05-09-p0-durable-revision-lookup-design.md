@@ -126,7 +126,9 @@ This makes the direct revision path independent of process memory.
 ## 8. Error Handling
 
 - If a revision id does not exist, the service should continue to return `NotFoundException`.
-- If a parent object exists but is not pointing at the requested current revision, existing validation errors should remain in place.
+- If a parent object exists but is not pointing at the requested current revision, existing validation errors should remain in place for flows that require the current approved revision.
+- If a parent object’s `current_revision_id` is stale or missing, direct revision lookup by id should still succeed when the revision row exists; only the flows that require the current approved revision should fail with the existing `BadRequestException` from parent validation.
+- If a parent object’s `current_revision_id` points at a missing revision row, direct lookup should surface `NotFoundException` from the repository.
 - The service should not silently fall back to scanning a parent collection when direct lookup fails.
 
 The key rule is that missing process memory must not masquerade as a missing database row.
@@ -136,14 +138,18 @@ The key rule is that missing process memory must not masquerade as a missing dat
 Add focused coverage in three places:
 
 - repository adapter tests for `getSpecRevision` and `getPlanRevision`
-- API restart regression coverage that reuses the same repository instance across a fresh app boot
+- API restart regression coverage that boots two fresh app instances against the same durable repository backend
 - existing plan/spec flow tests to confirm draft generation still works after the direct lookup change
 
 The regression should prove that:
 
 - a revision route still works after the API restarts
+- the public `spec-revisions/:id` and `plan-revisions/:id` routes still resolve after a fresh app boot with the same durable repository backend
 - `generatePlanDraft()` can rehydrate the approved spec revision after restart
 - `generatePackages()` can rehydrate the approved plan revision after restart
+- any repository test doubles compile and pass once the interface grows
+
+For the restart regression, “durable repository backend” means the Drizzle/Postgres path or an equivalent persisted adapter, not the in-memory repository.
 
 ## 10. Acceptance Criteria
 
