@@ -6,7 +6,7 @@ Draft for review.
 
 ## Context
 
-ForgeLoop has a green baseline on `main`: full tests pass, build passes, the worktree is clean, CI exists, and the reviewer-first Evidence Chain API and Workbench UI are implemented. The remaining uncertainty is not broad feature availability. It is whether the current P0/P1 phase has been closed with strict evidence and whether project planning documents still reflect reality.
+ForgeLoop has a recent green baseline on `main`: full tests pass, build passes, CI exists, and the reviewer-first Evidence Chain API and Workbench UI are implemented. The closure pass must still re-check current dirty files before strict dogfood, because strict `local_codex` preflight requires a clean source checkout except for documented dogfood outputs. The remaining uncertainty is not broad feature availability. It is whether the current P0/P1 phase has been closed with strict evidence and whether project planning documents still reflect reality.
 
 The current dogfood completion report explicitly says strict `local_codex` acceptance is disabled. Several plan documents still contain unchecked implementation steps even though recent commits show the corresponding functionality exists. The P1 decision also names follow-up candidates, but Release, Retrospective, and Trace projector/backfill are separate product surfaces and should not be pulled into this closure batch.
 
@@ -26,6 +26,7 @@ Treating all three as one implementation batch would either under-verify P0/P1 o
 - Refresh completion evidence so reports distinguish deterministic mock dogfood, durable/browser verification, and strict real-Codex acceptance.
 - Synchronize relevant plan/checklist status with the implemented code and current verification results.
 - Apply only narrow hardening needed to make closure evidence trustworthy, such as report accuracy, redaction metadata gaps, and noisy verification output.
+- Preserve unrelated user changes while preparing the clean source checkout required by strict dogfood.
 - Keep full verification green after any changes.
 
 ## Non-Goals
@@ -41,13 +42,14 @@ Treating all three as one implementation batch would either under-verify P0/P1 o
 Use a closure-first approach:
 
 1. Establish a fresh verification baseline with `pnpm test`, `pnpm build`, and `git diff --check`.
-2. Prepare local durable dependencies and run schema push.
-3. Run strict `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 pnpm dogfood:p0:work-items`.
-4. If strict mode passes, update the dogfood completion report with the strict pass evidence.
-5. If strict mode is blocked, preserve the failure, record blocker codes and command output, and keep deterministic dogfood status separate from strict acceptance.
-6. Audit relevant plan docs against actual files and tests, then mark only verified items complete or add a short completion note explaining why old unchecked items are stale.
-7. Apply minimal hardening only when it directly supports closure evidence.
-8. Re-run focused tests for touched areas, then full test/build verification.
+2. Identify dirty files before strict dogfood. Do not edit or revert unrelated user changes. Closure-owned changes must be committed before the strict run, or the strict report must record source dirtiness as a blocker.
+3. Prepare local durable dependencies with Docker Compose and run schema push against a local or disposable database. Do not drop a user-provided database.
+4. Run strict `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 pnpm dogfood:p0:work-items`.
+5. If strict mode passes, update the dogfood completion report with the strict pass evidence.
+6. If strict mode is blocked, preserve the failure, record blocker codes and command output, and keep deterministic dogfood status separate from strict acceptance.
+7. Audit relevant plan docs against actual files and tests, then mark only verified items complete or add a short completion note explaining why old unchecked items are stale.
+8. Apply minimal hardening only when it directly supports closure evidence.
+9. Re-run focused tests for touched areas, then full test/build verification.
 
 This is preferred over a documentation-only sweep because it produces real acceptance evidence. It is also preferred over starting all follow-up product work because it keeps the phase boundary clear.
 
@@ -58,6 +60,8 @@ This is preferred over a documentation-only sweep because it produces real accep
 The strict path uses the existing `scripts/p0-dogfood-work-items.ts` behavior. Two Work Items should run with `executor_type: local_codex` and `workflow_only=false`; one mock Work Item should keep the `changes_requested -> rerun -> approve` path. The script remains the source of truth for strict qualifying Work Items.
 
 The closure pass must not relax strict preflight. Missing Codex auth, dirty source checkout, unavailable durable dependencies, or worktree failures are valid blockers and should be recorded rather than bypassed.
+
+Strict local Codex runs must keep their mutation boundary inside `.worktrees/<run-session-id>`. If the source checkout has unrelated dirty files, the implementation must not stash, revert, or rewrite them. It should either ask the operator to clean them up or record `source_dirty_blocked` in the strict report.
 
 ### Evidence And Reports
 
@@ -74,6 +78,13 @@ The durable/browser verification report should stay accurate and should not impl
 Plan docs are advisory records, not runtime truth. The closure pass should update the relevant P0/P1 plan document so a future reader can tell which steps are already implemented, which were superseded by later commits, and which remain intentionally deferred.
 
 Do not blindly mark every unchecked box across old plans. Older historical plans may remain as history. Prefer a current closure note or targeted checkbox updates where the repository provides direct evidence.
+
+The closure pass should explicitly distinguish:
+
+- implemented and verified items;
+- implemented items whose old checkboxes were superseded by later commits;
+- intentionally deferred future product work;
+- still-open blockers from the strict run.
 
 ### Narrow Hardening
 
@@ -95,6 +106,7 @@ If strict dogfood is blocked before creating product records, the report should 
 - Environment blockers are captured with command, status, and concise explanation.
 - Strict local Codex failure does not get converted into deterministic success.
 - If Docker or Postgres is unavailable, record that as infrastructure blocker and avoid changing product code unless the blocker is caused by repository code.
+- If the source checkout is dirty, record the exact dirty paths that block strict mode unless they are closure-owned files that have been committed before the run or dogfood-allowlisted report outputs.
 - If plan docs conflict with code, prefer current tests and source files, then document the reconciliation.
 
 ## Testing
@@ -104,6 +116,7 @@ Required verification for this closure pass:
 - `pnpm test`
 - `pnpm build`
 - `git diff --check`
+- `docker compose up -d postgres redis temporal` when local durable services are not already running
 - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm db:push` when Postgres is available
 - `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_REPO_PATH=/Users/viv/projs/forgeloop pnpm dogfood:p0:work-items` for strict acceptance
 
@@ -114,5 +127,6 @@ If strict dogfood cannot run to completion because of local environment constrai
 - The final report clearly says whether strict `local_codex` acceptance passed, failed, or was blocked.
 - Any blocker includes enough command evidence for the next operator to reproduce it.
 - Relevant P0/P1 planning docs no longer make completed Evidence Chain work look unstarted.
+- Any unrelated dirty files are preserved and called out rather than reverted or folded into closure work.
 - No Release, Retrospective, or broad Trace backfill product work is added.
 - Full test/build verification passes after changes, or any failure is explicitly documented with the narrow next fix.
