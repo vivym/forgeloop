@@ -164,6 +164,18 @@ describe('public evidence serialization', () => {
     }
   });
 
+  it('sanitizes artifact metadata strings before serialization', () => {
+    expect(serializePublicArtifactRef(publicArtifact({ name: '/Users/viv/projs/forgeloop/out.log' }))).toBeUndefined();
+    expect(serializePublicArtifactRef(publicArtifact({ content_type: '/tmp/out.log' }))).toBeUndefined();
+
+    expect(serializePublicArtifactRef(publicArtifact({ digest: 'file:///Users/viv/out.log' }))).toEqual({
+      kind: 'diff',
+      name: 'Patch',
+      content_type: 'text/x-patch',
+      storage_uri: 's3://forgeloop-artifacts/run-1/diff.patch',
+    });
+  });
+
   it('omits decision evidence refs', () => {
     const serialized = serializePublicDecision(decision());
 
@@ -481,5 +493,32 @@ describe('public evidence serialization', () => {
         payload: publicArtifact(),
       } as never),
     ).toThrow();
+  });
+
+  it('throws a clear non-leaking error for unsafe artifact replay payloads', () => {
+    let thrown: unknown;
+
+    try {
+      serializePublicReplayEntry({
+        id: 'entry-unsafe-artifact',
+        source: 'artifact',
+        object_type: 'artifact',
+        object_id: 'artifact-1',
+        summary: 'Artifact',
+        created_at: timestamp,
+        payload: publicArtifact({
+          name: '/Users/viv/projs/forgeloop/out.log',
+          storage_uri: 's3://bucket/key',
+          local_ref: 'artifacts/run/out.log',
+        }),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('Unsafe public artifact replay payload');
+    expect((thrown as Error).message).not.toContain('/Users/');
+    expect((thrown as Error).message).not.toContain('artifacts/run/out.log');
   });
 });

@@ -224,6 +224,13 @@ const sanitizeStringArrayFields = (target: JsonRecord, source: JsonRecord): void
 
 const hasKeys = (record: JsonRecord): boolean => Object.keys(record).length > 0;
 
+export class UnsafePublicArtifactReplayPayloadError extends Error {
+  constructor() {
+    super('Unsafe public artifact replay payload');
+    this.name = 'UnsafePublicArtifactReplayPayloadError';
+  }
+}
+
 export const artifactRedactionReason = (artifact: ArtifactRef): EvidenceChainRedactionReason | undefined => {
   const candidate = artifact as ArtifactRef & { raw_ref?: unknown };
 
@@ -256,12 +263,19 @@ export const serializePublicArtifactRef = (artifact: ArtifactRef): PublicArtifac
   }
 
   const candidate = artifact as ArtifactRef & { raw_ref?: unknown };
+  const name = safeString(candidate.name);
+  const contentType = safeString(candidate.content_type);
+  if (name === undefined || contentType === undefined) {
+    return undefined;
+  }
+
+  const digest = safeString(candidate.digest);
   const publicArtifact = {
     kind: candidate.kind,
-    name: candidate.name,
-    content_type: candidate.content_type,
+    name,
+    content_type: contentType,
     storage_uri: candidate.storage_uri,
-    ...(candidate.digest !== undefined ? { digest: candidate.digest } : {}),
+    ...(digest !== undefined ? { digest } : {}),
   };
   const parsed = publicArtifactRefSchema.safeParse(publicArtifact);
 
@@ -678,7 +692,7 @@ export const serializePublicReplayPayload = (
     case 'artifact': {
       const artifact = serializePublicArtifactRef(payload as ArtifactRef);
       if (artifact === undefined) {
-        return publicArtifactRefSchema.parse(payload);
+        throw new UnsafePublicArtifactReplayPayloadError();
       }
       return artifact;
     }
