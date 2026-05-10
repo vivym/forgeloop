@@ -717,11 +717,19 @@ export class DrizzleP0Repository implements P0Repository {
     await this.upsert(release_evidences, release_evidences.id, normalized);
   }
 
-  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
+  async getReleaseEvidence(releaseEvidenceId: string): Promise<ReleaseEvidence | undefined> {
+    return this.getById(release_evidences, release_evidences.id, releaseEvidenceId);
+  }
+
+  async listReleaseEvidences(releaseId: string): Promise<ReleaseEvidence[]> {
     return this.listWhere<ReleaseEvidence>(release_evidences, eq(release_evidences.releaseId, releaseId), [
       release_evidences.createdAt,
       release_evidences.id,
     ]);
+  }
+
+  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
+    return this.listReleaseEvidences(releaseId);
   }
 
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {

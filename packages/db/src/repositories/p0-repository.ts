@@ -179,6 +179,9 @@ export interface P0Repository {
   saveReleaseExecutionPackage(releaseExecutionPackage: ReleaseExecutionPackageRecord): Promise<void>;
   listReleaseExecutionPackages(releaseId: string): Promise<ReleaseExecutionPackageRecord[]>;
   saveReleaseEvidence(releaseEvidence: ReleaseEvidence): Promise<void>;
+  getReleaseEvidence(releaseEvidenceId: string): Promise<ReleaseEvidence | undefined>;
+  listReleaseEvidences(releaseId: string): Promise<ReleaseEvidence[]>;
+  /** @deprecated Use listReleaseEvidences. */
   listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]>;
 
   appendObjectEvent(objectEvent: ObjectEvent): Promise<void>;

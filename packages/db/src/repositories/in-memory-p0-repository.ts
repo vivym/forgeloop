@@ -536,10 +536,18 @@ export class InMemoryP0Repository implements P0Repository {
     this.releaseEvidences.set(releaseEvidence.id, clone(releaseEvidence));
   }
 
-  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
+  async getReleaseEvidence(releaseEvidenceId: string): Promise<ReleaseEvidence | undefined> {
+    return this.cloneMaybe(this.releaseEvidences.get(releaseEvidenceId));
+  }
+
+  async listReleaseEvidences(releaseId: string): Promise<ReleaseEvidence[]> {
     return valuesFor(this.releaseEvidences)
       .filter((releaseEvidence) => releaseEvidence.release_id === releaseId)
       .sort(byCreatedAtThenId);
+  }
+
+  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
+    return this.listReleaseEvidences(releaseId);
   }
 
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {

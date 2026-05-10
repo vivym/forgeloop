@@ -478,7 +478,8 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
   expect(await repository.listReleasesForProject(ids.project)).toEqual([release]);
   expect(await repository.listReleaseWorkItems(ids.release)).toEqual([releaseWorkItem]);
   expect(await repository.listReleaseExecutionPackages(ids.release)).toEqual([releaseExecutionPackage]);
-  expect(await repository.listReleaseEvidence(ids.release)).toEqual(evidences);
+  expect(await repository.getReleaseEvidence(ids.releaseEvidenceReview)).toEqual(evidences[0]);
+  expect(await repository.listReleaseEvidences(ids.release)).toEqual(evidences);
 
   const objectEvent: ObjectEvent = {
     id: 'object-event-1',
