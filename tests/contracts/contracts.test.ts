@@ -601,6 +601,62 @@ describe('P0 delivery loop contracts', () => {
     expect(
       releaseCockpitResponseSchema.safeParse({
         ...cockpit,
+        evidences: [
+          {
+            ...cockpit.evidences[0]!,
+            extra: {
+              build: {
+                build_id: 'build-1',
+                artifact: {
+                  kind: 'execution_summary',
+                  name: 'leak',
+                  content_type: 'text/plain',
+                  storage_uri: '/Users/viv/private.log',
+                },
+              },
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      releaseCockpitResponseSchema.safeParse({
+        ...cockpit,
+        evidences: [
+          {
+            ...cockpit.evidences[0]!,
+            extra: {
+              observation: {
+                source: 'script',
+                severity: 'warning',
+                summary: 'Unsafe metric',
+                observed_at: '2026-05-05T00:00:00.000Z',
+                metrics: { client_secret: 'hidden' },
+              },
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      releaseCockpitResponseSchema.safeParse({
+        ...cockpit,
+        decisions: [{ ...releaseDecision, object_type: 'work_item' }],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      releaseCockpitResponseSchema.safeParse({
+        ...cockpit,
+        decisions: [{ ...releaseDecision, decision_type: 'custom_non_release_decision' }],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      releaseCockpitResponseSchema.safeParse({
+        ...cockpit,
         decisions: [{ ...releaseDecision, outcome: 'ignored' }],
       }).success,
     ).toBe(false);

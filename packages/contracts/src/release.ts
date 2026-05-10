@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { jsonObjectSchema } from './executor.js';
 import { publicArtifactRefSchema } from './public-artifacts.js';
+import { publicMetricsSchema } from './public-evidence-safety.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const trimmedNonEmptyStringSchema = z.string().trim().min(1);
@@ -435,6 +436,81 @@ export type CreateReleaseEvidenceRequest = z.infer<typeof createReleaseEvidenceR
 export const publicReleaseArtifactRefSchema = publicArtifactRefSchema;
 export type PublicReleaseArtifactRef = z.infer<typeof publicReleaseArtifactRefSchema>;
 
+const publicReleaseEvidenceObservationExtraSchema = z
+  .object({
+    source: z.enum(['human', 'script']),
+    severity: z.enum(['info', 'warning', 'failure']),
+    summary: z.string().min(1),
+    observed_at: isoDateTimeSchema,
+    actor_id: z.string().min(1).optional(),
+    links: z.array(releaseEvidenceObservationLinkSchema).optional(),
+    metrics: publicMetricsSchema.optional(),
+    notes: z.string().min(1).optional(),
+  })
+  .strict();
+
+const publicReleaseEvidenceDeploymentSchema = z
+  .object({
+    environment: z.string().min(1),
+    result: z.enum(['succeeded', 'failed', 'cancelled', 'in_progress']),
+    deployment_id: z.string().min(1).optional(),
+    target: z.string().min(1).optional(),
+    version: z.string().min(1).optional(),
+    started_at: isoDateTimeSchema.optional(),
+    completed_at: isoDateTimeSchema.optional(),
+    actor_id: z.string().min(1).optional(),
+    notes: z.string().min(1).optional(),
+  })
+  .strict();
+
+const publicReleaseEvidenceRollbackSchema = z
+  .object({
+    result: z.enum(['succeeded', 'failed', 'cancelled', 'not_required']),
+    reason: z.string().min(1).optional(),
+    rollback_id: z.string().min(1).optional(),
+    target: z.string().min(1).optional(),
+    started_at: isoDateTimeSchema.optional(),
+    completed_at: isoDateTimeSchema.optional(),
+    actor_id: z.string().min(1).optional(),
+    notes: z.string().min(1).optional(),
+  })
+  .strict();
+
+const publicReleaseEvidenceBuildSchema = z
+  .object({
+    build_id: z.string().min(1).optional(),
+    version: z.string().min(1).optional(),
+    commit_sha: z.string().min(1).optional(),
+    source_branch: z.string().min(1).optional(),
+    result: z.enum(['succeeded', 'failed', 'cancelled', 'in_progress']).optional(),
+    started_at: isoDateTimeSchema.optional(),
+    completed_at: isoDateTimeSchema.optional(),
+    artifact_id: z.string().min(1).optional(),
+    artifact: publicReleaseArtifactRefSchema.optional(),
+  })
+  .strict();
+
+const publicReleaseEvidenceCheckRefSchema = z
+  .object({
+    check_id: z.string().min(1),
+    status: z.enum(['succeeded', 'failed', 'skipped']),
+    summary: z.string().min(1).optional(),
+    artifact_id: z.string().min(1).optional(),
+    artifact: publicReleaseArtifactRefSchema.optional(),
+  })
+  .strict();
+
+export const publicReleaseEvidenceProjectionExtraSchema = z
+  .object({
+    observation: publicReleaseEvidenceObservationExtraSchema.optional(),
+    deployment: publicReleaseEvidenceDeploymentSchema.optional(),
+    rollback: publicReleaseEvidenceRollbackSchema.optional(),
+    build: publicReleaseEvidenceBuildSchema.optional(),
+    check_refs: z.array(publicReleaseEvidenceCheckRefSchema).optional(),
+  })
+  .strict();
+export type PublicReleaseEvidenceProjectionExtra = z.infer<typeof publicReleaseEvidenceProjectionExtraSchema>;
+
 export const publicReleaseWorkItemSummarySchema = z
   .object({
     id: z.string().min(1),
@@ -531,11 +607,11 @@ export type PublicReleaseReviewPacketSummary = z.infer<typeof publicReleaseRevie
 export const publicReleaseDecisionSchema = z
   .object({
     id: z.string().min(1),
-    object_type: z.string().min(1),
+    object_type: z.literal('release'),
     object_id: z.string().min(1),
     actor_id: z.string().min(1),
     decided_by_actor_id: z.string().min(1).optional(),
-    decision_type: z.string().min(1).optional(),
+    decision_type: z.enum(['manual_override', 'release_approval', 'release_changes_requested', 'release_close']).optional(),
     outcome: z
       .enum(['approved', 'changes_requested', 'rejected', 'override_approved', 'rolled_back', 'cancelled', 'completed'])
       .optional(),
@@ -566,7 +642,7 @@ export const publicReleaseEvidenceProjectionSchema = z
     object_ref: releaseEvidenceObjectRefSchema.optional(),
     artifact_id: z.string().min(1).optional(),
     artifact: publicReleaseArtifactRefSchema.optional(),
-    extra: releaseEvidenceExtraSchema,
+    extra: publicReleaseEvidenceProjectionExtraSchema,
     redacted: z.boolean(),
     status: releaseEvidenceStatusSchema,
     created_at: isoDateTimeSchema,
