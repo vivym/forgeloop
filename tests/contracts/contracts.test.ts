@@ -397,6 +397,144 @@ describe('P0 delivery loop contracts', () => {
         work_item_ids: ['work-item-1'],
         execution_package_ids: ['package-1'],
       }),
+      work_items: [
+        {
+          id: 'work-item-1',
+          project_id: 'project-1',
+          title: 'Release radar work item',
+          kind: 'requirement',
+          phase: 'done',
+          activity_state: 'idle',
+          gate_state: 'none',
+          resolution: 'completed',
+          priority: 'P1',
+          risk: 'medium',
+        },
+      ],
+      execution_packages: [
+        {
+          id: 'package-1',
+          work_item_id: 'work-item-1',
+          project_id: 'project-1',
+          objective: 'Ship release radar.',
+          display_title: 'Ship release radar.',
+          phase: 'release',
+          activity_state: 'idle',
+          gate_state: 'release_ready',
+          resolution: 'completed',
+          integration_readiness_summary: 'Ready for release.',
+          required_check_summary: {
+            total: 1,
+            passed: 1,
+            failed: 0,
+            missing: 0,
+          },
+          required_artifact_summary: {
+            required: ['execution_summary'],
+            present: ['execution_summary'],
+            missing: [],
+          },
+        },
+      ],
+      latest_run_sessions: [
+        {
+          id: 'run-session-1',
+          execution_package_id: 'package-1',
+          status: 'succeeded',
+          executor_type: 'local_codex',
+          summary: 'Release checks passed.',
+          check_results: [
+            {
+              check_id: 'contracts',
+              status: 'succeeded',
+              blocks_review: true,
+              summary: 'Passed.',
+            },
+          ],
+          artifacts: [
+            {
+              kind: 'execution_summary',
+              name: 'summary',
+              content_type: 'text/markdown',
+              storage_uri: 's3://release-artifacts/run-session-1/summary.md',
+            },
+          ],
+          created_at: '2026-05-05T00:00:00.000Z',
+          updated_at: '2026-05-05T00:00:00.000Z',
+          started_at: '2026-05-05T00:00:00.000Z',
+          finished_at: '2026-05-05T00:00:00.000Z',
+        },
+      ],
+      current_review_packets: [
+        {
+          id: 'review-packet-1',
+          execution_package_id: 'package-1',
+          run_session_id: 'run-session-1',
+          status: 'completed',
+          decision: 'approved',
+          summary: 'Approved.',
+          check_result_summary: 'Contracts passed.',
+          risk_notes: [],
+          created_at: '2026-05-05T00:00:00.000Z',
+          updated_at: '2026-05-05T00:00:00.000Z',
+          completed_at: '2026-05-05T00:00:00.000Z',
+        },
+      ],
+      evidences: [
+        {
+          id: 'evidence-1',
+          release_id: 'release-cockpit-1',
+          evidence_type: 'observation_note',
+          summary: 'Observation is healthy.',
+          extra: {
+            observation: {
+              source: 'human',
+              severity: 'info',
+              summary: 'Healthy.',
+              observed_at: '2026-05-05T00:00:00.000Z',
+              links: [{ object_type: 'release', object_id: 'release-cockpit-1', relationship: 'observed' }],
+            },
+          },
+          redacted: false,
+          status: 'current',
+          created_at: '2026-05-05T00:00:00.000Z',
+          created_by_actor_id: 'actor-owner',
+        },
+      ],
+      observations: [
+        {
+          id: 'evidence-1',
+          release_id: 'release-cockpit-1',
+          evidence_type: 'observation_note',
+          summary: 'Observation is healthy.',
+          extra: {
+            observation: {
+              source: 'human',
+              severity: 'info',
+              summary: 'Healthy.',
+              observed_at: '2026-05-05T00:00:00.000Z',
+              links: [{ object_type: 'release', object_id: 'release-cockpit-1', relationship: 'observed' }],
+            },
+          },
+          redacted: false,
+          status: 'current',
+          created_at: '2026-05-05T00:00:00.000Z',
+          created_by_actor_id: 'actor-owner',
+        },
+      ],
+      decisions: [
+        {
+          id: 'decision-1',
+          object_type: 'release',
+          object_id: 'release-cockpit-1',
+          actor_id: 'actor-reviewer',
+          decision_type: 'release_approval',
+          outcome: 'approved',
+          decision: 'approved',
+          summary: 'Approved.',
+          created_at: '2026-05-05T00:00:00.000Z',
+        },
+      ],
       blocker_snapshot: validReleaseBlockerSnapshot,
       blockers: [
         {
@@ -406,11 +544,42 @@ describe('P0 delivery loop contracts', () => {
           message: 'Release is missing a rollback plan.',
         },
       ],
+      overridden_blockers: [],
+      risk_summary: {
+        structural_blocker_count: 0,
+        risk_blocker_count: 0,
+        evidence_blocker_count: 0,
+        planning_blocker_count: 1,
+        redacted_or_stale_evidence_count: 0,
+        failed_or_missing_check_count: 0,
+        packages_not_ready_count: 0,
+        release_can_proceed_without_override: false,
+        release_can_proceed_with_override: true,
+        release_cannot_proceed: false,
+      },
+      checklist: [
+        {
+          id: 'rollback_plan',
+          label: 'Rollback plan exists',
+          status: 'blocked',
+          blocker_codes: ['missing_rollback_plan'],
+          summary: 'Add rollback plan.',
+        },
+      ],
       next_actions: ['Add rollback plan before approval.'],
     });
 
     expect(cockpit.release.id).toBe('release-cockpit-1');
+    expect(cockpit.work_items).toHaveLength(1);
+    expect(cockpit.execution_packages).toHaveLength(1);
+    expect(cockpit.latest_run_sessions).toHaveLength(1);
+    expect(cockpit.current_review_packets).toHaveLength(1);
+    expect(cockpit.evidences).toHaveLength(1);
+    expect(cockpit.observations).toHaveLength(1);
+    expect(cockpit.decisions[0]?.decision_type).toBe('release_approval');
     expect(cockpit.blockers[0]?.code).toBe('missing_rollback_plan');
+    expect(cockpit.risk_summary.release_can_proceed_with_override).toBe(true);
+    expect(cockpit.checklist[0]?.blocker_codes).toEqual(['missing_rollback_plan']);
     expect(cockpit.next_actions).toEqual(['Add rollback plan before approval.']);
 
     expect(releaseBlockerCodes).toEqual([

@@ -431,12 +431,200 @@ export const createReleaseEvidenceRequestSchema = z
   .superRefine(validateReleaseEvidenceObjectRef);
 export type CreateReleaseEvidenceRequest = z.infer<typeof createReleaseEvidenceRequestSchema>;
 
+export const publicReleaseArtifactRefSchema = z
+  .object({
+    kind: z.string().min(1),
+    name: z.string().min(1),
+    content_type: z.string().min(1),
+    storage_uri: z.string().min(1),
+    digest: z.string().min(1).optional(),
+  })
+  .strict();
+export type PublicReleaseArtifactRef = z.infer<typeof publicReleaseArtifactRefSchema>;
+
+export const publicReleaseWorkItemSummarySchema = z
+  .object({
+    id: z.string().min(1),
+    project_id: z.string().min(1),
+    title: z.string().min(1),
+    kind: z.string().min(1),
+    phase: z.string().min(1),
+    activity_state: z.string().min(1),
+    gate_state: z.string().min(1),
+    resolution: z.string().min(1),
+    priority: z.string().min(1).optional(),
+    risk: z.string().min(1).optional(),
+  })
+  .strict();
+export type PublicReleaseWorkItemSummary = z.infer<typeof publicReleaseWorkItemSummarySchema>;
+
+export const publicReleaseExecutionPackageSummarySchema = z
+  .object({
+    id: z.string().min(1),
+    work_item_id: z.string().min(1),
+    project_id: z.string().min(1),
+    objective: z.string().min(1),
+    display_title: z.string().min(1).optional(),
+    phase: z.string().min(1),
+    activity_state: z.string().min(1),
+    gate_state: z.string().min(1),
+    resolution: z.string().min(1),
+    integration_readiness_summary: z.string().min(1).optional(),
+    required_check_summary: z
+      .object({
+        total: z.number().int().nonnegative(),
+        passed: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        missing: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
+    required_artifact_summary: z
+      .object({
+        required: z.array(z.string().min(1)),
+        present: z.array(z.string().min(1)),
+        missing: z.array(z.string().min(1)),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type PublicReleaseExecutionPackageSummary = z.infer<typeof publicReleaseExecutionPackageSummarySchema>;
+
+export const publicReleaseRunSessionSummarySchema = z
+  .object({
+    id: z.string().min(1),
+    execution_package_id: z.string().min(1),
+    status: z.string().min(1),
+    executor_type: z.string().min(1).optional(),
+    driver: z.string().min(1).optional(),
+    summary: z.string().min(1).optional(),
+    check_results: z.array(
+      z
+        .object({
+          check_id: z.string().min(1),
+          status: z.string().min(1),
+          blocks_review: z.boolean().optional(),
+          summary: z.string().min(1).optional(),
+        })
+        .strict(),
+    ),
+    artifacts: z.array(publicReleaseArtifactRefSchema),
+    created_at: isoDateTimeSchema,
+    updated_at: isoDateTimeSchema,
+    started_at: isoDateTimeSchema.optional(),
+    finished_at: isoDateTimeSchema.optional(),
+  })
+  .strict();
+export type PublicReleaseRunSessionSummary = z.infer<typeof publicReleaseRunSessionSummarySchema>;
+
+export const publicReleaseReviewPacketSummarySchema = z
+  .object({
+    id: z.string().min(1),
+    execution_package_id: z.string().min(1),
+    run_session_id: z.string().min(1),
+    status: z.string().min(1),
+    decision: z.string().min(1),
+    summary: z.string().min(1).optional(),
+    check_result_summary: z.string().min(1).optional(),
+    risk_notes: z.array(z.string().min(1)),
+    created_at: isoDateTimeSchema,
+    updated_at: isoDateTimeSchema,
+    completed_at: isoDateTimeSchema.optional(),
+  })
+  .strict();
+export type PublicReleaseReviewPacketSummary = z.infer<typeof publicReleaseReviewPacketSummarySchema>;
+
+export const publicReleaseDecisionSchema = z
+  .object({
+    id: z.string().min(1),
+    object_type: z.string().min(1),
+    object_id: z.string().min(1),
+    actor_id: z.string().min(1),
+    decided_by_actor_id: z.string().min(1).optional(),
+    decision_type: z.string().min(1).optional(),
+    outcome: z
+      .enum(['approved', 'changes_requested', 'rejected', 'override_approved', 'rolled_back', 'cancelled', 'completed'])
+      .optional(),
+    decision: z.enum([
+      'approved',
+      'changes_requested',
+      'need_more_context',
+      'escalate',
+      'rejected',
+      'override_approved',
+      'rolled_back',
+      'cancelled',
+      'completed',
+    ]),
+    summary: z.string().min(1),
+    rationale: z.string().min(1).optional(),
+    created_at: isoDateTimeSchema,
+  })
+  .strict();
+export type PublicReleaseDecision = z.infer<typeof publicReleaseDecisionSchema>;
+
+export const publicReleaseEvidenceProjectionSchema = z
+  .object({
+    id: z.string().min(1),
+    release_id: z.string().min(1),
+    evidence_type: releaseEvidenceTypeSchema,
+    summary: z.string().min(1),
+    object_ref: releaseEvidenceObjectRefSchema.optional(),
+    artifact_id: z.string().min(1).optional(),
+    artifact: publicReleaseArtifactRefSchema.optional(),
+    extra: releaseEvidenceExtraSchema,
+    redacted: z.boolean(),
+    status: releaseEvidenceStatusSchema,
+    created_at: isoDateTimeSchema,
+    created_by_actor_id: z.string().min(1).optional(),
+  })
+  .strict();
+export type PublicReleaseEvidenceProjection = z.infer<typeof publicReleaseEvidenceProjectionSchema>;
+
+export const releaseRiskSummarySchema = z
+  .object({
+    structural_blocker_count: z.number().int().nonnegative(),
+    risk_blocker_count: z.number().int().nonnegative(),
+    evidence_blocker_count: z.number().int().nonnegative(),
+    planning_blocker_count: z.number().int().nonnegative(),
+    redacted_or_stale_evidence_count: z.number().int().nonnegative(),
+    failed_or_missing_check_count: z.number().int().nonnegative(),
+    packages_not_ready_count: z.number().int().nonnegative(),
+    release_can_proceed_without_override: z.boolean(),
+    release_can_proceed_with_override: z.boolean(),
+    release_cannot_proceed: z.boolean(),
+  })
+  .strict();
+export type ReleaseRiskSummary = z.infer<typeof releaseRiskSummarySchema>;
+
+export const releaseChecklistItemSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    status: z.enum(['passed', 'blocked', 'warning', 'pending']),
+    blocker_codes: z.array(releaseBlockerCodeSchema).default([]),
+    summary: z.string().min(1).optional(),
+  })
+  .strict();
+export type ReleaseChecklistItem = z.infer<typeof releaseChecklistItemSchema>;
+
 export const releaseCockpitResponseSchema = z
   .object({
     release: publicReleaseSummarySchema,
+    work_items: z.array(publicReleaseWorkItemSummarySchema),
+    execution_packages: z.array(publicReleaseExecutionPackageSummarySchema),
+    latest_run_sessions: z.array(publicReleaseRunSessionSummarySchema),
+    current_review_packets: z.array(publicReleaseReviewPacketSummarySchema),
+    evidences: z.array(publicReleaseEvidenceProjectionSchema),
+    observations: z.array(publicReleaseEvidenceProjectionSchema),
+    decisions: z.array(publicReleaseDecisionSchema),
     blocker_snapshot: releaseBlockerSnapshotSchema,
     blockers: z.array(releaseBlockerSchema),
-    next_actions: z.array(z.string().min(1)).default([]),
+    overridden_blockers: z.array(releaseBlockerSchema),
+    risk_summary: releaseRiskSummarySchema,
+    checklist: z.array(releaseChecklistItemSchema),
+    next_actions: z.array(z.string().min(1)),
   })
   .strict();
 export type ReleaseCockpitResponse = z.infer<typeof releaseCockpitResponseSchema>;
