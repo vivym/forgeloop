@@ -461,8 +461,8 @@ const sanitizeObservation = (value: unknown): PublicReleaseEvidenceExtra['observ
     return undefined;
   }
 
-  const source = safeEnum(value.source, observationSources);
-  const severity = safeEnum(value.severity, observationSeverities);
+  const source = safeEnum<PublicObservation['source']>(value.source, observationSources);
+  const severity = safeEnum<PublicObservation['severity']>(value.severity, observationSeverities);
   const summary = safeString(value.summary);
   const observedAt = safeIsoDateTime(value.observed_at);
   if (source === undefined || severity === undefined || summary === undefined || observedAt === undefined) {
