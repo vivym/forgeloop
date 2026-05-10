@@ -36,6 +36,7 @@ import {
   deriveReleaseBlockers,
   deriveReleaseNextActions,
   isReleaseBlockerSnapshotInternallyConsistent,
+  selectReleaseReviewPacket,
   transitionRelease,
   DomainError,
   type Decision,
@@ -118,6 +119,12 @@ const valueForHistory = (value: unknown): string | undefined => {
 
 const sameValue = (left: unknown, right: unknown): boolean => valueForHistory(left) === valueForHistory(right);
 const uuidBackedIdPrefixes = new Set(['release', 'release-evidence', 'decision']);
+
+const byUpdatedAtDesc = <T extends { updated_at?: string; created_at: string; id: string }>(left: T, right: T): number => {
+  const leftTime = Date.parse(left.updated_at ?? left.created_at);
+  const rightTime = Date.parse(right.updated_at ?? right.created_at);
+  return rightTime - leftTime || right.id.localeCompare(left.id);
+};
 
 @Injectable()
 export class ReleaseService {
@@ -495,12 +502,29 @@ export class ReleaseService {
     ]);
     const workItems = resolvedReleaseWorkItems(workItemLinks);
     const executionPackages = resolvedReleaseExecutionPackages(executionPackageLinks);
-    const runSessions = (
-      await Promise.all(executionPackages.map((executionPackage) => this.repository.listRunSessionsForPackage(executionPackage.id)))
-    ).flat();
+    const runSessionsByPackage = await Promise.all(
+      executionPackages.map(async (executionPackage) => {
+        const packageRunSessions = await this.repository.listRunSessionsForPackage(executionPackage.id);
+        return {
+          executionPackage,
+          packageRunSessions,
+          selectedRunSession:
+            packageRunSessions.find((runSession) => release.current_run_session_ids?.includes(runSession.id) === true) ??
+            packageRunSessions.find((runSession) => runSession.id === executionPackage.current_run_session_id) ??
+            packageRunSessions.find((runSession) => runSession.id === executionPackage.last_run_session_id) ??
+            [...packageRunSessions].sort(byUpdatedAtDesc)[0],
+        };
+      }),
+    );
+    const runSessions = runSessionsByPackage.flatMap((item) => item.packageRunSessions);
+    const selectedRunSessions = runSessionsByPackage.flatMap((item) => (item.selectedRunSession === undefined ? [] : [item.selectedRunSession]));
     const reviewPackets = (
       await Promise.all(executionPackages.map((executionPackage) => this.repository.listReviewPacketsForPackage(executionPackage.id)))
     ).flat();
+    const selectedReviewPackets = executionPackages.flatMap((executionPackage) => {
+      const selected = selectReleaseReviewPacket(release, executionPackage, reviewPackets);
+      return selected === undefined ? [] : [selected];
+    });
 
     return {
       release,
@@ -511,7 +535,14 @@ export class ReleaseService {
       run_sessions: runSessions,
       review_packets: reviewPackets,
       evidence,
-      public_link_visibility: await this.publicLinkVisibility(release, workItems, executionPackages, runSessions, reviewPackets, evidence),
+      public_link_visibility: await this.publicLinkVisibility(
+        release,
+        workItems,
+        executionPackages,
+        selectedRunSessions,
+        selectedReviewPackets,
+        evidence,
+      ),
     };
   }
 

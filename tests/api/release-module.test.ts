@@ -758,6 +758,48 @@ describe('release module', () => {
       'unsafe_or_redacted_evidence_backlink',
     );
 
+    await repo.saveRunSession(runSession({ id: 'run-session-not-current', execution_package_id: scope.executionPackage.id }));
+    await repo.saveReviewPacket(
+      reviewPacket({
+        id: 'review-packet-not-current',
+        execution_package_id: scope.executionPackage.id,
+        run_session_id: 'run-session-not-current',
+      }),
+    );
+    const staleRuntimeRefs = await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Backlink points to non-current runtime evidence.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'warning',
+            observed_at: later,
+            summary: 'Runtime refs should match cockpit public projection.',
+            links: [
+              { object_type: 'release', object_id: id, relationship: 'observed' },
+              { object_type: 'work_item', object_id: scope.workItem.id, relationship: 'affected' },
+              { object_type: 'run_session', object_id: 'run-session-not-current', relationship: 'generated_by' },
+              { object_type: 'review_packet', object_id: 'review-packet-not-current', relationship: 'supports' },
+            ],
+          },
+        },
+      })
+      .expect(201);
+    const staleRuntimeEvidence = (await repo.listReleaseEvidences(id)).find(
+      (evidence) => evidence.summary === 'Backlink points to non-current runtime evidence.',
+    );
+    expect(staleRuntimeRefs.body.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unsafe_or_redacted_evidence_backlink',
+          object_id: staleRuntimeEvidence?.id,
+        }),
+      ]),
+    );
+
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
       .send({ actor_id: actorOwner, evidence_type: 'review_packet', summary: 'bad', object_ref: { object_type: 'work_item', object_id: 'x', relationship: 'supports' } })
