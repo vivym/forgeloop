@@ -18,6 +18,7 @@ import {
   releaseActorCommandRequestSchema,
   releaseControlResponseSchema,
   releaseEvidenceSchema,
+  releaseSchema,
   forceRerunPackageRequestSchema,
   forceRerunPackageResponseSchema,
   approveReleaseRequestSchema,
@@ -235,6 +236,27 @@ describe('P0 delivery loop contracts', () => {
     ...overrides,
   });
 
+  const releaseFixture = (overrides: Record<string, unknown> = {}) => ({
+    id: 'release-1',
+    org_id: 'org-1',
+    project_id: 'project-1',
+    title: 'P1 release',
+    phase: 'approval',
+    activity_state: 'awaiting_human',
+    gate_state: 'awaiting_approval',
+    resolution: 'none',
+    work_item_ids: ['work-item-1'],
+    execution_package_ids: ['package-1'],
+    scope_summary: 'Ship release radar.',
+    rollout_strategy: 'Deploy behind a flag.',
+    rollback_plan: 'Disable the flag.',
+    observation_plan: 'Watch error rate.',
+    created_by_actor_id: 'actor-owner',
+    created_at: '2026-05-05T00:00:00.000Z',
+    updated_at: '2026-05-05T00:00:00.000Z',
+    ...overrides,
+  });
+
   it('parses release request and response DTOs', () => {
     expect(
       createReleaseRequestSchema.parse({
@@ -404,6 +426,14 @@ describe('P0 delivery loop contracts', () => {
       expect(
         publicReleaseSummarySchema.safeParse(
           publicReleaseSummaryFixture({
+            [field]: '   ',
+          }),
+        ).success,
+      ).toBe(false);
+
+      expect(
+        releaseSchema.safeParse(
+          releaseFixture({
             [field]: '   ',
           }),
         ).success,
