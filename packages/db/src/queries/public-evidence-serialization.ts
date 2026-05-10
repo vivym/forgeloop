@@ -624,7 +624,21 @@ const artifactRefFromInput = (artifact: Artifact | ArtifactRef | undefined): Art
 };
 
 const safeReleaseObjectRef = (objectRef: unknown): ReleaseEvidence['object_ref'] | undefined => {
-  const parsed = releaseEvidenceObjectRefSchema.safeParse(objectRef);
+  if (!isRecord(objectRef)) {
+    return undefined;
+  }
+
+  const objectId = safeString(objectRef.object_id);
+  if (objectId === undefined) {
+    return undefined;
+  }
+
+  const parsed = releaseEvidenceObjectRefSchema.safeParse({
+    object_type: objectRef.object_type,
+    object_id: objectId,
+    relationship: objectRef.relationship,
+  });
+
   return parsed.success ? parsed.data : undefined;
 };
 

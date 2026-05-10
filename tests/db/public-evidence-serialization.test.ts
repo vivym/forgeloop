@@ -427,6 +427,25 @@ describe('public evidence serialization', () => {
     });
   });
 
+  it('drops unknown release object ref fields while preserving the valid object ref', () => {
+    expect(
+      serializePublicReleaseEvidence({
+        evidence: releaseEvidence({
+          object_ref: {
+            object_type: 'work_item',
+            object_id: 'work-item-1',
+            relationship: 'supports',
+            raw_payload: { token: 'drop' },
+          } as ReleaseEvidence['object_ref'] & { raw_payload: unknown },
+        }),
+      }).object_ref,
+    ).toEqual({
+      object_type: 'work_item',
+      object_id: 'work-item-1',
+      relationship: 'supports',
+    });
+  });
+
   it('enforces replay source and payload pairing', () => {
     const releaseEntry = serializePublicReplayEntry({
       id: 'entry-release-evidence',
