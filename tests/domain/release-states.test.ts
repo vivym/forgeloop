@@ -9,6 +9,7 @@ import {
   type Release,
   type ReleaseBlocker,
   type ReleaseBlockerSnapshot,
+  type ReleaseEvidence,
   type ReleaseGateContext,
   type ReviewPacket,
   type RunSession,
@@ -176,6 +177,40 @@ const gateContext = (release: Release, overrides: ReleaseGateContext = {}): Rele
   ...overrides,
 });
 
+const completedObservationEvidence = (releaseId: string, overrides: Partial<ReleaseEvidence> = {}): ReleaseEvidence => ({
+  id: 'evidence-observation-1',
+  release_id: releaseId,
+  evidence_type: 'observation_note',
+  summary: 'Rollout observation passed.',
+  extra: {
+    observation: {
+      source: 'human',
+      severity: 'info',
+      summary: 'No regressions observed.',
+      observed_at: timestamp,
+      links: [
+        { object_type: 'release', object_id: releaseId, relationship: 'observed' },
+        { object_type: 'work_item', object_id: 'work-item-1', relationship: 'affected' },
+      ],
+    },
+  },
+  redacted: false,
+  status: 'current',
+  created_at: timestamp,
+  ...overrides,
+});
+
+const closeCompletedEvent = (release: Release, overrides: Partial<ReleaseGateContext> = {}) => ({
+    type: 'close' as const,
+    resolution: 'completed' as const,
+    actor_id: 'actor-release-manager',
+    gate_context: gateContext(release, {
+      evidence: [completedObservationEvidence(release.id)],
+      ...overrides,
+    }),
+    at: timestamp,
+  });
+
 const currentSnapshot = (release: Release, overrides: ReleaseGateContext = {}): ReleaseBlockerSnapshot =>
   blockerSnapshot(release.id, deriveReleaseBlockers(gateContext(release, overrides)));
 
@@ -225,6 +260,39 @@ describe('Release state transitions', () => {
       activity_state: 'idle',
       gate_state: 'not_submitted',
       resolution: 'none',
+    });
+  });
+
+  it('keeps candidate phase when unlinking one of multiple scoped objects leaves scope behind', () => {
+    const candidate = {
+      ...createRelease(),
+      phase: 'candidate',
+      work_item_ids: ['work-item-1', 'work-item-2'],
+      execution_package_ids: ['package-1', 'package-2'],
+    } as Release;
+
+    expect(
+      transitionRelease(candidate, {
+        type: 'unlink_work_item',
+        work_item_id: 'work-item-1',
+        at: timestamp,
+      }).release,
+    ).toMatchObject({
+      phase: 'candidate',
+      work_item_ids: ['work-item-2'],
+      execution_package_ids: ['package-1', 'package-2'],
+    });
+
+    expect(
+      transitionRelease(candidate, {
+        type: 'unlink_execution_package',
+        execution_package_id: 'package-1',
+        at: timestamp,
+      }).release,
+    ).toMatchObject({
+      phase: 'candidate',
+      work_item_ids: ['work-item-1', 'work-item-2'],
+      execution_package_ids: ['package-2'],
     });
   });
 
@@ -438,19 +506,39 @@ describe('Release state transitions', () => {
     });
   });
 
-  it('closes completed observing releases', () => {
+  it('closes completed observing releases with observation evidence and records a close decision intent', () => {
+    const observing = {
+      ...createRelease(),
+      phase: 'observing',
+      gate_state: 'rollout_succeeded',
+    } as Release;
+    const result = transitionRelease(observing, closeCompletedEvent(observing));
+
+    expect(releaseState(result.release)).toEqual({
+      phase: 'completed',
+      activity_state: 'idle',
+      gate_state: 'rollout_succeeded',
+      resolution: 'completed',
+    });
+    expect(result.decision_intents).toEqual([
+      {
+        object_type: 'release',
+        object_id: 'release-1',
+        actor_id: 'actor-release-manager',
+        decision_type: 'release_close',
+        outcome: 'completed',
+      },
+    ]);
+  });
+
+  it('blocks completed close without valid observation evidence', () => {
     const observing = {
       ...createRelease(),
       phase: 'observing',
       gate_state: 'rollout_succeeded',
     } as Release;
 
-    expect(releaseState(transitionRelease(observing, { type: 'close', resolution: 'completed' }).release)).toEqual({
-      phase: 'completed',
-      activity_state: 'idle',
-      gate_state: 'rollout_succeeded',
-      resolution: 'completed',
-    });
+    expect(() => transitionRelease(observing, closeCompletedEvent(observing, { evidence: [] }))).toThrow(DomainError);
   });
 
   it('closes completed with observation override and records override plus close decision intents', () => {
@@ -502,7 +590,7 @@ describe('Release state transitions', () => {
       expect.objectContaining({
         actor_id: 'actor-release-manager',
         decision_type: 'manual_override',
-        outcome: 'completed',
+        outcome: 'override_approved',
         reason: 'Observation issue is understood and publicly documented elsewhere.',
         blocker_snapshot: snapshot,
       }),
@@ -562,19 +650,29 @@ describe('Release state transitions', () => {
     ).toThrow(DomainError);
   });
 
-  it.each(['rolled_back', 'cancelled'] as const)('closes %s releases', (resolution) => {
+  it.each(['rolled_back', 'cancelled'] as const)('closes %s releases and records a close decision intent', (resolution) => {
     const release = {
       ...createRelease(),
       phase: 'rollout',
-      gate_state: resolution === 'rolled_back' ? 'rollout_failed' : 'approved',
+      gate_state: 'approved',
     } as Release;
+    const result = transitionRelease(release, { type: 'close', resolution, actor_id: 'actor-release-manager' });
 
-    expect(releaseState(transitionRelease(release, { type: 'close', resolution }).release)).toEqual({
+    expect(releaseState(result.release)).toEqual({
       phase: 'closed',
       activity_state: 'idle',
-      gate_state: release.gate_state,
+      gate_state: resolution === 'rolled_back' ? 'rollout_failed' : 'approved',
       resolution,
     });
+    expect(result.decision_intents).toEqual([
+      {
+        object_type: 'release',
+        object_id: 'release-1',
+        actor_id: 'actor-release-manager',
+        decision_type: 'release_close',
+        outcome: resolution,
+      },
+    ]);
   });
 
   it.each([
@@ -592,12 +690,26 @@ describe('Release state transitions', () => {
       activity_state: phase === 'approval' ? 'awaiting_human' : 'idle',
     } as Release;
 
-    expect(releaseState(transitionRelease(release, { type: 'close', resolution: 'cancelled', at: timestamp }).release)).toEqual({
+    const result = transitionRelease(release, {
+      type: 'close',
+      resolution: 'cancelled',
+      actor_id: 'actor-release-manager',
+      at: timestamp,
+    });
+
+    expect(releaseState(result.release)).toEqual({
       phase: 'closed',
       activity_state: 'idle',
       gate_state: gateState,
       resolution: 'cancelled',
     });
+    expect(result.decision_intents).toEqual([
+      expect.objectContaining({
+        actor_id: 'actor-release-manager',
+        decision_type: 'release_close',
+        outcome: 'cancelled',
+      }),
+    ]);
   });
 
   it('rejects structural blockers on submit, approve, and override approve', () => {
@@ -816,7 +928,7 @@ describe('Release state transitions', () => {
       gate_context: gateContext(approval),
     }).release;
     const observing = transitionRelease(rollout, { type: 'start_observing' }).release;
-    const completed = transitionRelease(observing, { type: 'close', resolution: 'completed' }).release;
+    const completed = transitionRelease(observing, closeCompletedEvent(observing)).release;
 
     expect(releaseState(completed)).toEqual({
       phase: 'completed',

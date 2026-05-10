@@ -376,8 +376,65 @@ const hasUnsafePublicObservationLink = (
   return links.some((link) => visibilityByRef.get(visibilityKey(link.object_type, link.object_id)) !== true);
 };
 
-export const isCompletedCloseObservationEvidence = (evidence: ReleaseEvidence): boolean => {
-  if (evidence.evidence_type !== 'observation_note' || evidence.redacted || evidence.status !== 'current') {
+const isObservationEvidenceType = (evidenceType: ReleaseEvidence['evidence_type']): boolean =>
+  evidenceType === 'observation_note' || evidenceType === 'metric_snapshot';
+
+const isPublicObservationLink = (
+  link: ObservationLink,
+  publicLinkVisibility: readonly ReleasePublicLinkVisibility[] | undefined,
+): boolean => {
+  if (publicLinkVisibility === undefined) {
+    return true;
+  }
+
+  return publicLinkVisibility.some(
+    (item) => item.object_type === link.object_type && item.object_id === link.object_id && item.public,
+  );
+};
+
+const hasPublicReleaseBacklink = (
+  links: readonly ObservationLink[],
+  release: Release,
+  publicLinkVisibility: readonly ReleasePublicLinkVisibility[] | undefined,
+): boolean =>
+  links.some(
+    (link) =>
+      link.object_type === 'release' &&
+      link.object_id === release.id &&
+      isPublicObservationLink(link, publicLinkVisibility),
+  );
+
+const hasPublicScopedBacklink = (
+  links: readonly ObservationLink[],
+  release: Release,
+  publicLinkVisibility: readonly ReleasePublicLinkVisibility[] | undefined,
+): boolean => {
+  const scopedWorkItemIds = new Set(release.work_item_ids);
+  const scopedExecutionPackageIds = new Set(release.execution_package_ids);
+  if (scopedWorkItemIds.size === 0 && scopedExecutionPackageIds.size === 0) {
+    return true;
+  }
+
+  return links.some(
+    (link) =>
+      ((link.object_type === 'work_item' && scopedWorkItemIds.has(link.object_id)) ||
+        (link.object_type === 'execution_package' && scopedExecutionPackageIds.has(link.object_id))) &&
+      isPublicObservationLink(link, publicLinkVisibility),
+  );
+};
+
+const hasRequiredObservationBacklinks = (
+  evidence: ReleaseEvidence,
+  release: Release,
+  publicLinkVisibility: readonly ReleasePublicLinkVisibility[] | undefined,
+): boolean => {
+  const links = observationLinksFor(evidence);
+  return hasPublicReleaseBacklink(links, release, publicLinkVisibility) && hasPublicScopedBacklink(links, release, publicLinkVisibility);
+};
+
+export const isCompletedCloseObservationEvidence = (evidence: ReleaseEvidence, context: ReleaseGateContext): boolean => {
+  const release = context.release;
+  if (release === undefined || !isObservationEvidenceType(evidence.evidence_type) || evidence.redacted || evidence.status !== 'current') {
     return false;
   }
 
@@ -387,7 +444,11 @@ export const isCompletedCloseObservationEvidence = (evidence: ReleaseEvidence): 
   }
 
   const severity = observation.severity;
-  return severity === 'success' || severity === 'pass' || severity === 'passed' || severity === 'info';
+  if (severity === 'failure') {
+    return false;
+  }
+
+  return hasRequiredObservationBacklinks(evidence, release, context.public_link_visibility);
 };
 
 const resolveWorkItemLinks = (
@@ -581,14 +642,11 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
         id: item.id,
       }));
     }
-    if (item.evidence_type === 'observation_note') {
+    if (isObservationEvidenceType(item.evidence_type) && isRecord(isRecord(item.extra) ? item.extra.observation : undefined)) {
       const links = observationLinksFor(item);
-      const hasReleaseBacklink = links.some(
-        (link) => link.object_type === 'release' && link.object_id === release.id,
-      );
-      if (!hasReleaseBacklink) {
+      if (!hasRequiredObservationBacklinks(item, release, context.public_link_visibility)) {
         blockers.push(
-          blocker('missing_required_evidence_backlink', `Observation evidence ${item.id} is missing a release backlink.`, {
+          blocker('missing_required_evidence_backlink', `Observation evidence ${item.id} is missing required public release or scoped backlinks.`, {
             type: 'release_evidence',
             id: item.id,
           }),
@@ -622,26 +680,100 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
   return blockers;
 };
 
-export const deriveReleaseRiskSummary = (context: ReleaseGateContext): string => {
-  const blockers = deriveReleaseBlockers(context);
-  if (blockers.length === 0) {
-    return 'Release gates are clear.';
-  }
+export interface ReleaseRiskSummary {
+  structural_blocker_count: number;
+  risk_blocker_count: number;
+  evidence_blocker_count: number;
+  planning_blocker_count: number;
+  redacted_or_stale_evidence_count: number;
+  failed_or_missing_check_count: number;
+  packages_not_ready_count: number;
+  release_can_proceed_without_override: boolean;
+  release_can_proceed_with_override: boolean;
+  release_cannot_proceed: boolean;
+}
 
+export interface ReleaseChecklistItem {
+  id: string;
+  label: string;
+  status: 'passed' | 'blocked' | 'warning' | 'pending';
+  blocker_codes: ReleaseBlockerCode[];
+  summary?: string;
+}
+
+const releaseChecklistGroups: readonly {
+  id: string;
+  label: string;
+  categories: readonly ReleaseBlockerCategory[];
+  passedSummary: string;
+}[] = [
+  {
+    id: 'scope',
+    label: 'Release scope',
+    categories: ['structural'],
+    passedSummary: 'Release has valid work item and execution package scope.',
+  },
+  {
+    id: 'readiness',
+    label: 'Implementation readiness',
+    categories: ['risk'],
+    passedSummary: 'Scoped work items and execution packages are release-ready.',
+  },
+  {
+    id: 'evidence',
+    label: 'Release evidence',
+    categories: ['evidence'],
+    passedSummary: 'Required review, checks, artifacts, and evidence backlinks are present.',
+  },
+  {
+    id: 'planning',
+    label: 'Release planning',
+    categories: ['planning'],
+    passedSummary: 'Rollout, rollback, and observation plans are present.',
+  },
+];
+
+export const deriveReleaseRiskSummary = (context: ReleaseGateContext): ReleaseRiskSummary => {
+  const blockers = deriveReleaseBlockers(context);
   const counts = blockers.reduce<Record<ReleaseBlockerCategory, number>>(
     (summary, item) => ({ ...summary, [item.category]: summary[item.category] + 1 }),
     { structural: 0, risk: 0, evidence: 0, planning: 0 },
   );
-  return `Release has ${blockers.length} blocker(s): structural ${counts.structural}, risk ${counts.risk}, evidence ${counts.evidence}, planning ${counts.planning}.`;
+  const hasNonOverrideableBlockers = blockers.some((item) => !item.overrideable);
+
+  return {
+    structural_blocker_count: counts.structural,
+    risk_blocker_count: counts.risk,
+    evidence_blocker_count: counts.evidence,
+    planning_blocker_count: counts.planning,
+    redacted_or_stale_evidence_count: blockers.filter(
+      (item) => item.code === 'evidence_redacted' || item.code === 'stale_or_superseded_evidence',
+    ).length,
+    failed_or_missing_check_count: blockers.filter((item) => item.code === 'failed_required_check').length,
+    packages_not_ready_count: blockers.filter((item) => item.code === 'package_not_release_ready').length,
+    release_can_proceed_without_override: blockers.length === 0,
+    release_can_proceed_with_override: blockers.length > 0 && !hasNonOverrideableBlockers,
+    release_cannot_proceed: hasNonOverrideableBlockers,
+  };
 };
 
-export const deriveReleaseChecklist = (context: ReleaseGateContext): string[] => {
+export const deriveReleaseChecklist = (context: ReleaseGateContext): ReleaseChecklistItem[] => {
   const blockers = deriveReleaseBlockers(context);
-  if (blockers.length === 0) {
-    return ['Confirm release owner, rollout, rollback, and observation handoff.'];
-  }
 
-  return blockers.map((item) => item.message);
+  return releaseChecklistGroups.map((group) => {
+    const groupBlockers = blockers.filter((item) => group.categories.includes(item.category));
+    const blockerCodes = [...new Set(groupBlockers.map((item) => item.code))];
+    return {
+      id: group.id,
+      label: group.label,
+      status: groupBlockers.length > 0 ? 'blocked' : 'passed',
+      blocker_codes: blockerCodes,
+      summary:
+        groupBlockers.length > 0
+          ? `${group.label} has ${groupBlockers.length} blocker(s).`
+          : group.passedSummary,
+    };
+  });
 };
 
 export const deriveReleaseNextActions = (context: ReleaseGateContext): string[] => {

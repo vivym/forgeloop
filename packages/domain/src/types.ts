@@ -484,6 +484,7 @@ export interface Decision {
     | 'changes_requested'
     | 'need_more_context'
     | 'escalate'
+    | 'rejected'
     | 'override_approved'
     | 'completed'
     | 'rolled_back'

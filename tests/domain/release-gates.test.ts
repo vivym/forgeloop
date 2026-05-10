@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createReleaseBlockerSnapshot,
+  deriveReleaseChecklist,
   deriveReleaseBlockers,
+  deriveReleaseRiskSummary,
   fingerprintReleaseBlockers,
+  isCompletedCloseObservationEvidence,
   isReleaseBlockerOverrideable,
   releaseBlockerTruthTable,
   releaseBlockerCodes,
@@ -187,6 +190,26 @@ const evidence = (overrides: Partial<ReleaseEvidence> = {}): ReleaseEvidence => 
   ...overrides,
 });
 
+const completedObservationEvidence = (overrides: Partial<ReleaseEvidence> = {}): ReleaseEvidence =>
+  evidence({
+    evidence_type: 'observation_note',
+    summary: 'Rollout observation passed.',
+    object_ref: undefined,
+    extra: {
+      observation: {
+        source: 'human',
+        severity: 'info',
+        summary: 'No regressions observed.',
+        observed_at: timestamp,
+        links: [
+          { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+          { object_type: 'work_item', object_id: 'work-item-1', relationship: 'affected' },
+        ],
+      },
+    },
+    ...overrides,
+  });
+
 const deriveCodes = (overrides: Parameters<typeof deriveReleaseBlockers>[0] = {}) =>
   deriveReleaseBlockers({
     release: release(),
@@ -353,6 +376,48 @@ describe('Release gate derivation', () => {
     ).toContain('missing_required_evidence_backlink');
   });
 
+  it('derives missing_required_evidence_backlink when observation evidence only links the release without scoped attribution', () => {
+    expect(
+      deriveCodes({
+        evidence: [
+          completedObservationEvidence({
+            extra: {
+              observation: {
+                source: 'human',
+                severity: 'info',
+                summary: 'Release-only observation.',
+                observed_at: timestamp,
+                links: [{ object_type: 'release', object_id: 'release-1', relationship: 'observed' }],
+              },
+            },
+          }),
+        ],
+      }),
+    ).toContain('missing_required_evidence_backlink');
+  });
+
+  it('applies observation backlink blockers to metric snapshot evidence', () => {
+    expect(
+      deriveCodes({
+        evidence: [
+          completedObservationEvidence({
+            evidence_type: 'metric_snapshot',
+            summary: 'Metrics look healthy but lack release backlink.',
+            extra: {
+              observation: {
+                source: 'script',
+                severity: 'info',
+                summary: 'Error rate stayed flat.',
+                observed_at: timestamp,
+                links: [{ object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' }],
+              },
+            },
+          }),
+        ],
+      }),
+    ).toContain('missing_required_evidence_backlink');
+  });
+
   it('derives unsafe_or_redacted_evidence_backlink when observation links cannot be publicly projected', () => {
     expect(
       deriveCodes({
@@ -377,6 +442,44 @@ describe('Release gate derivation', () => {
         public_link_visibility: [{ object_type: 'artifact', object_id: 'missing-artifact', public: false }],
       }),
     ).toContain('unsafe_or_redacted_evidence_backlink');
+  });
+
+  it('derives unsafe_or_redacted_evidence_backlink when the release backlink is not public', () => {
+    expect(
+      deriveCodes({
+        evidence: [completedObservationEvidence()],
+        public_link_visibility: [
+          { object_type: 'release', object_id: 'release-1', public: false },
+          { object_type: 'work_item', object_id: 'work-item-1', public: true },
+        ],
+      }),
+    ).toContain('unsafe_or_redacted_evidence_backlink');
+  });
+
+  it('accepts completed-close observation evidence when no public link visibility map is supplied', () => {
+    expect(
+      isCompletedCloseObservationEvidence(completedObservationEvidence(), {
+        release: release(),
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts metric snapshot observation evidence for completed close', () => {
+    expect(
+      isCompletedCloseObservationEvidence(
+        completedObservationEvidence({
+          evidence_type: 'metric_snapshot',
+          summary: 'Metric snapshot shows healthy rollout.',
+        }),
+        {
+          release: release(),
+          public_link_visibility: [
+            { object_type: 'release', object_id: 'release-1', public: true },
+            { object_type: 'work_item', object_id: 'work-item-1', public: true },
+          ],
+        },
+      ),
+    ).toBe(true);
   });
 
   it.each([
@@ -450,6 +553,72 @@ describe('Release gate derivation', () => {
     expect(fingerprintReleaseBlockers([])).toBe(
       'release-blockers:v1:sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
     );
+  });
+
+  it('derives release risk summary in the public contract shape', () => {
+    expect(
+      deriveReleaseRiskSummary({
+        release: release({ rollout_strategy: undefined }),
+        work_items: [workItem()],
+        execution_packages: [executionPackage({ gate_state: 'review_approved' })],
+        run_sessions: [runSession({ artifacts: [] })],
+        review_packets: [reviewPacket()],
+        evidence: [evidence({ redacted: true })],
+      }),
+    ).toEqual({
+      structural_blocker_count: 0,
+      risk_blocker_count: 1,
+      evidence_blocker_count: 2,
+      planning_blocker_count: 1,
+      redacted_or_stale_evidence_count: 1,
+      failed_or_missing_check_count: 0,
+      packages_not_ready_count: 1,
+      release_can_proceed_without_override: false,
+      release_can_proceed_with_override: true,
+      release_cannot_proceed: false,
+    });
+  });
+
+  it('derives release checklist items in the public contract shape', () => {
+    expect(
+      deriveReleaseChecklist({
+        release: release({ rollout_strategy: undefined }),
+        work_items: [workItem()],
+        execution_packages: [executionPackage()],
+        run_sessions: [runSession()],
+        review_packets: [reviewPacket()],
+        evidence: [evidence()],
+      }),
+    ).toEqual([
+      {
+        id: 'scope',
+        label: 'Release scope',
+        status: 'passed',
+        blocker_codes: [],
+        summary: 'Release has valid work item and execution package scope.',
+      },
+      {
+        id: 'readiness',
+        label: 'Implementation readiness',
+        status: 'passed',
+        blocker_codes: [],
+        summary: 'Scoped work items and execution packages are release-ready.',
+      },
+      {
+        id: 'evidence',
+        label: 'Release evidence',
+        status: 'passed',
+        blocker_codes: [],
+        summary: 'Required review, checks, artifacts, and evidence backlinks are present.',
+      },
+      {
+        id: 'planning',
+        label: 'Release planning',
+        status: 'blocked',
+        blocker_codes: ['missing_rollout_strategy'],
+        summary: 'Release planning has 1 blocker(s).',
+      },
+    ]);
   });
 
   it('derives failed_required_check when a selected run is missing a required check result', () => {
