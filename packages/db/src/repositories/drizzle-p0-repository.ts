@@ -730,10 +730,6 @@ export class DrizzleP0Repository implements P0Repository {
     ]);
   }
 
-  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
-    return this.listReleaseEvidences(releaseId);
-  }
-
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {
     await this.db.insert(object_events).values(toDbRecord(objectEvent, object_events) as never).onConflictDoNothing();
   }

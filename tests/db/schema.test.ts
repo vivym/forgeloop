@@ -368,6 +368,11 @@ describe('P1 core schema release flow Drizzle schema', () => {
   it('defines release uniqueness and evidence contract constraints', () => {
     expect(hasUniqueIndex(releases, 'releases_org_key_uq', ['org_id', 'key'])).toBe(true);
     expect(hasUniqueIndex(release_evidences, 'release_evidences_org_key_uq', ['org_id', 'key'])).toBe(true);
+    expect(columnType(releases, 'scope_summary')).toBe('PgText');
+    expect(columnType(releases, 'rollout_strategy')).toBe('PgText');
+    expect(columnType(releases, 'rollback_plan')).toBe('PgText');
+    expect(columnType(releases, 'observation_plan')).toBe('PgText');
+    expect(columnNotNull(releases, 'updated_by_actor_id')).toBe(true);
     expect(columnNotNull(release_evidences, 'summary')).toBe(true);
   });
 

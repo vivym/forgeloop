@@ -360,15 +360,16 @@ const release: Release = {
   activity_state: 'idle',
   gate_state: 'approved',
   resolution: 'none',
+  scope_summary: 'Two work items, one package.',
   work_item_ids: [workItem2.id, workItem.id],
   execution_package_ids: [executionPackage2.id, executionPackage.id],
   current_review_packet_ids: [reviewPacket.id],
   current_run_session_ids: [runSession.id],
-  rollout_strategy: 'Deploy behind a flag.',
-  rollback_plan: 'Disable the flag and revert.',
-  observation_plan: 'Watch DB test signal.',
+  rollout_strategy: 'Ship behind flag.',
+  rollback_plan: 'Disable flag.',
+  observation_plan: 'Watch latency.',
   release_owner_actor_id: 'actor-owner',
-  release_type: 'normal',
+  release_type: 'gray',
   visibility: 'internal',
   labels: ['p1'],
   created_by_actor_id: 'actor-owner',
@@ -513,6 +514,7 @@ const createReleaseSelectRepository = () => {
     observationPlan: release.observation_plan,
     releaseOwnerActorId: release.release_owner_actor_id,
     releaseType: release.release_type,
+    scopeSummary: release.scope_summary,
     visibility: release.visibility,
     labels: release.labels,
     createdByActorId: release.created_by_actor_id,
@@ -730,6 +732,23 @@ describe('P0Repository in-memory adapter', () => {
     expect(await repository.listTraceLinks(traceEvent.id)).toEqual([firstLink, secondLink]);
     expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([firstArtifactRef, secondArtifactRef]);
   });
+
+  it('round-trips release canonical fields and filters releases by project', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    const otherProjectRelease: Release = {
+      ...release,
+      id: 'release-other-project',
+      project_id: 'project-2',
+      key: 'REL-2',
+      title: 'Other project release',
+    };
+
+    await repository.saveRelease(release);
+    await repository.saveRelease(otherProjectRelease);
+
+    expect(await repository.getRelease(release.id)).toEqual(release);
+    expect(await repository.listReleasesForProject(project.id)).toEqual([release]);
+  });
 });
 
 describe('P0Repository Drizzle adapter contract', () => {
@@ -830,6 +849,13 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
 
     expect(captures[0]?.values.currentReviewPacketIds).toEqual(release.current_review_packet_ids);
     expect(captures[0]?.values.currentRunSessionIds).toEqual(release.current_run_session_ids);
+    expect(captures[0]?.values.scopeSummary).toBe('Two work items, one package.');
+    expect(captures[0]?.values.rolloutStrategy).toBe('Ship behind flag.');
+    expect(captures[0]?.values.rollbackPlan).toBe('Disable flag.');
+    expect(captures[0]?.values.observationPlan).toBe('Watch latency.');
+    expect(captures[0]?.values.releaseOwnerActorId).toBe('actor-owner');
+    expect(captures[0]?.values.releaseType).toBe('gray');
+    expect(captures[0]?.values.updatedByActorId).toBe('actor-owner');
     expect(captures[0]?.values.workItemIds).toBeUndefined();
     expect(captures[0]?.values.executionPackageIds).toBeUndefined();
     expect(captures.slice(1)).toEqual([

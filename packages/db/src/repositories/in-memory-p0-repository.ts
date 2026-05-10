@@ -591,10 +591,6 @@ export class InMemoryP0Repository implements P0Repository {
       .sort(byCreatedAtThenId);
   }
 
-  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
-    return this.listReleaseEvidences(releaseId);
-  }
-
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {
     if (!this.objectEvents.has(objectEvent.id)) {
       this.objectEvents.set(objectEvent.id, clone(objectEvent));
