@@ -239,6 +239,27 @@ export const publicArtifactRefSchema = z
   });
 export type PublicArtifactRef = z.infer<typeof publicArtifactRefSchema>;
 
+const publicDecisionTypeSchema = z.enum([
+  'spec_approval',
+  'plan_approval',
+  'review_decision',
+  'release_approval',
+  'manual_override',
+  'release_changes_requested',
+  'release_close',
+  'rollback_decision',
+]);
+
+const publicDecisionOutcomeSchema = z.enum([
+  'approved',
+  'changes_requested',
+  'rejected',
+  'override_approved',
+  'rolled_back',
+  'cancelled',
+  'completed',
+]);
+
 export const publicDecisionSchema = z
   .object({
     id: z.string().min(1),
@@ -246,9 +267,19 @@ export const publicDecisionSchema = z
     object_id: z.string().min(1),
     actor_id: z.string().min(1),
     decided_by_actor_id: z.string().min(1).optional(),
-    decision_type: z.string().min(1).optional(),
-    outcome: z.string().min(1).optional(),
-    decision: z.enum(['approved', 'changes_requested', 'need_more_context', 'escalate', 'override_approved']),
+    decision_type: publicDecisionTypeSchema.optional(),
+    outcome: publicDecisionOutcomeSchema.optional(),
+    decision: z.enum([
+      'approved',
+      'changes_requested',
+      'need_more_context',
+      'escalate',
+      'rejected',
+      'override_approved',
+      'rolled_back',
+      'cancelled',
+      'completed',
+    ]),
     summary: z.string().min(1),
     rationale: z.string().min(1).optional(),
     created_at: isoDateTimeSchema,
@@ -371,13 +402,14 @@ export const publicMetricsSchema = z.record(z.string(), publicScalarSchema).supe
 });
 export type PublicMetrics = z.infer<typeof publicMetricsSchema>;
 
-const publicReleaseEvidenceObservationLinkSchema = z
+export const publicReleaseEvidenceObservationLinkSchema = z
   .object({
-    object_type: z.enum(['release', 'work_item', 'execution_package', 'run_session', 'review_packet']),
+    object_type: z.enum(['release', 'work_item', 'execution_package', 'run_session', 'review_packet', 'artifact', 'decision']),
     object_id: z.string().min(1),
-    relationship: z.enum(['observed', 'affected', 'supports', 'blocks']),
+    relationship: z.enum(['observed', 'affected', 'supports', 'blocks', 'generated_by', 'rollback_of']),
   })
   .strict();
+export type PublicReleaseEvidenceObservationLink = z.infer<typeof publicReleaseEvidenceObservationLinkSchema>;
 
 const publicReleaseEvidenceObservationSchema = z
   .object({

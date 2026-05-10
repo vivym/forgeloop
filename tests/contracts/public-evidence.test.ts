@@ -12,6 +12,7 @@ import {
   publicObjectEventPayloadSchema,
   publicObjectEventSchema,
   publicReleaseEvidenceExtraSchema,
+  publicReleaseEvidenceObservationLinkSchema,
   publicReleaseEvidenceSchema,
   publicReplayEntrySchema,
   publicStatusHistoryContextSchema,
@@ -281,6 +282,128 @@ describe('public evidence contracts', () => {
     expect(publicReleaseEvidenceSchema.parse({ ...base, artifact_id: 'artifact-1', artifact: publicArtifact, extra })).toMatchObject({
       id: 'evidence-2',
     });
+  });
+
+  it('accepts public release observation actor and product links', () => {
+    expect(
+      publicReleaseEvidenceSchema.parse({
+        id: 'evidence-1',
+        release_id: 'release-1',
+        evidence_type: 'observation_note',
+        summary: 'Observed rollback.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'warning',
+            summary: 'Rollback decision linked.',
+            observed_at: timestamp,
+            actor_id: 'actor-observer',
+            links: [
+              { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+              { object_type: 'artifact', object_id: 'artifact-1', relationship: 'generated_by' },
+              { object_type: 'decision', object_id: 'decision-1', relationship: 'rollback_of' },
+            ],
+          },
+        },
+        redacted: false,
+        status: 'current',
+        created_at: timestamp,
+      }).extra.observation?.links,
+    ).toHaveLength(3);
+
+    expect(
+      publicReleaseEvidenceSchema.parse({
+        id: 'evidence-actor',
+        release_id: 'release-1',
+        evidence_type: 'observation_note',
+        summary: 'Observed by actor.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            summary: 'Actor preserved.',
+            observed_at: timestamp,
+            actor_id: 'actor-observer',
+            links: [{ object_type: 'release', object_id: 'release-1', relationship: 'observed' }],
+          },
+        },
+        redacted: false,
+        status: 'current',
+        created_at: timestamp,
+      }).extra.observation?.actor_id,
+    ).toBe('actor-observer');
+
+    for (const link of [
+      { object_type: 'work_item', object_id: 'work-item-1', relationship: 'affected' },
+      { object_type: 'execution_package', object_id: 'package-1', relationship: 'blocks' },
+      { object_type: 'run_session', object_id: 'run-1', relationship: 'generated_by' },
+      { object_type: 'review_packet', object_id: 'review-1', relationship: 'supports' },
+    ] as const) {
+      expect(publicReleaseEvidenceObservationLinkSchema.parse(link)).toEqual(link);
+    }
+
+    expect(
+      publicReleaseEvidenceSchema.safeParse({
+        id: 'evidence-2',
+        release_id: 'release-1',
+        evidence_type: 'observation_note',
+        summary: 'Bad field',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            summary: 'Bad',
+            observed_at: timestamp,
+            related_object_refs: [],
+          },
+        },
+        redacted: false,
+        status: 'current',
+        created_at: timestamp,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts public release decision values', () => {
+    for (const [decision_type, outcome, decision] of [
+      ['release_approval', 'approved', 'approved'],
+      ['manual_override', 'override_approved', 'override_approved'],
+      ['release_approval', 'override_approved', 'override_approved'],
+      ['release_changes_requested', 'changes_requested', 'changes_requested'],
+      ['release_close', 'completed', 'completed'],
+      ['release_close', 'rolled_back', 'rolled_back'],
+      ['release_close', 'cancelled', 'cancelled'],
+    ] as const) {
+      expect(
+        publicDecisionSchema.parse({
+          id: `decision-${decision_type}-${outcome}`,
+          object_type: 'release',
+          object_id: 'release-1',
+          actor_id: 'actor-owner',
+          decision_type,
+          outcome,
+          decision,
+          summary: `Release ${outcome}`,
+          created_at: timestamp,
+        }).decision,
+      ).toBe(decision);
+    }
+  });
+
+  it('rejects unsupported public decision type and outcome values', () => {
+    expect(
+      publicDecisionSchema.safeParse({
+        ...publicDecision,
+        decision_type: 'deploy_anyway',
+      }).success,
+    ).toBe(false);
+
+    expect(
+      publicDecisionSchema.safeParse({
+        ...publicDecision,
+        outcome: 'ignored',
+      }).success,
+    ).toBe(false);
   });
 
   it('accepts a public release evidence build group without result', () => {

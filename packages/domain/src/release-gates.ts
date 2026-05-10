@@ -49,6 +49,8 @@ const overrideableCodes = new Set<ReleaseBlockerCode>([
   'missing_required_artifact',
   'evidence_redacted',
   'stale_or_superseded_evidence',
+  'missing_required_evidence_backlink',
+  'unsafe_or_redacted_evidence_backlink',
   'missing_rollout_strategy',
   'missing_rollback_plan',
   'missing_observation_plan',
@@ -57,7 +59,8 @@ const overrideableCodes = new Set<ReleaseBlockerCode>([
 const categoryByCode: Record<ReleaseBlockerCode, ReleaseBlockerCategory> = {
   missing_work_item: 'structural',
   missing_execution_package: 'structural',
-  empty_release_scope: 'structural',
+  empty_work_item_scope: 'structural',
+  empty_execution_package_scope: 'structural',
   work_item_not_complete: 'risk',
   package_not_release_ready: 'risk',
   missing_approved_review_packet: 'evidence',
@@ -65,6 +68,8 @@ const categoryByCode: Record<ReleaseBlockerCode, ReleaseBlockerCategory> = {
   missing_required_artifact: 'evidence',
   evidence_redacted: 'evidence',
   stale_or_superseded_evidence: 'evidence',
+  missing_required_evidence_backlink: 'evidence',
+  unsafe_or_redacted_evidence_backlink: 'evidence',
   missing_rollout_strategy: 'planning',
   missing_rollback_plan: 'planning',
   missing_observation_plan: 'planning',
@@ -404,8 +409,18 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
     })
     .filter((executionPackage): executionPackage is ExecutionPackage => executionPackage !== undefined);
 
-  if (validWorkItems.length === 0 || validExecutionPackages.length === 0) {
-    blockers.push(blocker('empty_release_scope', 'Release requires at least one valid work item and execution package.'));
+  if (validWorkItems.length === 0) {
+    blockers.push(blocker('empty_work_item_scope', 'Release requires at least one valid work item.', {
+      type: 'work_item_scope',
+      id: release.id,
+    }));
+  }
+
+  if (validExecutionPackages.length === 0) {
+    blockers.push(blocker('empty_execution_package_scope', 'Release requires at least one valid execution package.', {
+      type: 'execution_package_scope',
+      id: release.id,
+    }));
   }
 
   for (const workItem of validWorkItems) {

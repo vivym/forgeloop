@@ -20,16 +20,29 @@ import {
   releaseEvidenceSchema,
   forceRerunPackageRequestSchema,
   forceRerunPackageResponseSchema,
+  approveReleaseRequestSchema,
   requestReviewChangesRequestSchema,
   rerunPackageRequestSchema,
   rerunPackageResponseSchema,
+  linkReleaseObjectRequestSchema,
+  publicReleaseSummarySchema,
+  releaseBlockerCodes,
   reviewPacketDecisions,
   reviewDecisionPayloadSchema,
   runPackageRequestSchema,
   runPackageResponseSchema,
   runSpecSchema,
   selfReviewResultSchema,
+  releaseCockpitResponseSchema,
+  releaseListQuerySchema,
+  releaseListResponseSchema,
+  releaseResourceQuerySchema,
+  releaseResourceResponseSchema,
+  requestReleaseChangesRequestSchema,
+  startReleaseObservingRequestSchema,
+  submitReleaseForApprovalRequestSchema,
   submitReviewDecisionResponseSchema,
+  unlinkReleaseObjectRequestSchema,
 } from '@forgeloop/contracts';
 
 describe('P0 delivery loop contracts', () => {
@@ -197,19 +210,86 @@ describe('P0 delivery loop contracts', () => {
     ],
   };
 
+  const publicReleaseSummaryFixture = (overrides: Record<string, unknown> = {}) => ({
+    id: 'release-1',
+    key: 'REL-1',
+    org_id: 'org-1',
+    project_id: 'project-1',
+    title: 'P1 release',
+    scope_summary: 'Ship release radar.',
+    release_owner_actor_id: 'actor-owner',
+    release_type: 'normal',
+    phase: 'approval',
+    activity_state: 'awaiting_human',
+    gate_state: 'awaiting_approval',
+    resolution: 'none',
+    work_item_ids: [],
+    execution_package_ids: [],
+    rollout_strategy: 'Deploy behind a flag.',
+    rollback_plan: 'Disable the flag.',
+    observation_plan: 'Watch error rate.',
+    created_by_actor_id: 'actor-owner',
+    updated_by_actor_id: 'actor-owner',
+    created_at: '2026-05-05T00:00:00.000Z',
+    updated_at: '2026-05-05T00:00:00.000Z',
+    ...overrides,
+  });
+
   it('parses release request and response DTOs', () => {
     expect(
       createReleaseRequestSchema.parse({
+        actor_id: 'actor-owner',
         project_id: 'project-1',
         title: 'P1 release',
-        created_by_actor_id: 'actor-owner',
-        work_item_ids: ['work-item-1'],
-        execution_package_ids: ['package-1'],
-      }).work_item_ids,
-    ).toEqual(['work-item-1']);
+        scope_summary: 'Ship release radar.',
+      }).release_owner_actor_id,
+    ).toBe('actor-owner');
+
+    expect(
+      createReleaseRequestSchema.safeParse({
+        project_id: 'project-1',
+        title: 'P1 release',
+        created_by_actor_id: 'legacy-actor',
+      }).success,
+    ).toBe(false);
+
+    expect(releaseListQuerySchema.parse({ project_id: 'project-1' })).toMatchObject({
+      project_id: 'project-1',
+      limit: 50,
+    });
+
+    expect(
+      releaseListQuerySchema.parse({
+        project_id: 'project-1',
+        release_owner_actor_id: 'actor-owner',
+        phase: 'approval',
+        gate_state: 'awaiting_approval',
+        resolution: 'none',
+        limit: 100,
+        cursor: 'release-cursor-1',
+      }),
+    ).toMatchObject({
+      project_id: 'project-1',
+      release_owner_actor_id: 'actor-owner',
+      phase: 'approval',
+      gate_state: 'awaiting_approval',
+      resolution: 'none',
+      limit: 100,
+      cursor: 'release-cursor-1',
+    });
+
+    expect(
+      releaseListQuerySchema.safeParse({
+        project_id: 'project-1',
+        limit: 101,
+      }).success,
+    ).toBe(false);
+
+    expect(releaseResourceQuerySchema.parse({ project_id: 'project-1' })).toEqual({ project_id: 'project-1' });
 
     expect(
       patchReleaseRequestSchema.parse({
+        actor_id: 'actor-owner',
         title: 'P1 release candidate',
         rollout_strategy: 'Deploy behind a flag.',
         rollback_plan: 'Disable the flag.',
@@ -218,21 +298,10 @@ describe('P0 delivery loop contracts', () => {
     ).toBe('P1 release candidate');
 
     const control = releaseControlResponseSchema.parse({
-      release: {
-        id: 'release-1',
-        org_id: 'org-1',
-        project_id: 'project-1',
-        title: 'P1 release',
-        phase: 'approval',
-        activity_state: 'awaiting_human',
-        gate_state: 'awaiting_approval',
-        resolution: 'none',
+      release: publicReleaseSummaryFixture({
         work_item_ids: ['work-item-1'],
         execution_package_ids: ['package-1'],
-        created_by_actor_id: 'actor-owner',
-        created_at: '2026-05-05T00:00:00.000Z',
-        updated_at: '2026-05-05T00:00:00.000Z',
-      },
+      }),
       blocker_snapshot: {
         ...validReleaseBlockerSnapshot,
         blockers: [
@@ -244,11 +313,65 @@ describe('P0 delivery loop contracts', () => {
           },
         ],
       },
+      blockers: [],
+      overridden_blockers: [],
       decision_intents: [],
+      next_actions: [],
     });
 
     expect(control.release.gate_state).toBe('awaiting_approval');
     expect(control.blocker_snapshot.blockers[0]?.code).toBe('missing_rollout_strategy');
+
+    expect(
+      releaseListResponseSchema.parse({
+        releases: [
+          publicReleaseSummaryFixture({
+            work_item_ids: ['work-item-public'],
+            execution_package_ids: ['package-public'],
+          }),
+        ],
+        next_cursor: 'release-cursor-2',
+      }).next_cursor,
+    ).toBe('release-cursor-2');
+
+    expect(
+      publicReleaseSummarySchema.parse(
+        publicReleaseSummaryFixture({
+          work_item_ids: ['work-item-public'],
+          execution_package_ids: ['package-public'],
+        }),
+      ),
+    ).toMatchObject({
+      work_item_ids: ['work-item-public'],
+      execution_package_ids: ['package-public'],
+    });
+
+    expect(
+      releaseResourceResponseSchema.parse({
+        release: publicReleaseSummaryFixture(),
+      }).release.id,
+    ).toBe('release-1');
+
+    expect(typeof releaseCockpitResponseSchema.parse).toBe('function');
+
+    expect(releaseBlockerCodes).toEqual([
+      'missing_work_item',
+      'missing_execution_package',
+      'empty_work_item_scope',
+      'empty_execution_package_scope',
+      'work_item_not_complete',
+      'package_not_release_ready',
+      'missing_approved_review_packet',
+      'failed_required_check',
+      'missing_required_artifact',
+      'evidence_redacted',
+      'stale_or_superseded_evidence',
+      'missing_required_evidence_backlink',
+      'unsafe_or_redacted_evidence_backlink',
+      'missing_rollout_strategy',
+      'missing_rollback_plan',
+      'missing_observation_plan',
+    ]);
 
     expect(
       linkReleaseObjectResponseSchema.parse({
@@ -260,6 +383,34 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(true);
   });
 
+  it('rejects whitespace-only release product text fields', () => {
+    for (const field of ['scope_summary', 'rollout_strategy', 'rollback_plan', 'observation_plan'] as const) {
+      expect(
+        createReleaseRequestSchema.safeParse({
+          actor_id: 'actor-owner',
+          project_id: 'project-1',
+          title: 'P1 release',
+          [field]: '   ',
+        }).success,
+      ).toBe(false);
+
+      expect(
+        patchReleaseRequestSchema.safeParse({
+          actor_id: 'actor-owner',
+          [field]: '   ',
+        }).success,
+      ).toBe(false);
+
+      expect(
+        publicReleaseSummarySchema.safeParse(
+          publicReleaseSummaryFixture({
+            [field]: '   ',
+          }),
+        ).success,
+      ).toBe(false);
+    }
+  });
+
   it('parses release command DTOs', () => {
     expect(
       releaseActorCommandRequestSchema.parse({
@@ -267,6 +418,41 @@ describe('P0 delivery loop contracts', () => {
         idempotency_key: 'release-1:submit',
       }).actor_id,
     ).toBe('actor-release-manager');
+
+    expect(
+      patchReleaseRequestSchema.safeParse({ actor_id: 'actor-owner' }).success,
+    ).toBe(false);
+    expect(patchReleaseRequestSchema.parse({ actor_id: 'actor-owner', title: 'Renamed release' }).title).toBe(
+      'Renamed release',
+    );
+    expect(linkReleaseObjectRequestSchema.parse({ actor_id: 'actor-owner' }).actor_id).toBe('actor-owner');
+    expect(unlinkReleaseObjectRequestSchema.parse({ actor_id: 'actor-owner' }).actor_id).toBe('actor-owner');
+    expect(submitReleaseForApprovalRequestSchema.parse({ actor_id: 'actor-owner' }).actor_id).toBe('actor-owner');
+    expect(approveReleaseRequestSchema.parse({ actor_id: 'actor-reviewer' }).actor_id).toBe('actor-reviewer');
+    expect(
+      requestReleaseChangesRequestSchema.safeParse({
+        actor_id: 'actor-reviewer',
+        rationale: '',
+      }).success,
+    ).toBe(false);
+    expect(startReleaseObservingRequestSchema.parse({ actor_id: 'actor-owner' }).actor_id).toBe('actor-owner');
+    expect(
+      closeReleaseRequestSchema.safeParse({
+        actor_id: 'actor-owner',
+        resolution: 'completed',
+        override_without_observation: true,
+      }).success,
+    ).toBe(false);
+    expect(typeof createReleaseEvidenceRequestSchema.parse).toBe('function');
+    expect(typeof releaseCockpitResponseSchema.parse).toBe('function');
+    expect(
+      linkReleaseObjectResponseSchema.parse({
+        release_id: 'release-1',
+        object_type: 'work_item',
+        object_id: 'work-item-1',
+        linked: true,
+      }).linked,
+    ).toBe(true);
 
     expect(
       overrideApproveReleaseRequestSchema.parse({
@@ -287,6 +473,7 @@ describe('P0 delivery loop contracts', () => {
 
   it('parses release evidence DTOs', () => {
     const parsed = createReleaseEvidenceRequestSchema.parse({
+      actor_id: 'actor-owner',
       evidence_type: 'review_packet',
       summary: 'Approved review packet.',
       object_ref: {
@@ -302,6 +489,7 @@ describe('P0 delivery loop contracts', () => {
 
     expect(
       createReleaseEvidenceRequestSchema.parse({
+        actor_id: 'actor-owner',
         evidence_type: 'test_report',
         summary: 'Test report uploaded.',
         artifact_id: 'artifact-test-report-1',
@@ -362,12 +550,14 @@ describe('P0 delivery loop contracts', () => {
     ).toBe(false);
     expect(
       createReleaseEvidenceRequestSchema.safeParse({
+        actor_id: 'actor-release-manager',
         evidence_type: 'review_packet',
         summary: 'Approved review packet.',
       }).success,
     ).toBe(false);
     expect(
       createReleaseEvidenceRequestSchema.safeParse({
+        actor_id: 'actor-release-manager',
         evidence_type: 'review_packet',
         summary: 'Approved review packet.',
         object_ref: {
