@@ -1,5 +1,14 @@
 # P0 Query Surface Cleanup Implementation Plan
 
+## Status
+
+Completed and merged to `main` on 2026-05-09.
+
+- Merge head: `dc2004b` (`chore: verify p0 query surface cleanup`)
+- Verified after merge: `pnpm test`
+- Verified after merge: `pnpm build`
+- Verified after merge: `git diff --check`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make QueryModule the only HTTP and web-client boundary for P0 work item cockpit and replay reads, with no legacy read-route compatibility surface left.
