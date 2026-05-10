@@ -612,15 +612,21 @@ describe('P0Repository in-memory adapter', () => {
 describe('P0Repository Drizzle adapter contract', () => {
   const databaseUrl = process.env.FORGELOOP_TEST_DATABASE_URL ?? process.env.FORGELOOP_DATABASE_URL;
 
-  it.runIf(databaseUrl !== undefined && isResettable(databaseUrl))('satisfies the shared repository contract', async () => {
-    await resetForgeloopDatabase(databaseUrl!);
-    const { db, pool } = createDbClient({ connectionString: databaseUrl });
-    try {
-      await runP0RepositoryContract(new DrizzleP0Repository(db));
-    } finally {
-      await pool.end();
-    }
-  });
+  if (databaseUrl === undefined) {
+    it.skip('skips shared repository contract because no disposable database URL is configured', () => {});
+  } else if (!isResettable(databaseUrl)) {
+    it.skip('skips shared repository contract because configured database URL is not resettable', () => {});
+  } else {
+    it('satisfies the shared repository contract', async () => {
+      await resetForgeloopDatabase(databaseUrl);
+      const { db, pool } = createDbClient({ connectionString: databaseUrl });
+      try {
+        await runP0RepositoryContract(new DrizzleP0Repository(db));
+      } finally {
+        await pool.end();
+      }
+    });
+  }
 });
 
 describe('P0Repository Drizzle adapter persistence mapping', () => {
