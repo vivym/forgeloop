@@ -348,6 +348,7 @@ describe('Release gate derivation', () => {
       blockers,
     });
     expect(snapshot.blocker_fingerprint).toBe(fingerprintReleaseBlockers(blockers));
+    expect(snapshot.blocker_fingerprint).toMatch(/^release-blockers:v1:sha256:[a-f0-9]{64}$/);
     expect(
       createReleaseBlockerSnapshot({
         release_id: 'release-1',
@@ -355,6 +356,9 @@ describe('Release gate derivation', () => {
         blockers: [...blockers].reverse(),
       }).blocker_fingerprint,
     ).toBe(snapshot.blocker_fingerprint);
+    expect(fingerprintReleaseBlockers([])).toBe(
+      'release-blockers:v1:sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+    );
   });
 
   it('derives failed_required_check when a selected run is missing a required check result', () => {

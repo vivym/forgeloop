@@ -791,8 +791,8 @@ const hasBlockingReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolea
 const hasNonOverrideableReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolean =>
   blockers.some((blocker) => !isReleaseBlockerOverrideable(blocker.code) || !blocker.overrideable);
 
-const hasStructuralReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolean =>
-  blockers.some((blocker) => blocker.category === 'structural');
+const canSubmitReleaseForApproval = (blockers: readonly ReleaseBlocker[]): boolean =>
+  !hasNonOverrideableReleaseBlockers(blockers);
 
 const currentReleaseBlockerSnapshot = (
   release: Release,
@@ -891,7 +891,7 @@ export const transitionRelease = (
     case 'submit':
       if (release.phase === 'candidate') {
         const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
-        if (!hasStructuralReleaseBlockers(snapshot.blockers)) {
+        if (canSubmitReleaseForApproval(snapshot.blockers)) {
           return releaseResult(
             {
               ...release,

@@ -434,14 +434,25 @@ describe('Release state transitions', () => {
       activity_state: 'awaiting_human',
       gate_state: 'awaiting_approval',
     } as Release;
-    const validSnapshot = blockerSnapshot(release.id, [
-      {
-        code: 'stale_or_superseded_evidence',
-        category: 'evidence',
-        overrideable: true,
-        message: 'Evidence was superseded after review.',
-      },
-    ]);
+    const overrideableBlockerContext = gateContext(release, {
+      evidence: [
+        {
+          id: 'evidence-1',
+          release_id: release.id,
+          evidence_type: 'review_packet',
+          summary: 'Evidence was superseded after review.',
+          object_ref: {
+            object_type: 'review_packet',
+            object_id: 'review-packet-1',
+            relationship: 'supports',
+          },
+          redacted: false,
+          status: 'superseded',
+          created_at: timestamp,
+        },
+      ],
+    });
+    const validSnapshot = currentSnapshot(release, overrideableBlockerContext);
 
     expect(() =>
       transitionRelease(release, {
@@ -458,24 +469,7 @@ describe('Release state transitions', () => {
         approved_by_actor_id: 'actor-reviewer',
         rationale: ' ',
         blocker_snapshot: validSnapshot,
-        gate_context: gateContext(release, {
-          evidence: [
-            {
-              id: 'evidence-1',
-              release_id: release.id,
-              evidence_type: 'review_packet',
-              summary: 'Evidence was superseded after review.',
-              object_ref: {
-                object_type: 'review_packet',
-                object_id: 'review-packet-1',
-                relationship: 'supports',
-              },
-              redacted: false,
-              status: 'superseded',
-              created_at: timestamp,
-            },
-          ],
-        }),
+        gate_context: overrideableBlockerContext,
       }),
     ).toThrow(DomainError);
     expect(() =>
@@ -487,7 +481,7 @@ describe('Release state transitions', () => {
           ...validSnapshot,
           blocker_fingerprint: 'release-blockers:v1:stale',
         },
-        gate_context: gateContext(release),
+        gate_context: overrideableBlockerContext,
       }),
     ).toThrow(DomainError);
   });
@@ -570,6 +564,24 @@ describe('Release state transitions', () => {
         blocker_snapshot: snapshot,
       }),
     ]);
+  });
+
+  it('blocks submit when any current blocker is non-overrideable', () => {
+    const candidate = releasable(
+      transitionRelease(createRelease(), {
+        type: 'link_work_item',
+        work_item_id: 'work-item-1',
+      }).release,
+    );
+
+    expect(() =>
+      transitionRelease(candidate, {
+        type: 'submit',
+        gate_context: gateContext(candidate, {
+          execution_package_links: [{ object_id: 'package-1', status: 'missing' }],
+        }),
+      }),
+    ).toThrow(DomainError);
   });
 
   it('supports the full release path from create through completion', () => {
