@@ -176,7 +176,7 @@ const releaseEvidence = (): ReleaseEvidence => ({
   evidence_type: 'observation_note',
   summary: 'Release looks healthy.',
   object_ref: { object_type: 'run_session', object_id: 'run-private', relationship: 'generated_by' },
-  artifact_id: 'artifact-1',
+  artifact_id: 'artifact-stale',
   extra: {
     observation: {
       source: 'human',
@@ -187,6 +187,7 @@ const releaseEvidence = (): ReleaseEvidence => ({
         { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
         { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
         { object_type: 'artifact', object_id: 'artifact-1', relationship: 'generated_by' },
+        { object_type: 'artifact', object_id: 'artifact-stale', relationship: 'generated_by' },
         { object_type: 'decision', object_id: 'decision-release', relationship: 'supports' },
         { object_type: 'run_session', object_id: 'run-private', relationship: 'generated_by' },
       ],
@@ -351,6 +352,9 @@ describe('getObjectReplayTimeline release support', () => {
     expect(evidenceEntry?.payload).not.toHaveProperty('object_ref');
     expect(evidenceEntry?.payload.extra.observation?.links).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ object_id: 'run-private' })]),
+    );
+    expect(evidenceEntry?.payload.extra.observation?.links).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ object_id: 'artifact-stale' })]),
     );
 
     const serialized = JSON.stringify(timeline);

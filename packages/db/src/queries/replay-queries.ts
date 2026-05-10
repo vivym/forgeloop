@@ -299,12 +299,11 @@ const getReleaseReplayTimeline = async (
     await Promise.all(evidences.map(async (evidence) => [evidence.id, await artifactForEvidence(repository, evidence)] as const)),
   );
   const publicArtifactIds = new Set(
-    evidences.flatMap((evidence) => {
-      const artifact = artifactsByEvidenceId.get(evidence.id);
-      if (artifact === undefined || evidence.artifact_id === undefined || serializePublicArtifactRef(artifact.ref) === undefined) {
+    [...artifactsByEvidenceId.values()].flatMap((artifact) => {
+      if (artifact === undefined || serializePublicArtifactRef(artifact.ref) === undefined) {
         return [];
       }
-      return [evidence.artifact_id];
+      return [artifact.id];
     }),
   );
   const visibleRefs = new Map<string, boolean>();
