@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { publicReleaseEvidenceExtraSchema } from '@forgeloop/contracts';
 import type { Artifact, Decision, ObjectEvent, ReleaseEvidence, StatusHistory } from '@forgeloop/domain';
 import {
   artifactRedactionReason,
@@ -418,6 +419,71 @@ describe('public evidence serialization', () => {
     expect(JSON.stringify(serialized)).not.toContain('private_key');
     expect(JSON.stringify(serialized)).not.toContain('/Users/');
     expect(JSON.stringify(serialized)).not.toContain('/tmp/');
+  });
+
+  it('preserves release observation links for public backlinks', () => {
+    const links = [
+      { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+      { object_type: 'artifact', object_id: 'artifact-1', relationship: 'generated_by' },
+      { object_type: 'decision', object_id: 'decision-1', relationship: 'rollback_of' },
+    ] as const;
+
+    const serialized = serializePublicReleaseEvidence({
+      evidence: releaseEvidence({
+        extra: {
+          observation: {
+            source: 'script',
+            severity: 'info',
+            summary: 'Release has public evidence backlinks.',
+            observed_at: timestamp,
+            links,
+          },
+        },
+      }),
+    });
+
+    expect(serialized.extra.observation?.links).toEqual(links);
+  });
+
+  it('drops legacy related object refs while the public extra schema rejects them', () => {
+    const serialized = serializePublicReleaseEvidence({
+      evidence: releaseEvidence({
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'warning',
+            summary: 'Legacy backlinks should not leak.',
+            observed_at: timestamp,
+            links: [{ object_type: 'release', object_id: 'release-1', relationship: 'observed' }],
+            related_object_refs: [
+              { object_type: 'decision', object_id: 'decision-1', relationship: 'rollback_of' },
+            ],
+          },
+        } as ReleaseEvidence['extra'],
+      }),
+    });
+
+    expect(serialized.extra.observation).toEqual({
+      source: 'human',
+      severity: 'warning',
+      summary: 'Legacy backlinks should not leak.',
+      observed_at: timestamp,
+      links: [{ object_type: 'release', object_id: 'release-1', relationship: 'observed' }],
+    });
+    expect(JSON.stringify(serialized)).not.toContain('related_object_refs');
+    expect(
+      publicReleaseEvidenceExtraSchema.safeParse({
+        observation: {
+          source: 'human',
+          severity: 'warning',
+          summary: 'Legacy backlinks should not leak.',
+          observed_at: timestamp,
+          related_object_refs: [
+            { object_type: 'decision', object_id: 'decision-1', relationship: 'rollback_of' },
+          ],
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('uses an Artifact input ref when serializing release evidence', () => {

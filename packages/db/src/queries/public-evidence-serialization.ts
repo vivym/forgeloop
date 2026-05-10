@@ -135,6 +135,8 @@ const statusHistoryStringFields = [
 const publicStringArrayFields = ['blocker_codes', 'required_check_ids', 'failed_check_ids'] as const;
 
 type JsonRecord = Record<string, unknown>;
+type PublicObservation = NonNullable<PublicReleaseEvidenceExtra['observation']>;
+type PublicObservationLink = NonNullable<PublicObservation['links']>[number];
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -425,17 +427,40 @@ const parseExtraCandidate = (candidate: unknown): PublicReleaseEvidenceExtra | u
   return parsed.success ? parsed.data : undefined;
 };
 
+const sanitizeObservationLink = (link: unknown, observation: PublicObservation): PublicObservationLink | undefined => {
+  if (!isRecord(link)) {
+    return undefined;
+  }
+
+  const objectId = safeString(link.object_id);
+  if (objectId === undefined) {
+    return undefined;
+  }
+
+  const parsed = parseExtraCandidate({
+    observation: {
+      source: observation.source,
+      severity: observation.severity,
+      summary: observation.summary,
+      observed_at: observation.observed_at,
+      links: [
+        {
+          object_type: link.object_type,
+          object_id: objectId,
+          relationship: link.relationship,
+        },
+      ],
+    },
+  });
+
+  return parsed?.observation?.links?.[0];
+};
+
 const sanitizeObservation = (value: unknown): PublicReleaseEvidenceExtra['observation'] | undefined => {
   if (!isRecord(value)) {
     return undefined;
   }
 
-  const observation: JsonRecord = {
-    source: value.source,
-    severity: value.severity,
-    summary: value.summary,
-    observed_at: value.observed_at,
-  };
   const source = safeEnum(value.source, observationSources);
   const severity = safeEnum(value.severity, observationSeverities);
   const summary = safeString(value.summary);
@@ -444,25 +469,21 @@ const sanitizeObservation = (value: unknown): PublicReleaseEvidenceExtra['observ
     return undefined;
   }
 
-  observation.source = source;
-  observation.severity = severity;
-  observation.summary = summary;
-  observation.observed_at = observedAt;
-  assignSafeString(observation, 'actor_id', value.actor_id);
-  assignSafeString(observation, 'notes', value.notes);
+  const observation: PublicObservation = { source, severity, summary, observed_at: observedAt };
+  const actorId = safeString(value.actor_id);
+  if (actorId !== undefined) {
+    observation.actor_id = actorId;
+  }
+
+  const notes = safeString(value.notes);
+  if (notes !== undefined) {
+    observation.notes = notes;
+  }
 
   if (Array.isArray(value.links)) {
     const links = value.links.flatMap((link) => {
-      if (!isRecord(link)) {
-        return [];
-      }
-      const candidate = {
-        object_type: link.object_type,
-        object_id: safeString(link.object_id),
-        relationship: link.relationship,
-      };
-      const parsed = parseExtraCandidate({ observation: { ...observation, links: [candidate] } });
-      return parsed?.observation?.links?.[0] === undefined ? [] : [parsed.observation.links[0]];
+      const publicLink = sanitizeObservationLink(link, observation);
+      return publicLink === undefined ? [] : [publicLink];
     });
     if (links.length > 0) {
       observation.links = links;
