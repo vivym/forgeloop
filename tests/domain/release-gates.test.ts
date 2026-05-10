@@ -5,6 +5,7 @@ import {
   deriveReleaseBlockers,
   fingerprintReleaseBlockers,
   isReleaseBlockerOverrideable,
+  releaseBlockerTruthTable,
   releaseBlockerCodes,
   selectReleaseReviewPacket,
   transitionRelease,
@@ -22,7 +23,8 @@ const timestamp = '2026-05-05T00:00:00.000Z';
 const expectedCodes = [
   'missing_work_item',
   'missing_execution_package',
-  'empty_release_scope',
+  'empty_work_item_scope',
+  'empty_execution_package_scope',
   'work_item_not_complete',
   'package_not_release_ready',
   'missing_approved_review_packet',
@@ -30,6 +32,8 @@ const expectedCodes = [
   'missing_required_artifact',
   'evidence_redacted',
   'stale_or_superseded_evidence',
+  'missing_required_evidence_backlink',
+  'unsafe_or_redacted_evidence_backlink',
   'missing_rollout_strategy',
   'missing_rollback_plan',
   'missing_observation_plan',
@@ -200,7 +204,8 @@ describe('Release gate derivation', () => {
   });
 
   it('classifies structural, evidence, risk, and planning blockers for override policy', () => {
-    expect(isReleaseBlockerOverrideable('empty_release_scope')).toBe(false);
+    expect(isReleaseBlockerOverrideable('empty_work_item_scope')).toBe(false);
+    expect(isReleaseBlockerOverrideable('empty_execution_package_scope')).toBe(false);
     expect(isReleaseBlockerOverrideable('evidence_redacted')).toBe(true);
     expect(isReleaseBlockerOverrideable('stale_or_superseded_evidence')).toBe(true);
     expect(isReleaseBlockerOverrideable('work_item_not_complete')).toBe(true);
@@ -208,6 +213,26 @@ describe('Release gate derivation', () => {
     expect(isReleaseBlockerOverrideable('missing_rollout_strategy')).toBe(true);
     expect(isReleaseBlockerOverrideable('missing_rollback_plan')).toBe(true);
     expect(isReleaseBlockerOverrideable('missing_observation_plan')).toBe(true);
+  });
+
+  it('exports blocker truth-table metadata for lifecycle gates', () => {
+    const table = releaseBlockerTruthTable();
+
+    expect(table.empty_work_item_scope).toMatchObject({
+      category: 'structural',
+      overrideable: false,
+      blocks_submit: true,
+      blocks_plain_approval: true,
+      blocks_override_approval: true,
+    });
+
+    expect(table.missing_rollout_strategy).toMatchObject({
+      category: 'planning',
+      overrideable: true,
+      blocks_submit: false,
+      blocks_plain_approval: true,
+      blocks_override_approval: false,
+    });
   });
 
   it.each([
@@ -252,13 +277,32 @@ describe('Release gate derivation', () => {
     ).toContain('missing_execution_package');
   });
 
-  it('derives empty_release_scope when either valid linked scope side is empty and blocks submit, approve, and override', () => {
-    for (const context of [
-      { release: release({ work_item_ids: [] }), work_items: [], execution_packages: [executionPackage()] },
+  it('derives split empty scope blockers when either valid linked scope side is empty', () => {
+    expect(
+      deriveCodes({
+        release: release({ work_item_ids: [] }),
+        work_items: [],
+        execution_packages: [executionPackage()],
+      }),
+    ).toContain('empty_work_item_scope');
+
+    expect(
+      deriveCodes({
+        release: release({ execution_package_ids: [] }),
+        work_items: [workItem()],
+        execution_packages: [],
+      }),
+    ).toContain('empty_execution_package_scope');
+  });
+
+  it.each([
+    ['empty_work_item_scope', { release: release({ work_item_ids: [] }), work_items: [], execution_packages: [executionPackage()] }],
+    [
+      'empty_execution_package_scope',
       { release: release({ execution_package_ids: [] }), work_items: [workItem()], execution_packages: [] },
-    ]) {
+    ],
+  ] as const)('blocks submit, approve, and override for %s', (_code, context) => {
       const blockers = deriveReleaseBlockers(context);
-      expect(blockers.map((blocker) => blocker.code)).toContain('empty_release_scope');
       expect(() =>
         transitionRelease(context.release, {
           type: 'submit',
@@ -285,7 +329,54 @@ describe('Release gate derivation', () => {
           gate_context: context,
         }),
       ).toThrow();
-    }
+    },
+  );
+
+  it('derives missing_required_evidence_backlink when observation evidence has no release backlink', () => {
+    expect(
+      deriveCodes({
+        evidence: [
+          evidence({
+            evidence_type: 'observation_note',
+            extra: {
+              observation: {
+                source: 'human',
+                severity: 'failure',
+                summary: 'Issue without public release link',
+                observed_at: timestamp,
+                links: [{ object_type: 'work_item', object_id: 'work-item-1', relationship: 'affected' }],
+              },
+            },
+          }),
+        ],
+      }),
+    ).toContain('missing_required_evidence_backlink');
+  });
+
+  it('derives unsafe_or_redacted_evidence_backlink when observation links cannot be publicly projected', () => {
+    expect(
+      deriveCodes({
+        release: release({ id: 'release-1' }),
+        evidence: [
+          evidence({
+            evidence_type: 'observation_note',
+            extra: {
+              observation: {
+                source: 'human',
+                severity: 'failure',
+                summary: 'Issue with unsafe public backlink',
+                observed_at: timestamp,
+                links: [
+                  { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+                  { object_type: 'artifact', object_id: 'missing-artifact', relationship: 'generated_by' },
+                ],
+              },
+            },
+          }),
+        ],
+        public_link_visibility: [{ object_type: 'artifact', object_id: 'missing-artifact', public: false }],
+      }),
+    ).toContain('unsafe_or_redacted_evidence_backlink');
   });
 
   it.each([

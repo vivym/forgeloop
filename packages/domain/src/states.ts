@@ -226,19 +226,48 @@ export type ReleaseTransition =
       org_id: string;
       project_id: string;
       title: string;
+      scope_summary?: string;
+      release_owner_actor_id?: string;
+      release_type?: string;
       created_by_actor_id: string;
+      updated_by_actor_id?: string;
+    })
+  | (Timestamped & {
+      type: 'patch';
+      actor_id: string;
+      title?: string;
+      description?: string;
+      scope_summary?: string;
+      rollout_strategy?: string;
+      rollback_plan?: string;
+      observation_plan?: string;
+      release_owner_actor_id?: string;
+      release_type?: string;
     })
   | (Timestamped & {
       type: 'link_work_item';
       work_item_id: string;
+      actor_id?: string;
     })
   | (Timestamped & {
       type: 'link_execution_package';
       execution_package_id: string;
+      actor_id?: string;
+    })
+  | (Timestamped & {
+      type: 'unlink_work_item';
+      work_item_id: string;
+      actor_id?: string;
+    })
+  | (Timestamped & {
+      type: 'unlink_execution_package';
+      execution_package_id: string;
+      actor_id?: string;
     })
   | (Timestamped & {
       type: 'submit';
       gate_context: ReleaseGateContext;
+      actor_id?: string;
     })
   | (Timestamped & {
       type: 'approve';
@@ -253,11 +282,26 @@ export type ReleaseTransition =
       gate_context: ReleaseGateContext;
     })
   | (Timestamped & {
+      type: 'request_changes';
+      actor_id: string;
+      rationale: string;
+    })
+  | (Timestamped & {
       type: 'start_observing';
+      actor_id?: string;
     })
   | (Timestamped & {
       type: 'close';
       resolution: 'completed' | 'rolled_back' | 'cancelled';
+      actor_id?: string;
+    })
+  | (Timestamped & {
+      type: 'close_override';
+      resolution: 'completed' | 'rolled_back' | 'cancelled';
+      actor_id: string;
+      rationale: string;
+      blocker_snapshot: ReleaseBlockerSnapshot;
+      gate_context: ReleaseGateContext;
     });
 
 export interface ReleaseTransitionResult {
@@ -837,15 +881,19 @@ export const transitionRelease = (
       org_id: event.org_id,
       project_id: event.project_id,
       title: event.title,
+      ...(event.scope_summary !== undefined ? { scope_summary: event.scope_summary } : {}),
       phase: 'draft',
       activity_state: 'idle',
       gate_state: 'not_submitted',
       resolution: 'none',
       work_item_ids: [],
       execution_package_ids: [],
+      release_owner_actor_id: event.release_owner_actor_id ?? event.created_by_actor_id,
+      release_type: event.release_type ?? 'normal',
       created_by_actor_id: event.created_by_actor_id,
       created_at: at,
       updated_at: at,
+      updated_by_actor_id: event.updated_by_actor_id ?? event.created_by_actor_id,
     });
   }
 
@@ -854,6 +902,24 @@ export const transitionRelease = (
   }
 
   switch (event.type) {
+    case 'patch': {
+      if (release.phase === 'completed' || release.phase === 'closed') {
+        break;
+      }
+      return releaseResult({
+        ...release,
+        ...(event.title !== undefined ? { title: event.title } : {}),
+        ...(event.description !== undefined ? { description: event.description } : {}),
+        ...(event.scope_summary !== undefined ? { scope_summary: event.scope_summary } : {}),
+        ...(event.rollout_strategy !== undefined ? { rollout_strategy: event.rollout_strategy } : {}),
+        ...(event.rollback_plan !== undefined ? { rollback_plan: event.rollback_plan } : {}),
+        ...(event.observation_plan !== undefined ? { observation_plan: event.observation_plan } : {}),
+        ...(event.release_owner_actor_id !== undefined ? { release_owner_actor_id: event.release_owner_actor_id } : {}),
+        ...(event.release_type !== undefined ? { release_type: event.release_type } : {}),
+        updated_at: at,
+        updated_by_actor_id: event.actor_id,
+      });
+    }
     case 'link_work_item': {
       if (release.phase !== 'draft' && release.phase !== 'candidate') {
         break;
@@ -869,6 +935,7 @@ export const transitionRelease = (
         resolution: 'none',
         work_item_ids: workItemIds,
         updated_at: at,
+        ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
       });
     }
     case 'link_execution_package': {
@@ -886,10 +953,41 @@ export const transitionRelease = (
         resolution: 'none',
         execution_package_ids: executionPackageIds,
         updated_at: at,
+        ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
+      });
+    }
+    case 'unlink_work_item': {
+      if (release.phase !== 'draft' && release.phase !== 'candidate') {
+        break;
+      }
+      return releaseResult({
+        ...release,
+        phase: release.execution_package_ids.length > 0 ? 'candidate' : 'draft',
+        activity_state: 'idle',
+        gate_state: 'not_submitted',
+        resolution: 'none',
+        work_item_ids: release.work_item_ids.filter((id) => id !== event.work_item_id),
+        updated_at: at,
+        ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
+      });
+    }
+    case 'unlink_execution_package': {
+      if (release.phase !== 'draft' && release.phase !== 'candidate') {
+        break;
+      }
+      return releaseResult({
+        ...release,
+        phase: release.work_item_ids.length > 0 ? 'candidate' : 'draft',
+        activity_state: 'idle',
+        gate_state: 'not_submitted',
+        resolution: 'none',
+        execution_package_ids: release.execution_package_ids.filter((id) => id !== event.execution_package_id),
+        updated_at: at,
+        ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
       });
     }
     case 'submit':
-      if (release.phase === 'candidate') {
+      if (release.phase === 'candidate' || (release.phase === 'approval' && release.gate_state === 'changes_requested')) {
         const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
         if (canSubmitReleaseForApproval(snapshot.blockers)) {
           return releaseResult(
@@ -900,6 +998,7 @@ export const transitionRelease = (
               gate_state: 'awaiting_approval',
               resolution: 'none',
               updated_at: at,
+              ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
             },
             [],
             snapshot,
@@ -919,6 +1018,7 @@ export const transitionRelease = (
               gate_state: 'approved',
               resolution: 'none',
               updated_at: at,
+              updated_by_actor_id: event.approved_by_actor_id,
             },
             [
               {
@@ -961,6 +1061,7 @@ export const transitionRelease = (
             gate_state: 'approved',
             resolution: 'none',
             updated_at: at,
+            updated_by_actor_id: event.approved_by_actor_id,
           },
           [
             {
@@ -976,6 +1077,31 @@ export const transitionRelease = (
         );
       }
       break;
+    case 'request_changes':
+      if (release.phase === 'approval' && release.gate_state === 'awaiting_approval' && hasText(event.rationale)) {
+        return releaseResult(
+          {
+            ...release,
+            phase: 'approval',
+            activity_state: 'awaiting_human',
+            gate_state: 'changes_requested',
+            resolution: 'none',
+            updated_at: at,
+            updated_by_actor_id: event.actor_id,
+          },
+          [
+            {
+              object_type: 'release',
+              object_id: release.id,
+              actor_id: event.actor_id,
+              decision_type: 'release_changes_requested',
+              outcome: 'changes_requested',
+              reason: event.rationale,
+            },
+          ],
+        );
+      }
+      break;
     case 'start_observing':
       if (release.phase === 'rollout' && release.gate_state === 'approved') {
         return releaseResult({
@@ -985,6 +1111,7 @@ export const transitionRelease = (
           gate_state: 'rollout_succeeded',
           resolution: 'none',
           updated_at: at,
+          ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
         });
       }
       break;
@@ -997,10 +1124,11 @@ export const transitionRelease = (
           resolution: 'completed',
           closed_at: at,
           updated_at: at,
+          ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
         });
       }
       if (
-        (event.resolution === 'rolled_back' || event.resolution === 'cancelled') &&
+        event.resolution === 'rolled_back' &&
         (release.phase === 'rollout' || release.phase === 'observing')
       ) {
         return releaseResult({
@@ -1010,7 +1138,65 @@ export const transitionRelease = (
           resolution: event.resolution,
           closed_at: at,
           updated_at: at,
+          ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
         });
+      }
+      if (
+        event.resolution === 'cancelled' &&
+        (release.phase === 'draft' ||
+          release.phase === 'candidate' ||
+          release.phase === 'approval' ||
+          release.phase === 'rollout' ||
+          release.phase === 'observing')
+      ) {
+        return releaseResult({
+          ...release,
+          phase: 'closed',
+          activity_state: 'idle',
+          resolution: event.resolution,
+          closed_at: at,
+          updated_at: at,
+          ...(event.actor_id !== undefined ? { updated_by_actor_id: event.actor_id } : {}),
+        });
+      }
+      break;
+    case 'close_override':
+      if (release.phase === 'observing' && release.gate_state === 'rollout_succeeded' && hasText(event.rationale)) {
+        const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
+        assertRequestSnapshotMatchesCurrent(release, event.blocker_snapshot, snapshot);
+        if (snapshot.blockers.length === 0 || hasNonOverrideableReleaseBlockers(snapshot.blockers)) {
+          break;
+        }
+        const intentBase = {
+          object_type: 'release' as const,
+          object_id: release.id,
+          actor_id: event.actor_id,
+          outcome: event.resolution,
+          reason: event.rationale,
+          blocker_snapshot: snapshot,
+        };
+        return releaseResult(
+          {
+            ...release,
+            phase: event.resolution === 'completed' ? 'completed' : 'closed',
+            activity_state: 'idle',
+            resolution: event.resolution,
+            closed_at: at,
+            updated_at: at,
+            updated_by_actor_id: event.actor_id,
+          },
+          [
+            {
+              ...intentBase,
+              decision_type: 'manual_override',
+            },
+            {
+              ...intentBase,
+              decision_type: 'release_close',
+            },
+          ],
+          snapshot,
+        );
       }
       break;
   }

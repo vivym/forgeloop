@@ -479,7 +479,15 @@ export interface Decision {
   decided_by_actor_id?: string;
   decision_type?: string;
   outcome?: string;
-  decision: 'approved' | 'changes_requested' | 'need_more_context' | 'escalate' | 'override_approved';
+  decision:
+    | 'approved'
+    | 'changes_requested'
+    | 'need_more_context'
+    | 'escalate'
+    | 'override_approved'
+    | 'completed'
+    | 'rolled_back'
+    | 'cancelled';
   summary: string;
   rationale?: string;
   evidence_refs?: unknown;
@@ -561,6 +569,7 @@ export interface Release {
   key?: string;
   title: string;
   description?: string;
+  scope_summary?: string;
   phase: ReleasePhase;
   activity_state: ReleaseActivityState;
   gate_state: ReleaseGateState;
@@ -619,8 +628,8 @@ export interface ReleaseDecisionIntent {
   object_type: 'release';
   object_id: string;
   actor_id: string;
-  decision_type: 'manual_override' | 'release_approval';
-  outcome: 'approved' | 'override_approved';
+  decision_type: 'manual_override' | 'release_approval' | 'release_changes_requested' | 'release_close';
+  outcome: 'approved' | 'changes_requested' | 'override_approved' | 'completed' | 'rolled_back' | 'cancelled';
   reason?: string;
   blocker_snapshot?: ReleaseBlockerSnapshot;
 }

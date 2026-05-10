@@ -39,7 +39,25 @@ export interface ReleaseGateContext {
   run_sessions?: readonly RunSession[];
   review_packets?: readonly ReviewPacket[];
   evidence?: readonly ReleaseEvidence[];
+  public_link_visibility?: readonly ReleasePublicLinkVisibility[];
 }
+
+export interface ReleasePublicLinkVisibility {
+  object_type: string;
+  object_id: string;
+  public: boolean;
+}
+
+export interface ReleaseBlockerTruthTableEntry {
+  code: ReleaseBlockerCode;
+  category: ReleaseBlockerCategory;
+  overrideable: boolean;
+  blocks_submit: boolean;
+  blocks_plain_approval: boolean;
+  blocks_override_approval: boolean;
+}
+
+export type ReleaseBlockerTruthTable = Record<ReleaseBlockerCode, ReleaseBlockerTruthTableEntry>;
 
 const overrideableCodes = new Set<ReleaseBlockerCode>([
   'work_item_not_complete',
@@ -76,6 +94,24 @@ const categoryByCode: Record<ReleaseBlockerCode, ReleaseBlockerCategory> = {
 };
 
 export const isReleaseBlockerOverrideable = (code: ReleaseBlockerCode): boolean => overrideableCodes.has(code);
+
+export const releaseBlockerTruthTable = (): ReleaseBlockerTruthTable =>
+  Object.fromEntries(
+    releaseBlockerCodes.map((code) => {
+      const overrideable = isReleaseBlockerOverrideable(code);
+      return [
+        code,
+        {
+          code,
+          category: categoryByCode[code],
+          overrideable,
+          blocks_submit: !overrideable,
+          blocks_plain_approval: true,
+          blocks_override_approval: !overrideable,
+        },
+      ];
+    }),
+  ) as ReleaseBlockerTruthTable;
 
 const blocker = (code: ReleaseBlockerCode, message: string, object?: { type: string; id: string }): ReleaseBlocker => ({
   code,
@@ -300,6 +336,60 @@ const hasFailedOrMissingRequiredCheck = (
   });
 };
 
+interface ObservationLink {
+  object_type: string;
+  object_id: string;
+  relationship?: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const observationLinksFor = (evidence: ReleaseEvidence): ObservationLink[] => {
+  const observation = isRecord(evidence.extra) ? evidence.extra.observation : undefined;
+  if (!isRecord(observation) || !Array.isArray(observation.links)) {
+    return [];
+  }
+
+  return observation.links.filter((link): link is ObservationLink => {
+    if (!isRecord(link)) {
+      return false;
+    }
+    return typeof link.object_type === 'string' && typeof link.object_id === 'string';
+  });
+};
+
+const visibilityKey = (objectType: string, objectId: string): string => `${objectType}\0${objectId}`;
+
+const hasUnsafePublicObservationLink = (
+  links: readonly ObservationLink[],
+  publicLinkVisibility: readonly ReleasePublicLinkVisibility[] | undefined,
+): boolean => {
+  if (publicLinkVisibility === undefined) {
+    return false;
+  }
+
+  const visibilityByRef = new Map(
+    publicLinkVisibility.map((item) => [visibilityKey(item.object_type, item.object_id), item.public]),
+  );
+
+  return links.some((link) => visibilityByRef.get(visibilityKey(link.object_type, link.object_id)) !== true);
+};
+
+export const isCompletedCloseObservationEvidence = (evidence: ReleaseEvidence): boolean => {
+  if (evidence.evidence_type !== 'observation_note' || evidence.redacted || evidence.status !== 'current') {
+    return false;
+  }
+
+  const observation = isRecord(evidence.extra) ? evidence.extra.observation : undefined;
+  if (!isRecord(observation)) {
+    return false;
+  }
+
+  const severity = observation.severity;
+  return severity === 'success' || severity === 'pass' || severity === 'passed' || severity === 'info';
+};
+
 const resolveWorkItemLinks = (
   release: Release,
   workItems: readonly WorkItem[],
@@ -491,6 +581,32 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
         id: item.id,
       }));
     }
+    if (item.evidence_type === 'observation_note') {
+      const links = observationLinksFor(item);
+      const hasReleaseBacklink = links.some(
+        (link) => link.object_type === 'release' && link.object_id === release.id,
+      );
+      if (!hasReleaseBacklink) {
+        blockers.push(
+          blocker('missing_required_evidence_backlink', `Observation evidence ${item.id} is missing a release backlink.`, {
+            type: 'release_evidence',
+            id: item.id,
+          }),
+        );
+      }
+      if (hasUnsafePublicObservationLink(links, context.public_link_visibility)) {
+        blockers.push(
+          blocker(
+            'unsafe_or_redacted_evidence_backlink',
+            `Observation evidence ${item.id} has a backlink that cannot be publicly projected.`,
+            {
+              type: 'release_evidence',
+              id: item.id,
+            },
+          ),
+        );
+      }
+    }
   }
 
   if (!hasText(release.rollout_strategy)) {
@@ -504,4 +620,39 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
   }
 
   return blockers;
+};
+
+export const deriveReleaseRiskSummary = (context: ReleaseGateContext): string => {
+  const blockers = deriveReleaseBlockers(context);
+  if (blockers.length === 0) {
+    return 'Release gates are clear.';
+  }
+
+  const counts = blockers.reduce<Record<ReleaseBlockerCategory, number>>(
+    (summary, item) => ({ ...summary, [item.category]: summary[item.category] + 1 }),
+    { structural: 0, risk: 0, evidence: 0, planning: 0 },
+  );
+  return `Release has ${blockers.length} blocker(s): structural ${counts.structural}, risk ${counts.risk}, evidence ${counts.evidence}, planning ${counts.planning}.`;
+};
+
+export const deriveReleaseChecklist = (context: ReleaseGateContext): string[] => {
+  const blockers = deriveReleaseBlockers(context);
+  if (blockers.length === 0) {
+    return ['Confirm release owner, rollout, rollback, and observation handoff.'];
+  }
+
+  return blockers.map((item) => item.message);
+};
+
+export const deriveReleaseNextActions = (context: ReleaseGateContext): string[] => {
+  const blockers = deriveReleaseBlockers(context);
+  if (blockers.length === 0) {
+    return ['Submit release for approval or approve with the current evidence packet.'];
+  }
+
+  return blockers.map((item) =>
+    item.overrideable
+      ? `Resolve or explicitly override ${item.code}.`
+      : `Resolve non-overrideable blocker ${item.code}.`,
+  );
 };

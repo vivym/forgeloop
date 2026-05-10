@@ -36,10 +36,10 @@ const createRelease = () =>
   }).release;
 
 const emptyScopeBlocker: ReleaseBlocker = {
-  code: 'empty_release_scope',
+  code: 'empty_work_item_scope',
   category: 'structural',
   overrideable: false,
-  message: 'Release requires at least one valid work item and execution package.',
+  message: 'Release requires at least one valid work item.',
 };
 
 const blockerSnapshot = (releaseId: string, blockers: ReleaseBlocker[]): ReleaseBlockerSnapshot =>
@@ -189,6 +189,30 @@ describe('Release state transitions', () => {
     });
   });
 
+  it('creates a release with productized ownership, type, scope summary, and updater metadata', () => {
+    const created = transitionRelease(undefined, {
+      type: 'create',
+      id: 'release-1',
+      org_id: 'org-1',
+      project_id: 'project-1',
+      title: 'P1 core schema release flow',
+      scope_summary: 'Ship release risk radar.',
+      release_owner_actor_id: 'actor-owner',
+      release_type: 'normal',
+      created_by_actor_id: 'actor-creator',
+      updated_by_actor_id: 'actor-creator',
+      at: timestamp,
+    }).release;
+
+    expect(created).toMatchObject({
+      scope_summary: 'Ship release risk radar.',
+      release_owner_actor_id: 'actor-owner',
+      release_type: 'normal',
+      created_by_actor_id: 'actor-creator',
+      updated_by_actor_id: 'actor-creator',
+    });
+  });
+
   it('moves to candidate after the first valid linked object', () => {
     const linked = transitionRelease(createRelease(), {
       type: 'link_work_item',
@@ -231,6 +255,63 @@ describe('Release state transitions', () => {
       gate_state: 'awaiting_approval',
       resolution: 'none',
     });
+  });
+
+  it('submits again from approval changes requested', () => {
+    const changesRequested = {
+      ...releasable(createRelease()),
+      phase: 'approval',
+      activity_state: 'awaiting_human',
+      gate_state: 'changes_requested',
+    } as Release;
+
+    expect(
+      releaseState(
+        transitionRelease(changesRequested, {
+          type: 'submit',
+          gate_context: gateContext(changesRequested),
+          at: timestamp,
+        }).release,
+      ),
+    ).toEqual({
+      phase: 'approval',
+      activity_state: 'awaiting_human',
+      gate_state: 'awaiting_approval',
+      resolution: 'none',
+    });
+  });
+
+  it('requests approval changes and records a changes-requested decision intent', () => {
+    const release = {
+      ...releasable(createRelease()),
+      phase: 'approval',
+      activity_state: 'awaiting_human',
+      gate_state: 'awaiting_approval',
+    } as Release;
+
+    const result = transitionRelease(release, {
+      type: 'request_changes',
+      actor_id: 'actor-reviewer',
+      rationale: 'Need rollout notes.',
+      at: timestamp,
+    });
+
+    expect(result.release).toMatchObject({
+      phase: 'approval',
+      activity_state: 'awaiting_human',
+      gate_state: 'changes_requested',
+      resolution: 'none',
+    });
+    expect(result.decision_intents).toEqual([
+      {
+        object_type: 'release',
+        object_id: 'release-1',
+        actor_id: 'actor-reviewer',
+        decision_type: 'release_changes_requested',
+        outcome: 'changes_requested',
+        reason: 'Need rollout notes.',
+      },
+    ]);
   });
 
   it('approves a release with no blockers for rollout', () => {
@@ -372,6 +453,115 @@ describe('Release state transitions', () => {
     });
   });
 
+  it('closes completed with observation override and records override plus close decision intents', () => {
+    const observing = {
+      ...releasable(createRelease()),
+      phase: 'observing',
+      gate_state: 'rollout_succeeded',
+    } as Release;
+    const overrideContext = gateContext(observing, {
+      evidence: [
+        {
+          id: 'evidence-1',
+          release_id: observing.id,
+          evidence_type: 'observation_note',
+          summary: 'Known observation backlink issue.',
+          extra: {
+            observation: {
+              source: 'human',
+              severity: 'failure',
+              summary: 'Issue without public release link',
+              observed_at: timestamp,
+              links: [{ object_type: 'work_item', object_id: 'work-item-1', relationship: 'affected' }],
+            },
+          },
+          redacted: false,
+          status: 'current',
+          created_at: timestamp,
+        },
+      ],
+    });
+    const snapshot = currentSnapshot(observing, overrideContext);
+    const result = transitionRelease(observing, {
+      type: 'close_override',
+      resolution: 'completed',
+      actor_id: 'actor-release-manager',
+      rationale: 'Observation issue is understood and publicly documented elsewhere.',
+      blocker_snapshot: snapshot,
+      gate_context: overrideContext,
+      at: timestamp,
+    });
+
+    expect(releaseState(result.release)).toEqual({
+      phase: 'completed',
+      activity_state: 'idle',
+      gate_state: 'rollout_succeeded',
+      resolution: 'completed',
+    });
+    expect(result.decision_intents).toEqual([
+      expect.objectContaining({
+        actor_id: 'actor-release-manager',
+        decision_type: 'manual_override',
+        outcome: 'completed',
+        reason: 'Observation issue is understood and publicly documented elsewhere.',
+        blocker_snapshot: snapshot,
+      }),
+      expect.objectContaining({
+        actor_id: 'actor-release-manager',
+        decision_type: 'release_close',
+        outcome: 'completed',
+        reason: 'Observation issue is understood and publicly documented elsewhere.',
+        blocker_snapshot: snapshot,
+      }),
+    ]);
+  });
+
+  it('rejects close override with a stale blocker snapshot', () => {
+    const observing = {
+      ...releasable(createRelease()),
+      phase: 'observing',
+      gate_state: 'rollout_succeeded',
+    } as Release;
+    const overrideContext = gateContext(observing, {
+      evidence: [
+        {
+          id: 'evidence-1',
+          release_id: observing.id,
+          evidence_type: 'observation_note',
+          summary: 'Known observation backlink issue.',
+          extra: {
+            observation: {
+              source: 'human',
+              severity: 'failure',
+              summary: 'Issue without public release link',
+              observed_at: timestamp,
+              links: [{ object_type: 'work_item', object_id: 'work-item-1', relationship: 'affected' }],
+            },
+          },
+          redacted: false,
+          status: 'current',
+          created_at: timestamp,
+        },
+      ],
+    });
+    const snapshot = currentSnapshot(observing, overrideContext);
+
+    expect(() =>
+      transitionRelease(observing, {
+        type: 'close_override',
+        resolution: 'completed',
+        actor_id: 'actor-release-manager',
+        rationale: 'Observation issue is understood.',
+        blocker_snapshot: {
+          ...snapshot,
+          blocker_fingerprint: 'release-blockers:v1:stale',
+        },
+        gate_context: overrideContext,
+        at: timestamp,
+      }),
+    ).toThrow(DomainError);
+  });
+
   it.each(['rolled_back', 'cancelled'] as const)('closes %s releases', (resolution) => {
     const release = {
       ...createRelease(),
@@ -384,6 +574,29 @@ describe('Release state transitions', () => {
       activity_state: 'idle',
       gate_state: release.gate_state,
       resolution,
+    });
+  });
+
+  it.each([
+    ['draft', 'not_submitted'],
+    ['candidate', 'not_submitted'],
+    ['approval', 'awaiting_approval'],
+    ['approval', 'changes_requested'],
+    ['rollout', 'approved'],
+    ['observing', 'rollout_succeeded'],
+  ] as const)('closes cancelled from %s/%s with the expected gate state', (phase, gateState) => {
+    const release = {
+      ...releasable(createRelease()),
+      phase,
+      gate_state: gateState,
+      activity_state: phase === 'approval' ? 'awaiting_human' : 'idle',
+    } as Release;
+
+    expect(releaseState(transitionRelease(release, { type: 'close', resolution: 'cancelled', at: timestamp }).release)).toEqual({
+      phase: 'closed',
+      activity_state: 'idle',
+      gate_state: gateState,
+      resolution: 'cancelled',
     });
   });
 
