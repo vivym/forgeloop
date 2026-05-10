@@ -17,6 +17,7 @@ import {
   releaseBlockerSnapshotSchema,
   releaseActorCommandRequestSchema,
   releaseControlResponseSchema,
+  releaseEvidenceSchema,
   forceRerunPackageRequestSchema,
   forceRerunPackageResponseSchema,
   requestReviewChangesRequestSchema,
@@ -298,6 +299,27 @@ describe('P0 delivery loop contracts', () => {
     });
 
     expect(parsed.object_ref.relationship).toBe('supports');
+
+    expect(
+      createReleaseEvidenceRequestSchema.parse({
+        evidence_type: 'test_report',
+        summary: 'Test report uploaded.',
+        artifact_id: 'artifact-test-report-1',
+      }).artifact_id,
+    ).toBe('artifact-test-report-1');
+
+    expect(
+      releaseEvidenceSchema.parse({
+        id: 'evidence-1',
+        release_id: 'release-1',
+        evidence_type: 'observation_note',
+        summary: 'Observation window is healthy.',
+        extra: { error_rate: 0.01 },
+        redacted: false,
+        status: 'current',
+        created_at: '2026-05-05T00:00:00.000Z',
+      }).object_ref,
+    ).toBeUndefined();
   });
 
   it('rejects invalid release DTO inputs', () => {
@@ -336,6 +358,23 @@ describe('P0 delivery loop contracts', () => {
         rationale: 'Reviewed manually.',
         blocker_snapshot: validReleaseBlockerSnapshot,
         unknown: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      createReleaseEvidenceRequestSchema.safeParse({
+        evidence_type: 'review_packet',
+        summary: 'Approved review packet.',
+      }).success,
+    ).toBe(false);
+    expect(
+      createReleaseEvidenceRequestSchema.safeParse({
+        evidence_type: 'review_packet',
+        summary: 'Approved review packet.',
+        object_ref: {
+          object_type: 'run_session',
+          object_id: 'run-session-1',
+          relationship: 'supports',
+        },
       }).success,
     ).toBe(false);
   });

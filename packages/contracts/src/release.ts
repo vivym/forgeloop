@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { jsonObjectSchema } from './executor.js';
 
 const isoDateTimeSchema = z.string().datetime();
 
@@ -77,18 +78,34 @@ export type ReleaseEvidenceObjectRef = z.infer<typeof releaseEvidenceObjectRefSc
 export const releaseEvidenceStatusSchema = z.enum(['current', 'stale', 'superseded']);
 export type ReleaseEvidenceStatus = z.infer<typeof releaseEvidenceStatusSchema>;
 
+const validateReleaseEvidenceObjectRef = (
+  evidence: { evidence_type: ReleaseEvidenceType; object_ref?: ReleaseEvidenceObjectRef | undefined },
+  ctx: z.RefinementCtx,
+): void => {
+  if (evidence.evidence_type === 'review_packet' && evidence.object_ref?.object_type !== 'review_packet') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['object_ref', 'object_type'],
+      message: 'review_packet evidence requires object_ref.object_type to be review_packet',
+    });
+  }
+};
+
 export const releaseEvidenceSchema = z
   .object({
     id: z.string().min(1),
     release_id: z.string().min(1),
     evidence_type: releaseEvidenceTypeSchema,
     summary: z.string().min(1),
-    object_ref: releaseEvidenceObjectRefSchema,
+    object_ref: releaseEvidenceObjectRefSchema.optional(),
+    artifact_id: z.string().min(1).optional(),
+    extra: jsonObjectSchema.optional(),
     redacted: z.boolean(),
     status: releaseEvidenceStatusSchema,
     created_at: isoDateTimeSchema,
   })
-  .strict();
+  .strict()
+  .superRefine(validateReleaseEvidenceObjectRef);
 export type ReleaseEvidence = z.infer<typeof releaseEvidenceSchema>;
 
 export const releaseSchema = z
@@ -236,9 +253,12 @@ export const createReleaseEvidenceRequestSchema = z
   .object({
     evidence_type: releaseEvidenceTypeSchema,
     summary: z.string().min(1),
-    object_ref: releaseEvidenceObjectRefSchema,
+    object_ref: releaseEvidenceObjectRefSchema.optional(),
+    artifact_id: z.string().min(1).optional(),
+    extra: jsonObjectSchema.optional(),
     redacted: z.boolean().default(false),
     status: releaseEvidenceStatusSchema.default('current'),
   })
-  .strict();
+  .strict()
+  .superRefine(validateReleaseEvidenceObjectRef);
 export type CreateReleaseEvidenceRequest = z.infer<typeof createReleaseEvidenceRequestSchema>;

@@ -490,7 +490,9 @@ export interface ReleaseEvidence {
   release_id: string;
   evidence_type: ReleaseEvidenceType;
   summary: string;
-  object_ref: ReleaseEvidenceObjectRef;
+  object_ref?: ReleaseEvidenceObjectRef;
+  artifact_id?: string;
+  extra?: Record<string, unknown>;
   redacted: boolean;
   status: 'current' | 'stale' | 'superseded';
   created_at: IsoDateTime;
