@@ -45,8 +45,10 @@ import {
   trace_link_relationship_values,
   trace_links,
   work_item_activity_state_values,
+  work_item_gate_state_values,
   work_item_kind_values,
   work_item_phase_values,
+  work_item_resolution_values,
   work_items,
 } from '../../packages/db/src/index';
 import * as dbSchema from '../../packages/db/src/index';
@@ -186,7 +188,33 @@ describe('P1 core schema release flow Drizzle schema', () => {
       'closed',
     ]);
     expect(work_item_kind_values).toEqual(['requirement', 'bug', 'tech_debt']);
-    expect(work_item_activity_state_values).toEqual(['idle', 'awaiting_ai']);
+    expect(work_item_activity_state_values).toEqual([
+      'idle',
+      'in_progress',
+      'awaiting_ai',
+      'ai_running',
+      'awaiting_human',
+      'human_in_progress',
+      'blocked',
+    ]);
+    expect(work_item_gate_state_values).toEqual([
+      'none',
+      'awaiting_spec_approval',
+      'spec_changes_requested',
+      'awaiting_plan_approval',
+      'plan_changes_requested',
+      'awaiting_release_approval',
+      'release_changes_requested',
+    ]);
+    expect(work_item_resolution_values).toEqual([
+      'none',
+      'completed',
+      'cancelled',
+      'rejected',
+      'duplicate',
+      'superseded',
+      'won_t_do',
+    ]);
     expect(spec_plan_status_values).toEqual(['draft', 'in_review', 'approved', 'rejected', 'superseded', 'archived']);
     expect(spec_plan_editing_state_values).toEqual(['idle', 'ai_drafting', 'human_editing', 'co_editing']);
     expect(spec_plan_gate_state_values).toEqual([

@@ -14,15 +14,33 @@ export const work_item_phase_values = [
   'closed',
 ] as const;
 export const work_item_kind_values = ['requirement', 'bug', 'tech_debt'] as const;
-export const work_item_activity_state_values = ['idle', 'awaiting_ai'] as const;
+export const work_item_activity_state_values = [
+  'idle',
+  'in_progress',
+  'awaiting_ai',
+  'ai_running',
+  'awaiting_human',
+  'human_in_progress',
+  'blocked',
+] as const;
 export const work_item_gate_state_values = [
   'none',
   'awaiting_spec_approval',
   'spec_changes_requested',
   'awaiting_plan_approval',
   'plan_changes_requested',
+  'awaiting_release_approval',
+  'release_changes_requested',
 ] as const;
-export const work_item_resolution_values = ['none', 'completed'] as const;
+export const work_item_resolution_values = [
+  'none',
+  'completed',
+  'cancelled',
+  'rejected',
+  'duplicate',
+  'superseded',
+  'won_t_do',
+] as const;
 
 export const spec_plan_status_values = ['draft', 'in_review', 'approved', 'rejected', 'superseded', 'archived'] as const;
 export const spec_plan_editing_state_values = ['idle', 'ai_drafting', 'human_editing', 'co_editing'] as const;
