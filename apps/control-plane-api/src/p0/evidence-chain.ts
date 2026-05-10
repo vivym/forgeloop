@@ -144,8 +144,27 @@ const reviewPacketRiskFlags = (
 const decisionRiskFlags = (decision: Decision): EvidenceChainRiskFlag[] =>
   decision.decision === 'changes_requested' ? ['changes_requested'] : [];
 
-const publicDecisionValue = (decision: Decision['decision']): NonNullable<EvidenceChainItem['details']>['decision'] =>
-  decision === 'override_approved' ? 'approved' : decision;
+type EvidenceChainDecision = NonNullable<NonNullable<EvidenceChainItem['details']>['decision']>;
+
+const evidenceChainDecisionValues = new Set<EvidenceChainDecision>([
+  'none',
+  'approved',
+  'changes_requested',
+  'need_more_context',
+  'escalate',
+]);
+
+const publicDecisionValue = (decision: Decision['decision']): EvidenceChainDecision | undefined => {
+  const normalized = decision === 'override_approved' ? 'approved' : decision;
+  return evidenceChainDecisionValues.has(normalized as EvidenceChainDecision)
+    ? (normalized as EvidenceChainDecision)
+    : undefined;
+};
+
+const decisionDetails = (decision: Decision['decision']): EvidenceChainItem['details'] | undefined => {
+  const publicDecision = publicDecisionValue(decision);
+  return publicDecision === undefined ? undefined : { decision: publicDecision };
+};
 
 const replacementDetails = (traceEvent: TraceEventRecord): EvidenceChainItem['details'] | undefined => {
   if (traceEvent.event_type !== 'run_replacement_recorded') {
@@ -652,7 +671,7 @@ export const buildEvidenceChain = async (
           links: [objectRef('review_packet', reviewPacket.id, 'belongs_to')],
           risk_flags: decisionRiskFlags(decision),
           redacted: false,
-          details: { decision: publicDecisionValue(decision.decision) },
+          details: decisionDetails(decision.decision),
         });
       }
     }
