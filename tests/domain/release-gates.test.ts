@@ -388,6 +388,29 @@ describe('Release gate derivation', () => {
     ).toContain('failed_required_check');
   });
 
+  it('derives failed_required_check when required checks exist but the selected run is absent', () => {
+    const context = {
+      execution_packages: [executionPackage({ required_artifact_kinds: [] })],
+      run_sessions: [],
+    };
+
+    expect(deriveCodes(context)).toContain('failed_required_check');
+    expect(deriveCodes(context)).not.toContain('missing_required_artifact');
+    expect(() =>
+      transitionRelease(release({ phase: 'approval', gate_state: 'awaiting_approval' }), {
+        type: 'approve',
+        approved_by_actor_id: 'actor-reviewer',
+        gate_context: {
+          release: release({ phase: 'approval', gate_state: 'awaiting_approval' }),
+          work_items: [workItem()],
+          review_packets: [reviewPacket()],
+          evidence: [evidence()],
+          ...context,
+        },
+      }),
+    ).toThrow();
+  });
+
   it('selects release evidence from current pointers, then last run review packet, then latest non-archived packet', () => {
     const archivedNewer = reviewPacket({
       id: 'review-packet-archived-newer',

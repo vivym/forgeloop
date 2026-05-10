@@ -285,7 +285,7 @@ const hasFailedOrMissingRequiredCheck = (
   runSession: Pick<RunSession, 'check_results'> | undefined,
 ): boolean => {
   if (runSession === undefined) {
-    return false;
+    return executionPackage.required_checks.length > 0;
   }
 
   const checkResultsById = new Map(runSession.check_results.map((check) => [check.check_id, check]));
