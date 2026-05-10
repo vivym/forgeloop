@@ -330,6 +330,8 @@ const getReleaseReplayTimeline = async (
 
     const { evidence: publicEvidenceInput, omittedUnsafeLink } = filterEvidencePublicRefs(evidence, visibleRefs);
     const artifact = artifactsByEvidenceId.get(evidence.id);
+    const replayEvidenceInput =
+      artifact === undefined ? publicEvidenceInput : { ...publicEvidenceInput, artifact_id: artifact.id };
     entries.push(
       serializePublicReplayEntry({
         id: evidence.id,
@@ -338,7 +340,7 @@ const getReleaseReplayTimeline = async (
         object_id: release.id,
         summary: evidence.summary,
         created_at: evidence.created_at,
-        payload: artifact === undefined ? { evidence: publicEvidenceInput } : { evidence: publicEvidenceInput, artifact },
+        payload: artifact === undefined ? { evidence: replayEvidenceInput } : { evidence: replayEvidenceInput, artifact },
       }),
     );
 
@@ -360,7 +362,7 @@ const getReleaseReplayTimeline = async (
             reason: 'public_projection',
             payload: {
               release_id: release.id,
-              artifact_id: evidence.artifact_id,
+              ...(artifact !== undefined ? { artifact_id: artifact.id } : {}),
               blocker_codes: ['unsafe_or_redacted_evidence_backlink'],
               summary: 'Observation evidence contains a backlink that cannot be publicly projected.',
             },
