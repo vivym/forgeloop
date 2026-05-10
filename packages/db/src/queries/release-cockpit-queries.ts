@@ -440,10 +440,15 @@ export async function getReleaseCockpit(
   const allReviewPackets = (await Promise.all(
     executionPackages.map((executionPackage) => repository.listReviewPacketsForPackage(executionPackage.id)),
   )).flat();
+  const selectedReviewPacketByPackageId = new Map<string, ReviewPacket>();
   const currentReviewPackets = executionPackages.flatMap((executionPackage) => {
     const selected = selectReleaseReviewPacket(release, executionPackage, allReviewPackets);
+    if (selected !== undefined) {
+      selectedReviewPacketByPackageId.set(executionPackage.id, selected);
+    }
     return selected === undefined ? [] : [selected];
   });
+  const runSessionById = new Map(allRunSessions.map((runSession) => [runSession.id, runSession]));
   const artifactEntries = await Promise.all(
     evidences.map(async (evidence) => [evidence.id, await artifactForEvidence(repository, evidence)] as const),
   );
@@ -494,7 +499,7 @@ export async function getReleaseCockpit(
     execution_packages: executionPackages.map((executionPackage) =>
       publicExecutionPackageSummary(
         executionPackage,
-        latestRunSessions.find((runSession) => runSession.execution_package_id === executionPackage.id),
+        runSessionById.get(selectedReviewPacketByPackageId.get(executionPackage.id)?.run_session_id ?? ''),
       ),
     ),
     latest_run_sessions: latestRunSessions.map(publicRunSessionSummary),

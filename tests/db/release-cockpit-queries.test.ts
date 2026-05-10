@@ -319,6 +319,64 @@ describe('getReleaseCockpit', () => {
     }
   });
 
+  it('summarizes readiness from the selected review packet run and honors log refs', async () => {
+    const repo = new InMemoryP0Repository();
+    await seedReadyRelease(repo, {
+      execution_package: {
+        required_artifact_kinds: ['execution_summary', 'logs'],
+        current_run_session_id: 'run-new',
+        last_run_session_id: 'run-new',
+        current_review_packet_id: 'review-old',
+      },
+      run_session: {
+        id: 'run-new',
+        check_results: [
+          {
+            check_id: 'unit',
+            status: 'failed',
+            blocks_review: true,
+            summary: 'Current run failed after review packet selection.',
+          },
+        ],
+        artifacts: [{ ...publicArtifactRef, kind: 'logs', name: 'Logs uploaded as a regular artifact' }],
+        log_refs: [],
+      },
+      review_packet: {
+        id: 'review-old',
+        run_session_id: 'run-old',
+      },
+      release: {
+        current_review_packet_ids: ['review-old'],
+        current_run_session_ids: ['run-new'],
+      },
+    });
+    await repo.saveRunSession(
+      runSession({
+        id: 'run-old',
+        artifacts: [publicArtifactRef],
+        log_refs: [{ ...publicArtifactRef, kind: 'logs', name: 'Release logs' }],
+        created_at: '2026-05-10T00:00:00.000Z',
+        updated_at: '2026-05-10T00:01:00.000Z',
+        finished_at: '2026-05-10T00:01:00.000Z',
+      }),
+    );
+
+    const cockpit = await getReleaseCockpit(repo, 'release-1');
+
+    expect(cockpit?.latest_run_sessions.map((item) => item.id)).toEqual(['run-new']);
+    expect(cockpit?.current_review_packets.map((item) => item.id)).toEqual(['review-old']);
+    expect(cockpit?.execution_packages[0]?.required_check_summary).toMatchObject({
+      passed: 1,
+      failed: 0,
+      missing: 0,
+    });
+    expect(cockpit?.execution_packages[0]?.required_artifact_summary).toEqual({
+      required: ['execution_summary', 'logs'],
+      present: ['execution_summary', 'logs'],
+      missing: [],
+    });
+  });
+
   it('reports overrideable planning and evidence blockers when plans and evidence are missing', async () => {
     const repo = new InMemoryP0Repository();
     await seedReadyRelease(repo, {
