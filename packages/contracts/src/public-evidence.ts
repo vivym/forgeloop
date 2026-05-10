@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import {
+  releaseEvidenceObjectTypeSchema,
+  releaseEvidenceRelationshipSchema,
   releaseEvidenceObjectRefSchema,
   releaseEvidenceStatusSchema,
   releaseEvidenceTypeSchema,
@@ -404,9 +406,9 @@ export type PublicMetrics = z.infer<typeof publicMetricsSchema>;
 
 export const publicReleaseEvidenceObservationLinkSchema = z
   .object({
-    object_type: z.enum(['release', 'work_item', 'execution_package', 'run_session', 'review_packet', 'artifact', 'decision']),
+    object_type: releaseEvidenceObjectTypeSchema,
     object_id: z.string().min(1),
-    relationship: z.enum(['observed', 'affected', 'supports', 'blocks', 'generated_by', 'rollback_of']),
+    relationship: releaseEvidenceRelationshipSchema,
   })
   .strict();
 export type PublicReleaseEvidenceObservationLink = z.infer<typeof publicReleaseEvidenceObservationLinkSchema>;

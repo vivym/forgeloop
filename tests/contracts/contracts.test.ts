@@ -368,13 +368,50 @@ describe('P0 delivery loop contracts', () => {
       execution_package_ids: ['package-public'],
     });
 
+    for (const release_type of ['normal', 'hotfix', 'emergency', 'gray'] as const) {
+      expect(
+        createReleaseRequestSchema.parse({
+          actor_id: 'actor-owner',
+          project_id: 'project-1',
+          title: `${release_type} release`,
+          release_type,
+        }).release_type,
+      ).toBe(release_type);
+
+      expect(publicReleaseSummarySchema.parse(publicReleaseSummaryFixture({ release_type })).release_type).toBe(
+        release_type,
+      );
+
+      expect(releaseSchema.parse(releaseFixture({ release_type })).release_type).toBe(release_type);
+    }
+
     expect(
       releaseResourceResponseSchema.parse({
         release: publicReleaseSummaryFixture(),
       }).release.id,
     ).toBe('release-1');
 
-    expect(typeof releaseCockpitResponseSchema.parse).toBe('function');
+    const cockpit = releaseCockpitResponseSchema.parse({
+      release: publicReleaseSummaryFixture({
+        id: 'release-cockpit-1',
+        work_item_ids: ['work-item-1'],
+        execution_package_ids: ['package-1'],
+      }),
+      blocker_snapshot: validReleaseBlockerSnapshot,
+      blockers: [
+        {
+          code: 'missing_rollback_plan',
+          category: 'planning',
+          overrideable: true,
+          message: 'Release is missing a rollback plan.',
+        },
+      ],
+      next_actions: ['Add rollback plan before approval.'],
+    });
+
+    expect(cockpit.release.id).toBe('release-cockpit-1');
+    expect(cockpit.blockers[0]?.code).toBe('missing_rollback_plan');
+    expect(cockpit.next_actions).toEqual(['Add rollback plan before approval.']);
 
     expect(releaseBlockerCodes).toEqual([
       'missing_work_item',
@@ -474,7 +511,6 @@ describe('P0 delivery loop contracts', () => {
       }).success,
     ).toBe(false);
     expect(typeof createReleaseEvidenceRequestSchema.parse).toBe('function');
-    expect(typeof releaseCockpitResponseSchema.parse).toBe('function');
     expect(
       linkReleaseObjectResponseSchema.parse({
         release_id: 'release-1',

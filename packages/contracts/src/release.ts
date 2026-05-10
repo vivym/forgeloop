@@ -34,6 +34,9 @@ export const releaseResolutions = ['none', 'completed', 'rolled_back', 'cancelle
 export const releaseResolutionSchema = z.enum(releaseResolutions);
 export type ReleaseResolution = z.infer<typeof releaseResolutionSchema>;
 
+export const releaseTypeSchema = z.enum(['normal', 'hotfix', 'emergency', 'gray']);
+export type ReleaseType = z.infer<typeof releaseTypeSchema>;
+
 export const releaseEvidenceTypes = [
   'test_report',
   'review_packet',
@@ -130,7 +133,7 @@ export const releaseSchema = z
     rollback_plan: trimmedNonEmptyStringSchema.optional(),
     observation_plan: trimmedNonEmptyStringSchema.optional(),
     release_owner_actor_id: z.string().min(1).optional(),
-    release_type: z.string().min(1).optional(),
+    release_type: releaseTypeSchema.optional(),
     created_by_actor_id: z.string().min(1),
     created_at: isoDateTimeSchema,
     updated_at: isoDateTimeSchema,
@@ -196,9 +199,6 @@ export const releaseDecisionIntentSchema = z
   .strict();
 export type ReleaseDecisionIntent = z.infer<typeof releaseDecisionIntentSchema>;
 
-export const releaseTypeSchema = z.enum(['normal', 'emergency']);
-export type ReleaseType = z.infer<typeof releaseTypeSchema>;
-
 export const createReleaseRequestSchema = z
   .object({
     actor_id: z.string().min(1),
@@ -260,7 +260,7 @@ export const publicReleaseSummarySchema = z
     title: z.string().min(1),
     scope_summary: trimmedNonEmptyStringSchema.optional(),
     release_owner_actor_id: z.string().min(1).optional(),
-    release_type: z.string().min(1).optional(),
+    release_type: releaseTypeSchema.optional(),
     phase: releasePhaseSchema,
     activity_state: releaseActivityStateSchema,
     gate_state: releaseGateStateSchema,
