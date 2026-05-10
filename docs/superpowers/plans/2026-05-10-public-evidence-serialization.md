@@ -111,6 +111,8 @@ describe('public evidence contracts', () => {
       { kind: 'diff', name: 'Userinfo', content_type: 'text/x-patch', storage_uri: 'https://user:pass@example.test/out.patch' },
       { kind: 'diff', name: 'Query', content_type: 'text/x-patch', storage_uri: 'https://example.test/out.patch?token=secret' },
       { kind: 'diff', name: 'Fragment', content_type: 'text/x-patch', storage_uri: 'https://example.test/out.patch#frag' },
+      { kind: 'diff', name: 'S3 query', content_type: 'text/x-patch', storage_uri: 's3://bucket/out.patch?x=y' },
+      { kind: 'diff', name: 'GS fragment', content_type: 'text/x-patch', storage_uri: 'gs://bucket/out.patch#frag' },
       { kind: 'diff', name: 'Encoded local', content_type: 'text/x-patch', storage_uri: 'https://example.test/%2FUsers%2Fviv%2Fout.patch' },
     ]) {
       expect(publicArtifactRefSchema.safeParse(artifact).success).toBe(false);
@@ -124,12 +126,18 @@ describe('public evidence contracts', () => {
     expect(isUnsafePublicEvidenceKey('secretary_note')).toBe(false);
 
     expect(isLocalReferenceString('/Users/viv/projs/forgeloop/out.log')).toBe(true);
+    expect(isLocalReferenceString('/private/tmp/out.log')).toBe(true);
+    expect(isLocalReferenceString('/var/log/forgeloop.log')).toBe(true);
+    expect(isLocalReferenceString('/mnt/work/out.log')).toBe(true);
+    expect(isLocalReferenceString('/Volumes/work/out.log')).toBe(true);
     expect(isLocalReferenceString('/workspace/app/out.log')).toBe(true);
     expect(isLocalReferenceString('C:\\Users\\viv\\out.log')).toBe(true);
     expect(isLocalReferenceString('\\\\server\\share\\out.log')).toBe(true);
     expect(isLocalReferenceString('file:///Users/viv/out.log')).toBe(true);
     expect(isLocalReferenceString('local://run/out.log')).toBe(true);
     expect(isLocalReferenceString('artifacts/run/out.log')).toBe(true);
+    expect(isLocalReferenceString('./artifacts/run/out.log')).toBe(true);
+    expect(isLocalReferenceString('../artifacts/run/out.log')).toBe(true);
     expect(isLocalReferenceString('/query/replay/work_item/1')).toBe(false);
 
     expect(isPublicArtifactStorageUri('s3://bucket/key')).toBe(true);
@@ -137,6 +145,8 @@ describe('public evidence contracts', () => {
     expect(isPublicArtifactStorageUri('https://example.test/key')).toBe(true);
     expect(isPublicArtifactStorageUri('s3://')).toBe(false);
     expect(isPublicArtifactStorageUri('https:///key')).toBe(false);
+    expect(isPublicArtifactStorageUri('s3://bucket/key?x=y')).toBe(false);
+    expect(isPublicArtifactStorageUri('gs://bucket/key#frag')).toBe(false);
   });
 
   it('rejects unknown nested public payload keys', () => {
@@ -197,6 +207,65 @@ describe('public evidence contracts', () => {
     expect(publicReleaseEvidenceSchema.safeParse({ ...base, extra: { private_payload: {} } }).success).toBe(false);
   });
 
+  it('accepts every public release evidence extra group', () => {
+    const base = {
+      id: 'evidence-2',
+      release_id: 'release-1',
+      evidence_type: 'observation_note',
+      summary: 'Release evidence',
+      redacted: false,
+      status: 'current',
+      created_at: timestamp,
+    };
+
+    expect(
+      publicReleaseEvidenceSchema.parse({
+        ...base,
+        extra: {
+          observation: {
+            source: 'script',
+            severity: 'warning',
+            summary: 'Latency increased',
+            observed_at: timestamp,
+            metrics: { latency_ms: 250 },
+          },
+          deployment: {
+            environment: 'production',
+            result: 'succeeded',
+            deployment_id: 'deploy-1',
+            completed_at: timestamp,
+          },
+          rollback: {
+            result: 'not_required',
+            reason: 'No rollback needed',
+          },
+          build: {
+            build_id: 'build-1',
+            result: 'succeeded',
+            artifact: {
+              kind: 'diff',
+              name: 'Build patch',
+              content_type: 'text/x-patch',
+              storage_uri: 's3://bucket/build.patch',
+            },
+          },
+          check_refs: [
+            {
+              check_id: 'contracts',
+              status: 'succeeded',
+              artifact: {
+                kind: 'check_output',
+                name: 'stdout',
+                content_type: 'text/plain',
+                storage_uri: 'gs://bucket/stdout.txt',
+              },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({ id: 'evidence-2' });
+  });
+
   it('enforces replay source and payload pairing', () => {
     expect(
       publicReplayEntrySchema.parse({
@@ -217,6 +286,27 @@ describe('public evidence contracts', () => {
         },
       }),
     ).toMatchObject({ source: 'decision' });
+
+    expect(
+      publicReplayEntrySchema.parse({
+        id: 'entry-release-evidence',
+        source: 'release_evidence',
+        object_type: 'release',
+        object_id: 'release-1',
+        summary: 'Release evidence',
+        created_at: timestamp,
+        payload: {
+          id: 'evidence-1',
+          release_id: 'release-1',
+          evidence_type: 'observation_note',
+          summary: 'Observed',
+          extra: {},
+          redacted: false,
+          status: 'current',
+          created_at: timestamp,
+        },
+      }),
+    ).toMatchObject({ source: 'release_evidence' });
 
     expect(
       publicReplayEntrySchema.safeParse({
@@ -258,6 +348,7 @@ Implementation notes:
 - Use explicit `publicArtifactKindSchema = z.enum(['diff', 'changed_files', 'check_output', 'execution_summary', 'self_review', 'review_packet'])`.
 - Use `.strict()` on every object schema.
 - Use `.superRefine()` for `PublicMetrics` and `PublicArtifactRef`.
+- Match the spec's unsafe-key rules exactly: `token` and keys ending in `_token` are unsafe, but `token_count` is a safe near-miss and must not be caught by a `token_` prefix rule.
 - `isLocalReferenceString()` should percent-decode before checks and should detect POSIX, Windows, UNC, `file://`, `local://`, and artifact-relative paths.
 - `isPublicArtifactStorageUri()` should reject userinfo/query/fragment and require non-empty host/bucket.
 
@@ -322,14 +413,22 @@ const hostileStrings = [
   '/workspace/app/out.log',
   '/opt/build/out.log',
   '/tmp/out.log',
+  '/private/tmp/out.log',
+  '/var/log/forgeloop.log',
+  '/mnt/work/out.log',
+  '/Volumes/work/out.log',
   'C:\\Users\\viv\\out.log',
   '\\\\server\\share\\out.log',
   'file:///Users/viv/out.log',
   'local://run/out.log',
   'artifacts/run/out.log',
+  './artifacts/run/out.log',
+  '../artifacts/run/out.log',
   'https://example.test/artifact?token=secret',
   'https://user:pass@example.test/object',
   'https://example.test/object#frag',
+  's3://bucket/key?x=y',
+  'gs://bucket/key#frag',
   'https://example.test/%2FUsers%2Fviv%2Fout.log',
 ];
 
@@ -433,6 +532,58 @@ Implementation boundaries:
 Required exported functions:
 
 ```ts
+export type SerializePublicReleaseEvidenceInput = {
+  evidence: ReleaseEvidence;
+  artifact?: Artifact | ArtifactRef;
+};
+
+export type ReplaySerializationInput =
+  | {
+      id: string;
+      source: 'object_event';
+      object_type: string;
+      object_id: string;
+      summary: string;
+      created_at: string;
+      payload: ObjectEvent;
+    }
+  | {
+      id: string;
+      source: 'status_history';
+      object_type: string;
+      object_id: string;
+      summary: string;
+      created_at: string;
+      payload: StatusHistory;
+    }
+  | {
+      id: string;
+      source: 'decision';
+      object_type: string;
+      object_id: string;
+      summary: string;
+      created_at: string;
+      payload: Decision;
+    }
+  | {
+      id: string;
+      source: 'artifact';
+      object_type: string;
+      object_id: string;
+      summary: string;
+      created_at: string;
+      payload: ArtifactRef;
+    }
+  | {
+      id: string;
+      source: 'release_evidence';
+      object_type: string;
+      object_id: string;
+      summary: string;
+      created_at: string;
+      payload: SerializePublicReleaseEvidenceInput;
+    };
+
 export const artifactRedactionReason = (artifact: ArtifactRef): EvidenceChainRedactionReason | undefined => { /* ... */ };
 export const serializePublicArtifactRef = (artifact: ArtifactRef): PublicArtifactRef | undefined => { /* ... */ };
 export const serializePublicArtifactRefs = (artifacts: readonly ArtifactRef[]): PublicArtifactRef[] => { /* ... */ };
@@ -736,6 +887,12 @@ describe('run session public serialization', () => {
             content_type: 'text/plain',
             storage_uri: 'file:///Users/viv/stdout.txt',
           },
+          stderr: {
+            kind: 'check_output',
+            name: 'stderr',
+            content_type: 'text/plain',
+            storage_uri: 'https://example.test/stderr.txt?token=secret',
+          },
         },
       ],
       created_at: '2026-05-10T00:00:00.000Z',
@@ -753,6 +910,7 @@ describe('run session public serialization', () => {
     ]);
     expect(serialized.log_refs).toEqual([]);
     expect(serialized.check_results[0]).not.toHaveProperty('stdout');
+    expect(serialized.check_results[0]).not.toHaveProperty('stderr');
     expect(JSON.stringify(serialized)).not.toContain('token=secret');
     expect(JSON.stringify(serialized)).not.toContain('local_ref');
   });
@@ -767,7 +925,7 @@ Run:
 pnpm vitest run tests/api/evidence-chain.test.ts tests/api/run-session-serialization.test.ts
 ```
 
-Expected: FAIL because API code still imports artifact serialization from `run-session-serialization.ts`, and that implementation does not know `unsafe_storage_uri`.
+Expected: FAIL because API code still imports artifact serialization from `run-session-serialization.ts`, and that implementation does not know `unsafe_storage_uri` or the stricter public `storage_uri` rules for stdout/stderr.
 
 - [ ] **Step 4: Update Evidence Chain imports**
 
@@ -790,7 +948,7 @@ Modify `apps/control-plane-api/src/p0/run-session-serialization.ts`:
 - import `serializePublicArtifactRef` and `serializePublicArtifactRefs` from `@forgeloop/db`;
 - keep run-session-specific logic for `run_spec`, `runtime_metadata`, `log_refs`, and `executor_result.raw_metadata`.
 
-Because `serializePublicArtifactRef()` returns `PublicArtifactRef`, update local types where needed. If TypeScript rejects assigning `PublicArtifactRef[]` to `RunSession['artifacts']`, introduce local public run-session return types instead of weakening the shared serializer.
+Because `serializePublicArtifactRef()` returns `PublicArtifactRef`, update local types where needed. If TypeScript rejects assigning `PublicArtifactRef[]` to `RunSession['artifacts']`, introduce local public run-session return types and update the `P0Service.getRunSession()` return annotation instead of weakening the shared serializer.
 
 - [ ] **Step 6: Run focused API tests to verify pass**
 

@@ -417,7 +417,7 @@ Unsafe key rules:
 
 - exact normalized keys: `raw_ref`, `local_ref`, `raw_metadata`, `raw_payload`, `raw_logs`, `logs`, `stdout`, `stderr`, `env`, `environment_variables`, `headers`, `authorization`, `auth_header`, `cookie`, `set_cookie`, `api_key`, `password`, `credential`, `credentials`, `secret`, `token`, `access_token`, `refresh_token`, `client_secret`, `private_key`;
 - suffixes: `_token`, `_secret`, `_password`, `_credential`, `_credentials`, `_api_key`, `_private_key`;
-- prefixes: `token_`, `secret_`, `password_`, `credential_`, `credentials_`;
+- prefixes: `secret_`, `password_`, `credential_`, `credentials_`;
 - no fuzzy substring matching. For example, `token_count` and `secretary_note` are preserved unless an allowlist excludes them.
 
 It recursively removes string values where `isLocalReferenceString(value)` is true.
