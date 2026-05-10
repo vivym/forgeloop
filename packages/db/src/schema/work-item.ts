@@ -9,6 +9,7 @@ import {
   workItemPhase,
   workItemResolution,
 } from './_shared';
+import { actors } from './actor';
 
 export const work_items = pgTable('work_items', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -19,7 +20,9 @@ export const work_items = pgTable('work_items', {
   successCriteria: jsonb('success_criteria').$type<WorkItem['success_criteria']>().notNull(),
   priority: text('priority').notNull(),
   risk: text('risk').notNull(),
-  ownerActorId: text('owner_actor_id').notNull(),
+  ownerActorId: uuid('owner_actor_id')
+    .notNull()
+    .references(() => actors.id),
   phase: workItemPhase('phase').notNull(),
   activityState: workItemActivityState('activity_state').notNull(),
   gateState: workItemGateState('gate_state').notNull(),

@@ -2,11 +2,14 @@ import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { RunSession } from '@forgeloop/domain';
 
 import { runSessionStatus, timestampColumn } from './_shared';
+import { actors } from './actor';
 
 export const run_sessions = pgTable('run_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
   executionPackageId: uuid('execution_package_id').notNull(),
-  requestedByActorId: text('requested_by_actor_id').notNull(),
+  requestedByActorId: uuid('requested_by_actor_id')
+    .notNull()
+    .references(() => actors.id),
   status: runSessionStatus('status').notNull(),
   executorType: text('executor_type'),
   executorResult: jsonb('executor_result').$type<RunSession['executor_result']>(),

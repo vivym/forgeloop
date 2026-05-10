@@ -1,4 +1,5 @@
 import { getTableColumns } from 'drizzle-orm';
+import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -47,6 +48,8 @@ import {
 import * as dbSchema from '../../packages/db/src/index';
 
 type TableLike = Parameters<typeof getTableColumns>[0];
+type ColumnLike = { name: string; columnType: string; notNull?: boolean; table: unknown };
+type ConfiguredTable = Parameters<typeof getTableConfig>[0];
 
 const requiredTables = {
   organizations,
@@ -79,19 +82,46 @@ const requiredTables = {
   trace_artifact_refs,
 };
 
-const columnType = (table: TableLike, columnName: string) => {
+const column = (table: TableLike, columnName: string) => {
   const columns = getTableColumns(table);
-  const column =
+  const matchedColumn =
     columns[columnName] ??
     Object.values(columns).find((candidate) => (candidate as { name: string }).name === columnName);
-  if (column === undefined) {
+  if (matchedColumn === undefined) {
     throw new Error(`Missing column ${columnName}`);
   }
 
-  return (column as { columnType: string }).columnType;
+  return matchedColumn as ColumnLike;
 };
 
-describe('P0 Drizzle schema', () => {
+const columnType = (table: TableLike, columnName: string) => column(table, columnName).columnType;
+
+const columnNotNull = (table: TableLike, columnName: string) => column(table, columnName).notNull === true;
+
+const primaryKeyColumnNames = (table: ConfiguredTable) =>
+  getTableConfig(table).primaryKeys.map((primaryKey) => primaryKey.columns.map((keyColumn) => keyColumn.name));
+
+const hasForeignKey = (table: ConfiguredTable, columnName: string, foreignColumn: ColumnLike) =>
+  getTableConfig(table).foreignKeys.some((foreignKey) => {
+    const reference = foreignKey.reference();
+    return (
+      reference.columns.length === 1 &&
+      reference.columns[0]?.name === columnName &&
+      reference.foreignTable === foreignColumn.table &&
+      reference.foreignColumns[0] === foreignColumn
+    );
+  });
+
+const hasUniqueIndex = (table: ConfiguredTable, indexName: string, columnNames: string[]) => {
+  const index = getTableConfig(table).indexes.find((candidate) => candidate.config.name === indexName);
+
+  return (
+    index?.config.unique === true &&
+    index.config.columns.map((indexColumn) => (indexColumn as { name: string }).name).join(',') === columnNames.join(',')
+  );
+};
+
+describe('P1 core schema release flow Drizzle schema', () => {
   it('exports every required P0 table', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
@@ -231,9 +261,42 @@ describe('P0 Drizzle schema', () => {
     expect(columnType(run_events, 'id')).toBe('PgText');
     expect(columnType(run_commands, 'id')).toBe('PgText');
     expect(columnType(run_worker_leases, 'id')).toBe('PgText');
+    expect(columnType(project_repos, 'project_id')).toBe('PgUUID');
+    expect(columnType(projects, 'owner_actor_id')).toBe('PgUUID');
+    expect(columnType(work_items, 'owner_actor_id')).toBe('PgUUID');
+    expect(columnType(execution_packages, 'owner_actor_id')).toBe('PgUUID');
+    expect(columnType(execution_packages, 'reviewer_actor_id')).toBe('PgUUID');
+    expect(columnType(execution_packages, 'qa_owner_actor_id')).toBe('PgUUID');
+    expect(columnType(run_sessions, 'requested_by_actor_id')).toBe('PgUUID');
+    expect(columnType(run_commands, 'actor_id')).toBe('PgText');
     expect(columnType(execution_packages, 'required_checks')).toBe('PgJsonb');
     expect(columnType(execution_packages, 'required_test_gates')).toBe('PgJsonb');
     expect(columnType(release_evidences, 'object_ref')).toBe('PgJsonb');
+  });
+
+  it('defines release uniqueness and evidence contract constraints', () => {
+    expect(hasUniqueIndex(releases, 'releases_org_key_uq', ['org_id', 'key'])).toBe(true);
+    expect(hasUniqueIndex(release_evidences, 'release_evidences_org_key_uq', ['org_id', 'key'])).toBe(true);
+    expect(columnNotNull(release_evidences, 'summary')).toBe(true);
+  });
+
+  it('defines durable project and actor foreign keys', () => {
+    expect(hasForeignKey(project_repos, 'project_id', column(projects, 'id'))).toBe(true);
+    expect(hasForeignKey(projects, 'owner_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(work_items, 'owner_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_packages, 'owner_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_packages, 'reviewer_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_packages, 'qa_owner_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(run_sessions, 'requested_by_actor_id', column(actors, 'id'))).toBe(true);
+  });
+
+  it('defines release link composite primary keys and durable foreign keys', () => {
+    expect(primaryKeyColumnNames(release_work_items)).toContainEqual(['release_id', 'work_item_id']);
+    expect(primaryKeyColumnNames(release_execution_packages)).toContainEqual(['release_id', 'package_id']);
+    expect(hasForeignKey(release_work_items, 'release_id', column(releases, 'id'))).toBe(true);
+    expect(hasForeignKey(release_work_items, 'work_item_id', column(work_items, 'id'))).toBe(true);
+    expect(hasForeignKey(release_execution_packages, 'release_id', column(releases, 'id'))).toBe(true);
+    expect(hasForeignKey(release_execution_packages, 'package_id', column(execution_packages, 'id'))).toBe(true);
   });
 
   it('includes future artifact trace subject link columns', () => {

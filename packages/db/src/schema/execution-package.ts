@@ -8,6 +8,7 @@ import {
   executionPackageResolution,
   timestampColumn,
 } from './_shared';
+import { actors } from './actor';
 
 export type RequiredTestGateSpec = Record<string, unknown>;
 
@@ -21,9 +22,15 @@ export const execution_packages = pgTable('execution_packages', {
   projectId: uuid('project_id').notNull(),
   repoId: text('repo_id').notNull(),
   objective: text('objective').notNull(),
-  ownerActorId: text('owner_actor_id').notNull(),
-  reviewerActorId: text('reviewer_actor_id').notNull(),
-  qaOwnerActorId: text('qa_owner_actor_id').notNull(),
+  ownerActorId: uuid('owner_actor_id')
+    .notNull()
+    .references(() => actors.id),
+  reviewerActorId: uuid('reviewer_actor_id')
+    .notNull()
+    .references(() => actors.id),
+  qaOwnerActorId: uuid('qa_owner_actor_id')
+    .notNull()
+    .references(() => actors.id),
   phase: executionPackagePhase('phase').notNull(),
   activityState: executionPackageActivityState('activity_state').notNull(),
   gateState: executionPackageGateState('gate_state').notNull(),

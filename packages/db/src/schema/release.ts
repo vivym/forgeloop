@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { ReleaseEvidenceObjectRef } from '@forgeloop/domain';
 
 import {
@@ -64,6 +64,7 @@ export const releases = pgTable(
     closedAt: timestampColumn('closed_at'),
   },
   (table) => [
+    uniqueIndex('releases_org_key_uq').on(table.orgId, table.key),
     index('releases_project_phase_idx').on(table.projectId, table.phase),
     index('releases_owner_phase_idx').on(table.releaseOwnerActorId, table.phase),
   ],
@@ -119,7 +120,7 @@ export const release_evidences = pgTable(
     description: text('description'),
     evidenceType: releaseEvidenceType('evidence_type').notNull(),
     artifactId: uuid('artifact_id').references(() => artifacts.id),
-    summary: text('summary'),
+    summary: text('summary').notNull(),
     objectRef: jsonb('object_ref').$type<ReleaseEvidenceObjectRef>(),
     redacted: boolean('redacted').notNull(),
     status: releaseEvidenceStatus('status').notNull(),
@@ -139,6 +140,7 @@ export const release_evidences = pgTable(
     deletedAt: timestampColumn('deleted_at'),
   },
   (table) => [
+    uniqueIndex('release_evidences_org_key_uq').on(table.orgId, table.key),
     index('release_evidences_release_idx').on(table.releaseId),
     index('release_evidences_type_idx').on(table.evidenceType),
   ],
