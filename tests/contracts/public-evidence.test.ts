@@ -59,6 +59,9 @@ describe('public evidence contracts', () => {
       { kind: 'diff', name: 'Unknown', content_type: 'text/x-patch', storage_uri: 'ftp://example.test/out.patch' },
       { kind: 'diff', name: 'Relative', content_type: 'text/x-patch', storage_uri: 'artifacts/run-1/out.patch' },
       { kind: 'diff', name: 'Userinfo', content_type: 'text/x-patch', storage_uri: 'https://user:pass@example.test/out.patch' },
+      { kind: 'diff', name: 'Empty HTTPS host', content_type: 'text/x-patch', storage_uri: 'https://:443/key' },
+      { kind: 'diff', name: 'Whitespace HTTPS host', content_type: 'text/x-patch', storage_uri: 'https:// /key' },
+      { kind: 'diff', name: 'Invalid HTTPS port', content_type: 'text/x-patch', storage_uri: 'https://example.test:bad/key' },
       { kind: 'diff', name: 'Query', content_type: 'text/x-patch', storage_uri: 'https://example.test/out.patch?token=secret' },
       { kind: 'diff', name: 'Fragment', content_type: 'text/x-patch', storage_uri: 'https://example.test/out.patch#frag' },
       { kind: 'diff', name: 'S3 query', content_type: 'text/x-patch', storage_uri: 's3://bucket/out.patch?x=y' },
@@ -106,6 +109,10 @@ describe('public evidence contracts', () => {
     expect(isPublicArtifactStorageUri('https://example.test/key')).toBe(true);
     expect(isPublicArtifactStorageUri('s3://')).toBe(false);
     expect(isPublicArtifactStorageUri('https:///key')).toBe(false);
+    expect(isPublicArtifactStorageUri('https://:443/key')).toBe(false);
+    expect(isPublicArtifactStorageUri('https:// /key')).toBe(false);
+    expect(isPublicArtifactStorageUri('https://example.test:bad/key')).toBe(false);
+    expect(isPublicArtifactStorageUri('https://example.test/has space/key')).toBe(false);
     expect(isPublicArtifactStorageUri('s3://bucket/key?x=y')).toBe(false);
     expect(isPublicArtifactStorageUri('gs://bucket/key#frag')).toBe(false);
     expect(isPublicArtifactStorageUri('https://example.test/%2FUsers%2Fviv%2Fout.log')).toBe(false);

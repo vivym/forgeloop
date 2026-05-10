@@ -10,6 +10,17 @@ const isoDateTimeSchema = z.string().datetime();
 
 const actorTypeSchema = z.enum(['human', 'ai', 'system']);
 const publicScalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+type ParsedPublicHttpsUrl = {
+  protocol: string;
+  hostname: string;
+  username: string;
+  password: string;
+  pathname: string;
+  search: string;
+  hash: string;
+};
+
+type PublicUrlConstructor = new (input: string) => ParsedPublicHttpsUrl;
 
 const unsafePublicEvidenceKeys = new Set([
   'raw_ref',
@@ -84,6 +95,9 @@ const currentWorkingDirectory = (): string | undefined => {
   return cwd.endsWith('/') ? cwd : `${cwd}/`;
 };
 
+const publicUrlConstructor = (): PublicUrlConstructor | undefined =>
+  (globalThis as { URL?: PublicUrlConstructor }).URL;
+
 export const normalizePublicEvidenceKey = (key: string): string =>
   key
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
@@ -133,7 +147,12 @@ export const isLocalReferenceString = (value: string): boolean => {
 export const isPublicArtifactStorageUri = (storageUri: string): boolean => {
   const uri = storageUri.trim();
 
-  if (!uri || /^https:\/\/\//.test(uri) || /^(?:s3|gs):\/\/(?:$|[/?#])/.test(uri) || isLocalReferenceString(uri)) {
+  if (
+    !uri ||
+    /^https:\/\/(?:\/|$)/i.test(uri) ||
+    /[\s\x00-\x1f\x7f]/.test(uri) ||
+    isLocalReferenceString(uri)
+  ) {
     return false;
   }
 
@@ -141,23 +160,47 @@ export const isPublicArtifactStorageUri = (storageUri: string): boolean => {
     return false;
   }
 
-  const schemeMatch = /^(s3|gs|https):\/\/(.+)$/i.exec(uri);
+  if (uri.toLowerCase().startsWith('https://')) {
+    const URLConstructor = publicUrlConstructor();
+
+    if (!URLConstructor) {
+      return false;
+    }
+
+    let parsedUri: ParsedPublicHttpsUrl;
+
+    try {
+      parsedUri = new URLConstructor(uri);
+    } catch {
+      return false;
+    }
+
+    if (
+      parsedUri.protocol !== 'https:' ||
+      !parsedUri.hostname ||
+      parsedUri.username ||
+      parsedUri.password ||
+      parsedUri.search ||
+      parsedUri.hash
+    ) {
+      return false;
+    }
+
+    return !isLocalReferenceString(decodePercentEncoded(parsedUri.pathname));
+  }
+
+  const schemeMatch = /^(s3|gs):\/\/(.+)$/i.exec(uri);
 
   if (!schemeMatch) {
     return false;
   }
 
-  const scheme = schemeMatch[1]!;
   const rest = schemeMatch[2]!;
   const slashIndex = rest.indexOf('/');
   const authority = slashIndex === -1 ? rest : rest.slice(0, slashIndex);
   const path = slashIndex === -1 ? '' : rest.slice(slashIndex);
 
   if (!authority || authority.includes('@')) {
-    return false;
-  }
-
-  if (!['s3', 'gs', 'https'].includes(scheme.toLowerCase())) {
     return false;
   }
 
