@@ -54,6 +54,19 @@ describe('domain state transitions', () => {
       'done',
       'closed',
     ]);
+    expect(executionPackageGateStates).toEqual([
+      'not_submitted',
+      'self_review_pending',
+      'awaiting_human_review',
+      'changes_requested',
+      'review_approved',
+      'integration_failed',
+      'integration_passed',
+      'test_failed',
+      'test_passed',
+      'release_ready',
+      'released',
+    ]);
     expect(executionPackageGateStates).toContain('release_ready');
     expect(executionPackageGateStates).not.toContain('none');
   });

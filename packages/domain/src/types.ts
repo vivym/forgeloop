@@ -204,9 +204,14 @@ export type ExecutionPackageActivityState = (typeof executionPackageActivityStat
 
 export const executionPackageGateStates = [
   'not_submitted',
+  'self_review_pending',
   'awaiting_human_review',
-  'review_approved',
   'changes_requested',
+  'review_approved',
+  'integration_failed',
+  'integration_passed',
+  'test_failed',
+  'test_passed',
   'release_ready',
   'released',
 ] as const;
