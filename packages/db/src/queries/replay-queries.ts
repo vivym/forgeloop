@@ -27,6 +27,15 @@ const isVisible = (object: { archived_at?: string; deleted_at?: string }): boole
 
 const visibilityKey = (objectType: string, objectId: string): string => `${objectType}\0${objectId}`;
 
+const addObjectRef = (refs: ObjectRef[], seen: Set<string>, ref: ObjectRef): void => {
+  const key = visibilityKey(ref.objectType, ref.objectId);
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  refs.push(ref);
+};
+
 const observationLinksFor = (evidence: ReleaseEvidence): ObservationLink[] => {
   const observation = isRecord(evidence.extra) ? evidence.extra.observation : undefined;
   if (!isRecord(observation) || !Array.isArray(observation.links)) {
@@ -67,14 +76,25 @@ const artifactForEvidence = async (
   return artifacts.find((artifact) => artifact.id === evidence.artifact_id) ?? artifacts[0];
 };
 
-const filterEvidenceObservationLinks = (
+const filterEvidencePublicRefs = (
   evidence: ReleaseEvidence,
   publicVisibilityByRef: ReadonlyMap<string, boolean>,
 ): { evidence: ReleaseEvidence; omittedUnsafeLink: boolean } => {
+  let publicEvidence: ReleaseEvidence = evidence;
+  let omittedUnsafeLink = false;
+  if (
+    evidence.object_ref !== undefined &&
+    publicVisibilityByRef.get(visibilityKey(evidence.object_ref.object_type, evidence.object_ref.object_id)) !== true
+  ) {
+    const { object_ref: _objectRef, ...withoutObjectRef } = publicEvidence;
+    publicEvidence = withoutObjectRef;
+    omittedUnsafeLink = true;
+  }
+
   const extra = evidence.extra;
   const observation = isRecord(extra) ? extra.observation : undefined;
   if (!isRecord(extra) || !isRecord(observation) || !Array.isArray(observation.links)) {
-    return { evidence, omittedUnsafeLink: false };
+    return { evidence: publicEvidence, omittedUnsafeLink };
   }
 
   const publicLinks = observation.links.filter((link) => {
@@ -83,11 +103,11 @@ const filterEvidenceObservationLinks = (
     }
     return publicVisibilityByRef.get(visibilityKey(link.object_type, link.object_id)) === true;
   });
-  const omittedUnsafeLink = publicLinks.length !== observation.links.length;
+  omittedUnsafeLink = omittedUnsafeLink || publicLinks.length !== observation.links.length;
 
   return {
     evidence: {
-      ...evidence,
+      ...publicEvidence,
       extra: {
         ...extra,
         observation: {
@@ -104,6 +124,7 @@ const appendSerializedReplayEntries = async (
   repository: P0Repository,
   entries: PublicReplayEntry[],
   objectRefs: readonly ObjectRef[],
+  visibleRefKeys?: Set<string>,
 ): Promise<void> => {
   for (const ref of objectRefs) {
     for (const item of await repository.listObjectEvents(ref.objectId, ref.objectType)) {
@@ -144,6 +165,7 @@ const appendSerializedReplayEntries = async (
           payload: item,
         }),
       );
+      visibleRefKeys?.add(visibilityKey('decision', item.id));
     }
     for (const item of await repository.listArtifactsForObject(ref.objectType, ref.objectId)) {
       const publicArtifactRef = serializePublicArtifactRef(item.ref);
@@ -161,6 +183,7 @@ const appendSerializedReplayEntries = async (
           payload: publicArtifactRef,
         }),
       );
+      visibleRefKeys?.add(visibilityKey('artifact', item.id));
     }
   }
 };
@@ -174,26 +197,28 @@ const getWorkItemReplayTimeline = async (
     return undefined;
   }
 
-  const objectRefs: ObjectRef[] = [{ objectType: 'work_item', objectId: workItem.id }];
+  const objectRefs: ObjectRef[] = [];
+  const seenObjectRefs = new Set<string>();
+  addObjectRef(objectRefs, seenObjectRefs, { objectType: 'work_item', objectId: workItem.id });
   if (workItem.current_spec_id !== undefined) {
-    objectRefs.push({ objectType: 'spec', objectId: workItem.current_spec_id });
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'spec', objectId: workItem.current_spec_id });
     for (const revision of await repository.listSpecRevisions(workItem.current_spec_id)) {
-      objectRefs.push({ objectType: 'spec_revision', objectId: revision.id });
+      addObjectRef(objectRefs, seenObjectRefs, { objectType: 'spec_revision', objectId: revision.id });
     }
   }
   if (workItem.current_plan_id !== undefined) {
-    objectRefs.push({ objectType: 'plan', objectId: workItem.current_plan_id });
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'plan', objectId: workItem.current_plan_id });
     for (const revision of await repository.listPlanRevisions(workItem.current_plan_id)) {
-      objectRefs.push({ objectType: 'plan_revision', objectId: revision.id });
+      addObjectRef(objectRefs, seenObjectRefs, { objectType: 'plan_revision', objectId: revision.id });
     }
   }
   for (const executionPackage of await repository.listExecutionPackagesForWorkItem(workItem.id)) {
-    objectRefs.push({ objectType: 'execution_package', objectId: executionPackage.id });
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'execution_package', objectId: executionPackage.id });
     for (const runSession of await repository.listRunSessionsForPackage(executionPackage.id)) {
-      objectRefs.push({ objectType: 'run_session', objectId: runSession.id });
+      addObjectRef(objectRefs, seenObjectRefs, { objectType: 'run_session', objectId: runSession.id });
     }
     for (const reviewPacket of await repository.listReviewPacketsForPackage(executionPackage.id)) {
-      objectRefs.push({ objectType: 'review_packet', objectId: reviewPacket.id });
+      addObjectRef(objectRefs, seenObjectRefs, { objectType: 'review_packet', objectId: reviewPacket.id });
     }
   }
 
@@ -213,7 +238,9 @@ const getReleaseReplayTimeline = async (
   }
 
   const entries: PublicReplayEntry[] = [];
-  const objectRefs: ObjectRef[] = [{ objectType: 'release', objectId: release.id }];
+  const objectRefs: ObjectRef[] = [];
+  const seenObjectRefs = new Set<string>();
+  addObjectRef(objectRefs, seenObjectRefs, { objectType: 'release', objectId: release.id });
   const workItems = (
     await Promise.all(
       release.work_item_ids.map(async (workItemId) => {
@@ -234,10 +261,10 @@ const getReleaseReplayTimeline = async (
   ).filter((executionPackage): executionPackage is ExecutionPackage => executionPackage !== undefined);
 
   for (const workItem of workItems) {
-    objectRefs.push({ objectType: 'work_item', objectId: workItem.id });
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'work_item', objectId: workItem.id });
   }
   for (const executionPackage of executionPackages) {
-    objectRefs.push({ objectType: 'execution_package', objectId: executionPackage.id });
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'execution_package', objectId: executionPackage.id });
   }
 
   const selectedRunSessions = (
@@ -258,13 +285,14 @@ const getReleaseReplayTimeline = async (
   });
 
   for (const runSession of selectedRunSessions) {
-    objectRefs.push({ objectType: 'run_session', objectId: runSession.id });
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'run_session', objectId: runSession.id });
   }
   for (const reviewPacket of selectedReviewPackets) {
-    objectRefs.push({ objectType: 'review_packet', objectId: reviewPacket.id });
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'review_packet', objectId: reviewPacket.id });
   }
 
-  await appendSerializedReplayEntries(repository, entries, objectRefs);
+  const visibleRefKeys = new Set(objectRefs.map((ref) => visibilityKey(ref.objectType, ref.objectId)));
+  await appendSerializedReplayEntries(repository, entries, objectRefs, visibleRefKeys);
 
   const evidences = await repository.listReleaseEvidences(release.id);
   const artifactsByEvidenceId = new Map(
@@ -279,39 +307,29 @@ const getReleaseReplayTimeline = async (
       return [evidence.artifact_id];
     }),
   );
-  const publicDecisionIds = new Set(
-    (await repository.listDecisionsForObject('release', release.id)).map((decision) => decision.id),
-  );
   const visibleRefs = new Map<string, boolean>();
-  visibleRefs.set(visibilityKey('release', release.id), true);
-  for (const workItem of workItems) {
-    visibleRefs.set(visibilityKey('work_item', workItem.id), true);
-  }
-  for (const executionPackage of executionPackages) {
-    visibleRefs.set(visibilityKey('execution_package', executionPackage.id), true);
-  }
-  for (const runSession of selectedRunSessions) {
-    visibleRefs.set(visibilityKey('run_session', runSession.id), true);
-  }
-  for (const reviewPacket of selectedReviewPackets) {
-    visibleRefs.set(visibilityKey('review_packet', reviewPacket.id), true);
+  for (const key of visibleRefKeys) {
+    visibleRefs.set(key, true);
   }
   for (const artifactId of publicArtifactIds) {
     visibleRefs.set(visibilityKey('artifact', artifactId), true);
   }
-  for (const decisionId of publicDecisionIds) {
-    visibleRefs.set(visibilityKey('decision', decisionId), true);
-  }
 
   for (const evidence of evidences) {
-    for (const link of observationLinksFor(evidence)) {
+    const unsafeEvidenceRefs = [
+      ...(evidence.object_ref === undefined
+        ? []
+        : [{ object_type: evidence.object_ref.object_type, object_id: evidence.object_ref.object_id }]),
+      ...observationLinksFor(evidence),
+    ];
+    for (const link of unsafeEvidenceRefs) {
       const key = visibilityKey(link.object_type, link.object_id);
       if (!visibleRefs.has(key)) {
         visibleRefs.set(key, false);
       }
     }
 
-    const { evidence: publicEvidenceInput, omittedUnsafeLink } = filterEvidenceObservationLinks(evidence, visibleRefs);
+    const { evidence: publicEvidenceInput, omittedUnsafeLink } = filterEvidencePublicRefs(evidence, visibleRefs);
     const artifact = artifactsByEvidenceId.get(evidence.id);
     entries.push(
       serializePublicReplayEntry({
