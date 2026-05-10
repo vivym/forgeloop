@@ -2,6 +2,7 @@ import { integer, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { SpecRevision } from '@forgeloop/domain';
 
 import { specPlanEditingState, specPlanGateState, specPlanResolution, specPlanStatus, timestampColumn } from './_shared';
+import { actors } from './actor';
 
 export const specs = pgTable('specs', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -31,7 +32,7 @@ export const spec_revisions = pgTable('spec_revisions', {
   riskNotes: jsonb('risk_notes').$type<SpecRevision['risk_notes']>().notNull(),
   testStrategySummary: text('test_strategy_summary').notNull(),
   structuredDocument: jsonb('structured_document').$type<SpecRevision['structured_document']>(),
-  authorActorId: uuid('author_actor_id'),
+  authorActorId: uuid('author_actor_id').references(() => actors.id),
   artifactRefs: jsonb('artifact_refs').$type<SpecRevision['artifact_refs']>().notNull(),
   createdAt: timestampColumn('created_at').notNull(),
 });

@@ -2,7 +2,17 @@ import { pgEnum, timestamp } from 'drizzle-orm/pg-core';
 
 export const project_repo_status_values = ['active', 'paused', 'archived'] as const;
 
-export const work_item_phase_values = ['draft', 'triage', 'spec', 'plan', 'execution', 'done'] as const;
+export const work_item_phase_values = [
+  'draft',
+  'triage',
+  'spec',
+  'plan',
+  'execution',
+  'release',
+  'observing',
+  'done',
+  'closed',
+] as const;
 export const work_item_kind_values = ['requirement', 'bug', 'tech_debt'] as const;
 export const work_item_activity_state_values = ['idle', 'awaiting_ai'] as const;
 export const work_item_gate_state_values = [
@@ -14,30 +24,51 @@ export const work_item_gate_state_values = [
 ] as const;
 export const work_item_resolution_values = ['none', 'completed'] as const;
 
-export const spec_plan_status_values = ['draft', 'in_review', 'approved'] as const;
-export const spec_plan_editing_state_values = ['idle', 'ai_drafting'] as const;
+export const spec_plan_status_values = ['draft', 'in_review', 'approved', 'rejected', 'superseded', 'archived'] as const;
+export const spec_plan_editing_state_values = ['idle', 'ai_drafting', 'human_editing', 'co_editing'] as const;
 export const spec_plan_gate_state_values = [
   'not_submitted',
   'awaiting_approval',
   'approved',
   'changes_requested',
 ] as const;
-export const spec_plan_resolution_values = ['none', 'approved'] as const;
+export const spec_plan_resolution_values = ['none', 'approved', 'rejected', 'superseded'] as const;
 
-export const execution_package_phase_values = ['draft', 'ready', 'queued', 'execution', 'review'] as const;
+export const execution_package_phase_values = [
+  'draft',
+  'ready',
+  'queued',
+  'execution',
+  'review',
+  'integration',
+  'test_gate',
+  'release',
+  'archived',
+] as const;
 export const execution_package_activity_state_values = [
   'idle',
   'ai_running',
-  'blocked',
+  'ai_retrying',
+  'human_editing',
   'awaiting_human',
+  'human_reviewing',
+  'blocked',
+  'handover',
 ] as const;
 export const execution_package_gate_state_values = [
   'not_submitted',
+  'self_review_pending',
   'awaiting_human_review',
-  'review_approved',
   'changes_requested',
+  'review_approved',
+  'integration_failed',
+  'integration_passed',
+  'test_failed',
+  'test_passed',
+  'release_ready',
+  'released',
 ] as const;
-export const execution_package_resolution_values = ['none', 'completed'] as const;
+export const execution_package_resolution_values = ['none', 'completed', 'cancelled', 'rolled_back', 'superseded'] as const;
 
 export const run_session_status_values = [
   'queued',
@@ -51,8 +82,14 @@ export const run_session_status_values = [
   'timed_out',
   'cancelled',
 ] as const;
-export const review_packet_status_values = ['ready', 'in_review', 'completed', 'archived'] as const;
-export const review_packet_decision_values = ['none', 'approved', 'changes_requested'] as const;
+export const review_packet_status_values = ['draft', 'ready', 'in_review', 'completed', 'escalated', 'archived'] as const;
+export const review_packet_decision_values = [
+  'none',
+  'approved',
+  'changes_requested',
+  'need_more_context',
+  'escalate',
+] as const;
 export const decision_outcome_values = [
   'approved',
   'changes_requested',

@@ -2,6 +2,7 @@ import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { Artifact, ObjectEvent } from '@forgeloop/domain';
 
 import { decisionValue, timestampColumn, traceLinkRelationship } from './_shared';
+import { actors } from './actor';
 
 export const object_events = pgTable('object_events', {
   id: text('id').primaryKey(),
@@ -38,7 +39,9 @@ export const decisions = pgTable('decisions', {
   id: uuid('id').primaryKey().defaultRandom(),
   objectType: text('object_type').notNull(),
   objectId: text('object_id').notNull(),
-  actorId: uuid('actor_id').notNull(),
+  actorId: uuid('actor_id')
+    .notNull()
+    .references(() => actors.id),
   decision: decisionValue('decision').notNull(),
   summary: text('summary').notNull(),
   createdAt: timestampColumn('created_at').notNull(),

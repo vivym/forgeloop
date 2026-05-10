@@ -2,6 +2,7 @@ import { integer, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { PlanRevision } from '@forgeloop/domain';
 
 import { specPlanEditingState, specPlanGateState, specPlanResolution, specPlanStatus, timestampColumn } from './_shared';
+import { actors } from './actor';
 
 export const plans = pgTable('plans', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -30,7 +31,7 @@ export const plan_revisions = pgTable('plan_revisions', {
   riskMitigations: jsonb('risk_mitigations').$type<PlanRevision['risk_mitigations']>().notNull(),
   rollbackNotes: text('rollback_notes').notNull(),
   structuredDocument: jsonb('structured_document').$type<PlanRevision['structured_document']>(),
-  authorActorId: uuid('author_actor_id'),
+  authorActorId: uuid('author_actor_id').references(() => actors.id),
   artifactRefs: jsonb('artifact_refs').$type<PlanRevision['artifact_refs']>().notNull(),
   createdAt: timestampColumn('created_at').notNull(),
 });

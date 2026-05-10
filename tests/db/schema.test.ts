@@ -11,6 +11,7 @@ import {
   execution_package_phase_values,
   execution_packages,
   decision_outcome_values,
+  execution_package_resolution_values,
   organizations,
   object_events,
   project_repo_status_values,
@@ -29,7 +30,9 @@ import {
   run_session_status_values,
   run_sessions,
   run_worker_leases,
+  spec_plan_editing_state_values,
   spec_plan_gate_state_values,
+  spec_plan_resolution_values,
   spec_plan_status_values,
   spec_revisions,
   specs,
@@ -41,6 +44,7 @@ import {
   trace_events,
   trace_link_relationship_values,
   trace_links,
+  work_item_activity_state_values,
   work_item_kind_values,
   work_item_phase_values,
   work_items,
@@ -168,20 +172,73 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(dbSchema).not.toHaveProperty('package_contract_links');
   });
 
-  it('exports P0 enum value sets used by domain state machines', () => {
+  it('exports P1 core enum value sets used by domain state machines', () => {
     expect(project_repo_status_values).toEqual(['active', 'paused', 'archived']);
-    expect(work_item_phase_values).toEqual(['draft', 'triage', 'spec', 'plan', 'execution', 'done']);
+    expect(work_item_phase_values).toEqual([
+      'draft',
+      'triage',
+      'spec',
+      'plan',
+      'execution',
+      'release',
+      'observing',
+      'done',
+      'closed',
+    ]);
     expect(work_item_kind_values).toEqual(['requirement', 'bug', 'tech_debt']);
-    expect(spec_plan_status_values).toEqual(['draft', 'in_review', 'approved']);
+    expect(work_item_activity_state_values).toEqual(['idle', 'awaiting_ai']);
+    expect(spec_plan_status_values).toEqual(['draft', 'in_review', 'approved', 'rejected', 'superseded', 'archived']);
+    expect(spec_plan_editing_state_values).toEqual(['idle', 'ai_drafting', 'human_editing', 'co_editing']);
     expect(spec_plan_gate_state_values).toEqual([
       'not_submitted',
       'awaiting_approval',
       'approved',
       'changes_requested',
     ]);
-    expect(execution_package_phase_values).toEqual(['draft', 'ready', 'queued', 'execution', 'review']);
+    expect(spec_plan_resolution_values).toEqual(['none', 'approved', 'rejected', 'superseded']);
+    expect(execution_package_phase_values).toEqual([
+      'draft',
+      'ready',
+      'queued',
+      'execution',
+      'review',
+      'integration',
+      'test_gate',
+      'release',
+      'archived',
+    ]);
+    expect(execution_package_activity_state_values).toEqual([
+      'idle',
+      'ai_running',
+      'ai_retrying',
+      'human_editing',
+      'awaiting_human',
+      'human_reviewing',
+      'blocked',
+      'handover',
+    ]);
     expect(execution_package_activity_state_values).not.toContain('awaiting_ai');
+    expect(execution_package_gate_state_values).toEqual([
+      'not_submitted',
+      'self_review_pending',
+      'awaiting_human_review',
+      'changes_requested',
+      'review_approved',
+      'integration_failed',
+      'integration_passed',
+      'test_failed',
+      'test_passed',
+      'release_ready',
+      'released',
+    ]);
     expect(execution_package_gate_state_values).not.toContain('none');
+    expect(execution_package_resolution_values).toEqual([
+      'none',
+      'completed',
+      'cancelled',
+      'rolled_back',
+      'superseded',
+    ]);
     expect(decision_outcome_values).toEqual([
       'approved',
       'changes_requested',
@@ -203,8 +260,14 @@ describe('P1 core schema release flow Drizzle schema', () => {
       'timed_out',
       'cancelled',
     ]);
-    expect(review_packet_status_values).toEqual(['ready', 'in_review', 'completed', 'archived']);
-    expect(review_packet_decision_values).toEqual(['none', 'approved', 'changes_requested']);
+    expect(review_packet_status_values).toEqual(['draft', 'ready', 'in_review', 'completed', 'escalated', 'archived']);
+    expect(review_packet_decision_values).toEqual([
+      'none',
+      'approved',
+      'changes_requested',
+      'need_more_context',
+      'escalate',
+    ]);
     expect(trace_link_relationship_values).toEqual([
       'belongs_to',
       'generated_by',
@@ -288,6 +351,11 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(execution_packages, 'reviewer_actor_id', column(actors, 'id'))).toBe(true);
     expect(hasForeignKey(execution_packages, 'qa_owner_actor_id', column(actors, 'id'))).toBe(true);
     expect(hasForeignKey(run_sessions, 'requested_by_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(decisions, 'actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(review_packets, 'reviewer_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(review_packets, 'reviewed_by_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(spec_revisions, 'author_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(plan_revisions, 'author_actor_id', column(actors, 'id'))).toBe(true);
   });
 
   it('defines release link composite primary keys and durable foreign keys', () => {
