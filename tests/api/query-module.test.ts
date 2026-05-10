@@ -188,6 +188,8 @@ describe('query module', () => {
     expect(serialized).not.toContain('artifacts/run/out.log');
     expect(serialized).not.toContain('raw_ref');
     expect(serialized).not.toContain('token=secret');
+    expect(serialized).not.toContain('metadata');
+    expect(serialized).not.toContain('internal_payload');
 
     expect(response.body).toEqual(
       expect.arrayContaining([
