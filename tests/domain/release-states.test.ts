@@ -541,6 +541,47 @@ describe('Release state transitions', () => {
     expect(() => transitionRelease(observing, closeCompletedEvent(observing, { evidence: [] }))).toThrow(DomainError);
   });
 
+  it('close override can complete without observation evidence using an override snapshot', () => {
+    const observing = {
+      ...releasable(createRelease()),
+      phase: 'observing',
+      gate_state: 'rollout_succeeded',
+    } as Release;
+    const overrideContext = gateContext(observing, { evidence: [] });
+    const snapshot = currentSnapshot(observing, overrideContext);
+
+    expect(snapshot.blockers.map((blocker) => blocker.code)).toContain('missing_required_evidence_backlink');
+
+    const result = transitionRelease(observing, {
+      type: 'close_override',
+      resolution: 'completed',
+      actor_id: 'actor-release-manager',
+      rationale: 'Completing without observation evidence after manual release owner review.',
+      blocker_snapshot: snapshot,
+      gate_context: overrideContext,
+      at: timestamp,
+    });
+
+    expect(releaseState(result.release)).toEqual({
+      phase: 'completed',
+      activity_state: 'idle',
+      gate_state: 'rollout_succeeded',
+      resolution: 'completed',
+    });
+    expect(result.decision_intents).toEqual([
+      expect.objectContaining({
+        decision_type: 'manual_override',
+        outcome: 'override_approved',
+        blocker_snapshot: snapshot,
+      }),
+      expect.objectContaining({
+        decision_type: 'release_close',
+        outcome: 'completed',
+        blocker_snapshot: snapshot,
+      }),
+    ]);
+  });
+
   it('closes completed with observation override and records override plus close decision intents', () => {
     const observing = {
       ...releasable(createRelease()),

@@ -464,6 +464,17 @@ describe('Release gate derivation', () => {
     ).toBe(true);
   });
 
+  it('rejects completed-close observation evidence owned by a different release', () => {
+    expect(
+      isCompletedCloseObservationEvidence(
+        completedObservationEvidence({ release_id: 'other-release' }),
+        {
+          release: release(),
+        },
+      ),
+    ).toBe(false);
+  });
+
   it('accepts metric snapshot observation evidence for completed close', () => {
     expect(
       isCompletedCloseObservationEvidence(
@@ -480,6 +491,18 @@ describe('Release gate derivation', () => {
         },
       ),
     ).toBe(true);
+  });
+
+  it('derives a completed-close observation blocker while observing without valid observation evidence', () => {
+    expect(
+      deriveCodes({
+        release: release({
+          phase: 'observing',
+          gate_state: 'rollout_succeeded',
+        }),
+        evidence: [],
+      }),
+    ).toContain('missing_required_evidence_backlink');
   });
 
   it.each([

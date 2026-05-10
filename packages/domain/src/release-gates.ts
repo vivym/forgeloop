@@ -434,7 +434,13 @@ const hasRequiredObservationBacklinks = (
 
 export const isCompletedCloseObservationEvidence = (evidence: ReleaseEvidence, context: ReleaseGateContext): boolean => {
   const release = context.release;
-  if (release === undefined || !isObservationEvidenceType(evidence.evidence_type) || evidence.redacted || evidence.status !== 'current') {
+  if (
+    release === undefined ||
+    evidence.release_id !== release.id ||
+    !isObservationEvidenceType(evidence.evidence_type) ||
+    evidence.redacted ||
+    evidence.status !== 'current'
+  ) {
     return false;
   }
 
@@ -665,6 +671,24 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
         );
       }
     }
+  }
+
+  if (
+    release.phase === 'observing' &&
+    release.gate_state === 'rollout_succeeded' &&
+    !evidence.some((item) => isCompletedCloseObservationEvidence(item, context)) &&
+    !blockers.some((item) => item.code === 'missing_required_evidence_backlink')
+  ) {
+    blockers.push(
+      blocker(
+        'missing_required_evidence_backlink',
+        'Release requires current public observation evidence before completed close.',
+        {
+          type: 'release',
+          id: release.id,
+        },
+      ),
+    );
   }
 
   if (!hasText(release.rollout_strategy)) {
