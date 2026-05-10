@@ -19,9 +19,8 @@ import {
   type StatusHistory,
   type WorkItem,
 } from '@forgeloop/domain';
+import { artifactRedactionReason, serializePublicArtifactRef } from '@forgeloop/db';
 import type { P0Repository, TraceEventRecord, TraceLinkRecord } from '@forgeloop/db';
-
-import { artifactRedactionReason, serializePublicArtifactRef } from './run-session-serialization';
 
 type ProjectionInput = {
   reviewPacketId?: string;
@@ -144,6 +143,9 @@ const reviewPacketRiskFlags = (
 
 const decisionRiskFlags = (decision: Decision): EvidenceChainRiskFlag[] =>
   decision.decision === 'changes_requested' ? ['changes_requested'] : [];
+
+const publicDecisionValue = (decision: Decision['decision']): NonNullable<EvidenceChainItem['details']>['decision'] =>
+  decision === 'override_approved' ? 'approved' : decision;
 
 const replacementDetails = (traceEvent: TraceEventRecord): EvidenceChainItem['details'] | undefined => {
   if (traceEvent.event_type !== 'run_replacement_recorded') {
@@ -650,7 +652,7 @@ export const buildEvidenceChain = async (
           links: [objectRef('review_packet', reviewPacket.id, 'belongs_to')],
           risk_flags: decisionRiskFlags(decision),
           redacted: false,
-          details: { decision: decision.decision },
+          details: { decision: publicDecisionValue(decision.decision) },
         });
       }
     }
