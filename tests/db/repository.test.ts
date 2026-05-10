@@ -76,7 +76,7 @@ const projectRepo: ProjectRepo = {
 const workItem: WorkItem = {
   id: 'work-item-1',
   project_id: project.id,
-  kind: 'feature',
+  kind: 'requirement',
   title: 'Ship P0 db boundary',
   goal: 'Persist the P0 delivery loop state.',
   success_criteria: ['Required P0 records can be saved and queried.'],

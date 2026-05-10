@@ -183,7 +183,7 @@ async function routeEvidenceWorkbench(page: Page, options: { failEvidenceChain?:
   const workItem = {
     id: 'work-item-1',
     project_id: 'project-1',
-    kind: 'feature',
+    kind: 'requirement',
     title: 'Evidence Chain Workbench',
     goal: 'Render evidence',
     success_criteria: ['Evidence is visible'],

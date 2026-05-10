@@ -6,7 +6,7 @@ export type {
   EvidenceChainRiskFlag,
 } from '@forgeloop/contracts';
 
-export type WorkItemKind = 'feature' | 'bugfix' | 'tech_debt' | 'test_refactor';
+export type WorkItemKind = 'requirement' | 'bug' | 'tech_debt';
 export type ArtifactKind =
   | 'diff'
   | 'changed_files'

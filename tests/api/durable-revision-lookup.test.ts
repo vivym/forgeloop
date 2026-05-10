@@ -136,7 +136,7 @@ describeIfDb('durable revision lookup', () => {
         .post('/work-items')
         .send({
           project_id: project.id,
-          kind: 'feature',
+          kind: 'requirement',
           title: 'Ship P0 control plane API',
           goal: 'Expose the delivery loop commands over REST.',
           success_criteria: ['Spec, plan, package, run, and review commands are available.'],

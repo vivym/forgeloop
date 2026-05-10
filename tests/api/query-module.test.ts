@@ -105,6 +105,130 @@ describe('query module', () => {
     );
   });
 
+  it('serializes replay payloads through the public evidence boundary', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const workItemId = executionPackage.work_item_id;
+    const createdAt = '2026-05-10T00:00:00.000Z';
+
+    await repo.appendObjectEvent({
+      id: 'object-event-public-boundary',
+      object_type: 'work_item',
+      object_id: workItemId,
+      event_type: 'work_item_public_boundary',
+      actor_type: 'system',
+      actor_id: 'actor-system',
+      reason: 'test',
+      metadata: { internal_payload: 'not public' },
+      payload: {
+        work_item_id: workItemId,
+        required_check_ids: ['contracts', 123],
+        accessToken: 'secret',
+        output_path: '/Users/viv/out.log',
+        unknown: 'drop me',
+      },
+      created_at: createdAt,
+    });
+    await repo.appendStatusHistory({
+      id: 'status-history-public-boundary',
+      object_type: 'work_item',
+      object_id: workItemId,
+      to_status: 'ready',
+      context: {
+        work_item_id: workItemId,
+        failed_check_ids: ['api', false],
+        client_secret: 'secret',
+        path: 'artifacts/run/out.log',
+      },
+      created_at: createdAt,
+    });
+    await repo.saveDecision({
+      id: 'decision-public-boundary',
+      object_type: 'work_item',
+      object_id: workItemId,
+      actor_id: 'actor-reviewer',
+      decision: 'approved',
+      summary: 'Approved',
+      evidence_refs: { raw_ref: 'local://decision/raw.json' },
+      created_at: createdAt,
+    });
+    await repo.saveArtifact({
+      id: 'artifact-unsafe-uri',
+      object_type: 'work_item',
+      object_id: workItemId,
+      ref: {
+        kind: 'diff',
+        name: 'Unsafe patch',
+        content_type: 'text/x-patch',
+        storage_uri: 'https://example.test/out.patch?token=secret',
+      },
+      created_at: createdAt,
+    });
+    await repo.saveArtifact({
+      id: 'artifact-safe-uri',
+      object_type: 'work_item',
+      object_id: workItemId,
+      ref: {
+        kind: 'diff',
+        name: 'Safe patch',
+        content_type: 'text/x-patch',
+        storage_uri: 'https://example.test/out.patch',
+        local_ref: '/Users/viv/private/out.patch',
+        digest: 'sha256:1234',
+      },
+      created_at: createdAt,
+    });
+
+    const response = await request(app.getHttpServer()).get(`/query/replay/work_item/${workItemId}`).expect(200);
+    const serialized = JSON.stringify(response.body);
+
+    expect(serialized).not.toContain('accessToken');
+    expect(serialized).not.toContain('client_secret');
+    expect(serialized).not.toContain('/Users/');
+    expect(serialized).not.toContain('artifacts/run/out.log');
+    expect(serialized).not.toContain('raw_ref');
+    expect(serialized).not.toContain('token=secret');
+    expect(serialized).not.toContain('metadata');
+    expect(serialized).not.toContain('internal_payload');
+
+    expect(response.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'object-event-public-boundary',
+          source: 'object_event',
+          payload: expect.objectContaining({
+            payload: { work_item_id: workItemId, required_check_ids: ['contracts'] },
+          }),
+        }),
+        expect.objectContaining({
+          id: 'status-history-public-boundary',
+          source: 'status_history',
+          payload: expect.objectContaining({
+            context: { work_item_id: workItemId, failed_check_ids: ['api'] },
+          }),
+        }),
+        expect.objectContaining({
+          id: 'decision-public-boundary',
+          source: 'decision',
+          payload: expect.not.objectContaining({ evidence_refs: expect.anything() }),
+        }),
+        expect.objectContaining({
+          id: 'artifact-safe-uri',
+          source: 'artifact',
+          payload: {
+            kind: 'diff',
+            name: 'Safe patch',
+            content_type: 'text/x-patch',
+            storage_uri: 'https://example.test/out.patch',
+            digest: 'sha256:1234',
+          },
+        }),
+      ]),
+    );
+
+    expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'artifact-unsafe-uri' })]));
+  });
+
   it('returns 404 for a missing supported replay object', async () => {
     const { app } = await track(createTestApp());
 

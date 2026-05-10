@@ -26,7 +26,7 @@ import {
   STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE,
 } from './p0-local-codex-dogfood';
 
-type WorkItemKind = 'feature' | 'bugfix' | 'test_refactor';
+type WorkItemKind = 'requirement' | 'bug' | 'tech_debt';
 type DogfoodExecutorType = 'mock' | 'local_codex';
 type DogfoodRunMode = {
   executorType: DogfoodExecutorType;
@@ -397,7 +397,7 @@ const isStrictLocalCodexDogfoodEnabled = (env: NodeJS.ProcessEnv = process.env):
 export const dogfoodWorkItems: DogfoodItemDefinition[] = [
   {
     key: 'feature-ci-gate',
-    kind: 'feature',
+    kind: 'requirement',
     title: 'Remote CI gate',
     goal: 'Protect main with install, test, and build checks on GitHub Actions.',
     successCriteria: ['CI workflow exists', 'The CI-equivalent local install/test/build commands pass'],
@@ -410,7 +410,7 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
   },
   {
     key: 'bugfix-durable-verification',
-    kind: 'bugfix',
+    kind: 'bug',
     title: 'Durable verification gaps',
     goal: 'Close the documented durable DB and browser verification gaps for P0 readiness.',
     successCriteria: ['Durable schema push passes', 'Durable dogfood passes', 'Browser Run Console E2E passes'],
@@ -423,7 +423,7 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
   },
   {
     key: 'test-refactor-run-console',
-    kind: 'test_refactor',
+    kind: 'tech_debt',
     title: 'Browser Run Console walkthrough',
     goal: 'Exercise Run Console backfill, SSE append, command submission, and review rerun handling.',
     successCriteria: ['Run Console E2E passes', 'The review flow exercises changes_requested -> rerun -> approve'],

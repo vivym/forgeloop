@@ -646,7 +646,7 @@ const createApprovedPlan = async (apiUrl: string, projectId: string, label: stri
     method: 'POST',
     body: {
       project_id: projectId,
-      kind: 'test_refactor',
+      kind: 'tech_debt',
       title: `Dogfood ${label}`,
       goal: 'Verify the long-running run console control flow.',
       success_criteria: ['Live events are visible before terminal completion.', 'Review evidence is persisted.'],
@@ -1046,7 +1046,7 @@ const durableRecordsFor = (prefix: string): {
   const workItem: WorkItem = {
     id: `${prefix}-work-item`,
     project_id: project.id,
-    kind: 'test_refactor',
+    kind: 'tech_debt',
     title: 'Durable dogfood restart recovery',
     goal: 'Verify run state survives fresh repository and API instances.',
     success_criteria: ['Events backfill after restart.', 'Worker lease takeover completes without duplicate input.'],

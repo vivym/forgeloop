@@ -133,7 +133,7 @@ describe('RunWorker', () => {
         id: 'execution-package-2',
         phase: 'ready',
         activity_state: 'idle',
-        gate_state: 'none',
+        gate_state: 'not_submitted',
         resolution: 'none',
       },
       { type: 'run', run_session_id: 'run-session-2', at: '2026-05-05T00:00:01.000Z' },

@@ -671,7 +671,7 @@ export const transitionExecutionPackage = (
         return {
           ...executionPackage,
           phase: 'queued',
-          activity_state: 'awaiting_ai',
+          activity_state: 'idle',
           gate_state: 'not_submitted',
           resolution: 'none',
           last_run_session_id: event.run_session_id,
@@ -684,7 +684,7 @@ export const transitionExecutionPackage = (
         return {
           ...executionPackage,
           phase: 'queued',
-          activity_state: 'awaiting_ai',
+          activity_state: 'idle',
           gate_state: 'not_submitted',
           resolution: 'none',
           last_run_session_id: event.run_session_id,

@@ -218,7 +218,16 @@ export const executionPackagePhases = [
 ] as const;
 export type ExecutionPackagePhase = (typeof executionPackagePhases)[number];
 
-export const executionPackageActivityStates = ['idle', 'awaiting_ai', 'ai_running', 'blocked', 'awaiting_human'] as const;
+export const executionPackageActivityStates = [
+  'idle',
+  'ai_running',
+  'ai_retrying',
+  'human_editing',
+  'awaiting_human',
+  'human_reviewing',
+  'blocked',
+  'handover',
+] as const;
 export type ExecutionPackageActivityState = (typeof executionPackageActivityStates)[number];
 
 export const executionPackageGateStates = [

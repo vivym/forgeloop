@@ -473,6 +473,40 @@ describe('evidence chain API', () => {
     expect(JSON.stringify(chain)).not.toContain('"local_ref":');
   });
 
+  it('redacts persisted artifact rows with unsafe storage URIs', async () => {
+    const { app, repo, workItemId } = await track(seedEvidenceChainScenario());
+    await repo.saveArtifact({
+      id: 'artifact-unsafe-storage-uri',
+      object_type: 'run_session',
+      object_id: 'run-session-approved',
+      ref: {
+        kind: 'diff',
+        name: 'Unsafe public diff',
+        content_type: 'text/x-patch',
+        storage_uri: 'https://example.test/diff.patch?token=secret',
+      },
+      created_at: '2026-05-05T00:05:03.000Z',
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+    const serialized = JSON.stringify(chain);
+
+    expect(chain.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'evidence-item:redacted-artifact-record:artifact-unsafe-storage-uri',
+          source: 'artifact',
+          redacted: true,
+          details: expect.objectContaining({ redaction_reason: 'unsafe_storage_uri' }),
+        }),
+      ]),
+    );
+    expect(serialized).not.toContain('token=secret');
+    expect(serialized).not.toContain('https://example.test/diff.patch?token=secret');
+    expect(serialized).not.toContain('details":{"artifact"');
+  });
+
   it('reports mixed projection when trace events are overlaid on read-time records', async () => {
     const { app, repo, records, executionPackage } = await track(seedEvidenceChainBase());
     const runSession = {

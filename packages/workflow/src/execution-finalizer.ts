@@ -460,7 +460,7 @@ const updatePackageAfterFailure = async (
           ...executionPackage,
           phase: 'ready',
           activity_state: 'idle',
-          gate_state: 'none',
+          gate_state: 'not_submitted',
           last_failure_summary: failureSummary,
           updated_at: at,
         }
@@ -508,7 +508,7 @@ const failurePackageIsReconciled = (
     return (
       executionPackage.phase === 'ready' &&
       executionPackage.activity_state === 'idle' &&
-      executionPackage.gate_state === 'none' &&
+      executionPackage.gate_state === 'not_submitted' &&
       executionPackage.last_failure_summary === failureSummary
     );
   }

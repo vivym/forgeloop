@@ -91,7 +91,7 @@ const createApprovedPlanRevision = async (app: INestApplication) => {
       .post('/work-items')
       .send({
         project_id: project.id,
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Route local_codex through adapter',
         goal: 'Use the real local_codex executor path for non-workflow runs.',
         success_criteria: ['local_codex run sessions retain workspace evidence.'],

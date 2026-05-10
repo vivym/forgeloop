@@ -460,7 +460,7 @@ describe('execution finalizer', () => {
     expect(packageAfterFirst).toMatchObject({
       phase: 'ready',
       activity_state: 'idle',
-      gate_state: 'none',
+      gate_state: 'not_submitted',
       last_failure_summary: 'Unit tests failed.',
       updated_at: '2026-05-07T00:00:01.000Z',
     });
