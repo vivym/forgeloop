@@ -24,7 +24,13 @@ import type {
   SelfReviewResult,
 } from '@forgeloop/contracts';
 import type { WorkItemCompletion } from './completion.js';
-import { isReleaseBlockerOverrideable, isReleaseBlockerSnapshotCurrent } from './release-gates.js';
+import {
+  createReleaseBlockerSnapshot,
+  deriveReleaseBlockers,
+  isReleaseBlockerOverrideable,
+  isReleaseBlockerSnapshotInternallyConsistent,
+  type ReleaseGateContext,
+} from './release-gates.js';
 
 const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
 
@@ -232,18 +238,19 @@ export type ReleaseTransition =
     })
   | (Timestamped & {
       type: 'submit';
-      blocker_snapshot: ReleaseBlockerSnapshot;
+      gate_context: ReleaseGateContext;
     })
   | (Timestamped & {
       type: 'approve';
       approved_by_actor_id: string;
-      blocker_snapshot: ReleaseBlockerSnapshot;
+      gate_context: ReleaseGateContext;
     })
   | (Timestamped & {
       type: 'override_approve';
       approved_by_actor_id: string;
       rationale: string;
       blocker_snapshot: ReleaseBlockerSnapshot;
+      gate_context: ReleaseGateContext;
     })
   | (Timestamped & {
       type: 'start_observing';
@@ -256,6 +263,7 @@ export type ReleaseTransition =
 export interface ReleaseTransitionResult {
   release: Release;
   decision_intents: ReleaseDecisionIntent[];
+  blocker_snapshot?: ReleaseBlockerSnapshot;
 }
 
 const timestampFor = (event: Timestamped) => event.at ?? DEFAULT_TIMESTAMP;
@@ -768,9 +776,14 @@ export const transitionExecutionPackage = (
   );
 };
 
-const releaseResult = (release: Release, decisionIntents: ReleaseDecisionIntent[] = []): ReleaseTransitionResult => ({
+const releaseResult = (
+  release: Release,
+  decisionIntents: ReleaseDecisionIntent[] = [],
+  blockerSnapshot?: ReleaseBlockerSnapshot,
+): ReleaseTransitionResult => ({
   release,
   decision_intents: decisionIntents,
+  ...(blockerSnapshot !== undefined ? { blocker_snapshot: blockerSnapshot } : {}),
 });
 
 const hasBlockingReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolean => blockers.length > 0;
@@ -778,8 +791,32 @@ const hasBlockingReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolea
 const hasNonOverrideableReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolean =>
   blockers.some((blocker) => !isReleaseBlockerOverrideable(blocker.code) || !blocker.overrideable);
 
-const assertReleaseBlockerSnapshot = (release: Release, snapshot: ReleaseBlockerSnapshot): void => {
-  if (snapshot.release_id !== release.id || !hasText(snapshot.generated_at) || !isReleaseBlockerSnapshotCurrent(snapshot)) {
+const hasStructuralReleaseBlockers = (blockers: readonly ReleaseBlocker[]): boolean =>
+  blockers.some((blocker) => blocker.category === 'structural');
+
+const currentReleaseBlockerSnapshot = (
+  release: Release,
+  gateContext: ReleaseGateContext,
+  generatedAt: string,
+): ReleaseBlockerSnapshot =>
+  createReleaseBlockerSnapshot({
+    release_id: release.id,
+    generated_at: generatedAt,
+    blockers: deriveReleaseBlockers({ ...gateContext, release }),
+  });
+
+const assertRequestSnapshotMatchesCurrent = (
+  release: Release,
+  requestSnapshot: ReleaseBlockerSnapshot,
+  currentSnapshot: ReleaseBlockerSnapshot,
+): void => {
+  if (
+    requestSnapshot.release_id !== release.id ||
+    requestSnapshot.release_id !== currentSnapshot.release_id ||
+    !hasText(requestSnapshot.generated_at) ||
+    !isReleaseBlockerSnapshotInternallyConsistent(requestSnapshot) ||
+    requestSnapshot.blocker_fingerprint !== currentSnapshot.blocker_fingerprint
+  ) {
     return invalidTransition('Release', `${release.phase}/stale_blocker_snapshot`, 'blocker_snapshot');
   }
 };
@@ -852,61 +889,69 @@ export const transitionRelease = (
       });
     }
     case 'submit':
-      assertReleaseBlockerSnapshot(release, event.blocker_snapshot);
-      if (release.phase === 'candidate' && !hasBlockingReleaseBlockers(event.blocker_snapshot.blockers)) {
-        return releaseResult({
-          ...release,
-          phase: 'approval',
-          activity_state: 'awaiting_human',
-          gate_state: 'awaiting_approval',
-          resolution: 'none',
-          updated_at: at,
-        });
+      if (release.phase === 'candidate') {
+        const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
+        if (!hasStructuralReleaseBlockers(snapshot.blockers)) {
+          return releaseResult(
+            {
+              ...release,
+              phase: 'approval',
+              activity_state: 'awaiting_human',
+              gate_state: 'awaiting_approval',
+              resolution: 'none',
+              updated_at: at,
+            },
+            [],
+            snapshot,
+          );
+        }
       }
       break;
     case 'approve':
-      assertReleaseBlockerSnapshot(release, event.blocker_snapshot);
-      if (
-        release.phase === 'approval' &&
-        release.gate_state === 'awaiting_approval' &&
-        !hasBlockingReleaseBlockers(event.blocker_snapshot.blockers)
-      ) {
-        return releaseResult(
-          {
-            ...release,
-            phase: 'rollout',
-            activity_state: 'idle',
-            gate_state: 'approved',
-            resolution: 'none',
-            updated_at: at,
-          },
-          [
+      if (release.phase === 'approval' && release.gate_state === 'awaiting_approval') {
+        const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
+        if (!hasBlockingReleaseBlockers(snapshot.blockers)) {
+          return releaseResult(
             {
-              object_type: 'release',
-              object_id: release.id,
-              actor_id: event.approved_by_actor_id,
-              decision_type: 'release_approval',
-              outcome: 'approved',
+              ...release,
+              phase: 'rollout',
+              activity_state: 'idle',
+              gate_state: 'approved',
+              resolution: 'none',
+              updated_at: at,
             },
-          ],
-        );
+            [
+              {
+                object_type: 'release',
+                object_id: release.id,
+                actor_id: event.approved_by_actor_id,
+                decision_type: 'release_approval',
+                outcome: 'approved',
+              },
+            ],
+            snapshot,
+          );
+        }
       }
       break;
     case 'override_approve':
-      assertReleaseBlockerSnapshot(release, event.blocker_snapshot);
-      if (
-        release.phase === 'approval' &&
-        release.gate_state === 'awaiting_approval' &&
-        hasText(event.rationale) &&
-        event.blocker_snapshot.blockers.length > 0 &&
-        !hasNonOverrideableReleaseBlockers(event.blocker_snapshot.blockers)
-      ) {
+      if (release.phase === 'approval' && release.gate_state === 'awaiting_approval') {
+        const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
+        assertRequestSnapshotMatchesCurrent(release, event.blocker_snapshot, snapshot);
+        if (
+          !hasText(event.rationale) ||
+          snapshot.blockers.length === 0 ||
+          hasNonOverrideableReleaseBlockers(snapshot.blockers)
+        ) {
+          break;
+        }
         const intentBase = {
           object_type: 'release' as const,
           object_id: release.id,
           actor_id: event.approved_by_actor_id,
           outcome: 'override_approved' as const,
           reason: event.rationale,
+          blocker_snapshot: snapshot,
         };
         return releaseResult(
           {
@@ -927,6 +972,7 @@ export const transitionRelease = (
               decision_type: 'release_approval',
             },
           ],
+          snapshot,
         );
       }
       break;

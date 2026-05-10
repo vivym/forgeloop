@@ -126,7 +126,7 @@ export const createReleaseBlockerSnapshot = (input: {
   blockers: input.blockers.map((item) => ({ ...item })),
 });
 
-export const isReleaseBlockerSnapshotCurrent = (snapshot: ReleaseBlockerSnapshot): boolean =>
+export const isReleaseBlockerSnapshotInternallyConsistent = (snapshot: ReleaseBlockerSnapshot): boolean =>
   snapshot.blocker_fingerprint === fingerprintReleaseBlockers(snapshot.blockers);
 
 export const selectReleaseReviewPacket = (

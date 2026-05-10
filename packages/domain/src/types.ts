@@ -546,4 +546,5 @@ export interface ReleaseDecisionIntent {
   decision_type: 'manual_override' | 'release_approval';
   outcome: 'approved' | 'override_approved';
   reason?: string;
+  blocker_snapshot?: ReleaseBlockerSnapshot;
 }

@@ -253,42 +253,36 @@ describe('Release gate derivation', () => {
   });
 
   it('derives empty_release_scope when either valid linked scope side is empty and blocks submit, approve, and override', () => {
-    for (const blockers of [
-      deriveReleaseBlockers({ release: release({ work_item_ids: [] }), work_items: [], execution_packages: [executionPackage()] }),
-      deriveReleaseBlockers({ release: release({ execution_package_ids: [] }), work_items: [workItem()], execution_packages: [] }),
+    for (const context of [
+      { release: release({ work_item_ids: [] }), work_items: [], execution_packages: [executionPackage()] },
+      { release: release({ execution_package_ids: [] }), work_items: [workItem()], execution_packages: [] },
     ]) {
+      const blockers = deriveReleaseBlockers(context);
       expect(blockers.map((blocker) => blocker.code)).toContain('empty_release_scope');
       expect(() =>
-        transitionRelease(release(), {
+        transitionRelease(context.release, {
           type: 'submit',
-          blocker_snapshot: createReleaseBlockerSnapshot({
-            release_id: 'release-1',
-            generated_at: timestamp,
-            blockers,
-          }),
+          gate_context: context,
         }),
       ).toThrow();
       expect(() =>
-        transitionRelease({ ...release(), phase: 'approval', gate_state: 'awaiting_approval' }, {
+        transitionRelease({ ...context.release, phase: 'approval', gate_state: 'awaiting_approval' }, {
           type: 'approve',
           approved_by_actor_id: 'actor-reviewer',
-          blocker_snapshot: createReleaseBlockerSnapshot({
-            release_id: 'release-1',
-            generated_at: timestamp,
-            blockers,
-          }),
+          gate_context: context,
         }),
       ).toThrow();
       expect(() =>
-        transitionRelease({ ...release(), phase: 'approval', gate_state: 'awaiting_approval' }, {
+        transitionRelease({ ...context.release, phase: 'approval', gate_state: 'awaiting_approval' }, {
           type: 'override_approve',
           approved_by_actor_id: 'actor-reviewer',
           rationale: 'Manual approval.',
           blocker_snapshot: createReleaseBlockerSnapshot({
-            release_id: 'release-1',
+            release_id: context.release.id,
             generated_at: timestamp,
             blockers,
           }),
+          gate_context: context,
         }),
       ).toThrow();
     }

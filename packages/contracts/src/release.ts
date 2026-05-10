@@ -164,6 +164,7 @@ export const releaseDecisionIntentSchema = z
     decision_type: z.enum(['manual_override', 'release_approval']),
     outcome: z.enum(['approved', 'override_approved']),
     reason: z.string().min(1).optional(),
+    blocker_snapshot: releaseBlockerSnapshotSchema.optional(),
   })
   .strict();
 export type ReleaseDecisionIntent = z.infer<typeof releaseDecisionIntentSchema>;
