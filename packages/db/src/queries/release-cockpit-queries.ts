@@ -231,8 +231,16 @@ const requiredArtifactSummary = (executionPackage: ExecutionPackage, runSession:
     return undefined;
   }
 
-  const present = unique([...(runSession?.artifacts ?? []), ...(runSession?.log_refs ?? [])].map((artifact) => artifact.kind));
-  const missing = executionPackage.required_artifact_kinds.filter((kind) => !present.includes(kind));
+  const artifactKinds = new Set((runSession?.artifacts ?? []).map((artifact) => artifact.kind));
+  const logKinds = new Set((runSession?.log_refs ?? []).map((artifact) => artifact.kind));
+  const present = unique(
+    executionPackage.required_artifact_kinds.filter((kind) =>
+      kind === 'logs' ? logKinds.has(kind) : artifactKinds.has(kind),
+    ),
+  );
+  const missing = executionPackage.required_artifact_kinds.filter((kind) =>
+    kind === 'logs' ? !logKinds.has(kind) : !artifactKinds.has(kind),
+  );
 
   return {
     required: executionPackage.required_artifact_kinds,
@@ -448,8 +456,8 @@ export async function getReleaseCockpit(
     release,
     workItems,
     executionPackages,
-    runSessions: allRunSessions,
-    reviewPackets: allReviewPackets,
+    runSessions: latestRunSessions,
+    reviewPackets: currentReviewPackets,
     evidences,
     artifactsByEvidenceId,
     decisions,

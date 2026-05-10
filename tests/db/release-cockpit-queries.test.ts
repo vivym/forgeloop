@@ -361,11 +361,29 @@ describe('getReleaseCockpit', () => {
               { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
               { object_type: 'artifact', object_id: 'missing-artifact', relationship: 'generated_by' },
               { object_type: 'decision', object_id: 'missing-decision', relationship: 'supports' },
+              { object_type: 'run_session', object_id: 'run-old', relationship: 'generated_by' },
+              { object_type: 'review_packet', object_id: 'review-old', relationship: 'supports' },
             ],
           },
         },
       },
     });
+    await repo.saveRunSession(
+      runSession({
+        id: 'run-old',
+        created_at: '2026-05-10T00:00:00.000Z',
+        updated_at: '2026-05-10T00:01:00.000Z',
+      }),
+    );
+    await repo.saveReviewPacket(
+      reviewPacket({
+        id: 'review-old',
+        run_session_id: 'run-old',
+        created_at: '2026-05-10T00:00:00.000Z',
+        updated_at: '2026-05-10T00:01:00.000Z',
+        completed_at: '2026-05-10T00:01:00.000Z',
+      }),
+    );
 
     const cockpit = await getReleaseCockpit(repo, 'release-1');
 
