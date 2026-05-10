@@ -582,6 +582,29 @@ describe('P0 delivery loop contracts', () => {
     expect(cockpit.checklist[0]?.blocker_codes).toEqual(['missing_rollback_plan']);
     expect(cockpit.next_actions).toEqual(['Add rollback plan before approval.']);
 
+    const latestRunSession = cockpit.latest_run_sessions[0]!;
+    const runArtifact = latestRunSession.artifacts[0]!;
+    const releaseDecision = cockpit.decisions[0]!;
+
+    expect(
+      releaseCockpitResponseSchema.safeParse({
+        ...cockpit,
+        latest_run_sessions: [
+          {
+            ...latestRunSession,
+            artifacts: [{ ...runArtifact, storage_uri: '/Users/viv/private.log' }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      releaseCockpitResponseSchema.safeParse({
+        ...cockpit,
+        decisions: [{ ...releaseDecision, outcome: 'ignored' }],
+      }).success,
+    ).toBe(false);
+
     expect(releaseBlockerCodes).toEqual([
       'missing_work_item',
       'missing_execution_package',
@@ -672,6 +695,9 @@ describe('P0 delivery loop contracts', () => {
       }).success,
     ).toBe(false);
     expect(startReleaseObservingRequestSchema.parse({ actor_id: 'actor-owner' }).actor_id).toBe('actor-owner');
+    expect(approveReleaseRequestSchema.safeParse({ actor_id: 'actor-reviewer', rationale: '   ' }).success).toBe(
+      false,
+    );
     expect(
       closeReleaseRequestSchema.safeParse({
         actor_id: 'actor-owner',

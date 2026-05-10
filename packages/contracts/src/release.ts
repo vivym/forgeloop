@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { jsonObjectSchema } from './executor.js';
+import { publicArtifactRefSchema } from './public-artifacts.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const trimmedNonEmptyStringSchema = z.string().trim().min(1);
@@ -346,7 +347,7 @@ export const submitReleaseForApprovalRequestSchema = releaseActorCommandRequestS
 export type SubmitReleaseForApprovalRequest = z.infer<typeof submitReleaseForApprovalRequestSchema>;
 
 export const approveReleaseRequestSchema = releaseActorCommandRequestSchema.extend({
-  rationale: z.string().min(1).optional(),
+  rationale: trimmedNonEmptyStringSchema.optional(),
 });
 export type ApproveReleaseRequest = z.infer<typeof approveReleaseRequestSchema>;
 
@@ -431,15 +432,7 @@ export const createReleaseEvidenceRequestSchema = z
   .superRefine(validateReleaseEvidenceObjectRef);
 export type CreateReleaseEvidenceRequest = z.infer<typeof createReleaseEvidenceRequestSchema>;
 
-export const publicReleaseArtifactRefSchema = z
-  .object({
-    kind: z.string().min(1),
-    name: z.string().min(1),
-    content_type: z.string().min(1),
-    storage_uri: z.string().min(1),
-    digest: z.string().min(1).optional(),
-  })
-  .strict();
+export const publicReleaseArtifactRefSchema = publicArtifactRefSchema;
 export type PublicReleaseArtifactRef = z.infer<typeof publicReleaseArtifactRefSchema>;
 
 export const publicReleaseWorkItemSummarySchema = z

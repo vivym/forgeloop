@@ -390,20 +390,14 @@ describe('public evidence contracts', () => {
     }
   });
 
-  it('preserves existing non-release public decision types and rejects unsupported outcomes', () => {
+  it('preserves existing non-release public decision metadata', () => {
     expect(
       publicDecisionSchema.safeParse({
         ...publicDecision,
         decision_type: 'custom_non_release_decision',
-      }).success,
-    ).toBe(true);
-
-    expect(
-      publicDecisionSchema.safeParse({
-        ...publicDecision,
         outcome: 'ignored',
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('accepts a public release evidence build group without result', () => {
