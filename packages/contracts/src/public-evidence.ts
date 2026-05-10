@@ -107,11 +107,15 @@ export const isLocalReferenceString = (value: string): boolean => {
   const normalizedAbsoluteReference = reference.replace(/^\/+/, '/');
   const repoRoot = currentWorkingDirectory();
 
-  if (repoRoot && reference.startsWith(repoRoot)) {
+  if (repoRoot && reference.includes(repoRoot)) {
     return true;
   }
 
-  if (localReferencePrefixes.some((prefix) => normalizedAbsoluteReference.startsWith(prefix))) {
+  if (
+    localReferencePrefixes.some(
+      (prefix) => normalizedAbsoluteReference.startsWith(prefix) || reference.includes(prefix),
+    )
+  ) {
     return true;
   }
 
@@ -378,7 +382,7 @@ const publicReleaseEvidenceBuildSchema = z
     version: z.string().min(1).optional(),
     commit_sha: z.string().min(1).optional(),
     source_branch: z.string().min(1).optional(),
-    result: z.enum(['succeeded', 'failed', 'cancelled', 'in_progress']),
+    result: z.enum(['succeeded', 'failed', 'cancelled', 'in_progress']).optional(),
     started_at: isoDateTimeSchema.optional(),
     completed_at: isoDateTimeSchema.optional(),
     artifact_id: z.string().min(1).optional(),

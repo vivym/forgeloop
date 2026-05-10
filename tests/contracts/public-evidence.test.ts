@@ -64,6 +64,12 @@ describe('public evidence contracts', () => {
       { kind: 'diff', name: 'S3 query', content_type: 'text/x-patch', storage_uri: 's3://bucket/out.patch?x=y' },
       { kind: 'diff', name: 'GS fragment', content_type: 'text/x-patch', storage_uri: 'gs://bucket/out.patch#frag' },
       { kind: 'diff', name: 'Encoded local', content_type: 'text/x-patch', storage_uri: 'https://example.test/%2FUsers%2Fviv%2Fout.patch' },
+      {
+        kind: 'diff',
+        name: 'Embedded encoded local',
+        content_type: 'text/x-patch',
+        storage_uri: 'https://example.test/safe/%2FUsers%2Fviv%2Fout.log',
+      },
     ]) {
       expect(publicArtifactRefSchema.safeParse(artifact).success).toBe(false);
     }
@@ -85,6 +91,7 @@ describe('public evidence contracts', () => {
     expect(isLocalReferenceString('/mnt/work/out.log')).toBe(true);
     expect(isLocalReferenceString('/Volumes/work/out.log')).toBe(true);
     expect(isLocalReferenceString('/workspace/app/out.log')).toBe(true);
+    expect(isLocalReferenceString('note: see /Users/viv/out.log')).toBe(true);
     expect(isLocalReferenceString('C:\\Users\\viv\\out.log')).toBe(true);
     expect(isLocalReferenceString('\\\\server\\share\\out.log')).toBe(true);
     expect(isLocalReferenceString('file:///Users/viv/out.log')).toBe(true);
@@ -102,6 +109,7 @@ describe('public evidence contracts', () => {
     expect(isPublicArtifactStorageUri('s3://bucket/key?x=y')).toBe(false);
     expect(isPublicArtifactStorageUri('gs://bucket/key#frag')).toBe(false);
     expect(isPublicArtifactStorageUri('https://example.test/%2FUsers%2Fviv%2Fout.log')).toBe(false);
+    expect(isPublicArtifactStorageUri('https://example.test/safe/%2FUsers%2Fviv%2Fout.log')).toBe(false);
   });
 
   it('parses strict public decision and rejects evidence refs', () => {
@@ -266,6 +274,27 @@ describe('public evidence contracts', () => {
     expect(publicReleaseEvidenceSchema.parse({ ...base, artifact_id: 'artifact-1', artifact: publicArtifact, extra })).toMatchObject({
       id: 'evidence-2',
     });
+  });
+
+  it('accepts a public release evidence build group without result', () => {
+    expect(
+      publicReleaseEvidenceSchema.parse({
+        id: 'evidence-build-1',
+        release_id: 'release-1',
+        evidence_type: 'build',
+        summary: 'Build metadata captured',
+        extra: {
+          build: {
+            build_id: 'build-1',
+            version: 'v1',
+            artifact: publicArtifact,
+          },
+        },
+        redacted: false,
+        status: 'current',
+        created_at: timestamp,
+      }),
+    ).toMatchObject({ extra: { build: { build_id: 'build-1' } } });
   });
 
   it('enforces replay source and payload pairing', () => {
