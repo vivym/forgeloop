@@ -1,5 +1,14 @@
 # Public Evidence Serialization Implementation Plan
 
+## Status
+
+Completed and merged to `main` on 2026-05-11.
+
+- Merge head: `1b56977` (`merge: public evidence serialization`)
+- Verified after merge: `pnpm build`
+- Verified after merge: `pnpm test`
+- Verified after merge: `git diff --check`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build one strict public evidence/replay serialization boundary so public query, Evidence Chain, replay, and future Release views cannot leak raw/local/sensitive evidence.
@@ -66,7 +75,7 @@ Use a dedicated feature worktree before implementation if this plan is executed 
 - Test: `tests/contracts/public-evidence.test.ts`
 - Test: `tests/contracts/evidence-chain.test.ts`
 
-- [ ] **Step 1: Write failing public DTO contract tests**
+- [x] **Step 1: Write failing public DTO contract tests**
 
 Create `tests/contracts/public-evidence.test.ts`:
 
@@ -330,7 +339,7 @@ describe('public evidence contracts', () => {
 
 In `tests/contracts/evidence-chain.test.ts`, extend the existing redaction-reason test list with `unsafe_storage_uri`.
 
-- [ ] **Step 2: Run contract tests to verify failure**
+- [x] **Step 2: Run contract tests to verify failure**
 
 Run:
 
@@ -340,7 +349,7 @@ pnpm vitest run tests/contracts/public-evidence.test.ts tests/contracts/evidence
 
 Expected: FAIL because `public-evidence.ts` does not exist and `unsafe_storage_uri` is not in the Evidence Chain enum.
 
-- [ ] **Step 3: Implement public contract schemas and helpers**
+- [x] **Step 3: Implement public contract schemas and helpers**
 
 Create `packages/contracts/src/public-evidence.ts`. Keep the code pure: no db/app imports.
 
@@ -360,7 +369,7 @@ Export from `packages/contracts/src/index.ts`:
 export * from './public-evidence.js';
 ```
 
-- [ ] **Step 4: Run contract tests to verify pass**
+- [x] **Step 4: Run contract tests to verify pass**
 
 Run:
 
@@ -370,7 +379,7 @@ pnpm vitest run tests/contracts/public-evidence.test.ts tests/contracts/evidence
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit contracts**
+- [x] **Step 5: Commit contracts**
 
 ```bash
 git add packages/contracts/src tests/contracts
@@ -386,7 +395,7 @@ git commit -m "feat: add public evidence contracts"
 - Modify: `packages/db/src/index.ts`
 - Test: `tests/db/public-evidence-serialization.test.ts`
 
-- [ ] **Step 1: Write failing serializer tests**
+- [x] **Step 1: Write failing serializer tests**
 
 Create `tests/db/public-evidence-serialization.test.ts`.
 
@@ -479,7 +488,7 @@ it('sanitizes object event payloads without throwing on bad stored values', () =
 });
 ```
 
-- [ ] **Step 2: Run serializer tests to verify failure**
+- [x] **Step 2: Run serializer tests to verify failure**
 
 Run:
 
@@ -489,7 +498,7 @@ pnpm vitest run tests/db/public-evidence-serialization.test.ts
 
 Expected: FAIL because the serializer module does not exist.
 
-- [ ] **Step 3: Add db dependency and export placeholder**
+- [x] **Step 3: Add db dependency and export placeholder**
 
 Modify `packages/db/package.json`:
 
@@ -509,7 +518,7 @@ Modify `packages/db/src/index.ts`:
 export * from './queries/public-evidence-serialization';
 ```
 
-- [ ] **Step 4: Update lockfile**
+- [x] **Step 4: Update lockfile**
 
 Run:
 
@@ -519,7 +528,7 @@ pnpm install --lockfile-only
 
 Expected: PASS and `pnpm-lock.yaml` records `packages/db` depending on `@forgeloop/contracts`.
 
-- [ ] **Step 5: Implement serializer module**
+- [x] **Step 5: Implement serializer module**
 
 Create `packages/db/src/queries/public-evidence-serialization.ts`.
 
@@ -614,7 +623,7 @@ Implementation rules:
   - default `extra` to `{}`.
 - Parse final return values with the matching strict public schema.
 
-- [ ] **Step 6: Run serializer tests to verify pass**
+- [x] **Step 6: Run serializer tests to verify pass**
 
 Run:
 
@@ -624,7 +633,7 @@ pnpm vitest run tests/db/public-evidence-serialization.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit serializer**
+- [x] **Step 7: Commit serializer**
 
 ```bash
 git add packages/db/package.json pnpm-lock.yaml packages/db/src tests/db/public-evidence-serialization.test.ts
@@ -637,7 +646,7 @@ git commit -m "feat: share public evidence serialization"
 - Modify: `packages/db/src/queries/replay-queries.ts`
 - Modify: `tests/api/query-module.test.ts`
 
-- [ ] **Step 1: Write failing replay API leakage test**
+- [x] **Step 1: Write failing replay API leakage test**
 
 In `tests/api/query-module.test.ts`, add a test that seeds unsafe ObjectEvent/StatusHistory/Decision/Artifact rows and asserts `/query/replay/work_item/:id` returns only public payloads.
 
@@ -742,7 +751,7 @@ it('serializes replay payloads through the public evidence boundary', async () =
 });
 ```
 
-- [ ] **Step 2: Run replay API test to verify failure**
+- [x] **Step 2: Run replay API test to verify failure**
 
 Run:
 
@@ -752,7 +761,7 @@ pnpm vitest run tests/api/query-module.test.ts
 
 Expected: FAIL because replay currently returns raw Decision/ObjectEvent/StatusHistory payloads and local artifact redaction is incomplete.
 
-- [ ] **Step 3: Replace replay query serialization**
+- [x] **Step 3: Replace replay query serialization**
 
 Modify `packages/db/src/queries/replay-queries.ts`:
 - remove local `artifactRedactionReason`;
@@ -767,7 +776,7 @@ Important behavior:
 - ObjectEvent/StatusHistory/Decision entries should remain in the timeline with sanitized public payloads.
 - Unsupported object types still return `undefined`; QueryService still converts that to 400/404 as it does today.
 
-- [ ] **Step 4: Run replay API tests to verify pass**
+- [x] **Step 4: Run replay API tests to verify pass**
 
 Run:
 
@@ -777,7 +786,7 @@ pnpm vitest run tests/api/query-module.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit replay wiring**
+- [x] **Step 5: Commit replay wiring**
 
 ```bash
 git add packages/db/src/queries/replay-queries.ts tests/api/query-module.test.ts
@@ -792,7 +801,7 @@ git commit -m "feat: serialize replay payloads publicly"
 - Modify: `tests/api/evidence-chain.test.ts`
 - Create: `tests/api/run-session-serialization.test.ts`
 
-- [ ] **Step 1: Write failing Evidence Chain unsafe URI test**
+- [x] **Step 1: Write failing Evidence Chain unsafe URI test**
 
 In `tests/api/evidence-chain.test.ts`, add a test near `reconstructs public persisted artifact rows without local refs`:
 
@@ -831,7 +840,7 @@ it('redacts persisted artifact rows with unsafe storage URIs', async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing run-session serialization test**
+- [x] **Step 2: Write failing run-session serialization test**
 
 Create `tests/api/run-session-serialization.test.ts`:
 
@@ -917,7 +926,7 @@ describe('run session public serialization', () => {
 });
 ```
 
-- [ ] **Step 3: Run focused API tests to verify failure**
+- [x] **Step 3: Run focused API tests to verify failure**
 
 Run:
 
@@ -927,7 +936,7 @@ pnpm vitest run tests/api/evidence-chain.test.ts tests/api/run-session-serializa
 
 Expected: FAIL because API code still imports artifact serialization from `run-session-serialization.ts`, and that implementation does not know `unsafe_storage_uri` or the stricter public `storage_uri` rules for stdout/stderr.
 
-- [ ] **Step 4: Update Evidence Chain imports**
+- [x] **Step 4: Update Evidence Chain imports**
 
 Modify `apps/control-plane-api/src/p0/evidence-chain.ts`:
 
@@ -939,7 +948,7 @@ Remove the old import from `./run-session-serialization`.
 
 Do not add `details.artifact`; keep safe artifact items as subject/summary/links/risk flags only.
 
-- [ ] **Step 5: Update run-session serialization**
+- [x] **Step 5: Update run-session serialization**
 
 Modify `apps/control-plane-api/src/p0/run-session-serialization.ts`:
 - remove local `artifactRedactionReason`;
@@ -950,7 +959,7 @@ Modify `apps/control-plane-api/src/p0/run-session-serialization.ts`:
 
 Because `serializePublicArtifactRef()` returns `PublicArtifactRef`, update local types where needed. If TypeScript rejects assigning `PublicArtifactRef[]` to `RunSession['artifacts']`, introduce local public run-session return types and update the `P0Service.getRunSession()` return annotation instead of weakening the shared serializer.
 
-- [ ] **Step 6: Run focused API tests to verify pass**
+- [x] **Step 6: Run focused API tests to verify pass**
 
 Run:
 
@@ -960,7 +969,7 @@ pnpm vitest run tests/api/evidence-chain.test.ts tests/api/run-session-serializa
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit API integration**
+- [x] **Step 7: Commit API integration**
 
 ```bash
 git add apps/control-plane-api/src/p0/evidence-chain.ts apps/control-plane-api/src/p0/run-session-serialization.ts tests/api/evidence-chain.test.ts tests/api/run-session-serialization.test.ts
@@ -976,7 +985,7 @@ git commit -m "feat: reuse public artifact serialization in api"
 - Review: `apps/control-plane-api/src/p0/evidence-chain.ts`
 - Review: `apps/control-plane-api/src/p0/run-session-serialization.ts`
 
-- [ ] **Step 1: Search for duplicate artifact redaction implementations**
+- [x] **Step 1: Search for duplicate artifact redaction implementations**
 
 Run:
 
@@ -989,7 +998,7 @@ Expected:
 - API code imports serializer helpers from `@forgeloop/db`.
 - Tests may reference the names.
 
-- [ ] **Step 2: Run all targeted tests**
+- [x] **Step 2: Run all targeted tests**
 
 Run:
 
@@ -999,7 +1008,7 @@ pnpm vitest run tests/contracts/public-evidence.test.ts tests/contracts/evidence
 
 Expected: PASS.
 
-- [ ] **Step 3: Run package builds**
+- [x] **Step 3: Run package builds**
 
 Run:
 
@@ -1012,7 +1021,7 @@ pnpm --filter @forgeloop/control-plane-api build
 
 Expected: PASS.
 
-- [ ] **Step 4: Run the full test suite if targeted verification passes**
+- [x] **Step 4: Run the full test suite if targeted verification passes**
 
 Run:
 
@@ -1022,11 +1031,11 @@ pnpm test
 
 Expected: PASS.
 
-- [ ] **Step 5: Update plan checkboxes**
+- [x] **Step 5: Update plan checkboxes**
 
 Mark completed checklist items in this plan only after the commands above pass.
 
-- [ ] **Step 6: Commit cleanup**
+- [x] **Step 6: Commit cleanup**
 
 ```bash
 git add docs/superpowers/plans/2026-05-10-public-evidence-serialization.md packages/contracts packages/db apps/control-plane-api/src/p0 tests pnpm-lock.yaml
