@@ -20,7 +20,7 @@ describe('Forgeloop web API client', () => {
 
     const result = await api.createWorkItem({
       project_id: 'project-1',
-      kind: 'feature',
+      kind: 'requirement',
       title: 'Ship workbench',
       goal: 'Operate P0 from the browser',
       success_criteria: ['Create and run a package'],
@@ -35,7 +35,7 @@ describe('Forgeloop web API client', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         project_id: 'project-1',
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Ship workbench',
         goal: 'Operate P0 from the browser',
         success_criteria: ['Create and run a package'],

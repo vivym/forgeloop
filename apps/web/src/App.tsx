@@ -51,7 +51,7 @@ const artifactKinds: ArtifactKind[] = ['diff', 'changed_files', 'check_output', 
 
 const emptyWorkItem: CreateWorkItemBody = {
   project_id: '',
-  kind: 'feature',
+  kind: 'requirement',
   title: '',
   goal: '',
   success_criteria: [],
@@ -552,7 +552,7 @@ export function App() {
             <div className="form-grid two">
               <label>Project<input required value={workItemForm.project_id} onChange={(event) => setWorkItemForm({ ...workItemForm, project_id: event.target.value })} /></label>
               <label>Kind<select value={workItemForm.kind} onChange={(event) => setWorkItemForm({ ...workItemForm, kind: event.target.value as WorkItemKind })}>
-                <option value="feature">feature</option><option value="bugfix">bugfix</option><option value="tech_debt">tech_debt</option><option value="test_refactor">test_refactor</option>
+                <option value="requirement">requirement</option><option value="bug">bug</option><option value="tech_debt">tech_debt</option>
               </select></label>
               <label>Priority<input value={workItemForm.priority} onChange={(event) => setWorkItemForm({ ...workItemForm, priority: event.target.value })} /></label>
               <label>Risk<input value={workItemForm.risk} onChange={(event) => setWorkItemForm({ ...workItemForm, risk: event.target.value })} /></label>

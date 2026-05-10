@@ -130,7 +130,7 @@ const baseRecords = (): {
   const workItem: WorkItem = {
     id: 'work-item-1',
     project_id: project.id,
-    kind: 'feature',
+    kind: 'requirement',
     title: 'Ship package workflow',
     goal: 'Execute generated packages.',
     success_criteria: ['A review packet is produced for successful runs.'],
@@ -384,7 +384,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
       .post('/work-items')
       .send({
         project_id: project.id,
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Ship P0 control plane API',
         goal: 'Expose the delivery loop commands over REST.',
         success_criteria: ['Spec, plan, package, run, and review commands are available.'],

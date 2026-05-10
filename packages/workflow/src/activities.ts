@@ -10,21 +10,51 @@ import {
   type FailureKind,
   type RequestedChange,
   type RequiredCheckSpec,
+  type ReviewDecision,
+  type ReviewPacketStatus,
   type RunSpec,
   type SelfReviewInput,
   type SelfReviewResult,
 } from '@forgeloop/contracts';
-import type { RunSessionStatus } from '@forgeloop/domain';
 
 import { finalizePackageRunWithExecutorResult } from './execution-finalizer';
 
 type IsoDateTime = string;
-
-type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review';
-type ExecutionPackageActivityState = 'idle' | 'awaiting_ai' | 'ai_running' | 'blocked' | 'awaiting_human';
-type ExecutionPackageGateState = 'none' | 'not_submitted' | 'awaiting_human_review' | 'review_approved' | 'changes_requested';
-type ReviewPacketStatus = 'ready' | 'in_review' | 'completed' | 'archived';
-type ReviewPacketDecision = 'none' | 'approved' | 'changes_requested';
+type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review' | 'integration' | 'test_gate' | 'release' | 'archived';
+type ExecutionPackageActivityState =
+  | 'idle'
+  | 'ai_running'
+  | 'ai_retrying'
+  | 'human_editing'
+  | 'awaiting_human'
+  | 'human_reviewing'
+  | 'blocked'
+  | 'handover';
+type ExecutionPackageGateState =
+  | 'not_submitted'
+  | 'self_review_pending'
+  | 'awaiting_human_review'
+  | 'changes_requested'
+  | 'review_approved'
+  | 'integration_failed'
+  | 'integration_passed'
+  | 'test_failed'
+  | 'test_passed'
+  | 'release_ready'
+  | 'released';
+type ExecutionPackageResolution = 'none' | 'completed' | 'cancelled' | 'rolled_back' | 'superseded';
+type ReviewPacketDecision = ReviewDecision;
+type RunSessionStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting_for_input'
+  | 'stalled'
+  | 'resuming'
+  | 'cancel_requested'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled';
 
 export interface ProjectRepoRecord {
   id: string;
@@ -81,11 +111,13 @@ export interface ExecutionPackageRecord {
   project_id: string;
   repo_id: string;
   objective: string;
+  owner_actor_id: string;
   reviewer_actor_id: string;
+  qa_owner_actor_id: string;
   phase: ExecutionPackagePhase;
   activity_state: ExecutionPackageActivityState;
   gate_state: ExecutionPackageGateState;
-  resolution: 'none' | 'completed';
+  resolution: ExecutionPackageResolution;
   required_checks: RequiredCheckSpec[];
   required_artifact_kinds: ArtifactKind[];
   allowed_paths: string[];

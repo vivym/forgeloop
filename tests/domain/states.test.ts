@@ -14,6 +14,7 @@ import type {
 import {
   DomainError,
   deriveWorkItemCompletion,
+  executionPackageActivityStates,
   executionPackageGateStates,
   transitionExecutionPackage,
   transitionReviewPacket,
@@ -69,6 +70,17 @@ describe('domain state transitions', () => {
     ]);
     expect(executionPackageGateStates).toContain('release_ready');
     expect(executionPackageGateStates).not.toContain('none');
+    expect(executionPackageActivityStates).toEqual([
+      'idle',
+      'ai_running',
+      'ai_retrying',
+      'human_editing',
+      'awaiting_human',
+      'human_reviewing',
+      'blocked',
+      'handover',
+    ]);
+    expect(executionPackageActivityStates).not.toContain('awaiting_ai');
   });
 
   describe('WorkItem', () => {
@@ -529,7 +541,7 @@ describe('domain state transitions', () => {
       const queued = transitionExecutionPackage(ready, { type: 'run', run_session_id: 'run-session-1' });
       expect(queued).toMatchObject({
         phase: 'queued',
-        activity_state: 'awaiting_ai',
+        activity_state: 'idle',
         last_run_session_id: 'run-session-1',
       });
 
@@ -559,7 +571,7 @@ describe('domain state transitions', () => {
       });
       expect(forceRerunQueued).toMatchObject({
         phase: 'queued',
-        activity_state: 'awaiting_ai',
+        activity_state: 'idle',
         last_run_session_id: 'run-session-3',
       });
     });
@@ -721,7 +733,7 @@ describe('domain state transitions', () => {
         }),
       ).toMatchObject({
         phase: 'queued',
-        activity_state: 'awaiting_ai',
+        activity_state: 'idle',
       });
 
       expectDomainError(

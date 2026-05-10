@@ -148,7 +148,7 @@ const createFixture = async (options: FixtureOptions = {}) => {
   const workItem: WorkItem = {
     id: 'work-item-1',
     project_id: project.id,
-    kind: 'feature',
+    kind: 'requirement',
     title: 'Ship package workflow',
     goal: 'Execute generated packages.',
     success_criteria: ['A review packet is produced for successful runs.'],
@@ -157,7 +157,7 @@ const createFixture = async (options: FixtureOptions = {}) => {
     owner_actor_id: 'actor-owner',
     phase: 'execution',
     activity_state: 'idle',
-    gate_state: 'none',
+    gate_state: 'not_submitted',
     resolution: 'none',
     current_spec_id: 'spec-1',
     current_plan_id: 'plan-1',
@@ -574,7 +574,7 @@ describe('executePackageRun', () => {
       ...executionPackage,
       phase: 'execution',
       activity_state: 'ai_running',
-      gate_state: 'none',
+      gate_state: 'not_submitted',
     });
     await repository.saveRunSession({
       ...(await repository.getRunSession(runSessionId))!,
@@ -626,7 +626,7 @@ describe('executePackageRun', () => {
       ...executionPackage,
       phase: 'execution',
       activity_state: 'ai_running',
-      gate_state: 'none',
+      gate_state: 'not_submitted',
     });
     await repository.saveRunSession({
       ...(await repository.getRunSession(runSessionId))!,
@@ -658,7 +658,7 @@ describe('executePackageRun', () => {
     expect(await repository.getExecutionPackage(executionPackage.id)).toMatchObject({
       phase: 'ready',
       activity_state: 'idle',
-      gate_state: 'none',
+      gate_state: 'not_submitted',
       last_failure_summary: 'Unit tests failed.',
     });
   });
@@ -783,8 +783,8 @@ describe('executePackageRun', () => {
     await repository.saveExecutionPackage({
       ...executionPackage,
       phase: 'queued',
-      activity_state: 'awaiting_ai',
-      gate_state: 'none',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
       last_run_session_id: 'run-session-newer',
     });
     await repository.saveRunSession({
@@ -807,8 +807,8 @@ describe('executePackageRun', () => {
 
     expect(await repository.getExecutionPackage(executionPackage.id)).toMatchObject({
       phase: 'queued',
-      activity_state: 'awaiting_ai',
-      gate_state: 'none',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
       last_run_session_id: 'run-session-newer',
     });
     expect(await repository.getReviewPacket(`review-packet:${runSessionId}`)).toMatchObject({
@@ -835,7 +835,7 @@ describe('executePackageRun', () => {
     expect(await repository.getExecutionPackage(executionPackage.id)).toMatchObject({
       phase: 'ready',
       activity_state: 'idle',
-      gate_state: 'none',
+      gate_state: 'not_submitted',
       last_failure_summary: 'executor process crashed',
     });
     expect(await repository.listReviewPacketsForPackage(executionPackage.id)).toEqual([]);

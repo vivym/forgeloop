@@ -49,7 +49,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
       .post('/work-items')
       .send({
         project_id: project.id,
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Ship P0 control plane API',
         goal: 'Expose the delivery loop commands over REST.',
         success_criteria: ['Spec, plan, package, run, and review commands are available.'],
@@ -427,7 +427,7 @@ describe('P0 control plane API', () => {
       .post('/work-items')
       .send({
         project_id: project.id,
-        kind: 'feature',
+        kind: 'requirement',
         title: 'Invalid success criteria',
         goal: 'This should not persist.',
         success_criteria: 'not-an-array',

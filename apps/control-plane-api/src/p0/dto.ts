@@ -7,7 +7,7 @@ import {
   type ArtifactKind,
   type RequiredCheckSpec,
 } from '@forgeloop/contracts';
-import type { WorkItemKind } from '@forgeloop/domain';
+import { workItemKinds, type WorkItemKind } from '@forgeloop/domain';
 import { z } from 'zod';
 
 const nonEmptyString = z.string().trim().min(1);
@@ -36,7 +36,7 @@ export type CreateProjectRepoDto = z.infer<typeof createProjectRepoSchema>;
 export const createWorkItemSchema = z
   .object({
     project_id: nonEmptyString,
-    kind: z.enum(['feature', 'bugfix', 'tech_debt', 'test_refactor']) satisfies z.ZodType<WorkItemKind>,
+    kind: z.enum(workItemKinds) satisfies z.ZodType<WorkItemKind>,
     title: nonEmptyString,
     goal: nonEmptyString,
     success_criteria: stringList.default([]),

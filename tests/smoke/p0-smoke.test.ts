@@ -38,7 +38,7 @@ type PublicRunEvent = {
 
 const createApprovedSpecAndPlan = async (
   app: INestApplication,
-  kind: 'feature' | 'bugfix' | 'test_refactor' = 'feature',
+  kind: 'requirement' | 'bug' | 'tech_debt' = 'requirement',
 ): Promise<SmokeContext> => {
   const server = app.getHttpServer();
   const project = (
@@ -242,8 +242,8 @@ describe('P0 smoke delivery loop', () => {
     const cockpit = (await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(200)).body;
     expect(cockpit.packages[0]).toMatchObject({
       id: executionPackage.id,
-      phase: 'review',
-      gate_state: 'review_approved',
+      phase: 'release',
+      gate_state: 'release_ready',
       resolution: 'completed',
     });
     expect(cockpit.review_packets[0]).toMatchObject({ id: reviewPacket.id, status: 'completed', decision: 'approved' });
@@ -256,7 +256,7 @@ describe('P0 smoke delivery loop', () => {
 
   it('records changes_requested, reruns with a new run session and review packet, then approves the rerun', async () => {
     const server = app.getHttpServer();
-    const { workItem, planRevisionId } = await createApprovedSpecAndPlan(app, 'bugfix');
+    const { workItem, planRevisionId } = await createApprovedSpecAndPlan(app, 'bug');
     const executionPackage = await createReadyPackage(app, planRevisionId, 'Fix the P0 smoke bug.');
 
     const firstRun = await runPackage(app, executionPackage.id);
@@ -310,12 +310,12 @@ describe('P0 smoke delivery loop', () => {
         expect.objectContaining({ id: rerunReviewPacketId, decision: 'approved' }),
       ]),
     );
-    expect(cockpit.packages[0]).toMatchObject({ gate_state: 'review_approved', resolution: 'completed' });
+    expect(cockpit.packages[0]).toMatchObject({ phase: 'release', gate_state: 'release_ready', resolution: 'completed' });
   });
 
   it('archives the open review packet when force-rerun creates replacement run evidence before a decision', async () => {
     const server = app.getHttpServer();
-    const { planRevisionId } = await createApprovedSpecAndPlan(app, 'test_refactor');
+    const { planRevisionId } = await createApprovedSpecAndPlan(app, 'tech_debt');
     const executionPackage = await createReadyPackage(app, planRevisionId, 'Refresh P0 smoke coverage.');
 
     const firstRun = await runPackage(app, executionPackage.id);

@@ -742,7 +742,7 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
     method: 'POST',
     body: {
       project_id: project.id,
-      kind: 'test_refactor',
+      kind: 'tech_debt',
       title: 'Real local Codex dogfood',
       goal: 'Validate real local_codex execution path.',
       success_criteria: ['Local Codex run produces terminal review evidence.'],

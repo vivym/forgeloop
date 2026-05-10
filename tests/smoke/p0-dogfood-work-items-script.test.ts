@@ -68,7 +68,7 @@ const evaluateStrictLocalCodexAcceptance = (): StrictEvaluator => {
 const workItem = (id: string): WorkItem => ({
   id,
   project_id: 'project-1',
-  kind: 'feature',
+  kind: 'requirement',
   title: id,
   goal: `${id} goal`,
   success_criteria: [`${id} done`],
