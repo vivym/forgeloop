@@ -42,6 +42,7 @@ const ids = {
   ai: '11111111-1111-4111-8111-111111111114',
   project: '22222222-2222-4222-8222-222222222221',
   workItem: '33333333-3333-4333-8333-333333333331',
+  workItem2: '33333333-3333-4333-8333-333333333332',
   spec: '44444444-4444-4444-8444-444444444441',
   specRevision1: '44444444-4444-4444-8444-444444444442',
   specRevision2: '44444444-4444-4444-8444-444444444443',
@@ -50,6 +51,7 @@ const ids = {
   planRevision2: '55555555-5555-4555-8555-555555555553',
   package: '66666666-6666-4666-8666-666666666661',
   dependency: '66666666-6666-4666-8666-666666666662',
+  package2: '66666666-6666-4666-8666-666666666663',
   runSession: '77777777-7777-4777-8777-777777777771',
   reviewPacket: '88888888-8888-4888-8888-888888888881',
   release: '99999999-9999-4999-8999-999999999991',
@@ -167,6 +169,13 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
     created_at: at,
     updated_at: at,
   };
+  const workItem2: WorkItem = {
+    ...workItem,
+    id: ids.workItem2,
+    title: 'Exercise release link order',
+    goal: 'Round-trip multiple release links in insertion order.',
+    success_criteria: ['Release link arrays preserve order across adapters.'],
+  };
   const spec: Spec = {
     id: ids.spec,
     work_item_id: ids.workItem,
@@ -209,6 +218,7 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
   await repository.savePlan(plan);
   await repository.savePlanRevision(planRevision1);
   await repository.savePlanRevision(planRevision2);
+  await repository.saveWorkItem(workItem2);
 
   expect(await repository.getWorkItem(ids.workItem)).toEqual(workItem);
   expect(await repository.getSpec(ids.spec)).toEqual(spec);
@@ -252,6 +262,15 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
     created_at: at,
     updated_at: later,
   };
+  const executionPackage2: ExecutionPackage = {
+    ...executionPackage,
+    id: ids.package2,
+    work_item_id: ids.workItem2,
+  };
+  await repository.saveExecutionPackage(executionPackage2);
+  expect(await repository.getWorkItem(ids.workItem2)).toEqual(workItem2);
+  expect(await repository.getExecutionPackage(ids.package2)).toEqual(executionPackage2);
+  expect(await repository.listExecutionPackagesForWorkItem(ids.workItem2)).toEqual([executionPackage2]);
   const dependency: ExecutionPackageDependency = {
     package_id: ids.package,
     depends_on_package_id: ids.dependency,
@@ -379,8 +398,8 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
     activity_state: 'idle',
     gate_state: 'approved',
     resolution: 'none',
-    work_item_ids: [ids.workItem],
-    execution_package_ids: [ids.package],
+    work_item_ids: [ids.workItem2, ids.workItem],
+    execution_package_ids: [ids.package2, ids.package],
     current_review_packet_ids: [ids.reviewPacket],
     current_run_session_ids: [ids.runSession],
     rollout_strategy: 'Manual local rollout.',
@@ -396,13 +415,20 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
     updated_by_actor_id: ids.human,
   };
   const releaseWorkItem: ReleaseWorkItemRecord = { release_id: ids.release, work_item_id: ids.workItem };
+  const releaseWorkItem2: ReleaseWorkItemRecord = { release_id: ids.release, work_item_id: ids.workItem2 };
   const releaseExecutionPackage: ReleaseExecutionPackageRecord = {
     release_id: ids.release,
     execution_package_id: ids.package,
   };
+  const releaseExecutionPackage2: ReleaseExecutionPackageRecord = {
+    release_id: ids.release,
+    execution_package_id: ids.package2,
+  };
   await repository.saveRelease(release);
   await repository.saveReleaseWorkItem(releaseWorkItem);
+  await repository.saveReleaseWorkItem(releaseWorkItem2);
   await repository.saveReleaseExecutionPackage(releaseExecutionPackage);
+  await repository.saveReleaseExecutionPackage(releaseExecutionPackage2);
 
   const artifact: Artifact = {
     id: ids.artifact,
@@ -476,10 +502,28 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
 
   expect(await repository.getRelease(ids.release)).toEqual(release);
   expect(await repository.listReleasesForProject(ids.project)).toEqual([release]);
-  expect(await repository.listReleaseWorkItems(ids.release)).toEqual([releaseWorkItem]);
-  expect(await repository.listReleaseExecutionPackages(ids.release)).toEqual([releaseExecutionPackage]);
+  expect(await repository.listReleaseWorkItems(ids.release)).toEqual([releaseWorkItem2, releaseWorkItem]);
+  expect(await repository.listReleaseExecutionPackages(ids.release)).toEqual([
+    releaseExecutionPackage2,
+    releaseExecutionPackage,
+  ]);
   expect(await repository.getReleaseEvidence(ids.releaseEvidenceReview)).toEqual(evidences[0]);
   expect(await repository.listReleaseEvidences(ids.release)).toEqual(evidences);
+
+  const updatedRelease: Release = {
+    ...release,
+    work_item_ids: [ids.workItem],
+    execution_package_ids: [ids.package, ids.package2],
+    updated_at: '2026-05-05T00:03:00.000Z',
+    updated_by_actor_id: ids.system,
+  };
+  await repository.saveRelease(updatedRelease);
+  expect(await repository.getRelease(ids.release)).toEqual(updatedRelease);
+  expect(await repository.listReleaseWorkItems(ids.release)).toEqual([releaseWorkItem]);
+  expect(await repository.listReleaseExecutionPackages(ids.release)).toEqual([
+    releaseExecutionPackage,
+    releaseExecutionPackage2,
+  ]);
 
   const objectEvent: ObjectEvent = {
     id: 'object-event-1',

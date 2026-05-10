@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { Release, ReleaseEvidenceObjectRef } from '@forgeloop/domain';
 
 import {
@@ -81,9 +81,11 @@ export const release_work_items = pgTable(
     workItemId: uuid('work_item_id')
       .notNull()
       .references(() => work_items.id, { onDelete: 'cascade' }),
+    linkOrder: integer('link_order').notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.releaseId, table.workItemId] }),
+    index('release_work_items_release_order_idx').on(table.releaseId, table.linkOrder),
     index('release_work_items_work_item_idx').on(table.workItemId),
   ],
 );
@@ -97,9 +99,11 @@ export const release_execution_packages = pgTable(
     packageId: uuid('package_id')
       .notNull()
       .references(() => execution_packages.id, { onDelete: 'cascade' }),
+    linkOrder: integer('link_order').notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.releaseId, table.packageId] }),
+    index('release_execution_packages_release_order_idx').on(table.releaseId, table.linkOrder),
     index('release_execution_packages_package_idx').on(table.packageId),
   ],
 );

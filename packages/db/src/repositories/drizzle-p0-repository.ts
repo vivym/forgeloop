@@ -627,16 +627,13 @@ export class DrizzleP0Repository implements P0Repository {
       labels: release.labels ?? [],
       updated_by_actor_id: release.updated_by_actor_id ?? release.created_by_actor_id,
     };
-    await this.upsert(releases, releases.id, this.releaseTableRecord(normalized));
-    for (const workItemId of normalized.work_item_ids) {
-      await this.saveReleaseWorkItem({ release_id: normalized.id, work_item_id: workItemId });
-    }
-    for (const executionPackageId of normalized.execution_package_ids) {
-      await this.saveReleaseExecutionPackage({
-        release_id: normalized.id,
-        execution_package_id: executionPackageId,
-      });
-    }
+    await this.db.transaction(async (tx) => {
+      // Reuse the repository methods inside one transaction so the release row and link tables stay aligned.
+      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
+      await repository.saveReleaseRecord(normalized);
+      await repository.replaceReleaseWorkItems(normalized.id, normalized.work_item_ids);
+      await repository.replaceReleaseExecutionPackages(normalized.id, normalized.execution_package_ids);
+    });
   }
 
   async getRelease(releaseId: string): Promise<Release | undefined> {
@@ -650,39 +647,44 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async saveReleaseWorkItem(releaseWorkItem: ReleaseWorkItem): Promise<void> {
-    const record = toDbRecord(releaseWorkItem, release_work_items);
-    await this.db
-      .insert(release_work_items)
-      .values(record as never)
-      .onConflictDoUpdate({
-        target: [release_work_items.releaseId, release_work_items.workItemId],
-        set: record as never,
-      });
+    const linkOrder =
+      (await this.getReleaseWorkItemLinkOrder(releaseWorkItem.release_id, releaseWorkItem.work_item_id)) ??
+      (await this.nextReleaseWorkItemOrder(releaseWorkItem.release_id));
+    await this.saveReleaseWorkItemLink(releaseWorkItem.release_id, releaseWorkItem.work_item_id, linkOrder);
   }
 
   async listReleaseWorkItems(releaseId: string): Promise<ReleaseWorkItem[]> {
-    return this.listWhere<ReleaseWorkItem>(release_work_items, eq(release_work_items.releaseId, releaseId));
+    const rows = await this.db
+      .select()
+      .from(release_work_items)
+      .where(eq(release_work_items.releaseId, releaseId))
+      .orderBy(asc(release_work_items.linkOrder), asc(release_work_items.workItemId));
+
+    return rows.map((row) => ({
+      release_id: row.releaseId,
+      work_item_id: row.workItemId,
+    }));
   }
 
   async saveReleaseExecutionPackage(releaseExecutionPackage: ReleaseExecutionPackage): Promise<void> {
-    const record = {
-      releaseId: releaseExecutionPackage.release_id,
-      packageId: releaseExecutionPackage.execution_package_id,
-    };
-    await this.db
-      .insert(release_execution_packages)
-      .values(record as never)
-      .onConflictDoUpdate({
-        target: [release_execution_packages.releaseId, release_execution_packages.packageId],
-        set: record as never,
-      });
+    const linkOrder =
+      (await this.getReleaseExecutionPackageLinkOrder(
+        releaseExecutionPackage.release_id,
+        releaseExecutionPackage.execution_package_id,
+      )) ?? (await this.nextReleaseExecutionPackageOrder(releaseExecutionPackage.release_id));
+    await this.saveReleaseExecutionPackageLink(
+      releaseExecutionPackage.release_id,
+      releaseExecutionPackage.execution_package_id,
+      linkOrder,
+    );
   }
 
   async listReleaseExecutionPackages(releaseId: string): Promise<ReleaseExecutionPackage[]> {
     const rows = await this.db
       .select()
       .from(release_execution_packages)
-      .where(eq(release_execution_packages.releaseId, releaseId));
+      .where(eq(release_execution_packages.releaseId, releaseId))
+      .orderBy(asc(release_execution_packages.linkOrder), asc(release_execution_packages.packageId));
 
     return rows.map((row) => ({
       release_id: row.releaseId,
@@ -992,6 +994,28 @@ export class DrizzleP0Repository implements P0Repository {
     return record;
   }
 
+  private async saveReleaseRecord(release: Release): Promise<void> {
+    await this.upsert(releases, releases.id, this.releaseTableRecord(release));
+  }
+
+  private async replaceReleaseWorkItems(releaseId: string, workItemIds: string[]): Promise<void> {
+    const uniqueWorkItemIds = [...new Set(workItemIds)];
+    await this.db.delete(release_work_items).where(eq(release_work_items.releaseId, releaseId));
+
+    for (const [index, workItemId] of uniqueWorkItemIds.entries()) {
+      await this.saveReleaseWorkItemLink(releaseId, workItemId, index);
+    }
+  }
+
+  private async replaceReleaseExecutionPackages(releaseId: string, executionPackageIds: string[]): Promise<void> {
+    const uniqueExecutionPackageIds = [...new Set(executionPackageIds)];
+    await this.db.delete(release_execution_packages).where(eq(release_execution_packages.releaseId, releaseId));
+
+    for (const [index, executionPackageId] of uniqueExecutionPackageIds.entries()) {
+      await this.saveReleaseExecutionPackageLink(releaseId, executionPackageId, index);
+    }
+  }
+
   private async hydrateReleaseLinks(release: Release): Promise<Release> {
     const [workItems, executionPackages] = await Promise.all([
       this.listReleaseWorkItems(release.id),
@@ -1003,5 +1027,84 @@ export class DrizzleP0Repository implements P0Repository {
       work_item_ids: workItems.map((workItem) => workItem.work_item_id),
       execution_package_ids: executionPackages.map((executionPackage) => executionPackage.execution_package_id),
     };
+  }
+
+  private async getReleaseWorkItemLinkOrder(releaseId: string, workItemId: string): Promise<number | undefined> {
+    const [row] = await this.db
+      .select({ linkOrder: release_work_items.linkOrder })
+      .from(release_work_items)
+      .where(and(eq(release_work_items.releaseId, releaseId), eq(release_work_items.workItemId, workItemId)))
+      .limit(1);
+
+    return row?.linkOrder;
+  }
+
+  private async nextReleaseWorkItemOrder(releaseId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ linkOrder: release_work_items.linkOrder })
+      .from(release_work_items)
+      .where(eq(release_work_items.releaseId, releaseId))
+      .orderBy(desc(release_work_items.linkOrder))
+      .limit(1);
+
+    return (row?.linkOrder ?? -1) + 1;
+  }
+
+  private async saveReleaseWorkItemLink(releaseId: string, workItemId: string, linkOrder: number): Promise<void> {
+    const record = toDbRecord({ release_id: releaseId, work_item_id: workItemId, linkOrder }, release_work_items);
+    await this.db
+      .insert(release_work_items)
+      .values(record as never)
+      .onConflictDoUpdate({
+        target: [release_work_items.releaseId, release_work_items.workItemId],
+        set: record as never,
+      });
+  }
+
+  private async getReleaseExecutionPackageLinkOrder(
+    releaseId: string,
+    executionPackageId: string,
+  ): Promise<number | undefined> {
+    const [row] = await this.db
+      .select({ linkOrder: release_execution_packages.linkOrder })
+      .from(release_execution_packages)
+      .where(
+        and(
+          eq(release_execution_packages.releaseId, releaseId),
+          eq(release_execution_packages.packageId, executionPackageId),
+        ),
+      )
+      .limit(1);
+
+    return row?.linkOrder;
+  }
+
+  private async nextReleaseExecutionPackageOrder(releaseId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ linkOrder: release_execution_packages.linkOrder })
+      .from(release_execution_packages)
+      .where(eq(release_execution_packages.releaseId, releaseId))
+      .orderBy(desc(release_execution_packages.linkOrder))
+      .limit(1);
+
+    return (row?.linkOrder ?? -1) + 1;
+  }
+
+  private async saveReleaseExecutionPackageLink(
+    releaseId: string,
+    executionPackageId: string,
+    linkOrder: number,
+  ): Promise<void> {
+    const record = toDbRecord(
+      { release_id: releaseId, execution_package_id: executionPackageId, linkOrder },
+      release_execution_packages,
+    );
+    await this.db
+      .insert(release_execution_packages)
+      .values(record as never)
+      .onConflictDoUpdate({
+        target: [release_execution_packages.releaseId, release_execution_packages.packageId],
+        set: record as never,
+      });
   }
 }

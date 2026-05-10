@@ -67,7 +67,9 @@ export class InMemoryP0Repository implements P0Repository {
   private readonly reviewPackets = new Map<string, ReviewPacket>();
   private readonly releases = new Map<string, Release>();
   private readonly releaseWorkItems = new Map<string, ReleaseWorkItem>();
+  private readonly releaseWorkItemOrders = new Map<string, number>();
   private readonly releaseExecutionPackages = new Map<string, ReleaseExecutionPackage>();
+  private readonly releaseExecutionPackageOrders = new Map<string, number>();
   private readonly releaseEvidences = new Map<string, ReleaseEvidence>();
   private readonly objectEvents = new Map<string, ObjectEvent>();
   private readonly statusHistories = new Map<string, StatusHistory>();
@@ -498,37 +500,80 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async saveRelease(release: Release): Promise<void> {
-    this.releases.set(release.id, clone(release));
+    const normalized: Release = {
+      ...release,
+      key: release.key ?? release.id,
+      release_owner_actor_id: release.release_owner_actor_id ?? release.created_by_actor_id,
+      release_type: release.release_type ?? 'normal',
+      visibility: release.visibility ?? 'internal',
+      labels: release.labels ?? [],
+      updated_by_actor_id: release.updated_by_actor_id ?? release.created_by_actor_id,
+    };
+
+    this.releases.set(normalized.id, clone(normalized));
+    this.replaceReleaseWorkItems(normalized.id, normalized.work_item_ids);
+    this.replaceReleaseExecutionPackages(normalized.id, normalized.execution_package_ids);
   }
 
   async getRelease(releaseId: string): Promise<Release | undefined> {
-    return this.cloneMaybe(this.releases.get(releaseId));
+    const release = this.releases.get(releaseId);
+    return release === undefined ? undefined : this.hydrateReleaseLinks(release);
   }
 
   async listReleasesForProject(projectId: string): Promise<Release[]> {
-    return valuesFor(this.releases)
-      .filter((release) => release.project_id === projectId)
-      .sort(byCreatedAt);
+    const releases = valuesFor(this.releases).filter((release) => release.project_id === projectId).sort(byCreatedAt);
+    return Promise.all(releases.map((release) => this.hydrateReleaseLinks(release)));
   }
 
   async saveReleaseWorkItem(releaseWorkItem: ReleaseWorkItem): Promise<void> {
-    this.releaseWorkItems.set(`${releaseWorkItem.release_id}:${releaseWorkItem.work_item_id}`, clone(releaseWorkItem));
+    const key = `${releaseWorkItem.release_id}:${releaseWorkItem.work_item_id}`;
+    const existingOrder = this.releaseWorkItemOrders.get(key);
+    const order =
+      existingOrder ??
+      Math.max(
+        -1,
+        ...[...this.releaseWorkItemOrders.entries()]
+          .filter(([entryKey]) => entryKey.startsWith(`${releaseWorkItem.release_id}:`))
+          .map(([, value]) => value),
+      ) + 1;
+    this.releaseWorkItems.set(key, clone(releaseWorkItem));
+    this.releaseWorkItemOrders.set(key, order);
   }
 
   async listReleaseWorkItems(releaseId: string): Promise<ReleaseWorkItem[]> {
-    return valuesFor(this.releaseWorkItems).filter((releaseWorkItem) => releaseWorkItem.release_id === releaseId);
+    return valuesFor(this.releaseWorkItems)
+      .filter((releaseWorkItem) => releaseWorkItem.release_id === releaseId)
+      .sort(
+        (left, right) =>
+          (this.releaseWorkItemOrders.get(`${left.release_id}:${left.work_item_id}`) ?? 0) -
+            (this.releaseWorkItemOrders.get(`${right.release_id}:${right.work_item_id}`) ?? 0) ||
+          left.work_item_id.localeCompare(right.work_item_id),
+      );
   }
 
   async saveReleaseExecutionPackage(releaseExecutionPackage: ReleaseExecutionPackage): Promise<void> {
-    this.releaseExecutionPackages.set(
-      `${releaseExecutionPackage.release_id}:${releaseExecutionPackage.execution_package_id}`,
-      clone(releaseExecutionPackage),
-    );
+    const key = `${releaseExecutionPackage.release_id}:${releaseExecutionPackage.execution_package_id}`;
+    const existingOrder = this.releaseExecutionPackageOrders.get(key);
+    const order =
+      existingOrder ??
+      Math.max(
+        -1,
+        ...[...this.releaseExecutionPackageOrders.entries()]
+          .filter(([entryKey]) => entryKey.startsWith(`${releaseExecutionPackage.release_id}:`))
+          .map(([, value]) => value),
+      ) + 1;
+    this.releaseExecutionPackages.set(key, clone(releaseExecutionPackage));
+    this.releaseExecutionPackageOrders.set(key, order);
   }
 
   async listReleaseExecutionPackages(releaseId: string): Promise<ReleaseExecutionPackage[]> {
     return valuesFor(this.releaseExecutionPackages).filter(
       (releaseExecutionPackage) => releaseExecutionPackage.release_id === releaseId,
+    ).sort(
+      (left, right) =>
+        (this.releaseExecutionPackageOrders.get(`${left.release_id}:${left.execution_package_id}`) ?? 0) -
+          (this.releaseExecutionPackageOrders.get(`${right.release_id}:${right.execution_package_id}`) ?? 0) ||
+        left.execution_package_id.localeCompare(right.execution_package_id),
     );
   }
 
@@ -641,6 +686,51 @@ export class InMemoryP0Repository implements P0Repository {
 
   private dependencyKey(dependency: ExecutionPackageDependency): string {
     return `${dependency.package_id}:${dependency.depends_on_package_id}`;
+  }
+
+  private async hydrateReleaseLinks(release: Release): Promise<Release> {
+    const [workItems, executionPackages] = await Promise.all([
+      this.listReleaseWorkItems(release.id),
+      this.listReleaseExecutionPackages(release.id),
+    ]);
+
+    return {
+      ...clone(release),
+      work_item_ids: workItems.map((workItem) => workItem.work_item_id),
+      execution_package_ids: executionPackages.map((executionPackage) => executionPackage.execution_package_id),
+    };
+  }
+
+  private replaceReleaseWorkItems(releaseId: string, workItemIds: string[]): void {
+    const uniqueWorkItemIds = [...new Set(workItemIds)];
+    for (const key of [...this.releaseWorkItems.keys()]) {
+      if (key.startsWith(`${releaseId}:`)) {
+        this.releaseWorkItems.delete(key);
+        this.releaseWorkItemOrders.delete(key);
+      }
+    }
+
+    uniqueWorkItemIds.forEach((workItemId, index) => {
+      const key = `${releaseId}:${workItemId}`;
+      this.releaseWorkItems.set(key, clone({ release_id: releaseId, work_item_id: workItemId }));
+      this.releaseWorkItemOrders.set(key, index);
+    });
+  }
+
+  private replaceReleaseExecutionPackages(releaseId: string, executionPackageIds: string[]): void {
+    const uniqueExecutionPackageIds = [...new Set(executionPackageIds)];
+    for (const key of [...this.releaseExecutionPackages.keys()]) {
+      if (key.startsWith(`${releaseId}:`)) {
+        this.releaseExecutionPackages.delete(key);
+        this.releaseExecutionPackageOrders.delete(key);
+      }
+    }
+
+    uniqueExecutionPackageIds.forEach((executionPackageId, index) => {
+      const key = `${releaseId}:${executionPackageId}`;
+      this.releaseExecutionPackages.set(key, clone({ release_id: releaseId, execution_package_id: executionPackageId }));
+      this.releaseExecutionPackageOrders.set(key, index);
+    });
   }
 
   private claimCommand(command: RunCommand, workerId: string, claimedAt: string): RunCommand {

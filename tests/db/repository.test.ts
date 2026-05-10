@@ -182,6 +182,20 @@ const executionPackage: ExecutionPackage = {
   updated_at: now,
 };
 
+const workItem2: WorkItem = {
+  ...workItem,
+  id: 'work-item-2',
+  title: 'Ship P1 release link ordering',
+  goal: 'Exercise release link ordering with multiple rows.',
+  success_criteria: ['Release links preserve insertion order.'],
+};
+
+const executionPackage2: ExecutionPackage = {
+  ...executionPackage,
+  id: 'execution-package-2',
+  work_item_id: workItem2.id,
+};
+
 const dependency: ExecutionPackageDependency = {
   package_id: executionPackage.id,
   depends_on_package_id: 'execution-package-0',
@@ -346,8 +360,8 @@ const release: Release = {
   activity_state: 'idle',
   gate_state: 'approved',
   resolution: 'none',
-  work_item_ids: [workItem.id],
-  execution_package_ids: [executionPackage.id],
+  work_item_ids: [workItem2.id, workItem.id],
+  execution_package_ids: [executionPackage2.id, executionPackage.id],
   current_review_packet_ids: [reviewPacket.id],
   current_run_session_ids: [runSession.id],
   rollout_strategy: 'Deploy behind a flag.',
@@ -425,21 +439,32 @@ const traceArtifactRef: TraceArtifactRefRecord = {
 };
 
 const createInsertCaptureRepository = () => {
-  const captures: Array<{ values: Record<string, unknown>; set?: Record<string, unknown> }> = [];
+  const captures: Array<{ table: unknown; values: Record<string, unknown>; set?: Record<string, unknown> }> = [];
+  const deletes: Array<{ table: unknown; predicate: unknown }> = [];
+  const transactions: unknown[] = [];
   const db = {
-    insert: () => ({
+    insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => ({
         onConflictDoUpdate: async ({ set }: { set: Record<string, unknown> }) => {
-          captures.push({ values, set });
+          captures.push({ table, values, set });
         },
         onConflictDoNothing: async () => {
-          captures.push({ values });
+          captures.push({ table, values });
         },
       }),
     }),
+    delete: (table: unknown) => ({
+      where: async (predicate: unknown) => {
+        deletes.push({ table, predicate });
+      },
+    }),
+    transaction: async <T>(callback: (tx: never) => Promise<T>) => {
+      transactions.push(db);
+      return callback(db as never);
+    },
   };
 
-  return { repository: new DrizzleP0Repository(db as never), captures };
+  return { repository: new DrizzleP0Repository(db as never), captures, deletes, transactions };
 };
 
 const createSingleRowRepository = (row: Record<string, unknown>) => {
@@ -497,21 +522,36 @@ const createReleaseSelectRepository = () => {
   };
   const rowsByTable = new Map<unknown, Record<string, unknown>[]>([
     [releases, [releaseRow]],
-    [release_work_items, [{ releaseId: release.id, workItemId: workItem.id }]],
-    [release_execution_packages, [{ releaseId: release.id, packageId: executionPackage.id }]],
+    [
+      release_work_items,
+      [
+        { releaseId: release.id, workItemId: workItem.id, linkOrder: 1 },
+        { releaseId: release.id, workItemId: workItem2.id, linkOrder: 0 },
+      ],
+    ],
+    [
+      release_execution_packages,
+      [
+        { releaseId: release.id, packageId: executionPackage.id, linkOrder: 1 },
+        { releaseId: release.id, packageId: executionPackage2.id, linkOrder: 0 },
+      ],
+    ],
   ]);
+  const sortReleaseLinks = (rows: Record<string, unknown>[]) =>
+    [...rows].sort((left, right) => (Number(left.linkOrder ?? 0) - Number(right.linkOrder ?? 0)) || 0);
   const queryResult = (table: unknown) => {
     const rows = rowsByTable.get(table) ?? [];
+    const orderedRows = sortReleaseLinks(rows);
     return {
-      limit: async () => rows,
-      orderBy: async () => rows,
+      limit: async () => rows.slice(0, 1),
+      orderBy: async () => orderedRows,
       then: (resolve: (rows: Record<string, unknown>[]) => unknown, reject?: (error: unknown) => unknown) =>
         Promise.resolve(rows).then(resolve, reject),
     };
   };
   const selectFrom = (table: unknown) => ({
     where: () => queryResult(table),
-    orderBy: async () => rowsByTable.get(table) ?? [],
+    orderBy: async () => sortReleaseLinks(rowsByTable.get(table) ?? []),
   });
   const db = {
     select: () => ({
@@ -784,7 +824,7 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
   });
 
   it('writes release pointer arrays and normalized package links', async () => {
-    const { repository, captures } = createInsertCaptureRepository();
+    const { repository, captures, deletes, transactions } = createInsertCaptureRepository();
 
     await repository.saveRelease(release);
 
@@ -792,14 +832,43 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
     expect(captures[0]?.values.currentRunSessionIds).toEqual(release.current_run_session_ids);
     expect(captures[0]?.values.workItemIds).toBeUndefined();
     expect(captures[0]?.values.executionPackageIds).toBeUndefined();
-    expect(captures).toContainEqual({
-      values: { releaseId: release.id, workItemId: workItem.id },
-      set: { releaseId: release.id, workItemId: workItem.id },
+    expect(captures.slice(1)).toEqual([
+      expect.objectContaining({
+        values: expect.objectContaining({ releaseId: release.id, workItemId: workItem2.id, linkOrder: 0 }),
+      }),
+      expect.objectContaining({
+        values: expect.objectContaining({ releaseId: release.id, workItemId: workItem.id, linkOrder: 1 }),
+      }),
+      expect.objectContaining({
+        values: expect.objectContaining({ releaseId: release.id, executionPackageId: executionPackage2.id, linkOrder: 0 }),
+      }),
+      expect.objectContaining({
+        values: expect.objectContaining({ releaseId: release.id, executionPackageId: executionPackage.id, linkOrder: 1 }),
+      }),
+    ]);
+    expect(transactions).toHaveLength(1);
+    expect(deletes.map(({ table }) => table)).toEqual([release_work_items, release_execution_packages]);
+  });
+
+  it('replaces stale release links on repeat saves', async () => {
+    const { repository, deletes, transactions } = createInsertCaptureRepository();
+
+    await repository.saveRelease(release);
+    await repository.saveRelease({
+      ...release,
+      work_item_ids: [workItem.id],
+      execution_package_ids: [executionPackage.id, executionPackage2.id],
+      updated_at: '2026-05-05T00:03:00.000Z',
+      updated_by_actor_id: 'actor-system',
     });
-    expect(captures).toContainEqual({
-      values: { releaseId: release.id, packageId: executionPackage.id },
-      set: { releaseId: release.id, packageId: executionPackage.id },
-    });
+
+    expect(transactions).toHaveLength(2);
+    expect(deletes.map(({ table }) => table)).toEqual([
+      release_work_items,
+      release_execution_packages,
+      release_work_items,
+      release_execution_packages,
+    ]);
   });
 
   it('maps release rows with normalized links back to the domain release shape', async () => {
