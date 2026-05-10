@@ -1,4 +1,6 @@
 export * from './_shared';
+export * from './organization';
+export * from './actor';
 export * from './project';
 export * from './work-item';
 export * from './spec';
@@ -11,3 +13,4 @@ export * from './run-command';
 export * from './run-worker-lease';
 export * from './review-packet';
 export * from './evidence';
+export * from './release';

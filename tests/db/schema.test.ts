@@ -2,16 +2,23 @@ import { getTableColumns } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import {
+  actors,
   decisions,
   execution_package_dependencies,
   execution_package_activity_state_values,
   execution_package_gate_state_values,
   execution_package_phase_values,
   execution_packages,
+  decision_outcome_values,
+  organizations,
   object_events,
   project_repo_status_values,
   project_repos,
   projects,
+  release_evidences,
+  release_execution_packages,
+  release_work_items,
+  releases,
   review_packet_decision_values,
   review_packet_status_values,
   review_packets,
@@ -33,13 +40,17 @@ import {
   trace_events,
   trace_link_relationship_values,
   trace_links,
+  work_item_kind_values,
   work_item_phase_values,
   work_items,
 } from '../../packages/db/src/index';
+import * as dbSchema from '../../packages/db/src/index';
 
 type TableLike = Parameters<typeof getTableColumns>[0];
 
 const requiredTables = {
+  organizations,
+  actors,
   projects,
   project_repos,
   work_items,
@@ -59,13 +70,20 @@ const requiredTables = {
   status_histories,
   artifacts,
   decisions,
+  releases,
+  release_work_items,
+  release_execution_packages,
+  release_evidences,
   trace_events,
   trace_links,
   trace_artifact_refs,
 };
 
 const columnType = (table: TableLike, columnName: string) => {
-  const column = getTableColumns(table)[columnName];
+  const columns = getTableColumns(table);
+  const column =
+    columns[columnName] ??
+    Object.values(columns).find((candidate) => (candidate as { name: string }).name === columnName);
   if (column === undefined) {
     throw new Error(`Missing column ${columnName}`);
   }
@@ -77,15 +95,21 @@ describe('P0 Drizzle schema', () => {
   it('exports every required P0 table', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
+        'actors',
         'artifacts',
         'decisions',
         'execution_package_dependencies',
         'execution_packages',
         'object_events',
+        'organizations',
         'plan_revisions',
         'plans',
         'project_repos',
         'projects',
+        'release_evidences',
+        'release_execution_packages',
+        'release_work_items',
+        'releases',
         'review_packets',
         'run_commands',
         'run_event_counters',
@@ -105,11 +129,19 @@ describe('P0 Drizzle schema', () => {
     for (const table of Object.values(requiredTables)) {
       expect(table).toBeDefined();
     }
+
+    expect(dbSchema).not.toHaveProperty('test_evidences');
+    expect(dbSchema).not.toHaveProperty('incidents');
+    expect(dbSchema).not.toHaveProperty('incident_links');
+    expect(dbSchema).not.toHaveProperty('contracts');
+    expect(dbSchema).not.toHaveProperty('contract_revisions');
+    expect(dbSchema).not.toHaveProperty('package_contract_links');
   });
 
   it('exports P0 enum value sets used by domain state machines', () => {
     expect(project_repo_status_values).toEqual(['active', 'paused', 'archived']);
     expect(work_item_phase_values).toEqual(['draft', 'triage', 'spec', 'plan', 'execution', 'done']);
+    expect(work_item_kind_values).toEqual(['requirement', 'bug', 'tech_debt']);
     expect(spec_plan_status_values).toEqual(['draft', 'in_review', 'approved']);
     expect(spec_plan_gate_state_values).toEqual([
       'not_submitted',
@@ -118,19 +150,16 @@ describe('P0 Drizzle schema', () => {
       'changes_requested',
     ]);
     expect(execution_package_phase_values).toEqual(['draft', 'ready', 'queued', 'execution', 'review']);
-    expect(execution_package_activity_state_values).toEqual([
-      'idle',
-      'awaiting_ai',
-      'ai_running',
-      'blocked',
-      'awaiting_human',
-    ]);
-    expect(execution_package_gate_state_values).toEqual([
-      'none',
-      'not_submitted',
-      'awaiting_human_review',
-      'review_approved',
+    expect(execution_package_activity_state_values).not.toContain('awaiting_ai');
+    expect(execution_package_gate_state_values).not.toContain('none');
+    expect(decision_outcome_values).toEqual([
+      'approved',
       'changes_requested',
+      'rejected',
+      'override_approved',
+      'rolled_back',
+      'cancelled',
+      'completed',
     ]);
     expect(run_session_status_values).toEqual([
       'queued',
@@ -181,6 +210,30 @@ describe('P0 Drizzle schema', () => {
     expect(columnType(run_commands, 'driverAck')).toBe('PgJsonb');
     expect(columnType(trace_events, 'payload')).toBe('PgJsonb');
     expect(columnType(trace_artifact_refs, 'ref')).toBe('PgJsonb');
+  });
+
+  it('uses UUID ids for aggregate tables and text ids for runtime protocol tables', () => {
+    expect(columnType(organizations, 'id')).toBe('PgUUID');
+    expect(columnType(actors, 'id')).toBe('PgUUID');
+    expect(columnType(projects, 'id')).toBe('PgUUID');
+    expect(columnType(work_items, 'id')).toBe('PgUUID');
+    expect(columnType(specs, 'id')).toBe('PgUUID');
+    expect(columnType(spec_revisions, 'id')).toBe('PgUUID');
+    expect(columnType(plans, 'id')).toBe('PgUUID');
+    expect(columnType(plan_revisions, 'id')).toBe('PgUUID');
+    expect(columnType(execution_packages, 'id')).toBe('PgUUID');
+    expect(columnType(run_sessions, 'id')).toBe('PgUUID');
+    expect(columnType(review_packets, 'id')).toBe('PgUUID');
+    expect(columnType(artifacts, 'id')).toBe('PgUUID');
+    expect(columnType(decisions, 'id')).toBe('PgUUID');
+    expect(columnType(releases, 'id')).toBe('PgUUID');
+    expect(columnType(release_evidences, 'id')).toBe('PgUUID');
+    expect(columnType(run_events, 'id')).toBe('PgText');
+    expect(columnType(run_commands, 'id')).toBe('PgText');
+    expect(columnType(run_worker_leases, 'id')).toBe('PgText');
+    expect(columnType(execution_packages, 'required_checks')).toBe('PgJsonb');
+    expect(columnType(execution_packages, 'required_test_gates')).toBe('PgJsonb');
+    expect(columnType(release_evidences, 'object_ref')).toBe('PgJsonb');
   });
 
   it('includes future artifact trace subject link columns', () => {

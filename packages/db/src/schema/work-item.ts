@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text } from 'drizzle-orm/pg-core';
+import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { WorkItem } from '@forgeloop/domain';
 
 import {
@@ -11,8 +11,8 @@ import {
 } from './_shared';
 
 export const work_items = pgTable('work_items', {
-  id: text('id').primaryKey(),
-  projectId: text('project_id').notNull(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull(),
   kind: workItemKind('kind').notNull(),
   title: text('title').notNull(),
   goal: text('goal').notNull(),
@@ -24,8 +24,8 @@ export const work_items = pgTable('work_items', {
   activityState: workItemActivityState('activity_state').notNull(),
   gateState: workItemGateState('gate_state').notNull(),
   resolution: workItemResolution('resolution').notNull(),
-  currentSpecId: text('current_spec_id'),
-  currentPlanId: text('current_plan_id'),
+  currentSpecId: uuid('current_spec_id'),
+  currentPlanId: uuid('current_plan_id'),
   createdAt: timestampColumn('created_at').notNull(),
   updatedAt: timestampColumn('updated_at').notNull(),
 });

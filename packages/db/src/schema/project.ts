@@ -1,10 +1,10 @@
-import { jsonb, pgTable, text } from 'drizzle-orm/pg-core';
+import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { Project } from '@forgeloop/domain';
 
 import { projectRepoStatus, timestampColumn } from './_shared';
 
 export const projects = pgTable('projects', {
-  id: text('id').primaryKey(),
+  id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   repoIds: jsonb('repo_ids').$type<Project['repo_ids']>().notNull(),
   ownerActorId: text('owner_actor_id'),

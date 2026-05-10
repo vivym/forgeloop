@@ -1,15 +1,15 @@
-import { jsonb, pgTable, text } from 'drizzle-orm/pg-core';
+import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { ReviewPacket } from '@forgeloop/domain';
 
 import { reviewPacketDecision, reviewPacketStatus, timestampColumn } from './_shared';
 
 export const review_packets = pgTable('review_packets', {
-  id: text('id').primaryKey(),
-  runSessionId: text('run_session_id').notNull(),
-  executionPackageId: text('execution_package_id').notNull(),
-  reviewerActorId: text('reviewer_actor_id').notNull(),
-  specRevisionId: text('spec_revision_id').notNull(),
-  planRevisionId: text('plan_revision_id').notNull(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  runSessionId: uuid('run_session_id').notNull(),
+  executionPackageId: uuid('execution_package_id').notNull(),
+  reviewerActorId: uuid('reviewer_actor_id').notNull(),
+  specRevisionId: uuid('spec_revision_id').notNull(),
+  planRevisionId: uuid('plan_revision_id').notNull(),
   status: reviewPacketStatus('status').notNull(),
   decision: reviewPacketDecision('decision').notNull(),
   summary: text('summary'),
@@ -17,7 +17,7 @@ export const review_packets = pgTable('review_packets', {
   checkResultSummary: text('check_result_summary').notNull(),
   selfReview: jsonb('self_review').$type<ReviewPacket['self_review']>().notNull(),
   riskNotes: jsonb('risk_notes').$type<ReviewPacket['risk_notes']>().notNull(),
-  reviewedByActorId: text('reviewed_by_actor_id'),
+  reviewedByActorId: uuid('reviewed_by_actor_id'),
   reviewedAt: timestampColumn('reviewed_at'),
   requestedChanges: jsonb('requested_changes').$type<ReviewPacket['requested_changes']>().notNull(),
   createdAt: timestampColumn('created_at').notNull(),

@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text } from 'drizzle-orm/pg-core';
+import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { Artifact, ObjectEvent } from '@forgeloop/domain';
 
 import { decisionValue, timestampColumn, traceLinkRelationship } from './_shared';
@@ -25,7 +25,7 @@ export const status_histories = pgTable('status_histories', {
 });
 
 export const artifacts = pgTable('artifacts', {
-  id: text('id').primaryKey(),
+  id: uuid('id').primaryKey().defaultRandom(),
   objectType: text('object_type').notNull(),
   objectId: text('object_id').notNull(),
   traceSubjectType: text('trace_subject_type'),
@@ -35,10 +35,10 @@ export const artifacts = pgTable('artifacts', {
 });
 
 export const decisions = pgTable('decisions', {
-  id: text('id').primaryKey(),
+  id: uuid('id').primaryKey().defaultRandom(),
   objectType: text('object_type').notNull(),
   objectId: text('object_id').notNull(),
-  actorId: text('actor_id').notNull(),
+  actorId: uuid('actor_id').notNull(),
   decision: decisionValue('decision').notNull(),
   summary: text('summary').notNull(),
   createdAt: timestampColumn('created_at').notNull(),

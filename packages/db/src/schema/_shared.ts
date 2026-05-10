@@ -3,8 +3,8 @@ import { pgEnum, timestamp } from 'drizzle-orm/pg-core';
 export const project_repo_status_values = ['active', 'paused', 'archived'] as const;
 
 export const work_item_phase_values = ['draft', 'triage', 'spec', 'plan', 'execution', 'done'] as const;
-export const work_item_kind_values = ['feature', 'bugfix', 'tech_debt', 'test_refactor'] as const;
-export const work_item_activity_state_values = ['idle'] as const;
+export const work_item_kind_values = ['requirement', 'bug', 'tech_debt'] as const;
+export const work_item_activity_state_values = ['idle', 'awaiting_ai'] as const;
 export const work_item_gate_state_values = [
   'none',
   'awaiting_spec_approval',
@@ -27,13 +27,11 @@ export const spec_plan_resolution_values = ['none', 'approved'] as const;
 export const execution_package_phase_values = ['draft', 'ready', 'queued', 'execution', 'review'] as const;
 export const execution_package_activity_state_values = [
   'idle',
-  'awaiting_ai',
   'ai_running',
   'blocked',
   'awaiting_human',
 ] as const;
 export const execution_package_gate_state_values = [
-  'none',
   'not_submitted',
   'awaiting_human_review',
   'review_approved',
@@ -55,7 +53,46 @@ export const run_session_status_values = [
 ] as const;
 export const review_packet_status_values = ['ready', 'in_review', 'completed', 'archived'] as const;
 export const review_packet_decision_values = ['none', 'approved', 'changes_requested'] as const;
-export const decision_values = ['approved', 'changes_requested'] as const;
+export const decision_outcome_values = [
+  'approved',
+  'changes_requested',
+  'rejected',
+  'override_approved',
+  'rolled_back',
+  'cancelled',
+  'completed',
+] as const;
+export const decision_values = decision_outcome_values;
+export const actor_type_values = ['human', 'system', 'ai'] as const;
+export const release_phase_values = ['draft', 'candidate', 'approval', 'rollout', 'observing', 'completed', 'closed'] as const;
+export const release_activity_state_values = [
+  'idle',
+  'awaiting_human',
+  'human_in_progress',
+  'rolling_out',
+  'paused',
+  'blocked',
+] as const;
+export const release_gate_state_values = [
+  'not_submitted',
+  'awaiting_approval',
+  'changes_requested',
+  'approved',
+  'rollout_failed',
+  'rollout_succeeded',
+] as const;
+export const release_resolution_values = ['none', 'completed', 'rolled_back', 'cancelled'] as const;
+export const release_type_values = ['normal', 'hotfix', 'emergency', 'gray'] as const;
+export const release_evidence_type_values = [
+  'test_report',
+  'review_packet',
+  'build',
+  'deployment',
+  'metric_snapshot',
+  'rollback_record',
+  'observation_note',
+] as const;
+export const release_evidence_status_values = ['current', 'stale', 'superseded'] as const;
 export const trace_link_relationship_values = [
   'belongs_to',
   'generated_by',
@@ -86,6 +123,15 @@ export const runSessionStatus = pgEnum('run_session_status', run_session_status_
 export const reviewPacketStatus = pgEnum('review_packet_status', review_packet_status_values);
 export const reviewPacketDecision = pgEnum('review_packet_decision', review_packet_decision_values);
 export const decisionValue = pgEnum('decision_value', decision_values);
+export const decisionOutcome = pgEnum('decision_outcome', decision_outcome_values);
+export const actorType = pgEnum('actor_type', actor_type_values);
+export const releasePhase = pgEnum('release_phase', release_phase_values);
+export const releaseActivityState = pgEnum('release_activity_state', release_activity_state_values);
+export const releaseGateState = pgEnum('release_gate_state', release_gate_state_values);
+export const releaseResolution = pgEnum('release_resolution', release_resolution_values);
+export const releaseType = pgEnum('release_type', release_type_values);
+export const releaseEvidenceType = pgEnum('release_evidence_type', release_evidence_type_values);
+export const releaseEvidenceStatus = pgEnum('release_evidence_status', release_evidence_status_values);
 export const traceLinkRelationship = pgEnum('trace_link_relationship', trace_link_relationship_values);
 
 export const timestampColumn = (name: string) => timestamp(name, { withTimezone: true, mode: 'string' });
