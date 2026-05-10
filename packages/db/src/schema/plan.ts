@@ -13,6 +13,9 @@ export const plans = pgTable('plans', {
   gateState: specPlanGateState('gate_state').notNull(),
   resolution: specPlanResolution('resolution').notNull(),
   currentRevisionId: uuid('current_revision_id'),
+  approvedRevisionId: uuid('approved_revision_id'),
+  approvedAt: timestampColumn('approved_at'),
+  approvedByActorId: uuid('approved_by_actor_id').references(() => actors.id),
   createdAt: timestampColumn('created_at').notNull(),
   updatedAt: timestampColumn('updated_at').notNull(),
 });
@@ -21,6 +24,7 @@ export const plan_revisions = pgTable('plan_revisions', {
   id: uuid('id').primaryKey().defaultRandom(),
   planId: uuid('plan_id').notNull(),
   workItemId: uuid('work_item_id').notNull(),
+  basedOnSpecRevisionId: uuid('based_on_spec_revision_id'),
   revisionNumber: integer('revision_number').notNull(),
   summary: text('summary').notNull(),
   content: text('content').notNull(),

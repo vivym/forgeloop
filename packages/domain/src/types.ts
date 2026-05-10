@@ -55,9 +55,12 @@ export class DomainError extends Error {
 }
 
 export type IsoDateTime = string;
+export type RequiredTestGateSpec = Record<string, unknown>;
 
 export interface Project {
   id: string;
+  org_id?: string;
+  key?: string;
   name: string;
   repo_ids: string[];
   owner_actor_id?: string;
@@ -68,6 +71,7 @@ export interface Project {
 export interface ProjectRepo {
   id: string;
   repo_id: string;
+  org_id?: string;
   project_id: string;
   name: string;
   status: 'active' | 'paused' | 'archived';
@@ -119,7 +123,10 @@ export interface WorkItem {
   gate_state: WorkItemGateState;
   resolution: WorkItemResolution;
   current_spec_id?: string;
+  current_spec_revision_id?: string;
   current_plan_id?: string;
+  current_plan_revision_id?: string;
+  current_release_id?: string;
   archived_at?: IsoDateTime;
   deleted_at?: IsoDateTime;
   created_at: IsoDateTime;
@@ -141,6 +148,9 @@ export interface SpecPlanBase {
   gate_state: SpecPlanGateState;
   resolution: SpecPlanResolution;
   current_revision_id?: string;
+  approved_revision_id?: string;
+  approved_at?: IsoDateTime;
+  approved_by_actor_id?: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -179,6 +189,7 @@ export interface PlanRevision {
   id: string;
   plan_id: string;
   work_item_id: string;
+  based_on_spec_revision_id?: string;
   revision_number: number;
   summary: string;
   content: string;
@@ -245,10 +256,15 @@ export interface ExecutionPackage {
   gate_state: ExecutionPackageGateState;
   resolution: ExecutionPackageResolution;
   required_checks: RequiredCheckSpec[];
+  required_test_gates?: RequiredTestGateSpec[];
   required_artifact_kinds: ArtifactKind[];
   allowed_paths: string[];
   forbidden_paths: string[];
   last_run_session_id?: string;
+  current_run_session_id?: string;
+  current_review_packet_id?: string;
+  current_release_id?: string;
+  integration_readiness?: Record<string, unknown>;
   last_failure_summary?: string;
   blocked_reason?: string;
   archived_at?: IsoDateTime;
@@ -260,6 +276,11 @@ export interface ExecutionPackage {
 export interface ExecutionPackageDependency {
   package_id: string;
   depends_on_package_id: string;
+  dependency_type?: string;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: IsoDateTime;
+  updated_at?: IsoDateTime;
 }
 
 export type RunSessionStatus =
@@ -406,7 +427,10 @@ export interface ObjectEvent {
   object_type: string;
   object_id: string;
   event_type: string;
+  actor_type?: 'human' | 'ai' | 'system';
   actor_id?: string;
+  reason?: string;
+  payload?: Record<string, unknown>;
   metadata: Record<string, unknown>;
   created_at: IsoDateTime;
 }
@@ -415,10 +439,15 @@ export interface StatusHistory {
   id: string;
   object_type: string;
   object_id: string;
+  field_name?: string;
   from_status?: string;
   to_status: string;
+  from_value?: string;
+  to_value?: string;
+  actor_type?: 'human' | 'ai' | 'system';
   actor_id?: string;
   reason?: string;
+  context?: Record<string, unknown>;
   created_at: IsoDateTime;
 }
 
@@ -428,6 +457,7 @@ export interface Artifact {
   object_id: string;
   trace_subject_type?: string;
   trace_subject_id?: string;
+  artifact_type?: string;
   ref: ArtifactRef;
   created_at: IsoDateTime;
 }
@@ -437,8 +467,13 @@ export interface Decision {
   object_type: string;
   object_id: string;
   actor_id: string;
+  decided_by_actor_id?: string;
+  decision_type?: string;
+  outcome?: string;
   decision: 'approved' | 'changes_requested' | 'need_more_context' | 'escalate' | 'override_approved';
   summary: string;
+  rationale?: string;
+  evidence_refs?: unknown;
   created_at: IsoDateTime;
 }
 
@@ -454,6 +489,7 @@ export interface Actor {
   org_id: string;
   display_name: string;
   actor_type: 'human' | 'system' | 'ai';
+  email?: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -487,7 +523,12 @@ export interface ReleaseEvidenceObjectRef {
 
 export interface ReleaseEvidence {
   id: string;
+  org_id?: string;
+  project_id?: string;
   release_id: string;
+  key?: string;
+  title?: string;
+  description?: string;
   evidence_type: ReleaseEvidenceType;
   summary: string;
   object_ref?: ReleaseEvidenceObjectRef;
@@ -495,14 +536,22 @@ export interface ReleaseEvidence {
   extra?: Record<string, unknown>;
   redacted: boolean;
   status: 'current' | 'stale' | 'superseded';
+  visibility?: string;
+  source_type?: string;
+  labels?: string[];
   created_at: IsoDateTime;
+  created_by_actor_id?: string;
+  updated_at?: IsoDateTime;
+  updated_by_actor_id?: string;
 }
 
 export interface Release {
   id: string;
   org_id: string;
   project_id: string;
+  key?: string;
   title: string;
+  description?: string;
   phase: ReleasePhase;
   activity_state: ReleaseActivityState;
   gate_state: ReleaseGateState;
@@ -514,10 +563,26 @@ export interface Release {
   rollout_strategy?: string;
   rollback_plan?: string;
   observation_plan?: string;
+  release_owner_actor_id?: string;
+  release_type?: string;
+  visibility?: string;
+  labels?: string[];
+  extra?: Record<string, unknown>;
   created_by_actor_id: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
+  updated_by_actor_id?: string;
   closed_at?: IsoDateTime;
+}
+
+export interface ReleaseWorkItem {
+  release_id: string;
+  work_item_id: string;
+}
+
+export interface ReleaseExecutionPackage {
+  release_id: string;
+  execution_package_id: string;
 }
 
 export const releaseBlockerCodes = contractReleaseBlockerCodes;

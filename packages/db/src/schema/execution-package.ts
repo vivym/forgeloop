@@ -40,7 +40,11 @@ export const execution_packages = pgTable('execution_packages', {
   requiredArtifactKinds: jsonb('required_artifact_kinds').$type<ExecutionPackage['required_artifact_kinds']>().notNull(),
   allowedPaths: jsonb('allowed_paths').$type<ExecutionPackage['allowed_paths']>().notNull(),
   forbiddenPaths: jsonb('forbidden_paths').$type<ExecutionPackage['forbidden_paths']>().notNull(),
+  integrationReadiness: jsonb('integration_readiness').$type<ExecutionPackage['integration_readiness']>(),
+  currentRunSessionId: uuid('current_run_session_id'),
   lastRunSessionId: uuid('last_run_session_id'),
+  currentReviewPacketId: uuid('current_review_packet_id'),
+  currentReleaseId: uuid('current_release_id'),
   lastFailureSummary: text('last_failure_summary'),
   blockedReason: text('blocked_reason'),
   createdAt: timestampColumn('created_at').notNull(),
@@ -52,6 +56,11 @@ export const execution_package_dependencies = pgTable(
   {
     packageId: uuid('package_id').notNull(),
     dependsOnPackageId: uuid('depends_on_package_id').notNull(),
+    dependencyType: text('dependency_type'),
+    reason: text('reason'),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    createdAt: timestampColumn('created_at'),
+    updatedAt: timestampColumn('updated_at'),
   },
   (table) => [primaryKey({ columns: [table.packageId, table.dependsOnPackageId] })],
 );

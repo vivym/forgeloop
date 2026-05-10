@@ -18,13 +18,17 @@ import type {
 } from '@forgeloop/domain';
 
 import {
+  createDbClient,
   DrizzleP0Repository,
   InMemoryP0Repository,
   type P0Repository,
   type TraceArtifactRefRecord,
   type TraceEventRecord,
   type TraceLinkRecord,
+  assertResettableDatabaseUrl,
+  resetForgeloopDatabase,
 } from '../../packages/db/src/index';
+import { runP0RepositoryContract } from './repository-contract';
 
 const now = '2026-05-05T00:00:00.000Z';
 
@@ -436,6 +440,10 @@ const createEmptySelectRepository = () => {
 };
 
 describe('P0Repository in-memory adapter', () => {
+  it('satisfies the shared repository contract', async () => {
+    await runP0RepositoryContract(new InMemoryP0Repository());
+  });
+
   it('persists and queries a minimal P0 delivery flow', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
 
@@ -598,6 +606,20 @@ describe('P0Repository in-memory adapter', () => {
     ]);
     expect(await repository.listTraceLinks(traceEvent.id)).toEqual([firstLink, secondLink]);
     expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([firstArtifactRef, secondArtifactRef]);
+  });
+});
+
+describe('P0Repository Drizzle adapter contract', () => {
+  const databaseUrl = process.env.FORGELOOP_TEST_DATABASE_URL ?? process.env.FORGELOOP_DATABASE_URL;
+
+  it.runIf(databaseUrl !== undefined && isResettable(databaseUrl))('satisfies the shared repository contract', async () => {
+    await resetForgeloopDatabase(databaseUrl!);
+    const { db, pool } = createDbClient({ connectionString: databaseUrl });
+    try {
+      await runP0RepositoryContract(new DrizzleP0Repository(db));
+    } finally {
+      await pool.end();
+    }
   });
 });
 
@@ -827,3 +849,12 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
     expect(mappedRunSession?.finished_at).toBe('2026-05-08T03:03:00.456Z');
   });
 });
+
+const isResettable = (databaseUrl: string): boolean => {
+  try {
+    assertResettableDatabaseUrl(databaseUrl);
+    return true;
+  } catch {
+    return false;
+  }
+};

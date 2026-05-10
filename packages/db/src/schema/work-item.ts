@@ -28,7 +28,10 @@ export const work_items = pgTable('work_items', {
   gateState: workItemGateState('gate_state').notNull(),
   resolution: workItemResolution('resolution').notNull(),
   currentSpecId: uuid('current_spec_id'),
+  currentSpecRevisionId: uuid('current_spec_revision_id'),
   currentPlanId: uuid('current_plan_id'),
+  currentPlanRevisionId: uuid('current_plan_revision_id'),
+  currentReleaseId: uuid('current_release_id'),
   createdAt: timestampColumn('created_at').notNull(),
   updatedAt: timestampColumn('updated_at').notNull(),
 });

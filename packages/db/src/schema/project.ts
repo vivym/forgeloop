@@ -6,6 +6,8 @@ import { actors } from './actor';
 
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id'),
+  key: text('key'),
   name: text('name').notNull(),
   repoIds: jsonb('repo_ids').$type<Project['repo_ids']>().notNull(),
   ownerActorId: uuid('owner_actor_id').references(() => actors.id),
@@ -15,6 +17,7 @@ export const projects = pgTable('projects', {
 
 export const project_repos = pgTable('project_repos', {
   id: text('id').primaryKey(),
+  orgId: uuid('org_id'),
   repoId: text('repo_id').notNull(),
   projectId: uuid('project_id')
     .notNull()

@@ -1,13 +1,19 @@
 import type {
   Artifact,
+  Actor,
   Decision,
   ExecutionPackage,
   ExecutionPackageDependency,
   ObjectEvent,
+  Organization,
   Plan,
   PlanRevision,
   Project,
   ProjectRepo,
+  Release,
+  ReleaseEvidence,
+  ReleaseExecutionPackage,
+  ReleaseWorkItem,
   ReviewPacket,
   RunCommand,
   RunEvent,
@@ -51,7 +57,17 @@ export interface TraceArtifactRefRecord {
   created_at: string;
 }
 
+export type ReleaseWorkItemRecord = ReleaseWorkItem;
+export type ReleaseExecutionPackageRecord = ReleaseExecutionPackage;
+
 export interface P0Repository {
+  saveOrganization(organization: Organization): Promise<void>;
+  getOrganization(organizationId: string): Promise<Organization | undefined>;
+
+  saveActor(actor: Actor): Promise<void>;
+  getActor(actorId: string): Promise<Actor | undefined>;
+  listActorsForOrganization(organizationId: string): Promise<Actor[]>;
+
   saveProject(project: Project): Promise<void>;
   getProject(projectId: string): Promise<Project | undefined>;
 
@@ -154,6 +170,16 @@ export interface P0Repository {
   getReviewPacket(reviewPacketId: string): Promise<ReviewPacket | undefined>;
   listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
   findOpenReviewPacketForPackage(executionPackageId: string): Promise<ReviewPacket | undefined>;
+
+  saveRelease(release: Release): Promise<void>;
+  getRelease(releaseId: string): Promise<Release | undefined>;
+  listReleasesForProject(projectId: string): Promise<Release[]>;
+  saveReleaseWorkItem(releaseWorkItem: ReleaseWorkItemRecord): Promise<void>;
+  listReleaseWorkItems(releaseId: string): Promise<ReleaseWorkItemRecord[]>;
+  saveReleaseExecutionPackage(releaseExecutionPackage: ReleaseExecutionPackageRecord): Promise<void>;
+  listReleaseExecutionPackages(releaseId: string): Promise<ReleaseExecutionPackageRecord[]>;
+  saveReleaseEvidence(releaseEvidence: ReleaseEvidence): Promise<void>;
+  listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]>;
 
   appendObjectEvent(objectEvent: ObjectEvent): Promise<void>;
   listObjectEvents(objectId: string, objectType?: string): Promise<ObjectEvent[]>;

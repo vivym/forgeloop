@@ -1,14 +1,20 @@
 import type {
   Artifact,
+  Actor,
   Decision,
   DomainError as DomainErrorType,
   ExecutionPackage,
   ExecutionPackageDependency,
   ObjectEvent,
+  Organization,
   Plan,
   PlanRevision,
   Project,
   ProjectRepo,
+  Release,
+  ReleaseEvidence,
+  ReleaseExecutionPackage,
+  ReleaseWorkItem,
   ReviewPacket,
   RunCommand,
   RunEvent,
@@ -43,6 +49,8 @@ const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
 
 export class InMemoryP0Repository implements P0Repository {
+  private readonly organizations = new Map<string, Organization>();
+  private readonly actors = new Map<string, Actor>();
   private readonly projects = new Map<string, Project>();
   private readonly projectRepos = new Map<string, ProjectRepo>();
   private readonly workItems = new Map<string, WorkItem>();
@@ -57,6 +65,10 @@ export class InMemoryP0Repository implements P0Repository {
   private readonly runCommands = new Map<string, RunCommand>();
   private readonly runWorkerLeases = new Map<string, RunWorkerLease>();
   private readonly reviewPackets = new Map<string, ReviewPacket>();
+  private readonly releases = new Map<string, Release>();
+  private readonly releaseWorkItems = new Map<string, ReleaseWorkItem>();
+  private readonly releaseExecutionPackages = new Map<string, ReleaseExecutionPackage>();
+  private readonly releaseEvidences = new Map<string, ReleaseEvidence>();
   private readonly objectEvents = new Map<string, ObjectEvent>();
   private readonly statusHistories = new Map<string, StatusHistory>();
   private readonly artifacts = new Map<string, Artifact>();
@@ -64,6 +76,28 @@ export class InMemoryP0Repository implements P0Repository {
   private readonly traceEvents = new Map<string, TraceEventRecord>();
   private readonly traceLinks = new Map<string, TraceLinkRecord>();
   private readonly traceArtifactRefs = new Map<string, TraceArtifactRefRecord>();
+
+  async saveOrganization(organization: Organization): Promise<void> {
+    this.organizations.set(organization.id, clone(organization));
+  }
+
+  async getOrganization(organizationId: string): Promise<Organization | undefined> {
+    return this.cloneMaybe(this.organizations.get(organizationId));
+  }
+
+  async saveActor(actor: Actor): Promise<void> {
+    this.actors.set(actor.id, clone(actor));
+  }
+
+  async getActor(actorId: string): Promise<Actor | undefined> {
+    return this.cloneMaybe(this.actors.get(actorId));
+  }
+
+  async listActorsForOrganization(organizationId: string): Promise<Actor[]> {
+    return valuesFor(this.actors)
+      .filter((actor) => actor.org_id === organizationId)
+      .sort(byCreatedAtThenId);
+  }
 
   async saveProject(project: Project): Promise<void> {
     this.projects.set(project.id, clone(project));
@@ -461,6 +495,51 @@ export class InMemoryP0Repository implements P0Repository {
       .sort(byCreatedAt)[0];
 
     return this.cloneMaybe(openReviewPacket);
+  }
+
+  async saveRelease(release: Release): Promise<void> {
+    this.releases.set(release.id, clone(release));
+  }
+
+  async getRelease(releaseId: string): Promise<Release | undefined> {
+    return this.cloneMaybe(this.releases.get(releaseId));
+  }
+
+  async listReleasesForProject(projectId: string): Promise<Release[]> {
+    return valuesFor(this.releases)
+      .filter((release) => release.project_id === projectId)
+      .sort(byCreatedAt);
+  }
+
+  async saveReleaseWorkItem(releaseWorkItem: ReleaseWorkItem): Promise<void> {
+    this.releaseWorkItems.set(`${releaseWorkItem.release_id}:${releaseWorkItem.work_item_id}`, clone(releaseWorkItem));
+  }
+
+  async listReleaseWorkItems(releaseId: string): Promise<ReleaseWorkItem[]> {
+    return valuesFor(this.releaseWorkItems).filter((releaseWorkItem) => releaseWorkItem.release_id === releaseId);
+  }
+
+  async saveReleaseExecutionPackage(releaseExecutionPackage: ReleaseExecutionPackage): Promise<void> {
+    this.releaseExecutionPackages.set(
+      `${releaseExecutionPackage.release_id}:${releaseExecutionPackage.execution_package_id}`,
+      clone(releaseExecutionPackage),
+    );
+  }
+
+  async listReleaseExecutionPackages(releaseId: string): Promise<ReleaseExecutionPackage[]> {
+    return valuesFor(this.releaseExecutionPackages).filter(
+      (releaseExecutionPackage) => releaseExecutionPackage.release_id === releaseId,
+    );
+  }
+
+  async saveReleaseEvidence(releaseEvidence: ReleaseEvidence): Promise<void> {
+    this.releaseEvidences.set(releaseEvidence.id, clone(releaseEvidence));
+  }
+
+  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
+    return valuesFor(this.releaseEvidences)
+      .filter((releaseEvidence) => releaseEvidence.release_id === releaseId)
+      .sort(byCreatedAtThenId);
   }
 
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {

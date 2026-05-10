@@ -1,0 +1,80 @@
+import { Pool } from 'pg';
+
+const disposableNamePattern = /(?:test|tmp|forgeloop_dev)/i;
+const localHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+const resettableTables = [
+  'trace_artifact_refs',
+  'trace_links',
+  'trace_events',
+  'release_evidences',
+  'release_execution_packages',
+  'release_work_items',
+  'releases',
+  'decisions',
+  'artifacts',
+  'status_histories',
+  'object_events',
+  'review_packets',
+  'run_worker_leases',
+  'run_commands',
+  'run_event_counters',
+  'run_events',
+  'run_sessions',
+  'execution_package_dependencies',
+  'execution_packages',
+  'plan_revisions',
+  'plans',
+  'spec_revisions',
+  'specs',
+  'work_items',
+  'project_repos',
+  'projects',
+  'actors',
+  'organizations',
+] as const;
+
+export function assertResettableDatabaseUrl(databaseUrl: string, env: NodeJS.ProcessEnv = process.env): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error('Could not parse database URL; refusing to reset database.');
+  }
+
+  if (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') {
+    throw new Error(`Could not parse PostgreSQL database URL; refusing to reset database.`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const databaseName = parsed.pathname.replace(/^\//, '');
+  const isLocal = localHosts.has(hostname);
+  const isDisposableName = disposableNamePattern.test(databaseName);
+
+  if (!isLocal) {
+    throw new Error(`Refusing to reset database on non-local host ${parsed.hostname}.`);
+  }
+
+  if (isDisposableName) {
+    return;
+  }
+
+  if (env.FORGELOOP_CONFIRM_DB_RESET === '1') {
+    return;
+  }
+
+  throw new Error(
+    `Refusing to reset local database "${databaseName}" without FORGELOOP_CONFIRM_DB_RESET=1 because its name is not disposable.`,
+  );
+}
+
+export async function resetForgeloopDatabase(databaseUrl: string): Promise<void> {
+  assertResettableDatabaseUrl(databaseUrl);
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const tableList = resettableTables.map((table) => `"${table}"`).join(', ');
+    await pool.query(`TRUNCATE TABLE ${tableList} RESTART IDENTITY CASCADE`);
+  } finally {
+    await pool.end();
+  }
+}

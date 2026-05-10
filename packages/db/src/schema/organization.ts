@@ -6,4 +6,5 @@ export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   createdAt: timestampColumn('created_at').notNull(),
+  updatedAt: timestampColumn('updated_at').notNull(),
 });

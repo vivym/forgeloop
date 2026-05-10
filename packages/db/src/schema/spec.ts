@@ -13,6 +13,9 @@ export const specs = pgTable('specs', {
   gateState: specPlanGateState('gate_state').notNull(),
   resolution: specPlanResolution('resolution').notNull(),
   currentRevisionId: uuid('current_revision_id'),
+  approvedRevisionId: uuid('approved_revision_id'),
+  approvedAt: timestampColumn('approved_at'),
+  approvedByActorId: uuid('approved_by_actor_id').references(() => actors.id),
   createdAt: timestampColumn('created_at').notNull(),
   updatedAt: timestampColumn('updated_at').notNull(),
 });

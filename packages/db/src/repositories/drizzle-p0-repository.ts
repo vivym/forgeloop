@@ -3,15 +3,21 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
   Artifact,
+  Actor,
   Decision,
   DomainError as DomainErrorType,
   ExecutionPackage,
   ExecutionPackageDependency,
   ObjectEvent,
+  Organization,
   Plan,
   PlanRevision,
   Project,
   ProjectRepo,
+  Release,
+  ReleaseEvidence,
+  ReleaseExecutionPackage,
+  ReleaseWorkItem,
   ReviewPacket,
   RunCommand,
   RunEvent,
@@ -27,14 +33,20 @@ import { DomainError } from '@forgeloop/domain';
 import * as schema from '../schema';
 import {
   artifacts,
+  actors,
   decisions,
   execution_package_dependencies,
   execution_packages,
   object_events,
+  organizations,
   plan_revisions,
   plans,
   project_repos,
   projects,
+  release_evidences,
+  release_execution_packages,
+  release_work_items,
+  releases,
   review_packets,
   run_commands,
   run_event_counters,
@@ -110,6 +122,26 @@ const invalidLease = (runSessionId: string): DomainErrorType =>
 
 export class DrizzleP0Repository implements P0Repository {
   constructor(private readonly db: ForgeloopDrizzleDatabase) {}
+
+  async saveOrganization(organization: Organization): Promise<void> {
+    await this.upsert(organizations, organizations.id, organization);
+  }
+
+  async getOrganization(organizationId: string): Promise<Organization | undefined> {
+    return this.getById(organizations, organizations.id, organizationId);
+  }
+
+  async saveActor(actor: Actor): Promise<void> {
+    await this.upsert(actors, actors.id, actor);
+  }
+
+  async getActor(actorId: string): Promise<Actor | undefined> {
+    return this.getById(actors, actors.id, actorId);
+  }
+
+  async listActorsForOrganization(organizationId: string): Promise<Actor[]> {
+    return this.listWhere<Actor>(actors, eq(actors.orgId, organizationId), [actors.createdAt, actors.id]);
+  }
 
   async saveProject(project: Project): Promise<void> {
     await this.upsert(projects, projects.id, project);
@@ -583,6 +615,102 @@ export class DrizzleP0Repository implements P0Repository {
       .limit(1);
 
     return row === undefined ? undefined : fromDbRecord<ReviewPacket>(row);
+  }
+
+  async saveRelease(release: Release): Promise<void> {
+    const normalized: Release = {
+      ...release,
+      key: release.key ?? release.id,
+      release_owner_actor_id: release.release_owner_actor_id ?? release.created_by_actor_id,
+      release_type: release.release_type ?? 'normal',
+      visibility: release.visibility ?? 'internal',
+      labels: release.labels ?? [],
+      updated_by_actor_id: release.updated_by_actor_id ?? release.created_by_actor_id,
+    };
+    await this.upsert(releases, releases.id, normalized);
+  }
+
+  async getRelease(releaseId: string): Promise<Release | undefined> {
+    return this.getById(releases, releases.id, releaseId);
+  }
+
+  async listReleasesForProject(projectId: string): Promise<Release[]> {
+    return this.listWhere<Release>(releases, eq(releases.projectId, projectId), releases.createdAt);
+  }
+
+  async saveReleaseWorkItem(releaseWorkItem: ReleaseWorkItem): Promise<void> {
+    const record = toDbRecord(releaseWorkItem, release_work_items);
+    await this.db
+      .insert(release_work_items)
+      .values(record as never)
+      .onConflictDoUpdate({
+        target: [release_work_items.releaseId, release_work_items.workItemId],
+        set: record as never,
+      });
+  }
+
+  async listReleaseWorkItems(releaseId: string): Promise<ReleaseWorkItem[]> {
+    return this.listWhere<ReleaseWorkItem>(release_work_items, eq(release_work_items.releaseId, releaseId));
+  }
+
+  async saveReleaseExecutionPackage(releaseExecutionPackage: ReleaseExecutionPackage): Promise<void> {
+    const record = {
+      releaseId: releaseExecutionPackage.release_id,
+      packageId: releaseExecutionPackage.execution_package_id,
+    };
+    await this.db
+      .insert(release_execution_packages)
+      .values(record as never)
+      .onConflictDoUpdate({
+        target: [release_execution_packages.releaseId, release_execution_packages.packageId],
+        set: record as never,
+      });
+  }
+
+  async listReleaseExecutionPackages(releaseId: string): Promise<ReleaseExecutionPackage[]> {
+    const rows = await this.db
+      .select()
+      .from(release_execution_packages)
+      .where(eq(release_execution_packages.releaseId, releaseId));
+
+    return rows.map((row) => ({
+      release_id: row.releaseId,
+      execution_package_id: row.packageId,
+    }));
+  }
+
+  async saveReleaseEvidence(releaseEvidence: ReleaseEvidence): Promise<void> {
+    const release = await this.getRelease(releaseEvidence.release_id);
+    const orgId = releaseEvidence.org_id ?? release?.org_id;
+    const projectId = releaseEvidence.project_id ?? release?.project_id;
+    const createdByActorId = releaseEvidence.created_by_actor_id ?? release?.created_by_actor_id;
+    const updatedByActorId = releaseEvidence.updated_by_actor_id ?? release?.updated_by_actor_id ?? createdByActorId;
+    if (orgId === undefined || projectId === undefined || createdByActorId === undefined || updatedByActorId === undefined) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Release evidence ${releaseEvidence.id} requires release, organization, project, and actor audit anchors`,
+      );
+    }
+
+    const normalized: ReleaseEvidence = {
+      ...releaseEvidence,
+      org_id: orgId,
+      project_id: projectId,
+      key: releaseEvidence.key ?? releaseEvidence.id,
+      visibility: releaseEvidence.visibility ?? 'internal',
+      labels: releaseEvidence.labels ?? [],
+      created_by_actor_id: createdByActorId,
+      updated_at: releaseEvidence.updated_at ?? releaseEvidence.created_at,
+      updated_by_actor_id: updatedByActorId,
+    };
+    await this.upsert(release_evidences, release_evidences.id, normalized);
+  }
+
+  async listReleaseEvidence(releaseId: string): Promise<ReleaseEvidence[]> {
+    return this.listWhere<ReleaseEvidence>(release_evidences, eq(release_evidences.releaseId, releaseId), [
+      release_evidences.createdAt,
+      release_evidences.id,
+    ]);
   }
 
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {

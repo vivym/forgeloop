@@ -12,4 +12,5 @@ export const actors = pgTable('actors', {
   displayName: text('display_name').notNull(),
   email: text('email'),
   createdAt: timestampColumn('created_at').notNull(),
+  updatedAt: timestampColumn('updated_at').notNull(),
 });
