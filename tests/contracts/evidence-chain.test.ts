@@ -149,6 +149,7 @@ describe('Evidence Chain contracts', () => {
         'logs_artifact',
         'raw_metadata_artifact',
         'local_ref_only',
+        'unsafe_storage_uri',
         'internal_payload',
       ].map((reason) => evidenceChainRedactionReasonSchema.parse(reason)),
     ).toEqual([
@@ -157,6 +158,7 @@ describe('Evidence Chain contracts', () => {
       'logs_artifact',
       'raw_metadata_artifact',
       'local_ref_only',
+      'unsafe_storage_uri',
       'internal_payload',
     ]);
     expect(evidenceChainRedactionReasonSchema.safeParse('private_payload').success).toBe(false);

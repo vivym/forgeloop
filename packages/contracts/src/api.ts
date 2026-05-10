@@ -275,6 +275,7 @@ export const evidenceChainRedactionReasonSchema = z.enum([
   'logs_artifact',
   'raw_metadata_artifact',
   'local_ref_only',
+  'unsafe_storage_uri',
   'internal_payload',
 ]);
 export type EvidenceChainRedactionReason = z.infer<typeof evidenceChainRedactionReasonSchema>;
