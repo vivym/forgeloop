@@ -4,6 +4,7 @@ import type {
   ReleaseBlocker,
   ReleaseBlockerCategory,
   ReleaseBlockerCode,
+  ReleaseBlockerSnapshot,
   ReleaseEvidence,
   ReviewPacket,
   RunSession,
@@ -13,10 +14,28 @@ import { releaseBlockerCodes } from './types.js';
 
 export { releaseBlockerCodes };
 
+export type ReleaseResolvedLinkStatus = 'resolved' | 'missing' | 'archived' | 'deleted' | 'unauthorized';
+
+export interface ReleaseResolvedWorkItemLink {
+  object_id: string;
+  status: ReleaseResolvedLinkStatus;
+  reason?: string;
+  work_item?: WorkItem;
+}
+
+export interface ReleaseResolvedExecutionPackageLink {
+  object_id: string;
+  status: ReleaseResolvedLinkStatus;
+  reason?: string;
+  execution_package?: ExecutionPackage;
+}
+
 export interface ReleaseGateContext {
   release?: Release;
   work_items?: readonly WorkItem[];
+  work_item_links?: readonly ReleaseResolvedWorkItemLink[];
   execution_packages?: readonly ExecutionPackage[];
+  execution_package_links?: readonly ReleaseResolvedExecutionPackageLink[];
   run_sessions?: readonly RunSession[];
   review_packets?: readonly ReviewPacket[];
   evidence?: readonly ReleaseEvidence[];
@@ -63,11 +82,52 @@ const blocker = (code: ReleaseBlockerCode, message: string, object?: { type: str
 
 const hasText = (value: string | undefined): value is string => value !== undefined && value.trim().length > 0;
 
-const isVisible = (object: { archived_at?: string; deleted_at?: string; authorized?: boolean }): boolean =>
-  object.archived_at === undefined && object.deleted_at === undefined && object.authorized !== false;
+const isVisible = (object: { archived_at?: string; deleted_at?: string }): boolean =>
+  object.archived_at === undefined && object.deleted_at === undefined;
 
 const sortNewestFirst = <T extends { created_at: string }>(items: readonly T[]): T[] =>
   [...items].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+
+const stableBlockerValue = (blocker: ReleaseBlocker) => ({
+  category: blocker.category,
+  code: blocker.code,
+  message: blocker.message,
+  object_id: blocker.object_id ?? '',
+  object_type: blocker.object_type ?? '',
+  overrideable: blocker.overrideable,
+});
+
+export const fingerprintReleaseBlockers = (blockers: readonly ReleaseBlocker[]): string => {
+  const stableJson = JSON.stringify(
+    blockers
+      .map(stableBlockerValue)
+      .sort((left, right) =>
+        `${left.code}\0${left.object_type}\0${left.object_id}\0${left.message}`.localeCompare(
+          `${right.code}\0${right.object_type}\0${right.object_id}\0${right.message}`,
+        ),
+      ),
+  );
+  let hash = 5381;
+  for (let index = 0; index < stableJson.length; index += 1) {
+    hash = (hash * 33) ^ stableJson.charCodeAt(index);
+  }
+
+  return `release-blockers:v1:${(hash >>> 0).toString(16)}`;
+};
+
+export const createReleaseBlockerSnapshot = (input: {
+  release_id: string;
+  generated_at: string;
+  blockers: readonly ReleaseBlocker[];
+}): ReleaseBlockerSnapshot => ({
+  release_id: input.release_id,
+  generated_at: input.generated_at,
+  blocker_fingerprint: fingerprintReleaseBlockers(input.blockers),
+  blockers: input.blockers.map((item) => ({ ...item })),
+});
+
+export const isReleaseBlockerSnapshotCurrent = (snapshot: ReleaseBlockerSnapshot): boolean =>
+  snapshot.blocker_fingerprint === fingerprintReleaseBlockers(snapshot.blockers);
 
 export const selectReleaseReviewPacket = (
   release: Pick<Release, 'current_review_packet_ids' | 'current_run_session_ids'>,
@@ -137,6 +197,70 @@ const hasFailedOrMissingRequiredCheck = (
   });
 };
 
+const resolveWorkItemLinks = (
+  release: Release,
+  workItems: readonly WorkItem[],
+  explicitLinks: readonly ReleaseResolvedWorkItemLink[] | undefined,
+): ReleaseResolvedWorkItemLink[] => {
+  if (explicitLinks !== undefined) {
+    return release.work_item_ids.map((workItemId) => {
+      const explicit = explicitLinks.find((link) => link.object_id === workItemId);
+      if (explicit !== undefined) {
+        return explicit;
+      }
+
+      return { object_id: workItemId, status: 'missing' };
+    });
+  }
+
+  return release.work_item_ids.map((workItemId) => {
+    const item = workItems.find((workItem) => workItem.id === workItemId);
+    if (item === undefined) {
+      return { object_id: workItemId, status: 'missing' };
+    }
+    if (item.archived_at !== undefined) {
+      return { object_id: workItemId, status: 'archived', work_item: item };
+    }
+    if (item.deleted_at !== undefined) {
+      return { object_id: workItemId, status: 'deleted', work_item: item };
+    }
+
+    return { object_id: workItemId, status: 'resolved', work_item: item };
+  });
+};
+
+const resolveExecutionPackageLinks = (
+  release: Release,
+  executionPackages: readonly ExecutionPackage[],
+  explicitLinks: readonly ReleaseResolvedExecutionPackageLink[] | undefined,
+): ReleaseResolvedExecutionPackageLink[] => {
+  if (explicitLinks !== undefined) {
+    return release.execution_package_ids.map((executionPackageId) => {
+      const explicit = explicitLinks.find((link) => link.object_id === executionPackageId);
+      if (explicit !== undefined) {
+        return explicit;
+      }
+
+      return { object_id: executionPackageId, status: 'missing' };
+    });
+  }
+
+  return release.execution_package_ids.map((executionPackageId) => {
+    const item = executionPackages.find((executionPackage) => executionPackage.id === executionPackageId);
+    if (item === undefined) {
+      return { object_id: executionPackageId, status: 'missing' };
+    }
+    if (item.archived_at !== undefined) {
+      return { object_id: executionPackageId, status: 'archived', execution_package: item };
+    }
+    if (item.deleted_at !== undefined) {
+      return { object_id: executionPackageId, status: 'deleted', execution_package: item };
+    }
+
+    return { object_id: executionPackageId, status: 'resolved', execution_package: item };
+  });
+};
+
 export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlocker[] => {
   const release = context.release;
   const workItems = context.work_items ?? [];
@@ -150,33 +274,35 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
     return blockers;
   }
 
-  const validWorkItems = release.work_item_ids
-    .map((workItemId) => {
-      const linked = workItems.find((workItem) => workItem.id === workItemId);
-      if (linked === undefined || !isVisible(linked)) {
-        blockers.push(blocker('missing_work_item', `Release is missing valid work item ${workItemId}.`, {
+  const validWorkItems = resolveWorkItemLinks(release, workItems, context.work_item_links)
+    .map((link) => {
+      if (link.status !== 'resolved' || link.work_item === undefined || !isVisible(link.work_item)) {
+        blockers.push(blocker('missing_work_item', `Release is missing valid work item ${link.object_id}.`, {
           type: 'work_item',
-          id: workItemId,
+          id: link.object_id,
         }));
         return undefined;
       }
-      return linked;
+      return link.work_item;
     })
     .filter((workItem): workItem is WorkItem => workItem !== undefined);
 
-  const validExecutionPackages = release.execution_package_ids
-    .map((executionPackageId) => {
-      const linked = executionPackages.find((executionPackage) => executionPackage.id === executionPackageId);
-      if (linked === undefined || !isVisible(linked)) {
+  const validExecutionPackages = resolveExecutionPackageLinks(
+    release,
+    executionPackages,
+    context.execution_package_links,
+  )
+    .map((link) => {
+      if (link.status !== 'resolved' || link.execution_package === undefined || !isVisible(link.execution_package)) {
         blockers.push(
-          blocker('missing_execution_package', `Release is missing valid execution package ${executionPackageId}.`, {
+          blocker('missing_execution_package', `Release is missing valid execution package ${link.object_id}.`, {
             type: 'execution_package',
-            id: executionPackageId,
+            id: link.object_id,
           }),
         );
         return undefined;
       }
-      return linked;
+      return link.execution_package;
     })
     .filter((executionPackage): executionPackage is ExecutionPackage => executionPackage !== undefined);
 

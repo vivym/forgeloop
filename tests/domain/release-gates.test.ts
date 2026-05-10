@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createReleaseBlockerSnapshot,
   deriveReleaseBlockers,
+  fingerprintReleaseBlockers,
   isReleaseBlockerOverrideable,
   releaseBlockerCodes,
   selectReleaseReviewPacket,
@@ -210,24 +212,44 @@ describe('Release gate derivation', () => {
 
   it.each([
     ['absent', undefined],
-    ['archived', workItem({ archived_at: timestamp })],
-    ['soft-deleted', workItem({ deleted_at: timestamp })],
-    ['unauthorized', workItem({ authorized: false })],
+    ['archived', 'archived'],
+    ['soft-deleted', 'deleted'],
+    ['unauthorized', 'unauthorized'],
   ] as const)('derives missing_work_item for %s work item links', (_label, linkedWorkItem) => {
-    expect(deriveCodes({ work_items: linkedWorkItem === undefined ? [] : [linkedWorkItem] })).toContain(
-      'missing_work_item',
-    );
+    expect(
+      typeof linkedWorkItem === 'string'
+        ? deriveCodes({
+            work_item_links: [
+              {
+                object_id: 'work-item-1',
+                status: linkedWorkItem,
+                reason: `${linkedWorkItem} link`,
+              },
+            ],
+          })
+        : deriveCodes({ work_items: [] }),
+    ).toContain('missing_work_item');
   });
 
   it.each([
     ['absent', undefined],
-    ['archived', executionPackage({ archived_at: timestamp })],
-    ['soft-deleted', executionPackage({ deleted_at: timestamp })],
-    ['unauthorized', executionPackage({ authorized: false })],
+    ['archived', 'archived'],
+    ['soft-deleted', 'deleted'],
+    ['unauthorized', 'unauthorized'],
   ] as const)('derives missing_execution_package for %s package links', (_label, linkedPackage) => {
-    expect(deriveCodes({ execution_packages: linkedPackage === undefined ? [] : [linkedPackage] })).toContain(
-      'missing_execution_package',
-    );
+    expect(
+      typeof linkedPackage === 'string'
+        ? deriveCodes({
+            execution_package_links: [
+              {
+                object_id: 'package-1',
+                status: linkedPackage,
+                reason: `${linkedPackage} link`,
+              },
+            ],
+          })
+        : deriveCodes({ execution_packages: [] }),
+    ).toContain('missing_execution_package');
   });
 
   it('derives empty_release_scope when either valid linked scope side is empty and blocks submit, approve, and override', () => {
@@ -236,20 +258,37 @@ describe('Release gate derivation', () => {
       deriveReleaseBlockers({ release: release({ execution_package_ids: [] }), work_items: [workItem()], execution_packages: [] }),
     ]) {
       expect(blockers.map((blocker) => blocker.code)).toContain('empty_release_scope');
-      expect(() => transitionRelease(release(), { type: 'submit', blockers })).toThrow();
+      expect(() =>
+        transitionRelease(release(), {
+          type: 'submit',
+          blocker_snapshot: createReleaseBlockerSnapshot({
+            release_id: 'release-1',
+            generated_at: timestamp,
+            blockers,
+          }),
+        }),
+      ).toThrow();
       expect(() =>
         transitionRelease({ ...release(), phase: 'approval', gate_state: 'awaiting_approval' }, {
           type: 'approve',
           approved_by_actor_id: 'actor-reviewer',
-          blockers,
+          blocker_snapshot: createReleaseBlockerSnapshot({
+            release_id: 'release-1',
+            generated_at: timestamp,
+            blockers,
+          }),
         }),
       ).toThrow();
       expect(() =>
         transitionRelease({ ...release(), phase: 'approval', gate_state: 'awaiting_approval' }, {
           type: 'override_approve',
           approved_by_actor_id: 'actor-reviewer',
-          reason: 'Manual approval.',
-          blockers,
+          rationale: 'Manual approval.',
+          blocker_snapshot: createReleaseBlockerSnapshot({
+            release_id: 'release-1',
+            generated_at: timestamp,
+            blockers,
+          }),
         }),
       ).toThrow();
     }
@@ -292,6 +331,36 @@ describe('Release gate derivation', () => {
     expect(deriveCodes({ execution_packages: [executionPackage({ gate_state: 'released' })] })).not.toContain(
       'package_not_release_ready',
     );
+  });
+
+  it('creates deterministic blocker snapshots for transition commands', () => {
+    const blockers = deriveReleaseBlockers({
+      release: release({ rollout_strategy: undefined }),
+      work_items: [workItem()],
+      execution_packages: [executionPackage()],
+      run_sessions: [runSession()],
+      review_packets: [reviewPacket()],
+      evidence: [evidence()],
+    });
+    const snapshot = createReleaseBlockerSnapshot({
+      release_id: 'release-1',
+      generated_at: timestamp,
+      blockers,
+    });
+
+    expect(snapshot).toMatchObject({
+      release_id: 'release-1',
+      generated_at: timestamp,
+      blockers,
+    });
+    expect(snapshot.blocker_fingerprint).toBe(fingerprintReleaseBlockers(blockers));
+    expect(
+      createReleaseBlockerSnapshot({
+        release_id: 'release-1',
+        generated_at: timestamp,
+        blockers: [...blockers].reverse(),
+      }).blocker_fingerprint,
+    ).toBe(snapshot.blocker_fingerprint);
   });
 
   it('derives failed_required_check when a selected run is missing a required check result', () => {

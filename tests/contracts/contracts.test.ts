@@ -14,6 +14,7 @@ import {
   linkReleaseObjectResponseSchema,
   overrideApproveReleaseRequestSchema,
   patchReleaseRequestSchema,
+  releaseBlockerSnapshotSchema,
   releaseActorCommandRequestSchema,
   releaseControlResponseSchema,
   forceRerunPackageRequestSchema,
@@ -181,6 +182,20 @@ describe('P0 delivery loop contracts', () => {
     idempotency_key: 'exec-package-1:run-session-1:748c32b',
   };
 
+  const validReleaseBlockerSnapshot = {
+    release_id: 'release-1',
+    generated_at: '2026-05-05T00:00:00.000Z',
+    blocker_fingerprint: 'release-blockers:v1:abc123',
+    blockers: [
+      {
+        code: 'stale_or_superseded_evidence',
+        category: 'evidence',
+        overrideable: true,
+        message: 'Release evidence is stale.',
+      },
+    ],
+  };
+
   it('parses release request and response DTOs', () => {
     expect(
       createReleaseRequestSchema.parse({
@@ -217,19 +232,22 @@ describe('P0 delivery loop contracts', () => {
         created_at: '2026-05-05T00:00:00.000Z',
         updated_at: '2026-05-05T00:00:00.000Z',
       },
-      blockers: [
-        {
-          code: 'missing_rollout_strategy',
-          category: 'planning',
-          overrideable: true,
-          message: 'Release is missing a rollout strategy.',
-        },
-      ],
+      blocker_snapshot: {
+        ...validReleaseBlockerSnapshot,
+        blockers: [
+          {
+            code: 'missing_rollout_strategy',
+            category: 'planning',
+            overrideable: true,
+            message: 'Release is missing a rollout strategy.',
+          },
+        ],
+      },
       decision_intents: [],
     });
 
     expect(control.release.gate_state).toBe('awaiting_approval');
-    expect(control.blockers[0]?.code).toBe('missing_rollout_strategy');
+    expect(control.blocker_snapshot.blockers[0]?.code).toBe('missing_rollout_strategy');
 
     expect(
       linkReleaseObjectResponseSchema.parse({
@@ -252,10 +270,10 @@ describe('P0 delivery loop contracts', () => {
     expect(
       overrideApproveReleaseRequestSchema.parse({
         actor_id: 'actor-release-manager',
-        reason: 'Reviewed risk manually.',
-        accepted_blocker_codes: ['stale_or_superseded_evidence'],
-      }).accepted_blocker_codes,
-    ).toEqual(['stale_or_superseded_evidence']);
+        rationale: 'Reviewed risk manually.',
+        blocker_snapshot: validReleaseBlockerSnapshot,
+      }).blocker_snapshot.blockers[0]?.code,
+    ).toBe('stale_or_superseded_evidence');
 
     expect(
       closeReleaseRequestSchema.parse({
@@ -280,6 +298,46 @@ describe('P0 delivery loop contracts', () => {
     });
 
     expect(parsed.object_ref.relationship).toBe('supports');
+  });
+
+  it('rejects invalid release DTO inputs', () => {
+    expect(patchReleaseRequestSchema.safeParse({}).success).toBe(false);
+    expect(patchReleaseRequestSchema.safeParse({ title: 'P1', unknown: true }).success).toBe(false);
+    expect(
+      releaseBlockerSnapshotSchema.safeParse({
+        ...validReleaseBlockerSnapshot,
+        blockers: [
+          {
+            code: 'unknown_blocker',
+            category: 'evidence',
+            overrideable: true,
+            message: 'Unknown blocker.',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      overrideApproveReleaseRequestSchema.safeParse({
+        actor_id: 'actor-release-manager',
+        rationale: '',
+        blocker_snapshot: validReleaseBlockerSnapshot,
+      }).success,
+    ).toBe(false);
+    expect(
+      overrideApproveReleaseRequestSchema.safeParse({
+        actor_id: 'actor-release-manager',
+        rationale: 'Reviewed manually.',
+        accepted_blocker_codes: ['stale_or_superseded_evidence'],
+      }).success,
+    ).toBe(false);
+    expect(
+      overrideApproveReleaseRequestSchema.safeParse({
+        actor_id: 'actor-release-manager',
+        rationale: 'Reviewed manually.',
+        blocker_snapshot: validReleaseBlockerSnapshot,
+        unknown: true,
+      }).success,
+    ).toBe(false);
   });
 
   it('parses a valid run spec', () => {

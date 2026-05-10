@@ -1,19 +1,28 @@
-import type {
-  ArtifactKind,
-  ArtifactRef,
-  ChangedFile,
-  CheckResult,
-  ExecutorResult,
-  ExecutorType,
-  FailureKind,
-  RequiredCheckSpec,
-  RequestedChange,
-  RunCommandType,
-  RunEventSource,
-  RunEventType,
-  RunEventVisibility,
-  RunSpec,
-  SelfReviewResult,
+import {
+  releaseActivityStates as contractReleaseActivityStates,
+  releaseBlockerCodes as contractReleaseBlockerCodes,
+  releaseEvidenceObjectTypes as contractReleaseEvidenceObjectTypes,
+  releaseEvidenceRelationships as contractReleaseEvidenceRelationships,
+  releaseEvidenceTypes as contractReleaseEvidenceTypes,
+  releaseGateStates as contractReleaseGateStates,
+  releasePhases as contractReleasePhases,
+  releaseResolutions as contractReleaseResolutions,
+  reviewPacketDecisions as contractReviewPacketDecisions,
+  type ArtifactKind,
+  type ArtifactRef,
+  type ChangedFile,
+  type CheckResult,
+  type ExecutorResult,
+  type ExecutorType,
+  type FailureKind,
+  type RequiredCheckSpec,
+  type RequestedChange,
+  type RunCommandType,
+  type RunEventSource,
+  type RunEventType,
+  type RunEventVisibility,
+  type RunSpec,
+  type SelfReviewResult,
 } from '@forgeloop/contracts';
 
 export type DomainErrorCode =
@@ -113,7 +122,6 @@ export interface WorkItem {
   current_plan_id?: string;
   archived_at?: IsoDateTime;
   deleted_at?: IsoDateTime;
-  authorized?: boolean;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -245,7 +253,6 @@ export interface ExecutionPackage {
   blocked_reason?: string;
   archived_at?: IsoDateTime;
   deleted_at?: IsoDateTime;
-  authorized?: boolean;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -369,7 +376,7 @@ export interface RunWorkerLease {
 }
 
 export type ReviewPacketStatus = 'ready' | 'in_review' | 'completed' | 'archived';
-export const reviewPacketDecisions = ['none', 'approved', 'changes_requested', 'need_more_context', 'escalate'] as const;
+export const reviewPacketDecisions = contractReviewPacketDecisions;
 export type ReviewPacketDecision = (typeof reviewPacketDecisions)[number];
 
 export interface ReviewPacket {
@@ -451,54 +458,25 @@ export interface Actor {
   updated_at: IsoDateTime;
 }
 
-export const releasePhases = ['draft', 'candidate', 'approval', 'rollout', 'observing', 'completed', 'closed'] as const;
+export const releasePhases = contractReleasePhases;
 export type ReleasePhase = (typeof releasePhases)[number];
 
-export const releaseActivityStates = [
-  'idle',
-  'awaiting_human',
-  'human_in_progress',
-  'rolling_out',
-  'paused',
-  'blocked',
-] as const;
+export const releaseActivityStates = contractReleaseActivityStates;
 export type ReleaseActivityState = (typeof releaseActivityStates)[number];
 
-export const releaseGateStates = [
-  'not_submitted',
-  'awaiting_approval',
-  'changes_requested',
-  'approved',
-  'rollout_failed',
-  'rollout_succeeded',
-] as const;
+export const releaseGateStates = contractReleaseGateStates;
 export type ReleaseGateState = (typeof releaseGateStates)[number];
 
-export const releaseResolutions = ['none', 'completed', 'rolled_back', 'cancelled'] as const;
+export const releaseResolutions = contractReleaseResolutions;
 export type ReleaseResolution = (typeof releaseResolutions)[number];
 
-export const releaseEvidenceTypes = [
-  'test_report',
-  'review_packet',
-  'build',
-  'deployment',
-  'metric_snapshot',
-  'rollback_record',
-  'observation_note',
-] as const;
+export const releaseEvidenceTypes = contractReleaseEvidenceTypes;
 export type ReleaseEvidenceType = (typeof releaseEvidenceTypes)[number];
 
-export const releaseEvidenceObjectTypes = [
-  'work_item',
-  'execution_package',
-  'run_session',
-  'review_packet',
-  'artifact',
-  'decision',
-] as const;
+export const releaseEvidenceObjectTypes = contractReleaseEvidenceObjectTypes;
 export type ReleaseEvidenceObjectType = (typeof releaseEvidenceObjectTypes)[number];
 
-export const releaseEvidenceRelationships = ['supports', 'generated_by', 'observed', 'blocks', 'rollback_of'] as const;
+export const releaseEvidenceRelationships = contractReleaseEvidenceRelationships;
 export type ReleaseEvidenceRelationship = (typeof releaseEvidenceRelationships)[number];
 
 export interface ReleaseEvidenceObjectRef {
@@ -540,21 +518,7 @@ export interface Release {
   closed_at?: IsoDateTime;
 }
 
-export const releaseBlockerCodes = [
-  'missing_work_item',
-  'missing_execution_package',
-  'empty_release_scope',
-  'work_item_not_complete',
-  'package_not_release_ready',
-  'missing_approved_review_packet',
-  'failed_required_check',
-  'missing_required_artifact',
-  'evidence_redacted',
-  'stale_or_superseded_evidence',
-  'missing_rollout_strategy',
-  'missing_rollback_plan',
-  'missing_observation_plan',
-] as const;
+export const releaseBlockerCodes = contractReleaseBlockerCodes;
 export type ReleaseBlockerCode = (typeof releaseBlockerCodes)[number];
 
 export type ReleaseBlockerCategory = 'structural' | 'risk' | 'evidence' | 'planning';
@@ -566,6 +530,13 @@ export interface ReleaseBlocker {
   message: string;
   object_type?: string;
   object_id?: string;
+}
+
+export interface ReleaseBlockerSnapshot {
+  release_id: string;
+  generated_at: IsoDateTime;
+  blocker_fingerprint: string;
+  blockers: ReleaseBlocker[];
 }
 
 export interface ReleaseDecisionIntent {

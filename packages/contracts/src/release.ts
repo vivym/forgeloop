@@ -2,33 +2,37 @@ import { z } from 'zod';
 
 const isoDateTimeSchema = z.string().datetime();
 
-export const releasePhaseSchema = z.enum(['draft', 'candidate', 'approval', 'rollout', 'observing', 'completed', 'closed']);
+export const releasePhases = ['draft', 'candidate', 'approval', 'rollout', 'observing', 'completed', 'closed'] as const;
+export const releasePhaseSchema = z.enum(releasePhases);
 export type ReleasePhase = z.infer<typeof releasePhaseSchema>;
 
-export const releaseActivityStateSchema = z.enum([
+export const releaseActivityStates = [
   'idle',
   'awaiting_human',
   'human_in_progress',
   'rolling_out',
   'paused',
   'blocked',
-]);
+] as const;
+export const releaseActivityStateSchema = z.enum(releaseActivityStates);
 export type ReleaseActivityState = z.infer<typeof releaseActivityStateSchema>;
 
-export const releaseGateStateSchema = z.enum([
+export const releaseGateStates = [
   'not_submitted',
   'awaiting_approval',
   'changes_requested',
   'approved',
   'rollout_failed',
   'rollout_succeeded',
-]);
+] as const;
+export const releaseGateStateSchema = z.enum(releaseGateStates);
 export type ReleaseGateState = z.infer<typeof releaseGateStateSchema>;
 
-export const releaseResolutionSchema = z.enum(['none', 'completed', 'rolled_back', 'cancelled']);
+export const releaseResolutions = ['none', 'completed', 'rolled_back', 'cancelled'] as const;
+export const releaseResolutionSchema = z.enum(releaseResolutions);
 export type ReleaseResolution = z.infer<typeof releaseResolutionSchema>;
 
-export const releaseEvidenceTypeSchema = z.enum([
+export const releaseEvidenceTypes = [
   'test_report',
   'review_packet',
   'build',
@@ -36,26 +40,29 @@ export const releaseEvidenceTypeSchema = z.enum([
   'metric_snapshot',
   'rollback_record',
   'observation_note',
-]);
+] as const;
+export const releaseEvidenceTypeSchema = z.enum(releaseEvidenceTypes);
 export type ReleaseEvidenceType = z.infer<typeof releaseEvidenceTypeSchema>;
 
-export const releaseEvidenceObjectTypeSchema = z.enum([
+export const releaseEvidenceObjectTypes = [
   'work_item',
   'execution_package',
   'run_session',
   'review_packet',
   'artifact',
   'decision',
-]);
+] as const;
+export const releaseEvidenceObjectTypeSchema = z.enum(releaseEvidenceObjectTypes);
 export type ReleaseEvidenceObjectType = z.infer<typeof releaseEvidenceObjectTypeSchema>;
 
-export const releaseEvidenceRelationshipSchema = z.enum([
+export const releaseEvidenceRelationships = [
   'supports',
   'generated_by',
   'observed',
   'blocks',
   'rollback_of',
-]);
+] as const;
+export const releaseEvidenceRelationshipSchema = z.enum(releaseEvidenceRelationships);
 export type ReleaseEvidenceRelationship = z.infer<typeof releaseEvidenceRelationshipSchema>;
 
 export const releaseEvidenceObjectRefSchema = z
@@ -109,7 +116,7 @@ export const releaseSchema = z
   .strict();
 export type Release = z.infer<typeof releaseSchema>;
 
-export const releaseBlockerCodeSchema = z.enum([
+export const releaseBlockerCodes = [
   'missing_work_item',
   'missing_execution_package',
   'empty_release_scope',
@@ -123,7 +130,8 @@ export const releaseBlockerCodeSchema = z.enum([
   'missing_rollout_strategy',
   'missing_rollback_plan',
   'missing_observation_plan',
-]);
+] as const;
+export const releaseBlockerCodeSchema = z.enum(releaseBlockerCodes);
 export type ReleaseBlockerCode = z.infer<typeof releaseBlockerCodeSchema>;
 
 export const releaseBlockerSchema = z
@@ -137,6 +145,16 @@ export const releaseBlockerSchema = z
   })
   .strict();
 export type ReleaseBlocker = z.infer<typeof releaseBlockerSchema>;
+
+export const releaseBlockerSnapshotSchema = z
+  .object({
+    release_id: z.string().min(1),
+    generated_at: isoDateTimeSchema,
+    blocker_fingerprint: z.string().min(1),
+    blockers: z.array(releaseBlockerSchema),
+  })
+  .strict();
+export type ReleaseBlockerSnapshot = z.infer<typeof releaseBlockerSnapshotSchema>;
 
 export const releaseDecisionIntentSchema = z
   .object({
@@ -177,7 +195,7 @@ export type PatchReleaseRequest = z.infer<typeof patchReleaseRequestSchema>;
 export const releaseControlResponseSchema = z
   .object({
     release: releaseSchema,
-    blockers: z.array(releaseBlockerSchema),
+    blocker_snapshot: releaseBlockerSnapshotSchema,
     decision_intents: z.array(releaseDecisionIntentSchema).default([]),
   })
   .strict();
@@ -202,8 +220,8 @@ export const releaseActorCommandRequestSchema = z
 export type ReleaseActorCommandRequest = z.infer<typeof releaseActorCommandRequestSchema>;
 
 export const overrideApproveReleaseRequestSchema = releaseActorCommandRequestSchema.extend({
-  reason: z.string().min(1),
-  accepted_blocker_codes: z.array(releaseBlockerCodeSchema).min(1),
+  rationale: z.string().trim().min(1),
+  blocker_snapshot: releaseBlockerSnapshotSchema,
 });
 export type OverrideApproveReleaseRequest = z.infer<typeof overrideApproveReleaseRequestSchema>;
 

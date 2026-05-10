@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createReleaseBlockerSnapshot,
   DomainError,
   transitionRelease,
   type Release,
   type ReleaseBlocker,
+  type ReleaseBlockerSnapshot,
 } from '../../packages/domain/src/index';
 
 const timestamp = '2026-05-05T00:00:00.000Z';
@@ -33,6 +35,13 @@ const emptyScopeBlocker: ReleaseBlocker = {
   overrideable: false,
   message: 'Release requires at least one valid work item and execution package.',
 };
+
+const blockerSnapshot = (releaseId: string, blockers: ReleaseBlocker[]): ReleaseBlockerSnapshot =>
+  createReleaseBlockerSnapshot({
+    release_id: releaseId,
+    generated_at: timestamp,
+    blockers,
+  });
 
 describe('Release state transitions', () => {
   it('creates a draft release in the not-submitted gate', () => {
@@ -65,7 +74,14 @@ describe('Release state transitions', () => {
       execution_package_id: 'package-1',
     }).release;
 
-    expect(releaseState(transitionRelease(candidate, { type: 'submit', blockers: [] }).release)).toEqual({
+    expect(
+      releaseState(
+        transitionRelease(candidate, {
+          type: 'submit',
+          blocker_snapshot: blockerSnapshot(candidate.id, []),
+        }).release,
+      ),
+    ).toEqual({
       phase: 'approval',
       activity_state: 'awaiting_human',
       gate_state: 'awaiting_approval',
@@ -84,7 +100,7 @@ describe('Release state transitions', () => {
     const result = transitionRelease(release, {
       type: 'approve',
       approved_by_actor_id: 'actor-reviewer',
-      blockers: [],
+      blocker_snapshot: blockerSnapshot(release.id, []),
     });
 
     expect(releaseState(result.release)).toEqual({
@@ -114,15 +130,15 @@ describe('Release state transitions', () => {
     const result = transitionRelease(release, {
       type: 'override_approve',
       approved_by_actor_id: 'actor-release-manager',
-      reason: 'Known flaky evidence service; reviewed manually.',
-      blockers: [
+      rationale: 'Known flaky evidence service; reviewed manually.',
+      blocker_snapshot: blockerSnapshot(release.id, [
         {
           code: 'stale_or_superseded_evidence',
           category: 'evidence',
           overrideable: true,
           message: 'Evidence was superseded after review.',
         },
-      ],
+      ]),
     });
 
     expect(releaseState(result.release)).toEqual({
@@ -206,22 +222,100 @@ describe('Release state transitions', () => {
     } as Release;
 
     for (const transition of [
-      () => transitionRelease(candidate, { type: 'submit', blockers: [emptyScopeBlocker] }),
+      () =>
+        transitionRelease(candidate, {
+          type: 'submit',
+          blocker_snapshot: blockerSnapshot(candidate.id, [emptyScopeBlocker]),
+        }),
       () =>
         transitionRelease(approval, {
           type: 'approve',
           approved_by_actor_id: 'actor-reviewer',
-          blockers: [emptyScopeBlocker],
+          blocker_snapshot: blockerSnapshot(approval.id, [emptyScopeBlocker]),
         }),
       () =>
         transitionRelease(approval, {
           type: 'override_approve',
           approved_by_actor_id: 'actor-reviewer',
-          reason: 'Manual approval.',
-          blockers: [emptyScopeBlocker],
+          rationale: 'Manual approval.',
+          blocker_snapshot: blockerSnapshot(approval.id, [emptyScopeBlocker]),
         }),
     ]) {
       expect(transition).toThrow(DomainError);
     }
+  });
+
+  it('rejects override approval with an empty blocker snapshot, blank rationale, or stale fingerprint', () => {
+    const release = {
+      ...createRelease(),
+      phase: 'approval',
+      activity_state: 'awaiting_human',
+      gate_state: 'awaiting_approval',
+    } as Release;
+    const validSnapshot = blockerSnapshot(release.id, [
+      {
+        code: 'stale_or_superseded_evidence',
+        category: 'evidence',
+        overrideable: true,
+        message: 'Evidence was superseded after review.',
+      },
+    ]);
+
+    expect(() =>
+      transitionRelease(release, {
+        type: 'override_approve',
+        approved_by_actor_id: 'actor-reviewer',
+        rationale: 'Manual approval.',
+        blocker_snapshot: blockerSnapshot(release.id, []),
+      }),
+    ).toThrow(DomainError);
+    expect(() =>
+      transitionRelease(release, {
+        type: 'override_approve',
+        approved_by_actor_id: 'actor-reviewer',
+        rationale: ' ',
+        blocker_snapshot: validSnapshot,
+      }),
+    ).toThrow(DomainError);
+    expect(() =>
+      transitionRelease(release, {
+        type: 'override_approve',
+        approved_by_actor_id: 'actor-reviewer',
+        rationale: 'Manual approval.',
+        blocker_snapshot: {
+          ...validSnapshot,
+          blocker_fingerprint: 'release-blockers:v1:stale',
+        },
+      }),
+    ).toThrow(DomainError);
+  });
+
+  it('supports the full release path from create through completion', () => {
+    const linkedWorkItem = transitionRelease(createRelease(), {
+      type: 'link_work_item',
+      work_item_id: 'work-item-1',
+    }).release;
+    const candidate = transitionRelease(linkedWorkItem, {
+      type: 'link_execution_package',
+      execution_package_id: 'package-1',
+    }).release;
+    const approval = transitionRelease(candidate, {
+      type: 'submit',
+      blocker_snapshot: blockerSnapshot(candidate.id, []),
+    }).release;
+    const rollout = transitionRelease(approval, {
+      type: 'approve',
+      approved_by_actor_id: 'actor-reviewer',
+      blocker_snapshot: blockerSnapshot(approval.id, []),
+    }).release;
+    const observing = transitionRelease(rollout, { type: 'start_observing' }).release;
+    const completed = transitionRelease(observing, { type: 'close', resolution: 'completed' }).release;
+
+    expect(releaseState(completed)).toEqual({
+      phase: 'completed',
+      activity_state: 'idle',
+      gate_state: 'rollout_succeeded',
+      resolution: 'completed',
+    });
   });
 });
