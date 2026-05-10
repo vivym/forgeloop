@@ -235,6 +235,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@forgeloop/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@forgeloop/domain':
         specifier: workspace:*
         version: link:../domain
