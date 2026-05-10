@@ -627,15 +627,26 @@ export class DrizzleP0Repository implements P0Repository {
       labels: release.labels ?? [],
       updated_by_actor_id: release.updated_by_actor_id ?? release.created_by_actor_id,
     };
-    await this.upsert(releases, releases.id, normalized);
+    await this.upsert(releases, releases.id, this.releaseTableRecord(normalized));
+    for (const workItemId of normalized.work_item_ids) {
+      await this.saveReleaseWorkItem({ release_id: normalized.id, work_item_id: workItemId });
+    }
+    for (const executionPackageId of normalized.execution_package_ids) {
+      await this.saveReleaseExecutionPackage({
+        release_id: normalized.id,
+        execution_package_id: executionPackageId,
+      });
+    }
   }
 
   async getRelease(releaseId: string): Promise<Release | undefined> {
-    return this.getById(releases, releases.id, releaseId);
+    const release = await this.getById<Release>(releases, releases.id, releaseId);
+    return release === undefined ? undefined : this.hydrateReleaseLinks(release);
   }
 
   async listReleasesForProject(projectId: string): Promise<Release[]> {
-    return this.listWhere<Release>(releases, eq(releases.projectId, projectId), releases.createdAt);
+    const releaseRows = await this.listWhere<Release>(releases, eq(releases.projectId, projectId), releases.createdAt);
+    return Promise.all(releaseRows.map((release) => this.hydrateReleaseLinks(release)));
   }
 
   async saveReleaseWorkItem(releaseWorkItem: ReleaseWorkItem): Promise<void> {
@@ -966,5 +977,23 @@ export class DrizzleP0Repository implements P0Repository {
         : await filtered.orderBy(...(Array.isArray(orderBy) ? orderBy : [orderBy]).map((column) => asc(column)));
 
     return rows.map((row) => fromDbRecord<T>(row));
+  }
+
+  private releaseTableRecord(release: Release): Omit<Release, 'work_item_ids' | 'execution_package_ids'> {
+    const { work_item_ids: _workItemIds, execution_package_ids: _executionPackageIds, ...record } = release;
+    return record;
+  }
+
+  private async hydrateReleaseLinks(release: Release): Promise<Release> {
+    const [workItems, executionPackages] = await Promise.all([
+      this.listReleaseWorkItems(release.id),
+      this.listReleaseExecutionPackages(release.id),
+    ]);
+
+    return {
+      ...release,
+      work_item_ids: workItems.map((workItem) => workItem.work_item_id),
+      execution_package_ids: executionPackages.map((executionPackage) => executionPackage.execution_package_id),
+    };
   }
 }

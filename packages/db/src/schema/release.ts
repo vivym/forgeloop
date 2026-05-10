@@ -1,5 +1,5 @@
 import { boolean, index, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import type { ReleaseEvidenceObjectRef } from '@forgeloop/domain';
+import type { Release, ReleaseEvidenceObjectRef } from '@forgeloop/domain';
 
 import {
   releaseActivityState,
@@ -44,6 +44,8 @@ export const releases = pgTable(
     rolloutStrategy: jsonb('rollout_strategy').$type<Record<string, unknown>>(),
     rollbackPlan: jsonb('rollback_plan').$type<Record<string, unknown>>(),
     observationPlan: jsonb('observation_plan').$type<Record<string, unknown>>(),
+    currentReviewPacketIds: jsonb('current_review_packet_ids').$type<Release['current_review_packet_ids']>(),
+    currentRunSessionIds: jsonb('current_run_session_ids').$type<Release['current_run_session_ids']>(),
     rolloutStartedAt: timestampColumn('rollout_started_at'),
     rolloutCompletedAt: timestampColumn('rollout_completed_at'),
     observedUntil: timestampColumn('observed_until'),

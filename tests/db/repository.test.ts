@@ -9,6 +9,7 @@ import type {
   PlanRevision,
   Project,
   ProjectRepo,
+  Release,
   ReviewPacket,
   RunSession,
   Spec,
@@ -27,6 +28,9 @@ import {
   type TraceLinkRecord,
   assertResettableDatabaseUrl,
   resetForgeloopDatabase,
+  release_execution_packages,
+  release_work_items,
+  releases,
 } from '../../packages/db/src/index';
 import { runP0RepositoryContract } from './repository-contract';
 
@@ -332,6 +336,33 @@ const decision: Decision = {
   created_at: now,
 };
 
+const release: Release = {
+  id: 'release-1',
+  org_id: 'org-1',
+  project_id: project.id,
+  key: 'REL-1',
+  title: 'P1 release',
+  phase: 'candidate',
+  activity_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'none',
+  work_item_ids: [workItem.id],
+  execution_package_ids: [executionPackage.id],
+  current_review_packet_ids: [reviewPacket.id],
+  current_run_session_ids: [runSession.id],
+  rollout_strategy: 'Deploy behind a flag.',
+  rollback_plan: 'Disable the flag and revert.',
+  observation_plan: 'Watch DB test signal.',
+  release_owner_actor_id: 'actor-owner',
+  release_type: 'normal',
+  visibility: 'internal',
+  labels: ['p1'],
+  created_by_actor_id: 'actor-owner',
+  created_at: now,
+  updated_at: now,
+  updated_by_actor_id: 'actor-owner',
+};
+
 const traceEvent: TraceEventRecord = {
   id: 'trace-event-1',
   event_type: 'run_replacement_recorded',
@@ -433,6 +464,58 @@ const createEmptySelectRepository = () => {
           limit: async () => [],
         }),
       }),
+    }),
+  };
+
+  return new DrizzleP0Repository(db as never);
+};
+
+const createReleaseSelectRepository = () => {
+  const releaseRow = {
+    id: release.id,
+    orgId: release.org_id,
+    projectId: release.project_id,
+    key: release.key,
+    title: release.title,
+    phase: release.phase,
+    activityState: release.activity_state,
+    gateState: release.gate_state,
+    resolution: release.resolution,
+    currentReviewPacketIds: release.current_review_packet_ids,
+    currentRunSessionIds: release.current_run_session_ids,
+    rolloutStrategy: release.rollout_strategy,
+    rollbackPlan: release.rollback_plan,
+    observationPlan: release.observation_plan,
+    releaseOwnerActorId: release.release_owner_actor_id,
+    releaseType: release.release_type,
+    visibility: release.visibility,
+    labels: release.labels,
+    createdByActorId: release.created_by_actor_id,
+    createdAt: release.created_at,
+    updatedAt: release.updated_at,
+    updatedByActorId: release.updated_by_actor_id,
+  };
+  const rowsByTable = new Map<unknown, Record<string, unknown>[]>([
+    [releases, [releaseRow]],
+    [release_work_items, [{ releaseId: release.id, workItemId: workItem.id }]],
+    [release_execution_packages, [{ releaseId: release.id, packageId: executionPackage.id }]],
+  ]);
+  const queryResult = (table: unknown) => {
+    const rows = rowsByTable.get(table) ?? [];
+    return {
+      limit: async () => rows,
+      orderBy: async () => rows,
+      then: (resolve: (rows: Record<string, unknown>[]) => unknown, reject?: (error: unknown) => unknown) =>
+        Promise.resolve(rows).then(resolve, reject),
+    };
+  };
+  const selectFrom = (table: unknown) => ({
+    where: () => queryResult(table),
+    orderBy: async () => rowsByTable.get(table) ?? [],
+  });
+  const db = {
+    select: () => ({
+      from: (table: unknown) => selectFrom(table),
     }),
   };
 
@@ -698,6 +781,29 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
     expect(captures[0]?.set?.createdAt).toBeUndefined();
     expect(captures[1]?.values.artifactId).toBeNull();
     expect(captures[1]?.set).toBeUndefined();
+  });
+
+  it('writes release pointer arrays and normalized package links', async () => {
+    const { repository, captures } = createInsertCaptureRepository();
+
+    await repository.saveRelease(release);
+
+    expect(captures[0]?.values.currentReviewPacketIds).toEqual(release.current_review_packet_ids);
+    expect(captures[0]?.values.currentRunSessionIds).toEqual(release.current_run_session_ids);
+    expect(captures[0]?.values.workItemIds).toBeUndefined();
+    expect(captures[0]?.values.executionPackageIds).toBeUndefined();
+    expect(captures).toContainEqual({
+      values: { releaseId: release.id, workItemId: workItem.id },
+      set: { releaseId: release.id, workItemId: workItem.id },
+    });
+    expect(captures).toContainEqual({
+      values: { releaseId: release.id, packageId: executionPackage.id },
+      set: { releaseId: release.id, packageId: executionPackage.id },
+    });
+  });
+
+  it('maps release rows with normalized links back to the domain release shape', async () => {
+    expect(await createReleaseSelectRepository().getRelease(release.id)).toEqual(release);
   });
 
   it('maps database nulls back to omitted optional domain properties', async () => {
