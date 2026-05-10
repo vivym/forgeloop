@@ -120,9 +120,9 @@ const valueForHistory = (value: unknown): string | undefined => {
 const sameValue = (left: unknown, right: unknown): boolean => valueForHistory(left) === valueForHistory(right);
 const uuidBackedIdPrefixes = new Set(['release', 'release-evidence', 'decision']);
 
-const byUpdatedAtDesc = <T extends { updated_at?: string; created_at: string; id: string }>(left: T, right: T): number => {
-  const leftTime = Date.parse(left.updated_at ?? left.created_at);
-  const rightTime = Date.parse(right.updated_at ?? right.created_at);
+const byCreatedAtDesc = <T extends { created_at: string; id: string }>(left: T, right: T): number => {
+  const leftTime = Date.parse(left.created_at);
+  const rightTime = Date.parse(right.created_at);
   return rightTime - leftTime || right.id.localeCompare(left.id);
 };
 
@@ -512,7 +512,7 @@ export class ReleaseService {
             packageRunSessions.find((runSession) => release.current_run_session_ids?.includes(runSession.id) === true) ??
             packageRunSessions.find((runSession) => runSession.id === executionPackage.current_run_session_id) ??
             packageRunSessions.find((runSession) => runSession.id === executionPackage.last_run_session_id) ??
-            [...packageRunSessions].sort(byUpdatedAtDesc)[0],
+            [...packageRunSessions].sort(byCreatedAtDesc)[0],
         };
       }),
     );
@@ -576,7 +576,7 @@ export class ReleaseService {
               return [];
             }
             const artifacts = await this.repository.listArtifactsForObject('release_evidence', item.id);
-            const artifact = artifacts.find((candidate) => candidate.id === item.artifact_id) ?? artifacts[0];
+            const artifact = artifacts.find((candidate) => candidate.id === item.artifact_id);
             return artifact !== undefined && serializePublicArtifactRef(artifact.ref) !== undefined ? [item.artifact_id] : [];
           }),
         )

@@ -729,6 +729,105 @@ describe('release module', () => {
       'unsafe_or_redacted_evidence_backlink',
     );
 
+    await repo.saveRunSession(
+      runSession({
+        id: 'run-session-old-touch',
+        execution_package_id: scope.executionPackage.id,
+        created_at: now,
+        updated_at: later,
+      }),
+    );
+    await repo.saveRunSession(
+      runSession({
+        id: 'run-session-new-created',
+        execution_package_id: scope.executionPackage.id,
+        created_at: later,
+        updated_at: now,
+      }),
+    );
+    const runtimeSelection = await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Newly created runtime should be public.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'warning',
+            observed_at: later,
+            summary: 'Created order should win over a later touch.',
+            links: [
+              { object_type: 'release', object_id: id, relationship: 'observed' },
+              { object_type: 'work_item', object_id: scope.workItem.id, relationship: 'affected' },
+              { object_type: 'run_session', object_id: 'run-session-new-created', relationship: 'generated_by' },
+            ],
+          },
+        },
+      })
+      .expect(201);
+    expect(runtimeSelection.body.blockers).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unsafe_or_redacted_evidence_backlink',
+          object_id: 'run-session-new-created',
+        }),
+      ]),
+    );
+
+    await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Stale artifact id should not be inferred from other artifacts.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'warning',
+            observed_at: later,
+            summary: 'Only the explicit artifact id should count.',
+            links: [
+              { object_type: 'release', object_id: id, relationship: 'observed' },
+              { object_type: 'work_item', object_id: scope.workItem.id, relationship: 'affected' },
+              { object_type: 'artifact', object_id: 'artifact-stale', relationship: 'generated_by' },
+            ],
+          },
+        },
+      })
+      .expect(201);
+    const staleArtifactEvidence = (await repo.listReleaseEvidences(id)).find(
+      (evidence) => evidence.summary === 'Stale artifact id should not be inferred from other artifacts.',
+    );
+    expect(staleArtifactEvidence).toBeDefined();
+    await repo.saveArtifact({
+      id: 'artifact-attached-public',
+      object_type: 'release_evidence',
+      object_id: staleArtifactEvidence!.id,
+      ref: {
+        kind: 'execution_summary',
+        name: 'attached-summary.md',
+        content_type: 'text/markdown',
+        storage_uri: 'https://example.test/releases/attached-summary.md',
+      },
+      created_at: later,
+    });
+    const patched = await request(app.getHttpServer())
+      .patch(`/releases/${id}`)
+      .send({
+        actor_id: actorOwner,
+        title: 'Release Radar v2',
+      })
+      .expect(200);
+    expect(patched.body.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unsafe_or_redacted_evidence_backlink',
+          object_id: staleArtifactEvidence!.id,
+        }),
+      ]),
+    );
+
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
       .send({ actor_id: actorOwner, evidence_type: 'observation_note', summary: 'bad', related_object_refs: [] })
