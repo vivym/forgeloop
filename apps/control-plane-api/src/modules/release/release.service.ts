@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   BadRequestException,
   ConflictException,
@@ -53,8 +55,9 @@ import {
   type WorkItem,
 } from '@forgeloop/domain';
 import type { P0Repository } from '@forgeloop/db';
+import { serializePublicArtifactRef, serializePublicDecision } from '@forgeloop/db';
 
-import { P0_REPOSITORY } from '../../p0/p0.service';
+import { P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../../p0/p0.service';
 import {
   publicReleaseSummaryFor,
   resolveReleaseExecutionPackageLinks,
@@ -80,6 +83,10 @@ type ReleaseMutationEventType =
   | 'release_closed';
 
 type EvidenceExtra = NonNullable<CreateReleaseEvidenceRequest['extra']>;
+type DecisionPersistenceOptions = { reason?: string; summary?: string };
+type DecisionPersistenceOptionsFor = (
+  intent: ReleaseTransitionResult['decision_intents'][number],
+) => DecisionPersistenceOptions | undefined;
 
 const lifecycleFields: Array<keyof Release> = [
   'title',
@@ -110,13 +117,19 @@ const valueForHistory = (value: unknown): string | undefined => {
 };
 
 const sameValue = (left: unknown, right: unknown): boolean => valueForHistory(left) === valueForHistory(right);
+const uuidBackedIdPrefixes = new Set(['release', 'release-evidence', 'decision']);
 
 @Injectable()
 export class ReleaseService {
   private idCounter = 0;
   private timeCounter = 0;
+  private durableTimeMs = 0;
+  private readonly durableInstanceId = randomUUID().replace(/-/g, '').slice(0, 12);
 
-  constructor(@Inject(P0_REPOSITORY) private readonly repository: P0Repository) {}
+  constructor(
+    @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
+    @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+  ) {}
 
   async createRelease(body: CreateReleaseRequest): Promise<ReleaseControlResponse> {
     const project = await this.repository.getProject(body.project_id);
@@ -278,7 +291,11 @@ export class ReleaseService {
       gate_context: context,
       at: this.now(),
     });
-    await this.persistTransition(release, result, body.actor_id, 'release_approved');
+    await this.persistTransition(release, result, body.actor_id, 'release_approved', {
+      payload: body.rationale === undefined ? {} : { rationale: body.rationale },
+      decisionOptionsFor: (intent) =>
+        intent.decision_type === 'release_approval' && body.rationale !== undefined ? { reason: body.rationale } : undefined,
+    });
     return this.controlResponse(result.release, result.decision_intents, [], result.blocker_snapshot);
   }
 
@@ -437,7 +454,11 @@ export class ReleaseService {
         ? new UnprocessableEntityException('Release requires observation evidence before completed close')
         : new ConflictException('Release cannot be closed from its current state'),
     );
-    await this.persistTransition(release, result, body.actor_id, 'release_closed');
+    await this.persistTransition(release, result, body.actor_id, 'release_closed', {
+      payload: body.summary === undefined ? {} : { summary: body.summary },
+      decisionOptionsFor: (intent) =>
+        intent.decision_type === 'release_close' && body.summary !== undefined ? { summary: body.summary } : undefined,
+    });
     return this.controlResponse(result.release, result.decision_intents, overriddenBlockers, result.blocker_snapshot);
   }
 
@@ -490,23 +511,46 @@ export class ReleaseService {
       run_sessions: runSessions,
       review_packets: reviewPackets,
       evidence,
-      public_link_visibility: this.publicLinkVisibility(release, workItems, executionPackages, runSessions, reviewPackets, evidence),
+      public_link_visibility: await this.publicLinkVisibility(release, workItems, executionPackages, runSessions, reviewPackets, evidence),
     };
   }
 
-  private publicLinkVisibility(
+  private async publicLinkVisibility(
     release: Release,
     workItems: readonly WorkItem[],
     executionPackages: readonly ExecutionPackage[],
     runSessions: readonly RunSession[],
     reviewPackets: readonly ReviewPacket[],
     evidence: readonly ReleaseEvidence[],
-  ): ReleasePublicLinkVisibility[] {
+  ): Promise<ReleasePublicLinkVisibility[]> {
     const workItemIds = new Set(workItems.map((item) => item.id));
     const packageIds = new Set(executionPackages.map((item) => item.id));
     const runSessionIds = new Set(runSessions.map((item) => item.id));
     const reviewPacketIds = new Set(reviewPackets.map((item) => item.id));
     const evidenceIds = new Set(evidence.map((item) => item.id));
+    const decisionIds = new Set(
+      (await this.repository.listDecisionsForObject('release', release.id)).flatMap((decision) => {
+        try {
+          return [serializePublicDecision(decision).id];
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const publicArtifactIds = new Set(
+      (
+        await Promise.all(
+          evidence.map(async (item) => {
+            if (item.artifact_id === undefined) {
+              return [];
+            }
+            const artifacts = await this.repository.listArtifactsForObject('release_evidence', item.id);
+            const artifact = artifacts.find((candidate) => candidate.id === item.artifact_id) ?? artifacts[0];
+            return artifact !== undefined && serializePublicArtifactRef(artifact.ref) !== undefined ? [item.artifact_id] : [];
+          }),
+        )
+      ).flat(),
+    );
     const visibility = new Map<string, ReleasePublicLinkVisibility>();
 
     for (const item of evidence) {
@@ -522,7 +566,9 @@ export class ReleaseService {
           (link.object_type === 'execution_package' && packageIds.has(link.object_id)) ||
           (link.object_type === 'run_session' && runSessionIds.has(link.object_id)) ||
           (link.object_type === 'review_packet' && reviewPacketIds.has(link.object_id)) ||
-          (link.object_type === 'release_evidence' && evidenceIds.has(link.object_id));
+          (link.object_type === 'release_evidence' && evidenceIds.has(link.object_id)) ||
+          (link.object_type === 'artifact' && publicArtifactIds.has(link.object_id)) ||
+          (link.object_type === 'decision' && decisionIds.has(link.object_id));
         visibility.set(`${link.object_type}\0${link.object_id}`, {
           object_type: link.object_type,
           object_id: link.object_id,
@@ -537,6 +583,7 @@ export class ReleaseService {
   private validateEvidenceMinimum(body: CreateReleaseEvidenceRequest): void {
     const extra = body.extra;
     const observation = extra?.observation;
+    const hasArtifactEvidence = body.artifact_id !== undefined || body.object_ref?.object_type === 'artifact';
     switch (body.evidence_type) {
       case 'review_packet':
         if (body.object_ref?.object_type !== 'review_packet') {
@@ -544,7 +591,7 @@ export class ReleaseService {
         }
         return;
       case 'test_report':
-        if (body.artifact_id === undefined && (extra?.check_refs === undefined || extra.check_refs.length === 0)) {
+        if (!hasArtifactEvidence && (extra?.check_refs === undefined || extra.check_refs.length === 0)) {
           throw new BadRequestException('test_report evidence requires artifact_id or extra.check_refs');
         }
         return;
@@ -552,7 +599,7 @@ export class ReleaseService {
         const build = isRecord(extra?.build) ? extra.build : undefined;
         const hasIdentity =
           hasText(build?.build_id) || hasText(build?.version) || hasText(build?.commit_sha) || hasText(build?.source_branch);
-        if (body.artifact_id === undefined && !(hasIdentity && hasText(build?.result))) {
+        if (!hasArtifactEvidence && !(hasIdentity && hasText(build?.result))) {
           throw new BadRequestException('build evidence requires build identity/status or artifact_id');
         }
         return;
@@ -570,7 +617,7 @@ export class ReleaseService {
         }
         return;
       case 'rollback_record':
-        if (!isRecord(extra?.rollback)) {
+        if (!isRecord(extra?.rollback) || Object.keys(extra.rollback).length === 0) {
           throw new BadRequestException('rollback_record evidence requires rollback metadata');
         }
         return;
@@ -668,14 +715,21 @@ export class ReleaseService {
     result: Pick<ReleaseTransitionResult, 'release' | 'decision_intents'>,
     actorId: string,
     eventType: ReleaseMutationEventType,
+    options: { payload?: Record<string, unknown>; decisionOptionsFor?: DecisionPersistenceOptionsFor } = {},
   ): Promise<void> {
     await this.repository.saveRelease(result.release);
-    await this.writeObjectEvent(eventType, result.release, actorId, {});
+    await this.writeObjectEvent(eventType, result.release, actorId, options.payload ?? {});
     await this.writeStatusHistory(before, result.release, actorId);
-    await Promise.all(result.decision_intents.map((intent) => this.persistDecisionIntent(intent)));
+    await Promise.all(
+      result.decision_intents.map((intent) => this.persistDecisionIntent(intent, options.decisionOptionsFor?.(intent))),
+    );
   }
 
-  private async persistDecisionIntent(intent: ReleaseTransitionResult['decision_intents'][number]): Promise<void> {
+  private async persistDecisionIntent(
+    intent: ReleaseTransitionResult['decision_intents'][number],
+    options: DecisionPersistenceOptions = {},
+  ): Promise<void> {
+    const reason = options.reason ?? intent.reason;
     const decision: Decision = {
       id: this.id('decision'),
       object_type: intent.object_type,
@@ -685,8 +739,8 @@ export class ReleaseService {
       decision_type: intent.decision_type,
       outcome: intent.outcome,
       decision: intent.outcome,
-      summary: intent.reason ?? intent.outcome,
-      ...(intent.reason !== undefined ? { rationale: intent.reason } : {}),
+      summary: options.summary ?? reason ?? intent.outcome,
+      ...(reason !== undefined ? { rationale: reason } : {}),
       ...(intent.blocker_snapshot !== undefined ? { evidence_refs: { blocker_snapshot: intent.blocker_snapshot } } : {}),
       created_at: this.now(),
     };
@@ -744,10 +798,22 @@ export class ReleaseService {
 
   private id(prefix: string): string {
     this.idCounter += 1;
+    if (this.durabilityMode === 'durable' && uuidBackedIdPrefixes.has(prefix)) {
+      return randomUUID();
+    }
+    if (this.durabilityMode === 'durable') {
+      return `${prefix}-${this.durableInstanceId}-${this.idCounter}`;
+    }
     return `${prefix}-${this.idCounter}`;
   }
 
   private now(): string {
+    if (this.durabilityMode === 'durable') {
+      const current = Date.now();
+      this.durableTimeMs = current > this.durableTimeMs ? current : this.durableTimeMs + 1;
+      return new Date(this.durableTimeMs).toISOString();
+    }
+
     this.timeCounter += 1;
     return new Date(Date.UTC(2026, 4, 5, 0, 0, this.timeCounter)).toISOString();
   }

@@ -3,6 +3,8 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  Artifact,
+  Decision,
   ExecutionPackage,
   Project,
   Release,
@@ -13,13 +15,19 @@ import type {
 } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import {
+  P0_REPOSITORY,
+  RUN_DURABILITY_MODE,
+  RUN_WORKER,
+  type RunDurabilityMode,
+} from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const project = (overrides: Partial<Project> = {}): Project => ({
   id: 'project-1',
@@ -163,11 +171,13 @@ describe('release module', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  const createTestApp = async () => {
+  const createTestApp = async (durabilityMode: RunDurabilityMode = 'volatile_demo') => {
     const repo = new InMemoryP0Repository();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(P0_REPOSITORY)
       .useValue(repo)
+      .overrideProvider(RUN_DURABILITY_MODE)
+      .useValue(durabilityMode)
       .overrideProvider(RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();
@@ -264,6 +274,47 @@ describe('release module', () => {
     expect(list.body.releases).toEqual([expect.objectContaining({ id })]);
 
     await request(app.getHttpServer()).get(`/releases/${id}`).query({ project_id: 'other-project' }).expect(404);
+  });
+
+  it('uses durable-safe ids and clocks for release-owned rows in durable mode', async () => {
+    const { app, repo } = await track(createTestApp('durable'));
+    await seedProject(repo);
+
+    const { id, body } = await createRelease(app);
+    expect(id).toMatch(uuidPattern);
+    expect(body.release.created_at).not.toBe('2026-05-05T00:00:01.000Z');
+
+    await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Durable observation.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            observed_at: later,
+            summary: 'Durable evidence id should be a UUID.',
+          },
+        },
+      })
+      .expect(201);
+    expect((await repo.listReleaseEvidences(id))[0]?.id).toMatch(uuidPattern);
+
+    const ready = await createReadyRelease(app, repo);
+    await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/approve`).send({ actor_id: actorReviewer }).expect(201);
+    const decisions = await repo.listDecisionsForObject('release', ready.releaseId);
+    expect(decisions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringMatching(uuidPattern),
+          decision_type: 'release_approval',
+          decision: 'approved',
+        }),
+      ]),
+    );
   });
 
   it('filters release lists and paginates with next_cursor', async () => {
@@ -528,8 +579,21 @@ describe('release module', () => {
 
     const ready = await createReadyRelease(app, repo);
     await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    const approved = await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/approve`).send({ actor_id: actorReviewer }).expect(201);
+    const approved = await request(app.getHttpServer())
+      .post(`/releases/${ready.releaseId}/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Release risks are acceptable.' })
+      .expect(201);
     expect(approved.body.release).toMatchObject({ phase: 'rollout', gate_state: 'approved' });
+    expect(await repo.listDecisionsForObject('release', ready.releaseId)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          decision_type: 'release_approval',
+          decision: 'approved',
+          summary: 'Release risks are acceptable.',
+          rationale: 'Release risks are acceptable.',
+        }),
+      ]),
+    );
 
     const staleScope = await seedReadyScope(repo, {
       execution_package: { id: 'execution-package-stale', gate_state: 'not_submitted', phase: 'ready', resolution: 'none' },
@@ -604,6 +668,69 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'test_report',
+        summary: 'Public test report.',
+        artifact_id: 'artifact-public-report',
+      })
+      .expect(201);
+    const testReportEvidence = (await repo.listReleaseEvidences(id)).find(
+      (evidence) => evidence.artifact_id === 'artifact-public-report',
+    );
+    expect(testReportEvidence).toBeDefined();
+    const publicArtifact: Artifact = {
+      id: 'artifact-public-report',
+      object_type: 'release_evidence',
+      object_id: testReportEvidence!.id,
+      ref: {
+        kind: 'execution_summary',
+        name: 'release-test-report.md',
+        content_type: 'text/markdown',
+        storage_uri: 'https://example.test/releases/test-report.md',
+      },
+      created_at: later,
+    };
+    await repo.saveArtifact(publicArtifact);
+    const publicDecision: Decision = {
+      id: 'decision-public-release',
+      object_type: 'release',
+      object_id: id,
+      actor_id: actorReviewer,
+      decided_by_actor_id: actorReviewer,
+      decision_type: 'release_approval',
+      outcome: 'approved',
+      decision: 'approved',
+      summary: 'Approved for observation link.',
+      created_at: later,
+    };
+    await repo.saveDecision(publicDecision);
+    const publicBacklinks = await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Public artifact and decision backlinks.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            observed_at: later,
+            summary: 'All public refs.',
+            links: [
+              { object_type: 'artifact', object_id: publicArtifact.id, relationship: 'generated_by' },
+              { object_type: 'decision', object_id: publicDecision.id, relationship: 'supports' },
+            ],
+          },
+        },
+      })
+      .expect(201);
+    expect(publicBacklinks.body.blockers.map((blocker: { code: string }) => blocker.code)).not.toContain(
+      'unsafe_or_redacted_evidence_backlink',
+    );
+
+    await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
       .send({ actor_id: actorOwner, evidence_type: 'observation_note', summary: 'bad', related_object_refs: [] })
       .expect(400);
 
@@ -645,6 +772,10 @@ describe('release module', () => {
     await request(app.getHttpServer()).post(`/releases/${id}/evidences`).send({ actor_id: actorOwner, evidence_type: 'rollback_record', summary: 'bad' }).expect(400);
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .send({ actor_id: actorOwner, evidence_type: 'rollback_record', summary: 'bad', extra: { rollback: {} } })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
       .send({ actor_id: actorOwner, evidence_type: 'observation_note', summary: 'bad', extra: { observation: { source: 'human', severity: 'info', observed_at: later } } })
       .expect(400);
 
@@ -653,7 +784,15 @@ describe('release module', () => {
         evidence_type: 'review_packet',
         body: { object_ref: { object_type: 'review_packet', object_id: 'review-packet-1', relationship: 'supports' } },
       },
+      {
+        evidence_type: 'test_report',
+        body: { object_ref: { object_type: 'artifact', object_id: 'artifact-test-report', relationship: 'generated_by' } },
+      },
       { evidence_type: 'test_report', body: { extra: { check_refs: [{ check_id: 'unit-tests', status: 'succeeded' }] } } },
+      {
+        evidence_type: 'build',
+        body: { object_ref: { object_type: 'artifact', object_id: 'artifact-build', relationship: 'generated_by' } },
+      },
       { evidence_type: 'build', body: { extra: { build: { build_id: 'build-1', result: 'succeeded' } } } },
       { evidence_type: 'deployment', body: { extra: { deployment: { environment: 'prod', result: 'succeeded' } } } },
       {
@@ -715,11 +854,20 @@ describe('release module', () => {
       .expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${completed.releaseId}/close`)
-      .send({ actor_id: actorOwner, resolution: 'completed' })
+      .send({ actor_id: actorOwner, resolution: 'completed', summary: 'Observed stable after rollout.' })
       .expect(201)
       .expect(({ body }) => {
         expect(body.release).toMatchObject({ phase: 'completed', resolution: 'completed' });
       });
+    expect(await repo.listDecisionsForObject('release', completed.releaseId)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          decision_type: 'release_close',
+          decision: 'completed',
+          summary: 'Observed stable after rollout.',
+        }),
+      ]),
+    );
 
     const override = await createReadyRelease(app, repo);
     await request(app.getHttpServer()).post(`/releases/${override.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
