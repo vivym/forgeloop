@@ -241,16 +241,7 @@ export const publicArtifactRefSchema = z
   });
 export type PublicArtifactRef = z.infer<typeof publicArtifactRefSchema>;
 
-const publicDecisionTypeSchema = z.enum([
-  'spec_approval',
-  'plan_approval',
-  'review_decision',
-  'release_approval',
-  'manual_override',
-  'release_changes_requested',
-  'release_close',
-  'rollback_decision',
-]);
+const publicDecisionTypeSchema = z.string().min(1);
 
 const publicDecisionOutcomeSchema = z.enum([
   'approved',

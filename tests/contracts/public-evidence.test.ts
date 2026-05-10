@@ -390,13 +390,13 @@ describe('public evidence contracts', () => {
     }
   });
 
-  it('rejects unsupported public decision type and outcome values', () => {
+  it('preserves existing non-release public decision types and rejects unsupported outcomes', () => {
     expect(
       publicDecisionSchema.safeParse({
         ...publicDecision,
-        decision_type: 'deploy_anyway',
+        decision_type: 'custom_non_release_decision',
       }).success,
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       publicDecisionSchema.safeParse({
