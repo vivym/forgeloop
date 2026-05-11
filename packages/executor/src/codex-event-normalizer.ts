@@ -2,7 +2,19 @@ import type { RunEventType } from '@forgeloop/contracts';
 
 import type { NormalizedRunEventDraft } from './codex-session-driver.js';
 
-const SECRET_PATTERNS = [/(sk-[A-Za-z0-9_-]{8,})/g, /(token=)[^\s]+/gi, /(password=)[^\s]+/gi];
+const SECRET_PATTERNS = [
+  /(sk-[A-Za-z0-9_-]{8,})/g,
+  /(token=)[^\s]+/gi,
+  /(password=)[^\s]+/gi,
+  /\b(?:access|refresh|session)?[_-]?token(?!\=)[A-Za-z0-9_/-]*/gi,
+  /\b(?:api[_-]?key|client[_-]?secret|session[_-]?secret|authorization|password(?!\=)|secret)\b[^\s]*/gi,
+];
+const LOCAL_PATH_PATTERNS = [
+  /(?:^|[\s"'([=])\/(?:Users|home|workspace|workspaces|opt|mnt)\/[^\s"'`)]*/g,
+  /(?:^|[\s"'([=])\/(?:tmp|private\/var\/folders|var\/folders)\/[^\s"'`)]*/g,
+  /(?:^|[\s"'([=])\.worktrees(?:\/[^\s"'`)]*)?/g,
+  /\b[A-Za-z]:(?:\\|\/)[^\s"'`)]*/g,
+];
 const DEFAULT_MAX_STRING_LENGTH = 8_192;
 const TRUNCATION_MARKER = '[truncated]';
 
@@ -17,11 +29,23 @@ export const truncateString = (value: string, max = DEFAULT_MAX_STRING_LENGTH): 
   return `${value.slice(0, Math.max(0, max - marker.length))}${marker}`;
 };
 
-const redactString = (value: string): string =>
+const redactSecretString = (value: string): string =>
   SECRET_PATTERNS.reduce((current, pattern) => current.replace(pattern, (...matches: string[]) => {
     const prefix = matches[1];
     return typeof prefix === 'string' && prefix.endsWith('=') ? `${prefix}[REDACTED]` : '[REDACTED]';
   }), value);
+
+const redactLocalPathString = (value: string): string =>
+  LOCAL_PATH_PATTERNS.reduce(
+    (current, pattern) =>
+      current.replace(pattern, (match: string) => {
+        const prefix = match.match(/^[\s"'([=]/)?.[0] ?? '';
+        return `${prefix}[REDACTED_PATH]`;
+      }),
+    value,
+  );
+
+const redactString = (value: string): string => redactLocalPathString(redactSecretString(value));
 
 const sanitizePublicValue = (value: unknown): unknown => {
   if (typeof value === 'string') {

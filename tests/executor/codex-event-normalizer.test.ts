@@ -54,6 +54,35 @@ describe('codex event normalizer', () => {
     ]);
   });
 
+  it('redacts local paths and token notification names from public payloads', () => {
+    const pathEvents = normalizeCodexAppServerNotification({
+      params: {
+        type: 'assistant_message_delta',
+        delta: 'Updated [README.md](/Users/viv/projs/forgeloop/.worktrees/run-1/README.md)',
+      },
+    });
+    const notificationEvents = normalizeCodexAppServerNotification({
+      params: {
+        type: 'thread/tokenUsage/updated',
+      },
+    });
+    const commandEvents = normalizeCodexExecJsonLine(
+      JSON.stringify({
+        type: 'command_output_delta',
+        command: 'cat README.md',
+        text: 'wrote /private/var/folders/tmp/worktree-path/README.md',
+      }),
+    );
+
+    expect(JSON.stringify(pathEvents)).not.toContain('/Users/');
+    expect(JSON.stringify(pathEvents)).not.toContain('.worktrees');
+    expect(pathEvents[0]?.payload.message).toContain('[REDACTED_PATH]');
+    expect(JSON.stringify(notificationEvents)).not.toContain('token');
+    expect(notificationEvents[0]?.payload.notification_type).toContain('[REDACTED]');
+    expect(JSON.stringify(commandEvents)).not.toContain('/private/var/folders/');
+    expect(commandEvents[0]?.payload.text).toContain('[REDACTED_PATH]');
+  });
+
   it('truncates large public payload strings to bounded marker size', () => {
     const truncated = truncateString('a'.repeat(9_000), 8_192);
 
