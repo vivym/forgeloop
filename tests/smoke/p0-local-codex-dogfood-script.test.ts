@@ -600,10 +600,13 @@ describe('p0 local Codex dogfood script helpers', () => {
   it('starts the dogfood API with query routes registered', async () => {
     const api = await startApi();
     try {
-      const response = await fetch(`${api.apiUrl}/query/replay/release/missing-release`);
+      const missingRelease = await fetch(`${api.apiUrl}/query/replay/release/missing-release`);
 
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toMatchObject({
+      expect(missingRelease.status).toBe(404);
+
+      const unsupported = await fetch(`${api.apiUrl}/query/replay/unsupported/missing`);
+      expect(unsupported.status).toBe(400);
+      await expect(unsupported.json()).resolves.toMatchObject({
         message: expect.stringContaining('Unsupported replay object type'),
       });
     } finally {
