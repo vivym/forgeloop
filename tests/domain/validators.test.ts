@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DomainError,
+  deriveRequiredArtifactPresence,
   deriveWorkItemCompletion,
   validateExecutionPackage,
   validateForceRerunAllowed,
@@ -449,6 +450,42 @@ describe('domain completion derivation', () => {
       resolution: 'completed',
       incomplete_reasons: [],
     });
+  });
+
+  it('satisfies required review_packet with the approved Review Packet object for the run', () => {
+    const executionPackage = packageBase({ required_artifact_kinds: ['execution_summary', 'diff', 'review_packet'] });
+    const runSession = successfulRun();
+    const reviewPacket = approvedReviewPacket();
+
+    expect(
+      deriveRequiredArtifactPresence(executionPackage, runSession, { reviewPackets: [reviewPacket] }),
+    ).toMatchObject({
+      present_artifact_kinds: ['execution_summary', 'diff', 'review_packet'],
+      missing_artifact_kinds: [],
+    });
+
+    expect(deriveWorkItemCompletion(workItem, [executionPackage], [runSession], [reviewPacket])).toEqual({
+      done: true,
+      resolution: 'completed',
+      incomplete_reasons: [],
+    });
+  });
+
+  it('does not satisfy required review_packet with an unapproved or mismatched Review Packet', () => {
+    const executionPackage = packageBase({ required_artifact_kinds: ['execution_summary', 'diff', 'review_packet'] });
+    const runSession = successfulRun();
+
+    expect(
+      deriveRequiredArtifactPresence(executionPackage, runSession, {
+        reviewPackets: [approvedReviewPacket({ run_session_id: 'older-run-session' })],
+      }).missing_artifact_kinds,
+    ).toContain('review_packet');
+
+    expect(
+      deriveWorkItemCompletion(workItem, [executionPackage], [runSession], [
+        approvedReviewPacket({ decision: 'changes_requested' }),
+      ]).incomplete_reasons,
+    ).toContain('package package-1 has no approved review decision');
   });
 
   it('does not satisfy required logs from run artifacts', () => {

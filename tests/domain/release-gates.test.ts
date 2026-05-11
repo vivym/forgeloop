@@ -578,6 +578,21 @@ describe('Release gate derivation', () => {
     );
   });
 
+  it('satisfies required review_packet artifacts with the selected approved Review Packet', () => {
+    const selectedPacket = reviewPacket();
+    const selectedRun = runSession({
+      artifacts: runSession().artifacts.filter((artifact) => artifact.kind !== 'review_packet'),
+    });
+
+    expect(
+      deriveCodes({
+        execution_packages: [executionPackage({ required_artifact_kinds: ['execution_summary', 'review_packet'] })],
+        run_sessions: [selectedRun],
+        review_packets: [selectedPacket],
+      }),
+    ).not.toContain('missing_required_artifact');
+  });
+
   it('creates deterministic blocker snapshots for transition commands', () => {
     const blockers = deriveReleaseBlockers({
       release: release({ rollout_strategy: undefined }),

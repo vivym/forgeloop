@@ -15,10 +15,14 @@ export interface WorkItemCompletion {
   incomplete_reasons: string[];
 }
 
+export interface RequiredArtifactPresenceContext {
+  reviewPackets?: readonly Pick<ReviewPacket, 'execution_package_id' | 'run_session_id' | 'status' | 'decision'>[];
+}
+
 const hasApprovedReviewForRun = (
-  executionPackage: ExecutionPackage,
-  runSession: RunSession,
-  reviewPackets: readonly ReviewPacket[],
+  executionPackage: Pick<ExecutionPackage, 'id'>,
+  runSession: Pick<RunSession, 'id'>,
+  reviewPackets: readonly Pick<ReviewPacket, 'execution_package_id' | 'run_session_id' | 'status' | 'decision'>[],
 ): boolean =>
   reviewPackets.some(
     (reviewPacket) =>
@@ -29,8 +33,9 @@ const hasApprovedReviewForRun = (
   );
 
 export const deriveRequiredArtifactPresence = (
-  executionPackage: Pick<ExecutionPackage, 'required_artifact_kinds'>,
-  runSession: Pick<RunSession, 'artifacts' | 'log_refs'>,
+  executionPackage: Pick<ExecutionPackage, 'required_artifact_kinds'> & Partial<Pick<ExecutionPackage, 'id'>>,
+  runSession: Pick<RunSession, 'artifacts' | 'log_refs'> & Partial<Pick<RunSession, 'id'>>,
+  context: RequiredArtifactPresenceContext = {},
 ): RequiredArtifactPresence => {
   const artifactKinds = new Set<ArtifactKind>(runSession.artifacts.map((artifact) => artifact.kind));
   const logKinds = new Set<ArtifactKind>(runSession.log_refs.map((artifact) => artifact.kind));
@@ -39,7 +44,17 @@ export const deriveRequiredArtifactPresence = (
 
   for (const requiredArtifactKind of executionPackage.required_artifact_kinds) {
     const isPresent =
-      requiredArtifactKind === 'logs' ? logKinds.has(requiredArtifactKind) : artifactKinds.has(requiredArtifactKind);
+      requiredArtifactKind === 'logs'
+        ? logKinds.has(requiredArtifactKind)
+        : artifactKinds.has(requiredArtifactKind) ||
+          (requiredArtifactKind === 'review_packet' &&
+            executionPackage.id !== undefined &&
+            runSession.id !== undefined &&
+            hasApprovedReviewForRun(
+              { id: executionPackage.id },
+              { id: runSession.id },
+              context.reviewPackets ?? [],
+            ));
 
     if (isPresent) {
       presentArtifactKinds.add(requiredArtifactKind);
@@ -55,8 +70,12 @@ export const deriveRequiredArtifactPresence = (
   };
 };
 
-const missingRequiredArtifactReasons = (executionPackage: ExecutionPackage, runSession: RunSession): string[] => {
-  const artifactPresence = deriveRequiredArtifactPresence(executionPackage, runSession);
+const missingRequiredArtifactReasons = (
+  executionPackage: ExecutionPackage,
+  runSession: RunSession,
+  reviewPackets: readonly ReviewPacket[],
+): string[] => {
+  const artifactPresence = deriveRequiredArtifactPresence(executionPackage, runSession, { reviewPackets });
 
   return artifactPresence.missing_artifact_kinds
     .map((requiredArtifactKind) => `package ${executionPackage.id} is missing artifact ${requiredArtifactKind}`);
@@ -88,7 +107,7 @@ export const deriveWorkItemCompletion = (
         return [`package ${executionPackage.id} has no approved review decision`];
       }
 
-      return missingRequiredArtifactReasons(executionPackage, runSession);
+      return missingRequiredArtifactReasons(executionPackage, runSession, reviewPackets);
     };
 
     if (executionPackage.last_run_session_id !== undefined) {
@@ -115,13 +134,13 @@ export const deriveWorkItemCompletion = (
     }
 
     const approvedRunWithArtifacts = approvedRuns.find(
-      (runSession) => missingRequiredArtifactReasons(executionPackage, runSession).length === 0,
+      (runSession) => missingRequiredArtifactReasons(executionPackage, runSession, reviewPackets).length === 0,
     );
 
     if (approvedRunWithArtifacts === undefined) {
       const firstApprovedRun = approvedRuns[0];
       if (firstApprovedRun !== undefined) {
-        incompleteReasons.push(...missingRequiredArtifactReasons(executionPackage, firstApprovedRun));
+        incompleteReasons.push(...missingRequiredArtifactReasons(executionPackage, firstApprovedRun, reviewPackets));
       }
     }
   }

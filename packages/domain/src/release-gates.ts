@@ -10,6 +10,7 @@ import type {
   RunSession,
   WorkItem,
 } from './types.js';
+import { deriveRequiredArtifactPresence } from './completion.js';
 import { releaseBlockerCodes } from './types.js';
 
 export { releaseBlockerCodes };
@@ -307,18 +308,15 @@ const runForReviewPacket = (reviewPacket: ReviewPacket | undefined, runSessions:
   reviewPacket === undefined ? undefined : runSessions.find((runSession) => runSession.id === reviewPacket.run_session_id);
 
 const missingRequiredArtifactKinds = (
-  executionPackage: Pick<ExecutionPackage, 'required_artifact_kinds'>,
-  runSession: Pick<RunSession, 'artifacts' | 'log_refs'> | undefined,
+  executionPackage: Pick<ExecutionPackage, 'id' | 'required_artifact_kinds'>,
+  runSession: Pick<RunSession, 'id' | 'artifacts' | 'log_refs'> | undefined,
+  reviewPackets: readonly ReviewPacket[],
 ): string[] => {
   if (runSession === undefined) {
     return [...executionPackage.required_artifact_kinds];
   }
 
-  const artifactKinds = new Set(runSession.artifacts.map((artifact) => artifact.kind));
-  const logKinds = new Set(runSession.log_refs.map((artifact) => artifact.kind));
-  return executionPackage.required_artifact_kinds.filter((kind) =>
-    kind === 'logs' ? !logKinds.has(kind) : !artifactKinds.has(kind),
-  );
+  return deriveRequiredArtifactPresence(executionPackage, runSession, { reviewPackets }).missing_artifact_kinds;
 };
 
 const hasFailedOrMissingRequiredCheck = (
@@ -635,7 +633,7 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
       }));
     }
 
-    if (missingRequiredArtifactKinds(executionPackage, selectedRunSession).length > 0) {
+    if (missingRequiredArtifactKinds(executionPackage, selectedRunSession, reviewPackets).length > 0) {
       blockers.push(
         blocker('missing_required_artifact', `Execution package ${executionPackage.id} is missing required artifacts.`, {
           type: 'execution_package',

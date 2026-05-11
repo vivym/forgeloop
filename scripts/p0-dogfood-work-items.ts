@@ -217,11 +217,6 @@ const approvedReviewPacketForRun = (
       reviewPacket.decision === 'approved',
   );
 
-const packageForStrictArtifactEvaluation = (executionPackage: ExecutionPackage): ExecutionPackage => ({
-  ...executionPackage,
-  required_artifact_kinds: executionPackage.required_artifact_kinds.filter((kind) => kind !== 'review_packet'),
-});
-
 export const evaluateStrictLocalCodexAcceptance = (input: {
   workItems: readonly WorkItem[];
   executionPackages: readonly ExecutionPackage[];
@@ -235,8 +230,7 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
     const packagesForWorkItem = input.executionPackages.filter(
       (executionPackage) => executionPackage.work_item_id === workItem.id,
     );
-    const strictArtifactPackages = packagesForWorkItem.map(packageForStrictArtifactEvaluation);
-    const completion = deriveWorkItemCompletion(workItem, strictArtifactPackages, input.runSessions, input.reviewPackets);
+    const completion = deriveWorkItemCompletion(workItem, packagesForWorkItem, input.runSessions, input.reviewPackets);
     const workItemBlockers: StrictDogfoodBlocker[] = [];
     let qualifyingPackage: StrictQualifyingWorkItem | undefined;
 
@@ -275,8 +269,9 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
       const executorType = runSession.executor_type ?? runSession.run_spec?.executor_type;
       const workflowOnly = runSession.run_spec?.workflow_only;
       const approvedPacket = approvedReviewPacketForRun(executionPackage, runSession, input.reviewPackets);
-      const artifactPackage = packageForStrictArtifactEvaluation(executionPackage);
-      const missingArtifactKinds = deriveRequiredArtifactPresence(artifactPackage, runSession).missing_artifact_kinds;
+      const missingArtifactKinds = deriveRequiredArtifactPresence(executionPackage, runSession, {
+        reviewPackets: input.reviewPackets,
+      }).missing_artifact_kinds;
       const runBlockers: StrictDogfoodBlocker[] = [];
 
       if (executorType !== 'local_codex') {
@@ -332,7 +327,7 @@ export const evaluateStrictLocalCodexAcceptance = (input: {
             work_item_id: workItem.id,
             execution_package_id: executionPackage.id,
             run_session_id: runSession.id,
-            required_artifact_kinds: artifactPackage.required_artifact_kinds,
+            required_artifact_kinds: executionPackage.required_artifact_kinds,
             missing_artifact_kinds: missingArtifactKinds,
           }),
         );
