@@ -640,7 +640,7 @@ const repoRelativeOrBasename = (value: string): string => {
 
 const unsafeReportDetailKeyPattern = /path|url|secret|metadata|stderr|token|password|api[\s_-]?key|authorization/i;
 const unsafeReportDetailValuePattern =
-  /(?:[a-z][a-z0-9+.-]*:\/\/)|(?:postgres(?:ql)?:\/\/)|(?:^|[\s"'(=])\/Users\/|(?:^|[\s"'(=])\/(?:tmp|var|private|home|repo|workspace|workspaces|opt|mnt)\b|(?:^|\/)\.worktrees(?:\/|$)|(?:^|\/)artifacts\/|review-packet|(?:authorization|api[\s_-]?key|token|password|secret)\s*[:=]|\bbearer\s+\S+|\b(?:sk|ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_=-]+|stderr\s*:/i;
+  /(?:[a-z][a-z0-9+.-]*:\/\/)|(?:postgres(?:ql)?:\/\/)|(?:^|[\s"'(=])\/Users\/|(?:^|[\s"'(=])\/(?:tmp|var|private|home|repo|workspace|workspaces|opt|mnt)\b|(?:^|\/)\.worktrees(?:\/|$)|(?:^|\/)artifacts\/|review-packet|(?:raw|runtime)[_-]?metadata|(?:workspace|worktree|artifact)[_-]?path|local[_-]?ref|(?:allowed|forbidden)[_-]?paths|database[_-]?url|(?:access|refresh|session)[_-]?token|client[_-]?secret|api[_-]?key|authorization|(?:authorization|api[\s_-]?key|token|password|secret)\s*[:=]|\bbearer\s+\S+|\b(?:sk|ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_=-]+|stderr\s*:/i;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);

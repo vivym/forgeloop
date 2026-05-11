@@ -478,6 +478,71 @@ describe('p0 local Codex dogfood script helpers', () => {
     ).toThrow(/executor_type local_codex/);
   });
 
+  it('renders P0 local Codex reports without raw workspace paths or runtime metadata keys', () => {
+    const report = renderLocalCodexDogfoodReport({
+      status: 'PASS',
+      runtimeMetadata: {
+        workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-1',
+        app_server_attempted: true,
+        selected_execution_mode: 'exec_fallback',
+        effective_dangerous_mode: 'confirmed',
+      },
+      terminalEvidence: {
+        changed_files: [{ path: 'README.md' }],
+        check_results: [{ check_id: 'dogfood-required' }],
+        artifacts: [
+          { kind: 'diff', local_ref: '/tmp/forgeloop-executor-artifacts/diff.patch' },
+          { kind: 'review_packet', local_ref: '/tmp/forgeloop-executor-artifacts/review.md' },
+        ],
+        review_packet: {
+          id: 'review-packet-1',
+          artifact_path: '/tmp/forgeloop-executor-artifacts/review.md',
+        },
+      },
+    });
+
+    expect(report).toContain('- Runtime metadata: app_server_attempted=true selected_execution_mode=exec_fallback effective_dangerous_mode=confirmed');
+    expect(report).toContain('- Artifacts: diff, review_packet');
+    expect(report).toContain('- Review Packet: available');
+    expect(report).not.toContain('workspace_path');
+    expect(report).not.toContain('/Users/');
+    expect(report).not.toContain('/tmp/');
+    expect(report).not.toContain('local_ref');
+    expect(report).not.toContain('artifact_path');
+  });
+
+  it('sanitizes P0 local Codex failure errors and blocker details in reports', () => {
+    const report = renderLocalCodexDogfoodReport({
+      status: 'FAIL',
+      preflight: {
+        ok: false,
+        blockers: [
+          {
+            code: 'worktree_create_failed',
+            message: 'Unable to create isolated local Codex worktree',
+            details: {
+              workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-1',
+              artifact_path: '/tmp/forgeloop-executor-artifacts/review.md',
+              runtime_metadata: { workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-1' },
+              safe_hint: 'retry after cleaning dogfood state',
+            },
+          },
+        ],
+        message: 'blocked',
+        repoPath: '/Users/viv/projs/forgeloop',
+      },
+      error: 'runtime_metadata artifact_path workspace_path leaked without absolute path',
+    });
+
+    expect(report).toContain('safe_hint');
+    expect(report).toContain('redacted_detail_count');
+    expect(report).not.toContain('/Users/');
+    expect(report).not.toContain('/tmp/');
+    expect(report).not.toContain('workspace_path');
+    expect(report).not.toContain('runtime_metadata');
+    expect(report).not.toContain('artifact_path');
+  });
+
   it('attempts app-server before exec fallback and records the fallback reason', async () => {
     const calls: string[] = [];
     const selected = await selectCodexExecutionMode({

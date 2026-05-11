@@ -138,16 +138,16 @@ describe('p0 durable dogfood script helpers', () => {
   });
 
   it('verifies report text contains durable PASS markers', () => {
-    expect(
-      parseDurableDogfoodReport(`
+    const reportText = `
 # P0 Delivery Loop Verification
 
 - DB schema push: PASSED
 - Durable public API actor header auth: PASSED
 - Durable SSE stream-token auth: PASSED
 - Durable repository restart recovery: PASSED
-`),
-    ).toEqual({
+`;
+
+    expect(parseDurableDogfoodReport(reportText)).toEqual({
       dbSchemaPushPassed: true,
       durablePublicApiAuthPassed: true,
       durableSseAuthPassed: true,

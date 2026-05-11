@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { INestApplication } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/p0/r
 import { actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { createDbClient, createDrizzleP0Repository, InMemoryP0Repository } from '../../packages/db/src';
 import type { DbClient, P0Repository } from '../../packages/db/src';
+import { worktreePathForRun } from '../../packages/executor/src/index.js';
 import {
   artifactIdForRunSessionArtifact,
   reviewPacketIdForRunSession,
@@ -36,6 +38,7 @@ import {
 } from './durable-postgres.js';
 import type { CommandRunner, DockerPostgresCandidate, DurableDogfoodPlan, Env } from './durable-postgres.js';
 import {
+  buildSourceGuardInjectionPlan,
   evaluateLocalCodexDogfoodEnablement,
   extractPersistedTerminalEvidence,
   isPublicCodexLiveProgressEvent,
@@ -287,6 +290,42 @@ export const statusCodeForStrictReleaseMarkers = (
     strictReleaseClosureMarkers.includes(marker.marker as (typeof strictReleaseClosureMarkers)[number]),
   );
   return options.allowBlocked && onlyStrictClosureMarkersAreBlocked ? 0 : 1;
+};
+
+export const runDogfoodCleanup = async <T>(input: {
+  run: () => Promise<T>;
+  cleanup: Array<{ label: string; run: () => Promise<unknown> | unknown }>;
+  onCleanupError?: (error: Error) => void;
+}): Promise<T> => {
+  let primaryResult: T | undefined;
+  let primaryError: unknown;
+  const cleanupErrors: Error[] = [];
+
+  try {
+    primaryResult = await input.run();
+  } catch (error) {
+    primaryError = error;
+  }
+
+  for (const action of input.cleanup) {
+    try {
+      await action.run();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const cleanupError = new Error(`Cleanup ${action.label} failed: ${message}`);
+      cleanupErrors.push(cleanupError);
+      input.onCleanupError?.(cleanupError);
+    }
+  }
+
+  if (primaryError !== undefined) {
+    throw primaryError;
+  }
+  if (cleanupErrors.length > 0) {
+    throw cleanupErrors[0];
+  }
+
+  return primaryResult as T;
 };
 
 const noopRunWorker = {
@@ -850,6 +889,7 @@ type DockerInspectRow = {
   };
 };
 type StrictRunWorker = { kick?: () => void; drainOnce: () => Promise<void> };
+type StrictDogfoodCleanupAction = { label: string; run: () => Promise<void> };
 type StrictDurableDogfoodApp = {
   app: Pick<INestApplication, 'close' | 'getHttpServer'>;
   runWorker?: StrictRunWorker;
@@ -879,9 +919,12 @@ type StrictLocalCodexLifecycleDeps = {
     actorOwner: string;
     actorReviewer: string;
     actorQa: string;
+    runCommand: CommandRunner;
     runWorkerDrain?: () => Promise<void>;
+    cleanupActions?: StrictDogfoodCleanupAction[];
   }) => Promise<StrictLocalCodexPackageResult>;
   runWorkerDrain?: () => Promise<void>;
+  cleanupActions?: StrictDogfoodCleanupAction[];
 };
 
 export type StrictReleaseFlowDogfoodDeps = {
@@ -993,6 +1036,22 @@ const strictFailureDetails: Record<StrictFailureCode, string> = {
   strict_flow_failed: 'Strict durable release flow failed before closure could be verified.',
 };
 
+const withCleanupFailureDetails = (markers: VerificationMarker[], cleanupErrors: readonly string[]): VerificationMarker[] => {
+  if (cleanupErrors.length === 0) {
+    return markers;
+  }
+  const cleanupDetails = safeStrictFailureDetails('cleanup_failed', cleanupErrors.join('; '));
+  return markers.map((marker) =>
+    marker.marker === 'Durable local reset'
+      ? {
+          ...marker,
+          status: 'FAILED',
+          details: [...marker.details, ...cleanupDetails],
+        }
+      : marker,
+  );
+};
+
 const markersWithClosureBlocked = (code: string, detail: string): VerificationMarker[] =>
   requiredReleaseFlowReportMarkers.map((marker) => ({
     marker,
@@ -1056,6 +1115,7 @@ export const failedReleaseFlowMarkersFromError = (
 };
 
 const strictRequest = (server: Parameters<typeof request>[0], actorId: string) => ({
+  get: (path: string) => request(server).get(path).set(actorHeaderName, actorId),
   post: (path: string) => request(server).post(path).set(actorHeaderName, actorId),
 });
 
@@ -1123,6 +1183,33 @@ const strictLocalCodexFailureCode = (error: unknown): string => {
 
 const requestJsonBody = <T>(response: { body: unknown }): T => response.body as T;
 
+const cleanupStrictLocalCodexWorktree = async (input: {
+  repoPath: string;
+  runSessionId: string;
+  workspacePath: string;
+  runCommand: CommandRunner;
+}): Promise<void> => {
+  const expectedPath = worktreePathForRun(input.repoPath, input.runSessionId);
+  if (resolve(input.workspacePath) !== resolve(expectedPath)) {
+    throw new Error('strict_local_codex_worktree_cleanup_refused');
+  }
+
+  let removeError: unknown;
+  try {
+    await input.runCommand('git', ['worktree', 'remove', '--force', input.workspacePath], {
+      cwd: input.repoPath,
+      timeoutMs: 60_000,
+    });
+  } catch (error) {
+    removeError = error;
+  } finally {
+    await rm(input.workspacePath, { recursive: true, force: true });
+  }
+  if (removeError !== undefined) {
+    throw removeError;
+  }
+};
+
 const runReleaseStrictLocalCodexPackage = async (input: {
   server: Parameters<typeof request>[0];
   repository: P0Repository;
@@ -1134,7 +1221,9 @@ const runReleaseStrictLocalCodexPackage = async (input: {
   actorOwner: string;
   actorReviewer: string;
   actorQa: string;
+  runCommand: CommandRunner;
   runWorkerDrain?: () => Promise<void>;
+  cleanupActions?: StrictDogfoodCleanupAction[];
 }): Promise<StrictLocalCodexPackageResult> => {
   const packageInput = buildReleaseLocalCodexPackageInput({
     repoPath: input.repoPath,
@@ -1166,13 +1255,13 @@ const runReleaseStrictLocalCodexPackage = async (input: {
   const poll = await pollStrictLocalCodexRunToTerminal({
     getRunSession: async () => {
       const body = requestJsonBody<{ id: string; status: string }>(
-        await request(input.server).get(`/run-sessions/${run.run_session_id}`).expect(200),
+        await strictRequest(input.server, input.actorOwner).get(`/run-sessions/${run.run_session_id}`).expect(200),
       );
       return { id: body.id, status: body.status };
     },
     getPublicRunEvents: async () => {
       const body = requestJsonBody<{ events: ObservedRunEvent[] }>(
-        await request(input.server)
+        await strictRequest(input.server, input.actorOwner)
           .get(
             `/run-sessions/${run.run_session_id}/events?actor_id=${encodeURIComponent(input.actorOwner)}${
               after === undefined ? '' : `&after=${encodeURIComponent(after)}`
@@ -1199,13 +1288,25 @@ const runReleaseStrictLocalCodexPackage = async (input: {
   if (!poll.observedPublicNonTerminalEvent) {
     throw new Error('missing_public_non_terminal_live_event');
   }
-  if (poll.terminal.status !== 'succeeded') {
-    throw new Error(`local_codex_terminal_failed: ${poll.terminal.status}`);
-  }
-
   const persistedRun = await input.repository.getRunSession(run.run_session_id);
   if (persistedRun === undefined) {
     throw new Error('missing_terminal_evidence');
+  }
+  const workspacePath = persistedRun.runtime_metadata?.workspace_path;
+  if (typeof workspacePath === 'string') {
+    input.cleanupActions?.push({
+      label: 'worktree',
+      run: () =>
+        cleanupStrictLocalCodexWorktree({
+          repoPath: input.repoPath,
+          runSessionId: run.run_session_id,
+          workspacePath,
+          runCommand: input.runCommand,
+      }),
+    });
+  }
+  if (poll.terminal.status !== 'succeeded') {
+    throw new Error(`local_codex_terminal_failed: ${poll.terminal.status}`);
   }
   validateLocalCodexRuntimeMetadata(runSessionRuntimeMetadataReport(persistedRun), { expectedRunSessionId: run.run_session_id });
   const reviewPacket = (await input.repository.listReviewPacketsForPackage(executionPackage.id)).find(
@@ -1232,7 +1333,7 @@ const runReleaseStrictLocalCodexPackage = async (input: {
     })
     .expect(201);
   const strictPackage = requestJsonBody<ExecutionPackage>(
-    await request(input.server).get(`/execution-packages/${executionPackage.id}`).expect(200),
+    await strictRequest(input.server, input.actorOwner).get(`/execution-packages/${executionPackage.id}`).expect(200),
   );
   if (
     strictPackage.phase !== 'release' ||
@@ -1288,6 +1389,12 @@ export const runDurableReleaseLifecycle = async (input: {
         })
       ).stdout.trim()
     : 'strict-dogfood-base';
+  if (strictLocalCodexEnabled) {
+    deps.cleanupActions?.push({
+      label: 'source guard',
+      run: buildSourceGuardInjectionPlan(repoPath).cleanup,
+    });
+  }
 
   await repository.saveOrganization(identity.organization);
   await repository.saveActor(owner);
@@ -1438,7 +1545,9 @@ export const runDurableReleaseLifecycle = async (input: {
           actorOwner: owner.id,
           actorReviewer: reviewer.id,
           actorQa: qa.id,
+          runCommand: effectiveRunCommand,
           runWorkerDrain: deps.runWorkerDrain,
+          cleanupActions: deps.cleanupActions,
         });
         if (strictResult.marker.status === 'PASSED') {
           if (
@@ -1673,38 +1782,43 @@ const cleanupStrictReleaseFlowDogfood = async (input: {
   plan: DurableDogfoodPlan;
   dropDatabase: (plan: DurableDogfoodPlan) => Promise<void>;
   runCommand: CommandRunner;
-}): Promise<StrictFailureCode[]> => {
-  const failures: StrictFailureCode[] = [];
-  const attempt = async (cleanup: () => Promise<void>): Promise<void> => {
-    try {
-      await cleanup();
-    } catch {
-      failures.push('cleanup_failed');
-    }
-  };
+  cleanupActions?: StrictDogfoodCleanupAction[];
+}): Promise<string[]> => {
+  const cleanupErrors: string[] = [];
+  const cleanup: Array<{ label: string; run: () => Promise<void> }> = [];
 
   if (input.freshApp !== undefined) {
-    await attempt(() => input.freshApp!.close());
+    cleanup.push({ label: 'fresh nest app', run: () => input.freshApp!.close() });
   }
   if (input.freshClient !== undefined) {
-    await attempt(() => input.freshClient!.pool.end());
+    cleanup.push({ label: 'fresh db pool', run: () => input.freshClient!.pool.end() });
   }
   if (input.firstApp !== undefined) {
-    await attempt(() => input.firstApp!.close());
+    cleanup.push({ label: 'nest app', run: () => input.firstApp!.close() });
   }
   if (input.firstClient !== undefined) {
-    await attempt(() => input.firstClient!.pool.end());
+    cleanup.push({ label: 'db pool', run: () => input.firstClient!.pool.end() });
   }
-  await attempt(() => input.dropDatabase(input.plan));
-  await attempt(() => removeStartedPostgresContainer(input.plan, input.runCommand));
+  cleanup.push({ label: 'disposable database', run: () => input.dropDatabase(input.plan) });
+  cleanup.push({ label: 'disposable container', run: () => removeStartedPostgresContainer(input.plan, input.runCommand) });
+  for (const action of input.cleanupActions ?? []) {
+    cleanup.push(action);
+  }
 
-  return failures;
+  await runDogfoodCleanup({
+    run: async () => undefined,
+    cleanup,
+    onCleanupError: (error) => cleanupErrors.push(error.message),
+  }).catch(() => undefined);
+
+  return cleanupErrors;
 };
 
 export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoodInput): Promise<VerificationMarker[]> => {
   const deps = input.deps ?? {};
   const timestamp = deps.nowMs?.() ?? Date.now();
   const effectiveRunCommand = deps.runCommand ?? runCommand;
+  const cleanupActions: StrictDogfoodCleanupAction[] = [];
   let plan: DurableDogfoodPlan | undefined;
   try {
     plan =
@@ -1723,12 +1837,14 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
         plan,
         dropDatabase: deps.dropDatabase ?? dropDatabase,
         runCommand: effectiveRunCommand,
+        cleanupActions,
       });
-      if (cleanupFailures.length > 0) {
-        const cleanupMarkers = failedReleaseFlowMarkersFromError(undefined, { code: 'cleanup_failed' });
-        assertNoUnsafeReleaseDogfoodStrings('Strict release prepare cleanup failed markers', cleanupMarkers);
-        return cleanupMarkers;
-      }
+      const markers = withCleanupFailureDetails(
+        markersWithClosureBlocked('missing_database', 'No safe durable Postgres target was available for strict dogfood.'),
+        cleanupFailures,
+      );
+      assertNoUnsafeReleaseDogfoodStrings('Strict release prepare cleanup markers', markers);
+      return markers;
     }
     const markers = markersWithClosureBlocked('missing_database', 'No safe durable Postgres target was available for strict dogfood.');
     assertNoUnsafeReleaseDogfoodStrings('Strict release blocked markers', markers);
@@ -1778,6 +1894,7 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
         ...(deps.preflightStrictLocalCodex === undefined ? {} : { preflightStrictLocalCodex: deps.preflightStrictLocalCodex }),
         ...(deps.runStrictLocalCodexPackage === undefined ? {} : { runStrictLocalCodexPackage: deps.runStrictLocalCodexPackage }),
         runWorkerDrain: deps.runWorkerDrain ?? first.runWorker?.drainOnce.bind(first.runWorker),
+        cleanupActions,
       },
     });
     lifecycleResult = lifecycle;
@@ -1859,12 +1976,10 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
       plan: strictPlan,
       dropDatabase: deps.dropDatabase ?? dropDatabase,
       runCommand: effectiveRunCommand,
+      cleanupActions,
     });
     if (cleanupFailures.length > 0) {
-      markers = failedReleaseFlowMarkersFromError(undefined, {
-        code: 'cleanup_failed',
-        passedMarkers: (markers ?? lifecycleMarkers).filter((marker) => marker.status === 'PASSED'),
-      });
+      markers = withCleanupFailureDetails(markers ?? failedReleaseFlowMarkersFromError(undefined), cleanupFailures);
       assertNoUnsafeReleaseDogfoodStrings('Strict release cleanup failed markers', markers);
     }
   }

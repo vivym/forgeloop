@@ -14,6 +14,7 @@ import {
   recordLiveEventObservation,
   resolveReviewPacketReference,
   runSessionRuntimeMetadataReport,
+  sanitizeStrictBlockerDetails,
   validateLocalCodexRuntimeMetadata,
   type CommandRunner,
   type Env,
@@ -107,6 +108,8 @@ export const buildBoundedLocalCodexRunPackage = (input: {
   };
 };
 
+const safeReportRecord = (details: Record<string, unknown>): string => JSON.stringify(sanitizeStrictBlockerDetails(details));
+
 export const renderLocalCodexDogfoodReport = (input: {
   status: 'PASS' | 'FAIL' | 'SKIPPED';
   preflight?: PreflightResult;
@@ -132,7 +135,7 @@ export const renderLocalCodexDogfoodReport = (input: {
     for (const blocker of input.preflight.blockers) {
       lines.push(`- Strict preflight blocker: ${blocker.code} - ${blocker.message}`);
       if (blocker.details !== undefined) {
-        lines.push(`  - Details: ${JSON.stringify(blocker.details)}`);
+        lines.push(`  - Details: ${safeReportRecord(blocker.details)}`);
       }
     }
     if (input.preflight.dirtySource !== undefined) {
@@ -145,7 +148,14 @@ export const renderLocalCodexDogfoodReport = (input: {
   }
 
   if (input.runtimeMetadata !== undefined) {
-    lines.push(`- Runtime metadata: ${JSON.stringify(input.runtimeMetadata)}`);
+    lines.push(
+      [
+        '- Runtime metadata:',
+        `app_server_attempted=${String(input.runtimeMetadata.app_server_attempted === true)}`,
+        `selected_execution_mode=${String(input.runtimeMetadata.selected_execution_mode ?? 'unknown')}`,
+        `effective_dangerous_mode=${String(input.runtimeMetadata.effective_dangerous_mode ?? 'unknown')}`,
+      ].join(' '),
+    );
   }
 
   if (input.liveEvents !== undefined) {
@@ -156,7 +166,7 @@ export const renderLocalCodexDogfoodReport = (input: {
     lines.push(`- Changed files: ${(input.terminalEvidence.changed_files ?? []).map((file) => file.path).join(', ')}`);
     lines.push(`- Checks: ${(input.terminalEvidence.check_results ?? []).map((check) => check.check_id).join(', ')}`);
     lines.push(`- Artifacts: ${(input.terminalEvidence.artifacts ?? []).map((artifact) => artifact.kind).join(', ')}`);
-    lines.push(`- Review Packet: ${input.terminalEvidence.review_packet?.artifact_path ?? 'missing'}`);
+    lines.push(`- Review Packet: ${input.terminalEvidence.review_packet === undefined ? 'missing' : 'available'}`);
   }
 
   if (input.sourceGuardInjection !== undefined) {
@@ -168,7 +178,7 @@ export const renderLocalCodexDogfoodReport = (input: {
   }
 
   if (input.error !== undefined) {
-    lines.push(`- Error: ${input.error}`);
+    lines.push(`- Error: ${safeReportRecord({ error: input.error })}`);
   }
 
   lines.push('');

@@ -1675,7 +1675,7 @@ git commit -m "test: link strict local codex evidence into release dogfood"
 - Modify: `scripts/dogfood/durable-postgres.ts`
 - Modify: `scripts/dogfood/strict-local-codex.ts`
 
-- [ ] **Step 1: Add failure-path cleanup tests**
+- [x] **Step 1: Add failure-path cleanup tests**
 
 In `tests/smoke/release-flow-dogfood-script.test.ts`, add tests for a small cleanup helper exported from `scripts/dogfood/release-flow-core.ts`:
 
@@ -1748,7 +1748,7 @@ export const runDogfoodCleanup = async <T>(input: {
 
 Use this helper, or equivalent behavior with the same test coverage, around strict dogfood app/pool/database/container/worktree/source-guard cleanup. Cleanup errors must be reported and must not hide the primary failure.
 
-- [ ] **Step 2: Add tests for final marker/report invariants**
+- [x] **Step 2: Add tests for final marker/report invariants**
 
 In `tests/smoke/release-flow-dogfood-script.test.ts`, add:
 
@@ -1778,7 +1778,7 @@ it('does not allow blocked non-strict markers to exit zero', () => {
 });
 ```
 
-- [ ] **Step 3: Add P0 regression assertions**
+- [x] **Step 3: Add P0 regression assertions**
 
 In `tests/smoke/p0-durable-dogfood-script.test.ts`, assert the P0 script still parses P0 reports:
 
@@ -1793,7 +1793,7 @@ expect(parseDurableDogfoodReport(reportText)).toEqual({
 
 In `tests/smoke/p0-local-codex-dogfood-script.test.ts`, assert existing P0 report rendering does not expose raw `workspace_path` details after helper extraction. If P0 intentionally still prints raw runtime metadata, update P0 rendering to print booleans and artifact kinds instead.
 
-- [ ] **Step 4: Run smoke helper tests**
+- [x] **Step 4: Run smoke helper tests**
 
 Run:
 
@@ -1803,7 +1803,7 @@ pnpm vitest run tests/smoke/release-flow-dogfood-script.test.ts tests/smoke/dogf
 
 Expected: PASS.
 
-- [ ] **Step 5: Run deterministic dogfood and inspect report**
+- [x] **Step 5: Run deterministic dogfood and inspect report**
 
 Run:
 
@@ -1820,7 +1820,7 @@ Expected:
 - the first `rg` prints only status lines;
 - the second `rg` exits `1` with no matches. If the second `rg` exits `0`, fix the report renderer before continuing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 

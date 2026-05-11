@@ -24,6 +24,7 @@ import {
   publicStrictLocalCodexEvidenceSummary,
   renderReleaseFlowVerificationReport,
   requiredReleaseFlowReportMarkers,
+  runDogfoodCleanup,
   runDurableReleaseLifecycle,
   runStrictReleaseFlowDogfood,
   seedDurableReleaseReadyPackageEvidence,
@@ -187,6 +188,57 @@ describe('release flow dogfood script helpers', () => {
     expect(statusCodeForStrictReleaseMarkers(markers, { allowBlocked: true })).toBe(0);
   });
 
+  it('returns non-zero for failed strict markers even when blocked report generation is allowed', () => {
+    const markers = requiredReleaseFlowReportMarkers.map((marker) => ({
+      marker,
+      status: marker === 'Strict local_codex run' ? ('FAILED' as const) : ('PASSED' as const),
+      details: ['safe'],
+    }));
+
+    expect(statusCodeForStrictReleaseMarkers(markers, { allowBlocked: true })).toBe(1);
+  });
+
+  it('returns non-zero for non-strict blocked markers even when blocked report generation is allowed', () => {
+    const markers = requiredReleaseFlowReportMarkers.map((marker) => ({
+      marker,
+      status: marker === 'Release cockpit query' ? ('BLOCKED with reason' as const) : ('PASSED' as const),
+      details: ['safe'],
+    }));
+
+    expect(statusCodeForStrictReleaseMarkers(markers, { allowBlocked: true })).toBe(1);
+  });
+
+  it('runs every cleanup action after a primary strict dogfood failure without hiding that failure', async () => {
+    const cleanupCalls: string[] = [];
+    const cleanupErrors: string[] = [];
+
+    await expect(
+      runDogfoodCleanup({
+        run: async () => {
+          throw new Error('primary strict dogfood failure');
+        },
+        cleanup: [
+          { label: 'nest app', run: async () => cleanupCalls.push('nest app') },
+          { label: 'db pool', run: async () => cleanupCalls.push('db pool') },
+          {
+            label: 'disposable database',
+            run: async () => {
+              cleanupCalls.push('disposable database');
+              throw new Error('drop failed');
+            },
+          },
+          { label: 'disposable container', run: async () => cleanupCalls.push('disposable container') },
+          { label: 'worktree', run: async () => cleanupCalls.push('worktree') },
+          { label: 'source guard', run: async () => cleanupCalls.push('source guard') },
+        ],
+        onCleanupError: (error) => cleanupErrors.push(error.message),
+      }),
+    ).rejects.toThrow('primary strict dogfood failure');
+
+    expect(cleanupCalls).toEqual(['nest app', 'db pool', 'disposable database', 'disposable container', 'worktree', 'source guard']);
+    expect(cleanupErrors).toEqual(['Cleanup disposable database failed: drop failed']);
+  });
+
   it('renders safe failed markers from strict runner errors', () => {
     const markers = failedReleaseFlowMarkersFromError(new Error('postgresql://user:secret@localhost/db failed in /Users/viv/repo'));
 
@@ -273,6 +325,7 @@ describe('release flow dogfood script helpers', () => {
     const repository = new InMemoryP0Repository();
     const app = await createDurableTestApp(repository);
     const realWorkerDrain = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const cleanupActions: Array<{ label: string; run: () => Promise<void> }> = [];
     const marker = {
       marker: 'Strict local_codex run' as const,
       status: 'PASSED' as const,
@@ -284,8 +337,9 @@ describe('release flow dogfood script helpers', () => {
         app,
         repository,
         identity: buildDurableReleaseDogfoodIdentity('2026-05-11T00:00:00.000Z'),
-        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' },
+        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1', FORGELOOP_REPO_PATH: '/repo' },
         deps: {
+          runCommand: async () => ({ stdout: 'base-sha\n', stderr: '' }),
           preflightStrictLocalCodex: async () => ({
             ok: true,
             blockers: [],
@@ -300,6 +354,7 @@ describe('release flow dogfood script helpers', () => {
           }),
           runStrictLocalCodexPackage: async (input) => {
             await input.runWorkerDrain?.();
+            input.cleanupActions?.push({ label: 'worktree', run: async () => undefined });
             await repository.saveExecutionPackage({
               id: 'strict-package-1',
               work_item_id: 'strict-work-item-1',
@@ -386,11 +441,99 @@ describe('release flow dogfood script helpers', () => {
             };
           },
           runWorkerDrain: realWorkerDrain,
+          cleanupActions,
         },
       });
 
       expect(realWorkerDrain).toHaveBeenCalled();
+      expect(cleanupActions.map((action) => action.label)).toEqual(expect.arrayContaining(['source guard', 'worktree']));
       expect(lifecycle.markers).toEqual(expect.arrayContaining([marker]));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('registers strict local Codex worktree cleanup before failed terminal runs throw', async () => {
+    const repository = new InMemoryP0Repository();
+    const app = await createDurableTestApp(repository);
+    let failedRunId = '';
+    const realWorkerDrain = vi.fn(async () => {
+      const runSessions = await repository.listRecoverableRunSessions();
+      const currentRun =
+        runSessions.find((runSession) => runSession.status === 'queued' && runSession.executor_type === 'local_codex') ??
+        runSessions.find((runSession) => runSession.status === 'queued') ??
+        runSessions.at(-1);
+      if (currentRun === undefined) {
+        throw new Error('expected local_codex run session');
+      }
+      failedRunId = currentRun.id;
+      await repository.saveRunSession({
+        ...currentRun,
+        status: 'failed',
+        runtime_metadata: {
+          durability_mode: 'durable',
+          workspace_path: `/repo/.worktrees/${currentRun.id}`,
+          recovery_attempt_count: 0,
+          effective_dangerous_mode: 'confirmed',
+          app_server_attempted: true,
+          selected_execution_mode: 'exec_fallback',
+          exec_fallback_dangerous_bypass: true,
+          app_server_fallback_reason: 'connection refused',
+        },
+        updated_at: '2026-05-11T00:01:00.000Z',
+        finished_at: '2026-05-11T00:01:00.000Z',
+      });
+      await repository.appendRunEvent({
+        id: 'failed-run-live-event',
+        run_session_id: currentRun.id,
+        event_type: 'turn_started',
+        source: 'codex',
+        visibility: 'public',
+        summary: 'Codex turn started before failure.',
+        payload: {},
+        created_at: '2026-05-11T00:00:30.000Z',
+      });
+    });
+    const cleanupCalls: string[] = [];
+    const cleanupActions: Array<{ label: string; run: () => Promise<void> }> = [];
+
+    try {
+      const lifecycle = await runDurableReleaseLifecycle({
+        app,
+        repository,
+        identity: buildDurableReleaseDogfoodIdentity('2026-05-11T00:00:00.000Z'),
+        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1', FORGELOOP_REPO_PATH: '/repo' },
+        deps: {
+          runCommand: async (command, args) => {
+            cleanupCalls.push(`${command} ${args.join(' ')}`);
+            return { stdout: 'base-sha\n', stderr: '' };
+          },
+          preflightStrictLocalCodex: async () => ({
+            ok: true,
+            blockers: [],
+            repoPath: '/repo',
+            dirtyFiles: [],
+            dirtySource: {
+              allowed_dirty_entries: [],
+              blocked_dirty_entries: [],
+              dirty_allowlist_source: 'RELEASE_STRICT_DIRTY_ALLOWLIST',
+            },
+            worktreeProbePath: '/repo/.worktrees/probe',
+          }),
+          runWorkerDrain: realWorkerDrain,
+          cleanupActions,
+        },
+      });
+
+      expect(realWorkerDrain).toHaveBeenCalled();
+      expect(lifecycle.markers.find((marker) => marker.marker === 'Strict local_codex run')).toMatchObject({
+        status: 'FAILED',
+      });
+      expect(cleanupActions.map((action) => action.label)).toEqual(expect.arrayContaining(['source guard', 'worktree']));
+      for (const action of cleanupActions) {
+        await action.run();
+      }
+      expect(cleanupCalls).toEqual(expect.arrayContaining([`git worktree remove --force /repo/.worktrees/${failedRunId}`]));
     } finally {
       await app.close();
     }
@@ -643,6 +786,53 @@ describe('release flow dogfood script helpers', () => {
       details: expect.arrayContaining(['cleanup_failed']),
     });
     expect(() => assertNoUnsafeReleaseDogfoodStrings('cleanup failure strict markers', markers)).not.toThrow();
+  });
+
+  it('attempts strict worktree and source guard cleanup when durable cleanup runs', async () => {
+    const closeFirstApp = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const closeFirstPool = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const cleanupWorktree = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const cleanupSourceGuard = vi.fn<() => Promise<void>>(() => Promise.reject(new Error('source guard cleanup failed in /Users/private')));
+
+    const markers = await runStrictReleaseFlowDogfood({
+      env: {},
+      deps: {
+        nowMs: () => 1,
+        runCommand: async () => ({ stdout: '', stderr: '' }),
+        planDatabase: () => ({
+          kind: 'provided',
+          databaseUrl: 'postgresql://safe.local/forgeloop_tmp_dogfood_test',
+          adminUrl: 'postgresql://safe.local/forgeloop_tmp_dogfood_test',
+          databaseName: 'forgeloop_tmp_dogfood_test',
+          cleanup: { dropDatabase: false, removeContainer: false },
+        }),
+        prepareSafeDatabaseTarget: () => undefined,
+        createDatabase: async () => undefined,
+        pushSchema: async () => undefined,
+        resetDatabase: async () => undefined,
+        createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
+        createRepository: () => new InMemoryP0Repository(),
+        createDurableApp: async () => ({ app: { close: closeFirstApp } }),
+        runDurableReleaseLifecycle: async ({ deps }) => {
+          deps?.cleanupActions?.push(
+            { label: 'worktree', run: cleanupWorktree },
+            { label: 'source guard', run: cleanupSourceGuard },
+          );
+          throw new Error('lifecycle failed before strict resource cleanup');
+        },
+        dropDatabase: async () => undefined,
+      },
+    });
+
+    expect(closeFirstApp).toHaveBeenCalled();
+    expect(closeFirstPool).toHaveBeenCalled();
+    expect(cleanupWorktree).toHaveBeenCalled();
+    expect(cleanupSourceGuard).toHaveBeenCalled();
+    expect(markers.find((marker) => marker.marker === 'Durable local reset')).toMatchObject({
+      status: 'FAILED',
+      details: expect.arrayContaining(['lifecycle_failed', 'cleanup_failed']),
+    });
+    expect(() => assertNoUnsafeReleaseDogfoodStrings('source guard cleanup strict markers', markers)).not.toThrow();
   });
 
   it('reports strict cleanup failure instead of a passed durable reset after an otherwise successful flow', async () => {
@@ -1461,6 +1651,10 @@ describe('release flow dogfood script helpers', () => {
     expect(report).toContain('Status: FAILED');
     expect(report).toContain('Status: BLOCKED with reason');
     expect(() => assertNoUnsafeReleaseDogfoodStrings('report', report)).not.toThrow();
+  });
+
+  it('rejects report rendering when a required marker is missing', () => {
+    expect(() => renderReleaseFlowVerificationReport([])).toThrow(/missing required marker/i);
   });
 
   it('serializes weird safe values without opaque stringify errors', () => {
