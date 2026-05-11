@@ -342,6 +342,82 @@ describe('Forgeloop web API client', () => {
     });
   });
 
+  it('routes release command methods through the release API', async () => {
+    const snapshot = {
+      release_id: 'release/1',
+      generated_at: '2026-05-11T00:00:00.000Z',
+      blocker_fingerprint: 'fingerprint-1',
+      blockers: [
+        {
+          code: 'missing_observation_plan',
+          category: 'planning',
+          overrideable: true,
+          message: 'Observation plan is required.',
+        },
+      ],
+    } as const;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ release: { id: 'release/1' } }), { status: 200 }));
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    await api.createRelease({
+      actor_id: 'actor-owner',
+      project_id: 'project-1',
+      title: 'Release Radar',
+    });
+    await api.getRelease('release/1', 'project with spaces');
+    await api.submitReleaseForApproval('release/1', { actor_id: 'actor-owner' });
+    await api.overrideApproveRelease('release/1', {
+      actor_id: 'actor-owner',
+      rationale: 'Accept planning blocker.',
+      blocker_snapshot: snapshot,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/releases', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      body: JSON.stringify({
+        actor_id: 'actor-owner',
+        project_id: 'project-1',
+        title: 'Release Radar',
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/root/releases/release%2F1?project_id=project+with+spaces', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/releases/release%2F1/submit-for-approval', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      body: JSON.stringify({ actor_id: 'actor-owner' }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/releases/release%2F1/override-approve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      body: JSON.stringify({
+        actor_id: 'actor-owner',
+        rationale: 'Accept planning blocker.',
+        blocker_snapshot: snapshot,
+      }),
+    });
+  });
+
+  it('routes release cockpit and replay reads through the query client', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    await queryApi.getReleaseCockpit('release/1');
+    await queryApi.getReleaseReplay('release/1');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/release-cockpit/release%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/root/query/replay/release/release%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
   it('keeps command and query client method surfaces separate', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
     const commandApi = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
@@ -354,6 +430,6 @@ describe('Forgeloop web API client', () => {
     }
     expect(commandMethods).not.toContain('getWorkItemCockpit');
     expect(commandMethods).not.toContain('getWorkItemReplay');
-    expect(Object.keys(queryApi).sort()).toEqual(['getWorkItemCockpit', 'getWorkItemReplay']);
+    expect(Object.keys(queryApi).sort()).toEqual(['getReleaseCockpit', 'getReleaseReplay', 'getWorkItemCockpit', 'getWorkItemReplay']);
   });
 });

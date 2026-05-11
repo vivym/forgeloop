@@ -1,9 +1,85 @@
-import type { ArtifactRef, EvidenceChainItem, EvidenceChainResponse } from './api';
+import type {
+  ArtifactRef,
+  CreateReleaseEvidenceBody,
+  EvidenceChainItem,
+  EvidenceChainResponse,
+  ReleaseBlocker,
+  ReleaseEvidenceObjectRef,
+} from './api';
 export { renderableRunEvents } from '@forgeloop/contracts';
 
 export function isActiveCockpit(cockpit: { work_item?: { id?: string } | null }, selectedWorkItemId: string): boolean {
   return Boolean(selectedWorkItemId && cockpit.work_item?.id === selectedWorkItemId);
 }
+
+const releaseBlockerCategoryOrder = ['structural', 'risk', 'evidence', 'planning'] as const;
+
+export interface ReleaseBlockerGroup {
+  id: ReleaseBlocker['category'];
+  label: string;
+  blockers: ReleaseBlocker[];
+}
+
+export const groupReleaseBlockers = (blockers: ReleaseBlocker[]): ReleaseBlockerGroup[] =>
+  releaseBlockerCategoryOrder
+    .map((category) => ({
+      id: category,
+      label: releaseNextActionLabel(category),
+      blockers: blockers.filter((blocker) => blocker.category === category),
+    }))
+    .filter((group) => group.blockers.length > 0);
+
+export const releaseNextActionLabel = (action: string): string => {
+  const label = action.replace(/_/g, ' ').trim();
+  return label ? `${label[0]?.toUpperCase()}${label.slice(1)}` : '';
+};
+
+export interface BuildObservationEvidencePayloadInput {
+  actorId: string;
+  summary: string;
+  severity: 'info' | 'warning' | 'failure';
+  observedAt: string;
+  source?: 'human' | 'script';
+  links?: ReleaseEvidenceObjectRef[];
+  metrics?: Record<string, string | number | boolean | null>;
+  notes?: string;
+  idempotencyKey?: string;
+  redacted?: boolean;
+}
+
+const releaseObservationLinkObjectTypes = new Set([
+  'work_item',
+  'execution_package',
+  'run_session',
+  'review_packet',
+  'artifact',
+  'decision',
+  'release',
+]);
+
+export const buildObservationEvidencePayload = (input: BuildObservationEvidencePayloadInput): CreateReleaseEvidenceBody => {
+  const links = (input.links ?? []).filter((link) => releaseObservationLinkObjectTypes.has(link.object_type));
+  return {
+    actor_id: input.actorId,
+    ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {}),
+    evidence_type: 'observation_note',
+    summary: input.summary,
+    extra: {
+      observation: {
+        source: input.source ?? 'human',
+        severity: input.severity,
+        summary: input.summary,
+        observed_at: input.observedAt,
+        actor_id: input.actorId,
+        ...(links.length ? { links } : {}),
+        ...(input.metrics ? { metrics: input.metrics } : {}),
+        ...(input.notes ? { notes: input.notes } : {}),
+      },
+    },
+    redacted: input.redacted ?? false,
+    status: 'current',
+  };
+};
 
 const runEventMergeKey = (event: { id: string; cursor?: string }): string =>
   event.cursor === undefined ? `id:${event.id}` : `cursor:${event.cursor}`;

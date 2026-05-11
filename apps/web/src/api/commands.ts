@@ -1,14 +1,28 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
 import type {
   ActorCommandBody,
+  ApproveReleaseBody,
   CreateExecutionPackageBody,
+  CreateReleaseBody,
+  CreateReleaseEvidenceBody,
   CreatePlanRevisionBody,
   CreateSpecRevisionBody,
   CreateWorkItemBody,
   EvidenceChainResponse,
   ExecutionPackage,
+  CloseReleaseBody,
+  LinkReleaseObjectResponse,
+  LinkReleaseScopeBody,
+  ListReleasesQuery,
+  OverrideApproveReleaseBody,
   PatchExecutionPackageBody,
+  PatchReleaseBody,
   PlanRevision,
+  ReleaseCommandBody,
+  ReleaseControlResponse,
+  ReleaseListResponse,
+  ReleaseResourceResponse,
+  RequestReleaseChangesBody,
   ReviewDecisionBody,
   ReviewPacket,
   RunEvent,
@@ -20,6 +34,8 @@ import type {
   RunSession,
   SpecPlan,
   SpecRevision,
+  StartReleaseObservingBody,
+  UnlinkReleaseScopeBody,
   WorkItem,
 } from './types';
 
@@ -44,10 +60,117 @@ const requireRunEventStreamToken = (payload: unknown) => {
   return payload.token;
 };
 
+const queryString = (params: Record<string, unknown>) => {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      searchParams.set(key, String(value));
+    }
+  }
+  const encoded = searchParams.toString();
+  return encoded ? `?${encoded}` : '';
+};
+
+const releaseListQueryString = (query: ListReleasesQuery) =>
+  queryString({
+    project_id: query.project_id,
+    release_owner_actor_id: query.release_owner_actor_id,
+    phase: query.phase,
+    gate_state: query.gate_state,
+    resolution: query.resolution,
+    limit: query.limit,
+    cursor: query.cursor,
+  });
+
+const releaseActorId = (body: { actor_id: string }) => body.actor_id;
+
 export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
   const { baseUrl, request } = createApiContext(options);
 
   return {
+    createRelease: (body: CreateReleaseBody) =>
+      request<ReleaseControlResponse>('/releases', { method: 'POST', body, actorId: releaseActorId(body) }),
+    listReleases: (query: ListReleasesQuery) => request<ReleaseListResponse>(`/releases${releaseListQueryString(query)}`),
+    getRelease: (releaseId: string, projectId: string) =>
+      request<ReleaseResourceResponse>(`/releases/${encodeURIComponent(releaseId)}${queryString({ project_id: projectId })}`),
+    patchRelease: (releaseId: string, body: PatchReleaseBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}`, {
+        method: 'PATCH',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    linkReleaseWorkItem: (releaseId: string, workItemId: string, body: LinkReleaseScopeBody) =>
+      request<LinkReleaseObjectResponse>(`/releases/${encodeURIComponent(releaseId)}/work-items/${encodeURIComponent(workItemId)}`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    unlinkReleaseWorkItem: (releaseId: string, workItemId: string, body: UnlinkReleaseScopeBody) =>
+      request<LinkReleaseObjectResponse>(`/releases/${encodeURIComponent(releaseId)}/work-items/${encodeURIComponent(workItemId)}`, {
+        method: 'DELETE',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    linkReleaseExecutionPackage: (releaseId: string, packageId: string, body: LinkReleaseScopeBody) =>
+      request<LinkReleaseObjectResponse>(
+        `/releases/${encodeURIComponent(releaseId)}/execution-packages/${encodeURIComponent(packageId)}`,
+        {
+          method: 'POST',
+          body,
+          actorId: releaseActorId(body),
+        },
+      ),
+    unlinkReleaseExecutionPackage: (releaseId: string, packageId: string, body: UnlinkReleaseScopeBody) =>
+      request<LinkReleaseObjectResponse>(
+        `/releases/${encodeURIComponent(releaseId)}/execution-packages/${encodeURIComponent(packageId)}`,
+        {
+          method: 'DELETE',
+          body,
+          actorId: releaseActorId(body),
+        },
+      ),
+    submitReleaseForApproval: (releaseId: string, body: ReleaseCommandBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/submit-for-approval`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    approveRelease: (releaseId: string, body: ApproveReleaseBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/approve`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    overrideApproveRelease: (releaseId: string, body: OverrideApproveReleaseBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/override-approve`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    requestReleaseChanges: (releaseId: string, body: RequestReleaseChangesBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/request-changes`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    createReleaseEvidence: (releaseId: string, body: CreateReleaseEvidenceBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/evidences`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    startReleaseObserving: (releaseId: string, body: StartReleaseObservingBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/start-observing`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    closeRelease: (releaseId: string, body: CloseReleaseBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/close`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
     createWorkItem: (body: CreateWorkItemBody) => request<WorkItem>('/work-items', { method: 'POST', body }),
     listWorkItems: (projectId?: string) =>
       request<WorkItem[]>(`/work-items${projectId ? `?${new URLSearchParams({ project_id: projectId }).toString()}` : ''}`),

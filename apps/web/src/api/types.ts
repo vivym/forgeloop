@@ -1,10 +1,62 @@
+import type { input as zInput } from 'zod';
+
+import type {
+  ApproveReleaseRequest,
+  closeReleaseRequestSchema,
+  createReleaseEvidenceRequestSchema,
+  createReleaseRequestSchema,
+  LinkReleaseObjectRequest,
+  OverrideApproveReleaseRequest,
+  PatchReleaseRequest,
+  ReleaseActorCommandRequest,
+  releaseListQuerySchema,
+  RequestReleaseChangesRequest,
+} from '@forgeloop/contracts';
+
 export type {
+  ApproveReleaseRequest,
+  CloseReleaseRequest,
+  CreateReleaseEvidenceRequest,
+  CreateReleaseRequest,
   EvidenceChainItem,
   EvidenceChainObjectRef,
   EvidenceChainRedactionReason,
   EvidenceChainResponse,
   EvidenceChainRiskFlag,
+  LinkReleaseObjectRequest,
+  LinkReleaseObjectResponse,
+  OverrideApproveReleaseRequest,
+  PatchReleaseRequest,
+  PublicReleaseSummary as ReleaseSummary,
+  ReleaseActorCommandRequest,
+  ReleaseBlocker,
+  ReleaseBlockerSnapshot,
+  ReleaseChecklistItem,
+  ReleaseCockpitResponse,
+  ReleaseControlResponse,
+  ReleaseEvidence,
+  ReleaseEvidenceObjectRef,
+  ReleaseListQuery,
+  ReleaseListResponse,
+  ReleaseResourceResponse,
+  RequestReleaseChangesRequest,
+  StartReleaseObservingRequest,
+  SubmitReleaseForApprovalRequest,
+  UnlinkReleaseObjectRequest,
 } from '@forgeloop/contracts';
+
+export type CreateReleaseBody = zInput<typeof createReleaseRequestSchema>;
+export type PatchReleaseBody = PatchReleaseRequest;
+export type ReleaseCommandBody = ReleaseActorCommandRequest;
+export type ApproveReleaseBody = ApproveReleaseRequest;
+export type OverrideApproveReleaseBody = OverrideApproveReleaseRequest;
+export type RequestReleaseChangesBody = RequestReleaseChangesRequest;
+export type StartReleaseObservingBody = ReleaseActorCommandRequest;
+export type CloseReleaseBody = zInput<typeof closeReleaseRequestSchema>;
+export type CreateReleaseEvidenceBody = zInput<typeof createReleaseEvidenceRequestSchema>;
+export type LinkReleaseScopeBody = LinkReleaseObjectRequest;
+export type UnlinkReleaseScopeBody = ReleaseActorCommandRequest;
+export type ListReleasesQuery = zInput<typeof releaseListQuerySchema>;
 
 export type WorkItemKind = 'requirement' | 'bug' | 'tech_debt';
 export type ArtifactKind =
