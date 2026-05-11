@@ -11,6 +11,19 @@ import { P0_REPOSITORY } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
+const actorOwner = 'actor-owner';
+const later = '2026-05-05T00:01:00.000Z';
+const unsafeInternalStrings = [
+  'allowed_paths',
+  'forbidden_paths',
+  'raw_payload',
+  'raw_metadata',
+  'runtime_metadata',
+  'review_payload',
+  'raw_extra',
+  'client_secret',
+] as const;
+
 describe('query module', () => {
   const apps: INestApplication[] = [];
 
@@ -40,6 +53,53 @@ describe('query module', () => {
     return { app, repo };
   };
 
+  const createLinkedRelease = async (app: INestApplication) => {
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const releaseResponse = await request(app.getHttpServer())
+      .post('/releases')
+      .send({
+        actor_id: actorOwner,
+        project_id: executionPackage.project_id,
+        title: 'Release Radar',
+        rollout_strategy: 'Ship behind a feature flag.',
+        rollback_plan: 'Disable the feature flag.',
+        observation_plan: 'Watch latency for 30 minutes.',
+      })
+      .expect(201);
+    const releaseId = releaseResponse.body.release.id as string;
+
+    await request(app.getHttpServer())
+      .post(`/releases/${releaseId}/work-items/${executionPackage.work_item_id}`)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/releases/${releaseId}/execution-packages/${executionPackage.id}`)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/releases/${releaseId}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Release cockpit observation.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            observed_at: later,
+            summary: 'Release looks healthy.',
+            links: [
+              { object_type: 'release', object_id: releaseId, relationship: 'observed' },
+              { object_type: 'work_item', object_id: executionPackage.work_item_id, relationship: 'affected' },
+            ],
+          },
+        },
+      })
+      .expect(201);
+
+    return { executionPackage, releaseId };
+  };
+
   it('returns the work item cockpit from the query surface', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
@@ -60,6 +120,35 @@ describe('query module', () => {
     const { app } = await track(createTestApp());
 
     await request(app.getHttpServer()).get('/query/work-item-cockpit/missing-work-item').expect(404);
+  });
+
+  it('returns the release cockpit from the query surface', async () => {
+    const { app } = await track(createTestApp());
+    const { releaseId } = await createLinkedRelease(app);
+
+    const response = await request(app.getHttpServer()).get(`/query/release-cockpit/${releaseId}`).expect(200);
+
+    expect(response.body.release).toMatchObject({ id: releaseId });
+    expect(response.body.latest_run_sessions).toEqual(expect.any(Array));
+    expect(response.body.current_review_packets).toEqual(expect.any(Array));
+    expect(response.body.evidences).toEqual(expect.any(Array));
+    expect(response.body.observations).toEqual(expect.any(Array));
+    expect(response.body.decisions).toEqual(expect.any(Array));
+    expect(response.body.overridden_blockers).toEqual(expect.any(Array));
+    expect(response.body.checklist).toEqual(expect.any(Array));
+    expect(response.body.risk_summary).toEqual(expect.any(Object));
+  });
+
+  it('does not expose unsafe release cockpit internals', async () => {
+    const { app } = await track(createTestApp());
+    const { releaseId } = await createLinkedRelease(app);
+
+    const response = await request(app.getHttpServer()).get(`/query/release-cockpit/${releaseId}`).expect(200);
+    const serialized = JSON.stringify(response.body);
+
+    for (const unsafeText of unsafeInternalStrings) {
+      expect(serialized).not.toContain(unsafeText);
+    }
   });
 
   it('does not depend on emitted constructor metadata to inject query routes', async () => {
@@ -102,6 +191,66 @@ describe('query module', () => {
           object_id: executionPackage.id,
         }),
       ]),
+    );
+  });
+
+  it('returns the release replay from the query surface through the public boundary', async () => {
+    const { app } = await track(createTestApp());
+    const { releaseId } = await createLinkedRelease(app);
+
+    const response = await request(app.getHttpServer()).get(`/query/replay/release/${releaseId}`).expect(200);
+    const serialized = JSON.stringify(response.body);
+
+    expect(response.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'object_event',
+          object_type: 'release',
+          object_id: releaseId,
+        }),
+      ]),
+    );
+    for (const unsafeText of unsafeInternalStrings) {
+      expect(serialized).not.toContain(unsafeText);
+    }
+  });
+
+  it('redacts unsafe release evidence backlinks from cockpit and replay links', async () => {
+    const { app } = await track(createTestApp());
+    const { releaseId } = await createLinkedRelease(app);
+
+    const createResponse = await request(app.getHttpServer())
+      .post(`/releases/${releaseId}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Backlink points to a non-public object.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'warning',
+            observed_at: later,
+            summary: 'Follow-up needed.',
+            links: [
+              { object_type: 'release', object_id: releaseId, relationship: 'observed' },
+              { object_type: 'work_item', object_id: 'missing-work-item', relationship: 'affected' },
+            ],
+          },
+        },
+      })
+      .expect(201);
+    expect(createResponse.body.blockers.map((blocker: { code: string }) => blocker.code)).toContain(
+      'unsafe_or_redacted_evidence_backlink',
+    );
+
+    const cockpit = await request(app.getHttpServer()).get(`/query/release-cockpit/${releaseId}`).expect(200);
+    const replay = await request(app.getHttpServer()).get(`/query/replay/release/${releaseId}`).expect(200);
+
+    expect(JSON.stringify(cockpit.body.evidences)).not.toContain('missing-work-item');
+    expect(JSON.stringify(cockpit.body.observations)).not.toContain('missing-work-item');
+    expect(JSON.stringify(replay.body)).not.toContain('missing-work-item');
+    expect(cockpit.body.blockers.map((blocker: { code: string }) => blocker.code)).toContain(
+      'unsafe_or_redacted_evidence_backlink',
     );
   });
 
@@ -233,12 +382,13 @@ describe('query module', () => {
     const { app } = await track(createTestApp());
 
     await request(app.getHttpServer()).get('/query/replay/work_item/missing-work-item').expect(404);
+    await request(app.getHttpServer()).get('/query/replay/release/missing-release').expect(404);
   });
 
   it('rejects unsupported replay object types before lookup', async () => {
     const { app } = await track(createTestApp());
 
-    const response = await request(app.getHttpServer()).get('/query/replay/release/missing-release').expect(400);
+    const response = await request(app.getHttpServer()).get('/query/replay/unsupported/missing').expect(400);
 
     expect(response.body.message).toContain('Unsupported replay object type');
   });

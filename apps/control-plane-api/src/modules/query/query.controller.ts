@@ -11,6 +11,11 @@ export class QueryController {
     return this.service.getWorkItemCockpit(workItemId);
   }
 
+  @Get('release-cockpit/:releaseId')
+  getReleaseCockpit(@Param('releaseId') releaseId: string) {
+    return this.service.getReleaseCockpit(releaseId);
+  }
+
   @Get('replay/:objectType/:objectId')
   getReplay(@Param('objectType') objectType: string, @Param('objectId') objectId: string) {
     return this.service.getReplay(objectType, objectId);

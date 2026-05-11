@@ -1,6 +1,11 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 
-import { type P0Repository, getObjectReplayTimeline, getWorkItemCockpit } from '@forgeloop/db';
+import {
+  type P0Repository,
+  getObjectReplayTimeline,
+  getReleaseCockpit as getReleaseCockpitQuery,
+  getWorkItemCockpit,
+} from '@forgeloop/db';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../../p0/p0.service';
@@ -27,8 +32,17 @@ export class QueryService {
     };
   }
 
+  async getReleaseCockpit(releaseId: string) {
+    const cockpit = await getReleaseCockpitQuery(this.repository, releaseId);
+    if (cockpit === undefined) {
+      throw new NotFoundException(`Release ${releaseId} not found`);
+    }
+
+    return cockpit;
+  }
+
   async getReplay(objectType: string, objectId: string) {
-    if (objectType !== 'work_item') {
+    if (objectType !== 'work_item' && objectType !== 'release') {
       throw new BadRequestException(`Unsupported replay object type: ${objectType}`);
     }
 
