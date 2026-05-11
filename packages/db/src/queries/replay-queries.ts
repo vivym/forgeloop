@@ -13,9 +13,9 @@ type ObservationLink = {
   relationship?: string;
 };
 
-const byUpdatedAtDesc = <T extends { updated_at?: string; created_at: string; id: string }>(left: T, right: T): number => {
-  const leftTime = Date.parse(left.updated_at ?? left.created_at);
-  const rightTime = Date.parse(right.updated_at ?? right.created_at);
+const byCreatedAtDesc = <T extends { created_at: string; id: string }>(left: T, right: T): number => {
+  const leftTime = Date.parse(left.created_at);
+  const rightTime = Date.parse(right.created_at);
   return rightTime - leftTime || right.id.localeCompare(left.id);
 };
 
@@ -26,6 +26,12 @@ const isVisible = (object: { archived_at?: string; deleted_at?: string }): boole
   object.archived_at === undefined && object.deleted_at === undefined;
 
 const visibilityKey = (objectType: string, objectId: string): string => `${objectType}\0${objectId}`;
+
+const omitArtifactId = (evidence: ReleaseEvidence): ReleaseEvidence => {
+  const result: ReleaseEvidence = { ...evidence };
+  delete result.artifact_id;
+  return result;
+};
 
 const addObjectRef = (refs: ObjectRef[], seen: Set<string>, ref: ObjectRef): void => {
   const key = visibilityKey(ref.objectType, ref.objectId);
@@ -61,7 +67,7 @@ const latestRunSessionForPackage = async (
     runSessions.find((runSession) => releaseCurrentRunSessionIds?.includes(runSession.id) === true) ??
     runSessions.find((runSession) => runSession.id === executionPackage.current_run_session_id) ??
     runSessions.find((runSession) => runSession.id === executionPackage.last_run_session_id) ??
-    [...runSessions].sort(byUpdatedAtDesc)[0]
+    [...runSessions].sort(byCreatedAtDesc)[0]
   );
 };
 
@@ -71,9 +77,9 @@ const artifactForEvidence = async (
 ): Promise<Artifact | undefined> => {
   const artifacts = await repository.listArtifactsForObject('release_evidence', evidence.id);
   if (evidence.artifact_id === undefined) {
-    return artifacts[0];
+    return undefined;
   }
-  return artifacts.find((artifact) => artifact.id === evidence.artifact_id) ?? artifacts[0];
+  return artifacts.find((artifact) => artifact.id === evidence.artifact_id);
 };
 
 const filterEvidencePublicRefs = (
@@ -331,7 +337,7 @@ const getReleaseReplayTimeline = async (
     const { evidence: publicEvidenceInput, omittedUnsafeLink } = filterEvidencePublicRefs(evidence, visibleRefs);
     const artifact = artifactsByEvidenceId.get(evidence.id);
     const replayEvidenceInput =
-      artifact === undefined ? publicEvidenceInput : { ...publicEvidenceInput, artifact_id: artifact.id };
+      artifact === undefined ? omitArtifactId(publicEvidenceInput) : { ...publicEvidenceInput, artifact_id: artifact.id };
     entries.push(
       serializePublicReplayEntry({
         id: evidence.id,

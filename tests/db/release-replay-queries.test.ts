@@ -335,22 +335,19 @@ describe('getObjectReplayTimeline release support', () => {
     const evidenceEntry = timeline?.find((entry) => entry.source === 'release_evidence');
     expect(evidenceEntry?.payload).toMatchObject({
       id: 'evidence-1',
-      artifact_id: 'artifact-1',
-      artifact: {
-        storage_uri: 'https://evidence.example.test/release-summary.md',
-      },
       extra: {
         observation: {
           links: [
             { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
             { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
-            { object_type: 'artifact', object_id: 'artifact-1', relationship: 'generated_by' },
             { object_type: 'decision', object_id: 'decision-release', relationship: 'supports' },
           ],
         },
       },
     });
     expect(evidenceEntry?.payload).not.toHaveProperty('object_ref');
+    expect(evidenceEntry?.payload).not.toHaveProperty('artifact');
+    expect(evidenceEntry?.payload).not.toHaveProperty('artifact_id');
     expect(evidenceEntry?.payload).not.toMatchObject({ artifact_id: 'artifact-stale' });
     expect(evidenceEntry?.payload.extra.observation?.links).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ object_id: 'run-private' })]),

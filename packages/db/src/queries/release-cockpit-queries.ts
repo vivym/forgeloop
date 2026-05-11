@@ -49,9 +49,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const publicReleaseTypes = new Set(['normal', 'hotfix', 'emergency', 'gray']);
 
-const byUpdatedAtDesc = <T extends { updated_at?: string; created_at: string; id: string }>(left: T, right: T): number => {
-  const leftTime = Date.parse(left.updated_at ?? left.created_at);
-  const rightTime = Date.parse(right.updated_at ?? right.created_at);
+const byCreatedAtDesc = <T extends { created_at: string; id: string }>(left: T, right: T): number => {
+  const leftTime = Date.parse(left.created_at);
+  const rightTime = Date.parse(right.created_at);
   return rightTime - leftTime || right.id.localeCompare(left.id);
 };
 
@@ -75,6 +75,12 @@ const visibilityKey = (objectType: string, objectId: string): string => `${objec
 
 const isVisible = (object: { archived_at?: string; deleted_at?: string }): boolean =>
   object.archived_at === undefined && object.deleted_at === undefined;
+
+const omitArtifactId = (evidence: ReleaseEvidence): ReleaseEvidence => {
+  const result: ReleaseEvidence = { ...evidence };
+  delete result.artifact_id;
+  return result;
+};
 
 const resolveWorkItemLinks = async (
   repository: P0Repository,
@@ -147,7 +153,7 @@ const latestRunSessionForPackage = async (
     runSessions.find((runSession) => release.current_run_session_ids?.includes(runSession.id) === true) ??
     runSessions.find((runSession) => runSession.id === executionPackage.current_run_session_id) ??
     runSessions.find((runSession) => runSession.id === executionPackage.last_run_session_id) ??
-    [...runSessions].sort(byUpdatedAtDesc)[0];
+    [...runSessions].sort(byCreatedAtDesc)[0];
 
   return { latest: selected, all: runSessions };
 };
@@ -158,9 +164,9 @@ const artifactForEvidence = async (
 ): Promise<Artifact | undefined> => {
   const artifacts = await repository.listArtifactsForObject('release_evidence', evidence.id);
   if (evidence.artifact_id === undefined) {
-    return artifacts[0];
+    return undefined;
   }
-  return artifacts.find((artifact) => artifact.id === evidence.artifact_id) ?? artifacts[0];
+  return artifacts.find((artifact) => artifact.id === evidence.artifact_id);
 };
 
 const publicReleaseSummary = (
@@ -483,7 +489,7 @@ export async function getReleaseCockpit(
     filterUnsafeObservationLinks(
       serializePublicReleaseEvidence(
         artifactsByEvidenceId.get(evidence.id) === undefined
-          ? { evidence }
+          ? { evidence: omitArtifactId(evidence) }
           : { evidence, artifact: artifactsByEvidenceId.get(evidence.id) as Artifact },
       ),
       visibility,

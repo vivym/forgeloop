@@ -16,6 +16,7 @@ import { getReleaseCockpit, InMemoryP0Repository, type P0Repository } from '../.
 
 const now = '2026-05-11T00:00:00.000Z';
 const later = '2026-05-11T00:01:00.000Z';
+const latest = '2026-05-11T00:02:00.000Z';
 
 const publicArtifactRef = {
   kind: 'execution_summary',
@@ -451,6 +452,66 @@ describe('getReleaseCockpit', () => {
       { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
       { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
     ]);
+    expect(cockpit?.blockers.map((item) => item.code)).toContain('unsafe_or_redacted_evidence_backlink');
+  });
+
+  it('selects fallback run sessions by creation time and requires exact public artifact refs', async () => {
+    const repo = new InMemoryP0Repository();
+    const packageWithoutRunPointers = executionPackage();
+    delete packageWithoutRunPointers.current_run_session_id;
+    delete packageWithoutRunPointers.last_run_session_id;
+    await seedReadyRelease(repo, {
+      execution_package: packageWithoutRunPointers,
+      run_session: {
+        id: 'run-old-touch',
+        created_at: now,
+        updated_at: latest,
+      },
+      review_packet: {
+        id: 'review-new-created',
+        run_session_id: 'run-new-created',
+      },
+      release: {
+        current_run_session_ids: [],
+        current_review_packet_ids: [],
+      },
+      evidence: {
+        artifact_id: 'artifact-stale',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            summary: 'Release links to a stale artifact id.',
+            observed_at: later,
+            links: [
+              { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+              { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
+              { object_type: 'artifact', object_id: 'artifact-1', relationship: 'generated_by' },
+            ],
+          },
+        },
+      },
+      artifact: {
+        id: 'artifact-1',
+      },
+    });
+    await repo.saveRunSession(
+      runSession({
+        id: 'run-new-created',
+        created_at: later,
+        updated_at: now,
+      }),
+    );
+
+    const cockpit = await getReleaseCockpit(repo, 'release-1');
+
+    expect(cockpit?.latest_run_sessions.map((item) => item.id)).toEqual(['run-new-created']);
+    expect(cockpit?.observations[0]?.extra.observation?.links).toEqual([
+      { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+      { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
+    ]);
+    expect(cockpit?.evidences[0]).not.toHaveProperty('artifact');
+    expect(cockpit?.evidences[0]).not.toHaveProperty('artifact_id');
     expect(cockpit?.blockers.map((item) => item.code)).toContain('unsafe_or_redacted_evidence_backlink');
   });
 
