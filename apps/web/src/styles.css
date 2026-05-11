@@ -189,6 +189,10 @@ pre {
   grid-column: span 2;
 }
 
+.release-owner {
+  grid-column: 1 / -1;
+}
+
 .section-header {
   display: flex;
   align-items: center;
@@ -222,7 +226,8 @@ pre {
 .stack-form,
 .detail-block,
 .entity-summary,
-.review-controls {
+.review-controls,
+.release-owner {
   display: grid;
   gap: 8px;
 }
@@ -600,13 +605,74 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.release-load-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.release-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.release-form,
+.release-state,
+.release-evidence-form {
+  min-width: 0;
+}
+
+.release-object-list {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.release-object-row {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border-left: 3px solid #7f93a8;
+  background: #fafbfc;
+  padding: 7px 8px;
+}
+
+.release-object-row strong,
+.release-object-row span,
+.release-blocker-group h4 {
+  overflow-wrap: anywhere;
+}
+
+.release-object-row span {
+  color: #67717c;
+  font-size: 12px;
+}
+
+.release-blocker-group {
+  display: grid;
+  gap: 6px;
+}
+
+.release-commands .button-row button {
+  flex: 1 1 136px;
+}
+
 @media (max-width: 1180px) {
   .workbench-grid {
     grid-template-columns: repeat(2, minmax(300px, 1fr));
   }
 
-  .run-review {
+  .run-review,
+  .release-owner {
     grid-column: span 2;
+  }
+
+  .release-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -624,7 +690,9 @@ pre {
   .form-grid.two,
   .evidence-metrics,
   .run-console-grid,
-  .run-input-row {
+  .run-input-row,
+  .release-load-row,
+  .release-grid {
     grid-template-columns: 1fr;
   }
 
@@ -633,7 +701,8 @@ pre {
     width: 100%;
   }
 
-  .run-review {
+  .run-review,
+  .release-owner {
     grid-column: span 1;
   }
 }

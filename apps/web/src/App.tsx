@@ -9,7 +9,10 @@ import {
   type CheckResult,
   type CockpitResponse,
   type CreateExecutionPackageBody,
+  type CreateReleaseBody,
+  type CreateReleaseEvidenceBody,
   type PatchExecutionPackageBody,
+  type PatchReleaseBody,
   type CreatePlanRevisionBody,
   type CreateSpecRevisionBody,
   type CreateWorkItemBody,
@@ -18,6 +21,8 @@ import {
   type ExecutorType,
   type PlanRevision,
   type RequestedChange,
+  type ReleaseCockpitResponse,
+  type ReleaseEvidenceObjectRef,
   type ReviewPacket,
   type RunEvent,
   type RunEventStream,
@@ -31,13 +36,16 @@ import {
 } from './api';
 import {
   appendRunEvents,
+  buildObservationEvidencePayload,
   evidenceChainDisplayItem,
   evidenceChainSummaryMetrics,
+  groupReleaseBlockers,
   groupEvidenceChainItems,
   isActiveCockpit,
   latestContinuationNotice,
   latestPlanStep,
   renderableRunEvents,
+  releaseNextActionLabel,
   runArtifactDisplayLabel,
   runArtifactsForDetail,
   visibleRunArtifacts,
@@ -72,6 +80,25 @@ const emptyPackage: CreateExecutionPackageBody = {
   forbidden_paths: ['apps/control-plane-api/**', 'migrations/**'],
 };
 
+const emptyReleaseForm: CreateReleaseBody = {
+  actor_id: actorDefault,
+  project_id: '',
+  title: '',
+  scope_summary: '',
+  rollout_strategy: '',
+  rollback_plan: '',
+  observation_plan: '',
+};
+
+const emptyReleasePatchForm: PatchReleaseBody = {
+  actor_id: actorDefault,
+  title: '',
+  scope_summary: '',
+  rollout_strategy: '',
+  rollback_plan: '',
+  observation_plan: '',
+};
+
 type SpecPlanMode = 'spec' | 'plan';
 
 export function App() {
@@ -99,6 +126,33 @@ export function App() {
   const [runConsoleError, setRunConsoleError] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const [reviewDetail, setReviewDetail] = useState<ReviewPacket | null>(null);
+  const [releaseId, setReleaseId] = useState('');
+  const [releaseProjectId, setReleaseProjectId] = useState('');
+  const [releaseCockpit, setReleaseCockpit] = useState<ReleaseCockpitResponse | null>(null);
+  const [releaseReplay, setReleaseReplay] = useState<TimelineEntry[]>([]);
+  const [releaseForm, setReleaseForm] = useState(emptyReleaseForm);
+  const [releasePatchForm, setReleasePatchForm] = useState(emptyReleasePatchForm);
+  const [releaseLinkForm, setReleaseLinkForm] = useState({
+    actor_id: actorDefault,
+    work_item_id: '',
+    execution_package_id: '',
+  });
+  const [releaseDecisionForm, setReleaseDecisionForm] = useState({
+    actor_id: reviewerDefault,
+    rationale: '',
+    close_resolution: 'completed' as 'completed' | 'rolled_back' | 'cancelled',
+    close_summary: '',
+    override_without_observation: false,
+  });
+  const [releaseEvidenceForm, setReleaseEvidenceForm] = useState({
+    actor_id: actorDefault,
+    summary: '',
+    severity: 'info' as 'info' | 'warning' | 'failure',
+    observed_at: '',
+    links: 'release||observed',
+    metrics: '',
+    notes: '',
+  });
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -134,6 +188,25 @@ export function App() {
   const failedChecks = (activeRunDetail?.check_results ?? []).filter((check) => check.status !== 'succeeded' && check.blocks_review !== false);
   const nextActions = hasActiveCockpit ? (cockpit.next_actions ?? []) : [];
   const selectedRunActorId = runForm.actor_id.trim() || selectedPackage?.owner_actor_id || actorDefault;
+  const release = releaseCockpit?.release ?? null;
+  const releaseBlockerGroups = groupReleaseBlockers(releaseCockpit?.blockers ?? []);
+  const releaseStateText = useMemo(
+    () =>
+      JSON.stringify(
+        release
+          ? {
+              phase: release.phase,
+              activity_state: release.activity_state,
+              gate_state: release.gate_state,
+              resolution: release.resolution,
+              blocker_fingerprint: releaseCockpit?.blocker_snapshot.blocker_fingerprint,
+            }
+          : {},
+        null,
+        2,
+      ),
+    [release, releaseCockpit?.blocker_snapshot.blocker_fingerprint],
+  );
 
   useEffect(() => {
     void loadWorkItems();
@@ -492,6 +565,82 @@ export function App() {
     });
   }
 
+  function activeReleaseId() {
+    const id = releaseId.trim() || release?.id;
+    if (!id) throw new Error('Enter or create a release first.');
+    return id;
+  }
+
+  async function refreshReleaseCockpit(reloadReplay = false) {
+    const id = activeReleaseId();
+    const [cockpitResponse, replayResponse] = await Promise.all([
+      queryApi.getReleaseCockpit(id),
+      reloadReplay ? queryApi.getReleaseReplay(id) : Promise.resolve(releaseReplay),
+    ]);
+    setReleaseCockpit(cockpitResponse);
+    setReleaseId(cockpitResponse.release.id);
+    setReleaseProjectId(cockpitResponse.release.project_id);
+    setReleasePatchForm((current) => ({
+      ...current,
+      title: cockpitResponse.release.title,
+      scope_summary: cockpitResponse.release.scope_summary ?? '',
+      rollout_strategy: cockpitResponse.release.rollout_strategy ?? '',
+      rollback_plan: cockpitResponse.release.rollback_plan ?? '',
+      observation_plan: cockpitResponse.release.observation_plan ?? '',
+    }));
+    setReleaseReplay(reloadReplay ? replayResponse : []);
+  }
+
+  function loadReleaseCockpit(event?: FormEvent) {
+    event?.preventDefault();
+    void runAction('Loaded release cockpit', async () => refreshReleaseCockpit(false));
+  }
+
+  function loadReleaseReplay() {
+    void runAction('Loaded release replay', async () => refreshReleaseCockpit(true));
+  }
+
+  function submitRelease(event: FormEvent) {
+    event.preventDefault();
+    void runAction('Created release', async () => {
+      const created = await api.createRelease(cleanReleaseCreate(releaseForm));
+      setReleaseId(created.release.id);
+      setReleaseProjectId(created.release.project_id);
+      setReleaseCockpit(await queryApi.getReleaseCockpit(created.release.id));
+      setReleaseReplay([]);
+    });
+  }
+
+  function patchRelease(event: FormEvent) {
+    event.preventDefault();
+    void runAction('Patched release', async () => {
+      await api.patchRelease(activeReleaseId(), cleanReleasePatch(releasePatchForm));
+      await refreshReleaseCockpit(false);
+    });
+  }
+
+  function releaseScopeCommand(label: string, command: () => Promise<unknown>) {
+    void runAction(label, async () => {
+      await command();
+      await refreshReleaseCockpit(false);
+    });
+  }
+
+  function releaseCommand(label: string, command: () => Promise<unknown>) {
+    void runAction(label, async () => {
+      await command();
+      await refreshReleaseCockpit(false);
+    });
+  }
+
+  function submitObservationEvidence(event: FormEvent) {
+    event.preventDefault();
+    void runAction('Created observation evidence', async () => {
+      await api.createReleaseEvidence(activeReleaseId(), toObservationEvidenceBody(releaseEvidenceForm, activeReleaseId()));
+      await refreshReleaseCockpit(false);
+    });
+  }
+
   function requiredWorkItemId() {
     if (!hasActiveCockpit || !selectedWorkItemId) throw new Error('Load the selected work item cockpit first.');
     return selectedWorkItemId;
@@ -736,6 +885,186 @@ export function App() {
               </article>
             ))}
           </div>
+        </section>
+
+        <section className="panel release-owner">
+          <SectionHeader title="Release Owner" meta={release?.gate_state ?? 'not loaded'} />
+          <form className="release-load-row" onSubmit={loadReleaseCockpit}>
+            <label>release_id<input value={releaseId} onChange={(event) => setReleaseId(event.target.value)} placeholder="release_id" /></label>
+            <label>project_id<input value={releaseProjectId} onChange={(event) => setReleaseProjectId(event.target.value)} placeholder="project_id" /></label>
+            <div className="button-row">
+              <button type="submit" disabled={loading || !releaseId.trim()}>Load cockpit</button>
+              <button type="button" disabled={loading || !releaseId.trim()} onClick={loadReleaseReplay}>Load replay</button>
+            </div>
+          </form>
+
+          <div className="release-grid">
+            <form className="stack-form compact release-form" onSubmit={submitRelease}>
+              <h3>Create release</h3>
+              <div className="form-grid two">
+                <label>Actor<input required value={releaseForm.actor_id} onChange={(event) => setReleaseForm({ ...releaseForm, actor_id: event.target.value })} /></label>
+                <label>Project id<input required value={releaseForm.project_id} onChange={(event) => setReleaseForm({ ...releaseForm, project_id: event.target.value })} /></label>
+              </div>
+              <label>Title<input required value={releaseForm.title} onChange={(event) => setReleaseForm({ ...releaseForm, title: event.target.value })} /></label>
+              <label>Scope summary<textarea value={releaseForm.scope_summary ?? ''} onChange={(event) => setReleaseForm({ ...releaseForm, scope_summary: event.target.value })} /></label>
+              <label>Rollout strategy<textarea value={releaseForm.rollout_strategy ?? ''} onChange={(event) => setReleaseForm({ ...releaseForm, rollout_strategy: event.target.value })} /></label>
+              <label>Rollback plan<textarea value={releaseForm.rollback_plan ?? ''} onChange={(event) => setReleaseForm({ ...releaseForm, rollback_plan: event.target.value })} /></label>
+              <label>Observation plan<textarea value={releaseForm.observation_plan ?? ''} onChange={(event) => setReleaseForm({ ...releaseForm, observation_plan: event.target.value })} /></label>
+              <button type="submit" disabled={loading}>Create release</button>
+            </form>
+
+            <form className="stack-form compact release-form" onSubmit={patchRelease}>
+              <h3>Patch release</h3>
+              <label>Actor<input required value={releasePatchForm.actor_id} onChange={(event) => setReleasePatchForm({ ...releasePatchForm, actor_id: event.target.value })} /></label>
+              <label>Title<input value={releasePatchForm.title ?? ''} onChange={(event) => setReleasePatchForm({ ...releasePatchForm, title: event.target.value })} /></label>
+              <label>Scope summary<textarea value={releasePatchForm.scope_summary ?? ''} onChange={(event) => setReleasePatchForm({ ...releasePatchForm, scope_summary: event.target.value })} /></label>
+              <label>Rollout strategy<textarea value={releasePatchForm.rollout_strategy ?? ''} onChange={(event) => setReleasePatchForm({ ...releasePatchForm, rollout_strategy: event.target.value })} /></label>
+              <label>Rollback plan<textarea value={releasePatchForm.rollback_plan ?? ''} onChange={(event) => setReleasePatchForm({ ...releasePatchForm, rollback_plan: event.target.value })} /></label>
+              <label>Observation plan<textarea value={releasePatchForm.observation_plan ?? ''} onChange={(event) => setReleasePatchForm({ ...releasePatchForm, observation_plan: event.target.value })} /></label>
+              <button type="submit" disabled={loading || !releaseId.trim()}>Patch release</button>
+            </form>
+
+            <div className="detail-block release-state">
+              <h3>State summary</h3>
+              {release ? (
+                <>
+                  <StatusLine item={release} />
+                  <span>{release.title}</span>
+                  <span>{release.id} / {release.project_id}</span>
+                  <pre>{releaseStateText}</pre>
+                </>
+              ) : <EmptyState text="Load a release cockpit" />}
+            </div>
+          </div>
+
+          <div className="release-grid">
+            <div className="detail-block">
+              <h3>Linked WorkItems</h3>
+              <ReleaseObjectList
+                empty="No linked WorkItems"
+                items={(releaseCockpit?.work_items ?? []).map((item) => ({
+                  id: item.id,
+                  title: item.title,
+                  meta: `${item.phase} / ${item.gate_state} / ${item.resolution}`,
+                }))}
+              />
+              <div className="inline-form">
+                <input value={releaseLinkForm.work_item_id} onChange={(event) => setReleaseLinkForm({ ...releaseLinkForm, work_item_id: event.target.value })} placeholder="work_item_id" />
+                <button type="button" disabled={!releaseLinkForm.work_item_id.trim()} onClick={() => releaseScopeCommand('Linked WorkItem', () => api.linkReleaseWorkItem(activeReleaseId(), releaseLinkForm.work_item_id.trim(), { actor_id: releaseLinkForm.actor_id }))}>Link WorkItem</button>
+              </div>
+              <div className="inline-form">
+                <input value={releaseLinkForm.actor_id} onChange={(event) => setReleaseLinkForm({ ...releaseLinkForm, actor_id: event.target.value })} placeholder="actor_id" />
+                <button type="button" disabled={!releaseLinkForm.work_item_id.trim()} onClick={() => releaseScopeCommand('Unlinked WorkItem', () => api.unlinkReleaseWorkItem(activeReleaseId(), releaseLinkForm.work_item_id.trim(), { actor_id: releaseLinkForm.actor_id }))}>Unlink WorkItem</button>
+              </div>
+            </div>
+
+            <div className="detail-block">
+              <h3>ExecutionPackages</h3>
+              <ReleaseObjectList
+                empty="No linked ExecutionPackages"
+                items={(releaseCockpit?.execution_packages ?? []).map((item) => ({
+                  id: item.id,
+                  title: item.display_title ?? item.objective,
+                  meta: `${item.phase} / ${item.gate_state} / ${item.resolution}`,
+                }))}
+              />
+              <div className="inline-form">
+                <input value={releaseLinkForm.execution_package_id} onChange={(event) => setReleaseLinkForm({ ...releaseLinkForm, execution_package_id: event.target.value })} placeholder="execution_package_id" />
+                <button type="button" disabled={!releaseLinkForm.execution_package_id.trim()} onClick={() => releaseScopeCommand('Linked ExecutionPackage', () => api.linkReleaseExecutionPackage(activeReleaseId(), releaseLinkForm.execution_package_id.trim(), { actor_id: releaseLinkForm.actor_id }))}>Link ExecutionPackage</button>
+              </div>
+              <div className="inline-form">
+                <input value={releaseLinkForm.actor_id} onChange={(event) => setReleaseLinkForm({ ...releaseLinkForm, actor_id: event.target.value })} placeholder="actor_id" />
+                <button type="button" disabled={!releaseLinkForm.execution_package_id.trim()} onClick={() => releaseScopeCommand('Unlinked ExecutionPackage', () => api.unlinkReleaseExecutionPackage(activeReleaseId(), releaseLinkForm.execution_package_id.trim(), { actor_id: releaseLinkForm.actor_id }))}>Unlink ExecutionPackage</button>
+              </div>
+            </div>
+
+            <div className="detail-block release-commands">
+              <h3>Commands</h3>
+              <div className="form-grid two">
+                <label>Actor<input value={releaseDecisionForm.actor_id} onChange={(event) => setReleaseDecisionForm({ ...releaseDecisionForm, actor_id: event.target.value })} /></label>
+                <label>Close resolution<select value={releaseDecisionForm.close_resolution} onChange={(event) => setReleaseDecisionForm({ ...releaseDecisionForm, close_resolution: event.target.value as typeof releaseDecisionForm.close_resolution })}>
+                  <option value="completed">completed</option><option value="rolled_back">rolled_back</option><option value="cancelled">cancelled</option>
+                </select></label>
+              </div>
+              <label>Rationale<textarea value={releaseDecisionForm.rationale} onChange={(event) => setReleaseDecisionForm({ ...releaseDecisionForm, rationale: event.target.value })} /></label>
+              <label>Close summary<input value={releaseDecisionForm.close_summary} onChange={(event) => setReleaseDecisionForm({ ...releaseDecisionForm, close_summary: event.target.value })} /></label>
+              <label className="checkbox"><input type="checkbox" checked={releaseDecisionForm.override_without_observation} onChange={(event) => setReleaseDecisionForm({ ...releaseDecisionForm, override_without_observation: event.target.checked })} /> override without observation</label>
+              <div className="button-row">
+                <button type="button" disabled={!releaseId.trim()} onClick={() => releaseCommand('Submitted release', () => api.submitReleaseForApproval(activeReleaseId(), { actor_id: releaseDecisionForm.actor_id }))}>Submit</button>
+                <button type="button" disabled={!releaseId.trim()} onClick={() => releaseCommand('Approved release', () => api.approveRelease(activeReleaseId(), { actor_id: releaseDecisionForm.actor_id, rationale: optionalText(releaseDecisionForm.rationale) }))}>Approve</button>
+                <button type="button" disabled={!releaseId.trim() || !releaseCockpit} onClick={() => releaseCommand('Override approved release', () => api.overrideApproveRelease(activeReleaseId(), { actor_id: releaseDecisionForm.actor_id, rationale: releaseDecisionForm.rationale.trim() || 'Release owner accepted overrideable blockers.', blocker_snapshot: releaseCockpit!.blocker_snapshot }))}>Override approve</button>
+                <button type="button" disabled={!releaseId.trim()} onClick={() => releaseCommand('Requested release changes', () => api.requestReleaseChanges(activeReleaseId(), { actor_id: releaseDecisionForm.actor_id, rationale: releaseDecisionForm.rationale.trim() || 'Release owner requested changes.' }))}>Request changes</button>
+                <button type="button" disabled={!releaseId.trim()} onClick={() => releaseCommand('Started observing release', () => api.startReleaseObserving(activeReleaseId(), { actor_id: releaseDecisionForm.actor_id }))}>Start observing</button>
+                <button type="button" disabled={!releaseId.trim()} onClick={() => releaseCommand('Closed release', () => api.closeRelease(activeReleaseId(), cleanCloseReleaseBody(releaseDecisionForm)))}>Close release</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="release-grid">
+            <ReleaseBlockersPanel groups={releaseBlockerGroups} />
+            <div className="detail-block">
+              <h3>Checklist</h3>
+              <ReleaseObjectList
+                empty="No checklist reported"
+                items={(releaseCockpit?.checklist ?? []).map((item) => ({
+                  id: item.id,
+                  title: `${item.label}: ${item.status}`,
+                  meta: item.summary ?? item.blocker_codes.map(releaseNextActionLabel).join(', '),
+                }))}
+              />
+            </div>
+            <div className="detail-block">
+              <h3>Risk summary</h3>
+              <pre>{JSON.stringify(releaseCockpit?.risk_summary ?? {}, null, 2)}</pre>
+            </div>
+          </div>
+
+          <div className="release-grid">
+            <div className="detail-block">
+              <h3>Evidence/observations</h3>
+              <ReleaseObjectList
+                empty="No evidence or observations"
+                items={[...(releaseCockpit?.evidences ?? []), ...(releaseCockpit?.observations ?? [])].map((item) => ({
+                  id: item.id,
+                  title: `${item.evidence_type}: ${item.summary}`,
+                  meta: `${item.status}${item.redacted ? ' / redacted' : ''}`,
+                }))}
+              />
+            </div>
+            <div className="detail-block">
+              <h3>Decisions</h3>
+              <ReleaseObjectList
+                empty="No decisions"
+                items={(releaseCockpit?.decisions ?? []).map((item) => ({
+                  id: item.id,
+                  title: `${item.decision_type ?? 'decision'}: ${item.decision}`,
+                  meta: item.summary,
+                }))}
+              />
+            </div>
+            <div className="detail-block">
+              <h3>Next actions</h3>
+              <PillList values={(releaseCockpit?.next_actions ?? []).map(releaseNextActionLabel)} empty="No release next actions" />
+              <h4>Replay</h4>
+              <PillList values={releaseReplay.slice(0, 8).map((entry) => `${entry.source}: ${entry.summary}`)} empty="No release replay loaded" />
+            </div>
+          </div>
+
+          <form className="stack-form compact release-evidence-form" onSubmit={submitObservationEvidence}>
+            <h3>Observation evidence</h3>
+            <div className="form-grid two">
+              <label>Actor<input value={releaseEvidenceForm.actor_id} onChange={(event) => setReleaseEvidenceForm({ ...releaseEvidenceForm, actor_id: event.target.value })} /></label>
+              <label>Severity<select value={releaseEvidenceForm.severity} onChange={(event) => setReleaseEvidenceForm({ ...releaseEvidenceForm, severity: event.target.value as typeof releaseEvidenceForm.severity })}>
+                <option value="info">info</option><option value="warning">warning</option><option value="failure">failure</option>
+              </select></label>
+            </div>
+            <label>Summary<input required value={releaseEvidenceForm.summary} onChange={(event) => setReleaseEvidenceForm({ ...releaseEvidenceForm, summary: event.target.value })} /></label>
+            <label>Observed at<input value={releaseEvidenceForm.observed_at} onChange={(event) => setReleaseEvidenceForm({ ...releaseEvidenceForm, observed_at: event.target.value })} placeholder="ISO timestamp; blank uses now" /></label>
+            <label>extra.observation.links<textarea value={releaseEvidenceForm.links} onChange={(event) => setReleaseEvidenceForm({ ...releaseEvidenceForm, links: event.target.value })} /></label>
+            <label>Metrics JSON<textarea value={releaseEvidenceForm.metrics} onChange={(event) => setReleaseEvidenceForm({ ...releaseEvidenceForm, metrics: event.target.value })} /></label>
+            <label>Notes<textarea value={releaseEvidenceForm.notes} onChange={(event) => setReleaseEvidenceForm({ ...releaseEvidenceForm, notes: event.target.value })} /></label>
+            <button type="submit" disabled={loading || !releaseId.trim()}>Submit observation evidence</button>
+          </form>
         </section>
       </div>
     </main>
@@ -995,6 +1324,42 @@ function ArtifactList({ artifacts }: { artifacts: ArtifactRef[] }) {
   );
 }
 
+function ReleaseObjectList({ empty, items }: { empty: string; items: Array<{ id: string; title: string; meta?: string }> }) {
+  if (items.length === 0) return <EmptyState text={empty} />;
+  return (
+    <div className="release-object-list">
+      {items.map((item) => (
+        <article className="release-object-row" key={item.id}>
+          <strong>{item.title}</strong>
+          <span>{item.id}</span>
+          {item.meta && <span>{item.meta}</span>}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function ReleaseBlockersPanel({ groups }: { groups: ReturnType<typeof groupReleaseBlockers> }) {
+  return (
+    <div className="detail-block">
+      <h3>Blockers</h3>
+      {groups.length === 0 ? <EmptyState text="No blockers reported" /> : groups.map((group) => (
+        <div className="release-blocker-group" key={group.id}>
+          <h4>{group.label}</h4>
+          <ReleaseObjectList
+            empty="No blockers"
+            items={group.blockers.map((blocker) => ({
+              id: blocker.code,
+              title: blocker.message,
+              meta: `${blocker.overrideable ? 'overrideable' : 'blocking'}${blocker.object_id ? ` / ${blocker.object_type}:${blocker.object_id}` : ''}`,
+            }))}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function defaultRevisionForm(mode: SpecPlanMode) {
   return {
     summary: mode === 'spec' ? 'Minimum P0 workbench' : 'Implement workbench UI and API client',
@@ -1097,6 +1462,88 @@ function cleanWorkItem(body: CreateWorkItemBody): CreateWorkItemBody {
   return { ...body, success_criteria: body.success_criteria.filter(Boolean) };
 }
 
+function cleanReleaseCreate(form: CreateReleaseBody): CreateReleaseBody {
+  return compactObject({
+    ...form,
+    actor_id: form.actor_id.trim(),
+    project_id: form.project_id.trim(),
+    title: form.title.trim(),
+    scope_summary: form.scope_summary?.trim(),
+    rollout_strategy: form.rollout_strategy?.trim(),
+    rollback_plan: form.rollback_plan?.trim(),
+    observation_plan: form.observation_plan?.trim(),
+  });
+}
+
+function cleanReleasePatch(form: PatchReleaseBody): PatchReleaseBody {
+  return compactObject({
+    ...form,
+    actor_id: form.actor_id.trim(),
+    title: form.title?.trim(),
+    scope_summary: form.scope_summary?.trim(),
+    rollout_strategy: form.rollout_strategy?.trim(),
+    rollback_plan: form.rollback_plan?.trim(),
+    observation_plan: form.observation_plan?.trim(),
+  });
+}
+
+function cleanCloseReleaseBody(form: typeof releaseDecisionFormTemplate) {
+  return compactObject({
+    actor_id: form.actor_id.trim(),
+    resolution: form.close_resolution,
+    summary: form.close_summary.trim(),
+    override_without_observation: form.override_without_observation,
+    override_rationale: form.override_without_observation ? form.rationale.trim() || 'Release owner override.' : undefined,
+  });
+}
+
+function toObservationEvidenceBody(form: typeof releaseEvidenceFormTemplate, releaseId: string): CreateReleaseEvidenceBody {
+  const metrics = parseOptionalJsonRecord(form.metrics);
+  const notes = optionalText(form.notes);
+  const input = {
+    actorId: form.actor_id.trim() || actorDefault,
+    summary: form.summary.trim(),
+    severity: form.severity,
+    observedAt: form.observed_at.trim() || new Date().toISOString(),
+    links: parseReleaseObservationLinks(form.links, releaseId),
+  };
+  return buildObservationEvidencePayload({
+    ...input,
+    ...(metrics ? { metrics } : {}),
+    ...(notes ? { notes } : {}),
+  });
+}
+
+function parseReleaseObservationLinks(value: string, releaseId: string): ReleaseEvidenceObjectRef[] {
+  const parsed = lines(value.replaceAll('||', `|${releaseId}|`)).map((line) => {
+    const [object_type, object_id, relationship] = line.split('|').map((part) => part.trim());
+    return { object_type, object_id, relationship };
+  });
+  return parsed.filter((link): link is ReleaseEvidenceObjectRef =>
+    Boolean(link.object_type && link.object_id && link.relationship),
+  );
+}
+
+function parseOptionalJsonRecord(value: string): Record<string, string | number | boolean | null> | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Metrics JSON must be an object.');
+  const output: Record<string, string | number | boolean | null> = {};
+  for (const [key, item] of Object.entries(parsed)) {
+    if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean' || item === null) output[key] = item;
+  }
+  return output;
+}
+
+function optionalText(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function compactObject<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== '')) as T;
+}
+
 function toRequestedChange(form: typeof reviewFormTemplate): RequestedChange {
   const change: RequestedChange = {
     title: form.change_title.trim() || 'Changes requested',
@@ -1116,6 +1563,24 @@ const reviewFormTemplate = {
   change_file_path: '',
   change_severity: 'major',
   suggested_validation: '',
+};
+
+const releaseDecisionFormTemplate = {
+  actor_id: reviewerDefault,
+  rationale: '',
+  close_resolution: 'completed' as 'completed' | 'rolled_back' | 'cancelled',
+  close_summary: '',
+  override_without_observation: false,
+};
+
+const releaseEvidenceFormTemplate = {
+  actor_id: actorDefault,
+  summary: '',
+  severity: 'info' as 'info' | 'warning' | 'failure',
+  observed_at: '',
+  links: 'release||observed',
+  metrics: '',
+  notes: '',
 };
 
 function lines(value: string): string[] {

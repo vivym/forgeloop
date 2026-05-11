@@ -13,7 +13,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     exclude: runConsoleE2eSelected ? [] : ['tests/e2e/**'],
     environment: 'node',
   },
