@@ -1837,7 +1837,7 @@ git commit -m "test: enforce release dogfood report semantics"
 - Modify: `docs/superpowers/reports/p1-release-risk-radar-verification.md`
 - Potentially modify implementation files only if this task exposes bugs.
 
-- [ ] **Step 1: Run strict closure with disposable Postgres and blocked Codex allowed**
+- [x] **Step 1: Run strict closure with disposable Postgres and blocked Codex allowed**
 
 Run:
 
@@ -1860,7 +1860,7 @@ FORGELOOP_DATABASE_URL="postgresql://forgeloop:forgeloop@127.0.0.1:5432/forgeloo
 
 Expected: same as above.
 
-- [ ] **Step 2: Run strict closure with real local Codex enabled**
+- [x] **Step 2: Run strict closure with real local Codex enabled**
 
 Run only when the local Codex runtime is authenticated and the checkout is clean:
 
@@ -1880,7 +1880,7 @@ Expected:
 
 If this is blocked by environment, do not mark the task complete. Record the blocker in the report and tell the user what is missing.
 
-- [ ] **Step 3: Verify report safety**
+- [x] **Step 3: Verify report safety**
 
 Run:
 
@@ -1890,7 +1890,7 @@ rg -in "runtime_metadata|runtimeMetadata|raw_metadata|rawMetadata|database_url|d
 
 Expected: no matches. `rg` should exit `1`.
 
-- [ ] **Step 4: Commit report update**
+- [x] **Step 4: Commit report update**
 
 Run:
 
