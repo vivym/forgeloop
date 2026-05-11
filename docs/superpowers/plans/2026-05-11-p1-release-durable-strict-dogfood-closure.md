@@ -1982,3 +1982,15 @@ git commit -m "docs: refresh release dogfood verification"
 ```
 
 Expected: commit succeeds and status is clean.
+
+#### Final Verification Evidence
+
+Recorded after the strict evidence summary fix on 2026-05-12:
+
+- `FORGELOOP_DOGFOOD_START_POSTGRES=1 FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1 pnpm dogfood:release-flow:strict`: exit `0`; tracked report has 9 `PASSED` markers and strict local Codex safe summary fields.
+- `rg -in "<unsafe report pattern>" docs/superpowers/reports/p1-release-risk-radar-verification.md`: exit `1`; no unsafe report matches.
+- `pnpm vitest run tests/smoke/release-flow-dogfood-script.test.ts tests/smoke/dogfood-durable-postgres.test.ts tests/smoke/dogfood-strict-local-codex.test.ts tests/smoke/p0-durable-dogfood-script.test.ts tests/smoke/p0-local-codex-dogfood-script.test.ts tests/api/durable-id-generation.test.ts tests/workflow/execution-finalizer.test.ts tests/workflow/package-execution-workflow.test.ts tests/api/release-module.test.ts tests/api/query-module.test.ts`: final run exit `0`; 10 test files passed, 137 tests passed.
+- `pnpm test`: exit `0`; 58 test files passed, 1 skipped, 749 tests passed, 12 skipped. The expected negative-path `FORGELOOP_DEV_AUTH_SECRET` Nest log appeared.
+- `pnpm build`: exit `0`; recursive workspace build passed.
+- `FORGELOOP_RELEASE_FLOW_DOGFOOD_REPORT_PATH=/tmp/forgeloop-release-flow-deterministic-verification.md pnpm dogfood:release-flow`: exit `0`; deterministic report written to `/tmp/forgeloop-release-flow-deterministic-verification.md` without overwriting the tracked strict PASS report.
+- `rg -n "Status: PASSED|Status: BLOCKED with reason|Status: FAILED|run_session_id=|changed_file_count=|check_count=|artifact_kinds=|review_packet_available=" docs/superpowers/reports/p1-release-risk-radar-verification.md /tmp/forgeloop-release-flow-deterministic-verification.md`: tracked report has 9 `PASSED` markers plus strict summary; `/tmp` deterministic report has durable and strict markers `BLOCKED with reason` as expected.
