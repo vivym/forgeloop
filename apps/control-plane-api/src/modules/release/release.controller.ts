@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   approveReleaseRequestSchema,
   closeReleaseRequestSchema,
@@ -29,6 +29,7 @@ import {
 } from '@forgeloop/contracts';
 
 import { ZodValidationPipe } from '../../p0/zod-validation.pipe';
+import { actorContextFromHeaders } from '../../p0/actor-context';
 import { ReleaseService } from './release.service';
 
 @Controller('releases')
@@ -36,8 +37,11 @@ export class ReleaseController {
   constructor(private readonly releaseService: ReleaseService) {}
 
   @Post()
-  createRelease(@Body(new ZodValidationPipe(createReleaseRequestSchema)) body: CreateReleaseRequest) {
-    return this.releaseService.createRelease(body);
+  createRelease(
+    @Body(new ZodValidationPipe(createReleaseRequestSchema)) body: CreateReleaseRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.releaseService.createRelease(body, actorContextFromHeaders(headers));
   }
 
   @Get()
@@ -54,8 +58,9 @@ export class ReleaseController {
   patchRelease(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(patchReleaseRequestSchema)) body: PatchReleaseRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.patchRelease(releaseId, body);
+    return this.releaseService.patchRelease(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/work-items/:workItemId')
@@ -63,8 +68,9 @@ export class ReleaseController {
     @Param('releaseId') releaseId: string,
     @Param('workItemId') workItemId: string,
     @Body(new ZodValidationPipe(linkReleaseObjectRequestSchema)) body: LinkReleaseObjectRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.linkWorkItem(releaseId, workItemId, body);
+    return this.releaseService.linkWorkItem(releaseId, workItemId, body, actorContextFromHeaders(headers));
   }
 
   @Delete(':releaseId/work-items/:workItemId')
@@ -72,8 +78,9 @@ export class ReleaseController {
     @Param('releaseId') releaseId: string,
     @Param('workItemId') workItemId: string,
     @Body(new ZodValidationPipe(unlinkReleaseObjectRequestSchema)) body: UnlinkReleaseObjectRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.unlinkWorkItem(releaseId, workItemId, body);
+    return this.releaseService.unlinkWorkItem(releaseId, workItemId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/execution-packages/:packageId')
@@ -81,8 +88,9 @@ export class ReleaseController {
     @Param('releaseId') releaseId: string,
     @Param('packageId') packageId: string,
     @Body(new ZodValidationPipe(linkReleaseObjectRequestSchema)) body: LinkReleaseObjectRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.linkExecutionPackage(releaseId, packageId, body);
+    return this.releaseService.linkExecutionPackage(releaseId, packageId, body, actorContextFromHeaders(headers));
   }
 
   @Delete(':releaseId/execution-packages/:packageId')
@@ -90,63 +98,71 @@ export class ReleaseController {
     @Param('releaseId') releaseId: string,
     @Param('packageId') packageId: string,
     @Body(new ZodValidationPipe(unlinkReleaseObjectRequestSchema)) body: UnlinkReleaseObjectRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.unlinkExecutionPackage(releaseId, packageId, body);
+    return this.releaseService.unlinkExecutionPackage(releaseId, packageId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/submit-for-approval')
   submitForApproval(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(submitReleaseForApprovalRequestSchema)) body: SubmitReleaseForApprovalRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.submitForApproval(releaseId, body);
+    return this.releaseService.submitForApproval(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/approve')
   approveRelease(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(approveReleaseRequestSchema)) body: ApproveReleaseRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.approveRelease(releaseId, body);
+    return this.releaseService.approveRelease(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/override-approve')
   overrideApproveRelease(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(overrideApproveReleaseRequestSchema)) body: OverrideApproveReleaseRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.overrideApproveRelease(releaseId, body);
+    return this.releaseService.overrideApproveRelease(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/request-changes')
   requestChanges(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(requestReleaseChangesRequestSchema)) body: RequestReleaseChangesRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.requestChanges(releaseId, body);
+    return this.releaseService.requestChanges(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/evidences')
   createEvidence(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(createReleaseEvidenceRequestSchema)) body: CreateReleaseEvidenceRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.createEvidence(releaseId, body);
+    return this.releaseService.createEvidence(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/start-observing')
   startObserving(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(startReleaseObservingRequestSchema)) body: StartReleaseObservingRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.startObserving(releaseId, body);
+    return this.releaseService.startObserving(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/close')
   closeRelease(
     @Param('releaseId') releaseId: string,
     @Body(new ZodValidationPipe(closeReleaseRequestSchema)) body: CloseReleaseRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.releaseService.closeRelease(releaseId, body);
+    return this.releaseService.closeRelease(releaseId, body, actorContextFromHeaders(headers));
   }
 }

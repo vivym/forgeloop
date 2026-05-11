@@ -144,6 +144,6 @@ const durabilityMode = (): RunDurabilityMode =>
     P0Service,
     RunWorkerLifecycleService,
   ],
-  exports: [P0_REPOSITORY, RUN_DURABILITY_MODE],
+  exports: [P0_REPOSITORY, RUN_DURABILITY_MODE, P0_DEMO_ACTOR_ID_FALLBACK],
 })
 export class P0Module {}

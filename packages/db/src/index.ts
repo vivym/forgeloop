@@ -5,6 +5,7 @@ export * from './repositories/drizzle-p0-repository';
 export * from './schema';
 export * from './queries/work-item-cockpit-queries';
 export * from './queries/release-cockpit-queries';
+export * from './queries/release-public-link-visibility';
 export * from './queries/replay-queries';
 export * from './queries/public-evidence-serialization';
 export * from './reset';

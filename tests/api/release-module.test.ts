@@ -17,10 +17,12 @@ import type {
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
   P0_REPOSITORY,
+  P0_DEMO_ACTOR_ID_FALLBACK,
   RUN_DURABILITY_MODE,
   RUN_WORKER,
   type RunDurabilityMode,
 } from '../../apps/control-plane-api/src/p0/p0.service';
+import { actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
@@ -178,6 +180,8 @@ describe('release module', () => {
       .useValue(repo)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue(durabilityMode)
+      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+      .useValue(durabilityMode === 'volatile_demo')
       .overrideProvider(RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();
@@ -223,29 +227,40 @@ describe('release module', () => {
   const createRelease = async (
     app: INestApplication,
     body: Record<string, unknown> = {},
+    headers: Record<string, string> = {},
   ): Promise<{ id: string; body: Record<string, any> }> => {
-    const response = await request(app.getHttpServer())
-      .post('/releases')
-      .send({
-        actor_id: actorOwner,
-        project_id: 'project-1',
-        title: 'Release Radar',
-        ...body,
-      })
-      .expect(201);
+    const requestBuilder = request(app.getHttpServer()).post('/releases');
+    for (const [name, value] of Object.entries(headers)) {
+      requestBuilder.set(name, value);
+    }
+    const response = await requestBuilder.send({
+      actor_id: actorOwner,
+      project_id: 'project-1',
+      title: 'Release Radar',
+      ...body,
+    }).expect(201);
     return { id: response.body.release.id as string, body: response.body };
   };
 
-  const createReadyRelease = async (app: INestApplication, repo: InMemoryP0Repository) => {
+  const createReadyRelease = async (
+    app: INestApplication,
+    repo: InMemoryP0Repository,
+    headers: Record<string, string> = {},
+  ) => {
     const scope = await seedReadyScope(repo);
     const { id } = await createRelease(app, {
       rollout_strategy: 'Ship behind a feature flag.',
       rollback_plan: 'Disable the feature flag.',
       observation_plan: 'Watch latency for 30 minutes.',
-    });
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/${scope.workItem.id}`).send({ actor_id: actorOwner }).expect(201);
+    }, headers);
+    await request(app.getHttpServer())
+      .post(`/releases/${id}/work-items/${scope.workItem.id}`)
+      .set(headers)
+      .send({ actor_id: actorOwner })
+      .expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/${scope.executionPackage.id}`)
+      .set(headers)
       .send({ actor_id: actorOwner })
       .expect(201);
     return { releaseId: id, ...scope };
@@ -279,13 +294,15 @@ describe('release module', () => {
   it('uses durable-safe ids and clocks for release-owned rows in durable mode', async () => {
     const { app, repo } = await track(createTestApp('durable'));
     await seedProject(repo);
+    const headers = { [actorHeaderName]: actorOwner };
 
-    const { id, body } = await createRelease(app);
+    const { id, body } = await createRelease(app, {}, headers);
     expect(id).toMatch(uuidPattern);
     expect(body.release.created_at).not.toBe('2026-05-05T00:00:01.000Z');
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(headers)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -302,9 +319,17 @@ describe('release module', () => {
       .expect(201);
     expect((await repo.listReleaseEvidences(id))[0]?.id).toMatch(uuidPattern);
 
-    const ready = await createReadyRelease(app, repo);
-    await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/approve`).send({ actor_id: actorReviewer }).expect(201);
+    const ready = await createReadyRelease(app, repo, headers);
+    await request(app.getHttpServer())
+      .post(`/releases/${ready.releaseId}/submit-for-approval`)
+      .set(headers)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/releases/${ready.releaseId}/approve`)
+      .set({ [actorHeaderName]: actorReviewer })
+      .send({ actor_id: actorOwner })
+      .expect(201);
     const decisions = await repo.listDecisionsForObject('release', ready.releaseId);
     expect(decisions).toEqual(
       expect.arrayContaining([
@@ -313,6 +338,52 @@ describe('release module', () => {
           decision_type: 'release_approval',
           decision: 'approved',
         }),
+      ]),
+    );
+  });
+
+  it('requires authenticated actor headers for durable release mutations and ignores spoofed body actors', async () => {
+    const { app, repo } = await track(createTestApp('durable'));
+    await seedProject(repo);
+
+    await request(app.getHttpServer())
+      .post('/releases')
+      .send({
+        actor_id: actorOwner,
+        project_id: 'project-1',
+        title: 'Body-only durable release',
+      })
+      .expect(401);
+
+    const created = await request(app.getHttpServer())
+      .post('/releases')
+      .set(actorHeaderName, actorReviewer)
+      .send({
+        actor_id: 'actor-spoofed',
+        project_id: 'project-1',
+        title: 'Header-authenticated release',
+      })
+      .expect(201);
+    expect(created.body.release).toMatchObject({
+      created_by_actor_id: actorReviewer,
+      updated_by_actor_id: actorReviewer,
+      release_owner_actor_id: actorReviewer,
+    });
+
+    await request(app.getHttpServer())
+      .patch(`/releases/${created.body.release.id}`)
+      .set(actorHeaderName, actorReviewer)
+      .send({ actor_id: 'actor-spoofed', title: 'Header actor wins' })
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.release.updated_by_actor_id).toBe(actorReviewer);
+      });
+
+    const events = await repo.listObjectEvents(created.body.release.id, 'release');
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: 'release_created', actor_id: actorReviewer }),
+        expect.objectContaining({ event_type: 'release_patched', actor_id: actorReviewer }),
       ]),
     );
   });
@@ -705,6 +776,19 @@ describe('release module', () => {
       created_at: later,
     };
     await repo.saveDecision(publicDecision);
+    const publicReviewDecision: Decision = {
+      id: 'decision-public-review-packet',
+      object_type: 'review_packet',
+      object_id: scope.reviewPacket.id,
+      actor_id: actorReviewer,
+      decided_by_actor_id: actorReviewer,
+      decision_type: 'release_approval',
+      outcome: 'approved',
+      decision: 'approved',
+      summary: 'Selected review packet supports the release.',
+      created_at: later,
+    };
+    await repo.saveDecision(publicReviewDecision);
     const publicBacklinks = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
       .send({
@@ -720,6 +804,7 @@ describe('release module', () => {
             links: [
               { object_type: 'artifact', object_id: publicArtifact.id, relationship: 'generated_by' },
               { object_type: 'decision', object_id: publicDecision.id, relationship: 'supports' },
+              { object_type: 'decision', object_id: publicReviewDecision.id, relationship: 'supports' },
             ],
           },
         },

@@ -35,17 +35,9 @@ import {
   serializePublicDecision,
   serializePublicReleaseEvidence,
 } from './public-evidence-serialization';
-
-type ObservationLink = {
-  object_type: string;
-  object_id: string;
-  relationship?: string;
-};
+import { buildReleasePublicLinkVisibility, releasePublicVisibilityKey } from './release-public-link-visibility';
 
 const hasText = (value: string | undefined): value is string => value !== undefined && value.trim().length > 0;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const publicReleaseTypes = new Set(['normal', 'hotfix', 'emergency', 'gray']);
 
@@ -56,22 +48,6 @@ const byCreatedAtDesc = <T extends { created_at: string; id: string }>(left: T, 
 };
 
 const unique = <T>(items: readonly T[]): T[] => [...new Set(items)];
-
-const observationLinksFor = (evidence: ReleaseEvidence): ObservationLink[] => {
-  const observation = isRecord(evidence.extra) ? evidence.extra.observation : undefined;
-  if (!isRecord(observation) || !Array.isArray(observation.links)) {
-    return [];
-  }
-
-  return observation.links.filter((link): link is ObservationLink => {
-    if (!isRecord(link)) {
-      return false;
-    }
-    return typeof link.object_type === 'string' && typeof link.object_id === 'string';
-  });
-};
-
-const visibilityKey = (objectType: string, objectId: string): string => `${objectType}\0${objectId}`;
 
 const isVisible = (object: { archived_at?: string; deleted_at?: string }): boolean =>
   object.archived_at === undefined && object.deleted_at === undefined;
@@ -324,59 +300,6 @@ const publicReleaseDecision = (decision: Decision): PublicReleaseDecision | unde
   return parsed.success ? parsed.data : undefined;
 };
 
-const publicLinkVisibility = (input: {
-  release: Release;
-  workItems: readonly WorkItem[];
-  executionPackages: readonly ExecutionPackage[];
-  runSessions: readonly RunSession[];
-  reviewPackets: readonly ReviewPacket[];
-  evidences: readonly ReleaseEvidence[];
-  artifactsByEvidenceId: ReadonlyMap<string, Artifact | undefined>;
-  decisions: readonly PublicReleaseDecision[];
-}): ReleasePublicLinkVisibility[] => {
-  const visibilityByRef = new Map<string, ReleasePublicLinkVisibility>();
-  const workItemIds = new Set(input.workItems.map((workItem) => workItem.id));
-  const executionPackageIds = new Set(input.executionPackages.map((executionPackage) => executionPackage.id));
-  const runSessionIds = new Set(input.runSessions.map((runSession) => runSession.id));
-  const reviewPacketIds = new Set(input.reviewPackets.map((reviewPacket) => reviewPacket.id));
-  const decisionIds = new Set(input.decisions.map((decision) => decision.id));
-  const publicArtifactIds = new Set(
-    input.evidences.flatMap((evidence) => {
-      const artifact = input.artifactsByEvidenceId.get(evidence.id);
-      if (artifact === undefined || evidence.artifact_id === undefined || serializePublicArtifactRef(artifact.ref) === undefined) {
-        return [];
-      }
-      return [evidence.artifact_id];
-    }),
-  );
-
-  for (const evidence of input.evidences) {
-    for (const link of observationLinksFor(evidence)) {
-      const key = visibilityKey(link.object_type, link.object_id);
-      if (visibilityByRef.has(key)) {
-        continue;
-      }
-
-      const publicLink =
-        (link.object_type === 'release' && link.object_id === input.release.id) ||
-        (link.object_type === 'work_item' && workItemIds.has(link.object_id)) ||
-        (link.object_type === 'execution_package' && executionPackageIds.has(link.object_id)) ||
-        (link.object_type === 'run_session' && runSessionIds.has(link.object_id)) ||
-        (link.object_type === 'review_packet' && reviewPacketIds.has(link.object_id)) ||
-        (link.object_type === 'artifact' && publicArtifactIds.has(link.object_id)) ||
-        (link.object_type === 'decision' && decisionIds.has(link.object_id));
-
-      visibilityByRef.set(key, {
-        object_type: link.object_type,
-        object_id: link.object_id,
-        public: publicLink,
-      });
-    }
-  }
-
-  return [...visibilityByRef.values()];
-};
-
 const filterUnsafeObservationLinks = (
   evidence: PublicReleaseEvidenceProjection,
   publicVisibility: readonly ReleasePublicLinkVisibility[],
@@ -387,9 +310,11 @@ const filterUnsafeObservationLinks = (
   }
 
   const visibilityByRef = new Map(
-    publicVisibility.map((item) => [visibilityKey(item.object_type, item.object_id), item.public]),
+    publicVisibility.map((item) => [releasePublicVisibilityKey(item.object_type, item.object_id), item.public]),
   );
-  const publicLinks = observation.links.filter((link) => visibilityByRef.get(visibilityKey(link.object_type, link.object_id)) === true);
+  const publicLinks = observation.links.filter(
+    (link) => visibilityByRef.get(releasePublicVisibilityKey(link.object_type, link.object_id)) === true,
+  );
 
   return {
     ...evidence,
@@ -463,7 +388,8 @@ export async function getReleaseCockpit(
     const publicDecision = publicReleaseDecision(decision);
     return publicDecision === undefined ? [] : [publicDecision];
   });
-  const visibility = publicLinkVisibility({
+  const visibility = await buildReleasePublicLinkVisibility({
+    repository,
     release,
     workItems,
     executionPackages,
@@ -471,7 +397,6 @@ export async function getReleaseCockpit(
     reviewPackets: currentReviewPackets,
     evidences,
     artifactsByEvidenceId,
-    decisions,
   });
   const context = {
     release,

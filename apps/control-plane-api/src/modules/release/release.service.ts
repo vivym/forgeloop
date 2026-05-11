@@ -6,6 +6,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type {
@@ -56,9 +57,10 @@ import {
   type WorkItem,
 } from '@forgeloop/domain';
 import type { P0Repository } from '@forgeloop/db';
-import { serializePublicArtifactRef, serializePublicDecision } from '@forgeloop/db';
+import { buildReleasePublicLinkVisibility } from '@forgeloop/db';
 
-import { P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../../p0/p0.service';
+import type { ActorContext } from '../../p0/actor-context';
+import { P0_DEMO_ACTOR_ID_FALLBACK, P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../../p0/p0.service';
 import {
   publicReleaseSummaryFor,
   resolveReleaseExecutionPackageLinks,
@@ -136,9 +138,11 @@ export class ReleaseService {
   constructor(
     @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
   ) {}
 
-  async createRelease(body: CreateReleaseRequest): Promise<ReleaseControlResponse> {
+  async createRelease(body: CreateReleaseRequest, actorContext?: ActorContext): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const project = await this.repository.getProject(body.project_id);
     if (project === undefined) {
       throw new NotFoundException(`Project ${body.project_id} not found`);
@@ -152,10 +156,10 @@ export class ReleaseService {
       project_id: project.id,
       title: body.title,
       ...(body.scope_summary !== undefined ? { scope_summary: body.scope_summary } : {}),
-      release_owner_actor_id: body.release_owner_actor_id,
+      release_owner_actor_id: this.releaseOwnerActorIdFor(body, actorId),
       release_type: body.release_type,
-      created_by_actor_id: body.actor_id,
-      updated_by_actor_id: body.actor_id,
+      created_by_actor_id: actorId,
+      updated_by_actor_id: actorId,
       at,
     });
     const release: Release = {
@@ -168,8 +172,8 @@ export class ReleaseService {
     };
 
     await this.repository.saveRelease(release);
-    await this.writeObjectEvent('release_created', release, body.actor_id, {});
-    await this.writeStatusHistory(undefined, release, body.actor_id);
+    await this.writeObjectEvent('release_created', release, actorId, {});
+    await this.writeStatusHistory(undefined, release, actorId);
     return this.controlResponse(release, result.decision_intents, []);
   }
 
@@ -198,11 +202,12 @@ export class ReleaseService {
     return releaseResourceResponseSchema.parse({ release: await publicReleaseSummaryFor(this.repository, release) });
   }
 
-  async patchRelease(releaseId: string, body: PatchReleaseRequest): Promise<ReleaseControlResponse> {
+  async patchRelease(releaseId: string, body: PatchReleaseRequest, actorContext?: ActorContext): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const existing = await this.requireRelease(releaseId);
     const result = this.applyTransition(existing, {
       type: 'patch',
-      actor_id: body.actor_id,
+      actor_id: actorId,
       ...(body.title !== undefined ? { title: body.title } : {}),
       ...(body.scope_summary !== undefined ? { scope_summary: body.scope_summary } : {}),
       ...(body.rollout_strategy !== undefined ? { rollout_strategy: body.rollout_strategy } : {}),
@@ -210,45 +215,63 @@ export class ReleaseService {
       ...(body.observation_plan !== undefined ? { observation_plan: body.observation_plan } : {}),
       at: this.now(),
     });
-    await this.persistTransition(existing, result, body.actor_id, 'release_patched');
+    await this.persistTransition(existing, result, actorId, 'release_patched');
     return this.controlResponse(result.release, result.decision_intents, []);
   }
 
-  async linkWorkItem(releaseId: string, workItemId: string, body: ReleaseActorCommand): Promise<LinkReleaseObjectResponse> {
+  async linkWorkItem(
+    releaseId: string,
+    workItemId: string,
+    body: ReleaseActorCommand,
+    actorContext?: ActorContext,
+  ): Promise<LinkReleaseObjectResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const workItem = await this.requireLinkableWorkItem(release, workItemId);
     const result = this.applyTransition(release, {
       type: 'link_work_item',
       work_item_id: workItem.id,
-      actor_id: body.actor_id,
+      actor_id: actorId,
       at: this.now(),
     });
-    await this.persistTransition(release, result, body.actor_id, 'release_work_item_linked');
+    await this.persistTransition(release, result, actorId, 'release_work_item_linked');
     return { release_id: releaseId, object_type: 'work_item', object_id: workItemId, linked: true };
   }
 
-  async unlinkWorkItem(releaseId: string, workItemId: string, body: UnlinkReleaseObjectRequest): Promise<LinkReleaseObjectResponse> {
+  async unlinkWorkItem(
+    releaseId: string,
+    workItemId: string,
+    body: UnlinkReleaseObjectRequest,
+    actorContext?: ActorContext,
+  ): Promise<LinkReleaseObjectResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const result = this.applyTransition(release, {
       type: 'unlink_work_item',
       work_item_id: workItemId,
-      actor_id: body.actor_id,
+      actor_id: actorId,
       at: this.now(),
     });
-    await this.persistTransition(release, result, body.actor_id, 'release_work_item_unlinked');
+    await this.persistTransition(release, result, actorId, 'release_work_item_unlinked');
     return { release_id: releaseId, object_type: 'work_item', object_id: workItemId, linked: false };
   }
 
-  async linkExecutionPackage(releaseId: string, packageId: string, body: ReleaseActorCommand): Promise<LinkReleaseObjectResponse> {
+  async linkExecutionPackage(
+    releaseId: string,
+    packageId: string,
+    body: ReleaseActorCommand,
+    actorContext?: ActorContext,
+  ): Promise<LinkReleaseObjectResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const executionPackage = await this.requireLinkableExecutionPackage(release, packageId);
     const result = this.applyTransition(release, {
       type: 'link_execution_package',
       execution_package_id: executionPackage.id,
-      actor_id: body.actor_id,
+      actor_id: actorId,
       at: this.now(),
     });
-    await this.persistTransition(release, result, body.actor_id, 'release_execution_package_linked');
+    await this.persistTransition(release, result, actorId, 'release_execution_package_linked');
     return { release_id: releaseId, object_type: 'execution_package', object_id: packageId, linked: true };
   }
 
@@ -256,19 +279,26 @@ export class ReleaseService {
     releaseId: string,
     packageId: string,
     body: UnlinkReleaseObjectRequest,
+    actorContext?: ActorContext,
   ): Promise<LinkReleaseObjectResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const result = this.applyTransition(release, {
       type: 'unlink_execution_package',
       execution_package_id: packageId,
-      actor_id: body.actor_id,
+      actor_id: actorId,
       at: this.now(),
     });
-    await this.persistTransition(release, result, body.actor_id, 'release_execution_package_unlinked');
+    await this.persistTransition(release, result, actorId, 'release_execution_package_unlinked');
     return { release_id: releaseId, object_type: 'execution_package', object_id: packageId, linked: false };
   }
 
-  async submitForApproval(releaseId: string, body: SubmitReleaseForApprovalRequest): Promise<ReleaseControlResponse> {
+  async submitForApproval(
+    releaseId: string,
+    body: SubmitReleaseForApprovalRequest,
+    actorContext?: ActorContext,
+  ): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const context = await this.gateContext(release);
     const blockers = deriveReleaseBlockers(context);
@@ -278,14 +308,15 @@ export class ReleaseService {
     const result = this.applyTransition(release, {
       type: 'submit',
       gate_context: context,
-      actor_id: body.actor_id,
+      actor_id: actorId,
       at: this.now(),
     });
-    await this.persistTransition(release, result, body.actor_id, 'release_submitted_for_approval');
+    await this.persistTransition(release, result, actorId, 'release_submitted_for_approval');
     return this.controlResponse(result.release, result.decision_intents, [], result.blocker_snapshot);
   }
 
-  async approveRelease(releaseId: string, body: ApproveReleaseRequest): Promise<ReleaseControlResponse> {
+  async approveRelease(releaseId: string, body: ApproveReleaseRequest, actorContext?: ActorContext): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const context = await this.gateContext(release);
     const blockers = deriveReleaseBlockers(context);
@@ -294,11 +325,11 @@ export class ReleaseService {
     }
     const result = this.applyTransition(release, {
       type: 'approve',
-      approved_by_actor_id: body.actor_id,
+      approved_by_actor_id: actorId,
       gate_context: context,
       at: this.now(),
     });
-    await this.persistTransition(release, result, body.actor_id, 'release_approved', {
+    await this.persistTransition(release, result, actorId, 'release_approved', {
       payload: body.rationale === undefined ? {} : { rationale: body.rationale },
       decisionOptionsFor: (intent) =>
         intent.decision_type === 'release_approval' && body.rationale !== undefined ? { reason: body.rationale } : undefined,
@@ -306,7 +337,12 @@ export class ReleaseService {
     return this.controlResponse(result.release, result.decision_intents, [], result.blocker_snapshot);
   }
 
-  async overrideApproveRelease(releaseId: string, body: OverrideApproveReleaseRequest): Promise<ReleaseControlResponse> {
+  async overrideApproveRelease(
+    releaseId: string,
+    body: OverrideApproveReleaseRequest,
+    actorContext?: ActorContext,
+  ): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const requestSnapshot = body.blocker_snapshot as unknown as ReleaseBlockerSnapshot;
     if (!isReleaseBlockerSnapshotInternallyConsistent(requestSnapshot)) {
       throw new ConflictException('Blocker snapshot is stale');
@@ -332,7 +368,7 @@ export class ReleaseService {
       release,
       {
         type: 'override_approve',
-        approved_by_actor_id: body.actor_id,
+        approved_by_actor_id: actorId,
         rationale: body.rationale,
         blocker_snapshot: requestSnapshot,
         gate_context: context,
@@ -340,27 +376,32 @@ export class ReleaseService {
       },
       new ConflictException('Blocker snapshot is stale'),
     );
-    await this.persistTransition(release, result, body.actor_id, 'release_override_approved');
+    await this.persistTransition(release, result, actorId, 'release_override_approved');
     return this.controlResponse(result.release, result.decision_intents, result.blocker_snapshot?.blockers ?? [], result.blocker_snapshot);
   }
 
-  async requestChanges(releaseId: string, body: RequestReleaseChangesRequest): Promise<ReleaseControlResponse> {
+  async requestChanges(
+    releaseId: string,
+    body: RequestReleaseChangesRequest,
+    actorContext?: ActorContext,
+  ): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const result =
       release.phase === 'approval' && release.gate_state === 'changes_requested'
-        ? { release: { ...release, updated_at: this.now(), updated_by_actor_id: body.actor_id }, decision_intents: [] }
+        ? { release: { ...release, updated_at: this.now(), updated_by_actor_id: actorId }, decision_intents: [] }
         : this.applyTransition(release, {
             type: 'request_changes',
-            actor_id: body.actor_id,
+            actor_id: actorId,
             rationale: body.rationale,
             at: this.now(),
           });
-    await this.persistTransition(release, result, body.actor_id, 'release_changes_requested');
+    await this.persistTransition(release, result, actorId, 'release_changes_requested');
     if (result.decision_intents.length === 0) {
       await this.persistDecisionIntent({
         object_type: 'release',
         object_id: release.id,
-        actor_id: body.actor_id,
+        actor_id: actorId,
         decision_type: 'release_changes_requested',
         outcome: 'changes_requested',
         reason: body.rationale,
@@ -369,11 +410,16 @@ export class ReleaseService {
     return this.controlResponse(result.release, result.decision_intents, []);
   }
 
-  async createEvidence(releaseId: string, body: CreateReleaseEvidenceRequest): Promise<ReleaseControlResponse> {
+  async createEvidence(
+    releaseId: string,
+    body: CreateReleaseEvidenceRequest,
+    actorContext?: ActorContext,
+  ): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     this.validateEvidenceMinimum(body);
     const at = this.now();
-    const extra = this.evidenceExtraWithActor(body.extra, body.actor_id);
+    const extra = this.evidenceExtraWithActor(body.extra, actorId);
     const evidence: ReleaseEvidence = {
       id: this.id('release-evidence'),
       org_id: release.org_id,
@@ -387,34 +433,40 @@ export class ReleaseService {
       redacted: body.redacted,
       status: body.status,
       created_at: at,
-      created_by_actor_id: body.actor_id,
+      created_by_actor_id: actorId,
       updated_at: at,
-      updated_by_actor_id: body.actor_id,
+      updated_by_actor_id: actorId,
     };
     await this.repository.saveReleaseEvidence(evidence);
-    await this.writeObjectEvent('release_evidence_created', release, body.actor_id, {
+    await this.writeObjectEvent('release_evidence_created', release, actorId, {
       release_evidence_id: evidence.id,
       evidence_type: evidence.evidence_type,
     });
     return this.controlResponse(release, [], []);
   }
 
-  async startObserving(releaseId: string, body: StartReleaseObservingRequest): Promise<ReleaseControlResponse> {
+  async startObserving(
+    releaseId: string,
+    body: StartReleaseObservingRequest,
+    actorContext?: ActorContext,
+  ): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const result = this.applyTransition(
       release,
       {
         type: 'start_observing',
-        actor_id: body.actor_id,
+        actor_id: actorId,
         at: this.now(),
       },
       new ConflictException('Release is not approved for observation'),
     );
-    await this.persistTransition(release, result, body.actor_id, 'release_observing_started');
+    await this.persistTransition(release, result, actorId, 'release_observing_started');
     return this.controlResponse(result.release, result.decision_intents, []);
   }
 
-  async closeRelease(releaseId: string, body: CloseReleaseRequest): Promise<ReleaseControlResponse> {
+  async closeRelease(releaseId: string, body: CloseReleaseRequest, actorContext?: ActorContext): Promise<ReleaseControlResponse> {
+    const actorId = this.actorIdFor(body, actorContext);
     const release = await this.requireRelease(releaseId);
     const context = await this.gateContext(release);
     let event: ReleaseTransition;
@@ -430,7 +482,7 @@ export class ReleaseService {
       event = {
         type: 'close_override',
         resolution: 'completed',
-        actor_id: body.actor_id,
+        actor_id: actorId,
         rationale: body.override_rationale ?? 'Manual observation override',
         blocker_snapshot: snapshot,
         gate_context: context,
@@ -442,14 +494,14 @@ export class ReleaseService {
         type: 'close',
         resolution: 'completed',
         gate_context: context,
-        actor_id: body.actor_id,
+        actor_id: actorId,
         at: this.now(),
       };
     } else {
       event = {
         type: 'close',
         resolution: body.resolution,
-        actor_id: body.actor_id,
+        actor_id: actorId,
         at: this.now(),
       };
     }
@@ -461,7 +513,7 @@ export class ReleaseService {
         ? new UnprocessableEntityException('Release requires observation evidence before completed close')
         : new ConflictException('Release cannot be closed from its current state'),
     );
-    await this.persistTransition(release, result, body.actor_id, 'release_closed', {
+    await this.persistTransition(release, result, actorId, 'release_closed', {
       payload: body.summary === undefined ? {} : { summary: body.summary },
       decisionOptionsFor: (intent) =>
         intent.decision_type === 'release_close' && body.summary !== undefined ? { summary: body.summary } : undefined,
@@ -554,61 +606,27 @@ export class ReleaseService {
     reviewPackets: readonly ReviewPacket[],
     evidence: readonly ReleaseEvidence[],
   ): Promise<ReleasePublicLinkVisibility[]> {
-    const workItemIds = new Set(workItems.map((item) => item.id));
-    const packageIds = new Set(executionPackages.map((item) => item.id));
-    const runSessionIds = new Set(runSessions.map((item) => item.id));
-    const reviewPacketIds = new Set(reviewPackets.map((item) => item.id));
-    const evidenceIds = new Set(evidence.map((item) => item.id));
-    const decisionIds = new Set(
-      (await this.repository.listDecisionsForObject('release', release.id)).flatMap((decision) => {
-        try {
-          return [serializePublicDecision(decision).id];
-        } catch {
-          return [];
-        }
-      }),
+    const artifactsByEvidenceId = new Map(
+      await Promise.all(
+        evidence.map(async (item) => {
+          if (item.artifact_id === undefined) {
+            return [item.id, undefined] as const;
+          }
+          const artifacts = await this.repository.listArtifactsForObject('release_evidence', item.id);
+          return [item.id, artifacts.find((artifact) => artifact.id === item.artifact_id)] as const;
+        }),
+      ),
     );
-    const publicArtifactIds = new Set(
-      (
-        await Promise.all(
-          evidence.map(async (item) => {
-            if (item.artifact_id === undefined) {
-              return [];
-            }
-            const artifacts = await this.repository.listArtifactsForObject('release_evidence', item.id);
-            const artifact = artifacts.find((candidate) => candidate.id === item.artifact_id);
-            return artifact !== undefined && serializePublicArtifactRef(artifact.ref) !== undefined ? [item.artifact_id] : [];
-          }),
-        )
-      ).flat(),
-    );
-    const visibility = new Map<string, ReleasePublicLinkVisibility>();
-
-    for (const item of evidence) {
-      const observation = isRecord(item.extra) ? item.extra.observation : undefined;
-      const links = isRecord(observation) && Array.isArray(observation.links) ? observation.links : [];
-      for (const link of links) {
-        if (!isRecord(link) || !hasText(link.object_type) || !hasText(link.object_id)) {
-          continue;
-        }
-        const isPublic =
-          (link.object_type === 'release' && link.object_id === release.id) ||
-          (link.object_type === 'work_item' && workItemIds.has(link.object_id)) ||
-          (link.object_type === 'execution_package' && packageIds.has(link.object_id)) ||
-          (link.object_type === 'run_session' && runSessionIds.has(link.object_id)) ||
-          (link.object_type === 'review_packet' && reviewPacketIds.has(link.object_id)) ||
-          (link.object_type === 'release_evidence' && evidenceIds.has(link.object_id)) ||
-          (link.object_type === 'artifact' && publicArtifactIds.has(link.object_id)) ||
-          (link.object_type === 'decision' && decisionIds.has(link.object_id));
-        visibility.set(`${link.object_type}\0${link.object_id}`, {
-          object_type: link.object_type,
-          object_id: link.object_id,
-          public: isPublic,
-        });
-      }
-    }
-
-    return [...visibility.values()];
+    return buildReleasePublicLinkVisibility({
+      repository: this.repository,
+      release,
+      workItems,
+      executionPackages,
+      runSessions,
+      reviewPackets,
+      evidences: evidence,
+      artifactsByEvidenceId,
+    });
   }
 
   private validateEvidenceMinimum(body: CreateReleaseEvidenceRequest): void {
@@ -724,6 +742,25 @@ export class ReleaseService {
       throw new NotFoundException(`Release ${releaseId} not found`);
     }
     return release;
+  }
+
+  private actorIdFor(body: ReleaseActorCommand, actorContext?: ActorContext): string {
+    const authenticatedActorId = actorContext?.authenticatedActorId?.trim();
+    if (authenticatedActorId !== undefined && authenticatedActorId.length > 0) {
+      return authenticatedActorId;
+    }
+
+    if (this.allowDemoActorIdFallback && this.durabilityMode === 'volatile_demo') {
+      return body.actor_id;
+    }
+
+    throw new UnauthorizedException('Authenticated actor is required');
+  }
+
+  private releaseOwnerActorIdFor(body: CreateReleaseRequest, actorId: string): string {
+    return body.release_owner_actor_id === undefined || body.release_owner_actor_id === body.actor_id
+      ? actorId
+      : body.release_owner_actor_id;
   }
 
   private applyTransition(

@@ -455,6 +455,42 @@ describe('getReleaseCockpit', () => {
     expect(cockpit?.blockers.map((item) => item.code)).toContain('unsafe_or_redacted_evidence_backlink');
   });
 
+  it('treats decisions on selected release graph objects as public backlinks', async () => {
+    const repo = new InMemoryP0Repository();
+    await seedReadyRelease(repo, {
+      evidence: {
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            summary: 'Selected review decision supports release readiness.',
+            observed_at: later,
+            links: [
+              { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+              { object_type: 'decision', object_id: 'decision-review-packet', relationship: 'supports' },
+            ],
+          },
+        },
+      },
+    });
+    await repo.saveDecision(
+      decision({
+        id: 'decision-review-packet',
+        object_type: 'review_packet',
+        object_id: 'review-1',
+      }),
+    );
+
+    const cockpit = await getReleaseCockpit(repo, 'release-1');
+
+    expect(cockpit?.observations[0]?.extra.observation?.links).toEqual([
+      { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+      { object_type: 'decision', object_id: 'decision-review-packet', relationship: 'supports' },
+    ]);
+    expect(cockpit?.blockers.map((item) => item.code)).not.toContain('unsafe_or_redacted_evidence_backlink');
+    expect(cockpit?.decisions.map((item) => item.id)).toEqual(['decision-1']);
+  });
+
   it('selects fallback run sessions by creation time and requires exact public artifact refs', async () => {
     const repo = new InMemoryP0Repository();
     const packageWithoutRunPointers = executionPackage();

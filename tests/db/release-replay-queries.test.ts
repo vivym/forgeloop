@@ -189,6 +189,8 @@ const releaseEvidence = (): ReleaseEvidence => ({
         { object_type: 'artifact', object_id: 'artifact-1', relationship: 'generated_by' },
         { object_type: 'artifact', object_id: 'artifact-stale', relationship: 'generated_by' },
         { object_type: 'decision', object_id: 'decision-release', relationship: 'supports' },
+        { object_type: 'decision', object_id: 'decision-review_packet', relationship: 'supports' },
+        { object_type: 'decision', object_id: 'decision-stale-review', relationship: 'supports' },
         { object_type: 'run_session', object_id: 'run-private', relationship: 'generated_by' },
       ],
       metrics: { errors: 0, client_secret: 'do-not-leak' },
@@ -288,6 +290,7 @@ const seedReleaseReplay = async (repo: P0Repository): Promise<void> => {
   await repo.saveRunSession(runSession());
   await repo.saveRunSession({ ...runSession(), id: 'run-private', created_at: latest, updated_at: latest });
   await repo.saveReviewPacket(reviewPacket());
+  await repo.saveReviewPacket({ ...reviewPacket(), id: 'review-stale', run_session_id: 'run-private' });
   await repo.saveRelease(release());
   await repo.saveReleaseEvidence(releaseEvidence());
   await repo.saveArtifact(artifact());
@@ -304,6 +307,7 @@ const seedReleaseReplay = async (repo: P0Repository): Promise<void> => {
     await repo.appendStatusHistory(statusHistory(object_type, object_id));
     await repo.saveDecision(decision(object_type, object_id));
   }
+  await repo.saveDecision(decision('review_packet', 'review-stale', 'decision-stale-review'));
 };
 
 describe('getObjectReplayTimeline release support', () => {
@@ -341,6 +345,7 @@ describe('getObjectReplayTimeline release support', () => {
             { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
             { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
             { object_type: 'decision', object_id: 'decision-release', relationship: 'supports' },
+            { object_type: 'decision', object_id: 'decision-review_packet', relationship: 'supports' },
           ],
         },
       },
@@ -354,6 +359,9 @@ describe('getObjectReplayTimeline release support', () => {
     );
     expect(evidenceEntry?.payload.extra.observation?.links).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ object_id: 'artifact-stale' })]),
+    );
+    expect(evidenceEntry?.payload.extra.observation?.links).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ object_id: 'decision-stale-review' })]),
     );
 
     const serialized = JSON.stringify(timeline);
