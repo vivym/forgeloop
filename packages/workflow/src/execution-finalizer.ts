@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   executorResultSchema,
   runSpecSchema,
@@ -31,6 +33,22 @@ type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 type LoadedRunContext = Awaited<ReturnType<typeof loadRunContext>>;
 type TraceWrite = (repository: PackageExecutionRepository) => Promise<void>;
+
+export const stableWorkflowUuidFor = (key: string): string => {
+  const hex = createHash('sha256').update(`forgeloop-workflow:${key}`).digest('hex');
+  const version = ((Number.parseInt(hex.slice(12, 16), 16) & 0x0fff) | 0x5000).toString(16).padStart(4, '0');
+  const variant = ((Number.parseInt(hex.slice(16, 20), 16) & 0x3fff) | 0x8000).toString(16).padStart(4, '0');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variant}-${hex.slice(20, 32)}`;
+};
+
+export const reviewPacketIdForRunSession = (runSessionId: string): string => stableWorkflowUuidFor(`review-packet:${runSessionId}`);
+
+export const artifactIdForRunSessionArtifact = (input: {
+  runSessionId: string;
+  index: number;
+  kind: string;
+  name: string;
+}): string => stableWorkflowUuidFor(`artifact:${input.runSessionId}:${input.index}:${input.kind}:${input.name}`);
 
 export interface FinalizePackageRunWithExecutorResultInput {
   repository: PackageExecutionRepository;
@@ -201,7 +219,12 @@ const persistArtifacts = async (
 ): Promise<void> => {
   for (const [index, artifact] of artifacts.entries()) {
     await repository.saveArtifact({
-      id: `artifact:${runSession.id}:${index}:${artifact.kind}:${artifact.name}`,
+      id: artifactIdForRunSessionArtifact({
+        runSessionId: runSession.id,
+        index,
+        kind: artifact.kind,
+        name: artifact.name,
+      }),
       object_type: 'run_session',
       object_id: runSession.id,
       trace_subject_type: 'execution_package',
@@ -302,7 +325,12 @@ const recordTerminalEvidenceTrace = async (
       await repository.saveTraceArtifactRef({
         id: `trace-artifact-ref:${id}:${index}:${artifact.kind}:${artifact.name}`,
         trace_event_id: id,
-        artifact_id: `artifact:${runSession.id}:${index}:${artifact.kind}:${artifact.name}`,
+        artifact_id: artifactIdForRunSessionArtifact({
+          runSessionId: runSession.id,
+          index,
+          kind: artifact.kind,
+          name: artifact.name,
+        }),
         ref: clone(artifact),
         created_at: at,
       });
@@ -372,7 +400,7 @@ const createReviewPacket = async (
   selfReviewResult: SelfReviewResult,
   at: IsoDateTime,
 ): Promise<ReviewPacketRecord> => {
-  const id = `review-packet:${runSession.id}`;
+  const id = reviewPacketIdForRunSession(runSession.id);
   const existing = await repository.getReviewPacket(id);
 
   if (existing !== undefined) {
@@ -605,7 +633,7 @@ const loadFinalizationState = async (
   const terminalMatches =
     terminalStatuses.has(context.runSession.status) && executorResultsEqual(currentResult, parsedExecutorResult);
   const runSpec = runSpecSchema.parse(context.runSession.run_spec ?? buildRunSpec(context, {}));
-  const reviewPacket = await repository.getReviewPacket(`review-packet:${context.runSession.id}`);
+  const reviewPacket = await repository.getReviewPacket(reviewPacketIdForRunSession(context.runSession.id));
 
   return { context, runSpec, runSession: context.runSession, reviewPacket, terminalMatches };
 };

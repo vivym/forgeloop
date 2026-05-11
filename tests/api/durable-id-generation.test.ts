@@ -12,6 +12,8 @@ import {
 } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src';
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 describe('durable P0 object IDs', () => {
   const apps: INestApplication[] = [];
 
@@ -58,5 +60,147 @@ describe('durable P0 object IDs', () => {
     ).body as { id: string };
 
     expect(secondProject.id).not.toBe(firstProject.id);
+  });
+
+  it('uses UUID ids for durable public P0 API-created aggregates', async () => {
+    const repository = new InMemoryP0Repository();
+    const app = await createDurableApp(repository);
+    const server = app.getHttpServer();
+    const ownerActorId = '11111111-1111-4111-8111-111111111111';
+    const reviewerActorId = '22222222-2222-4222-8222-222222222222';
+    const qaActorId = '33333333-3333-4333-8333-333333333333';
+
+    const project = (await request(server).post('/projects').send({ name: 'Durable UUIDs', owner_actor_id: ownerActorId }).expect(201))
+      .body;
+    await request(server)
+      .post(`/projects/${project.id}/repos`)
+      .send({
+        repo_id: 'forgeloop-source',
+        name: 'forgeloop',
+        local_path: '/workspace/forgeloop',
+        base_commit_sha: 'base',
+      })
+      .expect(201);
+    const workItem = (
+      await request(server)
+        .post('/work-items')
+        .send({
+          project_id: project.id,
+          kind: 'requirement',
+          title: 'Durable UUID path',
+          goal: 'Prove durable ids',
+          success_criteria: ['ids are UUIDs'],
+          priority: 'P1',
+          risk: 'low',
+          owner_actor_id: ownerActorId,
+        })
+        .expect(201)
+    ).body;
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    const specRevision = (
+      await request(server)
+        .post(`/specs/${spec.id}/revisions`)
+        .send({
+          summary: 'Durable spec',
+          content: 'Spec content',
+          background: 'Background',
+          goals: ['Goal'],
+          scope_in: ['In'],
+          scope_out: ['Out'],
+          acceptance_criteria: ['Accept'],
+          test_strategy_summary: 'Test',
+          author_actor_id: ownerActorId,
+        })
+        .expect(201)
+    ).body;
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set('X-Forgeloop-Actor-Id', ownerActorId)
+      .send({ actor_id: ownerActorId })
+      .expect(201);
+    await request(server)
+      .post(`/specs/${spec.id}/approve`)
+      .set('X-Forgeloop-Actor-Id', reviewerActorId)
+      .send({ actor_id: reviewerActorId })
+      .expect(201);
+    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
+    const planRevision = (
+      await request(server)
+        .post(`/plans/${plan.id}/revisions`)
+        .send({
+          summary: 'Durable plan',
+          content: 'Plan content',
+          implementation_summary: 'Implement',
+          split_strategy: 'One package',
+          dependency_order: [],
+          test_matrix: ['pnpm test'],
+          rollback_notes: 'Revert',
+          author_actor_id: ownerActorId,
+        })
+        .expect(201)
+    ).body;
+    await request(server)
+      .post(`/plans/${plan.id}/submit-for-approval`)
+      .set('X-Forgeloop-Actor-Id', ownerActorId)
+      .send({ actor_id: ownerActorId })
+      .expect(201);
+    await request(server)
+      .post(`/plans/${plan.id}/approve`)
+      .set('X-Forgeloop-Actor-Id', reviewerActorId)
+      .send({ actor_id: reviewerActorId })
+      .expect(201);
+    const executionPackage = (
+      await request(server)
+        .post(`/plan-revisions/${planRevision.id}/execution-packages`)
+        .send({
+          repo_id: 'forgeloop-source',
+          objective: 'Durable package',
+          owner_actor_id: ownerActorId,
+          reviewer_actor_id: reviewerActorId,
+          qa_owner_actor_id: qaActorId,
+          required_checks: [
+            {
+              check_id: 'unit',
+              display_name: 'Unit',
+              command: 'node -e "process.exit(0)"',
+              timeout_seconds: 30,
+              blocks_review: true,
+            },
+          ],
+          required_artifact_kinds: ['execution_summary'],
+          allowed_paths: ['README.md'],
+          forbidden_paths: ['.git'],
+        })
+        .expect(201)
+    ).body;
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set('X-Forgeloop-Actor-Id', ownerActorId)
+      .send({ actor_id: ownerActorId })
+      .expect(201);
+    const run = (
+      await request(server)
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .set('X-Forgeloop-Actor-Id', ownerActorId)
+        .send({
+          requested_by_actor_id: ownerActorId,
+          executor_type: 'mock',
+          workflow_only: true,
+        })
+        .expect(201)
+    ).body;
+
+    for (const id of [
+      project.id,
+      workItem.id,
+      spec.id,
+      specRevision.id,
+      plan.id,
+      planRevision.id,
+      executionPackage.id,
+      run.run_session_id,
+    ]) {
+      expect(id).toMatch(uuidPattern);
+    }
   });
 });

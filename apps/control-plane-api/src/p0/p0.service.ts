@@ -95,6 +95,17 @@ export const RUN_DURABILITY_MODE = Symbol('RUN_DURABILITY_MODE');
 export const P0_DEMO_ACTOR_ID_FALLBACK = Symbol('P0_DEMO_ACTOR_ID_FALLBACK');
 
 const terminalRunStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
+const uuidBackedP0IdPrefixes = new Set([
+  'project',
+  'work-item',
+  'spec',
+  'spec-revision',
+  'plan',
+  'plan-revision',
+  'execution-package',
+  'run-session',
+  'decision',
+]);
 const streamPollMs = 500;
 const runEventStreamTokenTtlMs = 60_000;
 const beginningOfStreamCursor = '0000000000';
@@ -832,26 +843,29 @@ export class P0Service {
     context: Awaited<ReturnType<P0Service['packageContext']>>,
     dto: CreateExecutionPackageDto,
   ): Promise<ExecutionPackage> {
-    const executionPackage = transitionExecutionPackage(undefined, {
-      type: 'generate_package',
-      id: this.id('execution-package'),
-      work_item_id: context.workItem.id,
-      spec_id: context.spec.id,
-      spec_revision_id: context.specRevision.id,
-      plan_id: context.plan.id,
-      plan_revision_id: context.planRevision.id,
-      project_id: context.project.id,
-      repo_id: dto.repo_id,
-      objective: dto.objective,
-      owner_actor_id: dto.owner_actor_id,
-      reviewer_actor_id: dto.reviewer_actor_id,
-      qa_owner_actor_id: dto.qa_owner_actor_id,
-      required_checks: dto.required_checks,
-      required_artifact_kinds: dto.required_artifact_kinds,
-      allowed_paths: dto.allowed_paths,
-      forbidden_paths: dto.forbidden_paths,
-      at: this.now(),
-    });
+    const executionPackage = {
+      ...transitionExecutionPackage(undefined, {
+        type: 'generate_package',
+        id: this.id('execution-package'),
+        work_item_id: context.workItem.id,
+        spec_id: context.spec.id,
+        spec_revision_id: context.specRevision.id,
+        plan_id: context.plan.id,
+        plan_revision_id: context.planRevision.id,
+        project_id: context.project.id,
+        repo_id: dto.repo_id,
+        objective: dto.objective,
+        owner_actor_id: dto.owner_actor_id,
+        reviewer_actor_id: dto.reviewer_actor_id,
+        qa_owner_actor_id: dto.qa_owner_actor_id,
+        required_checks: dto.required_checks,
+        required_artifact_kinds: dto.required_artifact_kinds,
+        allowed_paths: dto.allowed_paths,
+        forbidden_paths: dto.forbidden_paths,
+        at: this.now(),
+      }),
+      required_test_gates: [],
+    };
     validateExecutionPackage(context.project, executionPackage);
     await this.repository.saveExecutionPackage(executionPackage);
     await this.event('execution_package', executionPackage.id, 'package_created', executionPackage.owner_actor_id, {
@@ -1308,6 +1322,9 @@ export class P0Service {
 
   private id(prefix: string): string {
     this.idCounter += 1;
+    if (this.durabilityMode === 'durable' && uuidBackedP0IdPrefixes.has(prefix)) {
+      return randomUUID();
+    }
     if (this.durabilityMode === 'durable') {
       return `${prefix}-${this.durableInstanceId}-${this.idCounter}`;
     }

@@ -17,7 +17,7 @@ import {
   type SelfReviewResult,
 } from '@forgeloop/contracts';
 
-import { finalizePackageRunWithExecutorResult } from './execution-finalizer';
+import { artifactIdForRunSessionArtifact, finalizePackageRunWithExecutorResult } from './execution-finalizer';
 
 type IsoDateTime = string;
 type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review' | 'integration' | 'test_gate' | 'release' | 'archived';
@@ -606,7 +606,12 @@ const persistArtifacts = async (
   await Promise.all(
     artifacts.map((artifact, index) =>
       repository.saveArtifact({
-        id: `artifact:${runSession.id}:${index}:${artifact.kind}:${artifact.name}`,
+        id: artifactIdForRunSessionArtifact({
+          runSessionId: runSession.id,
+          index,
+          kind: artifact.kind,
+          name: artifact.name,
+        }),
         object_type: 'run_session',
         object_id: runSession.id,
         trace_subject_type: 'execution_package',

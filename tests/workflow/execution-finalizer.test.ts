@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ExecutorResult } from '@forgeloop/contracts';
 import { InMemoryP0Repository, type TraceEventRecord } from '../../packages/db/src';
 import type { Artifact, Decision, ReviewPacket } from '../../packages/domain/src/index';
-import { finalizePackageRunWithExecutorResult } from '../../packages/workflow/src';
+import { finalizePackageRunWithExecutorResult, reviewPacketIdForRunSession, stableWorkflowUuidFor } from '../../packages/workflow/src';
 import {
   seedReadyStartedPackageRun,
   succeededExecutorResult,
@@ -114,7 +114,22 @@ const nonRetryableFailedExecutorResult = (runSessionId: string): ExecutorResult 
   raw_metadata: {},
 });
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 describe('execution finalizer', () => {
+  it('derives deterministic SHA-256 UUID-compatible workflow ids', () => {
+    const first = stableWorkflowUuidFor('known-key');
+    const second = stableWorkflowUuidFor('known-key');
+    const different = stableWorkflowUuidFor('different-key');
+
+    expect(first).toBe(second);
+    expect(first).not.toBe(different);
+    expect(first).toBe('63b71fc6-c992-54fc-b44d-74f1a1efd39e');
+    expect(first).toMatch(uuidPattern);
+    expect(first.split('-')[2]?.startsWith('5')).toBe(true);
+    expect(['8', '9', 'a', 'b']).toContain(first.split('-')[3]?.[0]);
+  });
+
   it('persists artifacts sequentially during leased finalization', async () => {
     const repo = new ArtifactConcurrencyDetectingRepository();
     const context = await seedReadyStartedPackageRun(repo);
@@ -156,7 +171,7 @@ describe('execution finalizer', () => {
       (event) => event.event_type === 'run_terminal_evidence_recorded',
     );
 
-    expect(finalResult.reviewPacketId).toBe(`review-packet:${context.runSession.id}`);
+    expect(finalResult.reviewPacketId).toMatch(uuidPattern);
     expect(terminalTraceEvent).toMatchObject({
       subject_type: 'run_session',
       subject_id: context.runSession.id,
@@ -165,7 +180,7 @@ describe('execution finalizer', () => {
         execution_package_id: context.executionPackage.id,
         work_item_id: context.executionPackage.work_item_id,
         status: 'succeeded',
-        review_packet_id: `review-packet:${context.runSession.id}`,
+        review_packet_id: finalResult.reviewPacketId,
       },
     });
     expect(await repo.listTraceLinks(terminalTraceEvent!.id)).toEqual(
@@ -188,11 +203,14 @@ describe('execution finalizer', () => {
         expect.objectContaining({
           relationship: 'supports',
           object_type: 'review_packet',
-          object_id: `review-packet:${context.runSession.id}`,
+          object_id: finalResult.reviewPacketId,
         }),
       ]),
     );
-    expect(await repo.listTraceArtifactRefs(terminalTraceEvent!.id)).toHaveLength(result.artifacts.length);
+    const savedArtifacts = await repo.listArtifactsForObject('run_session', context.runSession.id);
+    const traceArtifactRefs = await repo.listTraceArtifactRefs(terminalTraceEvent!.id);
+    expect(savedArtifacts.map((artifact) => artifact.id).every((id) => uuidPattern.test(id))).toBe(true);
+    expect(traceArtifactRefs.map((ref) => ref.artifact_id).sort()).toEqual(savedArtifacts.map((artifact) => artifact.id).sort());
   });
 
   it('keeps terminal records when finalizer trace writes fail', async () => {
@@ -223,7 +241,7 @@ describe('execution finalizer', () => {
       expect(finalResult).toEqual({
         runSessionId: context.runSession.id,
         status: 'succeeded',
-        reviewPacketId: `review-packet:${context.runSession.id}`,
+        reviewPacketId: expect.stringMatching(uuidPattern),
       });
       expect(await repo.getRunSession(context.runSession.id)).toMatchObject({ status: 'succeeded', summary: result.summary });
       expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(1);
@@ -267,7 +285,7 @@ describe('execution finalizer', () => {
       expect(finalResult).toEqual({
         runSessionId: context.runSession.id,
         status: 'succeeded',
-        reviewPacketId: `review-packet:${context.runSession.id}`,
+        reviewPacketId: expect.stringMatching(uuidPattern),
       });
       expect(repo.traceEventWriteInsideLease).toBe(false);
       expect(await repo.getRunSession(context.runSession.id)).toMatchObject({ status: 'succeeded', summary: result.summary });
@@ -345,7 +363,7 @@ describe('execution finalizer', () => {
       updated_at: terminalAt,
     });
     await repo.saveReviewPacket({
-      id: `review-packet:${runSessionId}`,
+      id: reviewPacketIdForRunSession(runSessionId),
       run_session_id: runSessionId,
       execution_package_id: packageId,
       reviewer_actor_id: 'actor-reviewer',
@@ -555,7 +573,7 @@ describe('execution finalizer', () => {
       updated_at: terminalAt,
     });
     await repo.saveReviewPacket({
-      id: `review-packet:${runSessionId}`,
+      id: reviewPacketIdForRunSession(runSessionId),
       run_session_id: runSessionId,
       execution_package_id: packageId,
       reviewer_actor_id: 'actor-reviewer',
@@ -580,7 +598,11 @@ describe('execution finalizer', () => {
       workerLease: { workerId: lease.worker_id, leaseToken: lease.lease_token },
     });
 
-    expect(finalResult).toMatchObject({ runSessionId, status: 'succeeded', reviewPacketId: `review-packet:${runSessionId}` });
+    expect(finalResult).toMatchObject({
+      runSessionId,
+      status: 'succeeded',
+      reviewPacketId: reviewPacketIdForRunSession(runSessionId),
+    });
     expect(repo.calls).toBe(1);
     expect(repo.leaseReadCount).toBeGreaterThan(0);
   });
@@ -611,7 +633,7 @@ describe('execution finalizer', () => {
       now: () => '2026-05-07T00:00:01.000Z',
     });
 
-    expect(finalResult).toEqual({ runSessionId, status: 'succeeded', reviewPacketId: `review-packet:${runSessionId}` });
+    expect(finalResult).toEqual({ runSessionId, status: 'succeeded', reviewPacketId: reviewPacketIdForRunSession(runSessionId) });
     expect(selfReviewRanInsideLease).toBe(false);
     expect(repo.calls).toBe(2);
   });

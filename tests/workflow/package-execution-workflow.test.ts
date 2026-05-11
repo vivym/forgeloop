@@ -15,10 +15,11 @@ import type {
 
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 import { transitionExecutionPackage, transitionReviewPacket, transitionRunSession } from '../../packages/domain/src/index';
-import { createPackageExecutionActivities, executePackageRun } from '../../packages/workflow/src/index';
+import { createPackageExecutionActivities, executePackageRun, reviewPacketIdForRunSession } from '../../packages/workflow/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const requiredChecks = [
   {
@@ -346,7 +347,7 @@ describe('executePackageRun', () => {
     });
     expect(reviewPackets).toHaveLength(1);
     expect(reviewPackets[0]).toMatchObject({
-      id: `review-packet:${runSessionId}`,
+      id: expect.stringMatching(uuidPattern),
       run_session_id: runSessionId,
       status: 'ready',
       decision: 'none',
@@ -354,6 +355,7 @@ describe('executePackageRun', () => {
       self_review: { status: 'succeeded' },
     });
     expect(artifacts.map((artifact) => artifact.ref.kind)).toEqual(['execution_summary', 'diff']);
+    expect(artifacts.map((artifact) => artifact.id).every((id) => uuidPattern.test(id))).toBe(true);
     expect(packageHistory.map((entry) => entry.to_status)).toContain('review/awaiting_human/awaiting_human_review');
   });
 
@@ -529,7 +531,7 @@ describe('executePackageRun', () => {
       status: 'archived',
       decision: 'none',
     });
-    expect(reviewPackets.find((packet) => packet.id === `review-packet:${runSessionId}`)).toMatchObject({
+    expect(reviewPackets.find((packet) => packet.id === reviewPacketIdForRunSession(runSessionId))).toMatchObject({
       status: 'ready',
       decision: 'none',
     });
@@ -604,7 +606,7 @@ describe('executePackageRun', () => {
 
     expect(executorCalls).toBe(0);
     expect(reviewPackets).toHaveLength(1);
-    expect(reviewPackets[0]).toMatchObject({ id: `review-packet:${runSessionId}`, status: 'ready' });
+    expect(reviewPackets[0]).toMatchObject({ id: reviewPacketIdForRunSession(runSessionId), status: 'ready' });
     expect(updatedPackage).toMatchObject({
       phase: 'review',
       activity_state: 'awaiting_human',
@@ -811,7 +813,7 @@ describe('executePackageRun', () => {
       gate_state: 'not_submitted',
       last_run_session_id: 'run-session-newer',
     });
-    expect(await repository.getReviewPacket(`review-packet:${runSessionId}`)).toMatchObject({
+    expect(await repository.getReviewPacket(reviewPacketIdForRunSession(runSessionId))).toMatchObject({
       status: 'ready',
       run_session_id: runSessionId,
     });
@@ -876,9 +878,9 @@ describe('executePackageRun', () => {
     expect(result).toEqual({
       runSessionId,
       status: 'succeeded',
-      reviewPacketId: `review-packet:${runSessionId}`,
+      reviewPacketId: reviewPacketIdForRunSession(runSessionId),
     });
-    expect(await repository.getReviewPacket(`review-packet:${runSessionId}`)).toMatchObject({
+    expect(await repository.getReviewPacket(reviewPacketIdForRunSession(runSessionId))).toMatchObject({
       execution_package_id: executionPackage.id,
       status: 'ready',
     });
