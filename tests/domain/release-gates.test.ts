@@ -456,6 +456,40 @@ describe('Release gate derivation', () => {
     ).toContain('unsafe_or_redacted_evidence_backlink');
   });
 
+  it('uses public top-level object refs as required observation backlinks', () => {
+    const evidenceWithObjectRefs = completedObservationEvidence({
+      object_ref: { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+      extra: {
+        observation: {
+          source: 'human',
+          severity: 'info',
+          summary: 'Scoped backlink is also public.',
+          observed_at: timestamp,
+          links: [{ object_type: 'work_item', object_id: 'work-item-1', relationship: 'affected' }],
+        },
+      },
+    });
+
+    expect(
+      deriveCodes({
+        evidence: [evidenceWithObjectRefs],
+        public_link_visibility: [
+          { object_type: 'release', object_id: 'release-1', public: true },
+          { object_type: 'work_item', object_id: 'work-item-1', public: true },
+        ],
+      }),
+    ).not.toContain('missing_required_evidence_backlink');
+    expect(
+      isCompletedCloseObservationEvidence(evidenceWithObjectRefs, {
+        release: release(),
+        public_link_visibility: [
+          { object_type: 'release', object_id: 'release-1', public: true },
+          { object_type: 'work_item', object_id: 'work-item-1', public: true },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it('accepts completed-close observation evidence when no public link visibility map is supplied', () => {
     expect(
       isCompletedCloseObservationEvidence(completedObservationEvidence(), {

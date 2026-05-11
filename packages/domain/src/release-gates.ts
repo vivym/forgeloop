@@ -441,7 +441,7 @@ const hasRequiredObservationBacklinks = (
   release: Release,
   publicLinkVisibility: readonly ReleasePublicLinkVisibility[] | undefined,
 ): boolean => {
-  const links = observationLinksFor(evidence);
+  const links = publicRefsForEvidence(evidence);
   return hasPublicReleaseBacklink(links, release, publicLinkVisibility) && hasPublicScopedBacklink(links, release, publicLinkVisibility);
 };
 
