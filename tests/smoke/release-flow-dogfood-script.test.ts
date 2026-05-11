@@ -30,6 +30,7 @@ import {
   seedDurableReleaseReadyPackageEvidence,
   shouldAttemptReleaseStrictLocalCodex,
   statusCodeForStrictReleaseMarkers,
+  strictLocalCodexEvidenceSummaryDetails,
   strictReleaseClosureMarkers,
   verifyDurableReleaseAfterReopen,
 } from '../../scripts/dogfood/release-flow-core';
@@ -114,6 +115,15 @@ describe('release flow dogfood script helpers', () => {
       artifact_kinds: ['execution_summary', 'review_packet'],
       review_packet_available: true,
     });
+    expect(strictLocalCodexEvidenceSummaryDetails(summary)).toEqual([
+      'Created, ran, approved, and linked public-safe strict local Codex evidence.',
+      'run_session_id=run-1',
+      'changed_file_count=1',
+      'check_count=1',
+      'artifact_kinds=execution_summary,review_packet',
+      'review_packet_available=true',
+    ]);
+    expect(() => assertNoUnsafeReleaseDogfoodStrings('strict local Codex summary details', strictLocalCodexEvidenceSummaryDetails(summary))).not.toThrow();
   });
 
   it('requires explicit real local Codex enablement before strict package execution', () => {

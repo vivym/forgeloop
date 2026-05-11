@@ -222,6 +222,17 @@ export const publicStrictLocalCodexEvidenceSummary = (input: {
   review_packet_available: input.reviewPacketAvailable,
 });
 
+export const strictLocalCodexEvidenceSummaryDetails = (
+  summary: ReturnType<typeof publicStrictLocalCodexEvidenceSummary>,
+): string[] => [
+  'Created, ran, approved, and linked public-safe strict local Codex evidence.',
+  `run_session_id=${summary.run_session_id}`,
+  `changed_file_count=${summary.changed_file_count}`,
+  `check_count=${summary.check_count}`,
+  `artifact_kinds=${summary.artifact_kinds.join(',')}`,
+  `review_packet_available=${summary.review_packet_available ? 'true' : 'false'}`,
+];
+
 export const shouldAttemptReleaseStrictLocalCodex = (env: Record<string, string | undefined>): boolean =>
   evaluateLocalCodexDogfoodEnablement(env).enabled;
 
@@ -1357,7 +1368,7 @@ const runReleaseStrictLocalCodexPackage = async (input: {
     marker: {
       marker: 'Strict local_codex run',
       status: 'PASSED',
-      details: ['Created, ran, approved, and linked public-safe strict local Codex evidence.'],
+      details: strictLocalCodexEvidenceSummaryDetails(summary),
     },
     packageId: executionPackage.id,
     runSessionId: run.run_session_id,
