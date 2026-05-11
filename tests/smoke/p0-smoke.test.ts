@@ -14,6 +14,7 @@ const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
 const repoId = 'repo-1';
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const requiredChecks = [
   {
@@ -208,7 +209,7 @@ describe('P0 smoke delivery loop', () => {
     const run = await runPackage(app, executionPackage.id);
     const acceptedRun = await expectAcceptedRunWithVisibleLiveEvent(app, run);
     const reviewPacketId = (await waitForReviewPacket(app, acceptedRun.run_session_id)).id;
-    expect(reviewPacketId).toEqual(expect.stringContaining('review-packet'));
+    expect(reviewPacketId).toMatch(uuidPattern);
 
     const runSession = (await request(server).get(`/run-sessions/${acceptedRun.run_session_id}`).expect(200)).body;
     expect(runSession).toMatchObject({

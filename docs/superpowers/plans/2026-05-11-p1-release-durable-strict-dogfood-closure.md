@@ -1912,7 +1912,7 @@ git commit -m "docs: record blocked release strict dogfood closure"
 **Files:**
 - Modify only files required to fix failures discovered here.
 
-- [ ] **Step 1: Run focused smoke/API tests**
+- [x] **Step 1: Run focused smoke/API tests**
 
 Run:
 
@@ -1922,7 +1922,7 @@ pnpm vitest run tests/smoke/release-flow-dogfood-script.test.ts tests/smoke/dogf
 
 Expected: PASS.
 
-- [ ] **Step 2: Run full test suite**
+- [x] **Step 2: Run full test suite**
 
 Run:
 
@@ -1932,7 +1932,7 @@ pnpm test
 
 Expected: PASS. The known Nest negative-path log about `FORGELOOP_DEV_AUTH_SECRET` may appear if existing tests trigger it, but the command must exit `0`.
 
-- [ ] **Step 3: Run build**
+- [x] **Step 3: Run build**
 
 Run:
 
@@ -1942,7 +1942,7 @@ pnpm build
 
 Expected: PASS.
 
-- [ ] **Step 4: Run deterministic Release dogfood without overwriting final strict evidence**
+- [x] **Step 4: Run deterministic Release dogfood without overwriting final strict evidence**
 
 Run:
 
@@ -1952,7 +1952,7 @@ FORGELOOP_RELEASE_FLOW_DOGFOOD_REPORT_PATH=/tmp/forgeloop-release-flow-determini
 
 Expected: exits `0` and writes a deterministic report to `/tmp/forgeloop-release-flow-deterministic-verification.md`. Do not overwrite `docs/superpowers/reports/p1-release-risk-radar-verification.md` after Task 7 has produced strict PASS evidence. If the final tracked report was overwritten accidentally, rerun Task 7 before claiming closure.
 
-- [ ] **Step 5: Inspect final report markers**
+- [x] **Step 5: Inspect final report markers**
 
 Run:
 
@@ -1962,7 +1962,7 @@ sed -n '1,140p' docs/superpowers/reports/p1-release-risk-radar-verification.md
 
 Expected: report matches the most recent intentionally run dogfood mode. Do not claim strict closure if either strict closure marker is `BLOCKED with reason`.
 
-- [ ] **Step 6: Check git status**
+- [x] **Step 6: Check git status**
 
 Run:
 
@@ -1972,7 +1972,7 @@ git status --short --branch
 
 Expected: clean worktree.
 
-- [ ] **Step 7: Final commit if needed**
+- [x] **Step 7: Final commit if needed**
 
 If verification produced final report changes:
 
