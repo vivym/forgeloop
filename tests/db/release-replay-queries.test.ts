@@ -228,8 +228,8 @@ const exactPublicArtifact = (): Artifact => ({
 
 const unsafeArtifact = (): Artifact => ({
   id: 'artifact-unsafe',
-  object_type: 'release',
-  object_id: 'release-1',
+  object_type: 'release_evidence',
+  object_id: 'evidence-private-artifact',
   artifact_type: 'raw_metadata',
   ref: {
     kind: 'raw_metadata',
@@ -326,6 +326,25 @@ const seedReleaseReplay = async (repo: P0Repository): Promise<void> => {
       },
     },
   });
+  await repo.saveReleaseEvidence({
+    ...releaseEvidence(),
+    id: 'evidence-private-artifact',
+    summary: 'Private exact artifact id should not leak.',
+    object_ref: { object_type: 'run_session', object_id: 'run-private', relationship: 'generated_by' },
+    artifact_id: 'artifact-unsafe',
+    extra: {
+      observation: {
+        source: 'human',
+        severity: 'warning',
+        summary: 'Private exact artifact id and object ref should be filtered.',
+        observed_at: later,
+        links: [
+          { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+          { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
+        ],
+      },
+    },
+  });
   await repo.saveArtifact(artifact());
   await repo.saveArtifact(exactPublicArtifact());
   await repo.saveArtifact(unsafeArtifact());
@@ -411,6 +430,10 @@ describe('getObjectReplayTimeline release support', () => {
         },
       },
     });
+    const privateArtifactEvidenceEntry = timeline?.find((entry) => entry.id === 'evidence-private-artifact');
+    expect(privateArtifactEvidenceEntry?.payload).not.toHaveProperty('artifact');
+    expect(privateArtifactEvidenceEntry?.payload).not.toHaveProperty('artifact_id');
+    expect(privateArtifactEvidenceEntry?.payload).not.toHaveProperty('object_ref');
 
     const serialized = JSON.stringify(timeline);
     for (const unsafeText of [

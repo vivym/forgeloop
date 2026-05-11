@@ -345,7 +345,7 @@ describe('public evidence serialization', () => {
       artifact: unsafeArtifact,
     });
 
-    expect(serialized.artifact_id).toBe('artifact-unsafe');
+    expect(serialized).not.toHaveProperty('artifact_id');
     expect(serialized).not.toHaveProperty('artifact');
     expect(serialized.extra).toEqual({
       observation: {

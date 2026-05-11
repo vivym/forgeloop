@@ -300,24 +300,37 @@ const publicReleaseDecision = (decision: Decision): PublicReleaseDecision | unde
   return parsed.success ? parsed.data : undefined;
 };
 
-const filterUnsafeObservationLinks = (
+const filterUnsafeEvidenceRefs = (
   evidence: PublicReleaseEvidenceProjection,
   publicVisibility: readonly ReleasePublicLinkVisibility[],
 ): PublicReleaseEvidenceProjection => {
-  const observation = evidence.extra.observation;
-  if (observation?.links === undefined) {
-    return evidence;
-  }
-
   const visibilityByRef = new Map(
     publicVisibility.map((item) => [releasePublicVisibilityKey(item.object_type, item.object_id), item.public]),
   );
+  const objectRef =
+    evidence.object_ref === undefined ||
+    visibilityByRef.get(releasePublicVisibilityKey(evidence.object_ref.object_type, evidence.object_ref.object_id)) === true
+      ? evidence.object_ref
+      : undefined;
+  const observation = evidence.extra.observation;
+  if (observation?.links === undefined) {
+    if (objectRef === evidence.object_ref) {
+      return evidence;
+    }
+    const { object_ref: _objectRef, ...withoutObjectRef } = evidence;
+    return withoutObjectRef;
+  }
+
   const publicLinks = observation.links.filter(
     (link) => visibilityByRef.get(releasePublicVisibilityKey(link.object_type, link.object_id)) === true,
   );
+  const baseEvidence =
+    objectRef === evidence.object_ref
+      ? evidence
+      : (({ object_ref: _objectRef, ...withoutObjectRef }) => withoutObjectRef)(evidence);
 
   return {
-    ...evidence,
+    ...baseEvidence,
     extra: {
       ...evidence.extra,
       observation: {
@@ -331,6 +344,7 @@ const filterUnsafeObservationLinks = (
         ...(observation.notes !== undefined ? { notes: observation.notes } : {}),
       },
     },
+    ...(objectRef !== undefined ? { object_ref: objectRef } : {}),
   };
 };
 
@@ -411,7 +425,7 @@ export async function getReleaseCockpit(
   };
   const blockers = deriveReleaseBlockers(context);
   const serializedEvidences = evidences.map((evidence) =>
-    filterUnsafeObservationLinks(
+    filterUnsafeEvidenceRefs(
       serializePublicReleaseEvidence(
         artifactsByEvidenceId.get(evidence.id) === undefined
           ? { evidence: omitArtifactId(evidence) }

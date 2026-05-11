@@ -455,6 +455,46 @@ describe('getReleaseCockpit', () => {
     expect(cockpit?.blockers.map((item) => item.code)).toContain('unsafe_or_redacted_evidence_backlink');
   });
 
+  it('omits non-public exact artifact ids and unsafe top-level object refs', async () => {
+    const repo = new InMemoryP0Repository();
+    await seedReadyRelease(repo, {
+      evidence: {
+        object_ref: { object_type: 'run_session', object_id: 'run-private', relationship: 'generated_by' },
+        artifact_id: 'artifact-private',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            summary: 'Private artifact ids and object refs should not leak.',
+            observed_at: later,
+            links: [
+              { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+              { object_type: 'execution_package', object_id: 'package-1', relationship: 'observed' },
+            ],
+          },
+        },
+      },
+      artifact: {
+        id: 'artifact-private',
+        ref: {
+          kind: 'raw_metadata',
+          name: 'raw-metadata.json',
+          content_type: 'application/json',
+          storage_uri: 'https://evidence.example.test/raw.json?token=secret',
+          raw_ref: 'local:///Users/viv/private/raw.json',
+        } as Artifact['ref'] & { raw_ref: string },
+      },
+    });
+    await repo.saveRunSession(runSession({ id: 'run-private', created_at: latest, updated_at: latest }));
+
+    const cockpit = await getReleaseCockpit(repo, 'release-1');
+
+    expect(cockpit?.evidences[0]).not.toHaveProperty('artifact');
+    expect(cockpit?.evidences[0]).not.toHaveProperty('artifact_id');
+    expect(cockpit?.evidences[0]).not.toHaveProperty('object_ref');
+    expect(cockpit?.blockers.map((item) => item.code)).toContain('unsafe_or_redacted_evidence_backlink');
+  });
+
   it('treats decisions on selected release graph objects as public backlinks', async () => {
     const repo = new InMemoryP0Repository();
     await seedReadyRelease(repo, {

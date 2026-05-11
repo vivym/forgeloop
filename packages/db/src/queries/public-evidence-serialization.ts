@@ -689,7 +689,7 @@ export const serializePublicReleaseEvidence = (input: SerializePublicReleaseEvid
     evidence_type: evidence.evidence_type,
     summary: evidence.summary,
     ...(objectRef !== undefined ? { object_ref: objectRef } : {}),
-    ...(safeString(evidence.artifact_id) !== undefined ? { artifact_id: evidence.artifact_id } : {}),
+    ...(artifact !== undefined && safeString(evidence.artifact_id) !== undefined ? { artifact_id: evidence.artifact_id } : {}),
     ...(artifact !== undefined ? { artifact } : {}),
     extra: serializePublicReleaseEvidenceExtra(evidence.extra ?? {}),
     redacted: evidence.redacted,

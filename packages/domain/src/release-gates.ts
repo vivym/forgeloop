@@ -359,6 +359,19 @@ const observationLinksFor = (evidence: ReleaseEvidence): ObservationLink[] => {
   });
 };
 
+const publicRefsForEvidence = (evidence: ReleaseEvidence): ObservationLink[] => [
+  ...(evidence.object_ref === undefined
+    ? []
+    : [
+        {
+          object_type: evidence.object_ref.object_type,
+          object_id: evidence.object_ref.object_id,
+          relationship: evidence.object_ref.relationship,
+        },
+      ]),
+  ...observationLinksFor(evidence),
+];
+
 const visibilityKey = (objectType: string, objectId: string): string => `${objectType}\0${objectId}`;
 
 const hasUnsafePublicObservationLink = (
@@ -649,7 +662,6 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
       }));
     }
     if (isObservationEvidenceType(item.evidence_type) && isRecord(isRecord(item.extra) ? item.extra.observation : undefined)) {
-      const links = observationLinksFor(item);
       if (!hasRequiredObservationBacklinks(item, release, context.public_link_visibility)) {
         blockers.push(
           blocker('missing_required_evidence_backlink', `Observation evidence ${item.id} is missing required public release or scoped backlinks.`, {
@@ -658,7 +670,7 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
           }),
         );
       }
-      if (hasUnsafePublicObservationLink(links, context.public_link_visibility)) {
+      if (hasUnsafePublicObservationLink(publicRefsForEvidence(item), context.public_link_visibility)) {
         blockers.push(
           blocker(
             'unsafe_or_redacted_evidence_backlink',

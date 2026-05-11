@@ -54,6 +54,19 @@ const observationLinksFor = (evidence: ReleaseEvidence): ObservationLink[] => {
   });
 };
 
+const publicRefsFor = (evidence: ReleaseEvidence): ObservationLink[] => [
+  ...(evidence.object_ref === undefined
+    ? []
+    : [
+        {
+          object_type: evidence.object_ref.object_type,
+          object_id: evidence.object_ref.object_id,
+          relationship: evidence.object_ref.relationship,
+        },
+      ]),
+  ...observationLinksFor(evidence),
+];
+
 const visibleObjectRefsFor = (
   input: ReleasePublicLinkVisibilityInput,
   publicArtifactIds: ReadonlySet<string>,
@@ -121,7 +134,7 @@ export const buildReleasePublicLinkVisibility = async (
   const decisionIds = await collectPublicDecisionIds(input.repository, visibleObjectRefsFor(input, publicArtifactIds));
 
   for (const evidence of input.evidences) {
-    for (const link of observationLinksFor(evidence)) {
+    for (const link of publicRefsFor(evidence)) {
       const key = releasePublicVisibilityKey(link.object_type, link.object_id);
       if (visibilityByRef.has(key)) {
         continue;

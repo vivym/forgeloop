@@ -1020,6 +1020,39 @@ describe('release module', () => {
       ]),
     );
 
+    const staleObjectRef = await request(app.getHttpServer())
+      .post(`/releases/${id}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Top-level object ref points to non-current runtime evidence.',
+        object_ref: { object_type: 'run_session', object_id: 'run-session-not-current', relationship: 'generated_by' },
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'warning',
+            observed_at: later,
+            summary: 'Top-level object ref should match cockpit public projection.',
+            links: [
+              { object_type: 'release', object_id: id, relationship: 'observed' },
+              { object_type: 'work_item', object_id: scope.workItem.id, relationship: 'affected' },
+            ],
+          },
+        },
+      })
+      .expect(201);
+    const staleObjectRefEvidence = (await repo.listReleaseEvidences(id)).find(
+      (evidence) => evidence.summary === 'Top-level object ref points to non-current runtime evidence.',
+    );
+    expect(staleObjectRef.body.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unsafe_or_redacted_evidence_backlink',
+          object_id: staleObjectRefEvidence?.id,
+        }),
+      ]),
+    );
+
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
       .send({ actor_id: actorOwner, evidence_type: 'review_packet', summary: 'bad', object_ref: { object_type: 'work_item', object_id: 'x', relationship: 'supports' } })
