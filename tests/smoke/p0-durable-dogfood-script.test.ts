@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   discoverDockerPostgresCandidate,
-  parseDurableDogfoodReport,
   planDurableDogfoodDatabase,
   providedDatabaseUrlFromEnv,
   startDisposablePostgres,
-} from '../../scripts/p0-durable-dogfood';
+} from '../../scripts/dogfood/durable-postgres';
+import { parseDurableDogfoodReport } from '../../scripts/p0-durable-dogfood';
 
 const dockerInspect = [
   {
@@ -113,9 +113,9 @@ describe('p0 durable dogfood script helpers', () => {
     });
 
     expect(plan.kind).toBe('docker_temp_db');
-    expect(plan.databaseName).toBe('forgeloop_dogfood_1778256000000');
+    expect(plan.databaseName).toBe('forgeloop_tmp_dogfood_1778256000000');
     expect(plan.cleanup).toEqual({ dropDatabase: true });
-    expect(plan.databaseUrl).toBe('postgresql://forgeloop:secret@127.0.0.1:15432/forgeloop_dogfood_1778256000000');
+    expect(plan.databaseUrl).toBe('postgresql://forgeloop:secret@127.0.0.1:15432/forgeloop_tmp_dogfood_1778256000000');
   });
 
   it('does not mark an externally provided DB for cleanup', () => {
