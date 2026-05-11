@@ -59,6 +59,12 @@ describe('source repo guard', () => {
     ).toEqual(['.superpowers/state file.json', 'packages/workflow/src/activity file.ts']);
   });
 
+  it('preserves paths when a command runner trims porcelain leading spaces', () => {
+    expect(sourceDirtyEntriesFromPorcelain('M docs/superpowers/reports/p1-release-risk-radar-verification.md\n')).toEqual([
+      'docs/superpowers/reports/p1-release-risk-radar-verification.md',
+    ]);
+  });
+
   it('keeps Git-quoted filenames containing rename arrows as one path', () => {
     expect(sourceDirtyEntriesFromPorcelain('?? "a -> b.txt"\n')).toEqual(['a -> b.txt']);
     expect(sourceDirtyEntriesFromPorcelain('R  "old -> name.txt" -> "new -> name.txt"\n')).toEqual([

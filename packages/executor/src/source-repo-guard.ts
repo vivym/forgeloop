@@ -111,7 +111,18 @@ const decodeGitQuotedPath = (path: string): string => {
 
 const porcelainStatus = (line: string): string => (line.length >= 2 ? line.slice(0, 2) : line);
 
-const porcelainPayload = (line: string): string => (line.length > 3 ? line.slice(3) : line);
+const porcelainPayload = (line: string): string => {
+  if (line.length <= 2) {
+    return line;
+  }
+  if (line[2] === ' ') {
+    return line.slice(3);
+  }
+  if (line[1] === ' ') {
+    return line.slice(2);
+  }
+  return line.length > 3 ? line.slice(3) : line;
+};
 
 const splitGitPorcelainPaths = (payload: string): string[] => {
   const paths: string[] = [];
