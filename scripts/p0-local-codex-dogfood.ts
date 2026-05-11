@@ -1,417 +1,65 @@
-import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 
-import type { ArtifactRef, ChangedFile, CheckResult, RunSpec } from '@forgeloop/contracts';
+import type { RunSpec } from '@forgeloop/contracts';
 import {
-  sourceDirtyEntriesFromPorcelain,
-  worktreePathForRun,
-  type StrictPreflightBlocker,
-  type StrictPreflightResult,
-} from '../packages/executor/src/index.js';
+  buildSourceGuardInjectionPlan,
+  defaultRunCommand,
+  evaluateLocalCodexDogfoodEnablement,
+  extractPersistedTerminalEvidence,
+  isTerminalStatus,
+  preflightLocalCodexDogfood,
+  recordLiveEventObservation,
+  resolveReviewPacketReference,
+  runSessionRuntimeMetadataReport,
+  validateLocalCodexRuntimeMetadata,
+  type CommandRunner,
+  type Env,
+  type ObservedRunEvent,
+  type PreflightResult,
+  type TerminalEvidenceReport,
+} from './dogfood/strict-local-codex';
 
-type Env = Record<string, string | undefined>;
-
-type CommandRunner = (
-  command: string,
-  args: string[],
-  options?: { cwd?: string; env?: Env; timeoutMs?: number },
-) => Promise<{ stdout: string; stderr: string }>;
-
-type PreflightResult =
-  | (StrictPreflightResult & {
-      ok: true;
-      repoPath: string;
-      dirtyFiles: string[];
-      dirtySource: StrictDirtySourceSummary;
-      dirtyOverride?: { allowed: true; dirtyFiles: string[] };
-      worktreeProbePath: string;
-    })
-  | (StrictPreflightResult & {
-      ok: false;
-      message: string;
-      repoPath: string;
-      dirtyFiles?: string[];
-      dirtySource?: StrictDirtySourceSummary;
-      unexpectedDirtyFiles?: string[];
-      worktreeProbePath?: string;
-    });
-
-type StrictDirtySourceSummary = {
-  allowed_dirty_entries: string[];
-  blocked_dirty_entries: string[];
-  dirty_allowlist_source: typeof STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
-};
-
-type RuntimeMetadataReport = {
-  executor_type?: string;
-  runtime_metadata?: Record<string, unknown>;
-};
-
-type TerminalEvidenceReport = {
-  changed_files?: Array<Partial<ChangedFile>>;
-  check_results?: Array<Partial<CheckResult>>;
-  artifacts?: Array<Partial<ArtifactRef>>;
-  review_packet?: { id?: string; artifact_path?: string };
-};
-
-type ObservedRunEvent = {
-  event_type?: string;
-  visibility?: string;
-  status?: string;
-  cursor?: string;
-  runStatusAtObservation?: string;
-  payload?: Record<string, unknown>;
-};
-
-const execFile = promisify(execFileCallback);
-
-const terminalStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
-
-export const STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST';
-export const STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST = [
-  'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
-  '.superpowers/**',
-] as const;
-const DANGEROUS_MODE_CONFIRMATION_ENV = 'FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE';
-
-const defaultRunCommand: CommandRunner = async (command, args, options = {}) => {
-  const childOptions: Parameters<typeof execFile>[2] = { maxBuffer: 1024 * 1024 * 10 };
-  if (options.cwd !== undefined) {
-    childOptions.cwd = options.cwd;
-  }
-  if (options.env !== undefined) {
-    childOptions.env = { ...process.env, ...options.env };
-  }
-  if (options.timeoutMs !== undefined) {
-    childOptions.timeout = options.timeoutMs;
-  }
-  const { stdout, stderr } = await execFile(command, args, childOptions);
-  return { stdout: String(stdout), stderr: String(stderr) };
-};
+export {
+  buildCodexExecFallbackCommand,
+  buildSourceGuardInjectionPlan,
+  classifyStrictDirtySource,
+  classifyStrictLocalCodexExit,
+  classifyStrictLocalCodexReportStatus,
+  commandExists,
+  evaluateLocalCodexDogfoodEnablement,
+  extractPersistedTerminalEvidence,
+  parseDirtySourceFiles,
+  preflightLocalCodexDogfood,
+  recordLiveEventObservation,
+  releaseStrictDirtyAllowlist,
+  resolveReviewPacketReference,
+  runSessionRuntimeMetadataReport,
+  sanitizeStrictBlockerDetails,
+  sanitizeStrictPreflightBlockerDetails,
+  selectCodexExecutionMode,
+  strictBlocker,
+  STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST,
+  STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE,
+  validateLocalCodexRuntimeMetadata,
+  validateTerminalEvidence,
+} from './dogfood/strict-local-codex';
+export type {
+  CommandRunner,
+  Env,
+  ObservedRunEvent,
+  PreflightResult,
+  RuntimeMetadataReport,
+  StrictDirtySourceSummary,
+  StrictMarkerStatus,
+  TerminalEvidenceReport,
+} from './dogfood/strict-local-codex';
 
 const isMainModule = (): boolean => process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 const nowIso = (): string => new Date().toISOString();
-
-const isTerminalStatus = (status: unknown): boolean => typeof status === 'string' && terminalStatuses.has(status);
-
-const codexLiveProgressEventTypes = new Set([
-  'thread_started',
-  'thread_resumed',
-  'turn_started',
-  'agent_message_delta',
-  'agent_message_completed',
-  'command_output_delta',
-  'driver_fallback_used',
-]);
-
-export const evaluateLocalCodexDogfoodEnablement = (env: Env): {
-  enabled: boolean;
-  exitCode: number;
-  status: 'enabled' | 'skipped';
-  message: string;
-} => {
-  if (env.FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD === '1') {
-    return {
-      enabled: true,
-      exitCode: 0,
-      status: 'enabled',
-      message: 'Real local Codex dogfood enabled.',
-    };
-  }
-
-  return {
-    enabled: false,
-    exitCode: 0,
-    status: 'skipped',
-    message: 'Real local Codex dogfood disabled; set FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 to run.',
-  };
-};
-
-export const parseDirtySourceFiles = (porcelain: string): string[] => sourceDirtyEntriesFromPorcelain(porcelain);
-
-const matchesStrictDirtyAllowlist = (path: string): boolean => {
-  if (path !== path.trim()) {
-    return false;
-  }
-
-  return STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST.some((pattern) => {
-    if (pattern.endsWith('/**')) {
-      const prefix = pattern.slice(0, -'/**'.length);
-
-      return path === prefix || path.startsWith(`${prefix}/`);
-    }
-
-    return path === pattern;
-  });
-};
-
-const classifyStrictDirtySource = (dirtyFiles: string[]): StrictDirtySourceSummary => {
-  const allowed_dirty_entries = dirtyFiles.filter(matchesStrictDirtyAllowlist);
-  const allowed = new Set(allowed_dirty_entries);
-  const blocked_dirty_entries = dirtyFiles.filter((path) => !allowed.has(path));
-
-  return {
-    allowed_dirty_entries,
-    blocked_dirty_entries,
-    dirty_allowlist_source: STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE,
-  };
-};
-
-const commandExists = async (runCommand: CommandRunner, command: string, cwd: string): Promise<boolean> => {
-  try {
-    await runCommand(command, ['--version'], { cwd, timeoutMs: 10_000 });
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const strictBlocker = (
-  code: StrictPreflightBlocker['code'],
-  message: string,
-  details?: Record<string, unknown>,
-): StrictPreflightBlocker => ({
-  code,
-  message,
-  ...(details === undefined ? {} : { details }),
-});
-
-const strictFailure = (input: {
-  repoPath: string;
-  blockers: StrictPreflightBlocker[];
-  dirtyFiles?: string[];
-  dirtySource?: StrictDirtySourceSummary;
-  unexpectedDirtyFiles?: string[];
-  worktreeProbePath?: string;
-}): PreflightResult => ({
-  ok: false,
-  repoPath: input.repoPath,
-  blockers: input.blockers,
-  message: input.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join('; '),
-  ...(input.dirtyFiles === undefined ? {} : { dirtyFiles: input.dirtyFiles }),
-  ...(input.dirtySource === undefined ? {} : { dirtySource: input.dirtySource }),
-  ...(input.unexpectedDirtyFiles === undefined ? {} : { unexpectedDirtyFiles: input.unexpectedDirtyFiles }),
-  ...(input.worktreeProbePath === undefined ? {} : { worktreeProbePath: input.worktreeProbePath }),
-});
-
-const checkDurableRepositoryAvailable = async (input: {
-  env: Env;
-  repoPath: string;
-  runCommand: CommandRunner;
-}): Promise<StrictPreflightBlocker | undefined> => {
-  if (input.env.FORGELOOP_DATABASE_URL?.trim() === undefined || input.env.FORGELOOP_DATABASE_URL.trim().length === 0) {
-    return undefined;
-  }
-
-  try {
-    await input.runCommand('pnpm', ['db:push'], {
-      cwd: input.repoPath,
-      env: { FORGELOOP_DATABASE_URL: input.env.FORGELOOP_DATABASE_URL },
-      timeoutMs: 60_000,
-    });
-
-    return undefined;
-  } catch (error) {
-    return strictBlocker('durable_repo_unavailable', 'Durable repository is unavailable for FORGELOOP_DATABASE_URL', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-};
-
-const probeWorktreeCreation = async (input: {
-  repoPath: string;
-  runCommand: CommandRunner;
-}): Promise<{ workspacePath: string; blocker?: StrictPreflightBlocker }> => {
-  const runSessionId = `strict-preflight-${Date.now()}`;
-  const workspacePath = worktreePathForRun(input.repoPath, runSessionId);
-
-  try {
-    await input.runCommand('git', ['worktree', 'add', '--detach', workspacePath, 'HEAD'], {
-      cwd: input.repoPath,
-      timeoutMs: 60_000,
-    });
-
-    return { workspacePath };
-  } catch (error) {
-    return {
-      workspacePath,
-      blocker: strictBlocker('worktree_create_failed', 'Unable to create isolated local Codex worktree', {
-        workspace_path: workspacePath,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    };
-  } finally {
-    await input.runCommand('git', ['worktree', 'remove', '--force', workspacePath], {
-      cwd: input.repoPath,
-      timeoutMs: 60_000,
-    }).catch(() => undefined);
-    await rm(workspacePath, { recursive: true, force: true }).catch(() => undefined);
-  }
-};
-
-export const preflightLocalCodexDogfood = async (input: {
-  env: Env;
-  repoPath: string;
-  runCommand?: CommandRunner;
-}): Promise<PreflightResult> => {
-  const runCommand = input.runCommand ?? defaultRunCommand;
-  const repoPath = resolve(input.repoPath);
-  const blockers: StrictPreflightBlocker[] = [];
-  let codexCommandAvailable = true;
-  let dirtyFiles: string[] | undefined;
-  let dirtySource: StrictDirtySourceSummary | undefined;
-  let worktreeProbePath: string | undefined;
-
-  if (!(await commandExists(runCommand, 'git', repoPath))) {
-    return strictFailure({
-      repoPath,
-      blockers: [strictBlocker('worktree_create_failed', 'Missing required command: git')],
-    });
-  }
-
-  if (!(await commandExists(runCommand, 'codex', repoPath))) {
-    codexCommandAvailable = false;
-    blockers.push(strictBlocker('missing_codex_command', 'Missing required command: codex'));
-  }
-
-  if (codexCommandAvailable) {
-    try {
-      await runCommand('codex', ['login', 'status'], { cwd: repoPath, timeoutMs: 15_000 });
-    } catch {
-      blockers.push(
-        strictBlocker('codex_not_authenticated', 'Codex runtime is not authenticated or ready for local execution'),
-      );
-    }
-  }
-
-  if (input.env[DANGEROUS_MODE_CONFIRMATION_ENV] !== '1') {
-    blockers.push(
-      strictBlocker(
-        'dangerous_mode_unconfirmed',
-        `Dangerous local Codex execution mode is unconfirmed; set ${DANGEROUS_MODE_CONFIRMATION_ENV}=1 to acknowledge --dangerously-bypass-approvals-and-sandbox.`,
-        {
-          required_env: DANGEROUS_MODE_CONFIRMATION_ENV,
-          actual_value: input.env[DANGEROUS_MODE_CONFIRMATION_ENV] ?? null,
-        },
-      ),
-    );
-  }
-
-  try {
-    const { stdout } = await runCommand('git', ['status', '--porcelain', '--untracked-files=all'], {
-      cwd: repoPath,
-      timeoutMs: 15_000,
-    });
-    dirtyFiles = parseDirtySourceFiles(stdout);
-  } catch (error) {
-    blockers.push(
-      strictBlocker('source_dirty_blocked', 'Unable to inspect source checkout cleanliness', {
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
-    dirtyFiles = [];
-  }
-
-  dirtySource = classifyStrictDirtySource(dirtyFiles);
-  if (dirtySource.blocked_dirty_entries.length > 0) {
-    blockers.push(
-      strictBlocker('source_dirty_blocked', 'Source checkout is dirty', {
-        ...dirtySource,
-      }),
-    );
-  }
-
-  if (blockers.length > 0) {
-    return strictFailure({
-      repoPath,
-      blockers,
-      dirtyFiles,
-      dirtySource,
-      unexpectedDirtyFiles: dirtySource.blocked_dirty_entries.length === 0 ? undefined : dirtySource.blocked_dirty_entries,
-      worktreeProbePath,
-    });
-  }
-
-  const durableRepoBlocker = await checkDurableRepositoryAvailable({ env: input.env, repoPath, runCommand });
-  if (durableRepoBlocker !== undefined) {
-    blockers.push(durableRepoBlocker);
-  }
-
-  if (blockers.length > 0) {
-    return strictFailure({
-      repoPath,
-      blockers,
-      dirtyFiles,
-      dirtySource,
-      unexpectedDirtyFiles: dirtySource.blocked_dirty_entries.length === 0 ? undefined : dirtySource.blocked_dirty_entries,
-      worktreeProbePath,
-    });
-  }
-
-  const worktreeProbe = await probeWorktreeCreation({ repoPath, runCommand });
-  worktreeProbePath = worktreeProbe.workspacePath;
-  if (worktreeProbe.blocker !== undefined) {
-    blockers.push(worktreeProbe.blocker);
-  }
-
-  if (blockers.length > 0) {
-    return strictFailure({
-      repoPath,
-      blockers,
-      dirtyFiles,
-      dirtySource,
-      unexpectedDirtyFiles: dirtySource.blocked_dirty_entries.length === 0 ? undefined : dirtySource.blocked_dirty_entries,
-      worktreeProbePath,
-    });
-  }
-
-  return {
-    ok: true,
-    blockers: [],
-    repoPath,
-    dirtyFiles,
-    dirtySource,
-    worktreeProbePath,
-    ...(input.env.FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY === '1' && dirtySource.allowed_dirty_entries.length > 0
-      ? { dirtyOverride: { allowed: true as const, dirtyFiles: dirtySource.allowed_dirty_entries } }
-      : {}),
-  };
-};
-
-export const buildCodexExecFallbackCommand = (prompt: string): { command: 'codex'; args: string[] } => ({
-  command: 'codex',
-  args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', prompt],
-});
-
-export const selectCodexExecutionMode = async (input: {
-  attemptAppServer: () => Promise<{ ok: true } | { ok: false; reason: string }>;
-  buildExecFallback: () => { command: string; args: string[] };
-}): Promise<
-  | { mode: 'app_server'; appServerAttempted: true; fallbackReason?: undefined; execFallbackCommand?: undefined }
-  | {
-      mode: 'exec_fallback';
-      appServerAttempted: true;
-      fallbackReason: string;
-      execFallbackCommand: { command: string; args: string[] };
-    }
-> => {
-  const appServer = await input.attemptAppServer();
-  if (appServer.ok) {
-    return { mode: 'app_server', appServerAttempted: true };
-  }
-
-  return {
-    mode: 'exec_fallback',
-    appServerAttempted: true,
-    fallbackReason: appServer.reason,
-    execFallbackCommand: input.buildExecFallback(),
-  };
-};
 
 export const buildBoundedLocalCodexRunPackage = (input: {
   repoPath: string;
@@ -456,164 +104,6 @@ export const buildBoundedLocalCodexRunPackage = (input: {
     artifact_policy: { requested_artifacts: ['execution_summary', 'diff', 'changed_files', 'check_output', 'review_packet'] },
     timeout_seconds: 300,
     idempotency_key: `local-codex-dogfood-${Date.now()}`,
-  };
-};
-
-export const validateLocalCodexRuntimeMetadata = (
-  input: RuntimeMetadataReport,
-  options: { expectedRunSessionId?: string } = {},
-): void => {
-  if (input.executor_type !== 'local_codex') {
-    throw new Error('Runtime metadata assertion failed: expected executor_type local_codex.');
-  }
-
-  const metadata = input.runtime_metadata ?? {};
-  const workspacePath = metadata.workspace_path;
-  if (typeof workspacePath !== 'string' || !workspacePath.includes('/.worktrees/')) {
-    throw new Error('Runtime metadata assertion failed: expected worktree workspace_path.');
-  }
-  if (
-    options.expectedRunSessionId !== undefined &&
-    !workspacePath.endsWith(`/.worktrees/${options.expectedRunSessionId}`)
-  ) {
-    throw new Error('Runtime metadata assertion failed: expected run-session-id worktree workspace_path.');
-  }
-
-  if (metadata.app_server_attempted !== true) {
-    throw new Error('Runtime metadata assertion failed: expected app_server_attempted=true.');
-  }
-
-  if (metadata.selected_execution_mode !== 'app_server' && metadata.selected_execution_mode !== 'exec_fallback') {
-    throw new Error('Runtime metadata assertion failed: selected_execution_mode is required.');
-  }
-
-  if (metadata.effective_dangerous_mode !== 'confirmed') {
-    throw new Error('Runtime metadata assertion failed: expected confirmed dangerous mode.');
-  }
-
-  if (metadata.selected_execution_mode === 'exec_fallback') {
-    if (metadata.exec_fallback_dangerous_bypass !== true || metadata.effective_dangerous_mode !== 'confirmed') {
-      throw new Error('Runtime metadata assertion failed: exec fallback must record confirmed dangerous bypass mode.');
-    }
-    if (typeof metadata.app_server_fallback_reason !== 'string' || metadata.app_server_fallback_reason.length === 0) {
-      throw new Error('Runtime metadata assertion failed: exec fallback must record app_server_fallback_reason.');
-    }
-  }
-};
-
-export const runSessionRuntimeMetadataReport = (runSession: RuntimeMetadataReport): RuntimeMetadataReport => ({
-  executor_type: runSession.executor_type,
-  runtime_metadata: runSession.runtime_metadata,
-});
-
-export const recordLiveEventObservation = (
-  events: ObservedRunEvent[],
-): { sawPublicPreTerminalEvent: true; preTerminalPublicEvents: string[]; terminalEventType: string } => {
-  const terminalIndex = events.findIndex((event) => isTerminalStatus(event.status) || event.event_type === 'executor_succeeded');
-  const effectiveTerminalIndex = terminalIndex < 0 ? events.length : terminalIndex;
-  const preTerminalPublicEvents = events
-    .slice(0, effectiveTerminalIndex)
-    .filter(
-      (event) =>
-        event.visibility === 'public' &&
-        typeof event.event_type === 'string' &&
-        codexLiveProgressEventTypes.has(event.event_type) &&
-        typeof event.runStatusAtObservation === 'string' &&
-        !isTerminalStatus(event.runStatusAtObservation),
-    )
-    .map((event) => event.event_type)
-    .filter((eventType): eventType is string => eventType !== undefined && eventType.length > 0);
-  const terminalEvent = terminalIndex < 0 ? undefined : events[terminalIndex]?.event_type;
-
-  if (preTerminalPublicEvents.length === 0) {
-    throw new Error('Run did not expose a public non-terminal live event with Codex live progress before terminal completion.');
-  }
-
-  return {
-    sawPublicPreTerminalEvent: true,
-    preTerminalPublicEvents,
-    terminalEventType: terminalEvent ?? 'unknown',
-  };
-};
-
-export const extractPersistedTerminalEvidence = (input: {
-  runSession: Record<string, unknown>;
-  reviewPacket?: { id?: string; path?: string };
-}): TerminalEvidenceReport => {
-  const evidence = {
-    changed_files: Array.isArray(input.runSession.changed_files)
-      ? (input.runSession.changed_files as Array<Partial<ChangedFile>>)
-      : [],
-    check_results: Array.isArray(input.runSession.check_results)
-      ? (input.runSession.check_results as Array<Partial<CheckResult>>)
-      : [],
-    artifacts: Array.isArray(input.runSession.artifacts) ? (input.runSession.artifacts as Array<Partial<ArtifactRef>>) : [],
-    review_packet:
-      input.reviewPacket?.path === undefined
-        ? undefined
-        : {
-            id: input.reviewPacket.id,
-            artifact_path: input.reviewPacket.path,
-          },
-  };
-  validateTerminalEvidence(evidence);
-
-  return evidence;
-};
-
-export const resolveReviewPacketReference = (input: {
-  apiUrl: string;
-  runSession: Record<string, unknown>;
-  cockpit?: { review_packets?: Array<{ id?: string }> };
-}): { id?: string; path: string } | undefined => {
-  const artifacts = Array.isArray(input.runSession.artifacts) ? (input.runSession.artifacts as ArtifactRef[]) : [];
-  const reviewPacketArtifact = artifacts.find((artifact) => artifact.kind === 'review_packet');
-  if (typeof reviewPacketArtifact?.local_ref === 'string' && reviewPacketArtifact.local_ref.length > 0) {
-    return { id: reviewPacketArtifact.name, path: reviewPacketArtifact.local_ref };
-  }
-
-  const reviewPacketId = input.cockpit?.review_packets?.find((packet) => typeof packet.id === 'string')?.id;
-  if (reviewPacketId !== undefined) {
-    return { id: reviewPacketId, path: `${input.apiUrl}/review-packets/${encodeURIComponent(reviewPacketId)}` };
-  }
-
-  return undefined;
-};
-
-export const validateTerminalEvidence = (input: TerminalEvidenceReport): void => {
-  if ((input.changed_files ?? []).length === 0) {
-    throw new Error('Terminal evidence is missing changed files.');
-  }
-  if ((input.check_results ?? []).length === 0) {
-    throw new Error('Terminal evidence is missing checks.');
-  }
-  if ((input.artifacts ?? []).length === 0) {
-    throw new Error('Terminal evidence is missing artifacts.');
-  }
-  if (typeof input.review_packet?.artifact_path !== 'string' || input.review_packet.artifact_path.length === 0) {
-    throw new Error('Terminal evidence is missing a Review Packet artifact/path.');
-  }
-};
-
-export const buildSourceGuardInjectionPlan = (repoPath: string): {
-  relativePath: string;
-  mutationPath: string;
-  inject: () => Promise<void>;
-  cleanup: () => Promise<void>;
-} => {
-  const relativePath = '.forgeloop/dogfood-source-guard-probe.txt';
-  const mutationPath = join(resolve(repoPath), relativePath);
-
-  return {
-    relativePath,
-    mutationPath,
-    inject: async () => {
-      await mkdir(join(resolve(repoPath), '.forgeloop'), { recursive: true });
-      await writeFile(mutationPath, `forgeloop dogfood source guard probe ${nowIso()}\n`, 'utf8');
-    },
-    cleanup: async () => {
-      await rm(mutationPath, { force: true });
-    },
   };
 };
 
