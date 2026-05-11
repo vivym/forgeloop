@@ -8,11 +8,13 @@ Completed and merged to `main` on 2026-05-10.
 - Verified after merge: `pnpm vitest run tests/db/repository-contract.ts tests/db/repository.test.ts`
 - Verified after merge: `pnpm --filter @forgeloop/db build`
 
+Superseded scope note, 2026-05-11: this plan delivered the core schema and Release aggregate foundation. The product command/query/web/dogfood Release surface is tracked by `docs/superpowers/plans/2026-05-11-p1-release-risk-radar-product-surface.md`; use that plan and spec as the current source of truth for `ReleaseModule`, release cockpit/replay, Release Owner UI, public evidence backlinks, and Release Flow dogfood.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Migrate ForgeLoop's landed core schema to the V0 architecture shape and add a first-class local Release Flow MVP without preserving old P0 enum/state compatibility.
 
-**Architecture:** Keep command/object writes split from read models: P0Module remains responsible for WorkItem/Spec/Plan/Package/Run/Review commands, a new ReleaseModule owns Release commands and lightweight Release resources, and QueryModule owns Release cockpit/replay reads. Domain state machines and repository contracts drive both in-memory and Drizzle-backed persistence, with one shared public evidence serializer for replay, evidence chain, and Release surfaces.
+**Architecture:** Keep command/object writes split from read models: P0Module remains responsible for WorkItem/Spec/Plan/Package/Run/Review commands. This foundation plan prepared Release domain/schema/repository contracts; the current product surface plan owns `ReleaseModule`, lightweight Release resources, release cockpit/replay reads, and Release Owner UI. Domain state machines and repository contracts drive both in-memory and Drizzle-backed persistence, with one shared public evidence serializer for replay, evidence chain, and Release surfaces.
 
 **Tech Stack:** TypeScript, NestJS, Drizzle/Postgres, Vitest, Supertest, React/Vite, pnpm workspaces, local Codex dogfood scripts.
 
@@ -351,7 +353,8 @@ In `tests/domain/release-gates.test.ts`, assert all blocker codes from the spec:
 const expectedCodes = [
   'missing_work_item',
   'missing_execution_package',
-  'empty_release_scope',
+  'empty_work_item_scope',
+  'empty_execution_package_scope',
   'work_item_not_complete',
   'package_not_release_ready',
   'missing_approved_review_packet',
@@ -365,12 +368,12 @@ const expectedCodes = [
 ];
 ```
 
-Also assert `empty_release_scope` is not overrideable, evidence/risk blockers are overrideable, and `missing_rollout_strategy`, `missing_rollback_plan`, and `missing_observation_plan` are overrideable risk/planning blockers rather than structural blockers.
+Also assert `empty_work_item_scope` and `empty_execution_package_scope` are not overrideable, evidence/risk blockers are overrideable, and `missing_rollout_strategy`, `missing_rollback_plan`, and `missing_observation_plan` are overrideable risk/planning blockers rather than structural blockers.
 
 Add one scenario test for each required blocker predicate, not just enum membership:
 - `missing_work_item` when a ReleaseWorkItem link points at an archived, soft-deleted, unauthorized, or absent WorkItem;
 - `missing_execution_package` when a ReleaseExecutionPackage link points at an archived, soft-deleted, unauthorized, or absent ExecutionPackage;
-- `empty_release_scope` when the Release has zero valid WorkItem links or zero valid ExecutionPackage links, and this blocker prevents `submit-for-approval`, plain `approve`, and `override-approve`;
+- `empty_work_item_scope` when the Release has zero valid WorkItem links, and `empty_execution_package_scope` when it has zero valid ExecutionPackage links; either blocker prevents `submit-for-approval`, plain `approve`, and `override-approve`;
 - `work_item_not_complete` when linked WorkItem resolution is not completed and completion derivation is false;
 - `package_not_release_ready` when linked package gate is not `release_ready`/`released` and fallback approved-review/check evidence is insufficient;
 - `missing_approved_review_packet` when the package has no current/latest non-archived approved ReviewPacket;
@@ -1118,7 +1121,7 @@ In `tests/api/release-flow.test.ts`, cover:
 - link rejection for missing, archived, deleted, unauthorized, and cross-project WorkItems
 - link rejection for missing, archived, deleted, unauthorized, and cross-project ExecutionPackages
 - submit for approval through `POST /releases/:releaseId/submit-for-approval`
-- `empty_release_scope` returns an error and leaves state unchanged for `submit-for-approval`, plain `approve`, and `override-approve`
+- `empty_work_item_scope` or `empty_execution_package_scope` returns an error and leaves state unchanged for `submit-for-approval`, plain `approve`, and `override-approve`
 - approve with no blockers
 - plain approve rejects releases that currently have any blocker and leaves state unchanged
 - request changes

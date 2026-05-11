@@ -669,6 +669,39 @@ describe('release module', () => {
       .send({ actor_id: actorReviewer, rationale: 'Accepted for limited rollout.', blocker_snapshot: submitted.body.blocker_snapshot })
       .expect(201);
     expect(overridden.body.release).toMatchObject({ phase: 'rollout', gate_state: 'approved' });
+    expect(overridden.body.overridden_blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+    );
+
+    const cockpit = await request(app.getHttpServer()).get(`/query/release-cockpit/${blocked.id}`).expect(200);
+    expect(cockpit.body.overridden_blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+    );
+    expect(cockpit.body.decisions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          decision_type: 'manual_override',
+          blocker_snapshot: expect.objectContaining({
+            blockers: expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+          }),
+        }),
+      ]),
+    );
+
+    const replay = await request(app.getHttpServer()).get(`/query/replay/release/${blocked.id}`).expect(200);
+    expect(replay.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'decision',
+          payload: expect.objectContaining({
+            decision_type: 'manual_override',
+            blocker_snapshot: expect.objectContaining({
+              blockers: expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+            }),
+          }),
+        }),
+      ]),
+    );
 
     const ready = await createReadyRelease(app, repo);
     await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
@@ -735,7 +768,7 @@ describe('release module', () => {
     const response = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
       .send({
-        actor_id: actorOwner,
+        actor_id: actorReviewer,
         evidence_type: 'observation_note',
         summary: 'Latency looks normal.',
         extra: {
@@ -752,11 +785,13 @@ describe('release module', () => {
         },
       })
       .expect(201);
+    expect(response.body.release.updated_by_actor_id).toBe(actorReviewer);
+    expect((await repo.getRelease(id))?.updated_by_actor_id).toBe(actorReviewer);
     expect(response.body.blockers.map((blocker: { code: string }) => blocker.code)).not.toContain(
       'unsafe_or_redacted_evidence_backlink',
     );
     expect((await repo.listReleaseEvidences(id))[0]?.extra).toMatchObject({
-      observation: { actor_id: actorOwner },
+      observation: { actor_id: actorReviewer },
     });
 
     await request(app.getHttpServer())

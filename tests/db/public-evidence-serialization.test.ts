@@ -196,6 +196,46 @@ describe('public evidence serialization', () => {
     expect(serialized).not.toHaveProperty('evidence_refs');
   });
 
+  it('preserves release override blocker snapshots without exposing raw evidence refs', () => {
+    const serialized = serializePublicDecision(
+      decision({
+        object_type: 'release',
+        object_id: 'release-1',
+        decision_type: 'manual_override',
+        outcome: 'override_approved',
+        decision: 'override_approved',
+        evidence_refs: {
+          blocker_snapshot: {
+            release_id: 'release-1',
+            generated_at: timestamp,
+            blocker_fingerprint: 'risk-blockers',
+            blockers: [
+              {
+                code: 'package_not_release_ready',
+                category: 'risk',
+                overrideable: true,
+                message: 'Package is not release ready.',
+                object_type: 'execution_package',
+                object_id: 'package-1',
+              },
+            ],
+          },
+          raw_ref: '/Users/viv/private/evidence.json',
+        },
+      }),
+    );
+
+    expect(serialized).toMatchObject({
+      decision: 'override_approved',
+      blocker_snapshot: {
+        release_id: 'release-1',
+        blockers: [expect.objectContaining({ code: 'package_not_release_ready' })],
+      },
+    });
+    expect(serialized).not.toHaveProperty('evidence_refs');
+    expect(JSON.stringify(serialized)).not.toContain('raw_ref');
+  });
+
   it('sanitizes object event payloads without throwing on bad stored values', () => {
     const event = serializePublicObjectEvent(
       objectEvent({

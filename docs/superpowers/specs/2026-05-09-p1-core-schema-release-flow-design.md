@@ -2,7 +2,7 @@
 
 ## Status
 
-Ready for implementation planning.
+Superseded by implementation. This design remains historical for the core schema migration and Release aggregate foundation. The current product-surface source of truth for `ReleaseModule`, release cockpit/replay, Release Owner UI, public evidence backlinks, and Release Flow dogfood is `docs/superpowers/specs/2026-05-11-p1-release-risk-radar-product-surface-design.md`.
 
 ## Context
 
@@ -659,7 +659,8 @@ Required blocker codes:
 
 - `missing_work_item`
 - `missing_execution_package`
-- `empty_release_scope`
+- `empty_work_item_scope`
+- `empty_execution_package_scope`
 - `work_item_not_complete`
 - `package_not_release_ready`
 - `missing_approved_review_packet`
@@ -675,7 +676,8 @@ Blocker predicates:
 
 - `missing_work_item`: a ReleaseWorkItem link points at a soft-deleted, archived, unauthorized, or absent WorkItem.
 - `missing_execution_package`: a ReleaseExecutionPackage link points at a soft-deleted, archived, unauthorized, or absent ExecutionPackage.
-- `empty_release_scope`: Release has zero valid linked WorkItems or zero valid linked ExecutionPackages.
+- `empty_work_item_scope`: Release has zero valid linked WorkItems.
+- `empty_execution_package_scope`: Release has zero valid linked ExecutionPackages.
 - `work_item_not_complete`: linked WorkItem does not have `resolution = completed` and the existing WorkItem completion derivation does not consider all linked packages complete.
 - `package_not_release_ready`: linked package is not `gate_state = release_ready | released`, unless it is already `resolution = completed` with an approved current review packet and all required checks/artifacts present.
 - `missing_approved_review_packet`: no current/latest non-archived ReviewPacket for the package has `decision = approved`.
@@ -693,7 +695,7 @@ For "current/latest" package evidence, prefer explicit package pointers in this 
 2. current `last_run_session_id` and the non-archived ReviewPacket for that run;
 3. latest non-archived ReviewPacket by creation time.
 
-All evidence and risk blockers can be overridden for Release state progression. Structural blockers are not overrideable when there is no meaningful Release candidate, such as `empty_release_scope`. Override must not mutate underlying facts:
+All evidence and risk blockers can be overridden for Release state progression. Structural blockers are not overrideable when there is no meaningful Release candidate, such as empty WorkItem or ExecutionPackage scope. Override must not mutate underlying facts:
 
 - failed checks remain failed;
 - missing evidence remains missing;
@@ -710,7 +712,8 @@ type ReleaseBlocker = {
   code:
     | "missing_work_item"
     | "missing_execution_package"
-    | "empty_release_scope"
+    | "empty_work_item_scope"
+    | "empty_execution_package_scope"
     | "work_item_not_complete"
     | "package_not_release_ready"
     | "missing_approved_review_packet"
@@ -865,8 +868,8 @@ Release scope rules:
 
 - A new Release starts in `draft` and may have zero links.
 - Adding the first valid WorkItem or ExecutionPackage moves the Release to `candidate` if it is still `draft`.
-- Removing links may leave a Release in `candidate`, but cockpit must show `empty_release_scope` if either valid WorkItem links or valid ExecutionPackage links are empty.
-- `submit-for-approval`, `approve`, and `override-approve` are invalid when `empty_release_scope` is present. Empty scope is not overrideable because there is no release candidate to approve.
+- Removing links may leave a Release in `candidate`, but cockpit must show `empty_work_item_scope` if valid WorkItem links are empty and `empty_execution_package_scope` if valid ExecutionPackage links are empty.
+- `submit-for-approval`, `approve`, and `override-approve` are invalid when either empty-scope blocker is present. Empty scope is not overrideable because there is no release candidate to approve.
 
 ### Query API
 

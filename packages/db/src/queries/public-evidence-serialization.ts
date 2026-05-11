@@ -13,6 +13,7 @@ import {
   publicReplayEntrySchema,
   publicStatusHistoryContextSchema,
   publicStatusHistorySchema,
+  releaseBlockerSnapshotSchema,
   releaseEvidenceObjectRefSchema,
   type EvidenceChainRedactionReason,
   type PublicArtifactKind,
@@ -25,6 +26,7 @@ import {
   type PublicReplayEntry,
   type PublicStatusHistory,
   type PublicStatusHistoryContext,
+  type ReleaseBlockerSnapshot,
 } from '@forgeloop/contracts';
 import type { Artifact, Decision, ObjectEvent, ReleaseEvidence, StatusHistory } from '@forgeloop/domain';
 import { z } from 'zod';
@@ -147,6 +149,14 @@ const safeString = (value: unknown): string | undefined => {
   }
 
   return value;
+};
+
+export const releaseBlockerSnapshotForDecision = (decision: Decision): ReleaseBlockerSnapshot | undefined => {
+  if (!isRecord(decision.evidence_refs)) {
+    return undefined;
+  }
+  const parsed = releaseBlockerSnapshotSchema.safeParse(decision.evidence_refs.blocker_snapshot);
+  return parsed.success ? parsed.data : undefined;
 };
 
 const safeIsoDateTime = (value: unknown): string | undefined => {
@@ -302,6 +312,9 @@ export const serializePublicDecision = (decision: Decision): PublicDecision =>
     decision: decision.decision,
     summary: decision.summary,
     ...(safeString(decision.rationale) !== undefined ? { rationale: decision.rationale } : {}),
+    ...(releaseBlockerSnapshotForDecision(decision) !== undefined
+      ? { blocker_snapshot: releaseBlockerSnapshotForDecision(decision) }
+      : {}),
     created_at: decision.created_at,
   });
 

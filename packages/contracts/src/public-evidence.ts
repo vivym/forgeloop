@@ -11,6 +11,7 @@ import {
   releaseEvidenceObjectRefSchema,
   releaseEvidenceStatusSchema,
   releaseEvidenceTypeSchema,
+  releaseBlockerSnapshotSchema,
 } from './release.js';
 
 export {
@@ -58,6 +59,7 @@ export const publicDecisionSchema = z
     ]),
     summary: z.string().min(1),
     rationale: z.string().min(1).optional(),
+    blocker_snapshot: releaseBlockerSnapshotSchema.optional(),
     created_at: isoDateTimeSchema,
   })
   .strict();

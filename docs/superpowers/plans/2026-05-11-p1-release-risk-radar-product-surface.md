@@ -465,7 +465,7 @@ Run:
 pnpm vitest run tests/contracts/contracts.test.ts tests/contracts/public-evidence.test.ts
 ```
 
-Expected: FAIL because schemas still use old `created_by_actor_id`, old blocker code `empty_release_scope`, narrow observation links, and narrow public decision values.
+Expected: FAIL because schemas still use old `created_by_actor_id`, the legacy combined empty-scope blocker code, narrow observation links, and narrow public decision values.
 
 - [ ] **Step 5: Implement contract schemas**
 
@@ -482,7 +482,7 @@ Modify `packages/contracts/src/release.ts`:
   - optional text plans
 - Add `releaseListQuerySchema`, `releaseResourceQuerySchema`, `publicReleaseSummarySchema`, `releaseListResponseSchema`, `releaseResourceResponseSchema`.
 - Add `linkReleaseObjectResponseSchema` for link/unlink routes with `{ release_id, object_type, object_id, linked }`.
-- Replace `empty_release_scope` with `empty_work_item_scope` and `empty_execution_package_scope`.
+- Replace the legacy combined empty-scope blocker with `empty_work_item_scope` and `empty_execution_package_scope`.
 - Add backlink blocker codes.
 - Add command request schemas named in the spec:
   - `patchReleaseRequestSchema`
@@ -502,7 +502,7 @@ Modify `packages/contracts/src/release.ts`:
 
 Modify `packages/domain/src/release-gates.ts` only enough to keep the repo buildable after the contract enum change:
 
-- replace category/override entries for `empty_release_scope` with `empty_work_item_scope` and `empty_execution_package_scope`;
+- replace category/override entries for the legacy combined empty-scope blocker with `empty_work_item_scope` and `empty_execution_package_scope`;
 - replace the old combined empty-scope derivation with separate blockers for empty WorkItem scope and empty ExecutionPackage scope;
 - add category/override entries for `missing_required_evidence_backlink` and `unsafe_or_redacted_evidence_backlink`.
 
@@ -674,7 +674,7 @@ Modify `packages/domain/src/types.ts`:
 
 Modify `packages/domain/src/release-gates.ts`:
 
-- Replace `empty_release_scope` with separate empty scope blockers.
+- Replace the legacy combined empty-scope blocker with separate empty scope blockers.
 - Add `releaseBlockerTruthTable()`.
 - Add helper `deriveReleaseRiskSummary()`.
 - Add helper `deriveReleaseChecklist()`.
@@ -1769,18 +1769,18 @@ Run:
 
 ```bash
 rg -n "ReleaseModule|release-cockpit|release replay|Release Owner|Release Flow" docs/PRD_v1.md docs/architecture-design docs/superpowers/plans docs/superpowers/specs
-rg -n "IncidentLink|ContractRevision|PackageContractLink|test_evidences|related_object_refs|empty_release_scope|created_by_actor_id" packages apps tests scripts docs/superpowers
+rg -n -e "IncidentLink|ContractRevision|PackageContractLink|test_evidences|related_object_refs|created_by_actor_id" -e "empty_""release_scope" packages apps tests scripts docs/superpowers
 rg -n "local redaction|redactArtifact|serialize.*Artifact" apps packages tests
 ```
 
 Expected:
 
 - no active docs incorrectly claim old Release Flow plan already delivered product surface before this implementation;
-- no accidental deferred productization symbols;
-- no `related_object_refs`;
-- no `empty_release_scope`;
+- no accidental deferred productization symbols in product code or schema;
+- no `related_object_refs` in product code or positive public DTOs; negative rejection tests and migration/spec notes may mention it;
+- no legacy combined empty-scope blocker in product code, tests, or active current-source docs;
 - no public `CreateReleaseRequest` path that accepts `created_by_actor_id`; internal audit fields such as `Release.created_by_actor_id` and `ReleaseEvidence.created_by_actor_id` are expected and should not be removed;
-- no duplicated local redaction helper outside shared public evidence serializer.
+- no duplicated local redaction helper outside shared public evidence serializer; imports/usages of the shared serializer are expected.
 
 - [ ] **Step 2: Fix any drift found**
 

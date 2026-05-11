@@ -8,6 +8,7 @@ import {
   type PublicReleaseSummary,
   type PublicReleaseWorkItemSummary,
   type ReleaseCockpitResponse,
+  type ReleaseBlocker as PublicReleaseBlocker,
 } from '@forgeloop/contracts';
 import {
   createReleaseBlockerSnapshot,
@@ -34,6 +35,7 @@ import {
   serializePublicArtifactRef,
   serializePublicDecision,
   serializePublicReleaseEvidence,
+  releaseBlockerSnapshotForDecision,
 } from './public-evidence-serialization';
 import { buildReleasePublicLinkVisibility, releasePublicVisibilityKey } from './release-public-link-visibility';
 
@@ -300,6 +302,26 @@ const publicReleaseDecision = (decision: Decision): PublicReleaseDecision | unde
   return parsed.success ? parsed.data : undefined;
 };
 
+const blockerIdentity = (blocker: PublicReleaseBlocker): string =>
+  [blocker.code, blocker.object_type ?? '', blocker.object_id ?? ''].join('|');
+
+const overriddenBlockersFromDecisions = (decisions: readonly Decision[]): PublicReleaseBlocker[] => {
+  const blockersByIdentity = new Map<string, PublicReleaseBlocker>();
+  for (const decision of decisions) {
+    if (decision.object_type !== 'release' || decision.decision_type !== 'manual_override') {
+      continue;
+    }
+    const snapshot = releaseBlockerSnapshotForDecision(decision);
+    if (snapshot === undefined) {
+      continue;
+    }
+    for (const blocker of snapshot.blockers) {
+      blockersByIdentity.set(blockerIdentity(blocker), blocker);
+    }
+  }
+  return [...blockersByIdentity.values()];
+};
+
 const filterUnsafeEvidenceRefs = (
   evidence: PublicReleaseEvidenceProjection,
   publicVisibility: readonly ReleasePublicLinkVisibility[],
@@ -402,6 +424,7 @@ export async function getReleaseCockpit(
     const publicDecision = publicReleaseDecision(decision);
     return publicDecision === undefined ? [] : [publicDecision];
   });
+  const overriddenBlockers = overriddenBlockersFromDecisions(rawDecisions);
   const visibility = await buildReleasePublicLinkVisibility({
     repository,
     release,
@@ -458,7 +481,7 @@ export async function getReleaseCockpit(
       blockers,
     }),
     blockers,
-    overridden_blockers: [],
+    overridden_blockers: overriddenBlockers,
     risk_summary: deriveReleaseRiskSummary(context),
     checklist: deriveReleaseChecklist(context),
     next_actions: productNextActions(release, blockers, deriveReleaseNextActions(context)),

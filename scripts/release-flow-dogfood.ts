@@ -279,7 +279,7 @@ const approveOrOverride = async (
     .post(`/releases/${releaseId}/approve`)
     .send({ actor_id: actorReviewer, rationale: 'Release flow dogfood risks are acceptable.' });
   if (approved.status === 201) {
-    return { response: approved.body as JsonRecord, mode: 'approve' };
+    throw new Error('Release dogfood expected an overrideable blocker but plain approval succeeded');
   }
   if (approved.status !== 422) {
     throw new Error(`Release approval failed with unexpected status ${approved.status}: ${approved.text}`);
@@ -326,6 +326,31 @@ const assertObservationBacklinkProjected = (cockpit: JsonRecord, releaseId: stri
   }
 };
 
+const assertOverrideBlockerFactsProjected = (cockpit: JsonRecord, replay: unknown): void => {
+  const overriddenBlockers = cockpit.overridden_blockers;
+  if (
+    !Array.isArray(overriddenBlockers) ||
+    !overriddenBlockers.some((blocker) => (blocker as { code?: unknown }).code === 'missing_rollout_strategy')
+  ) {
+    throw new Error('Release cockpit did not preserve overridden missing_rollout_strategy blocker facts');
+  }
+
+  if (!Array.isArray(replay)) {
+    throw new Error('Release replay response was not an array');
+  }
+  const hasOverrideSnapshot = replay.some((entry) => {
+    const payload = (entry as { payload?: { decision_type?: unknown; blocker_snapshot?: { blockers?: unknown[] } } }).payload;
+    return (
+      payload?.decision_type === 'manual_override' &&
+      Array.isArray(payload.blocker_snapshot?.blockers) &&
+      payload.blocker_snapshot.blockers.some((blocker) => (blocker as { code?: unknown }).code === 'missing_rollout_strategy')
+    );
+  });
+  if (!hasOverrideSnapshot) {
+    throw new Error('Release replay did not preserve override blocker snapshot facts');
+  }
+};
+
 const runReleaseFlowDogfood = async (): Promise<VerificationMarker[]> => {
   const { app, repository } = await createDogfoodApp();
   try {
@@ -347,7 +372,6 @@ const runReleaseFlowDogfood = async (): Promise<VerificationMarker[]> => {
           project_id: projectId,
           title: 'P1 Release Risk Radar dogfood',
           scope_summary: 'Dogfood the Release command surface, cockpit, and replay.',
-          rollout_strategy: 'Ship behind the existing Release Owner workbench controls.',
           rollback_plan: 'Disable the Release Owner workbench entry point and revert the release module changes.',
           observation_plan: 'Check release cockpit observations and replay redaction after rollout.',
         })
@@ -373,7 +397,7 @@ const runReleaseFlowDogfood = async (): Promise<VerificationMarker[]> => {
     markers.push({
       marker: 'Release approval or override approval',
       status: 'PASSED',
-      details: [`Release moved through ${approved.mode}.`],
+      details: [`Release moved through ${approved.mode} with a matching blocker snapshot.`],
     });
 
     await request(server).post(`/releases/${releaseId}/start-observing`).send({ actor_id: actorOwner }).expect(201);
@@ -418,6 +442,7 @@ const runReleaseFlowDogfood = async (): Promise<VerificationMarker[]> => {
 
     const replay = (await request(server).get(`/query/replay/release/${releaseId}`).expect(200)).body;
     assertNoUnsafeSerializedStrings('Release replay', replay);
+    assertOverrideBlockerFactsProjected(cockpit, replay);
     markers.push({
       marker: 'Release replay redaction',
       status: 'PASSED',

@@ -628,6 +628,7 @@ export const publicReleaseDecisionSchema = z
     ]),
     summary: z.string().min(1),
     rationale: z.string().min(1).optional(),
+    blocker_snapshot: releaseBlockerSnapshotSchema.optional(),
     created_at: isoDateTimeSchema,
   })
   .strict();

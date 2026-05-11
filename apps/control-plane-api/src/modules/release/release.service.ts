@@ -437,12 +437,18 @@ export class ReleaseService {
       updated_at: at,
       updated_by_actor_id: actorId,
     };
+    const updatedRelease: Release = {
+      ...release,
+      updated_at: at,
+      updated_by_actor_id: actorId,
+    };
     await this.repository.saveReleaseEvidence(evidence);
-    await this.writeObjectEvent('release_evidence_created', release, actorId, {
+    await this.repository.saveRelease(updatedRelease);
+    await this.writeObjectEvent('release_evidence_created', updatedRelease, actorId, {
       release_evidence_id: evidence.id,
       evidence_type: evidence.evidence_type,
     });
-    return this.controlResponse(release, [], []);
+    return this.controlResponse(updatedRelease, [], []);
   }
 
   async startObserving(
