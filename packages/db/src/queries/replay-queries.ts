@@ -317,7 +317,24 @@ const getReleaseReplayTimeline = async (
     visibleRefs.set(key, true);
   }
   for (const artifactId of publicArtifactIds) {
-    visibleRefs.set(visibilityKey('artifact', artifactId), true);
+    const key = visibilityKey('artifact', artifactId);
+    visibleRefs.set(key, true);
+    visibleRefKeys.add(key);
+    for (const item of await repository.listDecisionsForObject('artifact', artifactId)) {
+      entries.push(
+        serializePublicReplayEntry({
+          id: item.id,
+          source: 'decision',
+          object_type: item.object_type,
+          object_id: item.object_id,
+          summary: item.summary,
+          created_at: item.created_at,
+          payload: item,
+        }),
+      );
+      visibleRefKeys.add(visibilityKey('decision', item.id));
+      visibleRefs.set(visibilityKey('decision', item.id), true);
+    }
   }
 
   for (const evidence of evidences) {

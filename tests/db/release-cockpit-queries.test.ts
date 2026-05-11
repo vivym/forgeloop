@@ -467,12 +467,20 @@ describe('getReleaseCockpit', () => {
             observed_at: later,
             links: [
               { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+              { object_type: 'decision', object_id: 'decision-artifact', relationship: 'supports' },
               { object_type: 'decision', object_id: 'decision-review-packet', relationship: 'supports' },
             ],
           },
         },
       },
     });
+    await repo.saveDecision(
+      decision({
+        id: 'decision-artifact',
+        object_type: 'artifact',
+        object_id: 'artifact-1',
+      }),
+    );
     await repo.saveDecision(
       decision({
         id: 'decision-review-packet',
@@ -485,6 +493,7 @@ describe('getReleaseCockpit', () => {
 
     expect(cockpit?.observations[0]?.extra.observation?.links).toEqual([
       { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+      { object_type: 'decision', object_id: 'decision-artifact', relationship: 'supports' },
       { object_type: 'decision', object_id: 'decision-review-packet', relationship: 'supports' },
     ]);
     expect(cockpit?.blockers.map((item) => item.code)).not.toContain('unsafe_or_redacted_evidence_backlink');

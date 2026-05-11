@@ -688,16 +688,15 @@ export class ReleaseService {
     if (extra === undefined) {
       return undefined;
     }
-    if (extra.observation === undefined || extra.observation.actor_id !== undefined) {
-      return extra;
+
+    const result: Record<string, unknown> = { ...extra };
+    for (const key of ['observation', 'deployment', 'rollback', 'build']) {
+      const section = result[key];
+      if (isRecord(section)) {
+        result[key] = { ...section, actor_id: actorId };
+      }
     }
-    return {
-      ...extra,
-      observation: {
-        ...extra.observation,
-        actor_id: actorId,
-      },
-    };
+    return result;
   }
 
   private async requireLinkableWorkItem(release: Release, workItemId: string): Promise<WorkItem> {

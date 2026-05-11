@@ -379,6 +379,28 @@ describe('release module', () => {
         expect(body.release.updated_by_actor_id).toBe(actorReviewer);
       });
 
+    await request(app.getHttpServer())
+      .post(`/releases/${created.body.release.id}/evidences`)
+      .set(actorHeaderName, actorReviewer)
+      .send({
+        actor_id: 'actor-spoofed',
+        evidence_type: 'observation_note',
+        summary: 'Header actor should own the observation.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            observed_at: later,
+            summary: 'Nested actor cannot override durable auth.',
+            actor_id: 'actor-spoofed',
+          },
+        },
+      })
+      .expect(201);
+    expect((await repo.listReleaseEvidences(created.body.release.id))[0]?.extra).toMatchObject({
+      observation: { actor_id: actorReviewer },
+    });
+
     const events = await repo.listObjectEvents(created.body.release.id, 'release');
     expect(events).toEqual(
       expect.arrayContaining([
@@ -776,6 +798,19 @@ describe('release module', () => {
       created_at: later,
     };
     await repo.saveDecision(publicDecision);
+    const publicArtifactDecision: Decision = {
+      id: 'decision-public-artifact',
+      object_type: 'artifact',
+      object_id: publicArtifact.id,
+      actor_id: actorReviewer,
+      decided_by_actor_id: actorReviewer,
+      decision_type: 'release_approval',
+      outcome: 'approved',
+      decision: 'approved',
+      summary: 'Public artifact supports the release.',
+      created_at: later,
+    };
+    await repo.saveDecision(publicArtifactDecision);
     const publicReviewDecision: Decision = {
       id: 'decision-public-review-packet',
       object_type: 'review_packet',
@@ -804,6 +839,7 @@ describe('release module', () => {
             links: [
               { object_type: 'artifact', object_id: publicArtifact.id, relationship: 'generated_by' },
               { object_type: 'decision', object_id: publicDecision.id, relationship: 'supports' },
+              { object_type: 'decision', object_id: publicArtifactDecision.id, relationship: 'supports' },
               { object_type: 'decision', object_id: publicReviewDecision.id, relationship: 'supports' },
             ],
           },

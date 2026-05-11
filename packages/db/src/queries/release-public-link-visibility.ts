@@ -54,12 +54,16 @@ const observationLinksFor = (evidence: ReleaseEvidence): ObservationLink[] => {
   });
 };
 
-const visibleObjectRefsFor = (input: ReleasePublicLinkVisibilityInput): VisibleObjectRef[] => [
+const visibleObjectRefsFor = (
+  input: ReleasePublicLinkVisibilityInput,
+  publicArtifactIds: ReadonlySet<string>,
+): VisibleObjectRef[] => [
   { objectType: 'release', objectId: input.release.id },
   ...input.workItems.map((item) => ({ objectType: 'work_item', objectId: item.id })),
   ...input.executionPackages.map((item) => ({ objectType: 'execution_package', objectId: item.id })),
   ...input.runSessions.map((item) => ({ objectType: 'run_session', objectId: item.id })),
   ...input.reviewPackets.map((item) => ({ objectType: 'review_packet', objectId: item.id })),
+  ...[...publicArtifactIds].map((artifactId) => ({ objectType: 'artifact', objectId: artifactId })),
 ];
 
 const collectPublicDecisionIds = async (
@@ -100,7 +104,6 @@ export const buildReleasePublicLinkVisibility = async (
   const runSessionIds = new Set(input.runSessions.map((item) => item.id));
   const reviewPacketIds = new Set(input.reviewPackets.map((item) => item.id));
   const evidenceIds = new Set(input.evidences.map((item) => item.id));
-  const decisionIds = await collectPublicDecisionIds(input.repository, visibleObjectRefsFor(input));
   const publicArtifactIds = new Set(
     input.evidences.flatMap((evidence) => {
       const artifact = input.artifactsByEvidenceId.get(evidence.id);
@@ -115,6 +118,7 @@ export const buildReleasePublicLinkVisibility = async (
       return [evidence.artifact_id];
     }),
   );
+  const decisionIds = await collectPublicDecisionIds(input.repository, visibleObjectRefsFor(input, publicArtifactIds));
 
   for (const evidence of input.evidences) {
     for (const link of observationLinksFor(evidence)) {

@@ -213,6 +213,19 @@ const artifact = (): Artifact => ({
   created_at: later,
 });
 
+const exactPublicArtifact = (): Artifact => ({
+  id: 'artifact-exact-public',
+  object_type: 'release_evidence',
+  object_id: 'evidence-artifact-decision',
+  artifact_type: 'execution_summary',
+  ref: {
+    ...publicArtifactRef,
+    name: 'exact-public-artifact.md',
+    storage_uri: 'https://evidence.example.test/exact-public-artifact.md',
+  },
+  created_at: later,
+});
+
 const unsafeArtifact = (): Artifact => ({
   id: 'artifact-unsafe',
   object_type: 'release',
@@ -293,7 +306,28 @@ const seedReleaseReplay = async (repo: P0Repository): Promise<void> => {
   await repo.saveReviewPacket({ ...reviewPacket(), id: 'review-stale', run_session_id: 'run-private' });
   await repo.saveRelease(release());
   await repo.saveReleaseEvidence(releaseEvidence());
+  await repo.saveReleaseEvidence({
+    ...releaseEvidence(),
+    id: 'evidence-artifact-decision',
+    summary: 'Public artifact decision should remain visible.',
+    object_ref: { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+    artifact_id: 'artifact-exact-public',
+    extra: {
+      observation: {
+        source: 'human',
+        severity: 'info',
+        summary: 'The public artifact decision supports release replay.',
+        observed_at: later,
+        links: [
+          { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+          { object_type: 'artifact', object_id: 'artifact-exact-public', relationship: 'generated_by' },
+          { object_type: 'decision', object_id: 'decision-artifact-exact', relationship: 'supports' },
+        ],
+      },
+    },
+  });
   await repo.saveArtifact(artifact());
+  await repo.saveArtifact(exactPublicArtifact());
   await repo.saveArtifact(unsafeArtifact());
 
   for (const [object_type, object_id] of [
@@ -308,6 +342,7 @@ const seedReleaseReplay = async (repo: P0Repository): Promise<void> => {
     await repo.saveDecision(decision(object_type, object_id));
   }
   await repo.saveDecision(decision('review_packet', 'review-stale', 'decision-stale-review'));
+  await repo.saveDecision(decision('artifact', 'artifact-exact-public', 'decision-artifact-exact'));
 };
 
 describe('getObjectReplayTimeline release support', () => {
@@ -363,6 +398,19 @@ describe('getObjectReplayTimeline release support', () => {
     expect(evidenceEntry?.payload.extra.observation?.links).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ object_id: 'decision-stale-review' })]),
     );
+    const exactArtifactEvidenceEntry = timeline?.find((entry) => entry.id === 'evidence-artifact-decision');
+    expect(exactArtifactEvidenceEntry?.payload).toMatchObject({
+      artifact_id: 'artifact-exact-public',
+      extra: {
+        observation: {
+          links: [
+            { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+            { object_type: 'artifact', object_id: 'artifact-exact-public', relationship: 'generated_by' },
+            { object_type: 'decision', object_id: 'decision-artifact-exact', relationship: 'supports' },
+          ],
+        },
+      },
+    });
 
     const serialized = JSON.stringify(timeline);
     for (const unsafeText of [
