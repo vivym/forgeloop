@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
+import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -14,6 +15,7 @@ import {
   RUN_DURABILITY_MODE,
   RUN_WORKER,
 } from '../../apps/control-plane-api/src/p0/p0.service';
+import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/p0/run-worker-lifecycle.service';
 import { actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { createDbClient, createDrizzleP0Repository, InMemoryP0Repository } from '../../packages/db/src';
 import type { DbClient, P0Repository } from '../../packages/db/src';
@@ -33,6 +35,19 @@ import {
   startDisposablePostgres,
 } from './durable-postgres.js';
 import type { CommandRunner, DockerPostgresCandidate, DurableDogfoodPlan, Env } from './durable-postgres.js';
+import {
+  evaluateLocalCodexDogfoodEnablement,
+  extractPersistedTerminalEvidence,
+  isPublicCodexLiveProgressEvent,
+  preflightLocalCodexDogfood,
+  releaseStrictDirtyAllowlist,
+  resolveReviewPacketReference,
+  runSessionRuntimeMetadataReport,
+  sanitizeStrictPreflightBlockerDetails,
+  validateLocalCodexRuntimeMetadata,
+  type ObservedRunEvent,
+  type PreflightResult,
+} from './strict-local-codex.js';
 import type {
   Actor,
   Artifact,
@@ -180,6 +195,83 @@ export const buildDurableReleaseDogfoodIdentity = (createdAt: string): {
   };
 };
 
+export const buildReleaseStrictObservationLinks = (input: {
+  releaseId: string;
+  executionPackageId: string;
+  runSessionId: string;
+}) => [
+  { object_type: 'release' as const, object_id: input.releaseId, relationship: 'observed' as const },
+  { object_type: 'execution_package' as const, object_id: input.executionPackageId, relationship: 'supports' as const },
+  { object_type: 'run_session' as const, object_id: input.runSessionId, relationship: 'generated_by' as const },
+];
+
+export const publicStrictLocalCodexEvidenceSummary = (input: {
+  runSessionId: string;
+  changedFileCount: number;
+  checkCount: number;
+  artifactKinds: string[];
+  reviewPacketAvailable: boolean;
+}) => ({
+  run_session_id: input.runSessionId,
+  changed_file_count: input.changedFileCount,
+  check_count: input.checkCount,
+  artifact_kinds: input.artifactKinds,
+  review_packet_available: input.reviewPacketAvailable,
+});
+
+export const shouldAttemptReleaseStrictLocalCodex = (env: Record<string, string | undefined>): boolean =>
+  evaluateLocalCodexDogfoodEnablement(env).enabled;
+
+export const buildReleaseLocalCodexPackageInput = (input: {
+  repoPath: string;
+  baseCommitSha: string;
+  actorOwner: string;
+  actorReviewer: string;
+  actorQa: string;
+}) => ({
+  repo_id: 'forgeloop-source',
+  objective: 'Append a short Release strict dogfood marker line to README.md only. Do not edit files outside README.md.',
+  owner_actor_id: input.actorOwner,
+  reviewer_actor_id: input.actorReviewer,
+  qa_owner_actor_id: input.actorQa,
+  required_checks: [
+    {
+      check_id: 'release-strict-local-codex',
+      display_name: 'Release strict local Codex required check',
+      command: 'node -e "process.exit(0)"',
+      timeout_seconds: 30,
+      blocks_review: true,
+    },
+  ],
+  required_artifact_kinds: ['execution_summary', 'diff', 'changed_files', 'check_output', 'review_packet'],
+  allowed_paths: ['README.md'],
+  forbidden_paths: ['.git', '.env', 'node_modules'],
+});
+
+const terminalRunStatuses = new Set(['succeeded', 'failed', 'cancelled', 'timed_out']);
+
+export const pollStrictLocalCodexRunToTerminal = async (input: {
+  getRunSession: () => Promise<{ status: string; id: string }>;
+  getPublicRunEvents: () => Promise<Array<{ event_type: string; visibility?: string; runStatusAtObservation?: string }>>;
+  timeoutMs: number;
+  intervalMs: number;
+}): Promise<{ terminal: { status: string; id: string }; observedPublicNonTerminalEvent: boolean }> => {
+  const deadline = Date.now() + input.timeoutMs;
+  let observedPublicNonTerminalEvent = false;
+  while (Date.now() <= deadline) {
+    const events = await input.getPublicRunEvents();
+    observedPublicNonTerminalEvent =
+      observedPublicNonTerminalEvent ||
+      events.some((event) => isPublicCodexLiveProgressEvent(event));
+    const terminal = await input.getRunSession();
+    if (terminalRunStatuses.has(terminal.status)) {
+      return { terminal, observedPublicNonTerminalEvent };
+    }
+    await new Promise((resolve) => setTimeout(resolve, input.intervalMs));
+  }
+  throw new Error('local_codex_run_terminal_timeout');
+};
+
 export const statusCodeForStrictReleaseMarkers = (
   markers: readonly VerificationMarker[],
   options: { allowBlocked: boolean },
@@ -206,7 +298,7 @@ const execFile = promisify(execFileCallback);
 
 const runCommand: CommandRunner = async (command, args, options = {}) => {
   const { stdout, stderr } = await execFile(command, args, {
-    cwd: process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     env: { ...process.env, ...options.env },
     timeout: options.timeoutMs ?? 30_000,
   });
@@ -281,26 +373,35 @@ const createDogfoodApp = async (): Promise<{ app: INestApplication; repository: 
   return { app, repository };
 };
 
-const createDurableReleaseDogfoodApp = async (repository: P0Repository): Promise<{ app: INestApplication }> => {
+const createDurableReleaseDogfoodApp = async (
+  repository: P0Repository,
+  options: { useRealWorker: boolean } = { useRealWorker: false },
+): Promise<{ app: INestApplication; runWorker?: StrictRunWorker }> => {
   (Reflect as typeof Reflect & { defineMetadata?: (key: string, value: unknown, target: object) => void }).defineMetadata?.(
     'design:paramtypes',
     [ReleaseService],
     ReleaseController,
   );
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(P0_REPOSITORY)
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('durable')
     .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
-    .useValue(false)
-    .overrideProvider(RUN_WORKER)
-    .useValue(noopRunWorker)
-    .compile();
+    .useValue(false);
+  if (options.useRealWorker) {
+    moduleBuilder = moduleBuilder.overrideProvider(RunWorkerLifecycleService).useValue({
+      onModuleInit: () => undefined,
+      onModuleDestroy: () => undefined,
+    });
+  } else {
+    moduleBuilder = moduleBuilder.overrideProvider(RUN_WORKER).useValue(noopRunWorker);
+  }
+  const moduleRef = await moduleBuilder.compile();
   const app = moduleRef.createNestApplication({ logger: false });
   app.useLogger(false);
   await app.init();
-  return { app };
+  return options.useRealWorker ? { app, runWorker: moduleRef.get<StrictRunWorker>(RUN_WORKER) } : { app };
 };
 
 const checkResults = (): CheckResult[] => [
@@ -639,6 +740,50 @@ const assertObservationBacklinkProjected = (cockpit: JsonRecord, releaseId: stri
   }
 };
 
+const publicPayloadHasObservationLink = (
+  value: unknown,
+  expected: { object_type: string; object_id: string; relationship: string },
+): boolean => {
+  if (Array.isArray(value)) {
+    return value.some((item) => publicPayloadHasObservationLink(item, expected));
+  }
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.object_type === expected.object_type &&
+    record.object_id === expected.object_id &&
+    record.relationship === expected.relationship
+  ) {
+    return true;
+  }
+  return Object.values(record).some((item) => publicPayloadHasObservationLink(item, expected));
+};
+
+const assertStrictLocalCodexPublicProjection = (
+  cockpit: unknown,
+  replay: unknown,
+  strictLocalCodex: NonNullable<StrictLifecycleResult['strictLocalCodex']>,
+): void => {
+  const packageLink = {
+    object_type: 'execution_package',
+    object_id: strictLocalCodex.executionPackageId,
+    relationship: 'supports',
+  };
+  const runLink = {
+    object_type: 'run_session',
+    object_id: strictLocalCodex.runSessionId,
+    relationship: 'generated_by',
+  };
+  if (!publicPayloadHasObservationLink(cockpit, packageLink) || !publicPayloadHasObservationLink(cockpit, runLink)) {
+    throw new Error('strict local Codex public cockpit projection missing supports/generated_by links');
+  }
+  if (!publicPayloadHasObservationLink(replay, packageLink) || !publicPayloadHasObservationLink(replay, runLink)) {
+    throw new Error('strict local Codex public replay projection missing supports/generated_by links');
+  }
+};
+
 const assertOverrideBlockerFactsProjected = (cockpit: JsonRecord, replay: unknown): void => {
   const overriddenBlockers = cockpit.overridden_blockers;
   if (
@@ -672,6 +817,12 @@ type StrictLifecycleResult = {
   executionPackageId?: string;
   runSessionId?: string;
   reviewPacketId?: string;
+  strictLocalCodex?: {
+    executionPackageId: string;
+    runSessionId: string;
+    reviewPacketId: string;
+    summary: ReturnType<typeof publicStrictLocalCodexEvidenceSummary>;
+  };
   markers: VerificationMarker[];
 };
 type StrictFailureCode =
@@ -698,6 +849,40 @@ type DockerInspectRow = {
     Ports?: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
   };
 };
+type StrictRunWorker = { kick?: () => void; drainOnce: () => Promise<void> };
+type StrictDurableDogfoodApp = {
+  app: Pick<INestApplication, 'close' | 'getHttpServer'>;
+  runWorker?: StrictRunWorker;
+};
+type StrictLocalCodexPackageResult = {
+  marker: VerificationMarker;
+  packageId?: string;
+  runSessionId?: string;
+  reviewPacketId?: string;
+  summary?: ReturnType<typeof publicStrictLocalCodexEvidenceSummary>;
+};
+type StrictLocalCodexLifecycleDeps = {
+  runCommand?: CommandRunner;
+  preflightStrictLocalCodex?: (input: {
+    env: Env;
+    repoPath: string;
+    runCommand: CommandRunner;
+  }) => Promise<PreflightResult<'RELEASE_STRICT_DIRTY_ALLOWLIST'>>;
+  runStrictLocalCodexPackage?: (input: {
+    server: Parameters<typeof request>[0];
+    repository: P0Repository;
+    planRevisionId: string;
+    releaseId: string;
+    projectId: string;
+    repoPath: string;
+    baseCommitSha: string;
+    actorOwner: string;
+    actorReviewer: string;
+    actorQa: string;
+    runWorkerDrain?: () => Promise<void>;
+  }) => Promise<StrictLocalCodexPackageResult>;
+  runWorkerDrain?: () => Promise<void>;
+};
 
 export type StrictReleaseFlowDogfoodDeps = {
   nowMs?: () => number;
@@ -711,15 +896,17 @@ export type StrictReleaseFlowDogfoodDeps = {
   startDisposablePostgres?: (runner: CommandRunner, timestamp: number) => Promise<{ containerId: string; candidate: DockerPostgresCandidate }>;
   createDbClient?: (input: { connectionString: string }) => StrictDbClient;
   createRepository?: (db: unknown) => P0Repository;
-  createDurableApp?: (repository: P0Repository) => Promise<{ app: Pick<INestApplication, 'close' | 'getHttpServer'> }>;
+  createDurableApp?: (repository: P0Repository, options?: { useRealWorker: boolean }) => Promise<StrictDurableDogfoodApp>;
   runDurableReleaseLifecycle?: (input: {
     app: Pick<INestApplication, 'getHttpServer'>;
     repository: P0Repository;
     identity: ReturnType<typeof buildDurableReleaseDogfoodIdentity>;
+    env: Env;
+    deps?: StrictLocalCodexLifecycleDeps;
   }) => Promise<StrictLifecycleResult>;
   reopenDbClient?: (input: { connectionString: string }) => StrictDbClient;
   createFreshRepository?: (db: unknown) => P0Repository;
-  createFreshDurableApp?: (repository: P0Repository) => Promise<{ app: Pick<INestApplication, 'close' | 'getHttpServer'> }>;
+  createFreshDurableApp?: (repository: P0Repository, options?: { useRealWorker: boolean }) => Promise<StrictDurableDogfoodApp>;
   verifyDurableReleaseAfterReopen?: (input: {
     app: Pick<INestApplication, 'getHttpServer'>;
     repository: P0Repository;
@@ -727,6 +914,9 @@ export type StrictReleaseFlowDogfoodDeps = {
     lifecycle: StrictLifecycleResult;
   }) => Promise<void>;
   dropDatabase?: (plan: DurableDogfoodPlan) => Promise<void>;
+  preflightStrictLocalCodex?: StrictLocalCodexLifecycleDeps['preflightStrictLocalCodex'];
+  runStrictLocalCodexPackage?: StrictLocalCodexLifecycleDeps['runStrictLocalCodexPackage'];
+  runWorkerDrain?: () => Promise<void>;
 };
 
 export type StrictReleaseFlowDogfoodInput = {
@@ -811,21 +1001,43 @@ const markersWithClosureBlocked = (code: string, detail: string): VerificationMa
       marker === 'Durable local reset'
         ? [code, detail]
         : marker === 'Strict local_codex run'
-          ? ['local_codex_not_integrated', 'Strict local_codex evidence is reserved for Task 5.']
+          ? ['strict_flow_not_started', 'Strict local Codex evidence was not attempted because strict durable prerequisites were blocked.']
           : ['Deterministic release flow coverage remains available; strict durable lifecycle did not start.'],
   }));
 
 export const failedReleaseFlowMarkersFromError = (
-  _error: unknown,
-  options: { code?: StrictFailureCode; passedMarkers?: readonly VerificationMarker[] } = {},
+  error: unknown,
+  options: {
+    code?: StrictFailureCode;
+    passedMarkers?: readonly VerificationMarker[];
+    failedStrictLocalCodex?: { code: string; message: string };
+  } = {},
 ): VerificationMarker[] => {
   const code = options.code ?? 'strict_flow_failed';
+  const safeErrorDetail = (() => {
+    if (error === undefined) {
+      return undefined;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const detail = message
+      .replace(/postgres(?:ql)?:\/\/\S+/gi, '[redacted]')
+      .replace(/\/(?:Users|tmp|var|private|home|repo|workspace|opt)\/\S+/gi, '[redacted]');
+    try {
+      assertNoUnsafeReleaseDogfoodStrings('Strict release failure diagnostic', detail);
+      return detail;
+    } catch {
+      return 'Strict failure diagnostics were redacted.';
+    }
+  })();
   const passedByMarker = new Map(
     (options.passedMarkers ?? [])
       .filter((marker) => marker.status === 'PASSED')
       .map((marker) => [marker.marker, marker] as const),
   );
   return requiredReleaseFlowReportMarkers.map((marker) => {
+    if (marker === 'Strict local_codex run' && options.failedStrictLocalCodex !== undefined) {
+      return failedStrictLocalCodexMarker(options.failedStrictLocalCodex.code, options.failedStrictLocalCodex.message);
+    }
     const passed = passedByMarker.get(marker);
     if (passed !== undefined && marker !== 'Durable local reset') {
       return passed;
@@ -835,9 +1047,9 @@ export const failedReleaseFlowMarkersFromError = (
       status: marker === 'Durable local reset' ? 'FAILED' : marker === 'Strict local_codex run' ? 'BLOCKED with reason' : 'BLOCKED with reason',
       details:
         marker === 'Durable local reset'
-          ? [code, strictFailureDetails[code]]
-          : marker === 'Strict local_codex run'
-            ? ['local_codex_not_integrated', 'Strict local_codex evidence is reserved for Task 5.']
+          ? [code, strictFailureDetails[code], ...(safeErrorDetail === undefined ? [] : [safeErrorDetail])]
+        : marker === 'Strict local_codex run'
+            ? ['strict_flow_not_started', 'Strict local Codex evidence was not attempted before this strict flow failure.']
             : [code, 'Strict durable release flow stopped before this marker completed.'],
     };
   });
@@ -847,14 +1059,235 @@ const strictRequest = (server: Parameters<typeof request>[0], actorId: string) =
   post: (path: string) => request(server).post(path).set(actorHeaderName, actorId),
 });
 
+const safeStrictFailureDetails = (code: string, message: string): string[] => {
+  const sanitizedMessage = message
+    .replace(/postgres(?:ql)?:\/\/\S+/gi, '[redacted]')
+    .replace(/\/(?:Users|tmp|var|private|home|repo|workspace|opt)\/\S+/gi, '[redacted]')
+    .replace(/runtime_metadata|raw_metadata|workspace_path|worktree_path|artifact_path|local_ref|allowed_paths|forbidden_paths/gi, '[redacted]');
+  const details = [code, sanitizedMessage];
+  try {
+    assertNoUnsafeReleaseDogfoodStrings('Strict local Codex failure details', details);
+    return details;
+  } catch {
+    return [code, 'Strict local Codex run failed; unsafe diagnostic details were redacted.'];
+  }
+};
+
+const blockedStrictLocalCodexMarker = (details: string[]): VerificationMarker => ({
+  marker: 'Strict local_codex run',
+  status: 'BLOCKED with reason',
+  details,
+});
+
+const failedStrictLocalCodexMarker = (code: string, message: string): VerificationMarker => ({
+  marker: 'Strict local_codex run',
+  status: 'FAILED',
+  details: safeStrictFailureDetails(code, message),
+});
+
+const isStrictLocalCodexProjectionFailure = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('unsafe serialized') ||
+    message.includes('public projection') ||
+    message.includes('supports/generated_by') ||
+    message.includes('strict_reopen_missing_strict_local_codex_links')
+  );
+};
+
+const strictLocalCodexFailureCode = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('local_codex_run_terminal_timeout')) {
+    return 'local_codex_run_terminal_timeout';
+  }
+  if (message.includes('local_codex_terminal_failed')) {
+    return 'local_codex_terminal_failed';
+  }
+  if (message.includes('missing_terminal_evidence')) {
+    return 'missing_terminal_evidence';
+  }
+  if (message.includes('missing_public_non_terminal_live_event')) {
+    return 'missing_public_non_terminal_live_event';
+  }
+  if (message.includes('package_not_release_ready')) {
+    return 'package_not_release_ready';
+  }
+  if (message.includes('Review Packet') || message.includes('review')) {
+    return 'review_approval_failed';
+  }
+  if (isStrictLocalCodexProjectionFailure(error)) {
+    return 'public_projection_leak';
+  }
+  return 'strict_local_codex_failed';
+};
+
+const requestJsonBody = <T>(response: { body: unknown }): T => response.body as T;
+
+const runReleaseStrictLocalCodexPackage = async (input: {
+  server: Parameters<typeof request>[0];
+  repository: P0Repository;
+  planRevisionId: string;
+  releaseId: string;
+  projectId: string;
+  repoPath: string;
+  baseCommitSha: string;
+  actorOwner: string;
+  actorReviewer: string;
+  actorQa: string;
+  runWorkerDrain?: () => Promise<void>;
+}): Promise<StrictLocalCodexPackageResult> => {
+  const packageInput = buildReleaseLocalCodexPackageInput({
+    repoPath: input.repoPath,
+    baseCommitSha: input.baseCommitSha,
+    actorOwner: input.actorOwner,
+    actorReviewer: input.actorReviewer,
+    actorQa: input.actorQa,
+  });
+  const executionPackage = requestJsonBody<ExecutionPackage>(
+    await strictRequest(input.server, input.actorOwner)
+      .post(`/plan-revisions/${input.planRevisionId}/execution-packages`)
+      .send(packageInput)
+      .expect(201),
+  );
+  await strictRequest(input.server, input.actorOwner)
+    .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+    .send({ actor_id: input.actorOwner })
+    .expect(201);
+  const run = requestJsonBody<{ run_session_id: string }>(
+    await strictRequest(input.server, input.actorOwner)
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .send({ requested_by_actor_id: input.actorOwner, executor_type: 'local_codex', workflow_only: false })
+      .expect(201),
+  );
+  await input.runWorkerDrain?.();
+
+  let after: string | undefined;
+  const observedEvents: ObservedRunEvent[] = [];
+  const poll = await pollStrictLocalCodexRunToTerminal({
+    getRunSession: async () => {
+      const body = requestJsonBody<{ id: string; status: string }>(
+        await request(input.server).get(`/run-sessions/${run.run_session_id}`).expect(200),
+      );
+      return { id: body.id, status: body.status };
+    },
+    getPublicRunEvents: async () => {
+      const body = requestJsonBody<{ events: ObservedRunEvent[] }>(
+        await request(input.server)
+          .get(
+            `/run-sessions/${run.run_session_id}/events?actor_id=${encodeURIComponent(input.actorOwner)}${
+              after === undefined ? '' : `&after=${encodeURIComponent(after)}`
+            }`,
+          )
+          .expect(200),
+      );
+      const events = body.events;
+      for (const event of events) {
+        observedEvents.push(event);
+        if (typeof event.cursor === 'string') {
+          after = event.cursor;
+        }
+      }
+      return events.map((event) => ({
+        event_type: String(event.event_type ?? ''),
+        visibility: event.visibility,
+        runStatusAtObservation: event.runStatusAtObservation,
+      }));
+    },
+    timeoutMs: Number(process.env.FORGELOOP_RELEASE_STRICT_LOCAL_CODEX_TIMEOUT_MS ?? 300_000),
+    intervalMs: Number(process.env.FORGELOOP_RELEASE_STRICT_LOCAL_CODEX_POLL_MS ?? 1_000),
+  });
+  if (!poll.observedPublicNonTerminalEvent) {
+    throw new Error('missing_public_non_terminal_live_event');
+  }
+  if (poll.terminal.status !== 'succeeded') {
+    throw new Error(`local_codex_terminal_failed: ${poll.terminal.status}`);
+  }
+
+  const persistedRun = await input.repository.getRunSession(run.run_session_id);
+  if (persistedRun === undefined) {
+    throw new Error('missing_terminal_evidence');
+  }
+  validateLocalCodexRuntimeMetadata(runSessionRuntimeMetadataReport(persistedRun), { expectedRunSessionId: run.run_session_id });
+  const reviewPacket = (await input.repository.listReviewPacketsForPackage(executionPackage.id)).find(
+    (packet) => packet.run_session_id === run.run_session_id,
+  );
+  const reviewPacketReference = resolveReviewPacketReference({
+    apiUrl: 'http://127.0.0.1',
+    runSession: persistedRun as unknown as Record<string, unknown>,
+    cockpit: reviewPacket === undefined ? undefined : { review_packets: [{ id: reviewPacket.id }] },
+  });
+  const terminalEvidence = extractPersistedTerminalEvidence({
+    runSession: persistedRun as unknown as Record<string, unknown>,
+    reviewPacket: reviewPacketReference,
+  });
+  if (reviewPacket?.id === undefined) {
+    throw new Error('missing_terminal_evidence');
+  }
+  await strictRequest(input.server, input.actorReviewer)
+    .post(`/review-packets/${reviewPacket.id}/approve`)
+    .send({
+      summary: 'Strict local Codex dogfood evidence approved.',
+      reviewed_by_actor_id: input.actorReviewer,
+      reviewed_at: new Date().toISOString(),
+    })
+    .expect(201);
+  const strictPackage = requestJsonBody<ExecutionPackage>(
+    await request(input.server).get(`/execution-packages/${executionPackage.id}`).expect(200),
+  );
+  if (
+    strictPackage.phase !== 'release' ||
+    strictPackage.gate_state !== 'release_ready' ||
+    strictPackage.resolution !== 'completed'
+  ) {
+    throw new Error('package_not_release_ready');
+  }
+
+  const summary = publicStrictLocalCodexEvidenceSummary({
+    runSessionId: run.run_session_id,
+    changedFileCount: terminalEvidence.changed_files?.length ?? 0,
+    checkCount: terminalEvidence.check_results?.length ?? 0,
+    artifactKinds: (terminalEvidence.artifacts ?? []).map((artifact) => String(artifact.kind ?? 'unknown')),
+    reviewPacketAvailable: true,
+  });
+  assertNoUnsafeReleaseDogfoodStrings('Strict local Codex public summary', summary);
+  assertNoUnsafeReleaseDogfoodStrings('Strict local Codex public events', observedEvents);
+
+  return {
+    marker: {
+      marker: 'Strict local_codex run',
+      status: 'PASSED',
+      details: ['Created, ran, approved, and linked public-safe strict local Codex evidence.'],
+    },
+    packageId: executionPackage.id,
+    runSessionId: run.run_session_id,
+    reviewPacketId: reviewPacket.id,
+    summary,
+  };
+};
+
 export const runDurableReleaseLifecycle = async (input: {
   app: Pick<INestApplication, 'getHttpServer'>;
   repository: P0Repository;
   identity: ReturnType<typeof buildDurableReleaseDogfoodIdentity>;
+  env?: Env;
+  deps?: StrictLocalCodexLifecycleDeps;
 }): Promise<StrictLifecycleResult> => {
   const { app, repository, identity } = input;
   const { owner, reviewer, qa } = identity.actors;
   const server = app.getHttpServer();
+  const env = input.env ?? {};
+  const deps = input.deps ?? {};
+  const effectiveRunCommand = deps.runCommand ?? runCommand;
+  const strictLocalCodexEnabled = shouldAttemptReleaseStrictLocalCodex(env);
+  const repoPath = strictLocalCodexEnabled ? resolve(env.FORGELOOP_REPO_PATH ?? process.cwd()) : '/workspace/forgeloop';
+  const baseCommitSha = strictLocalCodexEnabled
+    ? (
+        await effectiveRunCommand('git', ['rev-parse', env.FORGELOOP_BASE_COMMIT_SHA ?? 'HEAD'], {
+          cwd: repoPath,
+          timeoutMs: 15_000,
+        })
+      ).stdout.trim()
+    : 'strict-dogfood-base';
 
   await repository.saveOrganization(identity.organization);
   await repository.saveActor(owner);
@@ -867,9 +1300,9 @@ export const runDurableReleaseLifecycle = async (input: {
     .send({
       repo_id: 'forgeloop-source',
       name: 'forgeloop',
-      local_path: '/workspace/forgeloop',
+      local_path: strictLocalCodexEnabled ? repoPath : '/workspace/forgeloop',
       default_branch: 'main',
-      base_commit_sha: 'strict-dogfood-base',
+      base_commit_sha: strictLocalCodexEnabled ? baseCommitSha : 'strict-dogfood-base',
     })
     .expect(201);
   const workItem = (
@@ -966,10 +1399,76 @@ export const runDurableReleaseLifecycle = async (input: {
   ).body as { release: { id: string } };
   const releaseId = release.release.id;
   await strictRequest(server, owner.id).post(`/releases/${releaseId}/work-items/${seeded.workItem.id}`).send({ actor_id: owner.id }).expect(201);
-  await strictRequest(server, owner.id)
+  const seededPackageLink = await strictRequest(server, owner.id)
     .post(`/releases/${releaseId}/execution-packages/${seeded.executionPackage.id}`)
-    .send({ actor_id: owner.id })
-    .expect(201);
+    .send({ actor_id: owner.id });
+  if (seededPackageLink.status !== 201) {
+    throw new Error(`link_seeded_execution_package_failed_${seededPackageLink.status}: ${seededPackageLink.text}`);
+  }
+  let strictLocalCodex: StrictLifecycleResult['strictLocalCodex'];
+  let strictLocalCodexMarker: VerificationMarker;
+  const enablement = evaluateLocalCodexDogfoodEnablement(env);
+  if (!enablement.enabled) {
+    strictLocalCodexMarker = blockedStrictLocalCodexMarker([enablement.message]);
+  } else {
+    const preflight = await (deps.preflightStrictLocalCodex ?? ((args) =>
+      preflightLocalCodexDogfood({
+        env: args.env,
+        repoPath: args.repoPath,
+        runCommand: args.runCommand,
+        dirtyAllowlist: releaseStrictDirtyAllowlist,
+        dirtyAllowlistSource: 'RELEASE_STRICT_DIRTY_ALLOWLIST',
+      })))({
+      env,
+      repoPath,
+      runCommand: effectiveRunCommand,
+    });
+    if (!preflight.ok) {
+      strictLocalCodexMarker = blockedStrictLocalCodexMarker(sanitizeStrictPreflightBlockerDetails(preflight));
+    } else {
+      try {
+        const strictResult = await (deps.runStrictLocalCodexPackage ?? runReleaseStrictLocalCodexPackage)({
+          server,
+          repository,
+          planRevisionId: planRevision.id,
+          releaseId,
+          projectId: identity.project.id,
+          repoPath,
+          baseCommitSha,
+          actorOwner: owner.id,
+          actorReviewer: reviewer.id,
+          actorQa: qa.id,
+          runWorkerDrain: deps.runWorkerDrain,
+        });
+        if (strictResult.marker.status === 'PASSED') {
+          if (
+            strictResult.packageId === undefined ||
+            strictResult.runSessionId === undefined ||
+            strictResult.reviewPacketId === undefined ||
+            strictResult.summary === undefined
+          ) {
+            throw new Error('missing_terminal_evidence');
+          }
+          await strictRequest(server, owner.id)
+            .post(`/releases/${releaseId}/execution-packages/${strictResult.packageId}`)
+            .send({ actor_id: owner.id })
+            .expect(201);
+          strictLocalCodex = {
+            executionPackageId: strictResult.packageId,
+            runSessionId: strictResult.runSessionId,
+            reviewPacketId: strictResult.reviewPacketId,
+            summary: strictResult.summary,
+          };
+        }
+        strictLocalCodexMarker = strictResult.marker;
+      } catch (error) {
+        strictLocalCodexMarker = failedStrictLocalCodexMarker(
+          strictLocalCodexFailureCode(error),
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+  }
   await strictRequest(server, owner.id).post(`/releases/${releaseId}/submit-for-approval`).send({ actor_id: owner.id }).expect(201);
   await strictRequest(server, reviewer.id)
     .post(`/releases/${releaseId}/approve`)
@@ -990,13 +1489,42 @@ export const runDurableReleaseLifecycle = async (input: {
           summary: 'Fresh app and repository reopen verification is ready.',
           links: [
             { object_type: 'release', object_id: releaseId, relationship: 'observed' },
-            { object_type: 'work_item', object_id: seeded.workItem.id, relationship: 'affected' },
+            { object_type: 'execution_package', object_id: seeded.executionPackage.id, relationship: 'supports' },
             { object_type: 'run_session', object_id: seeded.runSession.id, relationship: 'generated_by' },
           ],
         },
       },
     })
     .expect(201);
+  if (strictLocalCodex !== undefined) {
+    await strictRequest(server, owner.id)
+      .post(`/releases/${releaseId}/evidences`)
+      .send({
+        actor_id: owner.id,
+        evidence_type: 'observation_note',
+        summary: 'Strict local Codex release evidence is public-safe and approved.',
+        extra: {
+          observation: {
+            source: 'script',
+            severity: 'info',
+            observed_at: new Date().toISOString(),
+            summary: `Strict local Codex run ${strictLocalCodex.runSessionId} completed with approved public evidence.`,
+            metrics: {
+              changed_file_count: strictLocalCodex.summary.changed_file_count,
+              check_count: strictLocalCodex.summary.check_count,
+              review_packet_available: strictLocalCodex.summary.review_packet_available,
+            },
+            notes: `artifact_kinds=${strictLocalCodex.summary.artifact_kinds.join(',')}`,
+            links: buildReleaseStrictObservationLinks({
+              releaseId,
+              executionPackageId: strictLocalCodex.executionPackageId,
+              runSessionId: strictLocalCodex.runSessionId,
+            }),
+          },
+        },
+      })
+      .expect(201);
+  }
   await strictRequest(server, owner.id)
     .post(`/releases/${releaseId}/close`)
     .send({ actor_id: owner.id, resolution: 'completed', summary: 'Strict durable release dogfood closed.' })
@@ -1009,6 +1537,7 @@ export const runDurableReleaseLifecycle = async (input: {
     executionPackageId: seeded.executionPackage.id,
     runSessionId: seeded.runSession.id,
     reviewPacketId: seeded.reviewPacket.id,
+    ...(strictLocalCodex === undefined ? {} : { strictLocalCodex }),
     markers: [
       {
         marker: 'P0 delivery path',
@@ -1030,6 +1559,7 @@ export const runDurableReleaseLifecycle = async (input: {
         status: 'PASSED',
         details: ['Observed and closed strict durable Release through public APIs.'],
       },
+      strictLocalCodexMarker,
     ],
   };
 };
@@ -1102,6 +1632,27 @@ export const verifyDurableReleaseAfterReopen = async (input: {
   if (reviewPacket === undefined || reviewPacket.decision !== 'approved' || reviewPacket.status !== 'completed') {
     throw new Error('strict_reopen_missing_approved_review');
   }
+  if (input.lifecycle.strictLocalCodex !== undefined) {
+    const hasStrictLinks = evidence.some((item) => {
+      const links = (item.extra as { observation?: { links?: Array<{ object_id?: string; relationship?: string }> } } | undefined)?.observation?.links;
+      return (
+        Array.isArray(links) &&
+        links.some(
+          (link) =>
+            link.object_id === input.lifecycle.strictLocalCodex?.executionPackageId &&
+            link.relationship === 'supports',
+        ) &&
+        links.some(
+          (link) =>
+            link.object_id === input.lifecycle.strictLocalCodex?.runSessionId &&
+            link.relationship === 'generated_by',
+        )
+      );
+    });
+    if (!hasStrictLinks) {
+      throw new Error('strict_reopen_missing_strict_local_codex_links');
+    }
+  }
 
   const server = input.app.getHttpServer();
   const cockpit = (await request(server).get(`/query/release-cockpit/${input.releaseId}`).expect(200)).body as JsonRecord;
@@ -1109,6 +1660,9 @@ export const verifyDurableReleaseAfterReopen = async (input: {
   assertNoUnsafeReleaseDogfoodStrings('Strict release cockpit query', cockpit);
   assertObservationBacklinkProjected(cockpit, input.releaseId);
   assertNoUnsafeReleaseDogfoodStrings('Strict release replay', replay);
+  if (input.lifecycle.strictLocalCodex !== undefined) {
+    assertStrictLocalCodexPublicProjection(cockpit, replay, input.lifecycle.strictLocalCodex);
+  }
 };
 
 const cleanupStrictReleaseFlowDogfood = async (input: {
@@ -1194,6 +1748,7 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
   let markers: VerificationMarker[] | undefined;
   let failureCode: StrictFailureCode = 'strict_flow_failed';
   let lifecycleMarkers: VerificationMarker[] = [];
+  let lifecycleResult: StrictLifecycleResult | undefined;
 
   try {
     failureCode = 'database_mutation_failed';
@@ -1209,13 +1764,23 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
     });
     const firstRepository = (deps.createRepository ?? ((db) => createDrizzleP0Repository(db as DbClient['db'])))(firstClient.db);
     const identity = buildDurableReleaseDogfoodIdentity(new Date().toISOString());
-    const first = await (deps.createDurableApp ?? createDurableReleaseDogfoodApp)(firstRepository);
+    const first = await (deps.createDurableApp ?? createDurableReleaseDogfoodApp)(firstRepository, {
+      useRealWorker: shouldAttemptReleaseStrictLocalCodex(input.env),
+    });
     firstApp = first.app;
     const lifecycle = await (deps.runDurableReleaseLifecycle ?? runDurableReleaseLifecycle)({
       app: firstApp,
       repository: firstRepository,
       identity,
+      env: input.env,
+      deps: {
+        runCommand: effectiveRunCommand,
+        ...(deps.preflightStrictLocalCodex === undefined ? {} : { preflightStrictLocalCodex: deps.preflightStrictLocalCodex }),
+        ...(deps.runStrictLocalCodexPackage === undefined ? {} : { runStrictLocalCodexPackage: deps.runStrictLocalCodexPackage }),
+        runWorkerDrain: deps.runWorkerDrain ?? first.runWorker?.drainOnce.bind(first.runWorker),
+      },
     });
+    lifecycleResult = lifecycle;
     lifecycleMarkers = lifecycle.markers;
     failureCode = 'cleanup_failed';
     await firstApp.close();
@@ -1230,7 +1795,9 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
     const freshRepository = (deps.createFreshRepository ?? deps.createRepository ?? ((db) => createDrizzleP0Repository(db as DbClient['db'])))(
       freshClient.db,
     );
-    const fresh = await (deps.createFreshDurableApp ?? deps.createDurableApp ?? createDurableReleaseDogfoodApp)(freshRepository);
+    const fresh = await (deps.createFreshDurableApp ?? deps.createDurableApp ?? createDurableReleaseDogfoodApp)(freshRepository, {
+      useRealWorker: false,
+    });
     freshApp = fresh.app;
     await (deps.verifyDurableReleaseAfterReopen ?? verifyDurableReleaseAfterReopen)({
       app: freshApp,
@@ -1239,8 +1806,11 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
       lifecycle,
     });
 
+    const strictLocalCodexMarker =
+      lifecycle.markers.find((marker) => marker.marker === 'Strict local_codex run') ??
+      blockedStrictLocalCodexMarker(['local_codex_missing_marker']);
     markers = [
-      ...lifecycle.markers,
+      ...lifecycle.markers.filter((marker) => marker.marker !== 'Strict local_codex run'),
       {
         marker: 'Release cockpit query',
         status: 'PASSED',
@@ -1261,15 +1831,24 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
         status: 'PASSED',
         details: ['Reset durable storage and verified Release closure through a fresh app/repository boundary.'],
       },
-      {
-        marker: 'Strict local_codex run',
-        status: 'BLOCKED with reason',
-        details: ['local_codex_not_integrated', 'Strict local_codex evidence is reserved for Task 5.'],
-      },
+      strictLocalCodexMarker,
     ];
     assertNoUnsafeReleaseDogfoodStrings('Strict release markers', markers);
   } catch (error) {
-    markers = failedReleaseFlowMarkersFromError(error, { code: failureCode, passedMarkers: lifecycleMarkers });
+    const shouldFailStrictLocalCodex =
+      failureCode === 'reopen_failed' && lifecycleResult?.strictLocalCodex !== undefined && isStrictLocalCodexProjectionFailure(error);
+    markers = failedReleaseFlowMarkersFromError(error, {
+      code: failureCode,
+      passedMarkers: lifecycleMarkers,
+      ...(shouldFailStrictLocalCodex
+        ? {
+            failedStrictLocalCodex: {
+              code: strictLocalCodexFailureCode(error),
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }
+        : {}),
+    });
     assertNoUnsafeReleaseDogfoodStrings('Strict release failed markers', markers);
   } finally {
     const cleanupFailures = await cleanupStrictReleaseFlowDogfood({

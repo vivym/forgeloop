@@ -103,6 +103,16 @@ const codexLiveProgressEventTypes = new Set([
   'driver_fallback_used',
 ]);
 
+export const isCodexLiveProgressEventType = (eventType: unknown): eventType is string =>
+  typeof eventType === 'string' && codexLiveProgressEventTypes.has(eventType);
+
+export const isPublicCodexLiveProgressEvent = (
+  event: Pick<ObservedRunEvent, 'event_type' | 'visibility' | 'runStatusAtObservation'>,
+): boolean =>
+  event.visibility === 'public' &&
+  isCodexLiveProgressEventType(event.event_type) &&
+  (event.runStatusAtObservation === undefined || !isTerminalStatus(event.runStatusAtObservation));
+
 export const defaultRunCommand: CommandRunner = async (command, args, options = {}) => {
   const childOptions: Parameters<typeof execFile>[2] = { maxBuffer: 1024 * 1024 * 10 };
   if (options.cwd !== undefined) {
@@ -492,14 +502,7 @@ export const recordLiveEventObservation = (
   const effectiveTerminalIndex = terminalIndex < 0 ? events.length : terminalIndex;
   const preTerminalPublicEvents = events
     .slice(0, effectiveTerminalIndex)
-    .filter(
-      (event) =>
-        event.visibility === 'public' &&
-        typeof event.event_type === 'string' &&
-        codexLiveProgressEventTypes.has(event.event_type) &&
-        typeof event.runStatusAtObservation === 'string' &&
-        !isTerminalStatus(event.runStatusAtObservation),
-    )
+    .filter((event) => typeof event.runStatusAtObservation === 'string' && isPublicCodexLiveProgressEvent(event))
     .map((event) => event.event_type)
     .filter((eventType): eventType is string => eventType !== undefined && eventType.length > 0);
   const terminalEvent = terminalIndex < 0 ? undefined : events[terminalIndex]?.event_type;

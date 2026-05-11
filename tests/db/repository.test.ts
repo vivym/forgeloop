@@ -866,10 +866,10 @@ describe('P0Repository Drizzle adapter persistence mapping', () => {
         values: expect.objectContaining({ releaseId: release.id, workItemId: workItem.id, linkOrder: 1 }),
       }),
       expect.objectContaining({
-        values: expect.objectContaining({ releaseId: release.id, executionPackageId: executionPackage2.id, linkOrder: 0 }),
+        values: expect.objectContaining({ releaseId: release.id, packageId: executionPackage2.id, linkOrder: 0 }),
       }),
       expect.objectContaining({
-        values: expect.objectContaining({ releaseId: release.id, executionPackageId: executionPackage.id, linkOrder: 1 }),
+        values: expect.objectContaining({ releaseId: release.id, packageId: executionPackage.id, linkOrder: 1 }),
       }),
     ]);
     expect(transactions).toHaveLength(1);

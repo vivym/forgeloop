@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { describe, expect, it, vi } from 'vitest';
@@ -15,13 +16,18 @@ import {
 import {
   assertNoUnsafeReleaseDogfoodStrings,
   buildDurableReleaseDogfoodIdentity,
+  buildReleaseLocalCodexPackageInput,
+  buildReleaseStrictObservationLinks,
   failedReleaseFlowMarkersFromError,
   planStrictReleaseDogfoodDatabase,
+  pollStrictLocalCodexRunToTerminal,
+  publicStrictLocalCodexEvidenceSummary,
   renderReleaseFlowVerificationReport,
   requiredReleaseFlowReportMarkers,
   runDurableReleaseLifecycle,
   runStrictReleaseFlowDogfood,
   seedDurableReleaseReadyPackageEvidence,
+  shouldAttemptReleaseStrictLocalCodex,
   statusCodeForStrictReleaseMarkers,
   strictReleaseClosureMarkers,
   verifyDurableReleaseAfterReopen,
@@ -75,6 +81,101 @@ describe('release flow dogfood script helpers', () => {
     expect(seed.project.owner_actor_id).toBe(seed.actors.owner.id);
   });
 
+  it('uses contract-allowed relationships for strict local Codex observation links', () => {
+    expect(
+      buildReleaseStrictObservationLinks({
+        releaseId: 'release-1',
+        executionPackageId: 'package-1',
+        runSessionId: 'run-1',
+      }),
+    ).toEqual([
+      { object_type: 'release', object_id: 'release-1', relationship: 'observed' },
+      { object_type: 'execution_package', object_id: 'package-1', relationship: 'supports' },
+      { object_type: 'run_session', object_id: 'run-1', relationship: 'generated_by' },
+    ]);
+  });
+
+  it('summarizes strict local Codex evidence without local paths or runtime metadata', () => {
+    const summary = publicStrictLocalCodexEvidenceSummary({
+      runSessionId: 'run-1',
+      changedFileCount: 1,
+      checkCount: 1,
+      artifactKinds: ['execution_summary', 'review_packet'],
+      reviewPacketAvailable: true,
+    });
+
+    expect(JSON.stringify(summary)).not.toContain('/Users/');
+    expect(JSON.stringify(summary)).not.toContain('runtime_metadata');
+    expect(summary).toEqual({
+      run_session_id: 'run-1',
+      changed_file_count: 1,
+      check_count: 1,
+      artifact_kinds: ['execution_summary', 'review_packet'],
+      review_packet_available: true,
+    });
+  });
+
+  it('requires explicit real local Codex enablement before strict package execution', () => {
+    expect(shouldAttemptReleaseStrictLocalCodex({})).toBe(false);
+    expect(shouldAttemptReleaseStrictLocalCodex({ FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' })).toBe(true);
+  });
+
+  it('builds a bounded release local Codex package input', () => {
+    expect(
+      buildReleaseLocalCodexPackageInput({
+        repoPath: '/repo',
+        baseCommitSha: 'abc123',
+        actorOwner: 'actor-owner',
+        actorReviewer: 'actor-reviewer',
+        actorQa: 'actor-qa',
+      }),
+    ).toEqual({
+      repo_id: 'forgeloop-source',
+      objective: 'Append a short Release strict dogfood marker line to README.md only. Do not edit files outside README.md.',
+      owner_actor_id: 'actor-owner',
+      reviewer_actor_id: 'actor-reviewer',
+      qa_owner_actor_id: 'actor-qa',
+      required_checks: [
+        {
+          check_id: 'release-strict-local-codex',
+          display_name: 'Release strict local Codex required check',
+          command: 'node -e "process.exit(0)"',
+          timeout_seconds: 30,
+          blocks_review: true,
+        },
+      ],
+      required_artifact_kinds: ['execution_summary', 'diff', 'changed_files', 'check_output', 'review_packet'],
+      allowed_paths: ['README.md'],
+      forbidden_paths: ['.git', '.env', 'node_modules'],
+    });
+  });
+
+  it('times out bounded strict local Codex polling instead of passing queued runs', async () => {
+    await expect(
+      pollStrictLocalCodexRunToTerminal({
+        getRunSession: async () => ({ id: 'run-1', status: 'queued' }),
+        getPublicRunEvents: async () => [{ event_type: 'run_queued', visibility: 'public' }],
+        timeoutMs: 1,
+        intervalMs: 1,
+      }),
+    ).rejects.toThrow(/local_codex_run_terminal_timeout/);
+  });
+
+  it('does not treat queue events as strict local Codex live progress', async () => {
+    await expect(
+      pollStrictLocalCodexRunToTerminal({
+        getRunSession: async () => ({ id: 'run-1', status: 'succeeded' }),
+        getPublicRunEvents: async () => [{ event_type: 'run_queued', visibility: 'public' }],
+        timeoutMs: 1,
+        intervalMs: 1,
+      }).then((result) => {
+        if (result.observedPublicNonTerminalEvent) {
+          throw new Error('run_queued counted as live progress');
+        }
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it('returns non-zero for blocked strict markers unless blocked report generation is allowed', () => {
     const markers = requiredReleaseFlowReportMarkers.map((marker) => ({
       marker,
@@ -95,6 +196,204 @@ describe('release flow dogfood script helpers', () => {
       details: expect.arrayContaining(['strict_flow_failed']),
     });
     expect(() => assertNoUnsafeReleaseDogfoodStrings('strict failure markers', markers)).not.toThrow();
+  });
+
+  it('does not preflight or create a strict local Codex package unless explicitly enabled', async () => {
+    const preflightStrictLocalCodex = vi.fn();
+    const runStrictLocalCodexPackage = vi.fn();
+
+    const markers = await runStrictReleaseFlowDogfood({
+      env: { FORGELOOP_DATABASE_URL: 'postgresql://safe.local/forgeloop_tmp_dogfood_test' },
+      deps: {
+        nowMs: () => 1,
+        planDatabase: () => ({
+          kind: 'provided',
+          databaseUrl: 'postgresql://safe.local/forgeloop_tmp_dogfood_test',
+          adminUrl: 'postgresql://safe.local/forgeloop_tmp_dogfood_test',
+          databaseName: 'forgeloop_tmp_dogfood_test',
+          cleanup: { dropDatabase: false, removeContainer: false },
+        }),
+        prepareSafeDatabaseTarget: () => undefined,
+        createDatabase: async () => undefined,
+        pushSchema: async () => undefined,
+        resetDatabase: async () => undefined,
+        createDbClient: () => ({ db: {}, pool: { end: async () => undefined } }),
+        createRepository: () => new InMemoryP0Repository(),
+        createDurableApp: async () => ({ app: { close: async () => undefined } }),
+        runDurableReleaseLifecycle: async ({ env, deps }) => {
+          expect(env.FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD).toBeUndefined();
+          expect(deps?.preflightStrictLocalCodex).toBe(preflightStrictLocalCodex);
+          expect(deps?.runStrictLocalCodexPackage).toBe(runStrictLocalCodexPackage);
+          return {
+            releaseId: 'release-1',
+            markers: [{ marker: 'Strict local_codex run', status: 'BLOCKED with reason', details: ['disabled'] }],
+          };
+        },
+        reopenDbClient: () => ({ db: {}, pool: { end: async () => undefined } }),
+        createFreshRepository: () => new InMemoryP0Repository(),
+        createFreshDurableApp: async () => ({ app: { close: async () => undefined } }),
+        verifyDurableReleaseAfterReopen: async () => undefined,
+        preflightStrictLocalCodex,
+        runStrictLocalCodexPackage,
+        dropDatabase: async () => undefined,
+      },
+    });
+
+    expect(preflightStrictLocalCodex).not.toHaveBeenCalled();
+    expect(runStrictLocalCodexPackage).not.toHaveBeenCalled();
+    expect(markers.find((marker) => marker.marker === 'Strict local_codex run')).toMatchObject({ status: 'BLOCKED with reason' });
+  });
+
+  it('does not require git when real strict local Codex is disabled', async () => {
+    const repository = new InMemoryP0Repository();
+    const app = await createDurableTestApp(repository);
+    const runCommand = vi.fn(async () => {
+      throw new Error('git should not run when strict local Codex is disabled');
+    });
+
+    try {
+      const lifecycle = await runDurableReleaseLifecycle({
+        app,
+        repository,
+        identity: buildDurableReleaseDogfoodIdentity('2026-05-11T00:00:00.000Z'),
+        env: { FORGELOOP_REPO_PATH: '/not-a-git-worktree' },
+        deps: { runCommand },
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(lifecycle.markers.find((marker) => marker.marker === 'Strict local_codex run')).toMatchObject({
+        status: 'BLOCKED with reason',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('kicks the real strict local Codex worker path before polling terminal evidence', async () => {
+    const repository = new InMemoryP0Repository();
+    const app = await createDurableTestApp(repository);
+    const realWorkerDrain = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const marker = {
+      marker: 'Strict local_codex run' as const,
+      status: 'PASSED' as const,
+      details: ['strict local Codex evidence linked'],
+    };
+
+    try {
+      const lifecycle = await runDurableReleaseLifecycle({
+        app,
+        repository,
+        identity: buildDurableReleaseDogfoodIdentity('2026-05-11T00:00:00.000Z'),
+        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1' },
+        deps: {
+          preflightStrictLocalCodex: async () => ({
+            ok: true,
+            blockers: [],
+            repoPath: '/repo',
+            dirtyFiles: [],
+            dirtySource: {
+              allowed_dirty_entries: [],
+              blocked_dirty_entries: [],
+              dirty_allowlist_source: 'RELEASE_STRICT_DIRTY_ALLOWLIST',
+            },
+            worktreeProbePath: '/repo/.worktrees/probe',
+          }),
+          runStrictLocalCodexPackage: async (input) => {
+            await input.runWorkerDrain?.();
+            await repository.saveExecutionPackage({
+              id: 'strict-package-1',
+              work_item_id: 'strict-work-item-1',
+              spec_id: 'strict-spec-1',
+              spec_revision_id: 'strict-spec-revision-1',
+              plan_id: 'strict-plan-1',
+              plan_revision_id: input.planRevisionId,
+              project_id: input.projectId,
+              repo_id: 'forgeloop-source',
+              objective: 'Strict local Codex evidence.',
+              owner_actor_id: input.actorOwner,
+              reviewer_actor_id: input.actorReviewer,
+              qa_owner_actor_id: input.actorQa,
+              phase: 'release',
+              activity_state: 'idle',
+              gate_state: 'release_ready',
+              resolution: 'completed',
+              required_checks: [],
+              required_artifact_kinds: ['execution_summary'],
+              allowed_paths: ['README.md'],
+              forbidden_paths: ['.git'],
+              current_run_session_id: 'run-1',
+              last_run_session_id: 'run-1',
+              current_review_packet_id: 'review-1',
+              created_at: '2026-05-11T00:00:00.000Z',
+              updated_at: '2026-05-11T00:01:00.000Z',
+            });
+            await repository.saveRunSession({
+              id: 'run-1',
+              execution_package_id: 'strict-package-1',
+              requested_by_actor_id: input.actorOwner,
+              status: 'succeeded',
+              executor_type: 'local_codex',
+              changed_files: [{ repo_id: 'forgeloop-source', path: 'README.md', change_kind: 'modified' }],
+              check_results: [],
+              artifacts: [{ kind: 'execution_summary', name: 'Summary', content_type: 'text/markdown', storage_uri: 'https://example.test/summary.md' }],
+              log_refs: [],
+              summary: 'Succeeded.',
+              created_at: '2026-05-11T00:00:00.000Z',
+              updated_at: '2026-05-11T00:01:00.000Z',
+              started_at: '2026-05-11T00:00:00.000Z',
+              finished_at: '2026-05-11T00:01:00.000Z',
+            });
+            await repository.saveReviewPacket({
+              id: 'review-1',
+              run_session_id: 'run-1',
+              execution_package_id: 'strict-package-1',
+              reviewer_actor_id: input.actorReviewer,
+              spec_revision_id: 'strict-spec-revision-1',
+              plan_revision_id: input.planRevisionId,
+              status: 'completed',
+              decision: 'approved',
+              summary: 'Approved.',
+              changed_files: [],
+              check_result_summary: 'Required checks passed.',
+              self_review: {
+                status: 'succeeded',
+                summary: 'Looks good.',
+                spec_plan_alignment: 'Aligned.',
+                test_assessment: 'Covered.',
+                risk_notes: [],
+                follow_up_questions: [],
+              },
+              risk_notes: [],
+              reviewed_by_actor_id: input.actorReviewer,
+              reviewed_at: '2026-05-11T00:01:00.000Z',
+              requested_changes: [],
+              created_at: '2026-05-11T00:00:00.000Z',
+              updated_at: '2026-05-11T00:01:00.000Z',
+              completed_at: '2026-05-11T00:01:00.000Z',
+            });
+            return {
+              marker,
+              packageId: 'strict-package-1',
+              runSessionId: 'run-1',
+              reviewPacketId: 'review-1',
+              summary: publicStrictLocalCodexEvidenceSummary({
+                runSessionId: 'run-1',
+                changedFileCount: 1,
+                checkCount: 1,
+                artifactKinds: ['execution_summary', 'review_packet'],
+                reviewPacketAvailable: true,
+              }),
+            };
+          },
+          runWorkerDrain: realWorkerDrain,
+        },
+      });
+
+      expect(realWorkerDrain).toHaveBeenCalled();
+      expect(lifecycle.markers).toEqual(expect.arrayContaining([marker]));
+    } finally {
+      await app.close();
+    }
   });
 
   it('requires durable reopen verification before Durable local reset can pass', async () => {
@@ -446,6 +745,77 @@ describe('release flow dogfood script helpers', () => {
     expect(() => assertNoUnsafeReleaseDogfoodStrings('reopen failure strict markers', markers)).not.toThrow();
   });
 
+  it('marks completed strict local Codex evidence failed when post-close public projection checks fail', async () => {
+    const closeFirstApp = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const closeFreshApp = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const closeFirstPool = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const closeFreshPool = vi.fn<() => Promise<void>>(() => Promise.resolve());
+
+    const markers = await runStrictReleaseFlowDogfood({
+      env: { FORGELOOP_DATABASE_URL: 'postgresql://safe.local/forgeloop_tmp_dogfood_test' },
+      deps: {
+        nowMs: () => 1,
+        planDatabase: () => ({
+          kind: 'provided',
+          databaseUrl: 'postgresql://safe.local/forgeloop_tmp_dogfood_test',
+          adminUrl: 'postgresql://safe.local/forgeloop_tmp_dogfood_test',
+          databaseName: 'forgeloop_tmp_dogfood_test',
+          cleanup: { dropDatabase: false, removeContainer: false },
+        }),
+        prepareSafeDatabaseTarget: () => undefined,
+        createDatabase: async () => undefined,
+        pushSchema: async () => undefined,
+        resetDatabase: async () => undefined,
+        createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
+        createRepository: () => new InMemoryP0Repository(),
+        createDurableApp: async () => ({ app: { close: closeFirstApp } }),
+        runDurableReleaseLifecycle: async () => ({
+          releaseId: 'release-1',
+          markers: [
+            { marker: 'P0 delivery path', status: 'PASSED', details: ['safe p0 marker'] },
+            { marker: 'Release create/link/submit', status: 'PASSED', details: ['safe release marker'] },
+            { marker: 'Strict local_codex run', status: 'PASSED', details: ['strict evidence completed before projection'] },
+          ],
+          strictLocalCodex: {
+            executionPackageId: 'strict-package-1',
+            runSessionId: 'strict-run-1',
+            reviewPacketId: 'strict-review-1',
+            summary: publicStrictLocalCodexEvidenceSummary({
+              runSessionId: 'strict-run-1',
+              changedFileCount: 1,
+              checkCount: 1,
+              artifactKinds: ['execution_summary', 'review_packet'],
+              reviewPacketAvailable: true,
+            }),
+          },
+        }),
+        reopenDbClient: () => ({ db: {}, pool: { end: closeFreshPool } }),
+        createFreshRepository: () => new InMemoryP0Repository(),
+        createFreshDurableApp: async () => ({ app: { close: closeFreshApp } }),
+        verifyDurableReleaseAfterReopen: async () => {
+          throw new Error('strict local Codex public cockpit projection missing supports/generated_by links');
+        },
+        dropDatabase: async () => undefined,
+      },
+    });
+
+    expect(closeFirstApp).toHaveBeenCalled();
+    expect(closeFirstPool).toHaveBeenCalled();
+    expect(closeFreshApp).toHaveBeenCalled();
+    expect(closeFreshPool).toHaveBeenCalled();
+    expect(markers.find((marker) => marker.marker === 'P0 delivery path')).toMatchObject({ status: 'PASSED' });
+    expect(markers.find((marker) => marker.marker === 'Release create/link/submit')).toMatchObject({ status: 'PASSED' });
+    expect(markers.find((marker) => marker.marker === 'Durable local reset')).toMatchObject({
+      status: 'FAILED',
+      details: expect.arrayContaining(['reopen_failed']),
+    });
+    expect(markers.find((marker) => marker.marker === 'Strict local_codex run')).toMatchObject({
+      status: 'FAILED',
+      details: expect.arrayContaining(['public_projection_leak']),
+    });
+    expect(() => assertNoUnsafeReleaseDogfoodStrings('projection failure strict markers', markers)).not.toThrow();
+  });
+
   it('creates observation evidence before closing the strict durable release lifecycle', async () => {
     const repository = new InMemoryP0Repository();
     const app = await createDurableTestApp(repository);
@@ -474,6 +844,15 @@ describe('release flow dogfood script helpers', () => {
           }),
         ]),
       );
+      const observationRelationships = evidence.flatMap((item) => {
+        const links = (item.extra as { observation?: { links?: Array<{ relationship?: unknown }> } } | undefined)?.observation?.links;
+        return Array.isArray(links) ? links.map((link) => link.relationship) : [];
+      });
+      expect(observationRelationships).not.toContain('affected');
+      expect(observationRelationships).toEqual(
+        expect.arrayContaining(['observed', 'generated_by']),
+      );
+      expect(observationRelationships.every((relationship) => ['observed', 'supports', 'generated_by'].includes(String(relationship)))).toBe(true);
     } finally {
       await app.close();
     }
@@ -737,6 +1116,174 @@ describe('release flow dogfood script helpers', () => {
       },
     };
   };
+
+  it('rejects strict local Codex reopen verification when public projection drops strict links', async () => {
+    const { repository, lifecycle } = await seedFreshReopenRepository({
+      releaseEvidence: {
+        id: 'release-evidence-reopen',
+        release_id: 'release-reopen',
+        evidence_type: 'observation_note',
+        summary: 'Observation is healthy.',
+        extra: {
+          observation: {
+            source: 'script',
+            severity: 'info',
+            observed_at: '2026-05-11T00:01:00.000Z',
+            summary: 'Fresh app can read release observations.',
+            links: [
+              { object_type: 'release', object_id: 'release-reopen', relationship: 'observed' },
+              { object_type: 'execution_package', object_id: 'strict-package-reopen', relationship: 'supports' },
+              { object_type: 'run_session', object_id: 'strict-run-reopen', relationship: 'generated_by' },
+            ],
+          },
+        },
+        redacted: false,
+        status: 'current',
+        created_at: '2026-05-11T00:01:00.000Z',
+        created_by_actor_id: 'actor-owner',
+        updated_at: '2026-05-11T00:01:00.000Z',
+        updated_by_actor_id: 'actor-owner',
+      },
+    });
+    const baseRelease = await repository.getRelease(lifecycle.releaseId);
+    if (baseRelease === undefined) {
+      throw new Error('missing seeded release');
+    }
+    await repository.saveExecutionPackage({
+      id: 'strict-package-reopen',
+      work_item_id: lifecycle.workItemId ?? 'work-item-reopen',
+      spec_id: 'spec-reopen',
+      spec_revision_id: 'spec-revision-reopen',
+      plan_id: 'plan-reopen',
+      plan_revision_id: 'plan-revision-reopen',
+      project_id: baseRelease.project_id,
+      repo_id: 'forgeloop-source',
+      objective: 'Strict local Codex public projection.',
+      owner_actor_id: 'actor-owner',
+      reviewer_actor_id: 'actor-reviewer',
+      qa_owner_actor_id: 'actor-qa',
+      phase: 'release',
+      activity_state: 'idle',
+      gate_state: 'release_ready',
+      resolution: 'completed',
+      required_checks: [],
+      required_artifact_kinds: ['execution_summary'],
+      allowed_paths: ['README.md'],
+      forbidden_paths: ['.git'],
+      current_run_session_id: 'strict-run-reopen',
+      last_run_session_id: 'strict-run-reopen',
+      current_review_packet_id: 'strict-review-reopen',
+      created_at: '2026-05-11T00:00:00.000Z',
+      updated_at: '2026-05-11T00:01:00.000Z',
+    });
+    await repository.saveRunSession({
+      id: 'strict-run-reopen',
+      execution_package_id: 'strict-package-reopen',
+      requested_by_actor_id: 'actor-owner',
+      status: 'succeeded',
+      executor_type: 'local_codex',
+      changed_files: [{ repo_id: 'forgeloop-source', path: 'README.md', change_kind: 'modified' }],
+      check_results: [],
+      artifacts: [{ kind: 'execution_summary', name: 'Summary', content_type: 'text/markdown', storage_uri: 'https://example.test/summary.md' }],
+      log_refs: [],
+      summary: 'Succeeded.',
+      created_at: '2026-05-11T00:00:00.000Z',
+      updated_at: '2026-05-11T00:01:00.000Z',
+      started_at: '2026-05-11T00:00:00.000Z',
+      finished_at: '2026-05-11T00:01:00.000Z',
+    });
+    await repository.saveReviewPacket({
+      id: 'strict-review-reopen',
+      run_session_id: 'strict-run-reopen',
+      execution_package_id: 'strict-package-reopen',
+      reviewer_actor_id: 'actor-reviewer',
+      spec_revision_id: 'spec-revision-reopen',
+      plan_revision_id: 'plan-revision-reopen',
+      status: 'completed',
+      decision: 'approved',
+      summary: 'Approved.',
+      changed_files: [],
+      check_result_summary: 'Required checks passed.',
+      self_review: {
+        status: 'succeeded',
+        summary: 'Looks good.',
+        spec_plan_alignment: 'Aligned.',
+        test_assessment: 'Covered.',
+        risk_notes: [],
+        follow_up_questions: [],
+      },
+      risk_notes: [],
+      reviewed_by_actor_id: 'actor-reviewer',
+      reviewed_at: '2026-05-11T00:01:00.000Z',
+      requested_changes: [],
+      created_at: '2026-05-11T00:00:00.000Z',
+      updated_at: '2026-05-11T00:01:00.000Z',
+      completed_at: '2026-05-11T00:01:00.000Z',
+    });
+    await repository.saveRelease({
+      ...baseRelease,
+      execution_package_ids: [...baseRelease.execution_package_ids, 'strict-package-reopen'],
+      current_run_session_ids: [...(baseRelease.current_run_session_ids ?? []), 'strict-run-reopen'],
+      current_review_packet_ids: [...(baseRelease.current_review_packet_ids ?? []), 'strict-review-reopen'],
+    });
+    await repository.saveReleaseExecutionPackage({ release_id: baseRelease.id, execution_package_id: 'strict-package-reopen' });
+    const server = createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url === `/query/release-cockpit/${baseRelease.id}`) {
+        response.end(
+          JSON.stringify({
+            observations: [
+              {
+                extra: {
+                  observation: {
+                    links: [{ object_type: 'release', object_id: baseRelease.id, relationship: 'observed' }],
+                  },
+                },
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      response.end(
+        JSON.stringify([
+          {
+            source: 'release_evidence',
+            payload: {
+              extra: {
+                observation: {
+                  links: [{ object_type: 'release', object_id: baseRelease.id, relationship: 'observed' }],
+                },
+              },
+            },
+          },
+        ]),
+      );
+    });
+
+    await expect(
+      verifyDurableReleaseAfterReopen({
+        app: { getHttpServer: () => server },
+        repository,
+        releaseId: lifecycle.releaseId,
+        lifecycle: {
+          ...lifecycle,
+          strictLocalCodex: {
+            executionPackageId: 'strict-package-reopen',
+            runSessionId: 'strict-run-reopen',
+            reviewPacketId: 'strict-review-reopen',
+            summary: publicStrictLocalCodexEvidenceSummary({
+              runSessionId: 'strict-run-reopen',
+              changedFileCount: 1,
+              checkCount: 0,
+              artifactKinds: ['execution_summary'],
+              reviewPacketAvailable: true,
+            }),
+          },
+        },
+      }),
+    ).rejects.toThrow(/strict local Codex public cockpit projection/i);
+  });
 
   it('verifies lifecycle-created release closure rows through a fresh app boundary', async () => {
     const repository = new InMemoryP0Repository();

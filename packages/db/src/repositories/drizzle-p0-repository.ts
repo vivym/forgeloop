@@ -1092,7 +1092,7 @@ export class DrizzleP0Repository implements P0Repository {
     linkOrder: number,
   ): Promise<void> {
     const record = toDbRecord(
-      { release_id: releaseId, execution_package_id: executionPackageId, linkOrder },
+      { release_id: releaseId, package_id: executionPackageId, linkOrder },
       release_execution_packages,
     );
     await this.db
