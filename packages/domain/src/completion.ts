@@ -46,15 +46,11 @@ export const deriveRequiredArtifactPresence = (
     const isPresent =
       requiredArtifactKind === 'logs'
         ? logKinds.has(requiredArtifactKind)
-        : artifactKinds.has(requiredArtifactKind) ||
-          (requiredArtifactKind === 'review_packet' &&
-            executionPackage.id !== undefined &&
+        : requiredArtifactKind === 'review_packet'
+          ? executionPackage.id !== undefined &&
             runSession.id !== undefined &&
-            hasApprovedReviewForRun(
-              { id: executionPackage.id },
-              { id: runSession.id },
-              context.reviewPackets ?? [],
-            ));
+            hasApprovedReviewForRun({ id: executionPackage.id }, { id: runSession.id }, context.reviewPackets ?? [])
+          : artifactKinds.has(requiredArtifactKind);
 
     if (isPresent) {
       presentArtifactKinds.add(requiredArtifactKind);

@@ -488,6 +488,29 @@ describe('domain completion derivation', () => {
     ).toContain('package package-1 has no approved review decision');
   });
 
+  it('does not satisfy required review_packet from a run artifact without an approved Review Packet object', () => {
+    const executionPackage = packageBase({ required_artifact_kinds: ['review_packet'] });
+    const runSession = successfulRun({
+      artifacts: [
+        {
+          kind: 'review_packet',
+          name: 'review packet artifact',
+          content_type: 'text/markdown',
+          local_ref: 'artifacts/run-session/review-packet.md',
+        },
+      ],
+    });
+
+    expect(deriveRequiredArtifactPresence(executionPackage, runSession).missing_artifact_kinds).toEqual([
+      'review_packet',
+    ]);
+    expect(
+      deriveRequiredArtifactPresence(executionPackage, runSession, {
+        reviewPackets: [approvedReviewPacket({ decision: 'changes_requested' })],
+      }).missing_artifact_kinds,
+    ).toEqual(['review_packet']);
+  });
+
   it('does not satisfy required logs from run artifacts', () => {
     const completion = deriveWorkItemCompletion(
       workItem,
