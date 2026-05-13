@@ -302,6 +302,22 @@ describe('evidence chain API', () => {
     expect(chain.items.some((item) => item.risk_flags.includes('failed_required_check'))).toBe(false);
   });
 
+  it('satisfies required review_packet evidence from the approved Review Packet object', async () => {
+    const { app, repo, workItemId, executionPackageId } = await track(seedEvidenceChainScenario());
+    const executionPackage = await repo.getExecutionPackage(executionPackageId);
+
+    await repo.saveExecutionPackage({
+      ...executionPackage!,
+      required_artifact_kinds: ['execution_summary', 'logs', 'review_packet'],
+    });
+
+    const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
+    const chain = evidenceChainResponseSchema.parse(response.body);
+
+    expect(chain.summary.risk_flags).not.toContain('missing_required_artifact');
+    expect(chain.items.some((item) => item.risk_flags.includes('missing_required_artifact'))).toBe(false);
+  });
+
   it('scopes explicit required artifact risk to the explicit packet run', async () => {
     const { app, repo, workItemId, executionPackageId, changesRequestedReviewPacketId } = await track(seedEvidenceChainScenario());
     const executionPackage = await repo.getExecutionPackage(executionPackageId);

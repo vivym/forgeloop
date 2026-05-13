@@ -518,7 +518,9 @@ export const buildEvidenceChain = async (
         },
       });
 
-      const missingArtifactKinds = deriveRequiredArtifactPresence(evidence.executionPackage, runSession).missing_artifact_kinds;
+      const missingArtifactKinds = deriveRequiredArtifactPresence(evidence.executionPackage, runSession, {
+        reviewPackets: evidence.reviewPackets,
+      }).missing_artifact_kinds;
       if (selectedRun && missingArtifactKinds.length > 0) {
         addItem({
           id: `evidence-item:missing-artifacts:${runSession.id}`,
