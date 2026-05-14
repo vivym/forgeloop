@@ -113,6 +113,7 @@ describe('domain state transitions', () => {
       required_artifact_kinds: ['execution_summary', 'diff'],
       allowed_paths: ['packages/domain/**', 'tests/domain/**'],
       forbidden_paths: ['apps/**'],
+      version: 0,
       created_at: '2026-05-05T00:00:00.000Z',
       updated_at: '2026-05-05T00:00:00.000Z',
       ...overrides,
@@ -530,12 +531,14 @@ describe('domain state transitions', () => {
         activity_state: 'idle',
         gate_state: 'not_submitted',
         resolution: 'none',
+        version: 0,
       });
 
       const ready = transitionExecutionPackage(created, { type: 'mark_ready' });
       expect(ready).toMatchObject({
         phase: 'ready',
         gate_state: 'not_submitted',
+        version: 1,
       });
 
       const queued = transitionExecutionPackage(ready, { type: 'run', run_session_id: 'run-session-1' });
@@ -543,12 +546,14 @@ describe('domain state transitions', () => {
         phase: 'queued',
         activity_state: 'idle',
         last_run_session_id: 'run-session-1',
+        version: 2,
       });
 
       const execution = transitionExecutionPackage(queued, { type: 'workflow_start' });
       expect(execution).toMatchObject({
         phase: 'execution',
         activity_state: 'ai_running',
+        version: 3,
       });
 
       const review = transitionExecutionPackage(execution, { type: 'execution_succeeded' });
@@ -556,6 +561,7 @@ describe('domain state transitions', () => {
         phase: 'review',
         activity_state: 'awaiting_human',
         gate_state: 'awaiting_human_review',
+        version: 4,
       });
     });
 
@@ -1662,6 +1668,18 @@ describe('domain state transitions', () => {
         ],
       });
       expect(transitionReviewPacket(ready, { type: 'archive_for_newer_run' })).toMatchObject({
+        status: 'archived',
+        decision: 'none',
+      });
+    });
+
+    it.each(['draft', 'escalated'] as const)('archives %s packets for a newer run', (status) => {
+      const packet: ReviewPacket = {
+        ...createPacket(),
+        status,
+      };
+
+      expect(transitionReviewPacket(packet, { type: 'archive_for_newer_run' })).toMatchObject({
         status: 'archived',
         decision: 'none',
       });

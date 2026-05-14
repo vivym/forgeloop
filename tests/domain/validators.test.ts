@@ -76,6 +76,26 @@ const packageBase = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackag
   required_artifact_kinds: ['execution_summary', 'diff'],
   allowed_paths: ['packages/domain/**', 'tests/domain/**'],
   forbidden_paths: ['apps/**'],
+  version: 0,
+  policy_snapshot_status: 'captured',
+  policy_snapshot_version: 1,
+  package_policy_snapshot: {
+    policy_snapshot_version: 1,
+    policy_digest: 'policy-digest-1',
+    policy_source_path: 'policies/runtime-policy.json',
+    policy_loaded_at: timestamp,
+    policy_last_known_good: true,
+    hooks: [],
+    command_policy: { default_timeout_ms: 120_000 },
+    check_policy: { required_checks: ['domain-tests'] },
+    env_policy: { allowed: ['CI'] },
+    path_policy: { allowed_paths: ['packages/domain/**', 'tests/domain/**'] },
+    codex_runtime_mode: 'mock',
+    fallback_policy: { allow_exec_fallback: false },
+    validation_strategy_version: 1,
+    validation_strategy: 'checks_required',
+    validation_public_summary: 'Domain tests are required before review.',
+  },
   created_at: timestamp,
   updated_at: timestamp,
   ...overrides,
@@ -265,6 +285,202 @@ describe('domain validators', () => {
       'EXECUTION_OBJECTIVE_REQUIRED',
     );
   });
+
+  it('rejects packages with a negative mutable version', () => {
+    expectDomainError(
+      () => validateExecutionPackage(project, packageBase({ version: -1 })),
+      'EXECUTION_PACKAGE_VERSION_INVALID',
+    );
+  });
+
+  it.each([1.5, Number.NaN, Number.POSITIVE_INFINITY] as const)(
+    'rejects packages with non-integer or non-finite mutable version %s',
+    (version) => {
+      expectDomainError(
+        () => validateExecutionPackage(project, packageBase({ version })),
+        'EXECUTION_PACKAGE_VERSION_INVALID',
+      );
+    },
+  );
+
+  it('requires a captured policy snapshot before ready or run-eligible phases', () => {
+    expectDomainError(
+      () => validateExecutionPackage(project, packageBase({ policy_snapshot_status: 'missing' })),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+    expectDomainError(
+      () => validateExecutionPackage(project, packageBase({ phase: 'queued', policy_snapshot_status: 'stale' })),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+  });
+
+  it('requires ready packages to include a captured policy snapshot payload', () => {
+    expectDomainError(
+      () => validateExecutionPackage(project, packageBase({ package_policy_snapshot: undefined })),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5] as const)(
+    'rejects ready packages with invalid policy snapshot version %s',
+    (policy_snapshot_version) => {
+      expectDomainError(
+        () => validateExecutionPackage(project, packageBase({ policy_snapshot_version })),
+        'EXECUTION_PACKAGE_POLICY_INVALID',
+      );
+    },
+  );
+
+  it('requires policy snapshot metadata to match the package snapshot payload', () => {
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            policy_snapshot_version: 2,
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...packageBase().package_policy_snapshot!,
+              policy_snapshot_status: 'stale',
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            validation_strategy: 'custom',
+            validation_strategy_version: 1,
+            validation_public_summary: 'Validated through an approved manual contract.',
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...packageBase().package_policy_snapshot!,
+              validation_strategy: 'custom',
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+  });
+
+  it('requires reviewed approval and evidence for allow_all_repo validation', () => {
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            required_checks: [],
+            validation_strategy: 'allow_all_repo',
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expect(() =>
+      validateExecutionPackage(
+        project,
+        packageBase({
+          required_checks: [],
+          validation_strategy: 'allow_all_repo',
+          validation_approved_by: 'actor-reviewer',
+          validation_approved_at: timestamp,
+          validation_evidence_refs: [executionSummaryArtifact],
+          package_policy_snapshot: {
+            ...packageBase().package_policy_snapshot!,
+            validation_strategy: 'allow_all_repo',
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('requires a public summary and frozen version for custom validation strategies', () => {
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            required_checks: [],
+            validation_strategy: 'custom',
+            validation_strategy_version: 1,
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            required_checks: [],
+            validation_strategy: 'custom',
+            validation_public_summary: 'Validated through an approved manual contract.',
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expect(() =>
+      validateExecutionPackage(
+        project,
+        packageBase({
+          required_checks: [],
+          validation_strategy: 'custom',
+          validation_strategy_version: 1,
+          validation_public_summary: 'Validated through an approved manual contract.',
+          package_policy_snapshot: {
+            ...packageBase().package_policy_snapshot!,
+            validation_strategy: 'custom',
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5] as const)(
+    'rejects custom validation strategy version %s',
+    (validation_strategy_version) => {
+      expectDomainError(
+        () =>
+          validateExecutionPackage(
+            project,
+            packageBase({
+              required_checks: [],
+              validation_strategy: 'custom',
+              validation_strategy_version,
+              validation_public_summary: 'Validated through an approved manual contract.',
+              package_policy_snapshot: {
+                ...packageBase().package_policy_snapshot!,
+                validation_strategy: 'custom',
+              },
+            }),
+          ),
+        'EXECUTION_PACKAGE_POLICY_INVALID',
+      );
+    },
+  );
 
   it('detects dependency cycles', () => {
     const packages = [packageBase({ id: 'package-a' }), packageBase({ id: 'package-b' })];

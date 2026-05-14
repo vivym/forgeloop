@@ -4,7 +4,7 @@ import { artifactRefSchema, changedFileSchema, checkResultSchema } from './execu
 
 const isoDateTimeSchema = z.string().datetime();
 
-export const reviewPacketStatusSchema = z.enum(['ready', 'in_review', 'completed', 'archived']);
+export const reviewPacketStatusSchema = z.enum(['draft', 'ready', 'in_review', 'completed', 'escalated', 'archived']);
 export type ReviewPacketStatus = z.infer<typeof reviewPacketStatusSchema>;
 
 export const reviewPacketDecisions = ['none', 'approved', 'changes_requested', 'need_more_context', 'escalate'] as const;
