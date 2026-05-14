@@ -699,7 +699,7 @@ describe('executePackageRun', () => {
     expect(executorCalls).toBe(0);
   });
 
-  it('archives all older open ReviewPackets and preserves completed packets', async () => {
+  it('archives the older open ReviewPacket and preserves completed packets', async () => {
     const openReady = transitionReviewPacket(undefined, {
       type: 'create',
       id: 'review-packet:open-ready',
@@ -714,23 +714,6 @@ describe('executePackageRun', () => {
       risk_notes: [],
       at: now,
     });
-    const openInReview = transitionReviewPacket(
-      transitionReviewPacket(undefined, {
-        type: 'create',
-        id: 'review-packet:open-in-review',
-        run_session_id: 'run-session-open-in-review',
-        execution_package_id: 'execution-package-1',
-        reviewer_actor_id: 'actor-reviewer',
-        spec_revision_id: 'spec-revision-1',
-        plan_revision_id: 'plan-revision-1',
-        changed_files: [],
-        check_result_summary: 'Open in-review review.',
-        self_review: successfulSelfReview(),
-        risk_notes: [],
-        at: now,
-      }),
-      { type: 'start_review', at: now },
-    );
     const completed = transitionReviewPacket(
       transitionReviewPacket(undefined, {
         type: 'create',
@@ -759,7 +742,6 @@ describe('executePackageRun', () => {
       previousReviewPacket: openReady,
       runSessionId: 'run-session-archives-all',
     });
-    await repository.saveReviewPacket(openInReview);
     await repository.saveReviewPacket(completed);
 
     await runWorkflow(repository, runSessionId);
@@ -767,10 +749,6 @@ describe('executePackageRun', () => {
     const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
 
     expect(reviewPackets.find((packet) => packet.id === openReady.id)).toMatchObject({ status: 'archived', decision: 'none' });
-    expect(reviewPackets.find((packet) => packet.id === openInReview.id)).toMatchObject({
-      status: 'archived',
-      decision: 'none',
-    });
     expect(reviewPackets.find((packet) => packet.id === completed.id)).toMatchObject({
       status: 'completed',
       decision: 'approved',

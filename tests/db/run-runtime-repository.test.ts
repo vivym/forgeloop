@@ -259,17 +259,62 @@ describe('run runtime repository behavior', () => {
   it('claims expired leases and lists only non-terminal recoverable run sessions', async () => {
     const repository = createRepository();
 
-    await repository.saveRunSession(runSession({ id: 'queued-run', status: 'queued', created_at: '2026-05-05T00:00:01.000Z' }));
-    await repository.saveRunSession(runSession({ id: 'running-run', status: 'running', created_at: '2026-05-05T00:00:02.000Z' }));
     await repository.saveRunSession(
-      runSession({ id: 'waiting-run', status: 'waiting_for_input', created_at: '2026-05-05T00:00:03.000Z' }),
+      runSession({
+        id: 'queued-run',
+        execution_package_id: 'execution-package-queued',
+        status: 'queued',
+        created_at: '2026-05-05T00:00:01.000Z',
+      }),
     );
-    await repository.saveRunSession(runSession({ id: 'stalled-run', status: 'stalled', created_at: '2026-05-05T00:00:04.000Z' }));
-    await repository.saveRunSession(runSession({ id: 'resuming-run', status: 'resuming', created_at: '2026-05-05T00:00:05.000Z' }));
     await repository.saveRunSession(
-      runSession({ id: 'cancel-run', status: 'cancel_requested', created_at: '2026-05-05T00:00:06.000Z' }),
+      runSession({
+        id: 'running-run',
+        execution_package_id: 'execution-package-running',
+        status: 'running',
+        created_at: '2026-05-05T00:00:02.000Z',
+      }),
     );
-    await repository.saveRunSession(runSession({ id: 'done-run', status: 'succeeded', created_at: '2026-05-05T00:00:07.000Z' }));
+    await repository.saveRunSession(
+      runSession({
+        id: 'waiting-run',
+        execution_package_id: 'execution-package-waiting',
+        status: 'waiting_for_input',
+        created_at: '2026-05-05T00:00:03.000Z',
+      }),
+    );
+    await repository.saveRunSession(
+      runSession({
+        id: 'stalled-run',
+        execution_package_id: 'execution-package-stalled',
+        status: 'stalled',
+        created_at: '2026-05-05T00:00:04.000Z',
+      }),
+    );
+    await repository.saveRunSession(
+      runSession({
+        id: 'resuming-run',
+        execution_package_id: 'execution-package-resuming',
+        status: 'resuming',
+        created_at: '2026-05-05T00:00:05.000Z',
+      }),
+    );
+    await repository.saveRunSession(
+      runSession({
+        id: 'cancel-run',
+        execution_package_id: 'execution-package-cancel',
+        status: 'cancel_requested',
+        created_at: '2026-05-05T00:00:06.000Z',
+      }),
+    );
+    await repository.saveRunSession(
+      runSession({
+        id: 'done-run',
+        execution_package_id: 'execution-package-done',
+        status: 'succeeded',
+        created_at: '2026-05-05T00:00:07.000Z',
+      }),
+    );
 
     await repository.claimRunWorkerLease({
       run_session_id: 'running-run',

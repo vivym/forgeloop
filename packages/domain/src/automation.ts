@@ -201,11 +201,17 @@ export interface ExecutionPackageGenerationRun {
   manifest_digest?: string;
   expected_package_count?: number;
   expected_package_keys?: string[];
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'blocked' | 'skipped';
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'blocked' | 'skipped' | 'superseded';
   result_json?: Record<string, unknown>;
   locked_until?: IsoDateTime;
   last_heartbeat_at?: IsoDateTime;
   claim_token?: string;
+  superseded_by?: string;
+  superseded_at?: IsoDateTime;
+  superseded_reason?: string;
+  evidence_refs?: ArtifactRef[];
+  next_generation_key?: string;
+  completed_at?: IsoDateTime;
   created_at?: IsoDateTime;
   updated_at?: IsoDateTime;
 }

@@ -1,10 +1,14 @@
 import { expect } from 'vitest';
 import type {
   Actor,
+  AutomationActionRun,
   Artifact,
+  CommandIdempotencyRecord,
   Decision,
+  ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
+  ManualPathHold,
   Organization,
   ObjectEvent,
   Plan,
@@ -34,6 +38,18 @@ import type {
 
 const at = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
+
+const buildManualScopeKey = (scope: {
+  object_type: string;
+  object_id: string;
+  generation_key?: string;
+  gate_key?: string;
+}): string =>
+  scope.object_type === 'package_generation'
+    ? `${scope.object_type}:${scope.object_id}:${scope.generation_key}`
+    : scope.object_type === 'release_gate'
+      ? `${scope.object_type}:${scope.object_id}:${scope.gate_key}`
+      : `${scope.object_type}:${scope.object_id}`;
 
 const ids = {
   org: '11111111-1111-4111-8111-111111111111',
@@ -259,6 +275,7 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
     last_run_session_id: ids.runSession,
     current_review_packet_id: ids.reviewPacket,
     current_release_id: ids.release,
+    version: 0,
     created_at: at,
     updated_at: later,
   };
@@ -603,6 +620,733 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
   expect(await repository.listTraceEventsForSubject('release', ids.release)).toEqual([traceEvent]);
   expect(await repository.listTraceLinks(traceEvent.id)).toEqual(traceLinks);
   expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([traceArtifactRef]);
+
+  await expectAutomationRepositoryContract(repository);
+}
+
+async function expectAutomationRepositoryContract(repository: P0Repository): Promise<void> {
+  const defaultSettings = await repository.resolveAutomationProjectSettings({
+    project_id: ids.project,
+    repo_id: 'repo-1',
+  });
+  expect(defaultSettings).toMatchObject({
+    project_id: ids.project,
+    repo_id: 'repo-1',
+    scope_type: 'repo',
+    preset: 'off',
+    version: 0,
+    capabilities_json: {
+      canProjectRuntimeState: false,
+      canGeneratePlanDraft: false,
+      canGeneratePackageDrafts: false,
+      canEnqueueRuns: false,
+    },
+  });
+
+  const settings = await repository.setAutomationProjectSettings({
+    id: 'automation-settings-1',
+    project_id: ids.project,
+    repo_id: 'repo-1',
+    scope_type: 'repo',
+    preset: 'draft_only',
+    expected_version: 0,
+    reason: 'local dogfood',
+    evidence_refs: [],
+    actor: { actor_id: ids.human, actor_class: 'human_admin' },
+    now: at,
+  });
+  expect(settings.version).toBe(1);
+  expect(settings.capabilities_json.canGeneratePlanDraft).toBe(true);
+  await expect(
+    repository.setAutomationProjectSettings({
+      id: 'automation-settings-2',
+      project_id: ids.project,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'stale',
+      evidence_refs: [],
+      actor: { actor_id: ids.human, actor_class: 'human_admin' },
+      now: later,
+    }),
+  ).rejects.toThrow(/version/i);
+  await expect(
+    repository.setAutomationProjectSettings({
+      id: 'automation-settings-daemon',
+      project_id: ids.project,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 1,
+      reason: 'daemon escalation',
+      evidence_refs: [],
+      actor: { actor_id: ids.system, actor_class: 'automation_daemon' },
+      now: later,
+    }),
+  ).rejects.toThrow(/capabilit|actor/i);
+  const concurrentSettings = await Promise.allSettled([
+    repository.setAutomationProjectSettings({
+      id: 'automation-settings-race-a',
+      project_id: ids.project,
+      repo_id: 'repo-cas-race',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'race a',
+      evidence_refs: [],
+      actor: { actor_id: ids.human, actor_class: 'human_admin' },
+      now: at,
+    }),
+    repository.setAutomationProjectSettings({
+      id: 'automation-settings-race-b',
+      project_id: ids.project,
+      repo_id: 'repo-cas-race',
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'race b',
+      evidence_refs: [],
+      actor: { actor_id: ids.human, actor_class: 'human_admin' },
+      now: at,
+    }),
+  ]);
+  expect(concurrentSettings.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+  expect(concurrentSettings.filter((result) => result.status === 'rejected')).toHaveLength(1);
+
+  const disabled = await repository.disableAutomationProjectSettings({
+    project_id: ids.project,
+    repo_id: 'repo-1',
+    expected_version: 1,
+    reason: 'pause automation',
+    evidence_refs: [],
+    actor: { actor_id: ids.human, actor_class: 'human_admin' },
+    now: later,
+  });
+  expect(disabled).toMatchObject({ preset: 'off', version: 2 });
+
+  const hold = await repository.requestManualPathHold({
+    id: 'hold-1',
+    object_type: 'plan_revision',
+    object_id: ids.planRevision2,
+    scope_key: buildManualScopeKey({ object_type: 'plan_revision', object_id: ids.planRevision2 }),
+    reason_code: 'needs_human_plan_review',
+    reason: 'Plan needs manual review.',
+    source_automation_action_id: 'automation-action-1',
+    evidence_refs: [],
+    requested_by: ids.system,
+    requested_at: at,
+    idempotency_key: 'hold-idem-1',
+  });
+  const replayedHold = await repository.requestManualPathHold({
+    ...hold,
+    id: 'hold-duplicate',
+    requested_at: later,
+    idempotency_key: 'hold-idem-1',
+  });
+  expect(replayedHold).toEqual(hold);
+  expect(replayedHold.source_automation_action_id).toBe('automation-action-1');
+  await expect(
+    repository.requestManualPathHold({
+      ...hold,
+      id: 'hold-conflict',
+      source_automation_action_id: 'automation-action-conflict',
+      requested_at: later,
+      idempotency_key: 'hold-idem-conflict',
+    }),
+  ).rejects.toThrow(/hold|active|duplicate/i);
+  await expect(
+    repository.requestManualPathHold({
+      ...hold,
+      id: 'hold-invalid-scope',
+      scope_key: 'plan_revision:not-the-plan',
+      source_automation_action_id: 'automation-action-invalid-scope',
+      idempotency_key: 'hold-idem-invalid',
+    }),
+  ).rejects.toThrow(/scope/i);
+  await expect(
+    repository.requestManualPathHold({
+      id: 'hold-invalid-package-generation',
+      object_type: 'package_generation',
+      object_id: ids.planRevision2,
+      scope_key: `package_generation:${ids.planRevision2}:wrong-generation-key`,
+      reason_code: 'needs_human_package_generation_review',
+      reason: 'Generation scope must be canonical.',
+      evidence_refs: [],
+      requested_by: ids.system,
+      requested_at: at,
+      idempotency_key: 'hold-idem-invalid-package-generation',
+    }),
+  ).rejects.toThrow(/generation|scope/i);
+  await expect(
+    repository.requestManualPathHold({
+      id: 'hold-invalid-release-gate',
+      object_type: 'release_gate',
+      object_id: ids.release,
+      scope_key: `release_gate:${ids.release}:wrong-gate-key`,
+      reason_code: 'needs_human_release_gate_review',
+      reason: 'Release gate scope must be canonical.',
+      evidence_refs: [],
+      requested_by: ids.system,
+      requested_at: at,
+      idempotency_key: 'hold-idem-invalid-release-gate',
+    }),
+  ).rejects.toThrow(/gate|scope/i);
+
+  const activeHoldsForPackage = await repository.listActiveManualPathHolds({
+    object_type: 'execution_package',
+    object_id: ids.package,
+  });
+  expect(activeHoldsForPackage.map((activeHold) => activeHold.id)).toContain(hold.id);
+
+  const resolvedHold = await repository.resolveManualPathHold({
+    hold_id: hold.id,
+    resolved_by: ids.human,
+    resolved_at: later,
+    resolution: 'handled manually',
+  });
+  expect(resolvedHold.status).toBe('resolved');
+  expect(
+    await repository.requestManualPathHold({
+      ...hold,
+      id: 'hold-after-resolve',
+      requested_at: later,
+      idempotency_key: 'hold-idem-1',
+    }),
+  ).toEqual(resolvedHold);
+  expect(
+    await repository.requestManualPathHold({
+      ...hold,
+      id: 'hold-source-replay',
+      requested_at: later,
+      idempotency_key: 'hold-idem-source-replay',
+    }),
+  ).toEqual(resolvedHold);
+
+  const claimedCommand = await repository.claimCommandIdempotency({
+    id: 'command-idem-1',
+    command_name: 'ensure_plan',
+    idempotency_key: 'command-key-1',
+    target_object_type: 'work_item',
+    target_object_id: ids.workItem,
+    target_revision_id: ids.specRevision2,
+    target_version: 2,
+    precondition_fingerprint: 'fingerprint-a',
+    precondition_json: { automation_settings_version: 2 },
+    actor_scope: ids.system,
+    claim_token: 'command-claim-1',
+    locked_until: '2026-05-05T00:05:00.000Z',
+    now: at,
+  });
+  expect(claimedCommand.status).toBe('running');
+  await expect(
+    repository.claimCommandIdempotency({
+      ...claimedCommand,
+      id: 'command-idem-live-duplicate',
+      claim_token: 'command-claim-live-duplicate',
+      now: at,
+      locked_until: '2026-05-05T00:06:00.000Z',
+    }),
+  ).rejects.toThrow(/active|claim/i);
+  await expect(
+    repository.claimCommandIdempotency({
+      ...claimedCommand,
+      id: 'command-idem-conflict',
+      precondition_fingerprint: 'fingerprint-b',
+      claim_token: 'command-claim-conflict',
+      now: at,
+    }),
+  ).rejects.toThrow(/fingerprint|precondition/i);
+  await expect(
+    repository.claimCommandIdempotency({
+      ...claimedCommand,
+      id: 'command-idem-identity-conflict',
+      command_name: 'ensure_execution_packages',
+      claim_token: 'command-claim-identity-conflict',
+      now: at,
+    }),
+  ).rejects.toThrow(/idempotency|command|conflict/i);
+  const renewedCommand = await repository.renewCommandIdempotency({
+    idempotency_key: claimedCommand.idempotency_key,
+    claim_token: 'command-claim-1',
+    locked_until: '2026-05-05T00:10:00.000Z',
+    last_heartbeat_at: later,
+  });
+  expect(renewedCommand.last_heartbeat_at).toBe(later);
+  const completedCommand = await repository.completeCommandIdempotency({
+    idempotency_key: claimedCommand.idempotency_key,
+    claim_token: 'command-claim-1',
+    result_json: { plan_revision_id: ids.planRevision2 },
+    finished_at: later,
+  });
+  expect(completedCommand.status).toBe('succeeded');
+  expect(completedCommand.result_json).toEqual({ plan_revision_id: ids.planRevision2 });
+  expect(
+    await repository.claimCommandIdempotency({
+      ...claimedCommand,
+      id: 'command-idem-replay',
+      claim_token: 'command-claim-replay',
+      now: later,
+    }),
+  ).toEqual(completedCommand);
+  const expiringCommand = await repository.claimCommandIdempotency({
+    id: 'command-idem-expiring',
+    command_name: 'ensure_execution_packages',
+    idempotency_key: 'command-key-expiring',
+    target_object_type: 'plan_revision',
+    target_object_id: ids.planRevision2,
+    target_revision_id: ids.planRevision2,
+    precondition_fingerprint: 'fingerprint-expiring',
+    actor_scope: ids.system,
+    claim_token: 'command-claim-expired-1',
+    locked_until: '2026-05-05T00:05:00.000Z',
+    now: at,
+  });
+  const reclaimedCommand = await repository.claimCommandIdempotency({
+    ...expiringCommand,
+    id: 'command-idem-expiring-reclaim',
+    claim_token: 'command-claim-expired-2',
+    locked_until: '2026-05-05T00:12:00.000Z',
+    now: '2026-05-05T00:06:00.000Z',
+  });
+  expect(reclaimedCommand).toMatchObject({ id: expiringCommand.id, status: 'running', claim_token: 'command-claim-expired-2' });
+  await expect(
+    repository.renewCommandIdempotency({
+      idempotency_key: expiringCommand.idempotency_key,
+      claim_token: 'command-claim-expired-1',
+      locked_until: '2026-05-05T00:13:00.000Z',
+      last_heartbeat_at: '2026-05-05T00:07:00.000Z',
+    }),
+  ).rejects.toThrow(/claimed|token|running/i);
+  await expect(
+    repository.completeCommandIdempotency({
+      idempotency_key: expiringCommand.idempotency_key,
+      claim_token: 'command-claim-expired-1',
+      finished_at: '2026-05-05T00:07:00.000Z',
+    }),
+  ).rejects.toThrow(/claimed|token|running/i);
+
+  const generationRun = await repository.claimExecutionPackageGenerationRun({
+    plan_revision_id: ids.planRevision2,
+    generation_key: `default:${ids.planRevision2}`,
+    generator_version: 'mock-plan-splitter@1',
+    policy_digest: 'sha256-policy-a',
+    manifest_digest: 'sha256-manifest-a',
+    expected_package_count: 2,
+    expected_package_keys: ['api', 'tests'],
+    claim_token: 'generation-claim-1',
+    now: at,
+    locked_until: '2026-05-05T00:05:00.000Z',
+  });
+  expect(generationRun.status).toBe('running');
+  await expect(
+    repository.claimExecutionPackageGenerationRun({
+      plan_revision_id: ids.planRevision2,
+      generation_key: `default:${ids.planRevision2}`,
+      generator_version: 'mock-plan-splitter@1',
+      policy_digest: 'sha256-policy-a',
+      manifest_digest: 'sha256-manifest-a',
+      expected_package_count: 2,
+      expected_package_keys: ['api', 'tests'],
+      claim_token: 'generation-claim-live-duplicate',
+      now: at,
+      locked_until: '2026-05-05T00:06:00.000Z',
+    }),
+  ).rejects.toThrow(/active|claim/i);
+  await expect(
+    repository.claimExecutionPackageGenerationRun({
+      plan_revision_id: ids.planRevision2,
+      generation_key: `default:${ids.planRevision2}`,
+      generator_version: 'mock-plan-splitter@2',
+      policy_digest: 'sha256-policy-a',
+      manifest_digest: 'sha256-manifest-b',
+      expected_package_count: 1,
+      expected_package_keys: ['api'],
+      claim_token: 'generation-claim-2',
+      now: later,
+      locked_until: '2026-05-05T00:05:00.000Z',
+    }),
+  ).rejects.toThrow(/manifest/i);
+  await expect(
+    repository.claimExecutionPackageGenerationRun({
+      plan_revision_id: ids.planRevision2,
+      generation_key: `default:${ids.planRevision2}`,
+      generator_version: 'mock-plan-splitter@1',
+      policy_digest: 'sha256-policy-b',
+      manifest_digest: 'sha256-manifest-a',
+      expected_package_count: 2,
+      expected_package_keys: ['api', 'tests'],
+      claim_token: 'generation-claim-policy-drift',
+      now: later,
+      locked_until: '2026-05-05T00:05:00.000Z',
+    }),
+  ).rejects.toThrow(/manifest|policy|drift/i);
+  await expect(
+    repository.claimExecutionPackageGenerationRun({
+      plan_revision_id: ids.planRevision2,
+      generation_key: `default:${ids.planRevision2}`,
+      generator_version: 'mock-plan-splitter@1',
+      policy_digest: 'sha256-policy-a',
+      manifest_digest: 'sha256-manifest-a',
+      expected_package_count: 1,
+      expected_package_keys: ['api', 'tests'],
+      claim_token: 'generation-claim-count-drift',
+      now: later,
+      locked_until: '2026-05-05T00:05:00.000Z',
+    }),
+  ).rejects.toThrow(/manifest|count|drift/i);
+  const reclaimedGenerationRun = await repository.claimExecutionPackageGenerationRun({
+    plan_revision_id: ids.planRevision2,
+    generation_key: `default:${ids.planRevision2}`,
+    generator_version: 'mock-plan-splitter@1',
+    policy_digest: 'sha256-policy-a',
+    manifest_digest: 'sha256-manifest-a',
+    expected_package_count: 2,
+    expected_package_keys: ['api', 'tests'],
+    claim_token: 'generation-claim-reclaimed',
+    now: '2026-05-05T00:06:00.000Z',
+    locked_until: '2026-05-05T00:11:00.000Z',
+  });
+  expect(reclaimedGenerationRun).toMatchObject({
+    execution_package_set_id: generationRun.execution_package_set_id,
+    status: 'running',
+    claim_token: 'generation-claim-reclaimed',
+    locked_until: '2026-05-05T00:11:00.000Z',
+    last_heartbeat_at: '2026-05-05T00:06:00.000Z',
+  });
+
+  await repository.saveExecutionPackageGenerationPackage({
+    execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+    execution_package_id: ids.package,
+    plan_revision_id: ids.planRevision2,
+    generation_key: reclaimedGenerationRun.generation_key,
+    package_key: 'api',
+    sequence: 1,
+    manifest_digest: reclaimedGenerationRun.manifest_digest!,
+    claim_token: 'generation-claim-reclaimed',
+  });
+  await expect(
+    repository.saveExecutionPackageGenerationPackage({
+      execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+      execution_package_id: ids.package2,
+      plan_revision_id: ids.planRevision2,
+      generation_key: reclaimedGenerationRun.generation_key,
+      package_key: 'api',
+      sequence: 2,
+      manifest_digest: reclaimedGenerationRun.manifest_digest!,
+      claim_token: 'generation-claim-reclaimed',
+    }),
+  ).rejects.toThrow(/package_key|unique|duplicate/i);
+  await expect(
+    repository.saveExecutionPackageGenerationPackage({
+      execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+      execution_package_id: ids.package,
+      plan_revision_id: ids.planRevision2,
+      generation_key: reclaimedGenerationRun.generation_key,
+      package_key: 'api',
+      sequence: 1,
+      manifest_digest: 'sha256-manifest-drift',
+      claim_token: 'generation-claim-reclaimed',
+    }),
+  ).rejects.toThrow(/drift|manifest/i);
+  await expect(
+    repository.saveExecutionPackageGenerationPackage({
+      execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+      execution_package_id: 'generation-package-stale-token',
+      plan_revision_id: ids.planRevision2,
+      generation_key: reclaimedGenerationRun.generation_key,
+      package_key: 'stale',
+      sequence: 3,
+      manifest_digest: reclaimedGenerationRun.manifest_digest!,
+      claim_token: 'generation-claim-1',
+    }),
+  ).rejects.toThrow(/claimed|token|running/i);
+  await expect(
+    repository.completeExecutionPackageGenerationRun({
+      plan_revision_id: ids.planRevision2,
+      execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+      claim_token: 'generation-claim-1',
+      result_json: { package_count: 1 },
+      completed_at: later,
+    }),
+  ).rejects.toThrow(/claimed|token|running/i);
+  await expect(
+    repository.completeExecutionPackageGenerationRun({
+      plan_revision_id: ids.planRevision2,
+      execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+      claim_token: 'generation-claim-reclaimed',
+      result_json: { package_count: 1 },
+      completed_at: later,
+    }),
+  ).rejects.toThrow(/package|manifest|count/i);
+  await repository.saveExecutionPackageGenerationPackage({
+    execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+    execution_package_id: ids.package2,
+    plan_revision_id: ids.planRevision2,
+    generation_key: reclaimedGenerationRun.generation_key,
+    package_key: 'tests',
+    sequence: 2,
+    manifest_digest: reclaimedGenerationRun.manifest_digest!,
+    claim_token: 'generation-claim-reclaimed',
+  });
+  const completedGeneration = await repository.completeExecutionPackageGenerationRun({
+    plan_revision_id: ids.planRevision2,
+    execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+    claim_token: 'generation-claim-reclaimed',
+    result_json: { package_count: 2 },
+    completed_at: later,
+  });
+  expect(completedGeneration.status).toBe('succeeded');
+  await expect(
+    repository.saveExecutionPackageGenerationPackage({
+      execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+      execution_package_id: 'generation-package-after-complete',
+      plan_revision_id: ids.planRevision2,
+      generation_key: reclaimedGenerationRun.generation_key,
+      package_key: 'after-complete',
+      sequence: 3,
+      manifest_digest: reclaimedGenerationRun.manifest_digest!,
+      claim_token: 'generation-claim-reclaimed',
+    }),
+  ).rejects.toThrow(/claimed|running|succeeded/i);
+  await expect(
+    repository.claimExecutionPackageGenerationRun({
+      plan_revision_id: ids.planRevision2,
+      generation_key: `alternate:${ids.planRevision2}`,
+      generator_version: 'mock-plan-splitter@1',
+      manifest_digest: 'sha256-manifest-new',
+      expected_package_count: 1,
+      expected_package_keys: ['worker'],
+      claim_token: 'generation-claim-new',
+      now: later,
+      locked_until: '2026-05-05T00:06:00.000Z',
+    }),
+  ).rejects.toThrow(/current|succeeded|supersede/i);
+  const superseded = await repository.supersedeExecutionPackageGenerationRun({
+    plan_revision_id: ids.planRevision2,
+    execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+    superseded_by: ids.human,
+    superseded_at: later,
+    reason: 'regenerate packages',
+    evidence_refs: [],
+  });
+  expect(superseded.status).toBe('superseded');
+  expect(superseded.next_generation_key).toBe(`regenerate:${ids.planRevision2}:2`);
+
+  const activeRun = await repository.findActiveRunSessionForPackage(ids.package);
+  expect(activeRun).toBeUndefined();
+  const queuedRun: RunSession = {
+    id: 'run-session-active-contract',
+    execution_package_id: ids.package,
+    requested_by_actor_id: ids.human,
+    status: 'queued',
+    changed_files: [],
+    check_results: [],
+    artifacts: [],
+    log_refs: [],
+    created_at: at,
+    updated_at: at,
+  };
+  await repository.saveRunSession(queuedRun);
+  expect(await repository.findActiveRunSessionForPackage(ids.package)).toEqual(queuedRun);
+  await expect(repository.saveRunSession({ ...queuedRun, id: 'run-session-active-contract-2' })).rejects.toThrow(
+    /active|run/i,
+  );
+  await repository.saveRunSession({ ...queuedRun, status: 'succeeded', finished_at: later, updated_at: later });
+  await repository.saveRunSession({ ...queuedRun, id: 'run-session-active-contract-2', status: 'running' });
+
+  expect(await repository.findOpenReviewPacketForPackage(ids.package)).toBeUndefined();
+  const openReview: ReviewPacket = {
+    id: 'review-packet-open-contract',
+    run_session_id: ids.runSession,
+    execution_package_id: ids.package,
+    reviewer_actor_id: ids.human,
+    spec_revision_id: ids.specRevision2,
+    plan_revision_id: ids.planRevision2,
+    status: 'draft',
+    decision: 'none',
+    changed_files: [],
+    check_result_summary: 'pending',
+    self_review: {
+      status: 'succeeded',
+      summary: 'pending',
+      spec_plan_alignment: 'pending',
+      test_assessment: 'pending',
+      risk_notes: [],
+      follow_up_questions: [],
+    },
+    risk_notes: [],
+    requested_changes: [],
+    created_at: at,
+    updated_at: at,
+  };
+  await repository.saveReviewPacket(openReview);
+  expect(await repository.findOpenReviewPacketForPackage(ids.package)).toEqual(openReview);
+  await expect(repository.saveReviewPacket({ ...openReview, id: 'review-packet-open-contract-2' })).rejects.toThrow(
+    /open|review/i,
+  );
+  await repository.saveReviewPacket({ ...openReview, status: 'completed', completed_at: later, updated_at: later });
+  await repository.saveReviewPacket({ ...openReview, id: 'review-packet-open-contract-2', status: 'ready' });
+
+  const actionRun = await repository.claimAutomationActionRun({
+    id: 'automation-action-contract',
+    action_type: 'generate_plan_draft',
+    target_object_type: 'work_item',
+    target_object_id: ids.workItem,
+    target_revision_id: ids.specRevision2,
+    target_status: 'approved',
+    idempotency_key: 'action-key-contract',
+    automation_scope: `repo:${ids.project}:repo-1`,
+    automation_settings_version: 2,
+    capability_fingerprint: disabled.capability_fingerprint,
+    claim_token: 'automation-claim-1',
+    locked_until: '2026-05-05T00:05:00.000Z',
+    now: at,
+  });
+  expect(actionRun.status).toBe('running');
+  await expect(
+    repository.claimAutomationActionRun({
+      ...actionRun,
+      id: 'automation-action-live-duplicate',
+      claim_token: 'automation-claim-live-duplicate',
+      now: at,
+      locked_until: '2026-05-05T00:06:00.000Z',
+    }),
+  ).rejects.toThrow(/active|claim/i);
+  const expiredRunningAction = (await repository.listClaimableAutomationActionRuns({
+    now: '2026-05-05T00:06:00.000Z',
+    limit: 10,
+  })).find((run) => run.id === actionRun.id);
+  expect(expiredRunningAction).toMatchObject({ id: actionRun.id, status: 'running' });
+  expect(expiredRunningAction?.claim_token).toBeUndefined();
+  expect(expiredRunningAction?.locked_until).toBeUndefined();
+  const reclaimedActionRun = await repository.claimAutomationActionRun({
+    ...actionRun,
+    claim_token: 'automation-claim-expired-2',
+    now: '2026-05-05T00:06:00.000Z',
+    locked_until: '2026-05-05T00:10:00.000Z',
+  });
+  expect(reclaimedActionRun).toMatchObject({ id: actionRun.id, status: 'running', attempt: 2 });
+  const pendingActionRun = await repository.markAutomationActionGatePending({
+    id: actionRun.id,
+    idempotency_key: actionRun.idempotency_key,
+    claim_token: 'automation-claim-expired-2',
+    reason: 'manual_path_hold_active',
+    result_json: { hold_id: hold.id },
+    next_attempt_at: '2026-05-05T00:10:00.000Z',
+    now: '2026-05-05T00:07:00.000Z',
+  });
+  expect(pendingActionRun.status).toBe('gate_pending');
+  expect((await repository.listClaimableAutomationActionRuns({ now: '2026-05-05T00:11:00.000Z', limit: 10 })).map(
+    (run) => run.id,
+  )).toContain(actionRun.id);
+  const resumedActionRun = await repository.claimAutomationActionRun({
+    ...actionRun,
+    claim_token: 'automation-claim-2',
+    now: '2026-05-05T00:11:00.000Z',
+    locked_until: '2026-05-05T00:15:00.000Z',
+  });
+  expect(resumedActionRun).toMatchObject({ id: actionRun.id, status: 'running', attempt: 3 });
+  const completedActionRun = await repository.completeAutomationActionRun({
+    id: actionRun.id,
+    idempotency_key: actionRun.idempotency_key,
+    claim_token: 'automation-claim-2',
+    status: 'skipped',
+    result_json: { skipped: true },
+    finished_at: '2026-05-05T00:12:00.000Z',
+  });
+  expect(completedActionRun.status).toBe('skipped');
+  await expect(
+    repository.markAutomationActionGatePending({
+      id: actionRun.id,
+      idempotency_key: actionRun.idempotency_key,
+      claim_token: 'automation-claim-2',
+      reason: 'terminal_actions_are_not_claimed',
+      now: '2026-05-05T00:12:00.000Z',
+    }),
+  ).rejects.toThrow(/claimed|running/i);
+  await expect(
+    repository.completeAutomationActionRun({
+      id: actionRun.id,
+      idempotency_key: actionRun.idempotency_key,
+      claim_token: 'automation-claim-2',
+      status: 'succeeded',
+      finished_at: '2026-05-05T00:12:00.000Z',
+    }),
+  ).rejects.toThrow(/claimed|running/i);
+  const replayedCompletedActionRun = await repository.claimAutomationActionRun({
+    ...actionRun,
+    id: 'automation-action-contract-duplicate',
+    claim_token: 'automation-claim-duplicate',
+    now: '2026-05-05T00:12:00.000Z',
+    locked_until: '2026-05-05T00:15:00.000Z',
+  });
+  expect(replayedCompletedActionRun).toMatchObject({
+    id: completedActionRun.id,
+    idempotency_key: completedActionRun.idempotency_key,
+    status: completedActionRun.status,
+  });
+  expect(replayedCompletedActionRun.claim_token).toBeUndefined();
+  expect(replayedCompletedActionRun.locked_until).toBeUndefined();
+  await expect(
+    repository.claimAutomationActionRun({
+      ...actionRun,
+      id: 'automation-action-contract-settings-drift',
+      automation_settings_version: actionRun.automation_settings_version + 1,
+      claim_token: 'automation-claim-settings-drift',
+      now: '2026-05-05T00:12:00.000Z',
+      locked_until: '2026-05-05T00:15:00.000Z',
+    }),
+  ).rejects.toThrow(/identity|settings|fingerprint/i);
+  await expect(
+    repository.claimAutomationActionRun({
+      ...actionRun,
+      id: 'automation-action-contract-fingerprint-drift',
+      capability_fingerprint: 'fingerprint-drift',
+      claim_token: 'automation-claim-fingerprint-drift',
+      now: '2026-05-05T00:12:00.000Z',
+      locked_until: '2026-05-05T00:15:00.000Z',
+    }),
+  ).rejects.toThrow(/identity|settings|fingerprint/i);
+
+  const retryableActionRun = await repository.claimAutomationActionRun({
+    id: 'automation-action-retryable',
+    action_type: 'enqueue_run',
+    target_object_type: 'execution_package',
+    target_object_id: ids.package,
+    target_status: 'ready',
+    idempotency_key: 'action-key-retryable',
+    automation_scope: `repo:${ids.project}:repo-1`,
+    automation_settings_version: 2,
+    capability_fingerprint: disabled.capability_fingerprint,
+    claim_token: 'automation-claim-retryable-1',
+    locked_until: '2026-05-05T00:05:00.000Z',
+    now: at,
+  });
+  await repository.completeAutomationActionRun({
+    id: retryableActionRun.id,
+    idempotency_key: retryableActionRun.idempotency_key,
+    claim_token: 'automation-claim-retryable-1',
+    status: 'blocked',
+    retryable: true,
+    next_attempt_at: '2026-05-05T00:20:00.000Z',
+    result_json: { reason: 'transient_gate' },
+    finished_at: later,
+  });
+  expect((await repository.listClaimableAutomationActionRuns({ now: '2026-05-05T00:19:00.000Z', limit: 10 })).map(
+    (run) => run.id,
+  )).not.toContain(retryableActionRun.id);
+  expect((await repository.listClaimableAutomationActionRuns({ now: '2026-05-05T00:21:00.000Z', limit: 10 })).map(
+    (run) => run.id,
+  )).toContain(retryableActionRun.id);
+  await expect(
+    repository.claimAutomationActionRun({
+      ...retryableActionRun,
+      claim_token: 'automation-claim-retryable-2',
+      locked_until: '2026-05-05T00:25:00.000Z',
+      now: '2026-05-05T00:21:00.000Z',
+    }),
+  ).resolves.toMatchObject({ id: retryableActionRun.id, status: 'running', attempt: 2 });
 }
 
 const artifactRef = (kind: string, name: string) => ({

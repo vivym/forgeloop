@@ -1,4 +1,4 @@
-import { jsonb, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
+import { integer, jsonb, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
 import type { ExecutionPackage } from '@forgeloop/domain';
 
 import {
@@ -40,6 +40,23 @@ export const execution_packages = pgTable('execution_packages', {
   requiredArtifactKinds: jsonb('required_artifact_kinds').$type<ExecutionPackage['required_artifact_kinds']>().notNull(),
   allowedPaths: jsonb('allowed_paths').$type<ExecutionPackage['allowed_paths']>().notNull(),
   forbiddenPaths: jsonb('forbidden_paths').$type<ExecutionPackage['forbidden_paths']>().notNull(),
+  version: integer('version').notNull().default(0),
+  executionPackageSetId: text('execution_package_set_id'),
+  executionPackageVersion: integer('execution_package_version'),
+  generationKey: text('generation_key'),
+  packageKey: text('package_key'),
+  sequence: integer('sequence'),
+  manifestDigest: text('manifest_digest'),
+  validationStrategy: text('validation_strategy').$type<ExecutionPackage['validation_strategy']>(),
+  validationStrategyVersion: integer('validation_strategy_version'),
+  validationRationale: text('validation_rationale'),
+  validationApprovedBy: uuid('validation_approved_by'),
+  validationApprovedAt: timestampColumn('validation_approved_at'),
+  validationEvidenceRefs: jsonb('validation_evidence_refs').$type<ExecutionPackage['validation_evidence_refs']>(),
+  validationPublicSummary: text('validation_public_summary'),
+  policySnapshotStatus: text('policy_snapshot_status').$type<ExecutionPackage['policy_snapshot_status']>(),
+  policySnapshotVersion: integer('policy_snapshot_version'),
+  packagePolicySnapshot: jsonb('package_policy_snapshot').$type<ExecutionPackage['package_policy_snapshot']>(),
   integrationReadiness: jsonb('integration_readiness').$type<ExecutionPackage['integration_readiness']>(),
   currentRunSessionId: uuid('current_run_session_id'),
   lastRunSessionId: uuid('last_run_session_id'),

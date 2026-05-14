@@ -1,9 +1,17 @@
 import type {
+  AutomationActionRun,
+  AutomationActorContext,
+  AutomationProjectSettings,
+  AutomationPreset,
+  AutomationScope,
   Artifact,
   Actor,
+  CommandIdempotencyRecord,
   Decision,
+  ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
+  ManualPathHold,
   ObjectEvent,
   Organization,
   Plan,
@@ -60,7 +68,162 @@ export interface TraceArtifactRefRecord {
 export type ReleaseWorkItemRecord = ReleaseWorkItem;
 export type ReleaseExecutionPackageRecord = ReleaseExecutionPackage;
 
+export interface ResolveAutomationProjectSettingsInput {
+  project_id: string;
+  repo_id?: string;
+}
+
+export interface SetAutomationProjectSettingsInput {
+  id: string;
+  project_id: string;
+  repo_id?: string;
+  scope_type: 'project' | 'repo';
+  preset: AutomationPreset;
+  expected_version: number;
+  reason: string;
+  evidence_refs: Artifact['ref'][];
+  actor: AutomationActorContext;
+  now: string;
+}
+
+export interface DisableAutomationProjectSettingsInput
+  extends Omit<SetAutomationProjectSettingsInput, 'id' | 'preset' | 'scope_type'> {
+  id?: string;
+}
+
+export interface RequestManualPathHoldInput
+  extends Omit<ManualPathHold, 'status' | 'resolved_by' | 'resolved_at' | 'resolution'> {
+  idempotency_key: string;
+  generation_key?: string;
+  gate_key?: string;
+}
+
+export interface ResolveManualPathHoldInput {
+  hold_id: string;
+  resolved_by: string;
+  resolved_at: string;
+  resolution: string;
+}
+
+export interface ListActiveManualPathHoldsInput {
+  object_type: string;
+  object_id: string;
+}
+
+export interface ClaimCommandIdempotencyInput
+  extends Omit<CommandIdempotencyRecord, 'status' | 'created_at' | 'updated_at' | 'started_at' | 'finished_at'> {
+  claim_token: string;
+  locked_until: string;
+  now: string;
+}
+
+export interface RenewCommandIdempotencyInput {
+  idempotency_key: string;
+  claim_token: string;
+  locked_until: string;
+  last_heartbeat_at: string;
+}
+
+export interface FinishCommandIdempotencyInput {
+  idempotency_key: string;
+  claim_token: string;
+  result_json?: Record<string, unknown>;
+  finished_at: string;
+}
+
+export interface ClaimExecutionPackageGenerationRunInput {
+  plan_revision_id: string;
+  generation_key: string;
+  generator_version?: string;
+  policy_digest?: string;
+  manifest_digest?: string;
+  expected_package_count?: number;
+  expected_package_keys?: string[];
+  claim_token: string;
+  now: string;
+  locked_until: string;
+}
+
+export interface ExecutionPackageGenerationPackageRecord {
+  execution_package_set_id: string;
+  execution_package_id: string;
+  plan_revision_id: string;
+  generation_key: string;
+  package_key: string;
+  sequence: number;
+  manifest_digest: string;
+}
+
+export interface SaveExecutionPackageGenerationPackageInput extends ExecutionPackageGenerationPackageRecord {
+  claim_token: string;
+}
+
+export interface CompleteExecutionPackageGenerationRunInput {
+  plan_revision_id: string;
+  execution_package_set_id: string;
+  claim_token: string;
+  result_json?: Record<string, unknown>;
+  completed_at: string;
+}
+
+export interface SupersedeExecutionPackageGenerationRunInput {
+  plan_revision_id: string;
+  execution_package_set_id: string;
+  superseded_by: string;
+  superseded_at: string;
+  reason: string;
+  evidence_refs: Artifact['ref'][];
+}
+
+export interface ClaimAutomationActionRunInput
+  extends Omit<
+    AutomationActionRun,
+    | 'status'
+    | 'attempt'
+    | 'claim_token'
+    | 'locked_until'
+    | 'created_at'
+    | 'updated_at'
+    | 'claimed_at'
+    | 'started_at'
+    | 'finished_at'
+  > {
+  automation_scope: AutomationScope;
+  claim_token: string;
+  locked_until: string;
+  now: string;
+}
+
+export interface MarkAutomationActionGatePendingInput {
+  id: string;
+  idempotency_key: string;
+  claim_token: string;
+  reason: string;
+  result_json?: Record<string, unknown>;
+  next_attempt_at?: string;
+  now: string;
+}
+
+export interface CompleteAutomationActionRunInput {
+  id: string;
+  idempotency_key: string;
+  claim_token: string;
+  status: Extract<AutomationActionRun['status'], 'succeeded' | 'failed' | 'skipped' | 'blocked'>;
+  result_json?: Record<string, unknown>;
+  retryable?: boolean;
+  next_attempt_at?: string;
+  finished_at: string;
+}
+
+export interface ListClaimableAutomationActionRunsInput {
+  now: string;
+  limit: number;
+}
+
 export interface P0Repository {
+  withP0Transaction<T>(write: (repository: P0Repository) => Promise<T>): Promise<T>;
+  withObjectLock<T>(key: string, write: (repository: P0Repository) => Promise<T>): Promise<T>;
+
   saveOrganization(organization: Organization): Promise<void>;
   getOrganization(organizationId: string): Promise<Organization | undefined>;
 
@@ -99,6 +262,7 @@ export interface P0Repository {
   saveRunSession(runSession: RunSession): Promise<void>;
   getRunSession(runSessionId: string): Promise<RunSession | undefined>;
   listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]>;
+  findActiveRunSessionForPackage(executionPackageId: string): Promise<RunSession | undefined>;
   listRecoverableRunSessions(): Promise<RunSession[]>;
 
   appendRunEvent(event: Omit<RunEvent, 'sequence' | 'cursor'>): Promise<RunEvent>;
@@ -170,6 +334,31 @@ export interface P0Repository {
   getReviewPacket(reviewPacketId: string): Promise<ReviewPacket | undefined>;
   listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
   findOpenReviewPacketForPackage(executionPackageId: string): Promise<ReviewPacket | undefined>;
+
+  resolveAutomationProjectSettings(input: ResolveAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
+  setAutomationProjectSettings(input: SetAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
+  disableAutomationProjectSettings(input: DisableAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
+  listActiveManualPathHolds(input: ListActiveManualPathHoldsInput): Promise<ManualPathHold[]>;
+  requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold>;
+  resolveManualPathHold(input: ResolveManualPathHoldInput): Promise<ManualPathHold>;
+  claimCommandIdempotency(input: ClaimCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
+  renewCommandIdempotency(input: RenewCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
+  completeCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
+  failCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
+  blockCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
+  claimExecutionPackageGenerationRun(input: ClaimExecutionPackageGenerationRunInput): Promise<ExecutionPackageGenerationRun>;
+  saveExecutionPackageGenerationPackage(input: SaveExecutionPackageGenerationPackageInput): Promise<void>;
+  completeExecutionPackageGenerationRun(
+    input: CompleteExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun>;
+  supersedeExecutionPackageGenerationRun(
+    input: SupersedeExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun>;
+  claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun>;
+  completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun>;
+  markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun>;
+  listClaimableAutomationActionRuns(input: ListClaimableAutomationActionRunsInput): Promise<AutomationActionRun[]>;
+  listRuntimeSnapshotRows(): Promise<Record<string, unknown>[]>;
 
   saveRelease(release: Release): Promise<void>;
   getRelease(releaseId: string): Promise<Release | undefined>;

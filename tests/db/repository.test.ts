@@ -634,6 +634,88 @@ describe('P0Repository in-memory adapter', () => {
     expect((await repository.getRunSession(runSession.id))?.changed_files).toEqual(runSession.changed_files);
   });
 
+  it('rolls back in-memory transaction writes when the callback throws', async () => {
+    const repository = new InMemoryP0Repository();
+
+    await expect(
+      repository.withP0Transaction(async (transaction) => {
+        await transaction.saveProject(project);
+        await transaction.saveProjectRepo(projectRepo);
+        throw new Error('rollback');
+      }),
+    ).rejects.toThrow('rollback');
+
+    await expect(repository.getProject(project.id)).resolves.toBeUndefined();
+    await expect(repository.listProjectRepos(project.id)).resolves.toEqual([]);
+  });
+
+  it('does not roll back concurrent in-memory writes when a transaction throws', async () => {
+    const repository = new InMemoryP0Repository();
+    const concurrentProject: Project = {
+      ...project,
+      id: 'project-concurrent-commit',
+      name: 'Concurrent commit',
+    };
+    let releaseTransaction: (() => void) | undefined;
+    let transaction: Promise<unknown> | undefined;
+    const transactionStarted = new Promise<void>((resolve) => {
+      transaction = repository.withP0Transaction(async (tx) => {
+        await tx.saveProject(project);
+        resolve();
+        await new Promise<void>((release) => {
+          releaseTransaction = release;
+        });
+        throw new Error('rollback');
+      });
+    });
+
+    await transactionStarted;
+    await repository.saveProject(concurrentProject);
+    releaseTransaction?.();
+
+    if (transaction === undefined) {
+      throw new Error('Expected transaction to be started');
+    }
+    await expect(transaction).rejects.toThrow('rollback');
+
+    await expect(repository.getProject(project.id)).resolves.toBeUndefined();
+    await expect(repository.getProject(concurrentProject.id)).resolves.toEqual(concurrentProject);
+  });
+
+  it('rejects an in-memory transaction that would overwrite a concurrent write', async () => {
+    const repository = new InMemoryP0Repository();
+    await repository.saveProject(project);
+    const concurrentProject: Project = {
+      ...project,
+      name: 'Concurrent update',
+    };
+    const transactionProject: Project = {
+      ...project,
+      name: 'Transaction update',
+    };
+    let releaseTransaction: (() => void) | undefined;
+    let transaction: Promise<unknown> | undefined;
+    const transactionStarted = new Promise<void>((resolve) => {
+      transaction = repository.withP0Transaction(async (tx) => {
+        await tx.saveProject(transactionProject);
+        resolve();
+        await new Promise<void>((release) => {
+          releaseTransaction = release;
+        });
+      });
+    });
+
+    await transactionStarted;
+    await repository.saveProject(concurrentProject);
+    releaseTransaction?.();
+
+    if (transaction === undefined) {
+      throw new Error('Expected transaction to be started');
+    }
+    await expect(transaction).rejects.toThrow(/concurrent/i);
+    await expect(repository.getProject(project.id)).resolves.toEqual(concurrentProject);
+  });
+
   it('gets spec revisions by id and returns undefined for unknown ids', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
     await repository.saveSpec(spec);
