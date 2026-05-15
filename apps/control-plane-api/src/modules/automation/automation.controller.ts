@@ -45,7 +45,7 @@ export class AutomationController {
     return this.automationActionService.createOrReplayAction(body);
   }
 
-  @Post('actions:claim-next')
+  @Post('actions\\:claim-next')
   @HttpCode(200)
   claimNextAction(
     @Body(new ZodValidationPipe(claimNextAutomationActionRunSchema)) body: ClaimNextAutomationActionRunDto,

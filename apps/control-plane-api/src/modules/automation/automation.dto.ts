@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 
 const nonBlankString = z.string().min(1);
-const isoDateTime = z.string().datetime();
+const isoDateTime = z.string().datetime().transform((value) => new Date(value).toISOString());
 const actionInputObject = z.record(z.string(), z.unknown());
 
 const automationScopeSchema = z.custom<AutomationScope>(
@@ -92,9 +92,7 @@ export const createAutomationActionRunSchema = z.discriminatedUnion('action_type
 export const claimNextAutomationActionRunSchema = z
   .object({
     claim_token: nonBlankString,
-    locked_until: isoDateTime.optional(),
     lease_ms: z.number().int().positive().max(60 * 60 * 1000).optional(),
-    now: isoDateTime.optional(),
     limit: z.number().int().min(1).max(100).default(1),
     project_id: nonBlankString.optional(),
     repo_id: nonBlankString.optional(),
@@ -107,7 +105,6 @@ export const completeAutomationActionRunSchema = z
     claim_token: nonBlankString,
     idempotency_key: nonBlankString,
     result_json: actionInputObject.optional(),
-    now: isoDateTime.optional(),
   })
   .strict();
 
@@ -118,7 +115,6 @@ export const gatePendingAutomationActionRunSchema = z
     reason: nonBlankString,
     result_json: actionInputObject.optional(),
     next_attempt_at: isoDateTime.optional(),
-    now: isoDateTime.optional(),
   })
   .strict();
 
@@ -129,7 +125,6 @@ export const blockAutomationActionRunSchema = z
     result_json: actionInputObject.optional(),
     retryable: z.boolean().optional(),
     next_attempt_at: isoDateTime.optional(),
-    now: isoDateTime.optional(),
   })
   .strict();
 
@@ -140,7 +135,6 @@ export const failAutomationActionRunSchema = z
     result_json: actionInputObject.optional(),
     retryable: z.boolean(),
     next_attempt_at: isoDateTime.optional(),
-    now: isoDateTime.optional(),
   })
   .strict();
 

@@ -16,6 +16,7 @@ const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
 const future = '2026-05-05T00:10:00.000Z';
 const expiredLeaseNow = '2026-05-05T00:00:02.000Z';
+const tenMinuteLeaseMs = 10 * 60 * 1000;
 const rawSecretPath = '/Users/viv/projs/forgeloop/.worktrees/feature/http-automation-daemon-mvp-impl';
 
 const apps: INestApplication[] = [];
@@ -74,8 +75,7 @@ const createActionBody = (id: string, overrides: Record<string, unknown> = {}) =
 
 const claimNextBody = (claimToken: string, overrides: Record<string, unknown> = {}) => ({
   claim_token: claimToken,
-  locked_until: future,
-  now: later,
+  lease_ms: tenMinuteLeaseMs,
   limit: 10,
   ...overrides,
 });
@@ -108,10 +108,12 @@ describe('internal automation action lifecycle', () => {
   beforeEach(() => {
     process.env.TZ = 'UTC';
     process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = secret;
+    process.env.FORGELOOP_AUTOMATION_TEST_NOW = now;
   });
 
   afterEach(async () => {
     delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
+    delete process.env.FORGELOOP_AUTOMATION_TEST_NOW;
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
@@ -241,6 +243,27 @@ describe('internal automation action lifecycle', () => {
     expect(none.body).toEqual({ action: null });
   });
 
+  it('treats actions:claim-next as a literal route', async () => {
+    const { app } = await bootAutomationApp();
+    await signedPost(app, '/internal/automation/actions', createActionBody('action-route-literal')).expect(201);
+
+    await signedPost(app, '/internal/automation/actionsXYZ-next', claimNextBody('literal-route-claim')).expect(404);
+  });
+
+  it('does not accept client-controlled claim timestamps or explicit lock deadlines', async () => {
+    const { app } = await bootAutomationApp();
+    await signedPost(app, '/internal/automation/actions', createActionBody('action-client-clock')).expect(201);
+
+    await signedPost(
+      app,
+      '/internal/automation/actions:claim-next',
+      claimNextBody('client-clock-claim', {
+        now: '2026-05-06T00:00:00.000Z',
+        locked_until: '2026-05-06T00:10:00.000Z',
+      }),
+    ).expect(400);
+  });
+
   it('honors project, repo, and scope claim filters', async () => {
     const { app } = await bootAutomationApp();
     await signedPost(
@@ -316,14 +339,12 @@ describe('internal automation action lifecycle', () => {
       await signedPost(app, testCase.path, {
         claim_token: 'wrong-claim-token',
         idempotency_key: claimed.idempotency_key,
-        now: later,
         ...testCase.body,
       }).expect(409);
 
       const completed = await signedPost(app, testCase.path, {
         claim_token: claimed.claim_token,
         idempotency_key: claimed.idempotency_key,
-        now: later,
         ...testCase.body,
       }).expect(200);
       expect(completed.body.action.status).toBe(testCase.expectedStatus);
@@ -345,19 +366,33 @@ describe('internal automation action lifecycle', () => {
     ];
 
     for (const testCase of cases) {
+      process.env.FORGELOOP_AUTOMATION_TEST_NOW = now;
       const claimed = await createAndClaim(app, testCase.id, `${testCase.id}-claim`, {
-        now,
-        locked_until: '2026-05-05T00:00:01.000Z',
+        lease_ms: 1000,
       });
+      process.env.FORGELOOP_AUTOMATION_TEST_NOW = expiredLeaseNow;
 
       const response = await signedPost(app, testCase.path, {
         claim_token: claimed.claim_token,
         idempotency_key: claimed.idempotency_key,
-        now: expiredLeaseNow,
         ...testCase.body,
       }).expect(409);
       expect(JSON.stringify(response.body)).not.toContain('DomainError');
       expect(JSON.stringify(response.body)).not.toContain('stack');
     }
+  });
+
+  it('does not let a daemon backdate terminal action time to bypass an expired lease', async () => {
+    const { app } = await bootAutomationApp();
+    const claimed = await createAndClaim(app, 'action-backdate-expired', 'action-backdate-expired-claim', {
+      lease_ms: 1000,
+    });
+    process.env.FORGELOOP_AUTOMATION_TEST_NOW = expiredLeaseNow;
+
+    await signedPost(app, '/internal/automation/actions/action-backdate-expired/complete', {
+      claim_token: claimed.claim_token,
+      idempotency_key: claimed.idempotency_key,
+      now,
+    }).expect(400);
   });
 });

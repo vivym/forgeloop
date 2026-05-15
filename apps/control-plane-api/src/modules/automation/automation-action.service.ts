@@ -30,10 +30,23 @@ const claimConflictBody = {
 
 const conflict = (body: Record<string, string>): HttpException => new HttpException(body, HttpStatus.CONFLICT);
 
-const currentIsoTime = (): string => new Date().toISOString();
+const normalizeIsoDateTime = (value: string): string => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid ISO timestamp: ${value}`);
+  }
+  return parsed.toISOString();
+};
+
+const currentIsoTime = (): string => {
+  const testNow = process.env.NODE_ENV === 'test' ? process.env.FORGELOOP_AUTOMATION_TEST_NOW?.trim() : undefined;
+  return testNow === undefined || testNow.length === 0 ? new Date().toISOString() : normalizeIsoDateTime(testNow);
+};
+
+const isAtOrBefore = (left: string, right: string): boolean => Date.parse(left) <= Date.parse(right);
 
 const lockedUntilFor = (input: ClaimNextAutomationActionRunDto, now: string): string =>
-  input.locked_until ?? new Date(Date.parse(now) + (input.lease_ms ?? defaultLeaseMs)).toISOString();
+  new Date(Date.parse(now) + (input.lease_ms ?? defaultLeaseMs)).toISOString();
 
 @Injectable()
 export class AutomationActionService {
@@ -59,7 +72,7 @@ export class AutomationActionService {
       });
       return { action: toAutomationActionRunDto(action) };
     } catch (error) {
-      if (error instanceof DomainError) {
+      if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
         throw conflict(commandIdempotencyConflictBody);
       }
       throw error;
@@ -67,7 +80,7 @@ export class AutomationActionService {
   }
 
   async claimNextAction(input: ClaimNextAutomationActionRunDto): Promise<AutomationActionResponseDto> {
-    const now = input.now ?? currentIsoTime();
+    const now = currentIsoTime();
     const action = await this.repository.claimNextAutomationActionRun({
       now,
       claim_token: input.claim_token,
@@ -81,7 +94,7 @@ export class AutomationActionService {
   }
 
   async completeAction(id: string, input: CompleteAutomationActionRunDto): Promise<AutomationActionResponseDto> {
-    const now = input.now ?? currentIsoTime();
+    const now = currentIsoTime();
     await this.assertActiveClaim(id, input.claim_token, input.idempotency_key, now);
     try {
       const action = await this.repository.completeAutomationActionRun({
@@ -102,7 +115,7 @@ export class AutomationActionService {
   }
 
   async gatePendingAction(id: string, input: GatePendingAutomationActionRunDto): Promise<AutomationActionResponseDto> {
-    const now = input.now ?? currentIsoTime();
+    const now = currentIsoTime();
     await this.assertActiveClaim(id, input.claim_token, input.idempotency_key, now);
     try {
       const action = await this.repository.markAutomationActionGatePending({
@@ -124,7 +137,7 @@ export class AutomationActionService {
   }
 
   async blockAction(id: string, input: BlockAutomationActionRunDto): Promise<AutomationActionResponseDto> {
-    const now = input.now ?? currentIsoTime();
+    const now = currentIsoTime();
     await this.assertActiveClaim(id, input.claim_token, input.idempotency_key, now);
     try {
       const action = await this.repository.completeAutomationActionRun({
@@ -147,7 +160,7 @@ export class AutomationActionService {
   }
 
   async failAction(id: string, input: FailAutomationActionRunDto): Promise<AutomationActionResponseDto> {
-    const now = input.now ?? currentIsoTime();
+    const now = currentIsoTime();
     await this.assertActiveClaim(id, input.claim_token, input.idempotency_key, now);
     try {
       const action = await this.repository.completeAutomationActionRun({
@@ -175,7 +188,7 @@ export class AutomationActionService {
       if (action.idempotency_key !== idempotencyKey) {
         throw conflict(claimConflictBody);
       }
-      if (action.locked_until === undefined || action.locked_until <= now) {
+      if (action.locked_until === undefined || isAtOrBefore(action.locked_until, now)) {
         throw conflict(claimConflictBody);
       }
     } catch (error) {

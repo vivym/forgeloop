@@ -471,6 +471,23 @@ describe('automation repository primitives', () => {
     expect(laterClaimableIds).not.toContain(retryableFailed.id);
   });
 
+  it('compares action lease timestamps chronologically instead of lexically', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    await claimSeedAction(repository, 'claim-iso-variant-expired', {
+      locked_until: '2026-05-05T00:00:00Z',
+      now,
+    });
+
+    await expect(
+      repository.claimNextAutomationActionRun({
+        now: '2026-05-05T00:00:00.500Z',
+        claim_token: 'claim-iso-variant-expired-2',
+        locked_until: afterRetry,
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({ id: 'claim-iso-variant-expired', status: 'running', attempt: 2 });
+  });
+
   it('uses project runtime snapshot stable observation identity for replay and latest projection lookup', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
     const snapshotInput = createActionInput('snapshot-action', {

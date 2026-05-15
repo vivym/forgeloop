@@ -192,6 +192,20 @@ const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJso
 
 const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
 
+const timestampMillis = (value: string | undefined): number | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+};
+
+const timestampAtOrBefore = (left: string | undefined, right: string): boolean => {
+  const leftMillis = timestampMillis(left);
+  const rightMillis = timestampMillis(right);
+  return leftMillis !== undefined && rightMillis !== undefined ? leftMillis <= rightMillis : left !== undefined && left <= right;
+};
+
 const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
   repo_id: actionInputJson.repo_id,
   policy_status: actionInputJson.policy_status,
@@ -1934,13 +1948,13 @@ export class DrizzleP0Repository implements P0Repository {
       return true;
     }
     if (actionRun.status === 'running') {
-      return actionRun.locked_until !== undefined && actionRun.locked_until <= now;
+      return timestampAtOrBefore(actionRun.locked_until, now);
     }
     if (actionRun.status === 'gate_pending') {
-      return actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now;
+      return actionRun.next_attempt_at === undefined || timestampAtOrBefore(actionRun.next_attempt_at, now);
     }
     if (actionRun.status === 'blocked' || actionRun.status === 'failed') {
-      return actionRun.retryable === true && (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now);
+      return actionRun.retryable === true && (actionRun.next_attempt_at === undefined || timestampAtOrBefore(actionRun.next_attempt_at, now));
     }
     return false;
   }
