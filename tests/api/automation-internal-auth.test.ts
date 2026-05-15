@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
@@ -111,7 +111,8 @@ describe('internal automation actor auth', () => {
   it('accepts a signed automation daemon request with an exact JSON body', async () => {
     const { app } = await bootAutomationApp();
     const timestamp = new Date().toISOString();
-    const rawBody = '{"a":1}';
+    const rawBody =
+      '{"id":"auth-exact-body-action","action_type":"ensure_plan_draft","target_object_type":"work_item","target_object_id":"work-item-auth","target_revision_id":"spec-revision-auth","target_status":"approved","idempotency_key":"auth-exact-body-action-key","automation_scope":"repo:project-auth:repo-1","automation_settings_version":1,"capability_fingerprint":"capability-auth","precondition_fingerprint":"precondition-auth","action_input_json":{"work_item_id":"work-item-auth","spec_revision_id":"spec-revision-auth"}}';
     const headers = signAutomationRequest({
       method: 'POST',
       pathAndQuery: '/internal/automation/actions',
@@ -128,7 +129,10 @@ describe('internal automation actor auth', () => {
       .set(headers)
       .set('Content-Type', 'application/json')
       .send(rawBody)
-      .expect(201, { action: null });
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.action).toMatchObject({ id: 'auth-exact-body-action', status: 'pending' });
+      });
   });
 
   it('rejects an altered query string', async () => {
