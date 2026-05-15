@@ -227,6 +227,26 @@ describe('automation executor', () => {
     ]);
   });
 
+  it('maps blocked gates and automation holds to blocked', async () => {
+    for (const code of ['automation_gate_blocked', 'automation_hold_active']) {
+      const client = new FakeAutomationClient();
+      client.commandError = new AutomationHttpError(422, { code });
+
+      const result = await execute(client);
+
+      expect(result).toMatchObject({ actionRunId: 'action-run-1', status: 'blocked', retryable: false, reasonCode: code });
+      expect(client.calls.find((call) => call.method === 'blockAction')?.args).toEqual([
+        'action-run-1',
+        expect.objectContaining({
+          claim_token: 'claim-token-1',
+          idempotency_key: 'idempotency-key-1',
+          retryable: false,
+        }),
+      ]);
+      expect(client.calls.map((call) => call.method)).not.toContain('failAction');
+    }
+  });
+
   it('maps idempotency conflicts to failed with retryable=false', async () => {
     const client = new FakeAutomationClient();
     client.commandError = new AutomationHttpError(409, { code: 'command_idempotency_conflict' });

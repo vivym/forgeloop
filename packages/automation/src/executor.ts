@@ -65,7 +65,10 @@ const isStalePrecondition = (code: string | undefined): boolean =>
   code === 'automation_precondition_stale' || code === 'stale_execution_package_revision';
 
 const isBlockedByGate = (code: string | undefined): boolean =>
-  code === 'manual_path_hold_active' || code === 'automation_gate_pending';
+  code === 'manual_path_hold_active' ||
+  code === 'automation_hold_active' ||
+  code === 'automation_gate_pending' ||
+  code === 'automation_gate_blocked';
 
 const isNonRetryableConflict = (code: string | undefined): boolean =>
   code === 'command_idempotency_conflict' ||
