@@ -591,7 +591,7 @@ describe('automation repository primitives', () => {
         target_object_type: 'repo',
         target_object_id: 'repo-1-renamed',
         target_status: 'reobserved',
-        automation_scope: 'project:project-automation',
+        automation_scope: 'repo:project-automation:repo-1',
         automation_settings_version: 99,
         capability_fingerprint: 'capability-b',
         action_input_json: {
@@ -605,6 +605,12 @@ describe('automation repository primitives', () => {
         },
       }),
     ).resolves.toMatchObject({ id: created.id, status: 'pending' });
+    await expect(
+      repository.createOrReplayAutomationActionRun({
+        ...snapshotInput,
+        automation_scope: 'repo:project-other:repo-1',
+      }),
+    ).rejects.toThrow(/idempotency|identity|policy/i);
     await expect(
       repository.createOrReplayAutomationActionRun({
         ...snapshotInput,
@@ -653,8 +659,32 @@ describe('automation repository primitives', () => {
       result_json: { projected: true, newer: true },
     });
 
+    const otherProject = await repository.createOrReplayAutomationActionRun({
+      ...snapshotInput,
+      id: 'snapshot-action-other-project',
+      idempotency_key: 'snapshot-stable-key-other-project',
+      automation_scope: 'repo:project-other:repo-1',
+      now: '2026-05-05T00:04:00.000Z',
+    });
+    const claimedOtherProject = await repository.claimNextAutomationActionRun({
+      now: '2026-05-05T00:04:00.000Z',
+      claim_token: 'snapshot-claim-other-project',
+      locked_until: afterRetry,
+      limit: 10,
+      automation_scope: 'repo:project-other:repo-1',
+    });
+    await repository.completeAutomationActionRun({
+      id: claimedOtherProject?.id ?? '',
+      idempotency_key: claimedOtherProject?.idempotency_key ?? '',
+      claim_token: 'snapshot-claim-other-project',
+      status: 'succeeded',
+      finished_at: '2026-05-05T00:05:00.000Z',
+      result_json: { projected: true, otherProject: true },
+    });
+
     await expect(
       repository.latestCompletedProjectionActionRun({
+        automation_scope: 'repo:project-automation:repo-1',
         repo_id: 'repo-1',
         policy_status: 'loaded',
         policy_digest: 'policy-a',
@@ -662,6 +692,35 @@ describe('automation repository primitives', () => {
         reason_code: 'loaded',
       }),
     ).resolves.toMatchObject({ id: newer.id, status: 'succeeded' });
+    await expect(
+      repository.latestCompletedProjectionActionRun({
+        automation_scope: 'repo:project-other:repo-1',
+        repo_id: 'repo-1',
+        policy_status: 'loaded',
+        policy_digest: 'policy-a',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'loaded',
+      }),
+    ).resolves.toMatchObject({ id: otherProject.id, status: 'succeeded' });
+  });
+
+  it('pushes latest completed projection action lookup filters into Drizzle SQL', () => {
+    const source = readFileSync('packages/db/src/repositories/drizzle-p0-repository.ts', 'utf8');
+    const methodStart = source.indexOf('async latestCompletedProjectionActionRun(');
+    const methodEnd = source.indexOf('\n  async claimAutomationActionRun', methodStart);
+    expect(methodStart).toBeGreaterThanOrEqual(0);
+    expect(methodEnd).toBeGreaterThan(methodStart);
+    const methodSource = source.slice(methodStart, methodEnd);
+
+    expect(methodSource).toContain('automation_action_runs.automationScope');
+    expect(methodSource).toContain('automation_action_runs.actionInputJson');
+    expect(methodSource).toMatch(/actionInputJson[\s\S]*->>[\s\S]*repo_id/);
+    expect(methodSource).toMatch(/actionInputJson[\s\S]*->>[\s\S]*policy_status/);
+    expect(methodSource).toMatch(/actionInputJson[\s\S]*->>[\s\S]*parser_version/);
+    expect(methodSource).toMatch(/actionInputJson[\s\S]*->>[\s\S]*policy_digest/);
+    expect(methodSource).toMatch(/actionInputJson[\s\S]*->>[\s\S]*reason_code/);
+    expect(methodSource).toContain('.limit(1)');
+    expect(methodSource).not.toContain('.find(');
   });
 
   it('keeps runtime snapshot action-run queries bounded in the Drizzle repository', () => {

@@ -251,6 +251,7 @@ export interface GetClaimedAutomationActionRunInput {
 }
 
 export interface LatestCompletedProjectionActionRunInput {
+  automation_scope: AutomationScope;
   repo_id: string;
   policy_status: string;
   policy_digest?: string;

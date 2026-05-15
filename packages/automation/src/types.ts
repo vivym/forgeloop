@@ -10,6 +10,7 @@ export type JsonPrimitive = string | number | boolean | null;
 export type ActionInputJson = JsonPrimitive | ActionInputJson[] | { readonly [key: string]: ActionInputJson };
 
 export interface StablePolicyObservationIdentity {
+  automationScope: AutomationScope;
   repoId: string;
   policyStatus: 'missing' | 'loaded' | 'parse_failed' | 'unsafe_path';
   policyDigest?: string;

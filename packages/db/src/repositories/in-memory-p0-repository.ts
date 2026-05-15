@@ -144,6 +144,8 @@ const automationScopeParts = (automationScope: string): { projectId: string; rep
   return scopeType === 'repo' && repoId !== undefined ? { projectId: projectId ?? '', repoId } : { projectId: projectId ?? '' };
 };
 
+const repoAutomationScopeRepoId = (automationScope: string): string | undefined => automationScopeParts(automationScope).repoId;
+
 const redactAutomationActionClaim = (actionRun: AutomationActionRun): AutomationActionRun => {
   const { claim_token: _claimToken, locked_until: _lockedUntil, ...redacted } = actionRun;
   return redacted;
@@ -1077,11 +1079,13 @@ export class InMemoryP0Repository implements P0Repository {
   async latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,
   ): Promise<AutomationActionRun | undefined> {
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
     const matched = valuesFor(this.automationActionRuns)
       .filter(
         (actionRun) =>
           actionRun.action_type === 'project_runtime_snapshot' &&
           actionRun.status === 'succeeded' &&
+          actionRun.automation_scope === input.automation_scope &&
           this.stablePolicyObservationIdentityMatches(actionRun.action_input_json, input),
       )
       .sort(
@@ -1495,6 +1499,9 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   private createOrReplayAutomationActionRunUnlocked(input: CreateOrReplayAutomationActionRunInput): AutomationActionRun {
+    if (input.action_type === 'project_runtime_snapshot') {
+      this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+    }
     const existingId = this.automationActionRunIdempotency.get(input.idempotency_key);
     const existing = existingId === undefined ? undefined : this.automationActionRuns.get(existingId);
     if (existing !== undefined) {
@@ -1641,8 +1648,15 @@ export class InMemoryP0Repository implements P0Repository {
     input: CreateOrReplayAutomationActionRunInput,
   ): void {
     if (existing.action_type === 'project_runtime_snapshot' || input.action_type === 'project_runtime_snapshot') {
+      if (existing.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(existing.automation_scope, existing.action_input_json.repo_id);
+      }
+      if (input.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+      }
       const mismatched =
         existing.action_type !== input.action_type ||
+        existing.automation_scope !== input.automation_scope ||
         !valuesEqual(
           stablePolicyObservationIdentity(existing.action_input_json),
           stablePolicyObservationIdentity(input.action_input_json),
@@ -1680,6 +1694,7 @@ export class InMemoryP0Repository implements P0Repository {
     actionInputJson: Record<string, unknown>,
     input: LatestCompletedProjectionActionRunInput,
   ): boolean {
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
     const stableIdentity = stablePolicyObservationIdentity(actionInputJson);
     return (
       stableIdentity.repo_id === input.repo_id &&
@@ -1688,6 +1703,13 @@ export class InMemoryP0Repository implements P0Repository {
       stableIdentity.parser_version === input.parser_version &&
       stableIdentity.reason_code === input.reason_code
     );
+  }
+
+  private assertProjectionAutomationScope(automationScope: string, repoId: unknown): void {
+    const scopeRepoId = repoAutomationScopeRepoId(automationScope);
+    if (scopeRepoId === undefined || repoId !== scopeRepoId) {
+      throw new DomainError('INVALID_TRANSITION', `Projection action requires matching repo automation scope`);
+    }
   }
 
   private matchesAutomationActionClaimFilter(

@@ -231,6 +231,8 @@ const automationScopeParts = (automationScope: string): { projectId: string; rep
   return scopeType === 'repo' && repoId !== undefined ? { projectId: projectId ?? '', repoId } : { projectId: projectId ?? '' };
 };
 
+const repoAutomationScopeRepoId = (automationScope: string): string | undefined => automationScopeParts(automationScope).repoId;
+
 const recoverableRunSessionStatuses: RunSession['status'][] = [
   'queued',
   'running',
@@ -1070,14 +1072,30 @@ export class DrizzleP0Repository implements P0Repository {
   async latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,
   ): Promise<AutomationActionRun | undefined> {
-    const rows = await this.db
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
+    const jsonTextEquals = (key: string, value: string) => sql`${automation_action_runs.actionInputJson}->>${key} = ${value}`;
+    const optionalJsonTextEquals = (key: string, value: string | undefined) =>
+      value === undefined
+        ? sql`coalesce(${automation_action_runs.actionInputJson}->>${key}, '') = ''`
+        : jsonTextEquals(key, value);
+    const [row] = await this.db
       .select()
       .from(automation_action_runs)
-      .where(and(eq(automation_action_runs.actionType, 'project_runtime_snapshot'), eq(automation_action_runs.status, 'succeeded')))
-      .orderBy(desc(automation_action_runs.finishedAt), desc(automation_action_runs.updatedAt), desc(automation_action_runs.id));
-    return rows
-      .map((row) => fromDbRecord<AutomationActionRun>(row))
-      .find((actionRun) => this.stablePolicyObservationIdentityMatches(actionRun.action_input_json, input));
+      .where(
+        and(
+          eq(automation_action_runs.actionType, 'project_runtime_snapshot'),
+          eq(automation_action_runs.status, 'succeeded'),
+          eq(automation_action_runs.automationScope, input.automation_scope),
+          jsonTextEquals('repo_id', input.repo_id),
+          jsonTextEquals('policy_status', input.policy_status),
+          optionalJsonTextEquals('policy_digest', input.policy_digest),
+          jsonTextEquals('parser_version', input.parser_version),
+          optionalJsonTextEquals('reason_code', input.reason_code),
+        ),
+      )
+      .orderBy(desc(automation_action_runs.finishedAt), desc(automation_action_runs.updatedAt), desc(automation_action_runs.id))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<AutomationActionRun>(row);
   }
 
   async claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
@@ -1817,6 +1835,9 @@ export class DrizzleP0Repository implements P0Repository {
   private async createOrReplayAutomationActionRunUnlocked(
     input: CreateOrReplayAutomationActionRunInput,
   ): Promise<AutomationActionRun> {
+    if (input.action_type === 'project_runtime_snapshot') {
+      this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+    }
     const existing = await this.automationActionRunByIdempotencyKey(input.idempotency_key);
     if (existing !== undefined) {
       this.assertAutomationActionReplayMatches(existing, input);
@@ -2018,8 +2039,15 @@ export class DrizzleP0Repository implements P0Repository {
     input: CreateOrReplayAutomationActionRunInput,
   ): void {
     if (existing.action_type === 'project_runtime_snapshot' || input.action_type === 'project_runtime_snapshot') {
+      if (existing.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(existing.automation_scope, existing.action_input_json.repo_id);
+      }
+      if (input.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+      }
       const mismatched =
         existing.action_type !== input.action_type ||
+        existing.automation_scope !== input.automation_scope ||
         !valuesEqual(
           stablePolicyObservationIdentity(existing.action_input_json),
           stablePolicyObservationIdentity(input.action_input_json),
@@ -2057,6 +2085,7 @@ export class DrizzleP0Repository implements P0Repository {
     actionInputJson: Record<string, unknown>,
     input: LatestCompletedProjectionActionRunInput,
   ): boolean {
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
     const stableIdentity = stablePolicyObservationIdentity(actionInputJson);
     return (
       stableIdentity.repo_id === input.repo_id &&
@@ -2065,6 +2094,13 @@ export class DrizzleP0Repository implements P0Repository {
       stableIdentity.parser_version === input.parser_version &&
       stableIdentity.reason_code === input.reason_code
     );
+  }
+
+  private assertProjectionAutomationScope(automationScope: string, repoId: unknown): void {
+    const scopeRepoId = repoAutomationScopeRepoId(automationScope);
+    if (scopeRepoId === undefined || repoId !== scopeRepoId) {
+      throw new DomainError('INVALID_TRANSITION', `Projection action requires matching repo automation scope`);
+    }
   }
 
   private matchesAutomationActionClaimFilter(

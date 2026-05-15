@@ -26,6 +26,7 @@ describe('automation idempotency helpers', () => {
   } satisfies MutatingActionIdentity;
 
   const observationA = {
+    automationScope: 'repo:project-1:repo-1',
     repoId: 'repo-1',
     policyStatus: 'loaded',
     policyDigest: 'policy-digest-a',
@@ -93,9 +94,12 @@ describe('automation idempotency helpers', () => {
     );
   });
 
-  it('builds runtime snapshot keys from stable policy observation identity only', () => {
+  it('builds runtime snapshot keys from stable policy observation identity and repo scope', () => {
     expect(projectRuntimeSnapshotIdempotencyKey(observationA)).toBe(
       projectRuntimeSnapshotIdempotencyKey({ ...observationA, observedAt: '2026-05-15T00:00:01.000Z' }),
+    );
+    expect(projectRuntimeSnapshotIdempotencyKey({ ...observationA, automationScope: 'repo:project-2:repo-1' })).not.toBe(
+      projectRuntimeSnapshotIdempotencyKey(observationA),
     );
     expect(projectRuntimeSnapshotIdempotencyKey({ ...observationA, policyStatus: 'parse_failed' })).not.toBe(
       projectRuntimeSnapshotIdempotencyKey(observationA),

@@ -54,6 +54,7 @@ const mutatingActionIdentityJson = (input: MutatingActionIdentity) => ({
 
 const stablePolicyObservationIdentityJson = (input: StablePolicyObservationIdentity) => ({
   actionType: 'project_runtime_snapshot',
+  automationScope: input.automationScope,
   repoId: input.repoId,
   policyStatus: input.policyStatus,
   policyDigest: input.policyDigest,

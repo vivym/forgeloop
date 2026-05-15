@@ -1481,7 +1481,7 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
       target_object_type: 'repo',
       target_object_id: 'repo-contract-projection-renamed',
       target_status: 'reobserved',
-      automation_scope: `project:${ids.project}`,
+      automation_scope: `repo:${ids.project}:repo-contract-projection`,
       automation_settings_version: 99,
       capability_fingerprint: 'ignored-capability-change',
       action_input_json: {
@@ -1495,6 +1495,12 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
       },
     }),
   ).resolves.toMatchObject({ id: snapshotActionInput.id, status: 'pending' });
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...snapshotActionInput,
+      automation_scope: `repo:${ids.project}-other:repo-contract-projection`,
+    }),
+  ).rejects.toThrow(/identity|policy/i);
   await expect(
     repository.createOrReplayAutomationActionRun({
       ...snapshotActionInput,
@@ -1524,6 +1530,7 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
   });
   await expect(
     repository.latestCompletedProjectionActionRun({
+      automation_scope: `repo:${ids.project}:repo-contract-projection`,
       repo_id: 'repo-contract-projection',
       policy_status: 'loaded',
       policy_digest: 'policy-contract-a',
