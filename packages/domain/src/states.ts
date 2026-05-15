@@ -694,6 +694,7 @@ export const transitionExecutionPackage = (
       required_artifact_kinds: [...event.required_artifact_kinds],
       allowed_paths: [...event.allowed_paths],
       forbidden_paths: [...event.forbidden_paths],
+      version: 0,
       created_at: at,
       updated_at: at,
     };
@@ -709,113 +710,103 @@ export const transitionExecutionPackage = (
     executionPackage.activity_state === 'awaiting_human' &&
     executionPackage.gate_state === 'awaiting_human_review' &&
     executionPackage.resolution === 'none';
+  const advance = (patch: Partial<ExecutionPackage>): ExecutionPackage => ({
+    ...executionPackage,
+    ...patch,
+    version: executionPackage.version + 1,
+    updated_at: at,
+  });
 
   switch (event.type) {
     case 'mark_ready':
       if (executionPackage.phase === 'draft') {
-        return { ...executionPackage, phase: 'ready', gate_state: 'not_submitted', updated_at: at };
+        return advance({ phase: 'ready', gate_state: 'not_submitted' });
       }
       break;
     case 'run':
     case 'rerun':
       if (executionPackage.phase === 'ready') {
-        return {
-          ...executionPackage,
+        return advance({
           phase: 'queued',
           activity_state: 'idle',
           gate_state: 'not_submitted',
           resolution: 'none',
           last_run_session_id: event.run_session_id,
-          updated_at: at,
-        };
+        });
       }
       break;
     case 'force_rerun':
       if (executionPackage.phase === 'review' && executionPackage.resolution === 'none' && event.has_open_review_packet) {
-        return {
-          ...executionPackage,
+        return advance({
           phase: 'queued',
           activity_state: 'idle',
           gate_state: 'not_submitted',
           resolution: 'none',
           last_run_session_id: event.run_session_id,
-          updated_at: at,
-        };
+        });
       }
       break;
     case 'workflow_start':
       if (executionPackage.phase === 'queued') {
-        return { ...executionPackage, phase: 'execution', activity_state: 'ai_running', updated_at: at };
+        return advance({ phase: 'execution', activity_state: 'ai_running' });
       }
       break;
     case 'execution_failed_retryable':
       if (isRunningExecution) {
-        return {
-          ...executionPackage,
+        return advance({
           phase: 'ready',
           activity_state: 'idle',
           gate_state: 'not_submitted',
           last_failure_summary: event.failure_summary,
-          updated_at: at,
-        };
+        });
       }
       break;
     case 'execution_failed_blocked':
       if (isRunningExecution) {
-        return {
-          ...executionPackage,
+        return advance({
           activity_state: 'blocked',
           blocked_reason: event.blocked_reason,
-          updated_at: at,
-        };
+        });
       }
       break;
     case 'execution_succeeded':
       if (isRunningExecution) {
-        return {
-          ...executionPackage,
+        return advance({
           phase: 'review',
           activity_state: 'awaiting_human',
           gate_state: 'awaiting_human_review',
           resolution: 'none',
-          updated_at: at,
-        };
+        });
       }
       break;
     case 'execution_failed_blocking_check':
       if (isRunningExecution) {
-        return {
-          ...executionPackage,
+        return advance({
           phase: 'ready',
           activity_state: 'idle',
           gate_state: 'not_submitted',
           last_failure_summary: event.failure_summary,
-          updated_at: at,
-        };
+        });
       }
       break;
     case 'review_approved':
       if (isAwaitingHumanReview) {
-        return {
-          ...executionPackage,
+        return advance({
           phase: 'release',
           activity_state: 'idle',
           gate_state: 'release_ready',
           resolution: 'completed',
-          updated_at: at,
-        };
+        });
       }
       break;
     case 'review_changes_requested':
       if (isAwaitingHumanReview) {
-        return {
-          ...executionPackage,
+        return advance({
           phase: 'ready',
           activity_state: 'idle',
           gate_state: 'changes_requested',
           resolution: 'none',
-          updated_at: at,
-        };
+        });
       }
       break;
   }
@@ -1489,7 +1480,10 @@ export const transitionReviewPacket = (
     case 'archive_for_newer_run':
       if (
         reviewPacket.decision === 'none' &&
-        (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review')
+        (reviewPacket.status === 'draft' ||
+          reviewPacket.status === 'ready' ||
+          reviewPacket.status === 'in_review' ||
+          reviewPacket.status === 'escalated')
       ) {
         return { ...reviewPacket, status: 'archived', decision: 'none', updated_at: at };
       }

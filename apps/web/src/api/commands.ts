@@ -14,6 +14,7 @@ import type {
   LinkReleaseObjectResponse,
   LinkReleaseScopeBody,
   ListReleasesQuery,
+  MarkPackageReadyBody,
   OverrideApproveReleaseBody,
   PatchExecutionPackageBody,
   PatchReleaseBody,
@@ -219,7 +220,7 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     getExecutionPackage: (packageId: string) => request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}`),
     patchExecutionPackage: (packageId: string, body: PatchExecutionPackageBody) =>
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}`, { method: 'PATCH', body }),
-    markPackageReady: (packageId: string, body: ActorCommandBody) =>
+    markPackageReady: (packageId: string, body: MarkPackageReadyBody) =>
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}/mark-ready`, { method: 'POST', body }),
     runPackage: (packageId: string, body: RunPackageBody) =>
       request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/run`, {

@@ -59,7 +59,12 @@ describe('p0 dogfood script helpers', () => {
     expect(token).toBe('stream-token-1');
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events/stream-token', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: {
+        'content-type': 'application/json',
+        'X-Forgeloop-Actor-Id': 'actor-owner',
+        'X-Forgeloop-Actor-Class': 'human_admin',
+      },
+      body: undefined,
     });
   });
 
@@ -73,7 +78,10 @@ describe('p0 dogfood script helpers', () => {
     });
 
     expect(tokenRequest.path).toBe('/run-sessions/run-1/events/stream-token');
-    expect(tokenRequest.init.headers).toMatchObject({ 'X-Forgeloop-Actor-Id': 'actor-owner' });
+    expect(tokenRequest.init.headers).toMatchObject({
+      'X-Forgeloop-Actor-Id': 'actor-owner',
+      'X-Forgeloop-Actor-Class': 'human_admin',
+    });
     expect(streamRequest.url).toBe('http://api.local/run-sessions/run-1/events/stream?stream_token=stream-token-1&after=0001');
     expect(streamRequest.url).not.toContain('actor_id=');
   });

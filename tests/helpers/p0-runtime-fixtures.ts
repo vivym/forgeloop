@@ -32,6 +32,14 @@ const later = '2026-05-05T00:01:00.000Z';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
+const ownerHeaders = {
+  'x-forgeloop-actor-id': actorOwner,
+  'x-forgeloop-actor-class': 'human_admin',
+};
+const reviewerHeaders = {
+  'x-forgeloop-actor-id': actorReviewer,
+  'x-forgeloop-actor-class': 'human',
+};
 
 const requiredChecks = [
   {
@@ -73,6 +81,42 @@ const successfulChecks = (): CheckResult[] =>
     duration_seconds: 2,
     blocks_review: check.blocks_review,
   }));
+
+const packagePolicyFieldsFor = (executionPackage: ExecutionPackage): Pick<
+  ExecutionPackage,
+  | 'validation_strategy'
+  | 'validation_strategy_version'
+  | 'validation_public_summary'
+  | 'policy_snapshot_status'
+  | 'policy_snapshot_version'
+  | 'package_policy_snapshot'
+> => ({
+  validation_strategy: 'checks_required',
+  validation_strategy_version: 1,
+  validation_public_summary: 'Required checks and package path policy are frozen for this test package.',
+  policy_snapshot_status: 'captured',
+  policy_snapshot_version: 1,
+  package_policy_snapshot: {
+    policy_snapshot_version: 1,
+    policy_digest: 'sha256:test-runtime-policy',
+    policy_source_path: '.forgeloop/runtime-policy.json',
+    policy_loaded_at: now,
+    policy_last_known_good: true,
+    hooks: [],
+    command_policy: { required_checks: executionPackage.required_checks.map((check) => check.check_id) },
+    check_policy: { required_checks: executionPackage.required_checks.map((check) => check.check_id) },
+    env_policy: {},
+    path_policy: {
+      allowed_paths: executionPackage.allowed_paths,
+      forbidden_paths: executionPackage.forbidden_paths,
+    },
+    codex_runtime_mode: 'mock',
+    fallback_policy: { allow_exec_fallback: false },
+    validation_strategy_version: 1,
+    validation_strategy: 'checks_required',
+    validation_public_summary: 'Required checks and package path policy are frozen for this test package.',
+  },
+});
 
 export const succeededSelfReview = (): SelfReviewResult => ({
   status: 'succeeded',
@@ -200,6 +244,7 @@ const baseRecords = (): {
     test_matrix: ['pnpm test tests/workflow'],
     risk_mitigations: [],
     rollback_notes: 'Revert workflow package changes.',
+    based_on_spec_revision_id: specRevision.id,
     artifact_refs: [],
     created_at: now,
   };
@@ -223,7 +268,13 @@ const baseRecords = (): {
     forbidden_paths: ['packages/db/**'],
     at: now,
   });
-  const executionPackage = transitionExecutionPackage(generatedPackage, { type: 'mark_ready', at: now });
+  const executionPackage = transitionExecutionPackage(
+    {
+      ...generatedPackage,
+      ...packagePolicyFieldsFor(generatedPackage),
+    },
+    { type: 'mark_ready', at: now },
+  );
 
   return { project, projectRepo, workItem, spec, specRevision, plan, planRevision, executionPackage };
 };
@@ -403,8 +454,8 @@ const approveSpec = async (app: INestApplication, workItemId: string): Promise<s
   const spec = (await request(server).post(`/work-items/${workItemId}/specs`).send({}).expect(201)).body;
 
   await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
 
   return spec.id as string;
 };
@@ -414,8 +465,8 @@ const approvePlan = async (app: INestApplication, workItemId: string): Promise<s
   const plan = (await request(server).post(`/work-items/${workItemId}/plans`).send({}).expect(201)).body;
   const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
 
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
 
   return planRevision.id as string;
 };
@@ -446,7 +497,8 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
 
   return (await request(server)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
-    .send({ actor_id: actorOwner })
+    .set(ownerHeaders)
+    .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
     .expect(201)).body as ExecutionPackage;
 };
 

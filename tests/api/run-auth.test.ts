@@ -9,6 +9,13 @@ import { vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
+  actorClassHeaderName,
+  actorSignatureHeaderName,
+  actorTimestampHeaderName,
+  trustedActorHeaderSignature,
+  actorHeaderName as trustedActorHeaderName,
+} from '../../apps/control-plane-api/src/p0/actor-context';
+import {
   P0_DEMO_ACTOR_ID_FALLBACK,
   P0_REPOSITORY,
   RUN_DURABILITY_MODE,
@@ -396,15 +403,25 @@ describe('durable run actor auth', () => {
   it('reports production configuration errors when stream-token secret is missing', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     const originalSecret = process.env.FORGELOOP_DEV_AUTH_SECRET;
-    process.env.NODE_ENV = 'production';
-    delete process.env.FORGELOOP_DEV_AUTH_SECRET;
+    const originalTrustedActorSecret = process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
     try {
       const { app } = await track(bootDurableApp());
       const { runSessionId } = await startDurableRun(app);
+      process.env.NODE_ENV = 'production';
+      delete process.env.FORGELOOP_DEV_AUTH_SECRET;
+      const trustedActorSecret = 'trusted-actor-secret';
+      process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = trustedActorSecret;
+      const timestamp = new Date().toISOString();
 
       await request(app.getHttpServer())
         .post(`/run-sessions/${runSessionId}/events/stream-token`)
-        .set(actorHeaderName, actorOwner)
+        .set(trustedActorHeaderName, actorOwner)
+        .set(actorClassHeaderName, 'human_admin')
+        .set(actorTimestampHeaderName, timestamp)
+        .set(
+          actorSignatureHeaderName,
+          trustedActorHeaderSignature({ actorId: actorOwner, actorClass: 'human_admin', timestamp }, trustedActorSecret),
+        )
         .send({})
         .expect(500);
     } finally {
@@ -417,6 +434,11 @@ describe('durable run actor auth', () => {
         delete process.env.FORGELOOP_DEV_AUTH_SECRET;
       } else {
         process.env.FORGELOOP_DEV_AUTH_SECRET = originalSecret;
+      }
+      if (originalTrustedActorSecret === undefined) {
+        delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
+      } else {
+        process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = originalTrustedActorSecret;
       }
     }
   });

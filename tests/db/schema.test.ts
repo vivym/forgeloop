@@ -40,6 +40,14 @@ import {
   plan_revisions,
   plans,
   artifacts,
+  automation_action_runs,
+  automation_cursors,
+  automation_project_settings,
+  command_idempotency_records,
+  execution_package_generation_packages,
+  execution_package_generation_runs,
+  manual_path_hold_idempotency_records,
+  manual_path_holds,
   trace_artifact_refs,
   trace_events,
   trace_link_relationship_values,
@@ -54,10 +62,18 @@ import {
 import * as dbSchema from '../../packages/db/src/index';
 
 type TableLike = Parameters<typeof getTableColumns>[0];
-type ColumnLike = { name: string; columnType: string; notNull?: boolean; table: unknown };
+type ColumnLike = { name: string; columnType: string; notNull?: boolean; isUnique?: boolean; primary?: boolean; table: unknown };
 type ConfiguredTable = Parameters<typeof getTableConfig>[0];
 
 const requiredTables = {
+  automation_project_settings,
+  manual_path_holds,
+  manual_path_hold_idempotency_records,
+  command_idempotency_records,
+  execution_package_generation_runs,
+  execution_package_generation_packages,
+  automation_action_runs,
+  automation_cursors,
   organizations,
   actors,
   projects,
@@ -131,12 +147,20 @@ describe('P1 core schema release flow Drizzle schema', () => {
   it('exports every required P0 table', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
+        'automation_action_runs',
+        'automation_cursors',
+        'automation_project_settings',
         'actors',
         'artifacts',
+        'command_idempotency_records',
         'decisions',
         'execution_package_dependencies',
+        'execution_package_generation_packages',
+        'execution_package_generation_runs',
         'execution_packages',
         'object_events',
+        'manual_path_holds',
+        'manual_path_hold_idempotency_records',
         'organizations',
         'plan_revisions',
         'plans',
@@ -352,6 +376,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(run_events, 'id')).toBe('PgText');
     expect(columnType(run_commands, 'id')).toBe('PgText');
     expect(columnType(run_worker_leases, 'id')).toBe('PgText');
+    expect(columnType(execution_packages, 'executionPackageSetId')).toBe('PgText');
     expect(columnType(project_repos, 'project_id')).toBe('PgUUID');
     expect(columnType(projects, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(work_items, 'owner_actor_id')).toBe('PgUUID');
@@ -374,6 +399,38 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(releases, 'observation_plan')).toBe('PgText');
     expect(columnNotNull(releases, 'updated_by_actor_id')).toBe(true);
     expect(columnNotNull(release_evidences, 'summary')).toBe(true);
+  });
+
+  it('defines automation uniqueness and ownership fences', () => {
+    expect(hasUniqueIndex(automation_project_settings, 'automation_project_settings_project_scope', ['project_id'])).toBe(true);
+    expect(hasUniqueIndex(automation_project_settings, 'automation_project_settings_repo_scope', ['project_id', 'repo_id'])).toBe(
+      true,
+    );
+    expect(hasUniqueIndex(manual_path_holds, 'manual_path_holds_active_scope', ['object_type', 'object_id', 'scope_key'])).toBe(true);
+    expect(hasUniqueIndex(manual_path_holds, 'manual_path_holds_source_action', ['source_automation_action_id'])).toBe(true);
+    expect(
+      hasUniqueIndex(execution_package_generation_runs, 'execution_package_generation_runs_key', ['plan_revision_id', 'generation_key']),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(execution_package_generation_runs, 'execution_package_generation_runs_current_succeeded', ['plan_revision_id']),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(
+        execution_package_generation_packages,
+        'execution_package_generation_package_id',
+        ['execution_package_set_id', 'execution_package_id'],
+      ),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(
+        execution_package_generation_packages,
+        'execution_package_generation_package_key',
+        ['plan_revision_id', 'generation_key', 'package_key'],
+      ),
+    ).toBe(true);
+    expect(column(manual_path_hold_idempotency_records, 'idempotency_key').primary).toBe(true);
+    expect(column(command_idempotency_records, 'idempotency_key').isUnique).toBe(true);
+    expect(column(automation_action_runs, 'idempotency_key').isUnique).toBe(true);
   });
 
   it('defines durable project and actor foreign keys', () => {

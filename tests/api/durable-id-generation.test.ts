@@ -10,6 +10,7 @@ import {
   RUN_DURABILITY_MODE,
   RUN_WORKER,
 } from '../../apps/control-plane-api/src/p0/p0.service';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { InMemoryP0Repository } from '../../packages/db/src';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -69,6 +70,8 @@ describe('durable P0 object IDs', () => {
     const ownerActorId = '11111111-1111-4111-8111-111111111111';
     const reviewerActorId = '22222222-2222-4222-8222-222222222222';
     const qaActorId = '33333333-3333-4333-8333-333333333333';
+    const ownerHeaders = { [actorHeaderName]: ownerActorId, [actorClassHeaderName]: 'human_admin' };
+    const reviewerHeaders = { [actorHeaderName]: reviewerActorId, [actorClassHeaderName]: 'human' };
 
     const project = (await request(server).post('/projects').send({ name: 'Durable UUIDs', owner_actor_id: ownerActorId }).expect(201))
       .body;
@@ -115,12 +118,12 @@ describe('durable P0 object IDs', () => {
     ).body;
     await request(server)
       .post(`/specs/${spec.id}/submit-for-approval`)
-      .set('X-Forgeloop-Actor-Id', ownerActorId)
+      .set(ownerHeaders)
       .send({ actor_id: ownerActorId })
       .expect(201);
     await request(server)
       .post(`/specs/${spec.id}/approve`)
-      .set('X-Forgeloop-Actor-Id', reviewerActorId)
+      .set(reviewerHeaders)
       .send({ actor_id: reviewerActorId })
       .expect(201);
     const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
@@ -141,12 +144,12 @@ describe('durable P0 object IDs', () => {
     ).body;
     await request(server)
       .post(`/plans/${plan.id}/submit-for-approval`)
-      .set('X-Forgeloop-Actor-Id', ownerActorId)
+      .set(ownerHeaders)
       .send({ actor_id: ownerActorId })
       .expect(201);
     await request(server)
       .post(`/plans/${plan.id}/approve`)
-      .set('X-Forgeloop-Actor-Id', reviewerActorId)
+      .set(reviewerHeaders)
       .send({ actor_id: reviewerActorId })
       .expect(201);
     const executionPackage = (
@@ -175,13 +178,13 @@ describe('durable P0 object IDs', () => {
     ).body;
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/mark-ready`)
-      .set('X-Forgeloop-Actor-Id', ownerActorId)
-      .send({ actor_id: ownerActorId })
+      .set(ownerHeaders)
+      .send({ actor_id: ownerActorId, expected_package_version: executionPackage.version })
       .expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .set('X-Forgeloop-Actor-Id', ownerActorId)
+        .set(ownerHeaders)
         .send({
           requested_by_actor_id: ownerActorId,
           executor_type: 'mock',

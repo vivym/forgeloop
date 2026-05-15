@@ -24,6 +24,7 @@ import {
   type RunSpec,
   type SelfReviewResult,
 } from '@forgeloop/contracts';
+import type { PackageRuntimePolicySnapshot, ValidationStrategy } from './automation.js';
 
 export type DomainErrorCode =
   | 'INVALID_TRANSITION'
@@ -38,7 +39,11 @@ export type DomainErrorCode =
   | 'EXECUTION_OBJECTIVE_REQUIRED'
   | 'EDIT_NOT_ALLOWED'
   | 'FORCE_RERUN_FORBIDDEN'
-  | 'COMPLETION_BLOCKED';
+  | 'COMPLETION_BLOCKED'
+  | 'AUTOMATION_CAPABILITY_REJECTED'
+  | 'MANUAL_PATH_SCOPE_INVALID'
+  | 'EXECUTION_PACKAGE_VERSION_INVALID'
+  | 'EXECUTION_PACKAGE_POLICY_INVALID';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
@@ -269,6 +274,23 @@ export interface ExecutionPackage {
   required_artifact_kinds: ArtifactKind[];
   allowed_paths: string[];
   forbidden_paths: string[];
+  version: number;
+  execution_package_set_id?: string;
+  execution_package_version?: number;
+  generation_key?: string;
+  package_key?: string;
+  sequence?: number;
+  manifest_digest?: string;
+  validation_strategy?: ValidationStrategy;
+  validation_strategy_version?: number;
+  validation_rationale?: string;
+  validation_approved_by?: string;
+  validation_approved_at?: IsoDateTime;
+  validation_evidence_refs?: ArtifactRef[];
+  validation_public_summary?: string;
+  policy_snapshot_status?: 'captured' | 'missing' | 'stale' | 'superseded';
+  policy_snapshot_version?: number;
+  package_policy_snapshot?: PackageRuntimePolicySnapshot;
   last_run_session_id?: string;
   current_run_session_id?: string;
   current_review_packet_id?: string;
@@ -405,7 +427,7 @@ export interface RunWorkerLease {
   status: RunWorkerLeaseStatus;
 }
 
-export type ReviewPacketStatus = 'ready' | 'in_review' | 'completed' | 'archived';
+export type ReviewPacketStatus = 'draft' | 'ready' | 'in_review' | 'completed' | 'escalated' | 'archived';
 export const reviewPacketDecisions = contractReviewPacketDecisions;
 export type ReviewPacketDecision = (typeof reviewPacketDecisions)[number];
 

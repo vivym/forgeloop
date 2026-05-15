@@ -166,6 +166,7 @@ export interface ExecutionPackage {
   required_artifact_kinds: ArtifactKind[];
   allowed_paths: string[];
   forbidden_paths: string[];
+  version: number;
   last_run_session_id?: string;
   last_failure_summary?: string;
   blocked_reason?: string;
@@ -372,6 +373,10 @@ export type PatchExecutionPackageBody = Partial<Omit<CreateExecutionPackageBody,
 
 export interface ActorCommandBody {
   actor_id?: string;
+}
+
+export interface MarkPackageReadyBody extends ActorCommandBody {
+  expected_package_version: number;
 }
 
 export interface RunPackageBody {

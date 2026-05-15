@@ -14,3 +14,4 @@ export * from './run-worker-lease';
 export * from './review-packet';
 export * from './evidence';
 export * from './release';
+export * from './automation';

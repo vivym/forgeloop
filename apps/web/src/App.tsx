@@ -786,7 +786,20 @@ export function App() {
           <SectionHeader title="Packages" meta={selectedPackage?.phase ?? 'none'} />
           <div className="button-row">
             <button disabled={!currentPlan?.current_revision_id} onClick={() => packageCommand('Generated packages', () => api.generatePackages(requiredPlanRevisionId()))}>Generate Package</button>
-            <button disabled={!selectedPackage} onClick={() => selectedPackage && packageCommand('Marked ready', () => api.markPackageReady(selectedPackage.id, commandBody()))}>Mark Ready</button>
+            <button
+              disabled={!selectedPackage}
+              onClick={() =>
+                selectedPackage &&
+                packageCommand('Marked ready', () =>
+                  api.markPackageReady(selectedPackage.id, {
+                    ...commandBody(),
+                    expected_package_version: selectedPackage.version,
+                  }),
+                )
+              }
+            >
+              Mark Ready
+            </button>
           </div>
           <div className="list tight">
             {packages.length === 0 && <EmptyState text="No execution packages" />}

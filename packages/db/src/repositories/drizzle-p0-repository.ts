@@ -1,13 +1,18 @@
-import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, notInArray, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
+  AutomationActionRun,
+  AutomationProjectSettings,
   Artifact,
   Actor,
+  CommandIdempotencyRecord,
   Decision,
   DomainError as DomainErrorType,
+  ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
+  ManualPathHold,
   ObjectEvent,
   Organization,
   Plan,
@@ -28,15 +33,29 @@ import type {
   StatusHistory,
   WorkItem,
 } from '@forgeloop/domain';
-import { DomainError } from '@forgeloop/domain';
+import {
+  DomainError,
+  assertAutomationCapabilityActor,
+  assertCanonicalManualScopeKey,
+  automationCapabilitiesForPreset,
+  capabilityFingerprint,
+  isActiveRunSessionStatus,
+} from '@forgeloop/domain';
 
 import * as schema from '../schema';
 import {
   artifacts,
+  automation_action_runs,
+  automation_project_settings,
+  command_idempotency_records,
   actors,
   decisions,
+  execution_package_generation_packages,
+  execution_package_generation_runs,
   execution_package_dependencies,
   execution_packages,
+  manual_path_hold_idempotency_records,
+  manual_path_holds,
   object_events,
   organizations,
   plan_revisions,
@@ -61,7 +80,30 @@ import {
   trace_links,
   work_items,
 } from '../schema';
-import type { P0Repository, TraceArtifactRefRecord, TraceEventRecord, TraceLinkRecord } from './p0-repository';
+import type {
+  ClaimAutomationActionRunInput,
+  ClaimCommandIdempotencyInput,
+  ClaimExecutionPackageGenerationRunInput,
+  CompleteAutomationActionRunInput,
+  CompleteExecutionPackageGenerationRunInput,
+  DisableAutomationProjectSettingsInput,
+  ExecutionPackageGenerationPackageRecord,
+  FinishCommandIdempotencyInput,
+  ListActiveManualPathHoldsInput,
+  ListClaimableAutomationActionRunsInput,
+  MarkAutomationActionGatePendingInput,
+  P0Repository,
+  RenewCommandIdempotencyInput,
+  RequestManualPathHoldInput,
+  ResolveAutomationProjectSettingsInput,
+  ResolveManualPathHoldInput,
+  SaveExecutionPackageGenerationPackageInput,
+  SetAutomationProjectSettingsInput,
+  SupersedeExecutionPackageGenerationRunInput,
+  TraceArtifactRefRecord,
+  TraceEventRecord,
+  TraceLinkRecord,
+} from './p0-repository';
 
 export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 
@@ -84,6 +126,11 @@ const toDbRecord = (record: object, table?: AnyPgTable): Record<string, unknown>
   }
 
   return dbRecord;
+};
+
+const redactAutomationActionClaim = (actionRun: AutomationActionRun): AutomationActionRun => {
+  const { claim_token: _claimToken, locked_until: _lockedUntil, ...redacted } = actionRun;
+  return redacted;
 };
 
 const normalizeTimestampValue = (key: string, value: unknown): unknown => {
@@ -116,12 +163,21 @@ const recoverableRunSessionStatuses: RunSession['status'][] = [
   'resuming',
   'cancel_requested',
 ];
+const terminalCommandStatuses = new Set<CommandIdempotencyRecord['status']>(['succeeded', 'skipped', 'blocked']);
 const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
 const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
 
 export class DrizzleP0Repository implements P0Repository {
   constructor(private readonly db: ForgeloopDrizzleDatabase) {}
+
+  async withP0Transaction<T>(write: (repository: P0Repository) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => write(new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase)));
+  }
+
+  async withObjectLock<T>(key: string, write: (repository: P0Repository) => Promise<T>): Promise<T> {
+    return this.withAdvisoryLocks([key], write);
+  }
 
   async saveOrganization(organization: Organization): Promise<void> {
     await this.upsert(organizations, organizations.id, organization);
@@ -244,6 +300,15 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async saveRunSession(runSession: RunSession): Promise<void> {
+    if (isActiveRunSessionStatus(runSession.status) && this.supportsSelect()) {
+      const existingActive = await this.findActiveRunSessionForPackage(runSession.execution_package_id);
+      if (existingActive !== undefined && existingActive.id !== runSession.id) {
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          `Package ${runSession.execution_package_id} already has active run ${existingActive.id}`,
+        );
+      }
+    }
     await this.upsert(run_sessions, run_sessions.id, runSession);
   }
 
@@ -257,6 +322,22 @@ export class DrizzleP0Repository implements P0Repository {
       eq(run_sessions.executionPackageId, executionPackageId),
       run_sessions.createdAt,
     );
+  }
+
+  async findActiveRunSessionForPackage(executionPackageId: string): Promise<RunSession | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(run_sessions)
+      .where(
+        and(
+          eq(run_sessions.executionPackageId, executionPackageId),
+          inArray(run_sessions.status, recoverableRunSessionStatuses),
+        ),
+      )
+      .orderBy(asc(run_sessions.createdAt))
+      .limit(1);
+
+    return row === undefined ? undefined : fromDbRecord<RunSession>(row);
   }
 
   async listRecoverableRunSessions(): Promise<RunSession[]> {
@@ -586,6 +667,15 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async saveReviewPacket(reviewPacket: ReviewPacket): Promise<void> {
+    if (reviewPacket.status !== 'completed' && reviewPacket.status !== 'archived' && this.supportsSelect()) {
+      const existingOpen = await this.findOpenReviewPacketForPackage(reviewPacket.execution_package_id);
+      if (existingOpen !== undefined && existingOpen.id !== reviewPacket.id) {
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          `Package ${reviewPacket.execution_package_id} already has open review packet ${existingOpen.id}`,
+        );
+      }
+    }
     await this.upsert(review_packets, review_packets.id, reviewPacket);
   }
 
@@ -615,6 +705,353 @@ export class DrizzleP0Repository implements P0Repository {
       .limit(1);
 
     return row === undefined ? undefined : fromDbRecord<ReviewPacket>(row);
+  }
+
+  async resolveAutomationProjectSettings(
+    input: ResolveAutomationProjectSettingsInput,
+  ): Promise<AutomationProjectSettings> {
+    const conditions = [
+      eq(automation_project_settings.projectId, input.project_id),
+      input.repo_id === undefined
+        ? sql`${automation_project_settings.repoId} is null`
+        : eq(automation_project_settings.repoId, input.repo_id),
+    ];
+    const [row] = await this.db.select().from(automation_project_settings).where(and(...conditions)).limit(1);
+    if (row !== undefined) {
+      return fromDbRecord<AutomationProjectSettings>(row);
+    }
+
+    const capabilities = automationCapabilitiesForPreset('off');
+    return {
+      id: `default:${this.automationSettingsKey(input.project_id, input.repo_id)}`,
+      project_id: input.project_id,
+      ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+      preset: 'off',
+      capabilities_json: capabilities,
+      capability_fingerprint: capabilityFingerprint(capabilities),
+      scope_type: input.repo_id === undefined ? 'project' : 'repo',
+      version: 0,
+      evidence_refs: [],
+    };
+  }
+
+  async setAutomationProjectSettings(input: SetAutomationProjectSettingsInput): Promise<AutomationProjectSettings> {
+    return this.withAdvisoryLocks(
+      [`automation-settings:${this.automationSettingsKey(input.project_id, input.repo_id)}`],
+      (repository) => (repository as DrizzleP0Repository).setAutomationProjectSettingsUnlocked(input),
+    );
+  }
+
+  async disableAutomationProjectSettings(input: DisableAutomationProjectSettingsInput): Promise<AutomationProjectSettings> {
+    return this.setAutomationProjectSettings({
+      id: input.id ?? `automation-settings-disabled:${this.automationSettingsKey(input.project_id, input.repo_id)}`,
+      project_id: input.project_id,
+      ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+      scope_type: input.repo_id === undefined ? 'project' : 'repo',
+      preset: 'off',
+      expected_version: input.expected_version,
+      reason: input.reason,
+      evidence_refs: input.evidence_refs,
+      actor: input.actor,
+      now: input.now,
+    });
+  }
+
+  async listActiveManualPathHolds(input: ListActiveManualPathHoldsInput): Promise<ManualPathHold[]> {
+    const keys = await this.manualHoldScopeKeysFor(input);
+    if (keys.length === 0) {
+      return [];
+    }
+    return this.listWhere<ManualPathHold>(
+      manual_path_holds,
+      and(eq(manual_path_holds.status, 'active'), inArray(manual_path_holds.scopeKey, keys)),
+      [manual_path_holds.requestedAt, manual_path_holds.id],
+    );
+  }
+
+  async getManualPathHold(holdId: string): Promise<ManualPathHold | undefined> {
+    return this.getById<ManualPathHold>(manual_path_holds, manual_path_holds.id, holdId);
+  }
+
+  async requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold> {
+    return this.withAdvisoryLocks(this.manualPathHoldLockKeys(input), (repository) =>
+      (repository as DrizzleP0Repository).requestManualPathHoldUnlocked(input),
+    );
+  }
+
+  async resolveManualPathHold(input: ResolveManualPathHoldInput): Promise<ManualPathHold> {
+    const hold = await this.getById<ManualPathHold>(manual_path_holds, manual_path_holds.id, input.hold_id);
+    if (hold === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Manual hold ${input.hold_id} does not exist`);
+    }
+    if (hold.status !== 'active') {
+      if (hold.status === 'resolved' && hold.resolved_by === input.resolved_by && hold.resolution === input.resolution) {
+        return hold;
+      }
+      throw new DomainError('INVALID_TRANSITION', `Manual hold ${input.hold_id} is not active`);
+    }
+    const resolved: ManualPathHold = {
+      ...hold,
+      status: 'resolved',
+      resolved_by: input.resolved_by,
+      resolved_at: input.resolved_at,
+      resolution: input.resolution,
+    };
+    await this.upsert(manual_path_holds, manual_path_holds.id, resolved);
+    return resolved;
+  }
+
+  async claimCommandIdempotency(input: ClaimCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
+    return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).claimCommandIdempotencyUnlocked(input),
+    );
+  }
+
+  async renewCommandIdempotency(input: RenewCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
+    return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).renewCommandIdempotencyUnlocked(input),
+    );
+  }
+
+  private async renewCommandIdempotencyUnlocked(input: RenewCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
+    const record = await this.claimedCommandIdempotency(input.idempotency_key, input.claim_token);
+    const renewed = {
+      ...record,
+      locked_until: input.locked_until,
+      last_heartbeat_at: input.last_heartbeat_at,
+      updated_at: input.last_heartbeat_at,
+    };
+    await this.upsert(command_idempotency_records, command_idempotency_records.id, renewed);
+    return renewed;
+  }
+
+  async completeCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
+    return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).finishCommandIdempotency(input, 'succeeded'),
+    );
+  }
+
+  async failCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
+    return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).finishCommandIdempotency(input, 'failed'),
+    );
+  }
+
+  async blockCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
+    return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).finishCommandIdempotency(input, 'blocked'),
+    );
+  }
+
+  async claimExecutionPackageGenerationRun(
+    input: ClaimExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun> {
+    return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
+      (repository as DrizzleP0Repository).claimExecutionPackageGenerationRunUnlocked(input),
+    );
+  }
+
+  async saveExecutionPackageGenerationPackage(input: SaveExecutionPackageGenerationPackageInput): Promise<void> {
+    return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
+      (repository as DrizzleP0Repository).saveExecutionPackageGenerationPackageUnlocked(input),
+    );
+  }
+
+  private async saveExecutionPackageGenerationPackageUnlocked(
+    input: SaveExecutionPackageGenerationPackageInput,
+  ): Promise<void> {
+    const run = await this.claimedGenerationRun(input.execution_package_set_id, input.claim_token);
+    if (run.plan_revision_id !== input.plan_revision_id || run.generation_key !== input.generation_key) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} identity mismatch`);
+    }
+    const [duplicate] = await this.db
+      .select()
+      .from(execution_package_generation_packages)
+      .where(
+        and(
+          eq(execution_package_generation_packages.planRevisionId, input.plan_revision_id),
+          eq(execution_package_generation_packages.generationKey, input.generation_key),
+          eq(execution_package_generation_packages.packageKey, input.package_key),
+        ),
+      )
+      .limit(1);
+    if (duplicate !== undefined && duplicate.executionPackageId !== input.execution_package_id) {
+      throw new DomainError('INVALID_TRANSITION', `Duplicate package_key ${input.package_key} for generation`);
+    }
+    const [existing] = await this.db
+      .select()
+      .from(execution_package_generation_packages)
+      .where(
+        and(
+          eq(execution_package_generation_packages.executionPackageSetId, input.execution_package_set_id),
+          eq(execution_package_generation_packages.executionPackageId, input.execution_package_id),
+        ),
+      )
+      .limit(1);
+    const existingRecord =
+      existing === undefined ? undefined : fromDbRecord<ExecutionPackageGenerationPackageRecord>(existing);
+    if (
+      existingRecord !== undefined &&
+      (existingRecord.plan_revision_id !== input.plan_revision_id ||
+        existingRecord.generation_key !== input.generation_key ||
+        existingRecord.package_key !== input.package_key ||
+        existingRecord.sequence !== input.sequence ||
+        existingRecord.manifest_digest !== input.manifest_digest)
+    ) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation package ${input.execution_package_id} drift`);
+    }
+    const { claim_token: _claimToken, ...record } = input;
+    await this.db
+      .insert(execution_package_generation_packages)
+      .values(toDbRecord(record, execution_package_generation_packages) as never)
+      .onConflictDoNothing();
+  }
+
+  async completeExecutionPackageGenerationRun(
+    input: CompleteExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun> {
+    return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
+      (repository as DrizzleP0Repository).completeExecutionPackageGenerationRunUnlocked(input),
+    );
+  }
+
+  async supersedeExecutionPackageGenerationRun(
+    input: SupersedeExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun> {
+    return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
+      (repository as DrizzleP0Repository).supersedeExecutionPackageGenerationRunUnlocked(input),
+    );
+  }
+
+  async getExecutionPackageGenerationRun(input: {
+    plan_revision_id: string;
+    generation_key: string;
+  }): Promise<ExecutionPackageGenerationRun | undefined> {
+    return this.generationRunFor(input.plan_revision_id, input.generation_key);
+  }
+
+  private async supersedeExecutionPackageGenerationRunUnlocked(
+    input: SupersedeExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun> {
+    const run = await this.getById<ExecutionPackageGenerationRun>(
+      execution_package_generation_runs,
+      execution_package_generation_runs.executionPackageSetId,
+      input.execution_package_set_id,
+    );
+    if (run === undefined || run.plan_revision_id !== input.plan_revision_id) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} does not exist`);
+    }
+    if (run.version !== input.expected_version) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} version mismatch`);
+    }
+    if (run.status !== 'succeeded') {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} is not current succeeded`);
+    }
+    const existingRuns = await this.listWhere<ExecutionPackageGenerationRun>(
+      execution_package_generation_runs,
+      eq(execution_package_generation_runs.planRevisionId, input.plan_revision_id),
+    );
+    const superseded: ExecutionPackageGenerationRun = {
+      ...run,
+      status: 'superseded',
+      version: run.version + 1,
+      superseded_by: input.superseded_by,
+      superseded_at: input.superseded_at,
+      superseded_reason: input.reason,
+      supersede_command_id: input.supersede_command_id,
+      evidence_refs: input.evidence_refs,
+      next_generation_key: `regenerate:${input.plan_revision_id}:${existingRuns.length + 1}`,
+      updated_at: input.superseded_at,
+    };
+    await this.upsert(execution_package_generation_runs, execution_package_generation_runs.executionPackageSetId, superseded);
+    return superseded;
+  }
+
+  async claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
+    return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).claimAutomationActionRunUnlocked(input),
+    );
+  }
+
+  async markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun> {
+    return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).markAutomationActionGatePendingUnlocked(input),
+    );
+  }
+
+  private async markAutomationActionGatePendingUnlocked(
+    input: MarkAutomationActionGatePendingInput,
+  ): Promise<AutomationActionRun> {
+    const actionRun = await this.claimedAutomationActionRun(input.id, input.claim_token);
+    if (actionRun.idempotency_key !== input.idempotency_key) {
+      throw new DomainError('INVALID_TRANSITION', `Automation action ${input.id} idempotency key mismatch`);
+    }
+    const pending: AutomationActionRun = {
+      ...actionRun,
+      status: 'gate_pending',
+      reason: input.reason,
+      ...(input.result_json === undefined ? {} : { result_json: input.result_json }),
+      ...(input.next_attempt_at === undefined ? {} : { next_attempt_at: input.next_attempt_at }),
+      updated_at: input.now,
+    };
+    await this.upsert(automation_action_runs, automation_action_runs.id, pending);
+    return pending;
+  }
+
+  async completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun> {
+    return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`], (repository) =>
+      (repository as DrizzleP0Repository).completeAutomationActionRunUnlocked(input),
+    );
+  }
+
+  private async completeAutomationActionRunUnlocked(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun> {
+    const actionRun = await this.claimedAutomationActionRun(input.id, input.claim_token);
+    if (actionRun.idempotency_key !== input.idempotency_key) {
+      throw new DomainError('INVALID_TRANSITION', `Automation action ${input.id} idempotency key mismatch`);
+    }
+    const completed: AutomationActionRun = {
+      ...actionRun,
+      status: input.status,
+      ...(input.result_json === undefined ? {} : { result_json: input.result_json }),
+      ...(input.retryable === undefined ? {} : { retryable: input.retryable }),
+      ...(input.next_attempt_at === undefined ? {} : { next_attempt_at: input.next_attempt_at }),
+      finished_at: input.finished_at,
+      updated_at: input.finished_at,
+    };
+    await this.upsert(automation_action_runs, automation_action_runs.id, completed);
+    return completed;
+  }
+
+  async listClaimableAutomationActionRuns(input: ListClaimableAutomationActionRunsInput): Promise<AutomationActionRun[]> {
+    const rows = await this.db
+      .select()
+      .from(automation_action_runs)
+      .where(
+        or(
+          eq(automation_action_runs.status, 'pending'),
+          and(
+            eq(automation_action_runs.status, 'gate_pending'),
+            or(sql`${automation_action_runs.nextAttemptAt} is null`, sql`${automation_action_runs.nextAttemptAt} <= ${input.now}`),
+          ),
+          and(
+            or(eq(automation_action_runs.status, 'blocked'), eq(automation_action_runs.status, 'failed')),
+            eq(automation_action_runs.retryable, true),
+            or(sql`${automation_action_runs.nextAttemptAt} is null`, sql`${automation_action_runs.nextAttemptAt} <= ${input.now}`),
+          ),
+          and(eq(automation_action_runs.status, 'running'), sql`${automation_action_runs.lockedUntil} <= ${input.now}`),
+        ),
+      )
+      .orderBy(
+        sql`coalesce(${automation_action_runs.nextAttemptAt}, ${automation_action_runs.createdAt})`,
+        asc(automation_action_runs.createdAt),
+        asc(automation_action_runs.id),
+      )
+      .limit(input.limit);
+    return rows.map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
+  }
+
+  async listRuntimeSnapshotRows(): Promise<Record<string, unknown>[]> {
+    return [];
   }
 
   async saveRelease(release: Release): Promise<void> {
@@ -865,6 +1302,544 @@ export class DrizzleP0Repository implements P0Repository {
     }
 
     return fromDbRecord<RunEvent>(row);
+  }
+
+  private async withAdvisoryLocks<T>(keys: readonly string[], write: (repository: P0Repository) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      for (const key of [...new Set(keys)].sort()) {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
+      }
+      return write(new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase));
+    });
+  }
+
+  private async setAutomationProjectSettingsUnlocked(
+    input: SetAutomationProjectSettingsInput,
+  ): Promise<AutomationProjectSettings> {
+    assertAutomationCapabilityActor(input.actor);
+    const current = await this.resolveAutomationProjectSettings(input);
+    if (current.version !== input.expected_version) {
+      throw new DomainError('INVALID_TRANSITION', `Automation settings version mismatch for ${input.project_id}`);
+    }
+    const capabilities = automationCapabilitiesForPreset(input.preset);
+    const settings: AutomationProjectSettings = {
+      id: current.id.startsWith('default:') ? input.id : current.id,
+      project_id: input.project_id,
+      ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+      preset: input.preset,
+      capabilities_json: capabilities,
+      capability_fingerprint: capabilityFingerprint(capabilities),
+      scope_type: input.scope_type,
+      version: current.version + 1,
+      enabled_by: input.actor.actor_id,
+      enabled_at: input.now,
+      updated_by: input.actor.actor_id,
+      updated_at: input.now,
+      reason: input.reason,
+      evidence_refs: input.evidence_refs,
+    };
+    await this.upsert(automation_project_settings, automation_project_settings.id, settings);
+    return settings;
+  }
+
+  private async requestManualPathHoldUnlocked(input: RequestManualPathHoldInput): Promise<ManualPathHold> {
+    const [existingReplay] = await this.db
+      .select()
+      .from(manual_path_hold_idempotency_records)
+      .where(eq(manual_path_hold_idempotency_records.idempotencyKey, input.idempotency_key))
+      .limit(1);
+    if (existingReplay !== undefined) {
+      const replayed = await this.getById<ManualPathHold>(manual_path_holds, manual_path_holds.id, existingReplay.holdId);
+      if (replayed !== undefined) {
+        return replayed;
+      }
+    }
+    if (input.source_automation_action_id !== undefined) {
+      const replayed = await this.manualPathHoldBySourceAction(input.source_automation_action_id);
+      if (replayed !== undefined) {
+        await this.db
+          .insert(manual_path_hold_idempotency_records)
+          .values({ idempotencyKey: input.idempotency_key, holdId: replayed.id })
+          .onConflictDoUpdate({
+            target: manual_path_hold_idempotency_records.idempotencyKey,
+            set: { holdId: replayed.id },
+          });
+        return replayed;
+      }
+    }
+
+    this.assertManualScopeKey(input);
+    const [existingActive] = await this.db
+      .select()
+      .from(manual_path_holds)
+      .where(
+        and(
+          eq(manual_path_holds.objectType, input.object_type),
+          eq(manual_path_holds.objectId, input.object_id),
+          eq(manual_path_holds.scopeKey, input.scope_key),
+          eq(manual_path_holds.status, 'active'),
+        ),
+      )
+      .limit(1);
+    if (existingActive !== undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Active manual hold already exists for ${input.scope_key}`);
+    }
+
+    const hold: ManualPathHold = {
+      id: input.id,
+      object_type: input.object_type,
+      object_id: input.object_id,
+      scope_key: input.scope_key,
+      status: 'active',
+      reason_code: input.reason_code,
+      reason: input.reason,
+      ...(input.source_automation_action_id === undefined
+        ? {}
+        : { source_automation_action_id: input.source_automation_action_id }),
+      evidence_refs: input.evidence_refs,
+      requested_by: input.requested_by,
+      requested_at: input.requested_at,
+      ...(input.metadata_json === undefined ? {} : { metadata_json: input.metadata_json }),
+    };
+    await this.upsert(manual_path_holds, manual_path_holds.id, hold);
+    await this.db
+      .insert(manual_path_hold_idempotency_records)
+      .values({ idempotencyKey: input.idempotency_key, holdId: hold.id })
+      .onConflictDoUpdate({
+        target: manual_path_hold_idempotency_records.idempotencyKey,
+        set: { holdId: hold.id },
+      });
+    return hold;
+  }
+
+  private async claimCommandIdempotencyUnlocked(
+    input: ClaimCommandIdempotencyInput,
+  ): Promise<CommandIdempotencyRecord> {
+    const existing = await this.commandIdempotencyByKey(input.idempotency_key);
+    if (existing !== undefined) {
+      this.assertCommandIdempotencyMatches(existing, input);
+      if (terminalCommandStatuses.has(existing.status)) {
+        return existing;
+      }
+      if (existing.status === 'running' && existing.locked_until !== undefined && existing.locked_until > input.now) {
+        throw new DomainError('INVALID_TRANSITION', `Command ${input.idempotency_key} already has an active claim`);
+      }
+    }
+    const record: CommandIdempotencyRecord = {
+      id: existing?.id ?? input.id,
+      command_name: input.command_name,
+      idempotency_key: input.idempotency_key,
+      target_object_type: input.target_object_type,
+      target_object_id: input.target_object_id,
+      ...(input.target_revision_id === undefined ? {} : { target_revision_id: input.target_revision_id }),
+      ...(input.target_version === undefined ? {} : { target_version: input.target_version }),
+      ...(input.precondition_json === undefined ? {} : { precondition_json: input.precondition_json }),
+      ...(input.precondition_fingerprint === undefined
+        ? {}
+        : { precondition_fingerprint: input.precondition_fingerprint }),
+      ...(input.actor_scope === undefined ? {} : { actor_scope: input.actor_scope, created_by: input.actor_scope }),
+      status: 'running',
+      locked_until: input.locked_until,
+      last_heartbeat_at: input.now,
+      claim_token: input.claim_token,
+      started_at: input.now,
+      created_at: existing?.created_at ?? input.now,
+      updated_at: input.now,
+    };
+    const dbRecord = toDbRecord(record, command_idempotency_records);
+    await this.db
+      .insert(command_idempotency_records)
+      .values(dbRecord as never)
+      .onConflictDoUpdate({
+        target: command_idempotency_records.idempotencyKey,
+        set: dbRecord as never,
+      });
+    return record;
+  }
+
+  private async claimExecutionPackageGenerationRunUnlocked(
+    input: ClaimExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun> {
+    const existing = await this.generationRunFor(input.plan_revision_id, input.generation_key);
+    if (existing !== undefined) {
+      if (
+        existing.manifest_digest !== input.manifest_digest ||
+        existing.policy_digest !== input.policy_digest ||
+        existing.generator_version !== input.generator_version ||
+        existing.expected_package_count !== input.expected_package_count ||
+        JSON.stringify(existing.expected_package_keys ?? []) !== JSON.stringify(input.expected_package_keys ?? [])
+      ) {
+        throw new DomainError('INVALID_TRANSITION', `Package generation manifest drift for ${input.generation_key}`);
+      }
+      if (existing.status === 'running' && existing.locked_until !== undefined && existing.locked_until <= input.now) {
+        const reclaimed: ExecutionPackageGenerationRun = {
+          ...existing,
+          claim_token: input.claim_token,
+          locked_until: input.locked_until,
+          last_heartbeat_at: input.now,
+          updated_at: input.now,
+        };
+        await this.upsert(execution_package_generation_runs, execution_package_generation_runs.executionPackageSetId, reclaimed);
+        return reclaimed;
+      }
+      if (existing.status === 'running') {
+        throw new DomainError('INVALID_TRANSITION', `Package generation ${input.generation_key} already has an active claim`);
+      }
+      return existing;
+    }
+    const [currentSucceeded] = await this.db
+      .select()
+      .from(execution_package_generation_runs)
+      .where(
+        and(
+          eq(execution_package_generation_runs.planRevisionId, input.plan_revision_id),
+          eq(execution_package_generation_runs.status, 'succeeded'),
+        ),
+      )
+      .limit(1);
+    if (currentSucceeded !== undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Plan revision ${input.plan_revision_id} already has current generation`);
+    }
+    const run: ExecutionPackageGenerationRun = {
+      execution_package_set_id: `generation:${input.plan_revision_id}:${input.generation_key}`,
+      plan_revision_id: input.plan_revision_id,
+      generation_key: input.generation_key,
+      version: 0,
+      ...(input.generator_version === undefined ? {} : { generator_version: input.generator_version }),
+      ...(input.policy_digest === undefined ? {} : { policy_digest: input.policy_digest }),
+      ...(input.manifest_digest === undefined ? {} : { manifest_digest: input.manifest_digest }),
+      ...(input.expected_package_count === undefined ? {} : { expected_package_count: input.expected_package_count }),
+      ...(input.expected_package_keys === undefined ? {} : { expected_package_keys: [...input.expected_package_keys] }),
+      status: 'running',
+      locked_until: input.locked_until,
+      last_heartbeat_at: input.now,
+      claim_token: input.claim_token,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    await this.upsert(execution_package_generation_runs, execution_package_generation_runs.executionPackageSetId, run);
+    return run;
+  }
+
+  private async completeExecutionPackageGenerationRunUnlocked(
+    input: CompleteExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun> {
+    const run = await this.claimedGenerationRun(input.execution_package_set_id, input.claim_token);
+    if (run.plan_revision_id !== input.plan_revision_id) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} plan mismatch`);
+    }
+    await this.assertGenerationPackageManifestComplete(run);
+    const completed: ExecutionPackageGenerationRun = {
+      ...run,
+      status: 'succeeded',
+      version: run.version + 1,
+      ...(input.result_json === undefined ? {} : { result_json: input.result_json }),
+      completed_at: input.completed_at,
+      updated_at: input.completed_at,
+    };
+    await this.upsert(execution_package_generation_runs, execution_package_generation_runs.executionPackageSetId, completed);
+    return completed;
+  }
+
+  private async claimAutomationActionRunUnlocked(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
+    const existing = await this.automationActionRunByIdempotencyKey(input.idempotency_key);
+    if (existing !== undefined) {
+      this.assertAutomationActionIdentityMatches(existing, input);
+      if (!this.isAutomationActionClaimable(existing, input.now)) {
+        if (existing.status === 'running') {
+          throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} already has an active claim`);
+        }
+        return redactAutomationActionClaim(existing);
+      }
+    }
+    const actionRun: AutomationActionRun = {
+      id: existing?.id ?? input.id,
+      action_type: input.action_type,
+      target_object_type: input.target_object_type,
+      target_object_id: input.target_object_id,
+      ...(input.target_revision_id === undefined ? {} : { target_revision_id: input.target_revision_id }),
+      target_status: input.target_status,
+      idempotency_key: input.idempotency_key,
+      automation_scope: input.automation_scope,
+      automation_settings_version: input.automation_settings_version,
+      capability_fingerprint: input.capability_fingerprint,
+      status: 'running',
+      claim_token: input.claim_token,
+      attempt: (existing?.attempt ?? 0) + 1,
+      locked_until: input.locked_until,
+      claimed_at: input.now,
+      started_at: existing?.started_at ?? input.now,
+      created_at: existing?.created_at ?? input.now,
+      updated_at: input.now,
+    };
+    await this.upsert(automation_action_runs, automation_action_runs.id, actionRun);
+    return actionRun;
+  }
+
+  private assertCommandIdempotencyMatches(
+    existing: CommandIdempotencyRecord,
+    input: ClaimCommandIdempotencyInput,
+  ): void {
+    const mismatched =
+      existing.command_name !== input.command_name ||
+      existing.target_object_type !== input.target_object_type ||
+      existing.target_object_id !== input.target_object_id ||
+      existing.target_revision_id !== input.target_revision_id ||
+      existing.target_version !== input.target_version ||
+      existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      existing.actor_scope !== input.actor_scope;
+    if (mismatched) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Command ${input.idempotency_key} idempotency identity or precondition fingerprint changed`,
+      );
+    }
+  }
+
+  private assertAutomationActionIdentityMatches(existing: AutomationActionRun, input: ClaimAutomationActionRunInput): void {
+    const mismatched =
+      existing.action_type !== input.action_type ||
+      existing.target_object_type !== input.target_object_type ||
+      existing.target_object_id !== input.target_object_id ||
+      existing.target_revision_id !== input.target_revision_id ||
+      existing.target_status !== input.target_status ||
+      existing.automation_scope !== input.automation_scope ||
+      existing.automation_settings_version !== input.automation_settings_version ||
+      existing.capability_fingerprint !== input.capability_fingerprint;
+    if (mismatched) {
+      throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} identity changed`);
+    }
+  }
+
+  private isAutomationActionClaimable(actionRun: AutomationActionRun, now: string): boolean {
+    if (actionRun.status === 'pending') {
+      return true;
+    }
+    if (actionRun.status === 'running') {
+      return actionRun.locked_until !== undefined && actionRun.locked_until <= now;
+    }
+    if (actionRun.status === 'gate_pending') {
+      return actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now;
+    }
+    if (actionRun.status === 'blocked' || actionRun.status === 'failed') {
+      return actionRun.retryable === true && (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now);
+    }
+    return false;
+  }
+
+  private assertGenerationPackageManifestComplete(run: ExecutionPackageGenerationRun): Promise<void> {
+    return (async () => {
+      const packages = await this.listWhere<ExecutionPackageGenerationPackageRecord>(
+        execution_package_generation_packages,
+        eq(execution_package_generation_packages.executionPackageSetId, run.execution_package_set_id),
+        [execution_package_generation_packages.sequence, execution_package_generation_packages.packageKey],
+      );
+      if (run.expected_package_count !== undefined && packages.length !== run.expected_package_count) {
+        throw new DomainError('INVALID_TRANSITION', `Package generation ${run.execution_package_set_id} package count mismatch`);
+      }
+      if (run.expected_package_keys !== undefined) {
+        const packageKeys = packages.map((record) => record.package_key);
+        if (JSON.stringify(packageKeys) !== JSON.stringify(run.expected_package_keys)) {
+          throw new DomainError('INVALID_TRANSITION', `Package generation ${run.execution_package_set_id} package key mismatch`);
+        }
+      }
+      if (run.manifest_digest !== undefined && packages.some((record) => record.manifest_digest !== run.manifest_digest)) {
+        throw new DomainError('INVALID_TRANSITION', `Package generation ${run.execution_package_set_id} manifest mismatch`);
+      }
+    })();
+  }
+
+  private async manualPathHoldBySourceAction(sourceAutomationActionId: string): Promise<ManualPathHold | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(manual_path_holds)
+      .where(eq(manual_path_holds.sourceAutomationActionId, sourceAutomationActionId))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<ManualPathHold>(row);
+  }
+
+  private manualPathHoldLockKeys(input: RequestManualPathHoldInput): string[] {
+    return [
+      `manual-hold-idem:${input.idempotency_key}`,
+      ...(input.source_automation_action_id === undefined ? [] : [`manual-hold-source:${input.source_automation_action_id}`]),
+    ];
+  }
+
+  private automationSettingsKey(projectId: string, repoId: string | undefined): string {
+    return repoId === undefined ? `project:${projectId}` : `repo:${projectId}:${repoId}`;
+  }
+
+  private supportsSelect(): boolean {
+    return typeof (this.db as { select?: unknown }).select === 'function';
+  }
+
+  private assertManualScopeKey(input: RequestManualPathHoldInput): void {
+    switch (input.object_type) {
+      case 'work_item':
+      case 'spec_revision':
+      case 'plan_revision':
+      case 'execution_package':
+      case 'run_session':
+      case 'review_packet':
+        assertCanonicalManualScopeKey(input.scope_key, {
+          object_type: input.object_type,
+          object_id: input.object_id,
+        });
+        return;
+      case 'package_generation':
+        if (input.generation_key === undefined) {
+          throw new DomainError('MANUAL_PATH_SCOPE_INVALID', 'Package generation manual hold requires generation_key');
+        }
+        assertCanonicalManualScopeKey(input.scope_key, {
+          object_type: 'package_generation',
+          object_id: input.object_id,
+          generation_key: input.generation_key,
+        });
+        return;
+      case 'release_gate':
+        if (input.gate_key === undefined) {
+          throw new DomainError('MANUAL_PATH_SCOPE_INVALID', 'Release gate manual hold requires gate_key');
+        }
+        assertCanonicalManualScopeKey(input.scope_key, {
+          object_type: 'release_gate',
+          object_id: input.object_id,
+          gate_key: input.gate_key,
+        });
+        return;
+      default:
+        throw new DomainError('MANUAL_PATH_SCOPE_INVALID', `Unsupported manual path hold object type ${input.object_type}`);
+    }
+  }
+
+  private async manualHoldScopeKeysFor(input: ListActiveManualPathHoldsInput): Promise<string[]> {
+    const keys = [`${input.object_type}:${input.object_id}`];
+    if (input.object_type === 'execution_package') {
+      const executionPackage = await this.getExecutionPackage(input.object_id);
+      if (executionPackage !== undefined) {
+        keys.push(
+          `work_item:${executionPackage.work_item_id}`,
+          `spec_revision:${executionPackage.spec_revision_id}`,
+          `plan_revision:${executionPackage.plan_revision_id}`,
+        );
+      }
+    }
+    if (input.object_type === 'package_generation' && input.generation_key !== undefined) {
+      keys.push(`package_generation:${input.object_id}:${input.generation_key}`);
+    }
+    if (input.object_type === 'release_gate') {
+      if (input.gate_key !== undefined) {
+        keys.push(`release_gate:${input.object_id}:${input.gate_key}`);
+      } else {
+        const releaseGateHolds = await this.listWhere<ManualPathHold>(
+          manual_path_holds,
+          and(eq(manual_path_holds.status, 'active'), eq(manual_path_holds.objectType, 'release_gate')),
+        );
+        keys.push(...releaseGateHolds.filter((hold) => hold.object_id === input.object_id).map((hold) => hold.scope_key));
+      }
+    }
+    if (input.object_type === 'run_session') {
+      const runSession = await this.getRunSession(input.object_id);
+      if (runSession !== undefined) {
+        keys.push(...(await this.manualHoldScopeKeysFor({ object_type: 'execution_package', object_id: runSession.execution_package_id })));
+      }
+    }
+    if (input.object_type === 'review_packet') {
+      const reviewPacket = await this.getReviewPacket(input.object_id);
+      if (reviewPacket !== undefined) {
+        keys.push(
+          ...(await this.manualHoldScopeKeysFor({
+            object_type: 'execution_package',
+            object_id: reviewPacket.execution_package_id,
+          })),
+        );
+      }
+    }
+    return [...new Set(keys)];
+  }
+
+  private async commandIdempotencyByKey(idempotencyKey: string): Promise<CommandIdempotencyRecord | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(command_idempotency_records)
+      .where(eq(command_idempotency_records.idempotencyKey, idempotencyKey))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<CommandIdempotencyRecord>(row);
+  }
+
+  private async claimedCommandIdempotency(
+    idempotencyKey: string,
+    claimToken: string,
+  ): Promise<CommandIdempotencyRecord> {
+    const record = await this.commandIdempotencyByKey(idempotencyKey);
+    if (record === undefined || record.status !== 'running' || record.claim_token !== claimToken) {
+      throw new DomainError('INVALID_TRANSITION', `Command idempotency record ${idempotencyKey} is not claimed`);
+    }
+    return record;
+  }
+
+  private async finishCommandIdempotency(
+    input: FinishCommandIdempotencyInput,
+    status: CommandIdempotencyRecord['status'],
+  ): Promise<CommandIdempotencyRecord> {
+    const record = await this.claimedCommandIdempotency(input.idempotency_key, input.claim_token);
+    const finished: CommandIdempotencyRecord = {
+      ...record,
+      status,
+      ...(input.result_json === undefined ? {} : { result_json: input.result_json }),
+      finished_at: input.finished_at,
+      updated_at: input.finished_at,
+    };
+    await this.upsert(command_idempotency_records, command_idempotency_records.id, finished);
+    return finished;
+  }
+
+  private async generationRunFor(
+    planRevisionId: string,
+    generationKey: string,
+  ): Promise<ExecutionPackageGenerationRun | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(execution_package_generation_runs)
+      .where(
+        and(
+          eq(execution_package_generation_runs.planRevisionId, planRevisionId),
+          eq(execution_package_generation_runs.generationKey, generationKey),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<ExecutionPackageGenerationRun>(row);
+  }
+
+  private async claimedGenerationRun(
+    executionPackageSetId: string,
+    claimToken: string,
+  ): Promise<ExecutionPackageGenerationRun> {
+    const run = await this.getById<ExecutionPackageGenerationRun>(
+      execution_package_generation_runs,
+      execution_package_generation_runs.executionPackageSetId,
+      executionPackageSetId,
+    );
+    if (run === undefined || run.status !== 'running' || run.claim_token !== claimToken) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${executionPackageSetId} is not claimed`);
+    }
+    return run;
+  }
+
+  private async automationActionRunByIdempotencyKey(idempotencyKey: string): Promise<AutomationActionRun | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(automation_action_runs)
+      .where(eq(automation_action_runs.idempotencyKey, idempotencyKey))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<AutomationActionRun>(row);
+  }
+
+  private async claimedAutomationActionRun(id: string, claimToken: string): Promise<AutomationActionRun> {
+    const actionRun = await this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, id);
+    if (actionRun === undefined || actionRun.status !== 'running' || actionRun.claim_token !== claimToken) {
+      throw new DomainError('INVALID_TRANSITION', `Automation action ${id} is not claimed`);
+    }
+    return actionRun;
   }
 
   private async lockActiveRunWorkerLease(

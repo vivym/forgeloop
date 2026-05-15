@@ -6,6 +6,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src';
 import type { RunWorker } from '../../packages/run-worker/src';
@@ -13,6 +14,8 @@ import type { RunWorker } from '../../packages/run-worker/src';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
+const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
+const reviewerHeaders = { [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' };
 const repoId = 'repo-1';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -75,13 +78,13 @@ const createApprovedSpecAndPlan = async (
 
   const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
   const specRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
 
   const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
   const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
 
   return {
     project,
@@ -110,7 +113,11 @@ const createReadyPackage = async (app: INestApplication, planRevisionId: string,
       .expect(201)
   ).body;
 
-  await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+  await request(server)
+    .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+    .set(ownerHeaders)
+    .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
+    .expect(201);
 
   return executionPackage;
 };
@@ -181,6 +188,7 @@ const waitForReviewPacket = async (app: INestApplication, runSessionId: string):
 const approveReviewPacket = async (app: INestApplication, reviewPacketId: string, reviewedAt = '2026-05-05T01:00:00.000Z') =>
   request(app.getHttpServer())
     .post(`/review-packets/${reviewPacketId}/approve`)
+    .set(reviewerHeaders)
     .send({
       summary: 'Approved for P0 handoff.',
       reviewed_by_actor_id: actorReviewer,
@@ -265,6 +273,7 @@ describe('P0 smoke delivery loop', () => {
     const firstReviewPacketId = (await waitForReviewPacket(app, firstAcceptedRun.run_session_id)).id;
     await request(server)
       .post(`/review-packets/${firstReviewPacketId}/request-changes`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Tighten the validation evidence.',
         reviewed_by_actor_id: actorReviewer,

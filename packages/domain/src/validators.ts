@@ -5,12 +5,142 @@ import {
   type Project,
   type ReviewPacket,
 } from './types.js';
+import { isOpenReviewPacketStatus } from './automation.js';
 
 export interface ExecutionPackageValidationOptions {
   referenced_repo_ids?: readonly string[];
 }
 
 const hasText = (value: string) => value.trim().length > 0;
+
+const readyOrRunEligiblePhases = new Set<ExecutionPackage['phase']>([
+  'ready',
+  'queued',
+  'execution',
+  'review',
+  'integration',
+  'test_gate',
+  'release',
+]);
+
+const hasApprovalEvidence = (executionPackage: ExecutionPackage): boolean =>
+  hasText(executionPackage.validation_approved_by ?? '') &&
+  hasText(executionPackage.validation_approved_at ?? '') &&
+  (executionPackage.validation_evidence_refs?.length ?? 0) > 0;
+
+const isFiniteNonNegativeInteger = (value: number | undefined): value is number =>
+  value !== undefined && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+
+const validateExecutionPackagePolicy = (executionPackage: ExecutionPackage): void => {
+  if (!readyOrRunEligiblePhases.has(executionPackage.phase)) {
+    return;
+  }
+
+  const effectiveValidationStrategy = executionPackage.validation_strategy ?? 'checks_required';
+
+  if (executionPackage.policy_snapshot_status !== 'captured') {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} must capture a policy snapshot before ${executionPackage.phase}.`,
+      {
+        execution_package_id: executionPackage.id,
+        phase: executionPackage.phase,
+        policy_snapshot_status: executionPackage.policy_snapshot_status,
+      },
+    );
+  }
+
+  if (executionPackage.package_policy_snapshot === undefined) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} must include a captured policy snapshot before ${executionPackage.phase}.`,
+      {
+        execution_package_id: executionPackage.id,
+        phase: executionPackage.phase,
+      },
+    );
+  }
+
+  if (!isFiniteNonNegativeInteger(executionPackage.policy_snapshot_version)) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} must use a valid policy snapshot version before ${executionPackage.phase}.`,
+      {
+        execution_package_id: executionPackage.id,
+        phase: executionPackage.phase,
+        policy_snapshot_version: executionPackage.policy_snapshot_version,
+      },
+    );
+  }
+
+  if (executionPackage.package_policy_snapshot.policy_snapshot_version !== executionPackage.policy_snapshot_version) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} must align its policy snapshot metadata before ${executionPackage.phase}.`,
+      {
+        execution_package_id: executionPackage.id,
+        phase: executionPackage.phase,
+        policy_snapshot_version: executionPackage.policy_snapshot_version,
+        package_policy_snapshot_version: executionPackage.package_policy_snapshot.policy_snapshot_version,
+      },
+    );
+  }
+
+  if (
+    executionPackage.package_policy_snapshot.policy_snapshot_status !== undefined &&
+    executionPackage.package_policy_snapshot.policy_snapshot_status !== 'captured'
+  ) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} must use a captured policy snapshot before ${executionPackage.phase}.`,
+      {
+        execution_package_id: executionPackage.id,
+        phase: executionPackage.phase,
+        package_policy_snapshot_status: executionPackage.package_policy_snapshot.policy_snapshot_status,
+      },
+    );
+  }
+
+  if (executionPackage.package_policy_snapshot.validation_strategy !== effectiveValidationStrategy) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} must freeze the effective validation strategy before ${executionPackage.phase}.`,
+      {
+        execution_package_id: executionPackage.id,
+        phase: executionPackage.phase,
+        validation_strategy: effectiveValidationStrategy,
+        package_policy_snapshot_validation_strategy: executionPackage.package_policy_snapshot.validation_strategy,
+      },
+    );
+  }
+
+  if (executionPackage.validation_strategy === 'allow_all_repo' && !hasApprovalEvidence(executionPackage)) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} requires reviewed approval before allow_all_repo can run.`,
+      {
+        execution_package_id: executionPackage.id,
+        validation_strategy: executionPackage.validation_strategy,
+      },
+    );
+  }
+
+  if (
+    executionPackage.validation_strategy === 'custom' &&
+    (!hasText(executionPackage.validation_public_summary ?? '') ||
+      !isFiniteNonNegativeInteger(executionPackage.validation_strategy_version))
+  ) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+      `Package ${executionPackage.id} requires a frozen custom validation strategy before ${executionPackage.phase}.`,
+      {
+        execution_package_id: executionPackage.id,
+        validation_strategy: executionPackage.validation_strategy,
+        validation_strategy_version: executionPackage.validation_strategy_version,
+      },
+    );
+  }
+};
 
 export const validateRepoBelongsToProject = (project: Project, repoId: string): void => {
   if (!project.repo_ids.includes(repoId)) {
@@ -36,6 +166,17 @@ export const validateExecutionPackage = (
 
   validateRepoBelongsToProject(project, executionPackage.repo_id);
 
+  if (!Number.isInteger(executionPackage.version) || executionPackage.version < 0) {
+    throw new DomainError(
+      'EXECUTION_PACKAGE_VERSION_INVALID',
+      `Package ${executionPackage.id} must have a non-negative integer version.`,
+      {
+        execution_package_id: executionPackage.id,
+        version: executionPackage.version,
+      },
+    );
+  }
+
   const referencedRepoIds = new Set(options.referenced_repo_ids ?? [executionPackage.repo_id]);
   if (referencedRepoIds.size > 1 || !referencedRepoIds.has(executionPackage.repo_id)) {
     throw new DomainError('PACKAGE_MULTIPLE_REPOS', `Package ${executionPackage.id} must bind exactly one repo`, {
@@ -48,7 +189,10 @@ export const validateExecutionPackage = (
     validateRepoBelongsToProject(project, repoId);
   }
 
-  if (executionPackage.required_checks.length === 0) {
+  if (
+    (executionPackage.validation_strategy === undefined || executionPackage.validation_strategy === 'checks_required') &&
+    executionPackage.required_checks.length === 0
+  ) {
     throw new DomainError('REQUIRED_CHECK_MISSING', `Package ${executionPackage.id} must define required checks`, {
       execution_package_id: executionPackage.id,
     });
@@ -77,6 +221,8 @@ export const validateExecutionPackage = (
       execution_package_id: executionPackage.id,
     });
   }
+
+  validateExecutionPackagePolicy(executionPackage);
 };
 
 export const validatePackageDependencyGraph = (
@@ -147,7 +293,7 @@ export const validateForceRerunAllowed = (
       (reviewPacket) =>
         reviewPacket.run_session_id === executionPackage.last_run_session_id &&
         reviewPacket.decision === 'none' &&
-        (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review'),
+        isOpenReviewPacketStatus(reviewPacket.status),
     );
 
   if (

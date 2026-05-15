@@ -16,6 +16,14 @@ import type { RunWorker } from '../../packages/run-worker/src';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
+const ownerHeaders = {
+  'x-forgeloop-actor-id': actorOwner,
+  'x-forgeloop-actor-class': 'human_admin',
+};
+const reviewerHeaders = {
+  'x-forgeloop-actor-id': actorReviewer,
+  'x-forgeloop-actor-class': 'human',
+};
 
 const requiredChecks = [
   {
@@ -90,8 +98,8 @@ const approveSpec = async (app: INestApplication, workItemId: string) => {
   await request(server).get(`/specs/${spec.id}`).expect(200);
   await request(server).get(`/specs/${spec.id}/revisions`).expect(200);
   await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
 
   return { specId: spec.id, specRevisionId: generatedRevision.id };
 };
@@ -122,8 +130,8 @@ const approvePlan = async (app: INestApplication, workItemId: string) => {
   await request(server).get(`/plans/${plan.id}`).expect(200);
   await request(server).get(`/plans/${plan.id}/revisions`).expect(200);
   await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200);
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
 
   return { planId: plan.id, planRevisionId: generatedRevision.id };
 };
@@ -296,8 +304,15 @@ describe('P0 control plane API', () => {
       2,
     );
     await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200);
-    await request(server).patch(`/execution-packages/${executionPackage.id}`).send({ objective: 'Edited before ready.' }).expect(200);
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    const patchedPackage = (await request(server)
+      .patch(`/execution-packages/${executionPackage.id}`)
+      .send({ objective: 'Edited before ready.' })
+      .expect(200)).body;
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: patchedPackage.version })
+      .expect(201);
 
     const firstRun = (
       await request(server)
@@ -313,6 +328,7 @@ describe('P0 control plane API', () => {
 
     await request(server)
       .post(`/review-packets/${firstReviewPacketId}/request-changes`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Please tighten the API assertions.',
         reviewed_by_actor_id: actorReviewer,
@@ -344,6 +360,7 @@ describe('P0 control plane API', () => {
 
     await request(server)
       .post(`/review-packets/${rerunReviewPacketId}/approve`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Approved for handoff.',
         reviewed_by_actor_id: actorReviewer,
@@ -381,13 +398,21 @@ describe('P0 control plane API', () => {
     const { workItem } = await createProjectRepoWorkItem(app);
 
     const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-    await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(400);
+    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(400);
 
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(400);
+    const readyPackage = (await request(server)
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
+      .expect(201)).body;
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: readyPackage.version })
+      .expect(400);
 
     const run = (
       await request(server)
@@ -398,6 +423,7 @@ describe('P0 control plane API', () => {
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/review-packets/${reviewPacketId}/approve`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Approved once.',
         reviewed_by_actor_id: actorReviewer,
@@ -406,6 +432,7 @@ describe('P0 control plane API', () => {
       .expect(201);
     await request(server)
       .post(`/review-packets/${reviewPacketId}/approve`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Approved twice.',
         reviewed_by_actor_id: actorReviewer,
@@ -457,7 +484,11 @@ describe('P0 control plane API', () => {
     expect((await request(server).get(`/work-items/${workItem.id}/execution-packages`).expect(200)).body).toHaveLength(0);
 
     const executionPackage = await createManualPackage(app, planRevisionId);
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
+      .expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -467,6 +498,7 @@ describe('P0 control plane API', () => {
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/review-packets/${reviewPacketId}/request-changes`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Invalid review decision.',
         reviewed_by_actor_id: actorReviewer,
@@ -487,7 +519,11 @@ describe('P0 control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
+      .expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -495,17 +531,21 @@ describe('P0 control plane API', () => {
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
-    await request(server)
+    const patchedPackage = (await request(server)
       .patch(`/execution-packages/${executionPackage.id}`)
       .send({ objective: 'Edited package creates a fresh run spec.' })
-      .expect(200);
+      .expect(200)).body;
 
     const oldRun = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
     const archivedPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
     expect(oldRun.status).toBe('succeeded');
     expect(archivedPacket.status).toBe('archived');
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: patchedPackage.version })
+      .expect(201);
     const newRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -530,7 +570,7 @@ describe('P0 control plane API', () => {
     const service = app.get(P0Service);
     const repository = (service as unknown as { repository: InMemoryP0Repository }).repository;
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -557,7 +597,7 @@ describe('P0 control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(400);
 
     const run = (
@@ -569,6 +609,7 @@ describe('P0 control plane API', () => {
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/review-packets/${reviewPacketId}/request-changes`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Rerun required.',
         reviewed_by_actor_id: actorReviewer,
@@ -617,7 +658,7 @@ describe('P0 control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const firstRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -627,6 +668,7 @@ describe('P0 control plane API', () => {
     const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
     await request(server)
       .post(`/review-packets/${firstReviewPacketId}/request-changes`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Rerun required.',
         reviewed_by_actor_id: actorReviewer,
@@ -700,7 +742,7 @@ describe('P0 control plane API', () => {
       const { planRevisionId } = await approvePlan(app, workItem.id);
       const executionPackage = await createManualPackage(app, planRevisionId);
 
-      await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+      await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
       const firstRun = (
         await request(server)
           .post(`/execution-packages/${executionPackage.id}/run`)
@@ -710,7 +752,8 @@ describe('P0 control plane API', () => {
       const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
       await request(server)
         .post(`/review-packets/${firstReviewPacketId}/request-changes`)
-        .send({
+        .set(reviewerHeaders)
+      .send({
           summary: 'Rerun required.',
           reviewed_by_actor_id: actorReviewer,
           reviewed_at: '2026-05-05T03:00:00.000Z',
@@ -749,7 +792,7 @@ describe('P0 control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -793,7 +836,7 @@ describe('P0 control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -803,6 +846,7 @@ describe('P0 control plane API', () => {
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/review-packets/${reviewPacketId}/approve`)
+      .set(reviewerHeaders)
       .send({
         summary: 'Completed review.',
         reviewed_by_actor_id: actorReviewer,
@@ -839,7 +883,7 @@ describe('P0 control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
 
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
@@ -885,9 +929,9 @@ describe('P0 control plane API', () => {
         test_strategy_summary: 'Tests',
       })
       .expect(201);
-    await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     expect(
-      (await request(server).post(`/specs/${spec.id}/request-changes`).send({ actor_id: actorReviewer }).expect(201)).body,
+      (await request(server).post(`/specs/${spec.id}/request-changes`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)).body,
     ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
 
     const { workItem: planWorkItem } = await createProjectRepoWorkItem(app);
@@ -905,9 +949,9 @@ describe('P0 control plane API', () => {
         rollback_notes: 'Revert',
       })
       .expect(201);
-    await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     expect(
-      (await request(server).post(`/plans/${plan.id}/request-changes`).send({ actor_id: actorReviewer }).expect(201)).body,
+      (await request(server).post(`/plans/${plan.id}/request-changes`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)).body,
     ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
   });
 });
