@@ -108,6 +108,29 @@ describe('internal automation actor auth', () => {
     await request(app.getHttpServer()).post('/internal/automation/actions').set(headers).send({ a: 2 }).expect(401);
   });
 
+  it('accepts a signed automation daemon request with an exact JSON body', async () => {
+    const { app } = await bootAutomationApp();
+    const timestamp = new Date().toISOString();
+    const rawBody = '{"a":1}';
+    const headers = signAutomationRequest({
+      method: 'POST',
+      pathAndQuery: '/internal/automation/actions',
+      rawBody,
+      actorId: 'daemon-actor',
+      actorClass: 'automation_daemon',
+      daemonIdentity: 'daemon-1',
+      timestamp,
+      secret: 'test-secret',
+    });
+
+    await request(app.getHttpServer())
+      .post('/internal/automation/actions')
+      .set(headers)
+      .set('Content-Type', 'application/json')
+      .send(rawBody)
+      .expect(201, { action: null });
+  });
+
   it('rejects an altered query string', async () => {
     const { app } = await bootAutomationApp();
     const timestamp = new Date().toISOString();
