@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import { automationPreconditionFingerprint, type AutomationPrecondition } from '../../packages/domain/src/index';
 import {
   AutomationHttpError,
   executeClaimedAction,
+  type AutomationActionResponse,
   type AutomationActionRunRecord,
   type AutomationExecutorClient,
   type NextAction,
@@ -50,13 +52,36 @@ const claimedAction = (overrides: Partial<AutomationActionRunRecord> = {}): Auto
   ...overrides,
 });
 
+const commandPreconditionFor = (action: AutomationActionRunRecord): AutomationPrecondition =>
+  ({
+    automation_scope: action.automationScope,
+    project_id: 'project-1',
+    repo_id: 'repo-1',
+    target_object_type: action.targetObjectType,
+    target_object_id: action.targetObjectId,
+    ...(action.targetRevisionId === undefined ? {} : { target_revision_id: action.targetRevisionId }),
+    ...(action.targetVersion === undefined ? {} : { target_version: action.targetVersion }),
+    target_status: action.targetStatus,
+    automation_settings_version: action.automationSettingsVersion,
+    capability_fingerprint: action.capabilityFingerprint,
+    required_capability:
+      action.actionType === 'ensure_package_drafts' || action.targetObjectType === 'plan_revision'
+        ? 'canGeneratePackageDrafts'
+        : 'canGeneratePlanDraft',
+    actor_class: 'automation_daemon',
+  }) as AutomationPrecondition;
+
 class FakeAutomationClient implements AutomationExecutorClient {
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   actionToClaim: AutomationActionRunRecord | null = claimedAction();
+  createOrReplayResponse?: AutomationActionResponse;
   commandError?: AutomationHttpError;
 
   async createOrReplayAction(action: NextAction) {
     this.calls.push({ method: 'createOrReplayAction', args: [action] });
+    if (this.createOrReplayResponse !== undefined) {
+      return this.createOrReplayResponse;
+    }
     return { action: { ...claimedAction(), status: 'pending' as const } };
   }
 
@@ -157,6 +182,44 @@ describe('automation executor', () => {
     ]);
   });
 
+  it('sends a command precondition whose fingerprint matches the claimed target-aware action identity', async () => {
+    const client = new FakeAutomationClient();
+    const action = claimedAction({ targetVersion: 7 });
+    const expectedPreconditionFingerprint = automationPreconditionFingerprint(commandPreconditionFor(action));
+    client.actionToClaim = {
+      ...action,
+      preconditionFingerprint: expectedPreconditionFingerprint,
+    };
+
+    await execute(client);
+
+    const ensureCall = client.calls.find((call) => call.method === 'ensurePlanDraft');
+    const commandInput = ensureCall?.args[1] as { automation_precondition?: AutomationPrecondition } | undefined;
+    expect(commandInput?.automation_precondition).toMatchObject({
+      target_object_type: 'work_item',
+      target_object_id: 'work-item-1',
+      target_revision_id: 'spec-revision-1',
+      target_version: 7,
+      target_status: 'approved',
+    });
+    expect(automationPreconditionFingerprint(commandInput?.automation_precondition as AutomationPrecondition)).toBe(
+      expectedPreconditionFingerprint,
+    );
+  });
+
+  it('treats replayed succeeded actions as complete without claiming or re-entering commands', async () => {
+    const client = new FakeAutomationClient();
+    client.actionToClaim = null;
+    client.createOrReplayResponse = {
+      action: { ...claimedAction({ status: 'succeeded' }), status: 'succeeded' },
+    };
+
+    const result = await execute(client);
+
+    expect(result).toEqual({ actionRunId: 'action-run-1', status: 'succeeded', retryable: false });
+    expect(client.calls.map((call) => call.method)).toEqual(['createOrReplayAction']);
+  });
+
   it('routes ensure_package_drafts to the plan revision package endpoint', async () => {
     const client = new FakeAutomationClient();
     client.actionToClaim = claimedAction({
@@ -193,6 +256,54 @@ describe('automation executor', () => {
     ]);
   });
 
+  it('binds package draft commands to the generation key in the target-aware precondition', async () => {
+    const client = new FakeAutomationClient();
+    const expectedPrecondition = {
+      automation_scope: repoScope,
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      target_object_type: 'plan_revision',
+      target_object_id: 'plan-revision-1',
+      target_revision_id: 'retry:plan-revision-1',
+      target_status: 'approved',
+      automation_settings_version: 3,
+      capability_fingerprint: 'capability-fingerprint-1',
+      required_capability: 'canGeneratePackageDrafts',
+      command_concurrency_token: 'retry:plan-revision-1',
+      actor_class: 'automation_daemon',
+    } as AutomationPrecondition;
+    client.actionToClaim = claimedAction({
+      actionType: 'ensure_package_drafts',
+      targetObjectType: 'plan_revision',
+      targetObjectId: 'plan-revision-1',
+      targetRevisionId: 'retry:plan-revision-1',
+      targetStatus: 'approved',
+      preconditionFingerprint: automationPreconditionFingerprint(expectedPrecondition),
+      actionInputJson: {
+        plan_revision_id: 'plan-revision-1',
+        generation_key: 'retry:plan-revision-1',
+      },
+    });
+
+    await execute(
+      client,
+      baseAction({
+        actionType: 'ensure_package_drafts',
+        targetObjectType: 'plan_revision',
+        targetObjectId: 'plan-revision-1',
+      }),
+    );
+
+    const ensureCall = client.calls.find((call) => call.method === 'ensurePackageDrafts');
+    const commandInput = ensureCall?.args[1] as { automation_precondition?: AutomationPrecondition } | undefined;
+    expect(commandInput?.automation_precondition).toMatchObject({
+      command_concurrency_token: 'retry:plan-revision-1',
+    });
+    expect(automationPreconditionFingerprint(commandInput?.automation_precondition as AutomationPrecondition)).toBe(
+      automationPreconditionFingerprint(expectedPrecondition),
+    );
+  });
+
   it('maps stale preconditions to gate_pending', async () => {
     const client = new FakeAutomationClient();
     client.commandError = new AutomationHttpError(409, { code: 'automation_precondition_stale' });
@@ -208,6 +319,57 @@ describe('automation executor', () => {
         reason: 'automation_precondition_stale',
       }),
     ]);
+  });
+
+  it('binds manual path commands to the scope and reason concurrency token', async () => {
+    const client = new FakeAutomationClient();
+    const expectedPrecondition = {
+      automation_scope: repoScope,
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      target_object_type: 'work_item',
+      target_object_id: 'work-item-ambiguous',
+      target_status: 'approved',
+      automation_settings_version: 3,
+      capability_fingerprint: 'capability-fingerprint-1',
+      required_capability: 'canGeneratePlanDraft',
+      command_concurrency_token: 'work_item:work-item-ambiguous:multi_repo_ambiguity',
+      actor_class: 'automation_daemon',
+    } as AutomationPrecondition;
+    client.actionToClaim = claimedAction({
+      actionType: 'request_manual_path',
+      targetObjectType: 'work_item',
+      targetObjectId: 'work-item-ambiguous',
+      targetRevisionId: undefined,
+      targetStatus: 'approved',
+      preconditionFingerprint: automationPreconditionFingerprint(expectedPrecondition),
+      actionInputJson: {
+        object_type: 'work_item',
+        object_id: 'work-item-ambiguous',
+        scope_key: 'work_item:work-item-ambiguous',
+        reason_code: 'multi_repo_ambiguity',
+        reason: 'Choose the canonical repository path manually.',
+      },
+    });
+
+    await execute(
+      client,
+      baseAction({
+        actionType: 'request_manual_path',
+        targetObjectType: 'work_item',
+        targetObjectId: 'work-item-ambiguous',
+        targetRevisionId: undefined,
+      }),
+    );
+
+    const manualPathCall = client.calls.find((call) => call.method === 'requestManualPathHold');
+    const commandInput = manualPathCall?.args[0] as { automation_precondition?: AutomationPrecondition } | undefined;
+    expect(commandInput?.automation_precondition).toMatchObject({
+      command_concurrency_token: 'work_item:work-item-ambiguous:multi_repo_ambiguity',
+    });
+    expect(automationPreconditionFingerprint(commandInput?.automation_precondition as AutomationPrecondition)).toBe(
+      automationPreconditionFingerprint(expectedPrecondition),
+    );
   });
 
   it('maps active holds to blocked', async () => {

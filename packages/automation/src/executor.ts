@@ -35,15 +35,34 @@ const requiredCapabilityFor = (action: AutomationActionRunRecord): AutomationPre
   return 'canGeneratePlanDraft';
 };
 
-const preconditionFor = (action: AutomationActionRunRecord, input: ExecuteClaimedActionInput): AutomationPrecondition => {
+const commandConcurrencyTokenFor = (action: AutomationActionRunRecord): string | undefined => {
+  if (action.actionType === 'ensure_package_drafts') {
+    return stringField(action.actionInputJson, 'generation_key') ?? action.targetRevisionId;
+  }
+  if (action.actionType === 'request_manual_path') {
+    const scopeKey = stringField(action.actionInputJson, 'scope_key') ?? `${action.targetObjectType}:${action.targetObjectId}`;
+    const reasonCode = stringField(action.actionInputJson, 'reason_code') ?? 'manual_path_required';
+    return `${scopeKey}:${reasonCode}`;
+  }
+  return undefined;
+};
+
+const preconditionFor = (action: AutomationActionRunRecord): AutomationPrecondition => {
   const scope = projectAndRepoFromScope(action.automationScope);
+  const commandConcurrencyToken = commandConcurrencyTokenFor(action);
   return {
     automation_scope: action.automationScope,
     project_id: scope.projectId,
     ...(scope.repoId === undefined ? {} : { repo_id: scope.repoId }),
+    target_object_type: action.targetObjectType,
+    target_object_id: action.targetObjectId,
+    ...(action.targetRevisionId === undefined ? {} : { target_revision_id: action.targetRevisionId }),
+    ...(action.targetVersion === undefined ? {} : { target_version: action.targetVersion }),
+    target_status: action.targetStatus,
     automation_settings_version: action.automationSettingsVersion,
     capability_fingerprint: action.capabilityFingerprint,
     required_capability: requiredCapabilityFor(action),
+    ...(commandConcurrencyToken === undefined ? {} : { command_concurrency_token: commandConcurrencyToken }),
     actor_class: 'automation_daemon',
   };
 };
@@ -112,7 +131,7 @@ const executeCommand = async (
   action: AutomationActionRunRecord,
   input: ExecuteClaimedActionInput,
 ): Promise<void> => {
-  const precondition = preconditionFor(action, input);
+  const precondition = preconditionFor(action);
   if (action.actionType === 'ensure_plan_draft') {
     const workItemId = stringField(action.actionInputJson, 'work_item_id') ?? action.targetObjectId;
     const specRevisionId = stringField(action.actionInputJson, 'spec_revision_id') ?? action.targetRevisionId;
@@ -161,6 +180,29 @@ const executeCommand = async (
       ...(gateKey === undefined ? {} : { gate_key: gateKey }),
     });
   }
+};
+
+const terminalReplayResult = (action: AutomationActionRunRecord): AutomationExecutorResult | undefined => {
+  if (action.status === 'succeeded') {
+    return { actionRunId: action.id, status: 'succeeded', retryable: false };
+  }
+  if (action.status === 'skipped') {
+    return {
+      actionRunId: action.id,
+      status: 'skipped',
+      retryable: false,
+      ...(action.reason === undefined ? {} : { reasonCode: action.reason }),
+    };
+  }
+  if ((action.status === 'blocked' || action.status === 'failed') && action.retryable !== true) {
+    return {
+      actionRunId: action.id,
+      status: action.status,
+      retryable: false,
+      ...(action.errorCode === undefined ? {} : { reasonCode: action.errorCode }),
+    };
+  }
+  return undefined;
 };
 
 const markCommandError = async (
@@ -215,8 +257,9 @@ const markCommandError = async (
 };
 
 export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Promise<AutomationExecutorResult> => {
+  let replayedAction: AutomationActionRunRecord | null;
   try {
-    await input.client.createOrReplayAction(input.action);
+    replayedAction = (await input.client.createOrReplayAction(input.action)).action;
   } catch (error) {
     const code = errorCode(error);
     return {
@@ -225,6 +268,12 @@ export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Pr
       retryable: isRetryableTransportError(error) && !isNonRetryableConflict(code),
       ...(code === undefined ? {} : { reasonCode: code }),
     };
+  }
+  if (replayedAction !== null) {
+    const replayResult = terminalReplayResult(replayedAction);
+    if (replayResult !== undefined) {
+      return replayResult;
+    }
   }
 
   const claim = await input.client.claimNextAction({
