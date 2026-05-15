@@ -8,6 +8,7 @@
     "start:dev": "tsx watch src/main.ts"
   },
   "dependencies": {
+    "@forgeloop/automation": "workspace:*",
     "@forgeloop/contracts": "workspace:*",
     "@forgeloop/db": "workspace:*",
     "@forgeloop/domain": "workspace:*",

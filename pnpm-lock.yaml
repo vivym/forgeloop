@@ -93,6 +93,9 @@ importers:
 
   apps/control-plane-api:
     dependencies:
+      '@forgeloop/automation':
+        specifier: workspace:*
+        version: link:../../packages/automation
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
