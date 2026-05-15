@@ -488,6 +488,36 @@ it('rejects signed non-daemon actors', async () => {
   await request(app.getHttpServer()).get('/internal/automation/runtime-snapshot').set(headers).expect(403);
 });
 
+it('accepts a signed automation daemon request', async () => {
+  const timestamp = new Date().toISOString();
+  const headers = signAutomationRequest({
+    method: 'GET',
+    pathAndQuery: '/internal/automation/runtime-snapshot',
+    rawBody: Buffer.alloc(0),
+    actorId: 'daemon-actor',
+    actorClass: 'automation_daemon',
+    daemonIdentity: 'daemon-1',
+    timestamp,
+    secret: 'test-secret',
+  });
+  await request(app.getHttpServer()).get('/internal/automation/runtime-snapshot').set(headers).expect(200);
+});
+
+it('rejects an expired automation daemon signature', async () => {
+  const timestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const headers = signAutomationRequest({
+    method: 'GET',
+    pathAndQuery: '/internal/automation/runtime-snapshot',
+    rawBody: Buffer.alloc(0),
+    actorId: 'daemon-actor',
+    actorClass: 'automation_daemon',
+    daemonIdentity: 'daemon-1',
+    timestamp,
+    secret: 'test-secret',
+  });
+  await request(app.getHttpServer()).get('/internal/automation/runtime-snapshot').set(headers).expect(401);
+});
+
 it('rejects a changed body hash', async () => {
   const timestamp = new Date().toISOString();
   const headers = signAutomationRequest({
@@ -657,6 +687,23 @@ const claimed = await repository.claimNextAutomationActionRun({
 expect(claimed?.id).toBe(pending.id);
 ```
 
+Add contract coverage for every claimable status from the spec:
+
+- plain `pending` action claims once;
+- due `gate_pending` action claims after `next_attempt_at`;
+- retryable `failed` action claims after `next_attempt_at`;
+- retryable `blocked` action claims after `next_attempt_at`;
+- expired `running` action claims after `locked_until`;
+- non-due `gate_pending`, non-retryable terminal actions, and unexpired `running` actions are not claimable.
+
+Add replay conflict coverage for:
+
+- mutating action `action_input_json` mismatch under the same idempotency key;
+- `project_runtime_snapshot` replay with changed stable observation identity under the same idempotency key;
+- `project_runtime_snapshot` replay ignores automation scope, settings version, capability fingerprint, observed timestamp, and last-known-good fields when stable policy observation identity is unchanged.
+
+Add claim-next filter coverage for optional project/repo/scope inputs: a daemon scoped to one repo must not claim an action from another repo or project.
+
 Add concurrent claim test with `Promise.all` and assert only one result has the pending action id.
 
 - [ ] **Step 3: Run tests and verify failure**
@@ -755,7 +802,11 @@ Create tests for:
 - missing `action_input_json` returns `400` or `422`;
 - `actions:claim-next` returns one action with claim token;
 - no claimable action returns `200` with `{ action: null }` or `204`, pick one and keep it consistent;
+- claim-next covers pending, due gate-pending, retryable failed/blocked, expired running, and no-claimable cases;
+- claim-next honors optional project/repo/scope filters and does not leak actions across scopes;
+- action create/replay rejects `action_input_json` and `project_runtime_snapshot` stable-identity conflicts;
 - complete/gate-pending/block/fail require correct claim token;
+- complete/gate-pending/block/fail reject expired leases even when the claim token matches;
 - responses omit `result_json`, `metadata_json`, raw errors, and local paths.
 
 - [ ] **Step 2: Run tests and verify failure**
