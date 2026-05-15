@@ -28,8 +28,28 @@ export interface MutatingActionIdentity {
   capabilityFingerprint: string;
   preconditionFingerprint: string;
   generationKey?: string;
+  manualPathScopeKey?: string;
+  manualPathReasonCode?: string;
   policyDigest?: string;
 }
+
+export type WorkflowPolicyDigestStatus =
+  | {
+      status: 'loaded';
+      policyDigest: string;
+      parserVersion: string;
+      reasonCode?: string;
+      policyPath?: string;
+      observedAt?: string;
+    }
+  | {
+      status: 'missing' | 'parse_failed' | 'unsafe_path';
+      parserVersion: string;
+      reasonCode: string;
+      policyPath?: string;
+      observedAt?: string;
+      publicSummary?: string;
+    };
 
 export interface RuntimePolicyProjection extends StablePolicyObservationIdentity {
   observedAt?: string;
@@ -111,6 +131,27 @@ export interface NextAction {
   policyStatus?: StablePolicyObservationIdentity['policyStatus'];
   policyDigest?: string;
   parserVersion?: string;
+  reasonCode?: string;
+  summary?: string;
+}
+
+export interface NoAction {
+  targetObjectType?: string;
+  targetObjectId?: string;
+  reasonCode: string;
+  summary: string;
+}
+
+export interface AutomationPlannerInput {
+  snapshot: RuntimeSnapshot;
+}
+
+export type AutomationExecutorResultStatus = 'succeeded' | 'failed' | 'skipped' | 'blocked' | 'gate_pending';
+
+export interface AutomationExecutorResult {
+  actionRunId: string;
+  status: AutomationExecutorResultStatus;
+  retryable: boolean;
   reasonCode?: string;
   summary?: string;
 }
