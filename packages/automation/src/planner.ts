@@ -1,4 +1,6 @@
-import { automationPreconditionFingerprint, type AutomationPreconditionCapability, type AutomationScope } from '@forgeloop/domain';
+import { createHash } from 'node:crypto';
+
+import type { AutomationPreconditionCapability, AutomationScope } from '@forgeloop/domain';
 
 import { mutatingActionIdempotencyKey, projectRuntimeSnapshotIdempotencyKey } from './idempotency.js';
 import type {
@@ -13,6 +15,39 @@ import type {
 } from './types.js';
 
 const suppressingStatuses = new Set(['pending', 'running', 'succeeded']);
+
+type CanonicalJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly CanonicalJsonValue[]
+  | { readonly [key: string]: CanonicalJsonValue };
+
+const canonicalize = (value: CanonicalJsonValue): CanonicalJsonValue => {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : canonicalize(item)));
+  }
+
+  const record = value as { readonly [key: string]: CanonicalJsonValue };
+  return Object.keys(record)
+    .sort()
+    .reduce<Record<string, CanonicalJsonValue>>((accumulator, key) => {
+      const item = record[key];
+      if (item !== undefined) {
+        accumulator[key] = canonicalize(item);
+      }
+      return accumulator;
+    }, {});
+};
+
+const canonicalHash = (value: CanonicalJsonValue): string =>
+  createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
 
 const projectIdFromScope = (automationScope: AutomationScope): string => {
   const [, projectId] = automationScope.split(':');
@@ -67,17 +102,25 @@ const targetPreconditionFingerprint = (
     automationSettingsVersion: number;
     capabilityFingerprint: string;
     requiredCapability: AutomationPreconditionCapability;
+    commandConcurrencyToken?: string;
   },
 ): string =>
   {
     const repoId = target.repoId ?? repoIdFromScope(input.automationScope);
-    return automationPreconditionFingerprint({
+    return canonicalHash({
       automation_scope: input.automationScope,
       project_id: target.projectId ?? projectIdFromScope(input.automationScope),
       ...(repoId === undefined ? {} : { repo_id: repoId }),
+      target_object_type: target.targetObjectType,
+      target_object_id: target.targetObjectId,
+      target_revision_id: target.targetRevisionId,
+      target_version: target.targetVersion,
+      target_status: target.targetStatus,
       automation_settings_version: input.automationSettingsVersion,
       capability_fingerprint: input.capabilityFingerprint,
+      active_hold_fingerprint: target.activeHoldFingerprint,
       required_capability: input.requiredCapability,
+      command_concurrency_token: input.commandConcurrencyToken,
       actor_class: 'automation_daemon',
     });
   };
@@ -101,6 +144,7 @@ const requestManualPathForAmbiguity = (snapshot: RuntimeSnapshot, target: Runtim
     automationSettingsVersion: settings.automationSettingsVersion,
     capabilityFingerprint: settings.capabilityFingerprint,
     requiredCapability: target.targetObjectType === 'plan_revision' ? 'canGeneratePackageDrafts' : 'canGeneratePlanDraft',
+    commandConcurrencyToken: `${scopeKey}:multi_repo_ambiguity`,
   });
   const idempotencyKey = mutatingActionIdempotencyKey({
     actionType: 'request_manual_path',
@@ -144,24 +188,18 @@ const mutatingActionForTarget = (
   actionType: Extract<AutomationActionType, 'ensure_plan_draft' | 'ensure_package_drafts'>,
   requiredCapability: AutomationPreconditionCapability,
 ): NextAction | undefined => {
+  if (target.activeHoldFingerprint !== undefined) {
+    return undefined;
+  }
   const repos = matchingReposForTarget(snapshot, target);
   if (repos.length > 1 && target.repoId === undefined) {
     return requestManualPathForAmbiguity(snapshot, target);
-  }
-  if (target.activeHoldFingerprint !== undefined) {
-    return undefined;
   }
   const repo = repos[0];
   if (repo === undefined) {
     return undefined;
   }
 
-  const preconditionFingerprint = targetPreconditionFingerprint(target, {
-    automationScope: repo.automationScope,
-    automationSettingsVersion: repo.automationSettingsVersion,
-    capabilityFingerprint: repo.capabilityFingerprint,
-    requiredCapability,
-  });
   const generationKey = actionType === 'ensure_package_drafts' ? (target.generationKey ?? target.targetRevisionId) : undefined;
   if (actionType === 'ensure_plan_draft' && target.targetRevisionId === undefined) {
     return undefined;
@@ -169,6 +207,13 @@ const mutatingActionForTarget = (
   if (actionType === 'ensure_package_drafts' && generationKey === undefined) {
     return undefined;
   }
+  const preconditionFingerprint = targetPreconditionFingerprint(target, {
+    automationScope: repo.automationScope,
+    automationSettingsVersion: repo.automationSettingsVersion,
+    capabilityFingerprint: repo.capabilityFingerprint,
+    requiredCapability,
+    ...(generationKey === undefined ? {} : { commandConcurrencyToken: generationKey }),
+  });
   const actionInputJson =
     actionType === 'ensure_plan_draft'
       ? ({
@@ -241,7 +286,7 @@ const projectRuntimeSnapshotAction = (snapshot: RuntimeSnapshot, repo: RuntimeSn
 
   return {
     actionType: 'project_runtime_snapshot',
-    targetObjectType: 'project_repo',
+    targetObjectType: 'repo',
     targetObjectId: repo.repoId,
     targetStatus: identity.policyStatus,
     automationScope: repo.automationScope,

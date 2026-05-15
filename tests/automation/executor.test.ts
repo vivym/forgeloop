@@ -248,7 +248,7 @@ describe('automation executor', () => {
     const client = new FakeAutomationClient();
     client.actionToClaim = claimedAction({
       actionType: 'project_runtime_snapshot',
-      targetObjectType: 'project_repo',
+      targetObjectType: 'repo',
       targetObjectId: 'repo-1',
       targetRevisionId: undefined,
       targetStatus: 'loaded',
@@ -267,7 +267,7 @@ describe('automation executor', () => {
       client,
       baseAction({
         actionType: 'project_runtime_snapshot',
-        targetObjectType: 'project_repo',
+        targetObjectType: 'repo',
         targetObjectId: 'repo-1',
         targetStatus: 'loaded',
         actionInputJson: {

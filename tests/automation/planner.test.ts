@@ -111,6 +111,35 @@ describe('automation planner', () => {
     expect(actions).toEqual([]);
   });
 
+  it('suppresses all actions for an active hold before multi-repo ambiguity checks', () => {
+    const actions = planNextActions(
+      baseSnapshot({
+        repos: [
+          baseSnapshot().repos[0]!,
+          {
+            projectId: 'project-1',
+            repoId: 'repo-2',
+            automationScope: 'repo:project-1:repo-2',
+            automationSettingsVersion: 4,
+            capabilityFingerprint: 'capability-fingerprint-2',
+            daemonInternalLocalPath: '/private/repo-2',
+          },
+        ],
+        workItemsRequiringPlan: [
+          workItemTarget({
+            targetObjectId: 'work-item-held',
+            projectId: 'project-1',
+            repoId: undefined,
+            automationScope: 'project:project-1',
+            activeHoldFingerprint: 'work_item:work-item-held:manual',
+          }),
+        ],
+      }),
+    );
+
+    expect(actions).toEqual([]);
+  });
+
   it('requests a manual path when a project-scoped target is ambiguous across multiple repos', () => {
     const ambiguousTarget = workItemTarget({
       targetObjectId: 'work-item-ambiguous',
@@ -149,6 +178,57 @@ describe('automation planner', () => {
       },
     });
     expect(String(actions[0]?.summary)).toContain('multiple repos');
+  });
+
+  it('changes mutating precondition and idempotency when target status changes', () => {
+    const approvedAction = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }))[0]!;
+    const changedStatusAction = planNextActions(
+      baseSnapshot({ workItemsRequiringPlan: [workItemTarget({ targetStatus: 'ready_for_plan' })] }),
+    )[0]!;
+
+    expect(changedStatusAction.preconditionFingerprint).not.toBe(approvedAction.preconditionFingerprint);
+    expect(changedStatusAction.idempotencyKey).not.toBe(approvedAction.idempotencyKey);
+  });
+
+  it('changes mutating precondition and idempotency when generation key changes', () => {
+    const defaultAction = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }))[0]!;
+    const changedGenerationAction = planNextActions(
+      baseSnapshot({
+        planRevisionsRequiringPackages: [
+          packageTarget({
+            generationKey: 'retry:plan-revision-1',
+          }),
+        ],
+      }),
+    )[0]!;
+
+    expect(changedGenerationAction.preconditionFingerprint).not.toBe(defaultAction.preconditionFingerprint);
+    expect(changedGenerationAction.idempotencyKey).not.toBe(defaultAction.idempotencyKey);
+  });
+
+  it('does not include policy projection fields in mutating preconditions', () => {
+    const baseline = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }))[0]!;
+    const changedPolicyProjection = planNextActions(
+      baseSnapshot({
+        repos: [
+          {
+            ...baseSnapshot().repos[0]!,
+            policyProjection: {
+              automationScope: repoScope,
+              repoId: 'repo-1',
+              policyStatus: 'loaded',
+              policyDigest: 'workflow-digest-changed',
+              parserVersion: 'workflow-md-parser:v2',
+              reasonCode: 'loaded',
+            },
+          },
+        ],
+        workItemsRequiringPlan: [workItemTarget()],
+      }),
+    ).find((action) => action.actionType === 'ensure_plan_draft')!;
+
+    expect(changedPolicyProjection.preconditionFingerprint).toBe(baseline.preconditionFingerprint);
+    expect(changedPolicyProjection.idempotencyKey).toBe(baseline.idempotencyKey);
   });
 
   it('never emits run enqueue actions for ready package projections', () => {
@@ -203,7 +283,7 @@ describe('automation planner', () => {
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       actionType: 'project_runtime_snapshot',
-      targetObjectType: 'project_repo',
+      targetObjectType: 'repo',
       targetObjectId: 'repo-1',
       automationScope: repoScope,
       idempotencyKey: projectRuntimeSnapshotIdempotencyKey(observation),
@@ -256,7 +336,7 @@ describe('automation planner', () => {
           {
             id: 'action-projected',
             actionType: 'project_runtime_snapshot',
-            targetObjectType: 'project_repo',
+            targetObjectType: 'repo',
             targetObjectId: 'repo-1',
             targetStatus: 'missing',
             idempotencyKey: plannedProjection.idempotencyKey,
