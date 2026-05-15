@@ -16,12 +16,12 @@ import type {
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  P0_REPOSITORY,
   P0_DEMO_ACTOR_ID_FALLBACK,
+  P0_REPOSITORY,
   RUN_DURABILITY_MODE,
-  RUN_WORKER,
   type RunDurabilityMode,
-} from '../../apps/control-plane-api/src/p0/p0.service';
+} from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
 
@@ -173,6 +173,28 @@ describe('release module', () => {
 
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  it('allows AppModule to override core release providers without ReleaseModule owning P0Module wiring', async () => {
+    const repository = new InMemoryP0Repository();
+    const durabilityMode: RunDurabilityMode = 'durable';
+    const allowDemoActorIdFallback = false;
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(P0_REPOSITORY)
+      .useValue(repository)
+      .overrideProvider(RUN_DURABILITY_MODE)
+      .useValue(durabilityMode)
+      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+      .useValue(allowDemoActorIdFallback)
+      .compile();
+
+    try {
+      expect(moduleRef.get(P0_REPOSITORY)).toBe(repository);
+      expect(moduleRef.get(RUN_DURABILITY_MODE)).toBe(durabilityMode);
+      expect(moduleRef.get(P0_DEMO_ACTOR_ID_FALLBACK)).toBe(allowDemoActorIdFallback);
+    } finally {
+      await moduleRef.close();
+    }
   });
 
   const createTestApp = async (

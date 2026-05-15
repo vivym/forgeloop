@@ -12,7 +12,8 @@ import {
   actorTimestampHeaderName,
   trustedActorHeaderSignature,
 } from '../../apps/control-plane-api/src/p0/actor-context';
-import { P0_REPOSITORY, P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
 import {
   automationPreconditionFingerprint,

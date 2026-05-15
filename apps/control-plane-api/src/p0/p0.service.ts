@@ -63,6 +63,12 @@ import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
 import { Observable } from 'rxjs';
 
 import {
+  P0_DEMO_ACTOR_ID_FALLBACK,
+  P0_REPOSITORY,
+  RUN_DURABILITY_MODE,
+  type RunDurabilityMode,
+} from '../modules/core/control-plane-tokens';
+import {
   createRunEventStreamToken as signRunEventStreamToken,
   resolveRunEventStreamTokenSecret,
   type ActorContext,
@@ -102,6 +108,13 @@ import {
 import { buildEvidenceChain } from './evidence-chain';
 import { serializePublicRunSession } from './run-session-serialization';
 
+export {
+  P0_DEMO_ACTOR_ID_FALLBACK,
+  P0_REPOSITORY,
+  RUN_DURABILITY_MODE,
+  type RunDurabilityMode,
+} from '../modules/core/control-plane-tokens';
+
 type RunReplacementRecordedPayload = {
   mode: 'rerun_package' | 'force_rerun_package';
   execution_package_id: string;
@@ -121,12 +134,7 @@ const statusForPackage = (executionPackage: ExecutionPackage): string =>
 const traceReplacementModeFor = (mode: 'rerun' | 'force_rerun'): RunReplacementRecordedPayload['mode'] =>
   mode === 'rerun' ? 'rerun_package' : 'force_rerun_package';
 
-export type RunDurabilityMode = RunRuntimeMetadata['durability_mode'];
-
-export const P0_REPOSITORY = Symbol('P0_REPOSITORY');
 export const RUN_WORKER = Symbol('RUN_WORKER');
-export const RUN_DURABILITY_MODE = Symbol('RUN_DURABILITY_MODE');
-export const P0_DEMO_ACTOR_ID_FALLBACK = Symbol('P0_DEMO_ACTOR_ID_FALLBACK');
 
 const terminalRunStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const commandClaimTtlMs = 5 * 60 * 1000;

@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { P0_REPOSITORY, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import type { P0Repository } from '../../packages/db/src';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 

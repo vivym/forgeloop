@@ -5,10 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { P0_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { RUN_DURABILITY_MODE, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/p0/p0.service';
+import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
@@ -37,6 +37,20 @@ describe('query module', () => {
 
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  it('allows AppModule to override core query providers without QueryModule owning P0Module wiring', async () => {
+    const repository = new InMemoryP0Repository();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(P0_REPOSITORY)
+      .useValue(repository)
+      .compile();
+
+    try {
+      expect(moduleRef.get(P0_REPOSITORY)).toBe(repository);
+    } finally {
+      await moduleRef.close();
+    }
   });
 
   const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {

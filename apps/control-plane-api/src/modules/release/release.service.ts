@@ -60,8 +60,13 @@ import {
 import type { P0Repository } from '@forgeloop/db';
 import { buildReleasePublicLinkVisibility } from '@forgeloop/db';
 
+import {
+  P0_DEMO_ACTOR_ID_FALLBACK,
+  P0_REPOSITORY,
+  RUN_DURABILITY_MODE,
+  type RunDurabilityMode,
+} from '../core/control-plane-tokens';
 import type { ActorContext } from '../../p0/actor-context';
-import { P0_DEMO_ACTOR_ID_FALLBACK, P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../../p0/p0.service';
 import {
   publicReleaseSummaryFor,
   resolveReleaseExecutionPackageLinks,

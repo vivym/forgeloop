@@ -23,8 +23,8 @@ import {
   P0_DEMO_ACTOR_ID_FALLBACK,
   P0_REPOSITORY,
   RUN_DURABILITY_MODE,
-  RUN_WORKER,
-} from '../../apps/control-plane-api/src/p0/p0.service';
+} from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src';
 
 const now = '2026-05-05T00:00:00.000Z';
