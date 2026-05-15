@@ -646,10 +646,14 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async listActiveManualPathHolds(input: ListActiveManualPathHoldsInput): Promise<ManualPathHold[]> {
-    const scopeKeys = new Set(this.manualHoldScopeKeysFor(input));
+    const scopeKeys = new Set(await this.manualHoldScopeKeysFor(input));
     return valuesFor(this.manualPathHolds)
       .filter((hold) => hold.status === 'active' && scopeKeys.has(hold.scope_key))
       .sort(byCreatedAtForRequestedAt);
+  }
+
+  async getManualPathHold(holdId: string): Promise<ManualPathHold | undefined> {
+    return this.cloneMaybe(this.manualPathHolds.get(holdId));
   }
 
   async requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold> {
@@ -715,6 +719,12 @@ export class InMemoryP0Repository implements P0Repository {
     const hold = this.manualPathHolds.get(input.hold_id);
     if (hold === undefined) {
       throw new DomainError('INVALID_TRANSITION', `Manual hold ${input.hold_id} does not exist`);
+    }
+    if (hold.status !== 'active') {
+      if (hold.status === 'resolved' && hold.resolved_by === input.resolved_by && hold.resolution === input.resolution) {
+        return clone(hold);
+      }
+      throw new DomainError('INVALID_TRANSITION', `Manual hold ${input.hold_id} is not active`);
     }
 
     const resolved: ManualPathHold = {
@@ -823,6 +833,7 @@ export class InMemoryP0Repository implements P0Repository {
       execution_package_set_id: `generation:${input.plan_revision_id}:${input.generation_key}`,
       plan_revision_id: input.plan_revision_id,
       generation_key: input.generation_key,
+      version: 0,
       ...(input.generator_version === undefined ? {} : { generator_version: input.generator_version }),
       ...(input.policy_digest === undefined ? {} : { policy_digest: input.policy_digest }),
       ...(input.manifest_digest === undefined ? {} : { manifest_digest: input.manifest_digest }),
@@ -901,12 +912,20 @@ export class InMemoryP0Repository implements P0Repository {
     const completed: ExecutionPackageGenerationRun = {
       ...run,
       status: 'succeeded',
+      version: run.version + 1,
       ...(input.result_json === undefined ? {} : { result_json: clone(input.result_json) }),
       completed_at: input.completed_at,
       updated_at: input.completed_at,
     };
     this.executionPackageGenerationRuns.set(completed.execution_package_set_id, clone(completed));
     return clone(completed);
+  }
+
+  async getExecutionPackageGenerationRun(input: {
+    plan_revision_id: string;
+    generation_key: string;
+  }): Promise<ExecutionPackageGenerationRun | undefined> {
+    return this.cloneMaybe(this.generationRunFor(input.plan_revision_id, input.generation_key));
   }
 
   async supersedeExecutionPackageGenerationRun(
@@ -924,15 +943,23 @@ export class InMemoryP0Repository implements P0Repository {
     if (run === undefined || run.plan_revision_id !== input.plan_revision_id) {
       throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} does not exist`);
     }
+    if (run.version !== input.expected_version) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} version mismatch`);
+    }
+    if (run.status !== 'succeeded') {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} is not current succeeded`);
+    }
     const nextIndex =
       valuesFor(this.executionPackageGenerationRuns).filter((candidate) => candidate.plan_revision_id === input.plan_revision_id)
         .length + 1;
     const superseded: ExecutionPackageGenerationRun = {
       ...run,
       status: 'superseded',
+      version: run.version + 1,
       superseded_by: input.superseded_by,
       superseded_at: input.superseded_at,
       superseded_reason: input.reason,
+      supersede_command_id: input.supersede_command_id,
       evidence_refs: clone(input.evidence_refs),
       next_generation_key: `regenerate:${input.plan_revision_id}:${nextIndex}`,
       updated_at: input.superseded_at,
@@ -1429,7 +1456,7 @@ export class InMemoryP0Repository implements P0Repository {
     }
   }
 
-  private manualHoldScopeKeysFor(input: ListActiveManualPathHoldsInput): string[] {
+  private async manualHoldScopeKeysFor(input: ListActiveManualPathHoldsInput): Promise<string[]> {
     const keys = [`${input.object_type}:${input.object_id}`];
     if (input.object_type === 'execution_package') {
       const executionPackage = this.executionPackages.get(input.object_id);
@@ -1441,16 +1468,30 @@ export class InMemoryP0Repository implements P0Repository {
         );
       }
     }
+    if (input.object_type === 'package_generation' && input.generation_key !== undefined) {
+      keys.push(`package_generation:${input.object_id}:${input.generation_key}`);
+    }
+    if (input.object_type === 'release_gate') {
+      if (input.gate_key !== undefined) {
+        keys.push(`release_gate:${input.object_id}:${input.gate_key}`);
+      } else {
+        for (const hold of this.manualPathHolds.values()) {
+          if (hold.status === 'active' && hold.object_type === 'release_gate' && hold.object_id === input.object_id) {
+            keys.push(hold.scope_key);
+          }
+        }
+      }
+    }
     if (input.object_type === 'run_session') {
       const runSession = this.runSessions.get(input.object_id);
       if (runSession !== undefined) {
-        keys.push(...this.manualHoldScopeKeysFor({ object_type: 'execution_package', object_id: runSession.execution_package_id }));
+        keys.push(...(await this.manualHoldScopeKeysFor({ object_type: 'execution_package', object_id: runSession.execution_package_id })));
       }
     }
     if (input.object_type === 'review_packet') {
       const reviewPacket = this.reviewPackets.get(input.object_id);
       if (reviewPacket !== undefined) {
-        keys.push(...this.manualHoldScopeKeysFor({ object_type: 'execution_package', object_id: reviewPacket.execution_package_id }));
+        keys.push(...(await this.manualHoldScopeKeysFor({ object_type: 'execution_package', object_id: reviewPacket.execution_package_id })));
       }
     }
     return [...new Set(keys)];

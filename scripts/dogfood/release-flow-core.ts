@@ -17,7 +17,7 @@ import {
   RUN_WORKER,
 } from '../../apps/control-plane-api/src/p0/p0.service';
 import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/p0/run-worker-lifecycle.service';
-import { actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { createDbClient, createDrizzleP0Repository, InMemoryP0Repository } from '../../packages/db/src';
 import type { DbClient, P0Repository } from '../../packages/db/src';
 import { worktreePathForRun } from '../../packages/executor/src/index.js';
@@ -712,13 +712,29 @@ const createP0DeliveryPath = async (
 
   const spec = (await request(server).post(`/work-items/${createdWorkItem.id}/specs`).send({}).expect(201)).body as { id: string };
   await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server)
+    .post(`/specs/${spec.id}/submit-for-approval`)
+    .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
+    .send({ actor_id: actorOwner })
+    .expect(201);
+  await request(server)
+    .post(`/specs/${spec.id}/approve`)
+    .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
+    .send({ actor_id: actorReviewer })
+    .expect(201);
 
   const plan = (await request(server).post(`/work-items/${createdWorkItem.id}/plans`).send({}).expect(201)).body as { id: string };
   const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body as { id: string };
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+  await request(server)
+    .post(`/plans/${plan.id}/submit-for-approval`)
+    .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
+    .send({ actor_id: actorOwner })
+    .expect(201);
+  await request(server)
+    .post(`/plans/${plan.id}/approve`)
+    .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
+    .send({ actor_id: actorReviewer })
+    .expect(201);
 
   const executionPackage = (
     await request(server)
@@ -736,7 +752,11 @@ const createP0DeliveryPath = async (
       })
       .expect(201)
   ).body as ExecutionPackage;
-  await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).send({ actor_id: actorOwner }).expect(201);
+  await request(server)
+    .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+    .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
+    .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
+    .expect(201);
 
   const seeded = await seedCompletedReleaseReadyRuntime(repository, executionPackage);
   return { projectId: project.id, workItem: seeded.workItem, executionPackage: seeded.executionPackage };
@@ -750,6 +770,7 @@ const approveOrOverride = async (
   const server = app.getHttpServer();
   const approved = await request(server)
     .post(`/releases/${releaseId}/approve`)
+    .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
     .send({ actor_id: actorReviewer, rationale: 'Release flow dogfood risks are acceptable.' });
   if (approved.status === 201) {
     throw new Error('Release dogfood expected an overrideable blocker but plain approval succeeded');
@@ -764,6 +785,7 @@ const approveOrOverride = async (
   }
   const overrideApproved = await request(server)
     .post(`/releases/${releaseId}/override-approve`)
+    .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
     .send({
       actor_id: actorReviewer,
       rationale: 'Dogfood override accepted with the submitted blocker snapshot.',
@@ -1125,9 +1147,9 @@ export const failedReleaseFlowMarkersFromError = (
   });
 };
 
-const strictRequest = (server: Parameters<typeof request>[0], actorId: string) => ({
-  get: (path: string) => request(server).get(path).set(actorHeaderName, actorId),
-  post: (path: string) => request(server).post(path).set(actorHeaderName, actorId),
+const strictRequest = (server: Parameters<typeof request>[0], actorId: string, actorClass: 'human' | 'human_admin' = 'human_admin') => ({
+  get: (path: string) => request(server).get(path).set(actorHeaderName, actorId).set(actorClassHeaderName, actorClass),
+  post: (path: string) => request(server).post(path).set(actorHeaderName, actorId).set(actorClassHeaderName, actorClass),
 });
 
 const safeStrictFailureDetails = (code: string, message: string): string[] => {
@@ -1243,22 +1265,26 @@ const runReleaseStrictLocalCodexPackage = async (input: {
     actorReviewer: input.actorReviewer,
     actorQa: input.actorQa,
   });
-  const executionPackage = requestJsonBody<ExecutionPackage>(
-    await strictRequest(input.server, input.actorOwner)
-      .post(`/plan-revisions/${input.planRevisionId}/execution-packages`)
-      .send(packageInput)
-      .expect(201),
-  );
-  await strictRequest(input.server, input.actorOwner)
+  const packageResponse = await strictRequest(input.server, input.actorOwner)
+    .post(`/plan-revisions/${input.planRevisionId}/execution-packages`)
+    .send(packageInput);
+  if (packageResponse.status !== 201) {
+    throw new Error(`package create failed ${packageResponse.status}: ${packageResponse.text}`);
+  }
+  const executionPackage = requestJsonBody<ExecutionPackage>(packageResponse);
+  const markReadyResponse = await strictRequest(input.server, input.actorOwner)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
-    .send({ actor_id: input.actorOwner })
-    .expect(201);
-  const run = requestJsonBody<{ run_session_id: string }>(
-    await strictRequest(input.server, input.actorOwner)
-      .post(`/execution-packages/${executionPackage.id}/run`)
-      .send({ requested_by_actor_id: input.actorOwner, executor_type: 'local_codex', workflow_only: false })
-      .expect(201),
-  );
+    .send({ actor_id: input.actorOwner, expected_package_version: executionPackage.version });
+  if (markReadyResponse.status !== 201) {
+    throw new Error(`mark ready failed ${markReadyResponse.status}: ${markReadyResponse.text}`);
+  }
+  const runResponse = await strictRequest(input.server, input.actorOwner)
+    .post(`/execution-packages/${executionPackage.id}/run`)
+    .send({ requested_by_actor_id: input.actorOwner, executor_type: 'local_codex', workflow_only: false });
+  if (runResponse.status !== 201) {
+    throw new Error(`run failed ${runResponse.status}: ${runResponse.text}`);
+  }
+  const run = requestJsonBody<{ run_session_id: string }>(runResponse);
   await input.runWorkerDrain?.();
 
   let after: string | undefined;
@@ -1454,7 +1480,7 @@ export const runDurableReleaseLifecycle = async (input: {
     })
     .expect(201);
   await strictRequest(server, owner.id).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: owner.id }).expect(201);
-  await strictRequest(server, reviewer.id).post(`/specs/${spec.id}/approve`).send({ actor_id: reviewer.id }).expect(201);
+  await strictRequest(server, reviewer.id, 'human').post(`/specs/${spec.id}/approve`).send({ actor_id: reviewer.id }).expect(201);
 
   const plan = (await strictRequest(server, owner.id).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body as { id: string };
   const planRevision = (
@@ -1473,7 +1499,7 @@ export const runDurableReleaseLifecycle = async (input: {
       .expect(201)
   ).body as { id: string };
   await strictRequest(server, owner.id).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: owner.id }).expect(201);
-  await strictRequest(server, reviewer.id).post(`/plans/${plan.id}/approve`).send({ actor_id: reviewer.id }).expect(201);
+  await strictRequest(server, reviewer.id, 'human').post(`/plans/${plan.id}/approve`).send({ actor_id: reviewer.id }).expect(201);
   const executionPackage = (
     await strictRequest(server, owner.id)
       .post(`/plan-revisions/${planRevision.id}/execution-packages`)
@@ -1492,14 +1518,8 @@ export const runDurableReleaseLifecycle = async (input: {
   ).body as ExecutionPackage;
   await strictRequest(server, owner.id)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
-    .send({ actor_id: owner.id })
+    .send({ actor_id: owner.id, expected_package_version: executionPackage.version })
     .expect(201);
-
-  const seeded = await seedDurableReleaseReadyPackageEvidence(repository, executionPackage, {
-    ownerActorId: owner.id,
-    reviewerActorId: reviewer.id,
-    at: new Date().toISOString(),
-  });
 
   const release = (
     await strictRequest(server, owner.id)
@@ -1516,13 +1536,7 @@ export const runDurableReleaseLifecycle = async (input: {
       .expect(201)
   ).body as { release: { id: string } };
   const releaseId = release.release.id;
-  await strictRequest(server, owner.id).post(`/releases/${releaseId}/work-items/${seeded.workItem.id}`).send({ actor_id: owner.id }).expect(201);
-  const seededPackageLink = await strictRequest(server, owner.id)
-    .post(`/releases/${releaseId}/execution-packages/${seeded.executionPackage.id}`)
-    .send({ actor_id: owner.id });
-  if (seededPackageLink.status !== 201) {
-    throw new Error(`link_seeded_execution_package_failed_${seededPackageLink.status}: ${seededPackageLink.text}`);
-  }
+  await strictRequest(server, owner.id).post(`/releases/${releaseId}/work-items/${workItem.id}`).send({ actor_id: owner.id }).expect(201);
   let strictLocalCodex: StrictLifecycleResult['strictLocalCodex'];
   let strictLocalCodexMarker: VerificationMarker;
   const enablement = evaluateLocalCodexDogfoodEnablement(env);
@@ -1589,8 +1603,19 @@ export const runDurableReleaseLifecycle = async (input: {
       }
     }
   }
+  const seeded = await seedDurableReleaseReadyPackageEvidence(repository, executionPackage, {
+    ownerActorId: owner.id,
+    reviewerActorId: reviewer.id,
+    at: new Date().toISOString(),
+  });
+  const seededPackageLink = await strictRequest(server, owner.id)
+    .post(`/releases/${releaseId}/execution-packages/${seeded.executionPackage.id}`)
+    .send({ actor_id: owner.id });
+  if (seededPackageLink.status !== 201) {
+    throw new Error(`link_seeded_execution_package_failed_${seededPackageLink.status}: ${seededPackageLink.text}`);
+  }
   await strictRequest(server, owner.id).post(`/releases/${releaseId}/submit-for-approval`).send({ actor_id: owner.id }).expect(201);
-  await strictRequest(server, reviewer.id)
+  await strictRequest(server, reviewer.id, 'human')
     .post(`/releases/${releaseId}/approve`)
     .send({ actor_id: reviewer.id, rationale: 'Strict durable release evidence is complete.' })
     .expect(201);
@@ -2031,7 +2056,11 @@ export const runDeterministicReleaseFlowDogfood = async (): Promise<Verification
       .send({ actor_id: actorOwner })
       .expect(201);
     const submitted = (
-      await request(server).post(`/releases/${releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201)
+      await request(server)
+        .post(`/releases/${releaseId}/submit-for-approval`)
+        .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
+        .send({ actor_id: actorOwner })
+        .expect(201)
     ).body as JsonRecord;
     markers.push({
       marker: 'Release create/link/submit',
@@ -2046,9 +2075,14 @@ export const runDeterministicReleaseFlowDogfood = async (): Promise<Verification
       details: [`Release moved through ${approved.mode} with a matching blocker snapshot.`],
     });
 
-    await request(server).post(`/releases/${releaseId}/start-observing`).send({ actor_id: actorOwner }).expect(201);
+    await request(server)
+      .post(`/releases/${releaseId}/start-observing`)
+      .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
+      .send({ actor_id: actorOwner })
+      .expect(201);
     await request(server)
       .post(`/releases/${releaseId}/evidences`)
+      .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -2070,6 +2104,7 @@ export const runDeterministicReleaseFlowDogfood = async (): Promise<Verification
       .expect(201);
     await request(server)
       .post(`/releases/${releaseId}/close`)
+      .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
       .send({ actor_id: actorOwner, resolution: 'completed', summary: 'Dogfood observation completed cleanly.' })
       .expect(201);
     markers.push({

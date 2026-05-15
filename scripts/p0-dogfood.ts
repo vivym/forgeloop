@@ -107,8 +107,13 @@ const isObject = (value: unknown): value is JsonObject => value !== null && type
 
 const durableModeFromEnv = (): DogfoodDurabilityMode => (databaseUrl === undefined || databaseUrl.length === 0 ? 'volatile_demo' : 'durable');
 
+const actorClassHeaderName = 'X-Forgeloop-Actor-Class';
+const humanActorHeaders = (actorId: string): Record<string, string> => ({
+  [actorHeaderName]: actorId,
+  [actorClassHeaderName]: actorId === actorReviewer ? 'human' : 'human_admin',
+});
 const actorHeaders = (mode: DogfoodDurabilityMode, actorId: string): Record<string, string> =>
-  mode === 'durable' ? { [actorHeaderName]: actorId } : {};
+  mode === 'durable' ? humanActorHeaders(actorId) : {};
 
 const maybeJsonHeaders = (body: JsonObject | undefined, headers: Record<string, string>): Record<string, string> =>
   body === undefined ? headers : { 'content-type': 'application/json', ...headers };
@@ -256,6 +261,14 @@ const stringField = (value: JsonObject, field: string): string => {
   const raw = value[field];
   if (typeof raw !== 'string' || raw.length === 0) {
     throw new Error(`Expected ${field} in API response`);
+  }
+  return raw;
+};
+
+const numberField = (value: JsonObject, field: string): number => {
+  const raw = value[field];
+  if (typeof raw !== 'number') {
+    throw new Error(`Expected numeric ${field} in API response`);
   }
   return raw;
 };
@@ -660,14 +673,30 @@ const createApprovedPlan = async (apiUrl: string, projectId: string, label: stri
   const spec = await requestJson(apiUrl, `/work-items/${encodeURIComponent(workItemId)}/specs`, { method: 'POST', body: {} });
   const specId = stringField(spec, 'id');
   await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/generate-draft`, { method: 'POST', body: {} });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/submit-for-approval`, { method: 'POST', body: { actor_id: actorOwner } });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/approve`, { method: 'POST', body: { actor_id: actorReviewer } });
+  await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/submit-for-approval`, {
+    method: 'POST',
+    headers: humanActorHeaders(actorOwner),
+    body: { actor_id: actorOwner },
+  });
+  await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/approve`, {
+    method: 'POST',
+    headers: humanActorHeaders(actorReviewer),
+    body: { actor_id: actorReviewer },
+  });
 
   const plan = await requestJson(apiUrl, `/work-items/${encodeURIComponent(workItemId)}/plans`, { method: 'POST', body: {} });
   const planId = stringField(plan, 'id');
   const planRevision = await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/generate-draft`, { method: 'POST', body: {} });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/submit-for-approval`, { method: 'POST', body: { actor_id: actorOwner } });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/approve`, { method: 'POST', body: { actor_id: actorReviewer } });
+  await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/submit-for-approval`, {
+    method: 'POST',
+    headers: humanActorHeaders(actorOwner),
+    body: { actor_id: actorOwner },
+  });
+  await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/approve`, {
+    method: 'POST',
+    headers: humanActorHeaders(actorReviewer),
+    body: { actor_id: actorReviewer },
+  });
   return stringField(planRevision, 'id');
 };
 
@@ -695,9 +724,11 @@ const createReadyPackage = async (apiUrl: string, planRevisionId: string, label:
     },
   });
   const packageId = stringField(executionPackage, 'id');
+  const packageVersion = numberField(executionPackage, 'version');
   await requestJson(apiUrl, `/execution-packages/${encodeURIComponent(packageId)}/mark-ready`, {
     method: 'POST',
-    body: { actor_id: actorOwner },
+    headers: humanActorHeaders(actorOwner),
+    body: { actor_id: actorOwner, expected_package_version: packageVersion },
   });
   return packageId;
 };
@@ -728,6 +759,7 @@ const runPackage = async (
 const approveReviewPacket = async (apiUrl: string, reviewPacketId: string): Promise<void> => {
   await requestJson(apiUrl, `/review-packets/${encodeURIComponent(reviewPacketId)}/approve`, {
     method: 'POST',
+    headers: humanActorHeaders(actorReviewer),
     body: {
       summary: 'Dogfood review approved.',
       reviewed_by_actor_id: actorReviewer,

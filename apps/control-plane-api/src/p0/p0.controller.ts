@@ -10,11 +10,16 @@ import {
   createProjectSchema,
   createSpecRevisionSchema,
   createWorkItemSchema,
+  disableAutomationCapabilitiesSchema,
+  markPackageReadySchema,
   patchExecutionPackageSchema,
   reviewDecisionSchema,
+  requestManualPathHoldSchema,
+  resolveManualPathHoldSchema,
   runControlSchema,
   runInputSchema,
   runPackageSchema,
+  setAutomationCapabilitiesSchema,
 } from './dto';
 import type {
   ActorCommandDto,
@@ -24,11 +29,16 @@ import type {
   CreateProjectRepoDto,
   CreateSpecRevisionDto,
   CreateWorkItemDto,
+  DisableAutomationCapabilitiesDto,
+  MarkPackageReadyDto,
   PatchExecutionPackageDto,
   ReviewDecisionDto,
+  RequestManualPathHoldDto,
+  ResolveManualPathHoldDto,
   RunControlDto,
   RunInputDto,
   RunPackageDto,
+  SetAutomationCapabilitiesDto,
 } from './dto';
 import { actorContextFromHeaders } from './actor-context';
 import { P0Service } from './p0.service';
@@ -54,6 +64,46 @@ export class P0Controller {
   @Get('projects/:projectId/repos')
   listProjectRepos(@Param('projectId') projectId: string) {
     return this.service.listProjectRepos(projectId);
+  }
+
+  @Get('p0/projects/:projectId/automation/capabilities')
+  getAutomationCapabilities(@Param('projectId') projectId: string, @Query('repo_id') repoId?: string) {
+    return this.service.getAutomationCapabilities(projectId, repoId);
+  }
+
+  @Post('p0/projects/:projectId/automation/capabilities')
+  setAutomationCapabilities(
+    @Param('projectId') projectId: string,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Body(new ZodValidationPipe(setAutomationCapabilitiesSchema)) body: SetAutomationCapabilitiesDto,
+  ) {
+    return this.service.setAutomationCapabilities(projectId, body, actorContextFromHeaders(headers));
+  }
+
+  @Post('p0/projects/:projectId/automation/capabilities:disable')
+  disableAutomationCapabilities(
+    @Param('projectId') projectId: string,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Body(new ZodValidationPipe(disableAutomationCapabilitiesSchema)) body: DisableAutomationCapabilitiesDto,
+  ) {
+    return this.service.disableAutomation(projectId, body, actorContextFromHeaders(headers));
+  }
+
+  @Post('p0/manual-path-holds')
+  requestManualPathHold(
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Body(new ZodValidationPipe(requestManualPathHoldSchema)) body: RequestManualPathHoldDto,
+  ) {
+    return this.service.requestManualPath(body, actorContextFromHeaders(headers));
+  }
+
+  @Post('p0/manual-path-holds/:holdId/resolve')
+  resolveManualPathHold(
+    @Param('holdId') holdId: string,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Body(new ZodValidationPipe(resolveManualPathHoldSchema)) body: ResolveManualPathHoldDto,
+  ) {
+    return this.service.resolveManualPath(holdId, body, actorContextFromHeaders(headers));
   }
 
   @Get('projects/:projectId')
@@ -115,18 +165,30 @@ export class P0Controller {
   }
 
   @Post('specs/:specId/submit-for-approval')
-  submitSpec(@Param('specId') specId: string, @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto) {
-    return this.service.submitSpecForApproval(specId, body);
+  submitSpec(
+    @Param('specId') specId: string,
+    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.submitSpecForApproval(specId, body, actorContextFromHeaders(headers));
   }
 
   @Post('specs/:specId/approve')
-  approveSpec(@Param('specId') specId: string, @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto) {
-    return this.service.approveSpec(specId, body);
+  approveSpec(
+    @Param('specId') specId: string,
+    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.approveSpec(specId, body, actorContextFromHeaders(headers));
   }
 
   @Post('specs/:specId/request-changes')
-  requestSpecChanges(@Param('specId') specId: string, @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto) {
-    return this.service.requestSpecChanges(specId, body);
+  requestSpecChanges(
+    @Param('specId') specId: string,
+    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.requestSpecChanges(specId, body, actorContextFromHeaders(headers));
   }
 
   @Post('work-items/:workItemId/plans')
@@ -163,18 +225,30 @@ export class P0Controller {
   }
 
   @Post('plans/:planId/submit-for-approval')
-  submitPlan(@Param('planId') planId: string, @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto) {
-    return this.service.submitPlanForApproval(planId, body);
+  submitPlan(
+    @Param('planId') planId: string,
+    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.submitPlanForApproval(planId, body, actorContextFromHeaders(headers));
   }
 
   @Post('plans/:planId/approve')
-  approvePlan(@Param('planId') planId: string, @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto) {
-    return this.service.approvePlan(planId, body);
+  approvePlan(
+    @Param('planId') planId: string,
+    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.approvePlan(planId, body, actorContextFromHeaders(headers));
   }
 
   @Post('plans/:planId/request-changes')
-  requestPlanChanges(@Param('planId') planId: string, @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto) {
-    return this.service.requestPlanChanges(planId, body);
+  requestPlanChanges(
+    @Param('planId') planId: string,
+    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.requestPlanChanges(planId, body, actorContextFromHeaders(headers));
   }
 
   @Post('plan-revisions/:planRevisionId/generate-packages')
@@ -209,8 +283,12 @@ export class P0Controller {
   }
 
   @Post('execution-packages/:packageId/mark-ready')
-  markPackageReady(@Param('packageId') packageId: string, @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto) {
-    return this.service.markPackageReady(packageId, body);
+  markPackageReady(
+    @Param('packageId') packageId: string,
+    @Body(new ZodValidationPipe(markPackageReadySchema)) body: MarkPackageReadyDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.markPackageReady(packageId, body, actorContextFromHeaders(headers));
   }
 
   @Post('execution-packages/:packageId/run')
@@ -328,15 +406,17 @@ export class P0Controller {
   approveReviewPacket(
     @Param('reviewPacketId') reviewPacketId: string,
     @Body(new ZodValidationPipe(reviewDecisionSchema)) body: ReviewDecisionDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.service.approveReviewPacket(reviewPacketId, body);
+    return this.service.approveReviewPacket(reviewPacketId, body, actorContextFromHeaders(headers));
   }
 
   @Post('review-packets/:reviewPacketId/request-changes')
   requestReviewChanges(
     @Param('reviewPacketId') reviewPacketId: string,
     @Body(new ZodValidationPipe(reviewDecisionSchema)) body: ReviewDecisionDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.service.requestReviewChanges(reviewPacketId, body);
+    return this.service.requestReviewChanges(reviewPacketId, body, actorContextFromHeaders(headers));
   }
 }

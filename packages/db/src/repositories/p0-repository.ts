@@ -108,6 +108,8 @@ export interface ResolveManualPathHoldInput {
 export interface ListActiveManualPathHoldsInput {
   object_type: string;
   object_id: string;
+  generation_key?: string;
+  gate_key?: string;
 }
 
 export interface ClaimCommandIdempotencyInput
@@ -169,10 +171,17 @@ export interface CompleteExecutionPackageGenerationRunInput {
 export interface SupersedeExecutionPackageGenerationRunInput {
   plan_revision_id: string;
   execution_package_set_id: string;
+  expected_version: number;
+  supersede_command_id: string;
   superseded_by: string;
   superseded_at: string;
   reason: string;
   evidence_refs: Artifact['ref'][];
+}
+
+export interface GetExecutionPackageGenerationRunInput {
+  plan_revision_id: string;
+  generation_key: string;
 }
 
 export interface ClaimAutomationActionRunInput
@@ -338,6 +347,7 @@ export interface P0Repository {
   resolveAutomationProjectSettings(input: ResolveAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
   setAutomationProjectSettings(input: SetAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
   disableAutomationProjectSettings(input: DisableAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
+  getManualPathHold(holdId: string): Promise<ManualPathHold | undefined>;
   listActiveManualPathHolds(input: ListActiveManualPathHoldsInput): Promise<ManualPathHold[]>;
   requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold>;
   resolveManualPathHold(input: ResolveManualPathHoldInput): Promise<ManualPathHold>;
@@ -351,6 +361,9 @@ export interface P0Repository {
   completeExecutionPackageGenerationRun(
     input: CompleteExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun>;
+  getExecutionPackageGenerationRun(
+    input: GetExecutionPackageGenerationRunInput,
+  ): Promise<ExecutionPackageGenerationRun | undefined>;
   supersedeExecutionPackageGenerationRun(
     input: SupersedeExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun>;

@@ -22,13 +22,15 @@ import {
   RUN_WORKER,
   type RunDurabilityMode,
 } from '../../apps/control-plane-api/src/p0/p0.service';
-import { actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { InMemoryP0Repository } from '../../packages/db/src/index';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
+import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
+const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
+const reviewerHeaders = { [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' };
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const project = (overrides: Partial<Project> = {}): Project => ({
@@ -173,8 +175,11 @@ describe('release module', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  const createTestApp = async (durabilityMode: RunDurabilityMode = 'volatile_demo') => {
-    const repo = new InMemoryP0Repository();
+  const createTestApp = async (
+    durabilityMode: RunDurabilityMode = 'volatile_demo',
+    repositoryOverride?: P0Repository,
+  ) => {
+    const repo = repositoryOverride ?? new InMemoryP0Repository();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(P0_REPOSITORY)
       .useValue(repo)
@@ -187,8 +192,72 @@ describe('release module', () => {
       .compile();
     const app = moduleRef.createNestApplication();
     await app.init();
-    return { app, repo };
+    return { app, repo: repo as InMemoryP0Repository };
   };
+
+  const repositoryFailingNextTransactionDecision = (
+    repo: InMemoryP0Repository,
+    failure: { enabled: boolean },
+  ): P0Repository =>
+    new Proxy(repo, {
+      get(target, property, receiver) {
+        if (property === 'withP0Transaction') {
+          return async (write: (repository: P0Repository) => Promise<unknown>) =>
+            target.withP0Transaction((transaction) => {
+              const transactionProxy = new Proxy(transaction, {
+                get(transactionTarget, transactionProperty, transactionReceiver) {
+                  if (transactionProperty === 'saveDecision') {
+                    return async (decision: Decision) => {
+                      if (failure.enabled) {
+                        failure.enabled = false;
+                        throw new Error('decision store unavailable');
+                      }
+                      return transactionTarget.saveDecision(decision);
+                    };
+                  }
+                  const value = Reflect.get(transactionTarget, transactionProperty, transactionReceiver);
+                  return typeof value === 'function' ? value.bind(transactionTarget) : value;
+                },
+              }) as P0Repository;
+              return write(transactionProxy);
+            });
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as P0Repository;
+
+  const repositoryFailingNextTransactionObjectEvent = (
+    repo: InMemoryP0Repository,
+    failure: { enabled: boolean },
+  ): P0Repository =>
+    new Proxy(repo, {
+      get(target, property, receiver) {
+        if (property === 'withP0Transaction') {
+          return async (write: (repository: P0Repository) => Promise<unknown>) =>
+            target.withP0Transaction((transaction) => {
+              const transactionProxy = new Proxy(transaction, {
+                get(transactionTarget, transactionProperty, transactionReceiver) {
+                  if (transactionProperty === 'appendObjectEvent') {
+                    return async (...args: Parameters<P0Repository['appendObjectEvent']>) => {
+                      if (failure.enabled) {
+                        failure.enabled = false;
+                        throw new Error('object event store unavailable');
+                      }
+                      return transactionTarget.appendObjectEvent(...args);
+                    };
+                  }
+                  const value = Reflect.get(transactionTarget, transactionProperty, transactionReceiver);
+                  return typeof value === 'function' ? value.bind(transactionTarget) : value;
+                },
+              }) as P0Repository;
+              return write(transactionProxy);
+            });
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as P0Repository;
 
   const seedProject = async (repo: InMemoryP0Repository, id = 'project-1') => {
     await repo.saveProject(project({ id, repo_ids: [`repo-${id}`] }));
@@ -291,10 +360,30 @@ describe('release module', () => {
     await request(app.getHttpServer()).get(`/releases/${id}`).query({ project_id: 'other-project' }).expect(404);
   });
 
+  it('does not commit release creation when audit event persistence fails', async () => {
+    const repo = new InMemoryP0Repository();
+    const eventFailure = { enabled: false };
+    const { app } = await track(createTestApp('volatile_demo', repositoryFailingNextTransactionObjectEvent(repo, eventFailure)));
+    await seedProject(repo);
+
+    eventFailure.enabled = true;
+    await request(app.getHttpServer())
+      .post('/releases')
+      .send({
+        actor_id: actorOwner,
+        project_id: 'project-1',
+        title: 'Release creation should roll back',
+      })
+      .expect(500);
+
+    expect(await repo.listReleasesForProject('project-1')).toEqual([]);
+    expect(await repo.listObjectEvents('project-1', 'release')).toEqual([]);
+  });
+
   it('uses durable-safe ids and clocks for release-owned rows in durable mode', async () => {
     const { app, repo } = await track(createTestApp('durable'));
     await seedProject(repo);
-    const headers = { [actorHeaderName]: actorOwner };
+    const headers = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
 
     const { id, body } = await createRelease(app, {}, headers);
     expect(id).toMatch(uuidPattern);
@@ -327,7 +416,7 @@ describe('release module', () => {
       .expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${ready.releaseId}/approve`)
-      .set({ [actorHeaderName]: actorReviewer })
+      .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
       .send({ actor_id: actorOwner })
       .expect(201);
     const decisions = await repo.listDecisionsForObject('release', ready.releaseId);
@@ -381,7 +470,7 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${created.body.release.id}/evidences`)
-      .set(actorHeaderName, actorReviewer)
+      .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
       .send({
         actor_id: 'actor-spoofed',
         evidence_type: 'observation_note',
@@ -424,7 +513,7 @@ describe('release module', () => {
         .post(`/releases/${releaseId}/execution-packages/${scope.executionPackage.id}`)
         .send({ actor_id: actorOwner })
         .expect(201);
-      await request(app.getHttpServer()).post(`/releases/${releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+      await request(app.getHttpServer()).post(`/releases/${releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     }
 
     const firstPage = await request(app.getHttpServer())
@@ -536,6 +625,7 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .patch(`/releases/${id}`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         title: 'Release Radar v2',
@@ -659,13 +749,15 @@ describe('release module', () => {
       .send({ actor_id: actorOwner });
     const submitted = await request(app.getHttpServer())
       .post(`/releases/${blocked.id}/submit-for-approval`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
     expect(submitted.body.release).toMatchObject({ phase: 'approval', gate_state: 'awaiting_approval' });
-    await request(app.getHttpServer()).post(`/releases/${blocked.id}/approve`).send({ actor_id: actorReviewer }).expect(422);
+    await request(app.getHttpServer()).post(`/releases/${blocked.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(422);
 
     const overridden = await request(app.getHttpServer())
       .post(`/releases/${blocked.id}/override-approve`)
+      .set(reviewerHeaders)
       .send({ actor_id: actorReviewer, rationale: 'Accepted for limited rollout.', blocker_snapshot: submitted.body.blocker_snapshot })
       .expect(201);
     expect(overridden.body.release).toMatchObject({ phase: 'rollout', gate_state: 'approved' });
@@ -704,9 +796,10 @@ describe('release module', () => {
     );
 
     const ready = await createReadyRelease(app, repo);
-    await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     const approved = await request(app.getHttpServer())
       .post(`/releases/${ready.releaseId}/approve`)
+      .set(reviewerHeaders)
       .send({ actor_id: actorReviewer, rationale: 'Release risks are acceptable.' })
       .expect(201);
     expect(approved.body.release).toMatchObject({ phase: 'rollout', gate_state: 'approved' });
@@ -733,25 +826,147 @@ describe('release module', () => {
       .send({ actor_id: actorOwner });
     const staleSubmit = await request(app.getHttpServer())
       .post(`/releases/${stale.id}/submit-for-approval`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
     await request(app.getHttpServer())
       .patch(`/releases/${stale.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, rollout_strategy: 'Added after snapshot.' })
       .expect(200);
     await request(app.getHttpServer())
       .post(`/releases/${stale.id}/override-approve`)
+      .set(reviewerHeaders)
       .send({ actor_id: actorReviewer, rationale: 'Old snapshot.', blocker_snapshot: staleSubmit.body.blocker_snapshot })
       .expect(409);
 
     const changed = await createReadyRelease(app, repo);
-    await request(app.getHttpServer()).post(`/releases/${changed.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${changed.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     const changes = await request(app.getHttpServer())
       .post(`/releases/${changed.releaseId}/request-changes`)
+      .set(reviewerHeaders)
       .send({ actor_id: actorReviewer, rationale: 'Tighten rollout.' })
       .expect(201);
     expect(changes.body.release).toMatchObject({ gate_state: 'changes_requested' });
-    await request(app.getHttpServer()).post(`/releases/${changed.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${changed.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  });
+
+  it('does not commit release approval when decision persistence fails', async () => {
+    const repo = new InMemoryP0Repository();
+    const decisionFailure = { enabled: false };
+    const { app } = await track(createTestApp('volatile_demo', repositoryFailingNextTransactionDecision(repo, decisionFailure)));
+    await seedProject(repo);
+    const ready = await createReadyRelease(app, repo);
+    await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+
+    decisionFailure.enabled = true;
+    await request(app.getHttpServer())
+      .post(`/releases/${ready.releaseId}/approve`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer, rationale: 'Decision persistence should roll back release state.' })
+      .expect(500);
+
+    expect(await repo.getRelease(ready.releaseId)).toMatchObject({ phase: 'approval', gate_state: 'awaiting_approval' });
+    expect(await repo.listDecisionsForObject('release', ready.releaseId)).toEqual([]);
+  });
+
+  it.each(['automation_daemon', 'source_adapter', 'external_tracker', 'repo_policy'] as const)(
+    'rejects %s actors from release gate lifecycle commands',
+    async (actorClass) => {
+      const { app, repo } = await track(createTestApp());
+      await seedProject(repo);
+      const ready = await createReadyRelease(app, repo);
+      const automationHeaders = {
+        [actorHeaderName]: `${actorClass}-actor`,
+        [actorClassHeaderName]: actorClass,
+      };
+
+      await request(app.getHttpServer())
+        .patch(`/releases/${ready.releaseId}`)
+        .set(automationHeaders)
+        .send({ actor_id: actorOwner, rollout_strategy: 'automation actor cannot mutate rollout planning' })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post(`/releases/${ready.releaseId}/evidences`)
+        .set(automationHeaders)
+        .send({
+          actor_id: actorOwner,
+          evidence_type: 'observation_note',
+          summary: 'Automation actor cannot create release gate evidence.',
+          extra: {
+            observation: {
+              source: 'script',
+              severity: 'info',
+              observed_at: later,
+              summary: 'Should be rejected.',
+            },
+          },
+        })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post(`/releases/${ready.releaseId}/submit-for-approval`)
+        .set(automationHeaders)
+        .send({ actor_id: actorOwner })
+        .expect(403)
+        .expect(({ body }) => {
+          expect(body).toMatchObject({ code: 'automation_actor_not_allowed_for_release_gate' });
+        });
+
+      await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+      await request(app.getHttpServer())
+        .post(`/releases/${ready.releaseId}/approve`)
+        .set(automationHeaders)
+        .send({ actor_id: actorReviewer, rationale: 'automation actor cannot approve release gates' })
+        .expect(403);
+
+      await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+      await request(app.getHttpServer())
+        .post(`/releases/${ready.releaseId}/start-observing`)
+        .set(automationHeaders)
+        .send({ actor_id: actorOwner })
+        .expect(403);
+
+      await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/start-observing`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+      await request(app.getHttpServer())
+        .post(`/releases/${ready.releaseId}/close`)
+        .set(automationHeaders)
+        .send({ actor_id: actorOwner, resolution: 'cancelled' })
+        .expect(403);
+    },
+  );
+
+  it('requires actor class headers for authenticated release gate lifecycle commands', async () => {
+    const { app, repo } = await track(createTestApp());
+    await seedProject(repo);
+    const ready = await createReadyRelease(app, repo);
+
+    await request(app.getHttpServer())
+      .post(`/releases/${ready.releaseId}/submit-for-approval`)
+      .send({ actor_id: actorOwner })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(`/releases/${ready.releaseId}/submit-for-approval`)
+      .set(actorHeaderName, 'automation-daemon-actor')
+      .send({ actor_id: actorOwner })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(`/releases/${ready.releaseId}/evidences`)
+      .send({
+        actor_id: actorOwner,
+        evidence_type: 'observation_note',
+        summary: 'Body-only evidence should not pass release gates.',
+        extra: {
+          observation: {
+            source: 'human',
+            severity: 'info',
+            observed_at: later,
+            summary: 'Missing actor class.',
+          },
+        },
+      })
+      .expect(401);
   });
 
   it('records evidence, validates strict backlinks, and enforces evidence type minimums', async () => {
@@ -767,6 +982,7 @@ describe('release module', () => {
 
     const response = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(reviewerHeaders)
       .send({
         actor_id: actorReviewer,
         evidence_type: 'observation_note',
@@ -796,6 +1012,7 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'test_report',
@@ -861,6 +1078,7 @@ describe('release module', () => {
     await repo.saveDecision(publicReviewDecision);
     const publicBacklinks = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -903,6 +1121,7 @@ describe('release module', () => {
     );
     const runtimeSelection = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -933,6 +1152,7 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -986,11 +1206,13 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, evidence_type: 'observation_note', summary: 'bad', related_object_refs: [] })
       .expect(400);
 
     const unsafe = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -1023,6 +1245,7 @@ describe('release module', () => {
     );
     const staleRuntimeRefs = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -1057,6 +1280,7 @@ describe('release module', () => {
 
     const staleObjectRef = await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -1090,22 +1314,26 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, evidence_type: 'review_packet', summary: 'bad', object_ref: { object_type: 'work_item', object_id: 'x', relationship: 'supports' } })
       .expect(400);
-    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).send({ actor_id: actorOwner, evidence_type: 'test_report', summary: 'bad' }).expect(400);
-    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).send({ actor_id: actorOwner, evidence_type: 'build', summary: 'bad' }).expect(400);
-    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).send({ actor_id: actorOwner, evidence_type: 'deployment', summary: 'bad' }).expect(400);
+    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).set(ownerHeaders).send({ actor_id: actorOwner, evidence_type: 'test_report', summary: 'bad' }).expect(400);
+    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).set(ownerHeaders).send({ actor_id: actorOwner, evidence_type: 'build', summary: 'bad' }).expect(400);
+    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).set(ownerHeaders).send({ actor_id: actorOwner, evidence_type: 'deployment', summary: 'bad' }).expect(400);
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, evidence_type: 'metric_snapshot', summary: 'bad', extra: { observation: { source: 'script', severity: 'info', observed_at: later, summary: 'No metrics.' } } })
       .expect(400);
-    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).send({ actor_id: actorOwner, evidence_type: 'rollback_record', summary: 'bad' }).expect(400);
+    await request(app.getHttpServer()).post(`/releases/${id}/evidences`).set(ownerHeaders).send({ actor_id: actorOwner, evidence_type: 'rollback_record', summary: 'bad' }).expect(400);
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, evidence_type: 'rollback_record', summary: 'bad', extra: { rollback: {} } })
       .expect(400);
     await request(app.getHttpServer())
       .post(`/releases/${id}/evidences`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, evidence_type: 'observation_note', summary: 'bad', extra: { observation: { source: 'human', severity: 'info', observed_at: later } } })
       .expect(400);
 
@@ -1142,6 +1370,7 @@ describe('release module', () => {
     for (const item of valid) {
       await request(app.getHttpServer())
         .post(`/releases/${id}/evidences`)
+        .set(ownerHeaders)
         .send({ actor_id: actorOwner, evidence_type: item.evidence_type, summary: `${item.evidence_type} ok`, ...item.body })
         .expect(201);
     }
@@ -1152,18 +1381,20 @@ describe('release module', () => {
     await seedProject(repo);
 
     const beforeApproval = await createRelease(app);
-    await request(app.getHttpServer()).post(`/releases/${beforeApproval.id}/start-observing`).send({ actor_id: actorOwner }).expect(409);
+    await request(app.getHttpServer()).post(`/releases/${beforeApproval.id}/start-observing`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(409);
 
     const completed = await createReadyRelease(app, repo);
-    await request(app.getHttpServer()).post(`/releases/${completed.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(app.getHttpServer()).post(`/releases/${completed.releaseId}/approve`).send({ actor_id: actorReviewer }).expect(201);
-    await request(app.getHttpServer()).post(`/releases/${completed.releaseId}/start-observing`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${completed.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${completed.releaseId}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${completed.releaseId}/start-observing`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${completed.releaseId}/close`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, resolution: 'completed' })
       .expect(422);
     await request(app.getHttpServer())
       .post(`/releases/${completed.releaseId}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -1184,6 +1415,7 @@ describe('release module', () => {
       .expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${completed.releaseId}/close`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, resolution: 'completed', summary: 'Observed stable after rollout.' })
       .expect(201)
       .expect(({ body }) => {
@@ -1200,11 +1432,12 @@ describe('release module', () => {
     );
 
     const override = await createReadyRelease(app, repo);
-    await request(app.getHttpServer()).post(`/releases/${override.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(app.getHttpServer()).post(`/releases/${override.releaseId}/approve`).send({ actor_id: actorReviewer }).expect(201);
-    await request(app.getHttpServer()).post(`/releases/${override.releaseId}/start-observing`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${override.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${override.releaseId}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${override.releaseId}/start-observing`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${override.releaseId}/close`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         resolution: 'completed',
@@ -1221,10 +1454,11 @@ describe('release module', () => {
     );
 
     const rolledBack = await createReadyRelease(app, repo);
-    await request(app.getHttpServer()).post(`/releases/${rolledBack.releaseId}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(app.getHttpServer()).post(`/releases/${rolledBack.releaseId}/approve`).send({ actor_id: actorReviewer }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${rolledBack.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${rolledBack.releaseId}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${rolledBack.releaseId}/close`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, resolution: 'rolled_back' })
       .expect(201)
       .expect(({ body }) => {
@@ -1234,6 +1468,7 @@ describe('release module', () => {
     const cancelled = await createRelease(app);
     await request(app.getHttpServer())
       .post(`/releases/${cancelled.id}/close`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner, resolution: 'cancelled' })
       .expect(201)
       .expect(({ body }) => {

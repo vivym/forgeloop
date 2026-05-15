@@ -1125,6 +1125,8 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
   const superseded = await repository.supersedeExecutionPackageGenerationRun({
     plan_revision_id: ids.planRevision2,
     execution_package_set_id: reclaimedGenerationRun.execution_package_set_id,
+    expected_version: completedGeneration.version,
+    supersede_command_id: 'command-supersede-generation-contract',
     superseded_by: ids.human,
     superseded_at: later,
     reason: 'regenerate packages',

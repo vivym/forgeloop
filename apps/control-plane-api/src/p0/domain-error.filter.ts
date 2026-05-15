@@ -1,7 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus } from '@nestjs/common';
 import { DomainError, type DomainErrorCode } from '@forgeloop/domain';
 
-const forbiddenDomainErrorCodes = new Set<DomainErrorCode>(['FORCE_RERUN_FORBIDDEN']);
+const forbiddenDomainErrorCodes = new Set<DomainErrorCode>(['FORCE_RERUN_FORBIDDEN', 'AUTOMATION_CAPABILITY_REJECTED']);
 
 @Catch(DomainError)
 export class DomainErrorFilter implements ExceptionFilter<DomainError> {

@@ -769,6 +769,10 @@ export class DrizzleP0Repository implements P0Repository {
     );
   }
 
+  async getManualPathHold(holdId: string): Promise<ManualPathHold | undefined> {
+    return this.getById<ManualPathHold>(manual_path_holds, manual_path_holds.id, holdId);
+  }
+
   async requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold> {
     return this.withAdvisoryLocks(this.manualPathHoldLockKeys(input), (repository) =>
       (repository as DrizzleP0Repository).requestManualPathHoldUnlocked(input),
@@ -779,6 +783,12 @@ export class DrizzleP0Repository implements P0Repository {
     const hold = await this.getById<ManualPathHold>(manual_path_holds, manual_path_holds.id, input.hold_id);
     if (hold === undefined) {
       throw new DomainError('INVALID_TRANSITION', `Manual hold ${input.hold_id} does not exist`);
+    }
+    if (hold.status !== 'active') {
+      if (hold.status === 'resolved' && hold.resolved_by === input.resolved_by && hold.resolution === input.resolution) {
+        return hold;
+      }
+      throw new DomainError('INVALID_TRANSITION', `Manual hold ${input.hold_id} is not active`);
     }
     const resolved: ManualPathHold = {
       ...hold,
@@ -913,6 +923,13 @@ export class DrizzleP0Repository implements P0Repository {
     );
   }
 
+  async getExecutionPackageGenerationRun(input: {
+    plan_revision_id: string;
+    generation_key: string;
+  }): Promise<ExecutionPackageGenerationRun | undefined> {
+    return this.generationRunFor(input.plan_revision_id, input.generation_key);
+  }
+
   private async supersedeExecutionPackageGenerationRunUnlocked(
     input: SupersedeExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun> {
@@ -924,6 +941,12 @@ export class DrizzleP0Repository implements P0Repository {
     if (run === undefined || run.plan_revision_id !== input.plan_revision_id) {
       throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} does not exist`);
     }
+    if (run.version !== input.expected_version) {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} version mismatch`);
+    }
+    if (run.status !== 'succeeded') {
+      throw new DomainError('INVALID_TRANSITION', `Package generation ${input.execution_package_set_id} is not current succeeded`);
+    }
     const existingRuns = await this.listWhere<ExecutionPackageGenerationRun>(
       execution_package_generation_runs,
       eq(execution_package_generation_runs.planRevisionId, input.plan_revision_id),
@@ -931,9 +954,11 @@ export class DrizzleP0Repository implements P0Repository {
     const superseded: ExecutionPackageGenerationRun = {
       ...run,
       status: 'superseded',
+      version: run.version + 1,
       superseded_by: input.superseded_by,
       superseded_at: input.superseded_at,
       superseded_reason: input.reason,
+      supersede_command_id: input.supersede_command_id,
       evidence_refs: input.evidence_refs,
       next_generation_key: `regenerate:${input.plan_revision_id}:${existingRuns.length + 1}`,
       updated_at: input.superseded_at,
@@ -1479,6 +1504,7 @@ export class DrizzleP0Repository implements P0Repository {
       execution_package_set_id: `generation:${input.plan_revision_id}:${input.generation_key}`,
       plan_revision_id: input.plan_revision_id,
       generation_key: input.generation_key,
+      version: 0,
       ...(input.generator_version === undefined ? {} : { generator_version: input.generator_version }),
       ...(input.policy_digest === undefined ? {} : { policy_digest: input.policy_digest }),
       ...(input.manifest_digest === undefined ? {} : { manifest_digest: input.manifest_digest }),
@@ -1506,6 +1532,7 @@ export class DrizzleP0Repository implements P0Repository {
     const completed: ExecutionPackageGenerationRun = {
       ...run,
       status: 'succeeded',
+      version: run.version + 1,
       ...(input.result_json === undefined ? {} : { result_json: input.result_json }),
       completed_at: input.completed_at,
       updated_at: input.completed_at,
@@ -1694,6 +1721,20 @@ export class DrizzleP0Repository implements P0Repository {
           `spec_revision:${executionPackage.spec_revision_id}`,
           `plan_revision:${executionPackage.plan_revision_id}`,
         );
+      }
+    }
+    if (input.object_type === 'package_generation' && input.generation_key !== undefined) {
+      keys.push(`package_generation:${input.object_id}:${input.generation_key}`);
+    }
+    if (input.object_type === 'release_gate') {
+      if (input.gate_key !== undefined) {
+        keys.push(`release_gate:${input.object_id}:${input.gate_key}`);
+      } else {
+        const releaseGateHolds = await this.listWhere<ManualPathHold>(
+          manual_path_holds,
+          and(eq(manual_path_holds.status, 'active'), eq(manual_path_holds.objectType, 'release_gate')),
+        );
+        keys.push(...releaseGateHolds.filter((hold) => hold.object_id === input.object_id).map((hold) => hold.scope_key));
       }
     }
     if (input.object_type === 'run_session') {

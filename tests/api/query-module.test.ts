@@ -6,12 +6,14 @@ import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { RUN_DURABILITY_MODE, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { P0_REPOSITORY } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src/index';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
+const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
 const later = '2026-05-05T00:01:00.000Z';
 const unsafeInternalStrings = [
   'allowed_paths',
@@ -78,6 +80,7 @@ describe('query module', () => {
       .expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${releaseId}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',
@@ -221,6 +224,7 @@ describe('query module', () => {
 
     const createResponse = await request(app.getHttpServer())
       .post(`/releases/${releaseId}/evidences`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         evidence_type: 'observation_note',

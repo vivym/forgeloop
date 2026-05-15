@@ -1,0 +1,2323 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
+import type { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import {
+  actorContextFromHeaders,
+  actorSignatureHeaderName,
+  actorTimestampHeaderName,
+  trustedActorHeaderSignature,
+} from '../../apps/control-plane-api/src/p0/actor-context';
+import { P0_REPOSITORY, P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import {
+  automationPreconditionFingerprint,
+  buildManualScopeKey,
+  type AutomationPrecondition,
+  type ExecutionPackage,
+  type Plan,
+  type PlanRevision,
+  type Release,
+  type ReviewPacket,
+  type RunSession,
+  type RuntimeSafetyAttestation,
+  type Spec,
+  type SpecRevision,
+  type WorkItem,
+} from '../../packages/domain/src/index';
+import { seedReadyExecutionPackageThroughApi, succeededSelfReview } from '../helpers/p0-runtime-fixtures';
+
+const actorOwner = 'actor-owner';
+const actorReviewer = 'actor-reviewer';
+const humanAdminHeaders = {
+  'x-forgeloop-actor-id': actorOwner,
+  'x-forgeloop-actor-class': 'human_admin',
+};
+const reviewerHeaders = {
+  'x-forgeloop-actor-id': actorReviewer,
+  'x-forgeloop-actor-class': 'human',
+};
+const daemonHeaders = {
+  'x-forgeloop-actor-id': 'daemon-actor',
+  'x-forgeloop-actor-class': 'automation_daemon',
+  'x-forgeloop-daemon-identity': 'daemon-1',
+};
+
+type ApprovedSpecContext = {
+  project: { id: string };
+  workItem: WorkItem;
+  spec: Spec;
+  specRevisionId: string;
+};
+
+type AutomationPlanDraftService = P0Service & {
+  ensurePlanDraftForApprovedSpec(
+    workItemId: string,
+    specRevisionId: string,
+    automationPrecondition: AutomationPrecondition,
+    idempotencyKey: string,
+  ): Promise<{ plan_id: string; plan_revision_id: string; status: 'created' | 'existing' }>;
+  ensureExecutionPackageDraftsForPlanRevision(input: {
+    planRevisionId: string;
+    automationPrecondition: AutomationPrecondition;
+    actorContext: { authenticatedActorId?: string; actorClass?: string; daemonIdentity?: string };
+    idempotencyKey: string;
+    generationKey?: string;
+    regenerationApproval?: {
+      supersededGenerationKey: string;
+      supersededExecutionPackageSetId: string;
+      supersedeCommandId: string;
+    };
+  }): Promise<{ execution_package_set_id: string; package_ids: string[]; status: 'created' | 'existing' }>;
+  supersedeExecutionPackageGenerationRun(input: {
+    planRevisionId: string;
+    generationKey: string;
+    expectedGenerationRunVersion: number;
+    reason: string;
+    evidenceRefs: [];
+    approvedBy: { actor_id: string; actor_class: 'human' | 'human_admin' };
+    idempotencyKey: string;
+  }): Promise<{
+    execution_package_set_id: string;
+    status: 'superseded';
+    next_generation_key: string;
+    supersede_command_id: string;
+  }>;
+  enqueueRunIfPackageStillReady(input: {
+    packageId: string;
+    expectedPackageVersion: number;
+    automationPrecondition: AutomationPrecondition;
+    idempotencyKey: string;
+    actorContext: { authenticatedActorId?: string; actorClass?: string; daemonIdentity?: string };
+    executorType: 'mock' | 'local_codex';
+    workflowOnly: boolean;
+    runtimeSafetyAttestation?: RuntimeSafetyAttestation;
+  }): Promise<{ status: 'accepted'; run_session_id: string; execution_package_id: string }>;
+};
+
+class OverlapDetectingRepository extends InMemoryP0Repository {
+  delayActiveRunChecks = false;
+  activeRunChecksInFlight = 0;
+  maxActiveRunChecksInFlight = 0;
+
+  override async findActiveRunSessionForPackage(executionPackageId: string) {
+    this.activeRunChecksInFlight += 1;
+    this.maxActiveRunChecksInFlight = Math.max(this.maxActiveRunChecksInFlight, this.activeRunChecksInFlight);
+    try {
+      if (this.delayActiveRunChecks) {
+        await delay(25);
+      }
+      return await super.findActiveRunSessionForPackage(executionPackageId);
+    } finally {
+      this.activeRunChecksInFlight -= 1;
+    }
+  }
+}
+
+const createTestApp = async (
+  repositoryOverride?: P0Repository,
+): Promise<{ app: INestApplication; repository: P0Repository; service: P0Service }> => {
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(P0_REPOSITORY)
+    .useValue(repositoryOverride ?? new InMemoryP0Repository())
+    .overrideProvider(RUN_WORKER)
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined })
+    .compile();
+  const app = moduleRef.createNestApplication();
+  await app.init();
+  return {
+    app,
+    repository: app.get(P0_REPOSITORY) as P0Repository,
+    service: app.get(P0Service),
+  };
+};
+
+const seedProjectRepoWorkItem = async (app: INestApplication): Promise<{ project: { id: string }; workItem: WorkItem }> => {
+  const server = app.getHttpServer();
+  const project = (await request(server).post('/projects').send({ name: 'Forgeloop', owner_actor_id: actorOwner }).expect(201)).body as {
+    id: string;
+  };
+
+  await request(server)
+    .post(`/projects/${project.id}/repos`)
+    .send({
+      repo_id: 'repo-1',
+      name: 'forgeloop',
+      local_path: '/workspace/forgeloop',
+      default_branch: 'main',
+      base_commit_sha: 'abc123',
+    })
+    .expect(201);
+
+  const workItem = (await request(server)
+    .post('/work-items')
+    .send({
+      project_id: project.id,
+      kind: 'requirement',
+      title: 'Ship automation plan drafts',
+      goal: 'Generate plan drafts only after PRD approval.',
+      success_criteria: ['Duplicate automation commands produce one plan draft.'],
+      priority: 'P0',
+      risk: 'medium',
+      owner_actor_id: actorOwner,
+    })
+    .expect(201)).body as WorkItem;
+
+  return { project, workItem };
+};
+
+const seedApprovedSpecThroughApi = async (app: INestApplication): Promise<ApprovedSpecContext> => {
+  const server = app.getHttpServer();
+  const { project, workItem } = await seedProjectRepoWorkItem(app);
+  const createdSpec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
+  const generatedRevision = (await request(server).post(`/specs/${createdSpec.id}/generate-draft`).send({}).expect(201)).body as {
+    id: string;
+  };
+
+  await request(server).post(`/specs/${createdSpec.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
+  const spec = (await request(server)
+    .post(`/specs/${createdSpec.id}/approve`)
+    .set(reviewerHeaders)
+    .send({ actor_id: actorReviewer })
+    .expect(201)).body as Spec;
+
+  return { project, workItem, spec, specRevisionId: generatedRevision.id };
+};
+
+const seedApprovedPlanThroughApi = async (app: INestApplication): Promise<ApprovedSpecContext & { plan: Plan; planRevisionId: string }> => {
+  const ctx = await seedApprovedSpecThroughApi(app);
+  const server = app.getHttpServer();
+  const createdPlan = (await request(server).post(`/work-items/${ctx.workItem.id}/plans`).send({}).expect(201)).body as Plan;
+  const generatedRevision = (await request(server).post(`/plans/${createdPlan.id}/generate-draft`).send({}).expect(201)).body as {
+    id: string;
+  };
+
+  await request(server).post(`/plans/${createdPlan.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
+  const plan = (await request(server)
+    .post(`/plans/${createdPlan.id}/approve`)
+    .set(reviewerHeaders)
+    .send({ actor_id: actorReviewer })
+    .expect(201)).body as Plan;
+  return { ...ctx, plan, planRevisionId: generatedRevision.id };
+};
+
+const runtimeSafetyAttestation = (
+  overrides: Partial<RuntimeSafetyAttestation> = {},
+): RuntimeSafetyAttestation => ({
+  hard_limit_mode: 'test_only_mock',
+  environment: 'test',
+  executor_type: 'mock',
+  workflow_only: true,
+  governor_id: 'test-governor',
+  governor_provenance: 'test_only_mock',
+  checked_at: '2026-05-05T00:31:00.000Z',
+  max_command_timeout_ms: 120_000,
+  max_hook_timeout_ms: 30_000,
+  max_command_output_bytes: 1_000_000,
+  max_run_output_bytes: 5_000_000,
+  supports_cpu_limit: false,
+  supports_memory_limit: false,
+  supports_process_limit: false,
+  supports_fd_limit: false,
+  supports_workspace_disk_limit: false,
+  supports_artifact_size_limit: false,
+  ...overrides,
+});
+
+describe('automation command boundaries', () => {
+  const apps: INestApplication[] = [];
+
+  afterEach(async () => {
+    await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  it('rejects daemon actor capability updates and keeps production default off', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { project } = await seedProjectRepoWorkItem(app);
+
+    await request(app.getHttpServer())
+      .post(`/p0/projects/${project.id}/automation/capabilities`)
+      .set(daemonHeaders)
+      .send({
+        repo_id: 'repo-1',
+        preset: 'run_enqueue',
+        expected_version: 0,
+        reason: 'daemon attempt',
+        evidence_refs: [],
+        actor_context: { actor_id: 'daemon-1', actor_class: 'automation_daemon' },
+      })
+      .expect(403);
+
+    const settings = await request(app.getHttpServer())
+      .get(`/p0/projects/${project.id}/automation/capabilities`)
+      .query({ repo_id: 'repo-1' })
+      .expect(200);
+
+    expect(settings.body).toMatchObject({
+      project_id: project.id,
+      repo_id: 'repo-1',
+      preset: 'off',
+      version: 0,
+      capabilities_json: {
+        canProjectRuntimeState: false,
+        canGeneratePlanDraft: false,
+        canGeneratePackageDrafts: false,
+        canEnqueueRuns: false,
+      },
+    });
+  });
+
+  it('rejects automation capability updates when body actor context does not match trusted headers', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { project } = await seedProjectRepoWorkItem(app);
+
+    await request(app.getHttpServer())
+      .post(`/p0/projects/${project.id}/automation/capabilities`)
+      .set(daemonHeaders)
+      .send({
+        repo_id: 'repo-1',
+        preset: 'run_enqueue',
+        expected_version: 0,
+        reason: 'spoofed body attempt',
+        evidence_refs: [],
+        actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
+      })
+      .expect(403);
+  });
+
+  it('rejects automation actors, missing actor class headers, and body-only actors from P0 approval gates', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { workItem } = await seedProjectRepoWorkItem(app);
+    const server = app.getHttpServer();
+    const createdSpec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
+    await request(server).post(`/specs/${createdSpec.id}/generate-draft`).send({}).expect(201);
+    await request(server)
+      .post(`/specs/${createdSpec.id}/submit-for-approval`)
+      .send({ actor_id: actorOwner })
+      .expect(401);
+    await request(server)
+      .post(`/specs/${createdSpec.id}/submit-for-approval`)
+      .set({ 'x-forgeloop-actor-id': actorOwner })
+      .send({ actor_id: actorOwner })
+      .expect(401);
+    await request(server)
+      .post(`/specs/${createdSpec.id}/submit-for-approval`)
+      .set(daemonHeaders)
+      .send({ actor_id: 'daemon-actor' })
+      .expect(403);
+    await request(server).post(`/specs/${createdSpec.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
+
+    await request(server)
+      .post(`/specs/${createdSpec.id}/approve`)
+      .set(daemonHeaders)
+      .send({ actor_id: actorReviewer })
+      .expect(403);
+    await request(server)
+      .post(`/specs/${createdSpec.id}/approve`)
+      .set({ 'x-forgeloop-actor-id': 'daemon-actor' })
+      .send({ actor_id: actorReviewer })
+      .expect(401);
+    await request(server)
+      .post(`/specs/${createdSpec.id}/approve`)
+      .send({ actor_id: actorReviewer })
+      .expect(401);
+  });
+
+  it('requires signed actor headers when trusted actor signature enforcement is enabled', () => {
+    const previousSecret = process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
+    const previousRequirement = process.env.FORGELOOP_REQUIRE_TRUSTED_ACTOR_SIGNATURE;
+    process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = 'test-trusted-actor-secret';
+    process.env.FORGELOOP_REQUIRE_TRUSTED_ACTOR_SIGNATURE = '1';
+    try {
+      expect(() => actorContextFromHeaders(humanAdminHeaders)).toThrow(/timestamp and signature/i);
+
+      const timestamp = new Date().toISOString();
+      const signedHeaders = {
+        ...humanAdminHeaders,
+        [actorTimestampHeaderName]: timestamp,
+        [actorSignatureHeaderName]: trustedActorHeaderSignature(
+          { actorId: actorOwner, actorClass: 'human_admin', timestamp },
+          'test-trusted-actor-secret',
+        ),
+      };
+
+      expect(actorContextFromHeaders(signedHeaders)).toEqual({
+        authenticatedActorId: actorOwner,
+        actorClass: 'human_admin',
+      });
+    } finally {
+      if (previousSecret === undefined) {
+        delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
+      } else {
+        process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = previousSecret;
+      }
+      if (previousRequirement === undefined) {
+        delete process.env.FORGELOOP_REQUIRE_TRUSTED_ACTOR_SIGNATURE;
+      } else {
+        process.env.FORGELOOP_REQUIRE_TRUSTED_ACTOR_SIGNATURE = previousRequirement;
+      }
+    }
+  });
+
+  it('ensures one plan draft for an approved spec under duplicate daemon and manual calls', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-plan-draft',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable plan draft dogfood',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:20:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const automationService = service as AutomationPlanDraftService;
+
+    const [first, second] = await Promise.all([
+      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-1'),
+      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-1'),
+    ]);
+
+    expect(first.plan_revision_id).toBe(second.plan_revision_id);
+    expect(first.status).toBe('created');
+    expect(second.status).toBe('existing');
+    await expect(service.listPlanRevisions(first.plan_id)).resolves.toHaveLength(1);
+    const [revision] = (await service.listPlanRevisions(first.plan_id)) as PlanRevision[];
+    expect(revision?.based_on_spec_revision_id).toBe(ctx.specRevisionId);
+    expect(ctx.spec.current_revision_id).toBe(ctx.specRevisionId);
+  });
+
+  it('does not create duplicate plan drafts when equivalent commands use different idempotency keys', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-plan-draft-target-lock',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable target lock dogfood',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:21:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const automationService = service as AutomationPlanDraftService;
+
+    const [first, second] = await Promise.all([
+      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-target-a'),
+      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-target-b'),
+    ]);
+
+    expect(second.plan_revision_id).toBe(first.plan_revision_id);
+    await expect(service.listPlanRevisions(first.plan_id)).resolves.toHaveLength(1);
+  });
+
+  it('rejects malformed succeeded plan draft idempotency replay instead of re-entering side effects', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-plan-draft-malformed-replay',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable plan draft',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const claim = await repository.claimCommandIdempotency({
+      id: 'command-idem-malformed-plan-replay',
+      command_name: 'ensure_plan_draft_for_approved_spec',
+      idempotency_key: 'idem-plan-draft-malformed-replay',
+      target_object_type: 'work_item',
+      target_object_id: ctx.workItem.id,
+      target_revision_id: ctx.specRevisionId,
+      precondition_json: precondition as unknown as Record<string, unknown>,
+      precondition_fingerprint: automationPreconditionFingerprint(precondition),
+      actor_scope: 'automation_daemon:daemon-1',
+      claim_token: 'claim-malformed-plan-replay',
+      locked_until: '2026-05-05T00:05:00.000Z',
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    await repository.completeCommandIdempotency({
+      idempotency_key: claim.idempotency_key,
+      claim_token: 'claim-malformed-plan-replay',
+      result_json: { malformed: true },
+      finished_at: '2026-05-05T00:01:00.000Z',
+    });
+
+    await expect(
+      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-malformed-replay',
+      ),
+    ).rejects.toThrow(/idempotency/i);
+    expect((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id).toBeUndefined();
+  });
+
+  it('rejects blocked plan draft idempotency replay instead of re-entering side effects', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-plan-draft-blocked-replay',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable plan draft blocked replay test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:01:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const claim = await repository.claimCommandIdempotency({
+      id: 'command-idem-blocked-plan-replay',
+      command_name: 'ensure_plan_draft_for_approved_spec',
+      idempotency_key: 'idem-plan-draft-blocked-replay',
+      target_object_type: 'work_item',
+      target_object_id: ctx.workItem.id,
+      target_revision_id: ctx.specRevisionId,
+      precondition_json: precondition as unknown as Record<string, unknown>,
+      precondition_fingerprint: automationPreconditionFingerprint(precondition),
+      actor_scope: 'automation_daemon:daemon-1',
+      claim_token: 'claim-blocked-plan-replay',
+      locked_until: '2026-05-05T00:06:00.000Z',
+      now: '2026-05-05T00:01:00.000Z',
+    });
+    await repository.blockCommandIdempotency({
+      idempotency_key: claim.idempotency_key,
+      claim_token: 'claim-blocked-plan-replay',
+      result_json: { error: 'manual_path_hold_active' },
+      finished_at: '2026-05-05T00:02:00.000Z',
+    });
+
+    await expect(
+      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-blocked-replay',
+      ),
+    ).rejects.toThrow(/idempotency/i);
+    expect((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id).toBeUndefined();
+  });
+
+  it('does not overwrite a concurrently changed current spec while attaching an automation plan draft', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-plan-draft-current-spec-race',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable plan draft race test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:03:00.000Z',
+    });
+    const concurrentSpec: Spec = {
+      ...ctx.spec,
+      id: 'spec-concurrent-current',
+      current_revision_id: 'spec-revision-concurrent-current',
+      updated_at: '2026-05-05T00:03:01.000Z',
+    };
+    const currentRevision = (await repository.getSpecRevision(ctx.specRevisionId)) as SpecRevision;
+    await repository.saveSpec(concurrentSpec);
+    await repository.saveSpecRevision({
+      ...currentRevision,
+      id: 'spec-revision-concurrent-current',
+      spec_id: concurrentSpec.id,
+      revision_number: 1,
+      created_at: '2026-05-05T00:03:01.000Z',
+    });
+    const originalGetWorkItem = repository.getWorkItem.bind(repository);
+    let getWorkItemCalls = 0;
+    repository.getWorkItem = async (workItemId: string) => {
+      getWorkItemCalls += 1;
+      if (workItemId === ctx.workItem.id && getWorkItemCalls === 2) {
+        const latest = await originalGetWorkItem(workItemId);
+        await repository.saveWorkItem({
+          ...latest!,
+          current_spec_id: concurrentSpec.id,
+          updated_at: '2026-05-05T00:03:02.000Z',
+        });
+      }
+      return originalGetWorkItem(workItemId);
+    };
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-current-spec-race',
+      ),
+    ).rejects.toThrow(/current spec changed/i);
+    expect((await repository.getWorkItem(ctx.workItem.id))?.current_spec_id).toBe(concurrentSpec.id);
+    expect((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id).toBeUndefined();
+  });
+
+  it('rejects plan draft commands when the repo-scoped automation precondition is no longer active for the project', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-plan-draft-repo-moved',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable repo-scoped plan draft',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:21:30.000Z',
+    });
+    const [repo] = await repository.listProjectRepos(ctx.project.id);
+    expect(repo).toBeDefined();
+    await repository.saveProjectRepo({ ...repo!, status: 'archived', updated_at: '2026-05-05T00:21:31.000Z' });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-repo-moved',
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'automation_precondition_stale' }),
+    });
+  });
+
+  it('creates, replays, and resolves manual path holds through the narrow p0 endpoint', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { workItem } = await seedProjectRepoWorkItem(app);
+    const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id });
+
+    const first = await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: scopeKey,
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: actorOwner,
+        idempotency_key: 'manual-hold-idem-1',
+      })
+      .expect(201);
+
+    const replayed = await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: scopeKey,
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: actorOwner,
+        idempotency_key: 'manual-hold-idem-1',
+      })
+      .expect(201);
+
+    expect(replayed.body).toMatchObject({ id: first.body.id, status: 'active', scope_key: scopeKey });
+
+    const resolved = await request(app.getHttpServer())
+      .post(`/p0/manual-path-holds/${first.body.id}/resolve`)
+      .set(reviewerHeaders)
+      .send({
+        resolved_by: actorReviewer,
+        resolution: 'reviewed',
+        evidence_refs: [],
+      })
+      .expect(201);
+
+    expect(resolved.body).toMatchObject({ id: first.body.id, status: 'resolved', resolved_by: actorReviewer });
+  });
+
+  it('prevents a daemon from resolving its own manual path hold', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const { project, workItem } = await seedProjectRepoWorkItem(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-manual-hold-daemon',
+      project_id: project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable daemon manual holds',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:22:00.000Z',
+    });
+    const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id });
+
+    const hold = await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .set(daemonHeaders)
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: scopeKey,
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: 'daemon-1',
+        idempotency_key: 'manual-hold-daemon-own-idem',
+        source_automation_action_id: 'automation-action-daemon-own-hold',
+        actor_context: { actor_id: 'daemon-actor', actor_class: 'automation_daemon', daemon_identity: 'daemon-1' },
+        automation_precondition: {
+          automation_scope: `repo:${project.id}:repo-1`,
+          project_id: project.id,
+          repo_id: 'repo-1',
+          automation_settings_version: settings.version,
+          capability_fingerprint: settings.capability_fingerprint,
+          required_capability: 'canGeneratePlanDraft',
+          actor_class: 'automation_daemon',
+          daemon_identity: 'daemon-1',
+        },
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .set(daemonHeaders)
+      .send({
+        resolved_by: 'daemon-1',
+        resolution: 'self resolved',
+        evidence_refs: [],
+      })
+      .expect(403);
+  });
+
+  it('rejects daemon-origin manual path holds without an automation precondition', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { workItem } = await seedProjectRepoWorkItem(app);
+
+    await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .set(daemonHeaders)
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id }),
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: 'daemon-1',
+        idempotency_key: 'manual-hold-daemon-no-precondition-idem',
+        actor_context: { actor_id: 'daemon-actor', actor_class: 'automation_daemon', daemon_identity: 'daemon-1' },
+      })
+      .expect(400);
+  });
+
+  it('rejects daemon-origin manual path holds without trusted actor headers', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const { project, workItem } = await seedProjectRepoWorkItem(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-manual-hold-untrusted',
+      project_id: project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable daemon manual holds',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:23:30.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id }),
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: 'daemon-1',
+        idempotency_key: 'manual-hold-daemon-untrusted-idem',
+        source_automation_action_id: 'automation-action-daemon-untrusted',
+        actor_context: { actor_id: 'daemon-actor', actor_class: 'automation_daemon', daemon_identity: 'daemon-1' },
+        automation_precondition: {
+          automation_scope: `repo:${project.id}:repo-1`,
+          project_id: project.id,
+          repo_id: 'repo-1',
+          automation_settings_version: settings.version,
+          capability_fingerprint: settings.capability_fingerprint,
+          required_capability: 'canGeneratePlanDraft',
+          actor_class: 'automation_daemon',
+          daemon_identity: 'daemon-1',
+        },
+      })
+      .expect(401);
+  });
+
+  it('rejects manual path hold resolution without trusted actor headers', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { workItem } = await seedProjectRepoWorkItem(app);
+    const hold = await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id }),
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: actorOwner,
+        idempotency_key: 'manual-hold-resolve-untrusted-idem',
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .send({ resolved_by: actorReviewer, resolution: 'reviewed', evidence_refs: [] })
+      .expect(401);
+  });
+
+  it('rejects manual path hold resolution attributed to a different actor than trusted headers', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { workItem } = await seedProjectRepoWorkItem(app);
+    const hold = await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id }),
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: actorOwner,
+        idempotency_key: 'manual-hold-resolve-spoof-idem',
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .set(humanAdminHeaders)
+      .send({ resolved_by: actorReviewer, resolution: 'reviewed', evidence_refs: [] })
+      .expect(403);
+  });
+
+  it('does not allow manual path hold resolution to be overwritten', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { workItem } = await seedProjectRepoWorkItem(app);
+    const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id });
+    const hold = await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: scopeKey,
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: actorOwner,
+        idempotency_key: 'manual-hold-resolve-once-idem',
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .set(reviewerHeaders)
+      .send({ resolved_by: actorReviewer, resolution: 'reviewed', evidence_refs: [] })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .set(humanAdminHeaders)
+      .send({ resolved_by: actorOwner, resolution: 'changed after resolution', evidence_refs: [] })
+      .expect(409);
+  });
+
+  it('rejects daemon-origin manual path holds when actor context no longer matches the precondition', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const { project, workItem } = await seedProjectRepoWorkItem(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-manual-hold-mismatch',
+      project_id: project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable daemon manual holds',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:23:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post('/p0/manual-path-holds')
+      .set({ ...daemonHeaders, 'x-forgeloop-daemon-identity': 'daemon-2' })
+      .send({
+        object_type: 'work_item',
+        object_id: workItem.id,
+        scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id }),
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+        evidence_refs: [],
+        requested_by: 'daemon-1',
+        idempotency_key: 'manual-hold-daemon-mismatch-idem',
+        source_automation_action_id: 'automation-action-daemon-mismatch',
+        actor_context: { actor_id: 'daemon-actor', actor_class: 'automation_daemon', daemon_identity: 'daemon-2' },
+        automation_precondition: {
+          automation_scope: `repo:${project.id}:repo-1`,
+          project_id: project.id,
+          repo_id: 'repo-1',
+          automation_settings_version: settings.version,
+          capability_fingerprint: settings.capability_fingerprint,
+          required_capability: 'canGeneratePlanDraft',
+          actor_class: 'automation_daemon',
+          daemon_identity: 'daemon-1',
+        },
+      })
+      .expect(409);
+  });
+
+  it('ensures one execution package draft set for an approved plan revision under duplicate commands', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-draft',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable package draft dogfood',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:25:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const automationService = service as AutomationPlanDraftService;
+
+    const [first, second] = await Promise.all([
+      automationService.ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        idempotencyKey: 'idem-package-draft-1',
+      }),
+      automationService.ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        idempotencyKey: 'idem-package-draft-1',
+      }),
+    ]);
+
+    expect(second.execution_package_set_id).toBe(first.execution_package_set_id);
+    expect(second.package_ids).toEqual(first.package_ids);
+    expect(await service.listExecutionPackages(ctx.workItem.id)).toHaveLength(1);
+    const [executionPackage] = (await service.listExecutionPackages(ctx.workItem.id)) as ExecutionPackage[];
+    expect(executionPackage).toMatchObject({ phase: 'draft', gate_state: 'not_submitted', plan_revision_id: ctx.planRevisionId });
+  });
+
+  it('allows project-scoped package draft automation for repos in the project', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-project-scope',
+      project_id: ctx.project.id,
+      scope_type: 'project',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable project scoped package drafts',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:25:30.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `project:${ctx.project.id}`,
+      project_id: ctx.project.id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        idempotencyKey: 'idem-package-project-scope',
+      }),
+    ).resolves.toMatchObject({ status: 'created', package_ids: [expect.any(String)] });
+  });
+
+  it('blocks project-scoped package draft automation when multiple repos make the package repo ambiguous', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    await request(app.getHttpServer())
+      .post(`/projects/${ctx.project.id}/repos`)
+      .send({
+        repo_id: 'repo-2',
+        name: 'forgeloop-worker',
+        local_path: '/workspace/forgeloop-worker',
+        default_branch: 'main',
+        base_commit_sha: 'def456',
+      })
+      .expect(201);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-project-scope-ambiguous',
+      project_id: ctx.project.id,
+      scope_type: 'project',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable ambiguous project scoped package drafts',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:25:40.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `project:${ctx.project.id}`,
+      project_id: ctx.project.id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        idempotencyKey: 'idem-package-project-scope-ambiguous',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'automation_gate_blocked' }),
+    });
+  });
+
+  it('rejects manual mark-ready when the package plan revision has no frozen spec revision target', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-mark-ready-missing-spec-target',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable mark-ready stale graph test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:25:50.000Z',
+    });
+    const generated = await (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: {
+        automation_scope: `repo:${ctx.project.id}:repo-1`,
+        project_id: ctx.project.id,
+        repo_id: 'repo-1',
+        automation_settings_version: settings.version,
+        capability_fingerprint: settings.capability_fingerprint,
+        required_capability: 'canGeneratePackageDrafts',
+        actor_class: 'automation_daemon',
+        daemon_identity: 'daemon-1',
+      },
+      actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+      idempotencyKey: 'idem-package-mark-ready-missing-spec-target',
+    });
+    const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
+    expect(planRevision).toBeDefined();
+    const executionPackage = await repository.getExecutionPackage(generated.package_ids[0]!);
+    expect(executionPackage).toBeDefined();
+    await repository.savePlanRevision({ ...planRevision!, based_on_spec_revision_id: undefined });
+
+    await request(app.getHttpServer())
+      .post(`/execution-packages/${generated.package_ids[0]}/mark-ready`)
+      .set(humanAdminHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: executionPackage!.version })
+      .expect(422);
+  });
+
+  it('rejects manual mark-ready when the package version is stale', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const executionPackage = (await request(app.getHttpServer())
+      .post(`/plan-revisions/${ctx.planRevisionId}/execution-packages`)
+      .send({
+        repo_id: 'repo-1',
+        objective: 'Implement the package execution workflow.',
+        owner_actor_id: actorOwner,
+        reviewer_actor_id: actorReviewer,
+        qa_owner_actor_id: actorOwner,
+        required_checks: [
+          {
+            check_id: 'unit',
+            display_name: 'Unit tests',
+            command: 'pnpm test',
+            timeout_seconds: 120,
+            blocks_review: true,
+          },
+        ],
+        required_artifact_kinds: ['execution_summary'],
+        allowed_paths: ['apps/control-plane-api/**'],
+        forbidden_paths: ['packages/db/**'],
+      })
+      .expect(201)).body as ExecutionPackage;
+    const patched = (await request(app.getHttpServer())
+      .patch(`/execution-packages/${executionPackage.id}`)
+      .send({ objective: 'Edited after the caller read the draft.' })
+      .expect(200)).body as ExecutionPackage;
+    expect(patched.version).toBe(executionPackage.version + 1);
+
+    await request(app.getHttpServer())
+      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
+      .set(humanAdminHeaders)
+      .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
+      .expect(422)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'stale_execution_package_revision' });
+      });
+  });
+
+  it('rejects stale package generation supersede versions', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-supersede-version',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable package regeneration dogfood',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:26:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const automationService = service as AutomationPlanDraftService;
+
+    await automationService.ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: precondition,
+      actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+      idempotencyKey: 'idem-package-supersede-version-default',
+    });
+
+    await expect(
+      automationService.supersedeExecutionPackageGenerationRun({
+        planRevisionId: ctx.planRevisionId,
+        generationKey: `default:${ctx.planRevisionId}`,
+        expectedGenerationRunVersion: 0,
+        reason: 'stale approval attempt',
+        evidenceRefs: [],
+        approvedBy: { actor_id: actorReviewer, actor_class: 'human_admin' },
+        idempotencyKey: 'idem-package-supersede-version-stale',
+      }),
+    ).rejects.toThrow(/version/i);
+  });
+
+  it('rejects non-default package regeneration when the supersede approval reference does not match', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-regeneration-approval',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable package regeneration dogfood',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:27:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'human_admin',
+    };
+    const automationService = service as AutomationPlanDraftService;
+
+    const defaultGeneration = await automationService.ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: precondition,
+      actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
+      idempotencyKey: 'idem-package-regeneration-default',
+    });
+    const supersede = await automationService.supersedeExecutionPackageGenerationRun({
+      planRevisionId: ctx.planRevisionId,
+      generationKey: `default:${ctx.planRevisionId}`,
+      expectedGenerationRunVersion: 1,
+      reason: 'regenerate with a corrected split',
+      evidenceRefs: [],
+      approvedBy: { actor_id: actorReviewer, actor_class: 'human_admin' },
+      idempotencyKey: 'idem-package-regeneration-supersede',
+    });
+
+    await expect(
+      automationService.ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
+        idempotencyKey: 'idem-package-regeneration-wrong-approval',
+        generationKey: supersede.next_generation_key,
+        regenerationApproval: {
+          supersededGenerationKey: `default:${ctx.planRevisionId}`,
+          supersededExecutionPackageSetId: `${defaultGeneration.execution_package_set_id}:wrong`,
+          supersedeCommandId: supersede.supersede_command_id,
+        },
+      }),
+    ).rejects.toThrow(/supersede approval|approval/i);
+
+    const regenerated = await automationService.ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: precondition,
+      actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
+      idempotencyKey: 'idem-package-regeneration-approved',
+      generationKey: supersede.next_generation_key,
+      regenerationApproval: {
+        supersededGenerationKey: `default:${ctx.planRevisionId}`,
+        supersededExecutionPackageSetId: defaultGeneration.execution_package_set_id,
+        supersedeCommandId: supersede.supersede_command_id,
+      },
+    });
+    expect(regenerated).toMatchObject({
+      status: 'created',
+      execution_package_set_id: `generation:${ctx.planRevisionId}:${supersede.next_generation_key}`,
+    });
+  });
+
+  it('rejects package generation when a package-generation manual hold is active', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-generation-hold',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable package generation hold test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:28:00.000Z',
+    });
+    const generationKey = `default:${ctx.planRevisionId}`;
+    await repository.requestManualPathHold({
+      id: 'manual-hold-package-generation',
+      object_type: 'package_generation',
+      object_id: ctx.planRevisionId,
+      scope_key: buildManualScopeKey({ object_type: 'package_generation', object_id: ctx.planRevisionId, generation_key: generationKey }),
+      reason_code: 'needs_human_package_split',
+      reason: 'Package split requires manual review.',
+      evidence_refs: [],
+      requested_by: actorReviewer,
+      requested_at: '2026-05-05T00:28:01.000Z',
+      idempotency_key: 'manual-hold-package-generation-idem',
+      generation_key: generationKey,
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        idempotencyKey: 'idem-package-generation-held',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'manual_path_hold_active' }),
+    });
+  });
+
+  it('rejects package regeneration when the same idempotency key is reused for a different generation key', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-generation-idem-key',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable package generation idempotency test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:29:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'human_admin',
+    };
+    const automationService = service as AutomationPlanDraftService;
+    const defaultGeneration = await automationService.ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: precondition,
+      actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
+      idempotencyKey: 'idem-package-generation-cross-key',
+    });
+    const supersede = await automationService.supersedeExecutionPackageGenerationRun({
+      planRevisionId: ctx.planRevisionId,
+      generationKey: `default:${ctx.planRevisionId}`,
+      expectedGenerationRunVersion: 1,
+      reason: 'regenerate split',
+      evidenceRefs: [],
+      approvedBy: { actor_id: actorReviewer, actor_class: 'human_admin' },
+      idempotencyKey: 'idem-package-generation-cross-key-supersede',
+    });
+
+    await expect(
+      automationService.ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
+        idempotencyKey: 'idem-package-generation-cross-key',
+        generationKey: supersede.next_generation_key,
+        regenerationApproval: {
+          supersededGenerationKey: `default:${ctx.planRevisionId}`,
+          supersededExecutionPackageSetId: defaultGeneration.execution_package_set_id,
+          supersedeCommandId: supersede.supersede_command_id,
+        },
+      }),
+    ).rejects.toThrow(/idempotency identity|fingerprint changed/i);
+  });
+
+  it('rejects package generation for plan revisions without a frozen spec revision target', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
+    expect(planRevision).toBeDefined();
+    await repository.savePlanRevision({
+      ...planRevision!,
+      based_on_spec_revision_id: undefined,
+    });
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-missing-spec-target',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable package missing target test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:29:30.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: precondition,
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        idempotencyKey: 'idem-package-missing-spec-target',
+      }),
+    ).rejects.toThrow(/based on/i);
+  });
+
+  it('stores based_on_spec_revision_id for manually created plan revisions', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const createdPlan = (await request(app.getHttpServer()).post(`/work-items/${ctx.workItem.id}/plans`).send({}).expect(201)).body as Plan;
+
+    const revision = (await request(app.getHttpServer())
+      .post(`/plans/${createdPlan.id}/revisions`)
+      .send({
+        summary: 'Manual plan revision',
+        content: 'Plan body',
+        implementation_summary: 'Implement the approved spec.',
+        split_strategy: 'Single package',
+        dependency_order: ['api-package'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: [],
+        rollback_notes: 'Revert',
+      })
+      .expect(201)).body as PlanRevision;
+
+    await expect(repository.getPlanRevision(revision.id)).resolves.toMatchObject({
+      based_on_spec_revision_id: ctx.specRevisionId,
+    });
+  });
+
+  it('rejects legacy package generation endpoints when the plan revision has no frozen spec revision target', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
+    expect(planRevision).toBeDefined();
+    await repository.savePlanRevision({
+      ...planRevision!,
+      based_on_spec_revision_id: undefined,
+    });
+
+    await request(app.getHttpServer()).post(`/plan-revisions/${ctx.planRevisionId}/generate-packages`).send({}).expect(409);
+    await request(app.getHttpServer())
+      .post(`/plan-revisions/${ctx.planRevisionId}/execution-packages`)
+      .send({
+        repo_id: 'repo-1',
+        objective: 'Implement the package execution workflow.',
+        owner_actor_id: actorOwner,
+        reviewer_actor_id: actorReviewer,
+        qa_owner_actor_id: actorOwner,
+        required_checks: [
+          {
+            check_id: 'unit',
+            display_name: 'Unit tests',
+            command: 'pnpm test',
+            timeout_seconds: 120,
+            blocks_review: true,
+          },
+        ],
+        required_artifact_kinds: ['execution_summary'],
+        allowed_paths: ['apps/control-plane-api/**'],
+        forbidden_paths: ['packages/db/**'],
+      })
+      .expect(409);
+  });
+
+  it('replays legacy generated packages instead of creating duplicate drafts', async () => {
+    const { app, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+
+    const first = await request(app.getHttpServer()).post(`/plan-revisions/${ctx.planRevisionId}/generate-packages`).send({}).expect(201);
+    const second = await request(app.getHttpServer()).post(`/plan-revisions/${ctx.planRevisionId}/generate-packages`).send({}).expect(201);
+
+    expect(second.body[0].id).toBe(first.body[0].id);
+    await expect(service.listExecutionPackages(ctx.workItem.id)).resolves.toHaveLength(1);
+  });
+
+  it('rejects run enqueue when runtime safety attestation is missing', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable run enqueue dogfood',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:30:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-missing-safety',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'runtime_hard_limits_unavailable' }),
+    });
+  });
+
+  it('rejects run enqueue when a local Codex request uses a non-enforcing runtime attestation', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-local-codex-safety',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable run enqueue dogfood',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:30:30.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-local-codex-non-enforcing',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'local_codex',
+        workflowOnly: false,
+        runtimeSafetyAttestation: runtimeSafetyAttestation({
+          executor_type: 'local_codex',
+          workflow_only: false,
+          environment: 'local_dogfood',
+          hard_limit_mode: 'test_only_mock',
+        }),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'runtime_hard_limits_not_enforcing' }),
+    });
+  });
+
+  it('replays a succeeded run enqueue command even when a later attestation is stale', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-replay',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable run enqueue replay',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const automationService = service as AutomationPlanDraftService;
+
+    const first = await automationService.enqueueRunIfPackageStillReady({
+      packageId: executionPackage.id,
+      expectedPackageVersion: executionPackage.version,
+      automationPrecondition: precondition,
+      idempotencyKey: 'idem-run-enqueue-replay-stale-attestation',
+      actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+      executorType: 'mock',
+      workflowOnly: true,
+      runtimeSafetyAttestation: runtimeSafetyAttestation(),
+    });
+    const replayed = await automationService.enqueueRunIfPackageStillReady({
+      packageId: executionPackage.id,
+      expectedPackageVersion: executionPackage.version,
+      automationPrecondition: precondition,
+      idempotencyKey: 'idem-run-enqueue-replay-stale-attestation',
+      actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+      executorType: 'mock',
+      workflowOnly: true,
+      runtimeSafetyAttestation: runtimeSafetyAttestation({ checked_at: '2026-05-04T23:00:00.000Z' }),
+    });
+
+    expect(replayed).toEqual(first);
+  });
+
+  it('rejects run enqueue with a stale package version after a ready package edit', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-stale-after-edit',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable run enqueue stale edit test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:20.000Z',
+    });
+    const patched = (await request(app.getHttpServer())
+      .patch(`/execution-packages/${executionPackage.id}`)
+      .send({ objective: 'Edited after ready before daemon enqueue.' })
+      .expect(200)).body as ExecutionPackage;
+    expect(patched.version).toBe(executionPackage.version + 1);
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-stale-after-edit',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'stale_execution_package_revision' }),
+    });
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(0);
+  });
+
+  it('serializes duplicate manual run gate checks for the same package', async () => {
+    const repository = new OverlapDetectingRepository();
+    const { app } = await createTestApp(repository);
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    repository.delayActiveRunChecks = true;
+
+    const results = await Promise.allSettled([
+      request(app.getHttpServer())
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true }),
+      request(app.getHttpServer())
+        .post(`/execution-packages/${executionPackage.id}/run`)
+        .send({ requested_by_actor_id: actorOwner, workflow_only: true }),
+    ]);
+
+    expect(repository.maxActiveRunChecksInFlight).toBe(1);
+    expect(results.map((result) => (result.status === 'fulfilled' ? result.value.status : 500)).sort()).toEqual([201, 422]);
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(1);
+  });
+
+  it('blocks a run enqueue idempotency key after completion persistence fails post side effect', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-complete-failure',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable run enqueue completion failure test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:35.000Z',
+    });
+    const originalComplete = repository.completeCommandIdempotency.bind(repository);
+    let failCompletion = true;
+    repository.completeCommandIdempotency = async (input) => {
+      if (input.idempotency_key === 'idem-run-complete-failure' && failCompletion) {
+        failCompletion = false;
+        throw new Error('simulated command completion write failure');
+      }
+      return originalComplete(input);
+    };
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+    const input = {
+      packageId: executionPackage.id,
+      expectedPackageVersion: executionPackage.version,
+      automationPrecondition: precondition,
+      idempotencyKey: 'idem-run-complete-failure',
+      actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+      executorType: 'mock' as const,
+      workflowOnly: true,
+      runtimeSafetyAttestation: runtimeSafetyAttestation(),
+    };
+
+    await expect((service as AutomationPlanDraftService).enqueueRunIfPackageStillReady(input)).rejects.toThrow(
+      /simulated command completion write failure/i,
+    );
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(1);
+    let activeRunChecks = 0;
+    const originalFindActiveRun = repository.findActiveRunSessionForPackage.bind(repository);
+    repository.findActiveRunSessionForPackage = async (packageId) => {
+      activeRunChecks += 1;
+      return originalFindActiveRun(packageId);
+    };
+    await expect((service as AutomationPlanDraftService).enqueueRunIfPackageStillReady(input)).rejects.toThrow(/idempotency/i);
+    expect(activeRunChecks).toBe(0);
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(1);
+  });
+
+  it('allows project-scoped run enqueue automation for repo packages in the project', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-project-scope',
+      project_id: executionPackage.project_id,
+      scope_type: 'project',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable project scoped run enqueue',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:30.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `project:${executionPackage.project_id}`,
+      project_id: executionPackage.project_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-project-scope',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).resolves.toMatchObject({ status: 'accepted', execution_package_id: executionPackage.id });
+  });
+
+  it('rejects run enqueue when a work item ancestor manual hold is active', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-work-item-hold',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable ancestor hold test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:40.000Z',
+    });
+    await repository.requestManualPathHold({
+      id: 'manual-hold-run-work-item-ancestor',
+      object_type: 'work_item',
+      object_id: executionPackage.work_item_id,
+      scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: executionPackage.work_item_id }),
+      reason_code: 'needs_human_review',
+      reason: 'Work item is held for manual review.',
+      evidence_refs: [],
+      requested_by: actorReviewer,
+      requested_at: '2026-05-05T00:31:41.000Z',
+      idempotency_key: 'manual-hold-run-work-item-ancestor-idem',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-work-item-hold',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'manual_path_hold_active' }),
+    });
+  });
+
+  it('rejects run enqueue when a terminal run session manual hold is still active', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const terminalRun: RunSession = {
+      id: 'run-session-held-terminal',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      status: 'succeeded',
+      executor_type: 'mock',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      summary: 'Terminal run is under manual reconciliation.',
+      created_at: '2026-05-05T00:31:42.000Z',
+      updated_at: '2026-05-05T00:31:43.000Z',
+      finished_at: '2026-05-05T00:31:43.000Z',
+    };
+    await repository.saveRunSession(terminalRun);
+    await repository.requestManualPathHold({
+      id: 'manual-hold-run-terminal',
+      object_type: 'run_session',
+      object_id: terminalRun.id,
+      scope_key: buildManualScopeKey({ object_type: 'run_session', object_id: terminalRun.id }),
+      reason_code: 'needs_human_review',
+      reason: 'Terminal run needs manual reconciliation before another enqueue.',
+      evidence_refs: [],
+      requested_by: actorReviewer,
+      requested_at: '2026-05-05T00:31:44.000Z',
+      idempotency_key: 'manual-hold-run-terminal-idem',
+    });
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-terminal-hold',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable terminal run hold test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:45.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-terminal-run-hold',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'manual_path_hold_active' }),
+    });
+  });
+
+  it('rejects run enqueue when a completed review packet manual hold is still active', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const terminalRun: RunSession = {
+      id: 'run-session-held-review-packet',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      status: 'succeeded',
+      executor_type: 'mock',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      summary: 'Run with completed review packet.',
+      created_at: '2026-05-05T00:31:46.000Z',
+      updated_at: '2026-05-05T00:31:47.000Z',
+      finished_at: '2026-05-05T00:31:47.000Z',
+    };
+    const reviewPacket: ReviewPacket = {
+      id: 'review-packet-held-completed',
+      run_session_id: terminalRun.id,
+      execution_package_id: executionPackage.id,
+      reviewer_actor_id: executionPackage.reviewer_actor_id,
+      spec_revision_id: executionPackage.spec_revision_id,
+      plan_revision_id: executionPackage.plan_revision_id,
+      status: 'completed',
+      decision: 'approved',
+      summary: 'Completed review remains under manual hold.',
+      changed_files: [],
+      check_result_summary: 'Required checks passed.',
+      self_review: succeededSelfReview(),
+      risk_notes: [],
+      reviewed_by_actor_id: actorReviewer,
+      reviewed_at: '2026-05-05T00:31:48.000Z',
+      requested_changes: [],
+      created_at: '2026-05-05T00:31:48.000Z',
+      updated_at: '2026-05-05T00:31:49.000Z',
+      completed_at: '2026-05-05T00:31:49.000Z',
+    };
+    await repository.saveRunSession(terminalRun);
+    await repository.saveReviewPacket(reviewPacket);
+    await repository.requestManualPathHold({
+      id: 'manual-hold-review-completed',
+      object_type: 'review_packet',
+      object_id: reviewPacket.id,
+      scope_key: buildManualScopeKey({ object_type: 'review_packet', object_id: reviewPacket.id }),
+      reason_code: 'needs_human_review',
+      reason: 'Completed review packet needs manual reconciliation before another enqueue.',
+      evidence_refs: [],
+      requested_by: actorReviewer,
+      requested_at: '2026-05-05T00:31:50.000Z',
+      idempotency_key: 'manual-hold-review-completed-idem',
+    });
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-review-completed-hold',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable completed review hold test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:51.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-completed-review-hold',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'manual_path_hold_active' }),
+    });
+  });
+
+  it('rejects run enqueue when an upstream execution package dependency is not completed', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    await repository.saveExecutionPackage({
+      ...executionPackage,
+      id: 'execution-package-upstream-not-complete',
+      objective: 'Upstream dependency package.',
+      phase: 'ready',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      last_run_session_id: undefined,
+    });
+    await repository.saveExecutionPackageDependency({
+      package_id: executionPackage.id,
+      depends_on_package_id: 'execution-package-upstream-not-complete',
+      dependency_type: 'blocks_run_enqueue',
+      reason: 'Upstream package must complete first.',
+      created_at: '2026-05-05T00:31:10.000Z',
+      updated_at: '2026-05-05T00:31:10.000Z',
+    });
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-dependency',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable dependency gate test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:10.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-dependency-not-complete',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'automation_gate_pending' }),
+    });
+  });
+
+  it('rejects run enqueue when the package is linked to an active release gate', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const release: Release = {
+      id: 'release-run-enqueue-gate',
+      org_id: 'org-1',
+      project_id: executionPackage.project_id,
+      title: 'Release gate blocks automation enqueue',
+      phase: 'planning',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      work_item_ids: [executionPackage.work_item_id],
+      execution_package_ids: [executionPackage.id],
+      created_by_actor_id: actorOwner,
+      created_at: '2026-05-05T00:31:20.000Z',
+      updated_at: '2026-05-05T00:31:20.000Z',
+    };
+    await repository.saveRelease(release);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-release',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable release gate test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:20.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-active-release',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'automation_gate_pending' }),
+    });
+  });
+
+  it('rejects run enqueue when the package no longer matches the current approved plan revision', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-stale-plan',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable stale graph check',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:00.000Z',
+    });
+    const plan = await repository.getPlan(executionPackage.plan_id);
+    expect(plan).toBeDefined();
+    await repository.savePlan({
+      ...plan!,
+      current_revision_id: 'plan-revision-superseded-by-human',
+      updated_at: '2026-05-05T00:31:30.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-stale-plan',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: {
+          hard_limit_mode: 'test_only_mock',
+          environment: 'test',
+          executor_type: 'mock',
+          workflow_only: true,
+          governor_id: 'test-governor',
+          governor_provenance: 'test_only_mock',
+          checked_at: '2026-05-05T00:31:00.000Z',
+          max_command_timeout_ms: 120_000,
+          max_hook_timeout_ms: 30_000,
+          max_command_output_bytes: 1_000_000,
+          max_run_output_bytes: 5_000_000,
+          supports_cpu_limit: false,
+          supports_memory_limit: false,
+          supports_process_limit: false,
+          supports_fd_limit: false,
+          supports_workspace_disk_limit: false,
+          supports_artifact_size_limit: false,
+        },
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'stale_execution_package_revision' }),
+    });
+  });
+
+  it('rejects run enqueue when the package plan revision has no frozen spec revision target', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const planRevision = await repository.getPlanRevision(executionPackage.plan_revision_id);
+    expect(planRevision).toBeDefined();
+    await repository.savePlanRevision({
+      ...planRevision!,
+      based_on_spec_revision_id: undefined,
+    });
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-missing-spec-target',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable missing plan target check',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:32:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-missing-spec-target',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'stale_execution_package_revision' }),
+    });
+  });
+
+  it('rejects legacy run enqueue when the package plan revision has no frozen spec revision target', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const planRevision = await repository.getPlanRevision(executionPackage.plan_revision_id);
+    expect(planRevision).toBeDefined();
+    await repository.savePlanRevision({
+      ...planRevision!,
+      based_on_spec_revision_id: undefined,
+    });
+
+    await request(app.getHttpServer())
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+      .expect(422);
+  });
+});

@@ -200,6 +200,11 @@ const requestJson = async <T>(apiUrl: string, path: string, init: { method?: str
   return (await response.json()) as T;
 };
 
+const actorHeaders = (actorId: string): Record<string, string> => ({
+  'X-Forgeloop-Actor-Id': actorId,
+  'X-Forgeloop-Actor-Class': 'human_admin',
+});
+
 export const startApi = async (): Promise<{ apiUrl: string; close: () => Promise<void> }> => {
   const [{ Test }, { AppModule }, { RunWorkerLifecycleService }] = await Promise.all([
     import('@nestjs/testing'),
@@ -267,8 +272,16 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
       author_actor_id: actor,
     },
   });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(spec.id)}/submit-for-approval`, { method: 'POST', body: { actor_id: actor } });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(spec.id)}/approve`, { method: 'POST', body: { actor_id: actor } });
+  await requestJson(apiUrl, `/specs/${encodeURIComponent(spec.id)}/submit-for-approval`, {
+    method: 'POST',
+    headers: actorHeaders(actor),
+    body: { actor_id: actor },
+  });
+  await requestJson(apiUrl, `/specs/${encodeURIComponent(spec.id)}/approve`, {
+    method: 'POST',
+    headers: actorHeaders(actor),
+    body: { actor_id: actor },
+  });
 
   const plan = await requestJson<{ id: string }>(apiUrl, `/work-items/${encodeURIComponent(workItem.id)}/plans`, { method: 'POST' });
   const planRevision = await requestJson<{ id: string }>(apiUrl, `/plans/${encodeURIComponent(plan.id)}/revisions`, {
@@ -285,11 +298,19 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
       author_actor_id: actor,
     },
   });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(plan.id)}/submit-for-approval`, { method: 'POST', body: { actor_id: actor } });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(plan.id)}/approve`, { method: 'POST', body: { actor_id: actor } });
+  await requestJson(apiUrl, `/plans/${encodeURIComponent(plan.id)}/submit-for-approval`, {
+    method: 'POST',
+    headers: actorHeaders(actor),
+    body: { actor_id: actor },
+  });
+  await requestJson(apiUrl, `/plans/${encodeURIComponent(plan.id)}/approve`, {
+    method: 'POST',
+    headers: actorHeaders(actor),
+    body: { actor_id: actor },
+  });
 
   const packageShape = buildBoundedLocalCodexRunPackage({ repoPath, baseCommitSha });
-  const executionPackage = await requestJson<{ id: string }>(
+  const executionPackage = await requestJson<{ id: string; version: number }>(
     apiUrl,
     `/plan-revisions/${encodeURIComponent(planRevision.id)}/execution-packages`,
     {
@@ -309,7 +330,8 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
   );
   await requestJson(apiUrl, `/execution-packages/${encodeURIComponent(executionPackage.id)}/mark-ready`, {
     method: 'POST',
-    body: { actor_id: actor },
+    headers: actorHeaders(actor),
+    body: { actor_id: actor, expected_package_version: executionPackage.version },
   });
 
   return executionPackage.id;

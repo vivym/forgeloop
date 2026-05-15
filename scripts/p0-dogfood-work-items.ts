@@ -127,6 +127,7 @@ const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
 const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
 const actorQa = process.env.FORGELOOP_ACTOR_QA ?? 'actor-qa';
 const actorHeaderName = 'X-Forgeloop-Actor-Id';
+const actorClassHeaderName = 'X-Forgeloop-Actor-Class';
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
 const reportPath = resolve(
@@ -428,7 +429,11 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
   },
 ];
 
-const withActor = <T extends SupertestTest>(test: T, actorId: string): T => test.set(actorHeaderName, actorId) as T;
+const withActor = <T extends SupertestTest>(
+  test: T,
+  actorId: string,
+  actorClass = actorId === actorReviewer ? 'human' : 'human_admin',
+): T => test.set(actorHeaderName, actorId).set(actorClassHeaderName, actorClass) as T;
 
 const getHeadSha = async (): Promise<string> => {
   const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoPath });
@@ -632,10 +637,10 @@ const createReadyPackage = async (
         forbidden_paths: ['.git/**', 'node_modules/**', '.env'],
       })
       .expect(201)
-  ).body as { id: string };
+  ).body as { id: string; version: number };
 
   await withActor(request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`), actorOwner)
-    .send({ actor_id: actorOwner })
+    .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
     .expect(201);
   return executionPackage.id;
 };

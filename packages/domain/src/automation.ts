@@ -196,6 +196,7 @@ export interface ExecutionPackageGenerationRun {
   execution_package_set_id: string;
   plan_revision_id: string;
   generation_key: string;
+  version: number;
   generator_version?: string;
   policy_digest?: string;
   manifest_digest?: string;
@@ -209,6 +210,7 @@ export interface ExecutionPackageGenerationRun {
   superseded_by?: string;
   superseded_at?: IsoDateTime;
   superseded_reason?: string;
+  supersede_command_id?: string;
   evidence_refs?: ArtifactRef[];
   next_generation_key?: string;
   completed_at?: IsoDateTime;

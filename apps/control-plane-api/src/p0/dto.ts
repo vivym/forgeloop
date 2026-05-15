@@ -1,4 +1,5 @@
 import {
+  artifactRefSchema,
   artifactKindSchema,
   executorTypeSchema,
   jsonObjectSchema,
@@ -53,6 +54,11 @@ export const actorCommandSchema = z
   })
   .strict();
 export type ActorCommandDto = z.infer<typeof actorCommandSchema>;
+
+export const markPackageReadySchema = actorCommandSchema.extend({
+  expected_package_version: z.number().int().min(0),
+});
+export type MarkPackageReadyDto = z.infer<typeof markPackageReadySchema>;
 
 export const createSpecRevisionSchema = z
   .object({
@@ -155,3 +161,109 @@ export const reviewDecisionSchema = z
   })
   .strict();
 export type ReviewDecisionDto = z.infer<typeof reviewDecisionSchema>;
+
+export const automationActorClassSchema = z.enum([
+  'human_admin',
+  'human',
+  'system_bootstrap',
+  'migration',
+  'automation_daemon',
+  'source_adapter',
+  'external_tracker',
+  'repo_policy',
+]);
+
+export const automationActorContextSchema = z
+  .object({
+    actor_class: automationActorClassSchema,
+    actor_id: nonEmptyString,
+    daemon_identity: nonEmptyString.optional(),
+    source: nonEmptyString.optional(),
+  })
+  .strict();
+export type AutomationActorContextDto = z.infer<typeof automationActorContextSchema>;
+
+export const automationPresetSchema = z.enum(['off', 'ready_projection', 'draft_only', 'run_enqueue']);
+export const automationCapabilitySchema = z.enum([
+  'canProjectRuntimeState',
+  'canGeneratePlanDraft',
+  'canGeneratePackageDrafts',
+  'canEnqueueRuns',
+]);
+
+export const automationPreconditionSchema = z
+  .object({
+    automation_scope: nonEmptyString,
+    project_id: nonEmptyString,
+    repo_id: nonEmptyString.optional(),
+    automation_settings_version: z.number().int().min(0),
+    capability_fingerprint: nonEmptyString,
+    required_capability: automationCapabilitySchema,
+    actor_class: automationActorClassSchema,
+    daemon_identity: nonEmptyString.optional(),
+  })
+  .strict();
+export type AutomationPreconditionDto = z.infer<typeof automationPreconditionSchema>;
+
+export const setAutomationCapabilitiesSchema = z
+  .object({
+    repo_id: nonEmptyString.optional(),
+    preset: automationPresetSchema,
+    expected_version: z.number().int().min(0),
+    reason: nonEmptyString,
+    evidence_refs: z.array(artifactRefSchema).default([]),
+    actor_context: automationActorContextSchema,
+  })
+  .strict();
+export type SetAutomationCapabilitiesDto = z.infer<typeof setAutomationCapabilitiesSchema>;
+
+export const disableAutomationCapabilitiesSchema = z
+  .object({
+    repo_id: nonEmptyString.optional(),
+    expected_version: z.number().int().min(0),
+    reason: nonEmptyString,
+    evidence_refs: z.array(artifactRefSchema).default([]),
+    actor_context: automationActorContextSchema,
+  })
+  .strict();
+export type DisableAutomationCapabilitiesDto = z.infer<typeof disableAutomationCapabilitiesSchema>;
+
+export const manualPathHoldObjectTypeSchema = z.enum([
+  'work_item',
+  'spec_revision',
+  'plan_revision',
+  'package_generation',
+  'execution_package',
+  'run_session',
+  'review_packet',
+  'release_gate',
+]);
+
+export const requestManualPathHoldSchema = z
+  .object({
+    object_type: manualPathHoldObjectTypeSchema,
+    object_id: nonEmptyString,
+    scope_key: nonEmptyString,
+    reason_code: nonEmptyString,
+    reason: nonEmptyString,
+    evidence_refs: z.array(artifactRefSchema).default([]),
+    requested_by: nonEmptyString,
+    idempotency_key: nonEmptyString,
+    source_automation_action_id: nonEmptyString.optional(),
+    actor_context: automationActorContextSchema.optional(),
+    generation_key: nonEmptyString.optional(),
+    gate_key: nonEmptyString.optional(),
+    automation_precondition: automationPreconditionSchema.optional(),
+  })
+  .strict();
+export type RequestManualPathHoldDto = z.infer<typeof requestManualPathHoldSchema>;
+
+export const resolveManualPathHoldSchema = z
+  .object({
+    resolution: nonEmptyString,
+    resolved_by: nonEmptyString,
+    evidence_refs: z.array(artifactRefSchema).default([]),
+    actor_context: automationActorContextSchema.optional(),
+  })
+  .strict();
+export type ResolveManualPathHoldDto = z.infer<typeof resolveManualPathHoldSchema>;
