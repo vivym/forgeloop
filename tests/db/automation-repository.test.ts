@@ -479,6 +479,12 @@ describe('automation repository primitives', () => {
     });
 
     await expect(
+      repository.listClaimableAutomationActionRuns({
+        now: '2026-05-05T00:00:00.500Z',
+        limit: 10,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ id: 'claim-iso-variant-expired', status: 'running' })]);
+    await expect(
       repository.claimNextAutomationActionRun({
         now: '2026-05-05T00:00:00.500Z',
         claim_token: 'claim-iso-variant-expired-2',

@@ -4,6 +4,7 @@ import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } 
 const nonBlankString = z.string().min(1);
 const isoDateTime = z.string().datetime().transform((value) => new Date(value).toISOString());
 const actionInputObject = z.record(z.string(), z.unknown());
+const publicReasonCode = z.string().regex(/^[a-z0-9_:-]+$/);
 
 const automationScopeSchema = z.custom<AutomationScope>(
   (value) => typeof value === 'string' && (/^project:[^:]+$/.test(value) || /^repo:[^:]+:[^:]+$/.test(value)),
@@ -112,7 +113,7 @@ export const gatePendingAutomationActionRunSchema = z
   .object({
     claim_token: nonBlankString,
     idempotency_key: nonBlankString,
-    reason: nonBlankString,
+    reason: publicReasonCode,
     result_json: actionInputObject.optional(),
     next_attempt_at: isoDateTime.optional(),
   })

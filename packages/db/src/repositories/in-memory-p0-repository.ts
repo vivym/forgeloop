@@ -1148,22 +1148,8 @@ export class InMemoryP0Repository implements P0Repository {
 
   async listClaimableAutomationActionRuns(input: ListClaimableAutomationActionRunsInput): Promise<AutomationActionRun[]> {
     return valuesFor(this.automationActionRuns)
-      .filter(
-        (actionRun) =>
-          actionRun.status === 'pending' ||
-          (actionRun.status === 'gate_pending' &&
-            (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= input.now)) ||
-          ((actionRun.status === 'blocked' || actionRun.status === 'failed') &&
-            actionRun.retryable === true &&
-            (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= input.now)) ||
-          (actionRun.status === 'running' && actionRun.locked_until !== undefined && actionRun.locked_until <= input.now),
-      )
-      .sort(
-        (left, right) =>
-          (left.next_attempt_at ?? left.created_at ?? '').localeCompare(right.next_attempt_at ?? right.created_at ?? '') ||
-          (left.created_at ?? '').localeCompare(right.created_at ?? '') ||
-          left.id.localeCompare(right.id),
-      )
+      .filter((actionRun) => this.isAutomationActionClaimable(actionRun, input.now))
+      .sort(this.compareAutomationActionClaimOrder)
       .map(redactAutomationActionClaim)
       .slice(0, input.limit);
   }

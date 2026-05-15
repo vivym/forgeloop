@@ -29,6 +29,8 @@ const claimConflictBody = {
 };
 
 const conflict = (body: Record<string, string>): HttpException => new HttpException(body, HttpStatus.CONFLICT);
+const isInvalidTransition = (error: unknown): error is DomainError =>
+  error instanceof DomainError && error.code === 'INVALID_TRANSITION';
 
 const normalizeIsoDateTime = (value: string): string => {
   const parsed = new Date(value);
@@ -72,7 +74,7 @@ export class AutomationActionService {
       });
       return { action: toAutomationActionRunDto(action) };
     } catch (error) {
-      if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
+      if (isInvalidTransition(error)) {
         throw conflict(commandIdempotencyConflictBody);
       }
       throw error;
@@ -107,7 +109,7 @@ export class AutomationActionService {
       });
       return { action: toAutomationActionRunDto(action) };
     } catch (error) {
-      if (error instanceof DomainError) {
+      if (isInvalidTransition(error)) {
         throw conflict(claimConflictBody);
       }
       throw error;
@@ -129,7 +131,7 @@ export class AutomationActionService {
       });
       return { action: toAutomationActionRunDto(action) };
     } catch (error) {
-      if (error instanceof DomainError) {
+      if (isInvalidTransition(error)) {
         throw conflict(claimConflictBody);
       }
       throw error;
@@ -152,7 +154,7 @@ export class AutomationActionService {
       });
       return { action: toAutomationActionRunDto(action) };
     } catch (error) {
-      if (error instanceof DomainError) {
+      if (isInvalidTransition(error)) {
         throw conflict(claimConflictBody);
       }
       throw error;
@@ -175,7 +177,7 @@ export class AutomationActionService {
       });
       return { action: toAutomationActionRunDto(action) };
     } catch (error) {
-      if (error instanceof DomainError) {
+      if (isInvalidTransition(error)) {
         throw conflict(claimConflictBody);
       }
       throw error;
@@ -192,7 +194,7 @@ export class AutomationActionService {
         throw conflict(claimConflictBody);
       }
     } catch (error) {
-      if (error instanceof DomainError) {
+      if (isInvalidTransition(error)) {
         throw conflict(claimConflictBody);
       }
       throw error;
