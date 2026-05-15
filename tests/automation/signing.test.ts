@@ -53,4 +53,24 @@ describe('automation request signing', () => {
       reason: 'timestamp_skew',
     });
   });
+
+  it('rejects signed non-ISO timestamps', () => {
+    const verifierNow = '2026-05-15T00:00:00.000Z';
+    const signingInput = {
+      method: 'POST',
+      pathAndQuery: '/internal/automation/actions?x=1',
+      rawBody: Buffer.from('{"a":1}'),
+      actorId: 'daemon-actor',
+      actorClass: 'automation_daemon',
+      daemonIdentity: 'daemon-1',
+      timestamp: 'Fri, 15 May 2026 00:00:00 GMT',
+      secret: 'secret',
+    } satisfies SignAutomationRequestInput;
+    const signed = signAutomationRequest(signingInput);
+
+    expect(verifyAutomationRequestSignature({ ...signingInput, headers: signed, now: verifierNow })).toEqual({
+      ok: false,
+      reason: 'timestamp_invalid',
+    });
+  });
 });

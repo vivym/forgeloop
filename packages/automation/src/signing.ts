@@ -53,6 +53,7 @@ export interface VerifyAutomationRequestSignatureInput extends Omit<SignAutomati
 
 const signatureVersion = 'v1';
 const defaultSkewToleranceMs = 5 * 60 * 1000;
+const utcIsoTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export const sha256Hex = (rawBody: Buffer | string): string => createHash('sha256').update(rawBody).digest('hex');
 
@@ -131,6 +132,19 @@ const dateMs = (value: string | number | Date): number => {
   return Date.parse(value);
 };
 
+const verifiedUtcIsoTimestampMs = (timestamp: string): number | undefined => {
+  if (!utcIsoTimestampPattern.test(timestamp)) {
+    return undefined;
+  }
+
+  const timestampMs = Date.parse(timestamp);
+  if (Number.isNaN(timestampMs) || new Date(timestampMs).toISOString() !== timestamp) {
+    return undefined;
+  }
+
+  return timestampMs;
+};
+
 const safeHexEquals = (expectedHex: string, receivedHex: string): boolean => {
   const expected = Buffer.from(expectedHex, 'hex');
   const received = Buffer.from(receivedHex, 'hex');
@@ -158,9 +172,9 @@ export const verifyAutomationRequestSignature = (
     return { ok: false, reason: 'body_sha_mismatch' };
   }
 
-  const timestampMs = Date.parse(headers.timestamp);
+  const timestampMs = verifiedUtcIsoTimestampMs(headers.timestamp);
   const nowMs = input.now === undefined ? Date.now() : dateMs(input.now);
-  if (Number.isNaN(timestampMs) || Number.isNaN(nowMs)) {
+  if (timestampMs === undefined || Number.isNaN(nowMs)) {
     return { ok: false, reason: 'timestamp_invalid' };
   }
   if (Math.abs(nowMs - timestampMs) > (input.skewToleranceMs ?? defaultSkewToleranceMs)) {
