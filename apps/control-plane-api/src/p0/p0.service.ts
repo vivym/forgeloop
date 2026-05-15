@@ -68,6 +68,7 @@ import {
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../modules/core/control-plane-tokens';
+import { AutomationCommandService } from '../modules/automation/automation-command.service';
 import {
   createRunEventStreamToken as signRunEventStreamToken,
   resolveRunEventStreamTokenSecret,
@@ -219,6 +220,7 @@ export class P0Service {
     @Inject(RUN_WORKER) private readonly runWorker: RunWorker,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
+    private readonly automationCommandService: AutomationCommandService,
   ) {}
 
   async createProject(dto: CreateProjectDto): Promise<Project> {
@@ -267,12 +269,7 @@ export class P0Service {
   }
 
   async getAutomationCapabilities(projectId: string, repoId?: string): Promise<AutomationProjectSettings> {
-    await this.getProject(projectId);
-    await this.assertRepoScopeCurrent(this.repository, projectId, repoId);
-    return this.repository.resolveAutomationProjectSettings({
-      project_id: projectId,
-      ...(repoId === undefined ? {} : { repo_id: repoId }),
-    });
+    return this.automationCommandService.getAutomationCapabilities(projectId, repoId);
   }
 
   async setAutomationCapabilities(
@@ -280,27 +277,7 @@ export class P0Service {
     dto: SetAutomationCapabilitiesDto,
     actorContext?: ActorContext,
   ): Promise<AutomationProjectSettings> {
-    await this.getProject(projectId);
-    await this.assertRepoScopeCurrent(this.repository, projectId, dto.repo_id);
-    const settings = await this.repository.setAutomationProjectSettings({
-      id: this.id('automation-settings'),
-      project_id: projectId,
-      ...(dto.repo_id === undefined ? {} : { repo_id: dto.repo_id }),
-      scope_type: dto.repo_id === undefined ? 'project' : 'repo',
-      preset: dto.preset,
-      expected_version: dto.expected_version,
-      reason: this.required(dto.reason, 'reason'),
-      evidence_refs: dto.evidence_refs,
-      actor: this.automationActorContext(dto.actor_context, actorContext, { requireTrusted: true }),
-      now: this.now(),
-    });
-    await this.event('automation_project_settings', settings.id, 'automation_capabilities_updated', dto.actor_context.actor_id, {
-      project_id: projectId,
-      ...(dto.repo_id === undefined ? {} : { repo_id: dto.repo_id }),
-      preset: settings.preset,
-      version: settings.version,
-    });
-    return settings;
+    return this.automationCommandService.setAutomationCapabilities(projectId, dto, actorContext);
   }
 
   async disableAutomation(
@@ -308,107 +285,15 @@ export class P0Service {
     dto: DisableAutomationCapabilitiesDto,
     actorContext?: ActorContext,
   ): Promise<AutomationProjectSettings> {
-    await this.getProject(projectId);
-    await this.assertRepoScopeCurrent(this.repository, projectId, dto.repo_id);
-    const settings = await this.repository.disableAutomationProjectSettings({
-      project_id: projectId,
-      ...(dto.repo_id === undefined ? {} : { repo_id: dto.repo_id }),
-      expected_version: dto.expected_version,
-      reason: this.required(dto.reason, 'reason'),
-      evidence_refs: dto.evidence_refs,
-      actor: this.automationActorContext(dto.actor_context, actorContext, { requireTrusted: true }),
-      now: this.now(),
-    });
-    await this.event('automation_project_settings', settings.id, 'automation_capabilities_disabled', dto.actor_context.actor_id, {
-      project_id: projectId,
-      ...(dto.repo_id === undefined ? {} : { repo_id: dto.repo_id }),
-      version: settings.version,
-    });
-    return settings;
+    return this.automationCommandService.disableAutomation(projectId, dto, actorContext);
   }
 
   async requestManualPath(dto: RequestManualPathHoldDto, actorContext?: ActorContext): Promise<ManualPathHold> {
-    const requestActor = this.optionalAutomationActorContext(dto.actor_context, actorContext);
-    const precondition = dto.automation_precondition as AutomationPrecondition | undefined;
-    const isDaemonOrigin = dto.source_automation_action_id !== undefined || requestActor?.actor_class === 'automation_daemon';
-    if (isDaemonOrigin && precondition === undefined) {
-      throw new BadRequestException('daemon-origin manual path requests require automation_precondition');
-    }
-    if (
-      isDaemonOrigin &&
-      (actorContext?.authenticatedActorId === undefined ||
-        actorContext.actorClass !== 'automation_daemon' ||
-        actorContext.daemonIdentity === undefined)
-    ) {
-      throw new UnauthorizedException('daemon-origin manual path requests require trusted daemon headers');
-    }
-    this.assertManualPreconditionActorMatches(precondition, requestActor, dto.requested_by);
-    return this.repository.withObjectLock(`manual-path-hold:${dto.object_type}:${dto.object_id}:${dto.scope_key}`, async (repository) => {
-      if (precondition !== undefined) {
-        await this.assertAutomationPreconditionForHold(repository, precondition);
-      }
-      return repository.requestManualPathHold({
-        id: this.id('manual-path-hold'),
-        object_type: dto.object_type,
-        object_id: dto.object_id,
-        scope_key: dto.scope_key,
-        reason_code: dto.reason_code,
-        reason: dto.reason,
-        evidence_refs: dto.evidence_refs,
-        requested_by: dto.requested_by,
-        requested_at: this.now(),
-        idempotency_key: dto.idempotency_key,
-        ...(dto.source_automation_action_id === undefined ? {} : { source_automation_action_id: dto.source_automation_action_id }),
-        ...(dto.generation_key === undefined ? {} : { generation_key: dto.generation_key }),
-        ...(dto.gate_key === undefined ? {} : { gate_key: dto.gate_key }),
-      });
-    });
+    return this.automationCommandService.requestManualPath(dto, actorContext);
   }
 
   async resolveManualPath(holdId: string, dto: ResolveManualPathHoldDto, actorContext?: ActorContext): Promise<ManualPathHold> {
-    const resolveActor = this.optionalAutomationActorContext(dto.actor_context, actorContext);
-    if (resolveActor === undefined || actorContext?.authenticatedActorId === undefined || actorContext.actorClass === undefined) {
-      throw new UnauthorizedException('Trusted actor headers are required to resolve manual path holds');
-    }
-    if (
-      resolveActor !== undefined &&
-      resolveActor.actor_class !== 'human' &&
-      resolveActor.actor_class !== 'human_admin' &&
-      resolveActor.actor_class !== 'system_bootstrap' &&
-      resolveActor.actor_class !== 'migration'
-    ) {
-      throw new ForbiddenException('automation actors cannot resolve manual path holds');
-    }
-    if (resolveActor.actor_id !== dto.resolved_by) {
-      throw new ForbiddenException('resolved_by must match the trusted actor');
-    }
-    return this.repository.withObjectLock(`manual-path-hold:${holdId}`, async (repository) => {
-      const existing = await repository.getManualPathHold(holdId);
-      if (existing !== undefined) {
-        if (existing.status !== 'active') {
-          if (existing.status === 'resolved' && existing.resolved_by === dto.resolved_by && existing.resolution === dto.resolution) {
-            return existing;
-          }
-          throw new ConflictException('Manual path hold is not active');
-        }
-        if (
-          actorContext?.actorClass === 'automation_daemon' &&
-          (existing.requested_by === actorContext.authenticatedActorId || existing.requested_by === actorContext.daemonIdentity)
-        ) {
-          throw new ForbiddenException('automation daemon cannot resolve its own manual path hold');
-        }
-      }
-      const hold = await repository.resolveManualPathHold({
-        hold_id: holdId,
-        resolved_by: dto.resolved_by,
-        resolved_at: this.now(),
-        resolution: dto.resolution,
-      });
-      await this.eventWithRepository(repository, 'manual_path_hold', hold.id, 'manual_path_hold_resolved', dto.resolved_by, {
-        resolution: dto.resolution,
-      });
-      return hold;
-    });
+    return this.automationCommandService.resolveManualPath(holdId, dto, actorContext);
   }
 
   async createWorkItem(dto: CreateWorkItemDto): Promise<WorkItem> {
@@ -558,263 +443,20 @@ export class P0Service {
     automationPrecondition: AutomationPrecondition,
     idempotencyKey: string,
   ): Promise<EnsurePlanDraftResult> {
-    const precondition = normalizeAutomationPrecondition(automationPrecondition);
-    if (precondition.required_capability !== 'canGeneratePlanDraft') {
-      throw new BadRequestException('ensurePlanDraftForApprovedSpec requires canGeneratePlanDraft precondition');
-    }
-    const preconditionFingerprint = automationPreconditionFingerprint(precondition);
-    const actorScope = `${precondition.actor_class}:${precondition.daemon_identity ?? 'unknown'}`;
-    const claimToken = randomUUID();
-    const claimedAt = this.now();
-
-    const outcome = await this.repository.withObjectLock(`work-item:${workItemId}`, async (
-      repository,
-    ): Promise<CommandBoundaryOutcome<EnsurePlanDraftResult>> => {
-      const claim = await repository.claimCommandIdempotency({
-        id: this.id('command-idempotency'),
-        command_name: 'ensure_plan_draft_for_approved_spec',
-        idempotency_key: idempotencyKey,
-        ...commandIdempotencyTarget({
-          objectType: 'work_item',
-          objectId: workItemId,
-          revisionId: specRevisionId,
-        }),
-        precondition_json: precondition as unknown as Record<string, unknown>,
-        precondition_fingerprint: preconditionFingerprint,
-        actor_scope: actorScope,
-        claim_token: claimToken,
-        locked_until: this.lockedUntil(claimedAt),
-        now: claimedAt,
-      });
-      const replayed = this.replayedPlanDraftResult(claim.result_json);
-      const replayable = this.replayableCommandResultOrThrow(claim, replayed);
-      if (replayable !== undefined) {
-        return { ok: true, value: { ...replayable, status: 'existing' } };
-      }
-
-      try {
-        const result = await this.writePlanDraftForApprovedSpec(repository, workItemId, specRevisionId, precondition);
-        await repository.completeCommandIdempotency({
-          idempotency_key: idempotencyKey,
-          claim_token: claimToken,
-          result_json: result,
-          finished_at: this.now(),
-        });
-        return { ok: true, value: result };
-      } catch (error) {
-        await this.blockCommandIdempotencyAfterError(repository, {
-          idempotency_key: idempotencyKey,
-          claim_token: claimToken,
-          error,
-        });
-        return { ok: false, error };
-      }
-    });
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
-    return outcome.value;
+    return this.automationCommandService.ensurePlanDraftForApprovedSpec(
+      workItemId,
+      specRevisionId,
+      automationPrecondition,
+      idempotencyKey,
+    );
   }
 
   async ensureExecutionPackageDraftsForPlanRevision(input: EnsurePackageDraftsInput): Promise<EnsurePackageDraftsResult> {
-    const precondition = normalizeAutomationPrecondition(input.automationPrecondition);
-    if (precondition.required_capability !== 'canGeneratePackageDrafts') {
-      throw new BadRequestException('ensureExecutionPackageDraftsForPlanRevision requires canGeneratePackageDrafts precondition');
-    }
-    const defaultGenerationKey = `default:${input.planRevisionId}`;
-    const generationKey = input.generationKey ?? defaultGenerationKey;
-    if (input.actorContext.actorClass === 'automation_daemon' && generationKey !== defaultGenerationKey) {
-      throw new BadRequestException('automation daemon may only use the default package generation key');
-    }
-    if (generationKey !== defaultGenerationKey) {
-      if (
-        input.actorContext.actorClass !== 'human' &&
-        input.actorContext.actorClass !== 'human_admin'
-      ) {
-        throw new ForbiddenException('non-default package generation requires human approval');
-      }
-      if (
-        input.regenerationApproval === undefined ||
-        generationKey.startsWith(`regenerate:${input.planRevisionId}:`) !== true
-      ) {
-        throw new BadRequestException('non-default package generation requires a matching supersede approval');
-      }
-    }
-    const preconditionFingerprint = automationPreconditionFingerprint(precondition);
-    const actorScope = `${precondition.actor_class}:${precondition.daemon_identity ?? input.actorContext.authenticatedActorId ?? 'unknown'}`;
-    const claimToken = randomUUID();
-    const claimedAt = this.now();
-
-    const outcome = await this.repository.withObjectLock(
-      `automation-command:ensure-package-drafts:${input.planRevisionId}:${generationKey}`,
-      async (repository): Promise<CommandBoundaryOutcome<EnsurePackageDraftsResult>> => {
-      const claim = await repository.claimCommandIdempotency({
-        id: this.id('command-idempotency'),
-        command_name: 'ensure_execution_package_drafts_for_plan_revision',
-        idempotency_key: input.idempotencyKey,
-        ...commandIdempotencyTarget({
-          objectType: 'plan_revision',
-          objectId: input.planRevisionId,
-          revisionId: generationKey,
-        }),
-        precondition_json: precondition as unknown as Record<string, unknown>,
-        precondition_fingerprint: preconditionFingerprint,
-        actor_scope: actorScope,
-        claim_token: claimToken,
-        locked_until: this.lockedUntil(claimedAt),
-        now: claimedAt,
-      });
-      const replayed = this.replayedPackageDraftsResult(claim.result_json);
-      const replayable = this.replayableCommandResultOrThrow(claim, replayed);
-      if (replayable !== undefined) {
-        return { ok: true, value: { ...replayable, status: 'existing' } };
-      }
-
-      try {
-        const result = await this.writeExecutionPackageDraftsForPlanRevision(repository, {
-          planRevisionId: input.planRevisionId,
-          generationKey,
-          claimToken,
-          precondition,
-          ...(input.regenerationApproval === undefined ? {} : { regenerationApproval: input.regenerationApproval }),
-        });
-        await repository.completeCommandIdempotency({
-          idempotency_key: input.idempotencyKey,
-          claim_token: claimToken,
-          result_json: result,
-          finished_at: this.now(),
-        });
-        return { ok: true, value: result };
-      } catch (error) {
-        await this.blockCommandIdempotencyAfterError(repository, {
-          idempotency_key: input.idempotencyKey,
-          claim_token: claimToken,
-          error,
-        });
-        return { ok: false, error };
-      }
-      },
-    );
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
-    return outcome.value;
+    return this.automationCommandService.ensureExecutionPackageDraftsForPlanRevision(input);
   }
 
   async enqueueRunIfPackageStillReady(input: EnqueueRunInput): Promise<RunAcceptedResponse> {
-    const precondition = normalizeAutomationPrecondition(input.automationPrecondition);
-    if (precondition.required_capability !== 'canEnqueueRuns') {
-      throw new BadRequestException('enqueueRunIfPackageStillReady requires canEnqueueRuns precondition');
-    }
-    const preconditionFingerprint = automationPreconditionFingerprint(precondition);
-    const actorScope = `${precondition.actor_class}:${precondition.daemon_identity ?? input.actorContext.authenticatedActorId ?? 'unknown'}`;
-    const claimToken = randomUUID();
-    const claimedAt = this.now();
-
-    const outcome = await this.repository.withObjectLock(`execution-package:${input.packageId}`, async (
-      repository,
-    ): Promise<CommandBoundaryOutcome<RunAcceptedResponse>> => {
-      const claim = await repository.claimCommandIdempotency({
-        id: this.id('command-idempotency'),
-        command_name: 'enqueue_run_if_package_still_ready',
-        idempotency_key: input.idempotencyKey,
-        ...commandIdempotencyTarget({
-          objectType: 'execution_package',
-          objectId: input.packageId,
-          version: input.expectedPackageVersion,
-        }),
-        precondition_json: precondition as unknown as Record<string, unknown>,
-        precondition_fingerprint: preconditionFingerprint,
-        actor_scope: actorScope,
-        claim_token: claimToken,
-        locked_until: this.lockedUntil(claimedAt),
-        now: claimedAt,
-      });
-      const replayed = this.replayedRunAcceptedResponse(claim.result_json);
-      const replayable = this.replayableCommandResultOrThrow(claim, replayed);
-      if (replayable !== undefined) {
-        return { ok: true, value: replayable };
-      }
-
-      try {
-        assertRuntimeSafetyAttestation(input.runtimeSafetyAttestation, {
-          executorType: input.executorType,
-          workflowOnly: input.workflowOnly,
-          now: this.now(),
-        });
-        const settings = await repository.resolveAutomationProjectSettings({
-          project_id: precondition.project_id,
-          ...(precondition.repo_id === undefined ? {} : { repo_id: precondition.repo_id }),
-        });
-        assertAutomationPreconditionStillCurrent(settings, precondition);
-        assertCommandCapabilityStillEnabled(settings, 'canEnqueueRuns');
-        await this.assertRepoScopeCurrent(repository, precondition.project_id, precondition.repo_id);
-        const executionPackage = this.requireFound(await repository.getExecutionPackage(input.packageId), `ExecutionPackage ${input.packageId}`);
-        if (
-          executionPackage.project_id !== precondition.project_id ||
-          (precondition.repo_id !== undefined && executionPackage.repo_id !== precondition.repo_id)
-        ) {
-          throw new ConflictException('Execution package scope no longer matches automation precondition');
-        }
-        await this.assertExecutionPackageGraphStillCurrent(repository, executionPackage);
-        const activeHolds = await repository.listActiveManualPathHolds({
-          object_type: 'execution_package',
-          object_id: executionPackage.id,
-        });
-        const packageGenerationHolds =
-          executionPackage.generation_key === undefined
-            ? []
-            : await repository.listActiveManualPathHolds({
-                object_type: 'package_generation',
-                object_id: executionPackage.plan_revision_id,
-                generation_key: executionPackage.generation_key,
-              });
-        const openReviewPacket = await repository.findOpenReviewPacketForPackage(executionPackage.id);
-        const activeRunSession = await repository.findActiveRunSessionForPackage(executionPackage.id);
-        const runSessions = await repository.listRunSessionsForPackage(executionPackage.id);
-        const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
-        const runSessionHolds = (
-          await Promise.all(
-            runSessions.map((runSession) =>
-              repository.listActiveManualPathHolds({ object_type: 'run_session', object_id: runSession.id }),
-            ),
-          )
-        ).flat();
-        const reviewPacketHolds = (
-          await Promise.all(
-            reviewPackets.map((reviewPacket) =>
-              repository.listActiveManualPathHolds({ object_type: 'review_packet', object_id: reviewPacket.id }),
-            ),
-          )
-        ).flat();
-        assertPackageRunEligible({
-          executionPackage,
-          expectedPackageVersion: input.expectedPackageVersion,
-          activeHolds: [...activeHolds, ...packageGenerationHolds, ...runSessionHolds, ...reviewPacketHolds],
-          ...(openReviewPacket === undefined ? {} : { openReviewPacket }),
-          ...(activeRunSession === undefined ? {} : { activeRunSession }),
-        });
-        const response = await this.enqueueRunWithRepository(repository, executionPackage, input);
-        await repository.completeCommandIdempotency({
-          idempotency_key: input.idempotencyKey,
-          claim_token: claimToken,
-          result_json: response,
-          finished_at: this.now(),
-        });
-        return { ok: true, value: response };
-      } catch (error) {
-        await this.blockCommandIdempotencyAfterError(repository, {
-          idempotency_key: input.idempotencyKey,
-          claim_token: claimToken,
-          error,
-        });
-        return { ok: false, error };
-      }
-    });
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
-    return outcome.value;
+    return this.automationCommandService.enqueueRunIfPackageStillReady(input);
   }
 
   async supersedeExecutionPackageGenerationRun(

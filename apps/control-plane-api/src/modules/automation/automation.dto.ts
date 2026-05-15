@@ -139,12 +139,82 @@ export const failAutomationActionRunSchema = z
   })
   .strict();
 
+const automationPreconditionSchema = z
+  .object({
+    automation_scope: automationScopeSchema,
+    project_id: nonBlankString,
+    repo_id: nonBlankString.optional(),
+    automation_settings_version: z.number().int().nonnegative(),
+    capability_fingerprint: nonBlankString,
+    required_capability: z.enum(['canProjectRuntimeState', 'canGeneratePlanDraft', 'canGeneratePackageDrafts', 'canEnqueueRuns']),
+    actor_class: z.enum([
+      'human_admin',
+      'human',
+      'system_bootstrap',
+      'migration',
+      'automation_daemon',
+      'source_adapter',
+      'external_tracker',
+      'repo_policy',
+    ]),
+    daemon_identity: nonBlankString.optional(),
+  })
+  .strict();
+
+const internalCommandBaseShape = {
+  action_run_id: nonBlankString,
+  claim_token: nonBlankString.optional(),
+  idempotency_key: nonBlankString,
+  automation_precondition: automationPreconditionSchema,
+} satisfies z.ZodRawShape;
+
+export const ensurePlanDraftCommandSchema = z
+  .object({
+    ...internalCommandBaseShape,
+    spec_revision_id: nonBlankString,
+  })
+  .strict();
+
+export const ensurePackageDraftsCommandSchema = z
+  .object({
+    ...internalCommandBaseShape,
+    generation_key: nonBlankString.optional(),
+    regeneration_approval: z
+      .object({
+        superseded_generation_key: nonBlankString,
+        superseded_execution_package_set_id: nonBlankString,
+        supersede_command_id: nonBlankString,
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const requestManualPathCommandSchema = z
+  .object({
+    ...internalCommandBaseShape,
+    object_type: nonBlankString,
+    object_id: nonBlankString,
+    scope_key: nonBlankString,
+    reason_code: nonBlankString,
+    reason: nonBlankString,
+    evidence_refs: z.array(z.unknown()).default([]),
+    requested_by: nonBlankString,
+    generation_key: nonBlankString.optional(),
+    gate_key: nonBlankString.optional(),
+  })
+  .strict();
+
 export type CreateAutomationActionRunDto = z.infer<typeof createAutomationActionRunSchema>;
 export type ClaimNextAutomationActionRunDto = z.infer<typeof claimNextAutomationActionRunSchema>;
 export type CompleteAutomationActionRunDto = z.infer<typeof completeAutomationActionRunSchema>;
 export type GatePendingAutomationActionRunDto = z.infer<typeof gatePendingAutomationActionRunSchema>;
 export type BlockAutomationActionRunDto = z.infer<typeof blockAutomationActionRunSchema>;
 export type FailAutomationActionRunDto = z.infer<typeof failAutomationActionRunSchema>;
+export type AutomationActionType = CreateAutomationActionRunDto['action_type'];
+export type EnsurePlanDraftCommandDto = z.infer<typeof ensurePlanDraftCommandSchema>;
+export type EnsurePackageDraftsCommandDto = z.infer<typeof ensurePackageDraftsCommandSchema>;
+export type RequestManualPathCommandDto = z.infer<typeof requestManualPathCommandSchema>;
 
 export interface AutomationRuntimeSnapshotDto {
   generated_at: string;
