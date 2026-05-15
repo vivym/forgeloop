@@ -136,6 +136,7 @@ export class AutomationCommandService {
   constructor(
     @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Optional() @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback = false,
   ) {}

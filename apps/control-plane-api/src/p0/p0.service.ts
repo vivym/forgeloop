@@ -205,7 +205,9 @@ export class P0Service {
     @Inject(RUN_WORKER) private readonly runWorker: RunWorker,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
+    @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
+    @Inject(AutomationCommandService)
     private readonly automationCommandService: AutomationCommandService,
   ) {}
 
