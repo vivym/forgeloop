@@ -37,6 +37,38 @@ describe('automation idempotency helpers', () => {
     expect(mutatingActionIdempotencyKey({ ...base, policyDigest: 'ignored' })).toBe(mutatingActionIdempotencyKey(base));
   });
 
+  it('canonicalizes mutating action identity field order', () => {
+    const first = mutatingActionIdempotencyKey({
+      actionType: base.actionType,
+      targetObjectType: base.targetObjectType,
+      targetObjectId: base.targetObjectId,
+      targetRevisionId: base.targetRevisionId,
+      automationScope: base.automationScope,
+      automationSettingsVersion: base.automationSettingsVersion,
+      capabilityFingerprint: base.capabilityFingerprint,
+      preconditionFingerprint: base.preconditionFingerprint,
+      generationKey: base.generationKey,
+    });
+    const reordered = mutatingActionIdempotencyKey({
+      generationKey: base.generationKey,
+      preconditionFingerprint: base.preconditionFingerprint,
+      capabilityFingerprint: base.capabilityFingerprint,
+      automationSettingsVersion: base.automationSettingsVersion,
+      automationScope: base.automationScope,
+      targetRevisionId: base.targetRevisionId,
+      targetObjectId: base.targetObjectId,
+      targetObjectType: base.targetObjectType,
+      actionType: base.actionType,
+    });
+    const changed = mutatingActionIdempotencyKey({
+      ...base,
+      generationKey: 'changed',
+    });
+
+    expect(reordered).toBe(first);
+    expect(changed).not.toBe(first);
+  });
+
   it('builds runtime snapshot keys from stable policy observation identity only', () => {
     expect(projectRuntimeSnapshotIdempotencyKey(observationA)).toBe(
       projectRuntimeSnapshotIdempotencyKey({ ...observationA, observedAt: '2026-05-15T00:00:01.000Z' }),

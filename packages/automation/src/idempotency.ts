@@ -35,7 +35,7 @@ const canonicalize = (value: CanonicalJsonValue): CanonicalJsonValue => {
     }, {});
 };
 
-export const canonicalJson = (value: CanonicalJsonValue): string => JSON.stringify(canonicalize(value));
+const canonicalJson = (value: CanonicalJsonValue): string => JSON.stringify(canonicalize(value));
 
 const mutatingActionIdentityJson = (input: MutatingActionIdentity) => ({
   actionType: input.actionType,

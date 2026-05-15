@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canonicalAutomationSignaturePayload,
   signAutomationRequest,
+  sha256Hex,
   verifyAutomationRequestSignature,
   type SignAutomationRequestInput,
 } from '../../packages/automation/src/index';
@@ -21,9 +23,24 @@ describe('automation request signing', () => {
     } satisfies SignAutomationRequestInput;
 
     const signed = signAutomationRequest(signingInput);
+    const expectedCanonicalPayload =
+      'v1\n' +
+      'POST\n' +
+      '/internal/automation/actions?x=1\n' +
+      '015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862\n' +
+      'daemon-actor\n' +
+      'automation_daemon\n' +
+      'daemon-1\n' +
+      '2026-05-15T00:00:00.000Z';
 
-    expect(signed['X-Forgeloop-Actor-Body-SHA256']).toHaveLength(64);
-    expect(signed['X-Forgeloop-Actor-Signature']).toMatch(/^v1=[0-9a-f]{64}$/);
+    expect(sha256Hex(signingInput.rawBody)).toBe('015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862');
+    expect(canonicalAutomationSignaturePayload(signingInput)).toBe(expectedCanonicalPayload);
+    expect(signed['X-Forgeloop-Actor-Body-SHA256']).toBe(
+      '015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862',
+    );
+    expect(signed['X-Forgeloop-Actor-Signature']).toBe(
+      'v1=ce793348144bea47251b66aab2af04cb19dde89b232990e475927d83c8ca30fb',
+    );
     expect(verifyAutomationRequestSignature({ ...signingInput, headers: signed, now: verifierNow })).toEqual({ ok: true });
     expect(
       verifyAutomationRequestSignature({

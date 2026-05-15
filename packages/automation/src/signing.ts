@@ -47,7 +47,6 @@ export type AutomationSignatureVerificationResult =
 export interface VerifyAutomationRequestSignatureInput extends Omit<SignAutomationRequestInput, 'timestamp'> {
   headers: AutomationRequestHeaderInput;
   now?: string | number | Date;
-  timestamp?: string;
   skewToleranceMs?: number;
 }
 
