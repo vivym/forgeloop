@@ -430,7 +430,7 @@ The completed projection result envelope is allowlisted:
 - `last_known_good_policy_digest`
 - `last_known_good_observed_at`
 
-`RuntimeSnapshotService` may derive repo policy projection fields from the latest completed `project_runtime_snapshot` action run for that repo and stable policy observation identity, ordered by `finished_at desc, updated_at desc, id desc`. Projection lookup and duplicate suppression do not filter by automation scope. They must expose only curated projection fields, not raw action-run `result_json` or `metadata_json`. Slice 2/3 must add a repository query for latest completed projection action runs by repo plus stable policy observation identity. No separate runtime snapshot table, local daemon cache, `automation_cursors` state, or additional daemon recovery table is introduced for this MVP. The existing `automation_cursors` table remains unused.
+`RuntimeSnapshotService` may derive repo policy projection fields from the latest completed `project_runtime_snapshot` action run for that repo and stable policy observation identity, ordered by `finished_at desc, updated_at desc, id desc`. Projection lookup and duplicate suppression do not filter by automation scope. They must expose only curated projection fields, not raw action-run `result_json` or `metadata_json`. Slice 2/3 must add a repository query for latest completed projection action runs by repo plus stable policy observation identity. No separate runtime snapshot table, local daemon cache, `automation_cursors` table/state, or additional daemon recovery table is introduced for this MVP.
 
 ### Response DTO Boundaries
 

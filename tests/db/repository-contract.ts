@@ -1201,6 +1201,8 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     automation_scope: `repo:${ids.project}:repo-1`,
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
+    precondition_fingerprint: 'precondition-contract-active',
+    action_input_json: { work_item_id: ids.workItem, spec_revision_id: ids.specRevision2 },
     claim_token: 'automation-claim-1',
     locked_until: '2026-05-05T00:05:00.000Z',
     now: at,
@@ -1229,6 +1231,15 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     locked_until: '2026-05-05T00:10:00.000Z',
   });
   expect(reclaimedActionRun).toMatchObject({ id: actionRun.id, status: 'running', attempt: 2 });
+  await expect(
+    repository.completeAutomationActionRun({
+      id: actionRun.id,
+      idempotency_key: actionRun.idempotency_key,
+      claim_token: 'automation-claim-1',
+      status: 'succeeded',
+      finished_at: '2026-05-05T00:06:30.000Z',
+    }),
+  ).rejects.toThrow(/claimed|running/i);
   const pendingActionRun = await repository.markAutomationActionGatePending({
     id: actionRun.id,
     idempotency_key: actionRun.idempotency_key,
@@ -1321,6 +1332,8 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     automation_scope: `repo:${ids.project}:repo-1`,
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
+    precondition_fingerprint: 'precondition-contract-retryable',
+    action_input_json: { execution_package_id: ids.package },
     claim_token: 'automation-claim-retryable-1',
     locked_until: '2026-05-05T00:05:00.000Z',
     now: at,
@@ -1341,14 +1354,27 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
   expect((await repository.listClaimableAutomationActionRuns({ now: '2026-05-05T00:21:00.000Z', limit: 10 })).map(
     (run) => run.id,
   )).toContain(retryableActionRun.id);
-  await expect(
-    repository.claimAutomationActionRun({
-      ...retryableActionRun,
-      claim_token: 'automation-claim-retryable-2',
-      locked_until: '2026-05-05T00:25:00.000Z',
-      now: '2026-05-05T00:21:00.000Z',
-    }),
-  ).resolves.toMatchObject({ id: retryableActionRun.id, status: 'running', attempt: 2 });
+  const resumedRetryableActionRun = await repository.claimAutomationActionRun({
+    ...retryableActionRun,
+    claim_token: 'automation-claim-retryable-2',
+    locked_until: '2026-05-05T00:25:00.000Z',
+    now: '2026-05-05T00:21:00.000Z',
+  });
+  expect(resumedRetryableActionRun).toMatchObject({ id: retryableActionRun.id, status: 'running', attempt: 2 });
+  expect(resumedRetryableActionRun.result_json).toBeUndefined();
+  expect(resumedRetryableActionRun.retryable).toBeUndefined();
+  expect(resumedRetryableActionRun.next_attempt_at).toBeUndefined();
+  expect(resumedRetryableActionRun.finished_at).toBeUndefined();
+  await repository.completeAutomationActionRun({
+    id: retryableActionRun.id,
+    idempotency_key: retryableActionRun.idempotency_key,
+    claim_token: 'automation-claim-retryable-2',
+    status: 'blocked',
+    finished_at: '2026-05-05T00:22:00.000Z',
+  });
+  expect((await repository.listClaimableAutomationActionRuns({ now: '2026-05-05T00:26:00.000Z', limit: 10 })).map(
+    (run) => run.id,
+  )).not.toContain(retryableActionRun.id);
 
   const pendingActionInput = {
     id: 'automation-action-contract-pending',
@@ -1368,6 +1394,21 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
   };
   const pendingNewAction = await repository.createOrReplayAutomationActionRun(pendingActionInput);
   expect(pendingNewAction).toMatchObject({ id: pendingActionInput.id, status: 'pending', attempt: 0 });
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...pendingActionInput,
+      idempotency_key: 'action-key-contract-pending-duplicate-id',
+    }),
+  ).rejects.toThrow(/idempotency|identity|duplicate/i);
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...pendingActionInput,
+      action_input_json: {
+        spec_revision_id: ids.specRevision2,
+        work_item_id: ids.workItem,
+      },
+    }),
+  ).resolves.toMatchObject({ id: pendingActionInput.id, status: 'pending' });
   await expect(
     repository.createOrReplayAutomationActionRun({
       ...pendingActionInput,
@@ -1414,7 +1455,7 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
   const snapshotActionInput = {
     id: 'automation-action-contract-snapshot',
     action_type: 'project_runtime_snapshot',
-    target_object_type: 'project_repo',
+    target_object_type: 'repo',
     target_object_id: 'repo-contract-projection',
     target_status: 'observed',
     idempotency_key: 'action-key-contract-snapshot',
@@ -1423,13 +1464,13 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     capability_fingerprint: disabled.capability_fingerprint,
     precondition_fingerprint: 'snapshot-precondition-a',
     action_input_json: {
-      repoId: 'repo-contract-projection',
-      policyStatus: 'loaded',
-      policyDigest: 'policy-contract-a',
-      parserVersion: 'workflow-md-parser:v1',
-      reasonCode: 'loaded',
-      observedAt: '2026-05-05T00:30:00.000Z',
-      lastKnownGood: { repoId: 'repo-contract-projection', policyStatus: 'loaded', policyDigest: 'older' },
+      repo_id: 'repo-contract-projection',
+      policy_status: 'loaded',
+      policy_digest: 'policy-contract-a',
+      parser_version: 'workflow-md-parser:v1',
+      reason_code: 'loaded',
+      observed_at: '2026-05-05T00:30:00.000Z',
+      last_known_good: { repo_id: 'repo-contract-projection', policy_status: 'loaded', policy_digest: 'older' },
     },
     now: '2026-05-05T00:30:00.000Z',
   };
@@ -1437,17 +1478,20 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
   await expect(
     repository.createOrReplayAutomationActionRun({
       ...snapshotActionInput,
+      target_object_type: 'repo',
+      target_object_id: 'repo-contract-projection-renamed',
+      target_status: 'reobserved',
       automation_scope: `project:${ids.project}`,
       automation_settings_version: 99,
       capability_fingerprint: 'ignored-capability-change',
       action_input_json: {
-        repoId: 'repo-contract-projection',
-        policyStatus: 'loaded',
-        policyDigest: 'policy-contract-a',
-        parserVersion: 'workflow-md-parser:v1',
-        reasonCode: 'loaded',
-        observedAt: '2026-05-05T00:31:00.000Z',
-        lastKnownGood: { repoId: 'repo-contract-projection', policyStatus: 'loaded', policyDigest: 'newer' },
+        repo_id: 'repo-contract-projection',
+        policy_status: 'loaded',
+        policy_digest: 'policy-contract-a',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'loaded',
+        observed_at: '2026-05-05T00:31:00.000Z',
+        last_known_good: { repo_id: 'repo-contract-projection', policy_status: 'loaded', policy_digest: 'newer' },
       },
     }),
   ).resolves.toMatchObject({ id: snapshotActionInput.id, status: 'pending' });
@@ -1455,11 +1499,11 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     repository.createOrReplayAutomationActionRun({
       ...snapshotActionInput,
       action_input_json: {
-        repoId: 'repo-contract-projection',
-        policyStatus: 'loaded',
-        policyDigest: 'policy-contract-b',
-        parserVersion: 'workflow-md-parser:v1',
-        reasonCode: 'loaded',
+        repo_id: 'repo-contract-projection',
+        policy_status: 'loaded',
+        policy_digest: 'policy-contract-b',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'loaded',
       },
     }),
   ).rejects.toThrow(/identity|policy/i);

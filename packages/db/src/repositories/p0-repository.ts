@@ -191,17 +191,23 @@ export interface ClaimAutomationActionRunInput
     | 'attempt'
     | 'claim_token'
     | 'locked_until'
+    | 'last_heartbeat_at'
+    | 'next_attempt_at'
+    | 'retryable'
+    | 'result_json'
+    | 'metadata_json'
+    | 'reason'
+    | 'error_code'
+    | 'error_message'
+    | 'policy_digest'
+    | 'created_by'
     | 'created_at'
     | 'updated_at'
     | 'claimed_at'
     | 'started_at'
     | 'finished_at'
-    | 'precondition_fingerprint'
-    | 'action_input_json'
   > {
   automation_scope: AutomationScope;
-  precondition_fingerprint?: string;
-  action_input_json?: Record<string, unknown>;
   claim_token: string;
   locked_until: string;
   now: string;

@@ -72,14 +72,45 @@ import { ObjectLockManager } from './object-lock';
 
 const clone = <T>(value: T): T => structuredClone(value);
 
-const valuesEqual = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
+type CanonicalJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly CanonicalJsonValue[]
+  | { readonly [key: string]: CanonicalJsonValue };
+
+const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : canonicalizeJson(item)));
+  }
+
+  const record = value as { readonly [key: string]: CanonicalJsonValue };
+  return Object.keys(record)
+    .sort()
+    .reduce<Record<string, CanonicalJsonValue>>((accumulator, key) => {
+      const item = record[key];
+      if (item !== undefined) {
+        accumulator[key] = canonicalizeJson(item);
+      }
+      return accumulator;
+    }, {});
+};
+
+const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
+
+const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
 
 const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
-  repoId: actionInputJson.repoId,
-  policyStatus: actionInputJson.policyStatus,
-  policyDigest: actionInputJson.policyDigest,
-  parserVersion: actionInputJson.parserVersion,
-  reasonCode: actionInputJson.reasonCode,
+  repo_id: actionInputJson.repo_id,
+  policy_status: actionInputJson.policy_status,
+  policy_digest: actionInputJson.policy_digest,
+  parser_version: actionInputJson.parser_version,
+  reason_code: actionInputJson.reason_code,
 });
 
 const automationScopeParts = (automationScope: string): { projectId: string; repoId?: string } => {
@@ -986,7 +1017,7 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun> {
-    return this.objectLocks.withLock(`automation-action:${input.idempotency_key}`, async () =>
+    return this.objectLocks.withLocks([`automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`], async () =>
       this.createOrReplayAutomationActionRunUnlocked(input),
     );
   }
@@ -1003,16 +1034,11 @@ export class InMemoryP0Repository implements P0Repository {
       if (selected === undefined) {
         return undefined;
       }
-      const claimed: AutomationActionRun = {
-        ...selected,
-        status: 'running',
+      const claimed = this.toRunningAutomationActionRun(selected, {
         claim_token: input.claim_token,
-        attempt: selected.attempt + 1,
         locked_until: input.locked_until,
-        claimed_at: input.now,
-        started_at: selected.started_at ?? input.now,
-        updated_at: input.now,
-      };
+        now: input.now,
+      });
       this.automationActionRuns.set(claimed.id, clone(claimed));
       return clone(claimed);
     });
@@ -1042,13 +1068,14 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
-    return this.objectLocks.withLock(`automation-action:${input.idempotency_key}`, () =>
-      this.claimAutomationActionRunUnlocked(input),
+    return this.objectLocks.withLocks(
+      ['automation-action:claim-next', `automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`],
+      () => this.claimAutomationActionRunUnlocked(input),
     );
   }
 
   async markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun> {
-    return this.objectLocks.withLock(`automation-action:${input.idempotency_key}`, () =>
+    return this.objectLocks.withLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], () =>
       this.markAutomationActionGatePendingUnlocked(input),
     );
   }
@@ -1073,7 +1100,7 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun> {
-    return this.objectLocks.withLock(`automation-action:${input.idempotency_key}`, () =>
+    return this.objectLocks.withLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], () =>
       this.completeAutomationActionRunUnlocked(input),
     );
   }
@@ -1418,6 +1445,7 @@ export class InMemoryP0Repository implements P0Repository {
       this.assertAutomationActionReplayMatches(existing, input);
       return clone(redactAutomationActionClaim(existing));
     }
+    this.assertAutomationActionIdIsUnused(input.id, input.idempotency_key);
 
     const actionRun: AutomationActionRun = {
       id: input.id,
@@ -1445,6 +1473,12 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   private async claimAutomationActionRunUnlocked(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
+    if (input.precondition_fingerprint === undefined || input.action_input_json === undefined) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${input.idempotency_key} requires precondition fingerprint and action input`,
+      );
+    }
     const existingId = this.automationActionRunIdempotency.get(input.idempotency_key);
     const existing = existingId === undefined ? undefined : this.automationActionRuns.get(existingId);
     if (existing !== undefined) {
@@ -1455,6 +1489,8 @@ export class InMemoryP0Repository implements P0Repository {
         }
         return clone(redactAutomationActionClaim(existing));
       }
+    } else {
+      this.assertAutomationActionIdIsUnused(input.id, input.idempotency_key);
     }
 
     const actionRun: AutomationActionRun = {
@@ -1469,12 +1505,13 @@ export class InMemoryP0Repository implements P0Repository {
       automation_scope: input.automation_scope,
       automation_settings_version: input.automation_settings_version,
       capability_fingerprint: input.capability_fingerprint,
-      precondition_fingerprint: input.precondition_fingerprint ?? '',
-      action_input_json: clone(input.action_input_json ?? {}),
+      precondition_fingerprint: input.precondition_fingerprint,
+      action_input_json: clone(input.action_input_json),
       status: 'running',
       claim_token: input.claim_token,
       attempt: (existing?.attempt ?? 0) + 1,
       locked_until: input.locked_until,
+      ...(existing?.created_by === undefined ? {} : { created_by: existing.created_by }),
       claimed_at: input.now,
       started_at: existing?.started_at ?? input.now,
       created_at: existing?.created_at ?? input.now,
@@ -1483,6 +1520,46 @@ export class InMemoryP0Repository implements P0Repository {
     this.automationActionRuns.set(actionRun.id, clone(actionRun));
     this.automationActionRunIdempotency.set(actionRun.idempotency_key, actionRun.id);
     return actionRun;
+  }
+
+  private assertAutomationActionIdIsUnused(id: string, idempotencyKey: string): void {
+    const existing = this.automationActionRuns.get(id);
+    if (existing !== undefined && existing.idempotency_key !== idempotencyKey) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${id} already exists with a different idempotency key`,
+      );
+    }
+  }
+
+  private toRunningAutomationActionRun(
+    actionRun: AutomationActionRun,
+    input: { claim_token: string; locked_until: string; now: string },
+  ): AutomationActionRun {
+    return {
+      id: actionRun.id,
+      action_type: actionRun.action_type,
+      target_object_type: actionRun.target_object_type,
+      target_object_id: actionRun.target_object_id,
+      ...(actionRun.target_revision_id === undefined ? {} : { target_revision_id: actionRun.target_revision_id }),
+      ...(actionRun.target_version === undefined ? {} : { target_version: actionRun.target_version }),
+      target_status: actionRun.target_status,
+      idempotency_key: actionRun.idempotency_key,
+      automation_scope: actionRun.automation_scope,
+      automation_settings_version: actionRun.automation_settings_version,
+      capability_fingerprint: actionRun.capability_fingerprint,
+      precondition_fingerprint: actionRun.precondition_fingerprint,
+      action_input_json: clone(actionRun.action_input_json),
+      status: 'running',
+      claim_token: input.claim_token,
+      attempt: actionRun.attempt + 1,
+      locked_until: input.locked_until,
+      ...(actionRun.created_by === undefined ? {} : { created_by: actionRun.created_by }),
+      claimed_at: input.now,
+      started_at: actionRun.started_at ?? input.now,
+      ...(actionRun.created_at === undefined ? {} : { created_at: actionRun.created_at }),
+      updated_at: input.now,
+    };
   }
 
   private assertAutomationActionIdentityMatches(existing: AutomationActionRun, input: ClaimAutomationActionRunInput): void {
@@ -1496,9 +1573,8 @@ export class InMemoryP0Repository implements P0Repository {
       existing.automation_scope !== input.automation_scope ||
       existing.automation_settings_version !== input.automation_settings_version ||
       existing.capability_fingerprint !== input.capability_fingerprint ||
-      (input.precondition_fingerprint !== undefined &&
-        existing.precondition_fingerprint !== input.precondition_fingerprint) ||
-      (input.action_input_json !== undefined && !valuesEqual(existing.action_input_json, input.action_input_json));
+      existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} identity changed`);
     }
@@ -1511,11 +1587,6 @@ export class InMemoryP0Repository implements P0Repository {
     if (existing.action_type === 'project_runtime_snapshot' || input.action_type === 'project_runtime_snapshot') {
       const mismatched =
         existing.action_type !== input.action_type ||
-        existing.target_object_type !== input.target_object_type ||
-        existing.target_object_id !== input.target_object_id ||
-        existing.target_revision_id !== input.target_revision_id ||
-        existing.target_version !== input.target_version ||
-        existing.target_status !== input.target_status ||
         !valuesEqual(
           stablePolicyObservationIdentity(existing.action_input_json),
           stablePolicyObservationIdentity(input.action_input_json),
@@ -1555,11 +1626,11 @@ export class InMemoryP0Repository implements P0Repository {
   ): boolean {
     const stableIdentity = stablePolicyObservationIdentity(actionInputJson);
     return (
-      stableIdentity.repoId === input.repo_id &&
-      stableIdentity.policyStatus === input.policy_status &&
-      stableIdentity.policyDigest === input.policy_digest &&
-      stableIdentity.parserVersion === input.parser_version &&
-      stableIdentity.reasonCode === input.reason_code
+      stableIdentity.repo_id === input.repo_id &&
+      stableIdentity.policy_status === input.policy_status &&
+      stableIdentity.policy_digest === input.policy_digest &&
+      stableIdentity.parser_version === input.parser_version &&
+      stableIdentity.reason_code === input.reason_code
     );
   }
 

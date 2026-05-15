@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import {
+  InMemoryP0Repository,
+  type ClaimAutomationActionRunInput,
+  type CreateOrReplayAutomationActionRunInput,
+  type P0Repository,
+} from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
@@ -8,7 +13,12 @@ const afterRetry = '2026-05-05T00:10:00.000Z';
 const buildManualScopeKey = (scope: { object_type: string; object_id: string }) =>
   `${scope.object_type}:${scope.object_id}`;
 
-const createActionInput = (id: string, overrides: Record<string, unknown> = {}) => ({
+type ActionInputOverrides = Partial<CreateOrReplayAutomationActionRunInput> & Partial<ClaimAutomationActionRunInput>;
+
+const createActionInput = (
+  id: string,
+  overrides: ActionInputOverrides = {},
+): CreateOrReplayAutomationActionRunInput => ({
   id,
   action_type: 'ensure_plan_draft',
   target_object_type: 'work_item',
@@ -26,17 +36,13 @@ const createActionInput = (id: string, overrides: Record<string, unknown> = {}) 
   ...overrides,
 });
 
-const claimSeedAction = async (
-  repository: P0Repository,
-  id: string,
-  overrides: Record<string, unknown> = {},
-) =>
+const claimSeedAction = async (repository: P0Repository, id: string, overrides: ActionInputOverrides = {}) =>
   repository.claimAutomationActionRun({
     ...createActionInput(id, overrides),
     claim_token: `${id}-claim-1`,
     locked_until: '2026-05-05T00:05:00.000Z',
     ...overrides,
-  } as never);
+  });
 
 const expectDefaultOff = async (repository: P0Repository) => {
   await expect(
@@ -225,6 +231,8 @@ describe('automation repository primitives', () => {
       automation_scope: 'project:project-automation',
       automation_settings_version: 1,
       capability_fingerprint: 'capability-a',
+      precondition_fingerprint: 'precondition-action-1',
+      action_input_json: { plan_revision_id: 'plan-revision-automation' },
       claim_token: 'action-claim-1',
       locked_until: '2026-05-05T00:05:00.000Z',
       now,
@@ -248,7 +256,7 @@ describe('automation repository primitives', () => {
   it('creates pending action runs and claims the next eligible run', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
 
-    const pending = await repository.createOrReplayAutomationActionRun(createActionInput('action-pending') as never);
+    const pending = await repository.createOrReplayAutomationActionRun(createActionInput('action-pending'));
 
     expect(pending).toMatchObject({
       id: 'action-pending',
@@ -283,22 +291,60 @@ describe('automation repository primitives', () => {
     const repository: P0Repository = new InMemoryP0Repository();
     const input = createActionInput('action-conflict');
 
-    await repository.createOrReplayAutomationActionRun(input as never);
+    await repository.createOrReplayAutomationActionRun(input);
     await expect(
-      repository.createOrReplayAutomationActionRun({ ...input, precondition_fingerprint: 'precondition-b' } as never),
+      repository.createOrReplayAutomationActionRun({ ...input, precondition_fingerprint: 'precondition-b' }),
     ).rejects.toThrow(/idempotency|identity|precondition/i);
     await expect(
       repository.createOrReplayAutomationActionRun({
         ...input,
         action_input_json: { work_item_id: 'work-item-automation', spec_revision_id: 'changed' },
-      } as never),
+      }),
     ).rejects.toThrow(/idempotency|identity|action/i);
+  });
+
+  it('treats action input replay as stable across JSON key order', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    const input = createActionInput('action-canonical-json', {
+      action_input_json: {
+        work_item_id: 'work-item-automation',
+        spec_revision_id: 'spec-revision-automation',
+        nested: { beta: 2, alpha: 1 },
+        list: [{ zeta: true, alpha: false }],
+      },
+    });
+
+    const created = await repository.createOrReplayAutomationActionRun(input);
+    await expect(
+      repository.createOrReplayAutomationActionRun({
+        ...input,
+        action_input_json: {
+          list: [{ alpha: false, zeta: true }],
+          nested: { alpha: 1, beta: 2 },
+          spec_revision_id: 'spec-revision-automation',
+          work_item_id: 'work-item-automation',
+        },
+      }),
+    ).resolves.toMatchObject({ id: created.id, status: 'pending' });
+  });
+
+  it('rejects a different idempotency key for an existing durable action id', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    const input = createActionInput('action-duplicate-id');
+
+    await repository.createOrReplayAutomationActionRun(input);
+    await expect(
+      repository.createOrReplayAutomationActionRun({
+        ...input,
+        idempotency_key: 'action-duplicate-id-new-key',
+      }),
+    ).rejects.toThrow(/idempotency|identity|duplicate/i);
   });
 
   it('claims only eligible statuses and skips gated, terminal, and live running actions', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
 
-    await repository.createOrReplayAutomationActionRun(createActionInput('claim-pending') as never);
+    await repository.createOrReplayAutomationActionRun(createActionInput('claim-pending'));
 
     const dueGate = await claimSeedAction(repository, 'claim-gate-due');
     await repository.markAutomationActionGatePending({
@@ -382,11 +428,54 @@ describe('automation repository primitives', () => {
     expect(claimedIds).not.toContain('skip-running-live');
   });
 
+  it('starts reclaimed actions with fresh result and retry state', async () => {
+    const repository: P0Repository = new InMemoryP0Repository();
+    const retryableFailed = await claimSeedAction(repository, 'claim-fresh-state');
+    await repository.completeAutomationActionRun({
+      id: retryableFailed.id,
+      idempotency_key: retryableFailed.idempotency_key,
+      claim_token: 'claim-fresh-state-claim-1',
+      status: 'failed',
+      retryable: true,
+      next_attempt_at: later,
+      result_json: { reason: 'transient_failure' },
+      finished_at: now,
+    });
+
+    const reclaimed = await repository.claimNextAutomationActionRun({
+      now: later,
+      claim_token: 'claim-fresh-state-claim-2',
+      locked_until: afterRetry,
+      limit: 10,
+    });
+    expect(reclaimed).toMatchObject({ id: retryableFailed.id, status: 'running', attempt: 2 });
+    expect(reclaimed?.result_json).toBeUndefined();
+    expect(reclaimed?.reason).toBeUndefined();
+    expect(reclaimed?.retryable).toBeUndefined();
+    expect(reclaimed?.next_attempt_at).toBeUndefined();
+    expect(reclaimed?.finished_at).toBeUndefined();
+
+    await repository.completeAutomationActionRun({
+      id: retryableFailed.id,
+      idempotency_key: retryableFailed.idempotency_key,
+      claim_token: 'claim-fresh-state-claim-2',
+      status: 'blocked',
+      finished_at: afterRetry,
+    });
+    const laterClaimableIds = (
+      await repository.listClaimableAutomationActionRuns({
+        now: '2026-05-05T00:11:00.000Z',
+        limit: 10,
+      })
+    ).map((actionRun) => actionRun.id);
+    expect(laterClaimableIds).not.toContain(retryableFailed.id);
+  });
+
   it('uses project runtime snapshot stable observation identity for replay and latest projection lookup', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
     const snapshotInput = createActionInput('snapshot-action', {
       action_type: 'project_runtime_snapshot',
-      target_object_type: 'project_repo',
+      target_object_type: 'repo',
       target_object_id: 'repo-1',
       target_revision_id: undefined,
       target_status: 'observed',
@@ -396,45 +485,48 @@ describe('automation repository primitives', () => {
       capability_fingerprint: 'capability-a',
       precondition_fingerprint: 'snapshot-precondition-a',
       action_input_json: {
-        repoId: 'repo-1',
-        policyStatus: 'loaded',
-        policyDigest: 'policy-a',
-        parserVersion: 'workflow-md-parser:v1',
-        reasonCode: 'loaded',
-        observedAt: now,
-        lastKnownGood: { repoId: 'repo-1', policyStatus: 'loaded', policyDigest: 'older' },
+        repo_id: 'repo-1',
+        policy_status: 'loaded',
+        policy_digest: 'policy-a',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'loaded',
+        observed_at: now,
+        last_known_good: { repo_id: 'repo-1', policy_status: 'loaded', policy_digest: 'older' },
       },
     });
 
-    const created = await repository.createOrReplayAutomationActionRun(snapshotInput as never);
+    const created = await repository.createOrReplayAutomationActionRun(snapshotInput);
     await expect(
       repository.createOrReplayAutomationActionRun({
         ...snapshotInput,
+        target_object_type: 'repo',
+        target_object_id: 'repo-1-renamed',
+        target_status: 'reobserved',
         automation_scope: 'project:project-automation',
         automation_settings_version: 99,
         capability_fingerprint: 'capability-b',
         action_input_json: {
-          repoId: 'repo-1',
-          policyStatus: 'loaded',
-          policyDigest: 'policy-a',
-          parserVersion: 'workflow-md-parser:v1',
-          reasonCode: 'loaded',
-          observedAt: later,
-          lastKnownGood: { repoId: 'repo-1', policyStatus: 'loaded', policyDigest: 'newer' },
+          repo_id: 'repo-1',
+          policy_status: 'loaded',
+          policy_digest: 'policy-a',
+          parser_version: 'workflow-md-parser:v1',
+          reason_code: 'loaded',
+          observed_at: later,
+          last_known_good: { repo_id: 'repo-1', policy_status: 'loaded', policy_digest: 'newer' },
         },
-      } as never),
+      }),
     ).resolves.toMatchObject({ id: created.id, status: 'pending' });
     await expect(
       repository.createOrReplayAutomationActionRun({
         ...snapshotInput,
         action_input_json: {
-          repoId: 'repo-1',
-          policyStatus: 'loaded',
-          policyDigest: 'policy-b',
-          parserVersion: 'workflow-md-parser:v1',
-          reasonCode: 'loaded',
+          repo_id: 'repo-1',
+          policy_status: 'loaded',
+          policy_digest: 'policy-b',
+          parser_version: 'workflow-md-parser:v1',
+          reason_code: 'loaded',
         },
-      } as never),
+      }),
     ).rejects.toThrow(/idempotency|identity|policy/i);
 
     const claimed = await repository.claimNextAutomationActionRun({
@@ -456,7 +548,7 @@ describe('automation repository primitives', () => {
       ...snapshotInput,
       id: 'snapshot-action-newer',
       idempotency_key: 'snapshot-stable-key-newer',
-    } as never);
+    });
     const claimedNewer = await repository.claimNextAutomationActionRun({
       now: '2026-05-05T00:02:00.000Z',
       claim_token: 'snapshot-claim-newer',
@@ -491,21 +583,21 @@ describe('automation repository primitives', () => {
         automation_scope: 'repo:project-a:repo-1',
         target_object_id: 'work-item-a',
         idempotency_key: 'filter-repo-1-key',
-      }) as never,
+      }),
     );
     await repository.createOrReplayAutomationActionRun(
       createActionInput('filter-repo-2', {
         automation_scope: 'repo:project-a:repo-2',
         target_object_id: 'work-item-b',
         idempotency_key: 'filter-repo-2-key',
-      }) as never,
+      }),
     );
     await repository.createOrReplayAutomationActionRun(
       createActionInput('filter-project-b', {
         automation_scope: 'repo:project-b:repo-1',
         target_object_id: 'work-item-c',
         idempotency_key: 'filter-project-b-key',
-      }) as never,
+      }),
     );
 
     await expect(
@@ -535,7 +627,7 @@ describe('automation repository primitives', () => {
   it('allows only one concurrent claimant to win a pending action', async () => {
     const repository: P0Repository = new InMemoryP0Repository();
 
-    const pending = await repository.createOrReplayAutomationActionRun(createActionInput('concurrent-action') as never);
+    const pending = await repository.createOrReplayAutomationActionRun(createActionInput('concurrent-action'));
     const results = await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
         repository.claimNextAutomationActionRun({

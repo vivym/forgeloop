@@ -41,7 +41,6 @@ import {
   plans,
   artifacts,
   automation_action_runs,
-  automation_cursors,
   automation_project_settings,
   command_idempotency_records,
   execution_package_generation_packages,
@@ -73,7 +72,6 @@ const requiredTables = {
   execution_package_generation_runs,
   execution_package_generation_packages,
   automation_action_runs,
-  automation_cursors,
   organizations,
   actors,
   projects,
@@ -148,7 +146,6 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
         'automation_action_runs',
-        'automation_cursors',
         'automation_project_settings',
         'actors',
         'artifacts',

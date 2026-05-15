@@ -188,9 +188,3 @@ export const automation_action_runs = pgTable(
     updatedAt: timestampColumn('updated_at'),
   },
 );
-
-export const automation_cursors = pgTable('automation_cursors', {
-  daemonId: text('daemon_id').primaryKey(),
-  cursor: text('cursor').notNull(),
-  updatedAt: timestampColumn('updated_at').notNull(),
-});
