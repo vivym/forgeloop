@@ -412,6 +412,29 @@ describe('internal automation runtime snapshot', () => {
       });
   });
 
+  it('suppresses package draft eligibility for active spec revision ancestor holds', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.requestManualPathHold({
+      id: 'hold-spec-revision-package-ancestor',
+      object_type: 'spec_revision',
+      object_id: 'spec-revision-1',
+      scope_key: buildManualScopeKey({ object_type: 'spec_revision', object_id: 'spec-revision-1' }),
+      reason_code: 'needs_human_spec_review',
+      reason: 'Spec review required before package drafting.',
+      evidence_refs: [],
+      requested_by: 'daemon-1',
+      requested_at: now,
+      idempotency_key: 'hold-spec-revision-package-ancestor-idempotency',
+    });
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).toEqual([]);
+      });
+  });
+
   it('includes public-safe active hold summaries', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedSpec(repository);
@@ -480,6 +503,13 @@ describe('internal automation runtime snapshot', () => {
         policy_digest: 'sha256:old-good',
         parser_version: 'workflow-md-parser:v1',
       },
+      resultJson: {
+        repo_id: 'repo-1',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:old-good',
+        parser_version: 'workflow-md-parser:v1',
+        observed_at: '2026-05-05T00:00:30.000Z',
+      },
     });
     await seedCompletedAction(repository, {
       id: 'policy-loaded-latest',
@@ -494,6 +524,13 @@ describe('internal automation runtime snapshot', () => {
         policy_digest: 'sha256:last-good',
         parser_version: 'workflow-md-parser:v1',
       },
+      resultJson: {
+        repo_id: 'repo-1',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:last-good',
+        parser_version: 'workflow-md-parser:v1',
+        observed_at: '2026-05-05T00:01:30.000Z',
+      },
     });
     await seedCompletedAction(repository, {
       id: 'policy-parse-failed-current',
@@ -507,6 +544,19 @@ describe('internal automation runtime snapshot', () => {
         policy_status: 'parse_failed',
         parser_version: 'workflow-md-parser:v1',
         reason_code: 'workflow_parse_failed',
+      },
+      resultJson: {
+        repo_id: 'repo-1',
+        policy_status: 'parse_failed',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'workflow_parse_failed',
+        observed_at: '2026-05-05T00:02:45.000Z',
+        last_known_good_policy_digest: 'sha256:daemon-supplied-good',
+        last_known_good_observed_at: '2026-05-05T00:01:15.000Z',
+        local_path: rawSecretPath,
+        metadata_json: { hmac: 'secret-hmac' },
+        command_output: 'secret command output',
+        claim_token: 'secret-claim-token',
       },
     });
     await seedCompletedAction(repository, {
@@ -523,6 +573,13 @@ describe('internal automation runtime snapshot', () => {
         policy_digest: 'sha256:repo-2-good',
         parser_version: 'workflow-md-parser:v1',
       },
+      resultJson: {
+        repo_id: 'repo-2',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:repo-2-good',
+        parser_version: 'workflow-md-parser:v1',
+        observed_at: '2026-05-05T00:02:15.000Z',
+      },
     });
     await seedCompletedAction(repository, {
       id: 'policy-unsafe-current',
@@ -538,6 +595,13 @@ describe('internal automation runtime snapshot', () => {
         parser_version: 'workflow-md-parser:v1',
         reason_code: 'workflow_unsafe_path',
       },
+      resultJson: {
+        repo_id: 'repo-2',
+        policy_status: 'unsafe_path',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'workflow_unsafe_path',
+        observed_at: '2026-05-05T00:03:15.000Z',
+      },
     });
 
     await signedAutomationGet(app)
@@ -551,9 +615,9 @@ describe('internal automation runtime snapshot', () => {
               policy_status: 'parse_failed',
               parser_version: 'workflow-md-parser:v1',
               reason_code: 'workflow_parse_failed',
-              observed_at: '2026-05-05T00:03:00.000Z',
+              observed_at: '2026-05-05T00:02:45.000Z',
               last_known_good_policy_digest: 'sha256:last-good',
-              last_known_good_observed_at: '2026-05-05T00:02:00.000Z',
+              last_known_good_observed_at: '2026-05-05T00:01:30.000Z',
             },
           }),
         );
@@ -564,10 +628,18 @@ describe('internal automation runtime snapshot', () => {
               policy_status: 'unsafe_path',
               reason_code: 'workflow_unsafe_path',
               last_known_good_policy_digest: 'sha256:repo-2-good',
-              last_known_good_observed_at: '2026-05-05T00:02:30.000Z',
+              observed_at: '2026-05-05T00:03:15.000Z',
+              last_known_good_observed_at: '2026-05-05T00:02:15.000Z',
             }),
           }),
         );
+        const publicSnapshot = JSON.stringify(body);
+        expect(publicSnapshot).not.toContain(rawSecretPath);
+        expect(publicSnapshot).not.toContain('secret-hmac');
+        expect(publicSnapshot).not.toContain('secret command output');
+        expect(publicSnapshot).not.toContain('secret-claim-token');
+        expect(publicSnapshot).not.toContain('metadata_json');
+        expect(publicSnapshot).not.toContain('command_output');
       });
   });
 

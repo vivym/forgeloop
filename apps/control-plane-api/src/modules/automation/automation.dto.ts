@@ -64,6 +64,17 @@ const projectRuntimeSnapshotActionInputSchema = z
   })
   .strict();
 
+const projectRuntimeSnapshotResultSchema = z.object({
+  repo_id: nonBlankString,
+  policy_status: z.enum(['missing', 'loaded', 'parse_failed', 'unsafe_path']),
+  policy_digest: nonBlankString.optional(),
+  parser_version: nonBlankString,
+  reason_code: nonBlankString.optional(),
+  observed_at: isoDateTime.optional(),
+  last_known_good_policy_digest: nonBlankString.optional(),
+  last_known_good_observed_at: isoDateTime.optional(),
+});
+
 const createAutomationActionRunBaseShape = {
   id: nonBlankString.optional(),
   target_object_type: nonBlankString,
@@ -479,26 +490,39 @@ export const toPolicyProjectionDto = (
   actionRun: AutomationActionRun,
   lastKnownGood?: AutomationActionRun,
 ): AutomationRuntimeSnapshotPolicyProjectionDto | undefined => {
-  const projection = projectRuntimeSnapshotActionInputSchema.safeParse(actionRun.action_input_json);
+  const projection = policyProjectionData(actionRun);
   if (!projection.success) {
     return undefined;
   }
-  const lastGoodProjection =
-    lastKnownGood === undefined ? undefined : projectRuntimeSnapshotActionInputSchema.safeParse(lastKnownGood.action_input_json);
-  const lastGoodData =
-    lastGoodProjection?.success === true && lastGoodProjection.data.policy_status === 'loaded' ? lastGoodProjection.data : undefined;
+  const lastGoodProjection = lastKnownGood === undefined ? undefined : policyProjectionData(lastKnownGood);
+  const lastGoodData = lastGoodProjection?.success === true && lastGoodProjection.data.policy_status === 'loaded' ? lastGoodProjection.data : undefined;
   return {
     repo_id: projection.data.repo_id,
     policy_status: projection.data.policy_status,
     ...(projection.data.policy_digest === undefined ? {} : { policy_digest: projection.data.policy_digest }),
     parser_version: projection.data.parser_version,
     ...(projection.data.reason_code === undefined ? {} : { reason_code: projection.data.reason_code }),
-    ...(actionRun.finished_at === undefined ? {} : { observed_at: actionRun.finished_at }),
+    ...(projection.data.observed_at === undefined ? {} : { observed_at: projection.data.observed_at }),
     ...(projection.data.policy_status !== 'parse_failed' && projection.data.policy_status !== 'unsafe_path'
       ? {}
       : {
           ...(lastGoodData?.policy_digest === undefined ? {} : { last_known_good_policy_digest: lastGoodData.policy_digest }),
-          ...(lastKnownGood?.finished_at === undefined ? {} : { last_known_good_observed_at: lastKnownGood.finished_at }),
+          ...(lastGoodData?.observed_at === undefined ? {} : { last_known_good_observed_at: lastGoodData.observed_at }),
         }),
   };
+};
+
+const policyProjectionData = (actionRun: AutomationActionRun) => {
+  const result = projectRuntimeSnapshotResultSchema.safeParse(actionRun.result_json);
+  if (result.success) {
+    return result;
+  }
+  const input = projectRuntimeSnapshotActionInputSchema.safeParse(actionRun.action_input_json);
+  if (!input.success) {
+    return result;
+  }
+  return projectRuntimeSnapshotResultSchema.safeParse({
+    ...input.data,
+    ...(actionRun.finished_at === undefined ? {} : { observed_at: actionRun.finished_at }),
+  });
 };

@@ -1785,6 +1785,7 @@ export class InMemoryP0Repository implements P0Repository {
       if (
         this.hasActiveManualHold([
           `work_item:${workItem.id}`,
+          `spec_revision:${planRevision.based_on_spec_revision_id}`,
           `plan_revision:${planRevisionId}`,
           `package_generation:${planRevisionId}:${generationKey}`,
         ])

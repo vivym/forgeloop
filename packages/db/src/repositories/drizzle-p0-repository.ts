@@ -2142,6 +2142,7 @@ export class DrizzleP0Repository implements P0Repository {
       if (
         this.hasActiveManualHold(holds, [
           `work_item:${workItem.id}`,
+          `spec_revision:${planRevision.based_on_spec_revision_id}`,
           `plan_revision:${planRevisionId}`,
           `package_generation:${planRevisionId}:${generationKey}`,
         ])

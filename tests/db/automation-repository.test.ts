@@ -170,6 +170,38 @@ describe('automation repository primitives', () => {
     });
   });
 
+  it('suppresses runtime package draft eligibility for active spec revision ancestor holds', async () => {
+    const repository = new InMemoryP0Repository();
+    await seedPackageEligibilityGraph(repository);
+
+    await expect(repository.getRuntimeSnapshotData()).resolves.toMatchObject({
+      plan_revisions_requiring_packages: [
+        expect.objectContaining({
+          target_object_type: 'plan_revision',
+          target_object_id: 'plan-revision-automation',
+          target_revision_id: 'default:plan-revision-automation',
+        }),
+      ],
+    });
+
+    await repository.requestManualPathHold({
+      id: 'hold-spec-revision-package-ancestor',
+      object_type: 'spec_revision',
+      object_id: 'spec-revision-automation',
+      scope_key: buildManualScopeKey({ object_type: 'spec_revision', object_id: 'spec-revision-automation' }),
+      reason_code: 'needs_human_spec_review',
+      reason: 'Spec review required before package drafting.',
+      evidence_refs: [],
+      requested_by: 'daemon-1',
+      requested_at: now,
+      idempotency_key: 'hold-spec-revision-package-ancestor-idem',
+    });
+
+    await expect(repository.getRuntimeSnapshotData()).resolves.toMatchObject({
+      plan_revisions_requiring_packages: [],
+    });
+  });
+
   it('replays terminal idempotency records and rejects precondition drift', async () => {
     const repository = new InMemoryP0Repository();
 
