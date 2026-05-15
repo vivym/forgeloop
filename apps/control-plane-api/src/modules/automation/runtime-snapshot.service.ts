@@ -38,6 +38,14 @@ const policyInput = (
   };
 };
 
+const canonicalProjectionScope = (actionRun: AutomationActionRun, repoId: string): `repo:${string}:${string}` | undefined => {
+  const [scopeType, projectId, scopedRepoId, extra] = actionRun.automation_scope.split(':');
+  if (scopeType !== 'repo' || projectId === undefined || projectId.length === 0 || scopedRepoId !== repoId || extra !== undefined) {
+    return undefined;
+  }
+  return actionRun.automation_scope as `repo:${string}:${string}`;
+};
+
 const isPriorTo = (candidate: AutomationActionRun, current: AutomationActionRun): boolean => {
   const candidateObservedAt = actionObservedAt(candidate);
   const currentObservedAt = actionObservedAt(current);
@@ -53,19 +61,25 @@ export class RuntimeSnapshotService {
 
   async getRuntimeSnapshot(): Promise<AutomationRuntimeSnapshotDto> {
     const data = await this.repository.getRuntimeSnapshotData();
-    const policyProjectionsByRepoId = new Map<string, NonNullable<AutomationRuntimeSnapshotDto['repos'][number]['policy_projection']>>();
+    const policyProjectionsByRepoScope = new Map<string, NonNullable<AutomationRuntimeSnapshotDto['repos'][number]['policy_projection']>>();
 
     for (const actionRun of data.policy_projection_action_runs) {
       const input = policyInput(actionRun);
-      if (input === undefined || policyProjectionsByRepoId.has(input.repoId)) {
+      const projectionScope = input === undefined ? undefined : canonicalProjectionScope(actionRun, input.repoId);
+      if (input === undefined || projectionScope === undefined || policyProjectionsByRepoScope.has(projectionScope)) {
         continue;
       }
       const lastKnownGood =
         input.status === 'parse_failed' || input.status === 'unsafe_path'
           ? data.policy_projection_action_runs.find((candidate) => {
               const candidateInput = policyInput(candidate);
+              if (candidateInput === undefined) {
+                return false;
+              }
+              const candidateScope =
+                canonicalProjectionScope(candidate, candidateInput.repoId);
               return (
-                candidateInput?.repoId === input.repoId &&
+                candidateScope === projectionScope &&
                 candidateInput.status === 'loaded' &&
                 candidateInput.policyDigest !== undefined &&
                 isPriorTo(candidate, actionRun)
@@ -73,15 +87,15 @@ export class RuntimeSnapshotService {
             })
           : undefined;
       const projection = toPolicyProjectionDto(actionRun, lastKnownGood);
-      if (projection !== undefined) {
-        policyProjectionsByRepoId.set(input.repoId, projection);
+      if (projection !== undefined && projection.repo_id === input.repoId) {
+        policyProjectionsByRepoScope.set(projectionScope, projection);
       }
     }
 
     return toRuntimeSnapshotDto({
       generatedAt: currentIsoTime(),
       data,
-      policyProjectionsByRepoId,
+      policyProjectionsByRepoScope,
     });
   }
 }

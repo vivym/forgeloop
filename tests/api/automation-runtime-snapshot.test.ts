@@ -643,6 +643,180 @@ describe('internal automation runtime snapshot', () => {
       });
   });
 
+  it('keeps policy projections isolated by canonical repo scope when projects share a repo id', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await repository.saveProject(
+      project({
+        id: 'project-alpha',
+        name: 'Alpha',
+        repo_ids: ['shared-repo'],
+      }),
+    );
+    await repository.saveProjectRepo(
+      projectRepo({
+        id: 'project-alpha-shared-repo',
+        project_id: 'project-alpha',
+        repo_id: 'shared-repo',
+        name: 'shared-alpha',
+        local_path: '/workspace/alpha',
+      }),
+    );
+    await repository.setAutomationProjectSettings({
+      id: 'automation-settings-alpha-shared',
+      project_id: 'project-alpha',
+      repo_id: 'shared-repo',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable alpha projection',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now,
+    });
+    await repository.saveProject(
+      project({
+        id: 'project-beta',
+        name: 'Beta',
+        repo_ids: ['shared-repo'],
+      }),
+    );
+    await repository.saveProjectRepo(
+      projectRepo({
+        id: 'project-beta-shared-repo',
+        project_id: 'project-beta',
+        repo_id: 'shared-repo',
+        name: 'shared-beta',
+        local_path: '/workspace/beta',
+      }),
+    );
+    await repository.setAutomationProjectSettings({
+      id: 'automation-settings-beta-shared',
+      project_id: 'project-beta',
+      repo_id: 'shared-repo',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable beta projection',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now,
+    });
+    await seedCompletedAction(repository, {
+      id: 'policy-alpha-loaded',
+      actionType: 'project_runtime_snapshot',
+      targetObjectType: 'repo',
+      targetObjectId: 'shared-repo',
+      targetStatus: 'observed',
+      automationScope: 'repo:project-alpha:shared-repo',
+      finishedAt: '2026-05-05T00:01:00.000Z',
+      actionInputJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:alpha-policy',
+        parser_version: 'workflow-md-parser:v1',
+      },
+      resultJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:alpha-policy',
+        parser_version: 'workflow-md-parser:v1',
+        observed_at: '2026-05-05T00:00:45.000Z',
+      },
+    });
+    await seedCompletedAction(repository, {
+      id: 'policy-beta-loaded',
+      actionType: 'project_runtime_snapshot',
+      targetObjectType: 'repo',
+      targetObjectId: 'shared-repo',
+      targetStatus: 'observed',
+      automationScope: 'repo:project-beta:shared-repo',
+      finishedAt: '2026-05-05T00:02:00.000Z',
+      actionInputJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:beta-policy',
+        parser_version: 'workflow-md-parser:v1',
+      },
+      resultJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:beta-policy',
+        parser_version: 'workflow-md-parser:v1',
+        observed_at: '2026-05-05T00:01:45.000Z',
+      },
+    });
+    await seedCompletedAction(repository, {
+      id: 'policy-project-scope-ignored',
+      actionType: 'project_runtime_snapshot',
+      targetObjectType: 'project',
+      targetObjectId: 'project-alpha',
+      targetStatus: 'observed',
+      automationScope: 'project:project-alpha',
+      finishedAt: '2026-05-05T00:03:00.000Z',
+      actionInputJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:project-scope-ignored',
+        parser_version: 'workflow-md-parser:v1',
+      },
+      resultJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:project-scope-ignored',
+        parser_version: 'workflow-md-parser:v1',
+        observed_at: '2026-05-05T00:02:45.000Z',
+      },
+    });
+    await seedCompletedAction(repository, {
+      id: 'policy-mismatched-scope-ignored',
+      actionType: 'project_runtime_snapshot',
+      targetObjectType: 'repo',
+      targetObjectId: 'other-repo',
+      targetStatus: 'observed',
+      automationScope: 'repo:project-alpha:other-repo',
+      finishedAt: '2026-05-05T00:04:00.000Z',
+      actionInputJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:mismatched-scope-ignored',
+        parser_version: 'workflow-md-parser:v1',
+      },
+      resultJson: {
+        repo_id: 'shared-repo',
+        policy_status: 'loaded',
+        policy_digest: 'sha256:mismatched-scope-ignored',
+        parser_version: 'workflow-md-parser:v1',
+        observed_at: '2026-05-05T00:03:45.000Z',
+      },
+    });
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        const alphaRepo = body.repos.find(
+          (repo: { project_id: string; repo_id: string }) => repo.project_id === 'project-alpha' && repo.repo_id === 'shared-repo',
+        );
+        const betaRepo = body.repos.find(
+          (repo: { project_id: string; repo_id: string }) => repo.project_id === 'project-beta' && repo.repo_id === 'shared-repo',
+        );
+
+        expect(alphaRepo?.policy_projection).toMatchObject({
+          repo_id: 'shared-repo',
+          policy_status: 'loaded',
+          policy_digest: 'sha256:alpha-policy',
+          observed_at: '2026-05-05T00:00:45.000Z',
+        });
+        expect(betaRepo?.policy_projection).toMatchObject({
+          repo_id: 'shared-repo',
+          policy_status: 'loaded',
+          policy_digest: 'sha256:beta-policy',
+          observed_at: '2026-05-05T00:01:45.000Z',
+        });
+        expect(JSON.stringify(body.repos)).not.toContain('project-scope-ignored');
+        expect(JSON.stringify(body.repos)).not.toContain('mismatched-scope-ignored');
+      });
+  });
+
   it('redacts raw action results, runtime metadata, and public-unsafe local paths', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedPlan(repository);

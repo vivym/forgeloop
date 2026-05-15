@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -660,6 +662,31 @@ describe('automation repository primitives', () => {
         reason_code: 'loaded',
       }),
     ).resolves.toMatchObject({ id: newer.id, status: 'succeeded' });
+  });
+
+  it('keeps runtime snapshot action-run queries bounded in the Drizzle repository', () => {
+    const source = readFileSync('packages/db/src/repositories/drizzle-p0-repository.ts', 'utf8');
+    const methodStart = source.indexOf('async getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData>');
+    const methodEnd = source.indexOf('\n  async saveRelease', methodStart);
+    expect(methodStart).toBeGreaterThanOrEqual(0);
+    expect(methodEnd).toBeGreaterThan(methodStart);
+    const methodSource = source.slice(methodStart, methodEnd);
+
+    expect(methodSource).not.toContain('const allActions');
+    const actionRunQueries = [
+      ...methodSource.matchAll(/this\.db\s*\.\s*select\(\)\s*\.\s*from\(automation_action_runs\)[\s\S]*?;/g),
+    ].map(([query]) => query);
+    expect(actionRunQueries.length).toBeGreaterThanOrEqual(3);
+    expect(actionRunQueries).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/orderBy\([\s\S]*automation_action_runs\.finishedAt[\s\S]*automation_action_runs\.updatedAt[\s\S]*automation_action_runs\.createdAt[\s\S]*automation_action_runs\.id[\s\S]*\)\s*\.limit\((50|RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT)\)/),
+        expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*project_runtime_snapshot[\s\S]*automation_action_runs\.status[\s\S]*succeeded[\s\S]*\)[\s\S]*\.limit\(/),
+        expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*ensure_plan_draft[\s\S]*ensure_package_drafts[\s\S]*\)[\s\S]*\.limit\(/),
+      ]),
+    );
+    for (const query of actionRunQueries) {
+      expect(query).toContain('.limit(');
+    }
   });
 
   it('honors claim-next project, repo, and scope filters', async () => {

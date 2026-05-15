@@ -243,6 +243,12 @@ const terminalCommandStatuses = new Set<CommandIdempotencyRecord['status']>(['su
 const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
 const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
+const RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT = 50;
+const RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK = 100;
+const RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK = 500;
+
+const runtimeSnapshotActionRunLookback = (targetCount: number): number =>
+  Math.min(RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK, Math.max(RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK, targetCount * 20));
 
 export class DrizzleP0Repository implements P0Repository {
   constructor(private readonly db: ForgeloopDrizzleDatabase) {}
@@ -1169,6 +1175,8 @@ export class DrizzleP0Repository implements P0Repository {
       generationRunRecords,
       executionPackageRecords,
       holdRecords,
+      settingsRecords,
+      recentActionRunRecords,
     ] = await Promise.all([
         this.db.select().from(projects).orderBy(asc(projects.createdAt), asc(projects.id)),
         this.db
@@ -1187,37 +1195,50 @@ export class DrizzleP0Repository implements P0Repository {
           .from(manual_path_holds)
           .where(eq(manual_path_holds.status, 'active'))
           .orderBy(asc(manual_path_holds.requestedAt), asc(manual_path_holds.id)),
+        this.db.select().from(automation_project_settings),
+        this.db
+          .select()
+          .from(automation_action_runs)
+          .orderBy(
+            desc(automation_action_runs.finishedAt),
+            desc(automation_action_runs.updatedAt),
+            desc(automation_action_runs.createdAt),
+            desc(automation_action_runs.id),
+          )
+          .limit(RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT),
       ]);
     const projectRows = projectRecords.map((row) => fromDbRecord<Project>(row));
     const repoRows = repoRecords.map((row) => fromDbRecord<ProjectRepo>(row));
     const workItemRows = workItemRecords.map((row) => fromDbRecord<WorkItem>(row));
-    const allActions = (await this.db.select().from(automation_action_runs)).map((row) =>
-      redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)),
-    );
-    const projectSnapshotRows = await Promise.all(
-      projectRows.map(async (project) => {
-        const settings = await this.resolveAutomationProjectSettings({ project_id: project.id });
-        return {
-          project_id: project.id,
-          automation_scope: `project:${project.id}` as const,
-          automation_settings_version: settings.version,
-          capability_fingerprint: settings.capability_fingerprint,
-        };
+    const settingsByScope = new Map(
+      settingsRecords.map((row) => {
+        const settings = fromDbRecord<AutomationProjectSettings>(row);
+        return [this.automationSettingsKey(settings.project_id, settings.repo_id), settings] as const;
       }),
     );
-    const repoSnapshotRows = await Promise.all(
-      repoRows.map(async (repo) => {
-        const settings = await this.resolveAutomationProjectSettings({ project_id: repo.project_id, repo_id: repo.repo_id });
-        return {
-          project_id: repo.project_id,
-          repo_id: repo.repo_id,
-          automation_scope: `repo:${repo.project_id}:${repo.repo_id}` as const,
-          automation_settings_version: settings.version,
-          capability_fingerprint: settings.capability_fingerprint,
-          daemon_internal_local_path: repo.local_path,
-        };
-      }),
-    );
+    const projectSnapshotRows = projectRows.map((project) => {
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, { project_id: project.id });
+      return {
+        project_id: project.id,
+        automation_scope: `project:${project.id}` as const,
+        automation_settings_version: settings.version,
+        capability_fingerprint: settings.capability_fingerprint,
+      };
+    });
+    const repoSnapshotRows = repoRows.map((repo) => {
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
+        project_id: repo.project_id,
+        repo_id: repo.repo_id,
+      });
+      return {
+        project_id: repo.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${repo.project_id}:${repo.repo_id}` as const,
+        automation_settings_version: settings.version,
+        capability_fingerprint: settings.capability_fingerprint,
+        daemon_internal_local_path: repo.local_path,
+      };
+    });
     const holds = holdRecords.map((row) => fromDbRecord<ManualPathHold>(row));
     const specsById = new Map(
       specRecords.map((row) => {
@@ -1233,35 +1254,76 @@ export class DrizzleP0Repository implements P0Repository {
     );
     const workItemsById = new Map(workItemRows.map((record) => [record.id, record] as const));
     const generationRuns = generationRunRecords.map((row) => fromDbRecord<ExecutionPackageGenerationRun>(row));
+    const workItemsRequiringPlan = await this.runtimeSnapshotWorkItemsRequiringPlan(
+      workItemRows,
+      repoRows,
+      specsById,
+      holds,
+      settingsByScope,
+    );
+    const planRevisionsRequiringPackages = await this.runtimeSnapshotPlanRevisionsRequiringPackages(
+      planRecords.map((row) => fromDbRecord<Plan>(row)),
+      repoRows,
+      planRevisionsById,
+      workItemsById,
+      generationRuns,
+      holds,
+      settingsByScope,
+    );
+    const latestMatchingTargets = [...workItemsRequiringPlan, ...planRevisionsRequiringPackages];
+    const latestMatchingActionRuns =
+      latestMatchingTargets.length === 0
+        ? []
+        : (
+            await this.db
+              .select()
+              .from(automation_action_runs)
+              .where(
+                and(
+                  inArray(automation_action_runs.actionType, ['ensure_plan_draft', 'ensure_package_drafts']),
+                  inArray(
+                    automation_action_runs.targetObjectId,
+                    [...new Set(latestMatchingTargets.map((target) => target.target_object_id))],
+                  ),
+                  inArray(
+                    automation_action_runs.targetRevisionId,
+                    [...new Set(latestMatchingTargets.flatMap((target) => (target.target_revision_id === undefined ? [] : [target.target_revision_id])))],
+                  ),
+                ),
+              )
+              .orderBy(
+                desc(automation_action_runs.finishedAt),
+                desc(automation_action_runs.updatedAt),
+                desc(automation_action_runs.createdAt),
+                desc(automation_action_runs.id),
+              )
+              .limit(runtimeSnapshotActionRunLookback(latestMatchingTargets.length))
+          ).map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
+    const latestMatchingActionFields = this.latestMatchingActionFieldsByTarget(latestMatchingActionRuns);
+    const policyProjectionActionRuns = (
+      await this.db
+        .select()
+        .from(automation_action_runs)
+        .where(and(eq(automation_action_runs.actionType, 'project_runtime_snapshot'), eq(automation_action_runs.status, 'succeeded')))
+        .orderBy(desc(automation_action_runs.finishedAt), desc(automation_action_runs.updatedAt), desc(automation_action_runs.id))
+        .limit(runtimeSnapshotActionRunLookback(repoRows.length))
+    ).map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
 
     return {
       projects: projectSnapshotRows,
       repos: repoSnapshotRows,
-      work_items_requiring_plan: await this.runtimeSnapshotWorkItemsRequiringPlan(
-        workItemRows,
-        repoRows,
-        specsById,
-        holds,
-        allActions,
-      ),
-      plan_revisions_requiring_packages: await this.runtimeSnapshotPlanRevisionsRequiringPackages(
-        planRecords.map((row) => fromDbRecord<Plan>(row)),
-        repoRows,
-        planRevisionsById,
-        workItemsById,
-        generationRuns,
-        holds,
-        allActions,
+      work_items_requiring_plan: this.applyLatestMatchingActionFields(workItemsRequiringPlan, latestMatchingActionFields),
+      plan_revisions_requiring_packages: this.applyLatestMatchingActionFields(
+        planRevisionsRequiringPackages,
+        latestMatchingActionFields,
       ),
       run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(
         executionPackageRecords.map((row) => fromDbRecord<ExecutionPackage>(row)),
         repoRows,
       ),
       active_holds: this.runtimeSnapshotActiveHolds(holds),
-      recent_action_runs: allActions.sort(this.compareAutomationActionRecency).slice(0, 50),
-      policy_projection_action_runs: allActions
-        .filter((actionRun) => actionRun.action_type === 'project_runtime_snapshot' && actionRun.status === 'succeeded')
-        .sort(this.compareAutomationActionRecency),
+      recent_action_runs: recentActionRunRecords.map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row))),
+      policy_projection_action_runs: policyProjectionActionRuns,
     };
   }
 
@@ -2070,7 +2132,7 @@ export class DrizzleP0Repository implements P0Repository {
     repos: ProjectRepo[],
     specsById: Map<string, Spec>,
     holds: ManualPathHold[],
-    actions: AutomationActionRun[],
+    settingsByScope: Map<string, AutomationProjectSettings>,
   ): Promise<RuntimeSnapshotTargetRow[]> {
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const workItem of workItems) {
@@ -2086,7 +2148,10 @@ export class DrizzleP0Repository implements P0Repository {
       if (repo === undefined) {
         continue;
       }
-      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+      });
       if (!settings.capabilities_json.canGeneratePlanDraft) {
         continue;
       }
@@ -2101,7 +2166,6 @@ export class DrizzleP0Repository implements P0Repository {
         project_id: workItem.project_id,
         repo_id: repo.repo_id,
         automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
-        ...this.latestMatchingActionFields(actions, 'ensure_plan_draft', workItem.id, specRevisionId),
       });
     }
     return targets;
@@ -2114,7 +2178,7 @@ export class DrizzleP0Repository implements P0Repository {
     workItemsById: Map<string, WorkItem>,
     generationRuns: ExecutionPackageGenerationRun[],
     holds: ManualPathHold[],
-    actions: AutomationActionRun[],
+    settingsByScope: Map<string, AutomationProjectSettings>,
   ): Promise<RuntimeSnapshotTargetRow[]> {
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const plan of plansToEvaluate) {
@@ -2134,7 +2198,10 @@ export class DrizzleP0Repository implements P0Repository {
       if (repo === undefined) {
         continue;
       }
-      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+      });
       if (!settings.capabilities_json.canGeneratePackageDrafts) {
         continue;
       }
@@ -2158,7 +2225,6 @@ export class DrizzleP0Repository implements P0Repository {
         repo_id: repo.repo_id,
         automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
         generation_key: generationKey,
-        ...this.latestMatchingActionFields(actions, 'ensure_package_drafts', planRevisionId, generationKey),
       });
     }
     return targets;
@@ -2210,20 +2276,48 @@ export class DrizzleP0Repository implements P0Repository {
     return holds.some((hold) => hold.status === 'active' && scopeKeySet.has(hold.scope_key));
   }
 
-  private latestMatchingActionFields(
+  private applyLatestMatchingActionFields(
+    targets: RuntimeSnapshotTargetRow[],
+    latestMatchingActionFields: Map<
+      string,
+      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>
+    >,
+  ): RuntimeSnapshotTargetRow[] {
+    return targets.map((target) => ({
+      ...target,
+      ...latestMatchingActionFields.get(
+        this.latestMatchingActionKey(
+          this.runtimeSnapshotActionTypeForTarget(target),
+          target.target_object_id,
+          target.target_revision_id ?? '',
+        ),
+      ),
+    }));
+  }
+
+  private latestMatchingActionFieldsByTarget(
     actions: AutomationActionRun[],
-    actionType: string,
-    targetObjectId: string,
-    targetRevisionId: string,
+  ): Map<string, Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>> {
+    const fieldsByTarget = new Map<
+      string,
+      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>
+    >();
+    for (const actionRun of actions) {
+      const targetRevisionId = actionRun.target_revision_id;
+      if (targetRevisionId === undefined) {
+        continue;
+      }
+      const key = this.latestMatchingActionKey(actionRun.action_type, actionRun.target_object_id, targetRevisionId);
+      if (!fieldsByTarget.has(key)) {
+        fieldsByTarget.set(key, this.latestMatchingActionFields(actionRun));
+      }
+    }
+    return fieldsByTarget;
+  }
+
+  private latestMatchingActionFields(
+    actionRun: AutomationActionRun | undefined,
   ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'> {
-    const actionRun = actions
-      .filter(
-        (candidate) =>
-          candidate.action_type === actionType &&
-          candidate.target_object_id === targetObjectId &&
-          candidate.target_revision_id === targetRevisionId,
-      )
-      .sort(this.compareAutomationActionRecency)[0];
     if (actionRun === undefined) {
       return {};
     }
@@ -2236,6 +2330,14 @@ export class DrizzleP0Repository implements P0Repository {
             ...(actionRun.error_code === undefined ? {} : { blocked_summary: actionRun.error_code }),
           }),
     };
+  }
+
+  private runtimeSnapshotActionTypeForTarget(target: RuntimeSnapshotTargetRow): 'ensure_plan_draft' | 'ensure_package_drafts' {
+    return target.target_object_type === 'plan_revision' ? 'ensure_package_drafts' : 'ensure_plan_draft';
+  }
+
+  private latestMatchingActionKey(actionType: string, targetObjectId: string, targetRevisionId: string): string {
+    return `${actionType}:${targetObjectId}:${targetRevisionId}`;
   }
 
   private isAutomationActionClaimable(actionRun: AutomationActionRun, now: string): boolean {
@@ -2294,6 +2396,29 @@ export class DrizzleP0Repository implements P0Repository {
 
   private automationSettingsKey(projectId: string, repoId: string | undefined): string {
     return repoId === undefined ? `project:${projectId}` : `repo:${projectId}:${repoId}`;
+  }
+
+  private resolvePreloadedAutomationProjectSettings(
+    settingsByScope: Map<string, AutomationProjectSettings>,
+    input: ResolveAutomationProjectSettingsInput,
+  ): AutomationProjectSettings {
+    const existing = settingsByScope.get(this.automationSettingsKey(input.project_id, input.repo_id));
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const capabilities = automationCapabilitiesForPreset('off');
+    return {
+      id: `default:${this.automationSettingsKey(input.project_id, input.repo_id)}`,
+      project_id: input.project_id,
+      ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+      preset: 'off',
+      capabilities_json: capabilities,
+      capability_fingerprint: capabilityFingerprint(capabilities),
+      scope_type: input.repo_id === undefined ? 'project' : 'repo',
+      version: 0,
+      evidence_refs: [],
+    };
   }
 
   private supportsSelect(): boolean {

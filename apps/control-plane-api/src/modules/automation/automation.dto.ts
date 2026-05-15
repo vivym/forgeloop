@@ -406,11 +406,11 @@ export const toAutomationActionRunDto = (
 export const toRuntimeSnapshotDto = (input: {
   generatedAt: string;
   data: RuntimeSnapshotRepositoryData;
-  policyProjectionsByRepoId: Map<string, AutomationRuntimeSnapshotPolicyProjectionDto>;
+  policyProjectionsByRepoScope: Map<string, AutomationRuntimeSnapshotPolicyProjectionDto>;
 }): AutomationRuntimeSnapshotDto => ({
   generated_at: input.generatedAt,
   projects: input.data.projects.map(toRuntimeSnapshotProjectDto),
-  repos: input.data.repos.map((repo) => toRuntimeSnapshotRepoDto(repo, input.policyProjectionsByRepoId.get(repo.repo_id))),
+  repos: input.data.repos.map((repo) => toRuntimeSnapshotRepoDto(repo, input.policyProjectionsByRepoScope.get(repo.automation_scope))),
   work_items_requiring_plan: input.data.work_items_requiring_plan.map(toRuntimeSnapshotTargetDto),
   plan_revisions_requiring_packages: input.data.plan_revisions_requiring_packages.map(toRuntimeSnapshotTargetDto),
   run_enqueue_disabled_packages: input.data.run_enqueue_disabled_packages.map(toRuntimeSnapshotTargetDto),
