@@ -284,6 +284,47 @@ export interface ListClaimableAutomationActionRunsInput {
   limit: number;
 }
 
+export interface RuntimeSnapshotTargetRow {
+  target_object_type: string;
+  target_object_id: string;
+  target_revision_id?: string;
+  target_version?: number;
+  target_status: string;
+  project_id?: string;
+  repo_id?: string;
+  automation_scope: AutomationScope;
+  active_hold_fingerprint?: string;
+  latest_matching_action_status?: string;
+  blocked_reason_code?: string;
+  blocked_summary?: string;
+  generation_key?: string;
+}
+
+export interface RuntimeSnapshotProjectRow {
+  project_id: string;
+  automation_scope: AutomationScope;
+  automation_settings_version: number;
+  capability_fingerprint: string;
+}
+
+export interface RuntimeSnapshotRepoRow {
+  project_id: string;
+  repo_id: string;
+  automation_scope: AutomationScope;
+  automation_settings_version: number;
+  capability_fingerprint: string;
+  daemon_internal_local_path: string;
+}
+
+export interface RuntimeSnapshotRepositoryData {
+  projects: RuntimeSnapshotProjectRow[];
+  repos: RuntimeSnapshotRepoRow[];
+  work_items_requiring_plan: RuntimeSnapshotTargetRow[];
+  plan_revisions_requiring_packages: RuntimeSnapshotTargetRow[];
+  recent_action_runs: AutomationActionRun[];
+  policy_projection_action_runs: AutomationActionRun[];
+}
+
 export interface P0Repository {
   withP0Transaction<T>(write: (repository: P0Repository) => Promise<T>): Promise<T>;
   withObjectLock<T>(key: string, write: (repository: P0Repository) => Promise<T>): Promise<T>;
@@ -432,7 +473,7 @@ export interface P0Repository {
   completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun>;
   markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun>;
   listClaimableAutomationActionRuns(input: ListClaimableAutomationActionRunsInput): Promise<AutomationActionRun[]>;
-  listRuntimeSnapshotRows(): Promise<Record<string, unknown>[]>;
+  getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData>;
 
   saveRelease(release: Release): Promise<void>;
   getRelease(releaseId: string): Promise<Release | undefined>;

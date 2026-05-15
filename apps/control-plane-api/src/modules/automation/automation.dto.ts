@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
+import type {
+  RuntimeSnapshotProjectRow,
+  RuntimeSnapshotRepoRow,
+  RuntimeSnapshotRepositoryData,
+  RuntimeSnapshotTargetRow,
+} from '@forgeloop/db';
 
 const nonBlankString = z.string().min(1);
 const isoDateTime = z.string().datetime().transform((value) => new Date(value).toISOString());
@@ -230,12 +236,71 @@ export type RequestManualPathCommandDto = z.infer<typeof requestManualPathComman
 
 export interface AutomationRuntimeSnapshotDto {
   generated_at: string;
-  projects: [];
-  repos: [];
-  work_items_requiring_plan: [];
-  plan_revisions_requiring_packages: [];
-  recent_action_runs: [];
+  projects: AutomationRuntimeSnapshotProjectDto[];
+  repos: AutomationRuntimeSnapshotRepoDto[];
+  work_items_requiring_plan: AutomationRuntimeSnapshotTargetDto[];
+  plan_revisions_requiring_packages: AutomationRuntimeSnapshotTargetDto[];
+  recent_action_runs: AutomationRuntimeSnapshotActionRunSummaryDto[];
   run_enqueue_disabled_reason: 'run_enqueue_disabled_by_scope';
+}
+
+export interface AutomationRuntimeSnapshotProjectDto {
+  project_id: string;
+  automation_scope: AutomationScope;
+  automation_settings_version: number;
+  capability_fingerprint: string;
+}
+
+export interface AutomationRuntimeSnapshotRepoDto {
+  project_id: string;
+  repo_id: string;
+  automation_scope: AutomationScope;
+  automation_settings_version: number;
+  capability_fingerprint: string;
+  daemon_internal_local_path: string;
+  policy_projection?: AutomationRuntimeSnapshotPolicyProjectionDto;
+}
+
+export interface AutomationRuntimeSnapshotTargetDto {
+  target_object_type: string;
+  target_object_id: string;
+  target_revision_id?: string;
+  target_version?: number;
+  target_status: string;
+  project_id?: string;
+  repo_id?: string;
+  automation_scope: AutomationScope;
+  active_hold_fingerprint?: string;
+  latest_matching_action_status?: string;
+  blocked_reason_code?: string;
+  blocked_summary?: string;
+  generation_key?: string;
+}
+
+export interface AutomationRuntimeSnapshotActionRunSummaryDto {
+  id: string;
+  action_type: string;
+  target_object_type: string;
+  target_object_id: string;
+  target_revision_id?: string;
+  target_version?: number;
+  status: AutomationActionRunStatus;
+  idempotency_key: string;
+  automation_scope: AutomationScope;
+  automation_settings_version?: number;
+  capability_fingerprint?: string;
+  precondition_fingerprint?: string;
+}
+
+export interface AutomationRuntimeSnapshotPolicyProjectionDto {
+  repo_id: string;
+  policy_status: 'missing' | 'loaded' | 'parse_failed' | 'unsafe_path';
+  policy_digest?: string;
+  parser_version: string;
+  reason_code?: string;
+  observed_at?: string;
+  last_known_good_policy_digest?: string;
+  last_known_good_observed_at?: string;
 }
 
 export interface AutomationActionRunDto {
@@ -311,3 +376,98 @@ export const toAutomationActionRunDto = (
   ...(options.includeClaim !== true || actionRun.claim_token === undefined ? {} : { claim_token: actionRun.claim_token }),
   ...(options.includeClaim !== true || actionRun.locked_until === undefined ? {} : { locked_until: actionRun.locked_until }),
 });
+
+export const toRuntimeSnapshotDto = (input: {
+  generatedAt: string;
+  data: RuntimeSnapshotRepositoryData;
+  policyProjectionsByRepoId: Map<string, AutomationRuntimeSnapshotPolicyProjectionDto>;
+}): AutomationRuntimeSnapshotDto => ({
+  generated_at: input.generatedAt,
+  projects: input.data.projects.map(toRuntimeSnapshotProjectDto),
+  repos: input.data.repos.map((repo) => toRuntimeSnapshotRepoDto(repo, input.policyProjectionsByRepoId.get(repo.repo_id))),
+  work_items_requiring_plan: input.data.work_items_requiring_plan.map(toRuntimeSnapshotTargetDto),
+  plan_revisions_requiring_packages: input.data.plan_revisions_requiring_packages.map(toRuntimeSnapshotTargetDto),
+  recent_action_runs: input.data.recent_action_runs.map(toActionRunSummaryDto),
+  run_enqueue_disabled_reason: 'run_enqueue_disabled_by_scope',
+});
+
+export const toRuntimeSnapshotProjectDto = (project: RuntimeSnapshotProjectRow): AutomationRuntimeSnapshotProjectDto => ({
+  project_id: project.project_id,
+  automation_scope: project.automation_scope,
+  automation_settings_version: project.automation_settings_version,
+  capability_fingerprint: project.capability_fingerprint,
+});
+
+export const toRuntimeSnapshotRepoDto = (
+  repo: RuntimeSnapshotRepoRow,
+  policyProjection?: AutomationRuntimeSnapshotPolicyProjectionDto,
+): AutomationRuntimeSnapshotRepoDto => ({
+  project_id: repo.project_id,
+  repo_id: repo.repo_id,
+  automation_scope: repo.automation_scope,
+  automation_settings_version: repo.automation_settings_version,
+  capability_fingerprint: repo.capability_fingerprint,
+  daemon_internal_local_path: repo.daemon_internal_local_path,
+  ...(policyProjection === undefined ? {} : { policy_projection: policyProjection }),
+});
+
+export const toRuntimeSnapshotTargetDto = (target: RuntimeSnapshotTargetRow): AutomationRuntimeSnapshotTargetDto => ({
+  target_object_type: target.target_object_type,
+  target_object_id: target.target_object_id,
+  ...(target.target_revision_id === undefined ? {} : { target_revision_id: target.target_revision_id }),
+  ...(target.target_version === undefined ? {} : { target_version: target.target_version }),
+  target_status: target.target_status,
+  ...(target.project_id === undefined ? {} : { project_id: target.project_id }),
+  ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }),
+  automation_scope: target.automation_scope,
+  ...(target.active_hold_fingerprint === undefined ? {} : { active_hold_fingerprint: target.active_hold_fingerprint }),
+  ...(target.latest_matching_action_status === undefined
+    ? {}
+    : { latest_matching_action_status: target.latest_matching_action_status }),
+  ...(target.blocked_reason_code === undefined ? {} : { blocked_reason_code: target.blocked_reason_code }),
+  ...(target.blocked_summary === undefined ? {} : { blocked_summary: target.blocked_summary }),
+  ...(target.generation_key === undefined ? {} : { generation_key: target.generation_key }),
+});
+
+export const toActionRunSummaryDto = (actionRun: AutomationActionRun): AutomationRuntimeSnapshotActionRunSummaryDto => ({
+  id: actionRun.id,
+  action_type: actionRun.action_type,
+  target_object_type: actionRun.target_object_type,
+  target_object_id: actionRun.target_object_id,
+  ...(actionRun.target_revision_id === undefined ? {} : { target_revision_id: actionRun.target_revision_id }),
+  ...(actionRun.target_version === undefined ? {} : { target_version: actionRun.target_version }),
+  status: actionRun.status,
+  idempotency_key: actionRun.idempotency_key,
+  automation_scope: actionRun.automation_scope,
+  automation_settings_version: actionRun.automation_settings_version,
+  capability_fingerprint: actionRun.capability_fingerprint,
+  precondition_fingerprint: actionRun.precondition_fingerprint,
+});
+
+export const toPolicyProjectionDto = (
+  actionRun: AutomationActionRun,
+  lastKnownGood?: AutomationActionRun,
+): AutomationRuntimeSnapshotPolicyProjectionDto | undefined => {
+  const projection = projectRuntimeSnapshotActionInputSchema.safeParse(actionRun.action_input_json);
+  if (!projection.success) {
+    return undefined;
+  }
+  const lastGoodProjection =
+    lastKnownGood === undefined ? undefined : projectRuntimeSnapshotActionInputSchema.safeParse(lastKnownGood.action_input_json);
+  const lastGoodData =
+    lastGoodProjection?.success === true && lastGoodProjection.data.policy_status === 'loaded' ? lastGoodProjection.data : undefined;
+  return {
+    repo_id: projection.data.repo_id,
+    policy_status: projection.data.policy_status,
+    ...(projection.data.policy_digest === undefined ? {} : { policy_digest: projection.data.policy_digest }),
+    parser_version: projection.data.parser_version,
+    ...(projection.data.reason_code === undefined ? {} : { reason_code: projection.data.reason_code }),
+    ...(actionRun.finished_at === undefined ? {} : { observed_at: actionRun.finished_at }),
+    ...(projection.data.policy_status !== 'parse_failed' && projection.data.policy_status !== 'unsafe_path'
+      ? {}
+      : {
+          ...(lastGoodData?.policy_digest === undefined ? {} : { last_known_good_policy_digest: lastGoodData.policy_digest }),
+          ...(lastKnownGood?.finished_at === undefined ? {} : { last_known_good_observed_at: lastKnownGood.finished_at }),
+        }),
+  };
+};

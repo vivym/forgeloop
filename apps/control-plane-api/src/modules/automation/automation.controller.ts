@@ -31,6 +31,7 @@ import {
   type GatePendingAutomationActionRunDto,
   type RequestManualPathCommandDto,
 } from './automation.dto';
+import { RuntimeSnapshotService } from './runtime-snapshot.service';
 import { TrustedAutomationActorGuard } from './trusted-automation-actor.guard';
 
 const firstHeaderValue = (headers: Record<string, string | string[] | undefined>, name: string): string | undefined => {
@@ -60,19 +61,12 @@ export class AutomationController {
   constructor(
     private readonly automationActionService: AutomationActionService,
     private readonly automationCommandService: AutomationCommandService,
+    private readonly runtimeSnapshotService: RuntimeSnapshotService,
   ) {}
 
   @Get('runtime-snapshot')
-  getRuntimeSnapshot(): AutomationRuntimeSnapshotDto {
-    return {
-      generated_at: new Date(0).toISOString(),
-      projects: [],
-      repos: [],
-      work_items_requiring_plan: [],
-      plan_revisions_requiring_packages: [],
-      recent_action_runs: [],
-      run_enqueue_disabled_reason: 'run_enqueue_disabled_by_scope',
-    };
+  getRuntimeSnapshot(): Promise<AutomationRuntimeSnapshotDto> {
+    return this.runtimeSnapshotService.getRuntimeSnapshot();
   }
 
   @Post('actions')

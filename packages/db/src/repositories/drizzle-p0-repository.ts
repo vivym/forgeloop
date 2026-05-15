@@ -40,6 +40,7 @@ import {
   automationCapabilitiesForPreset,
   capabilityFingerprint,
   isActiveRunSessionStatus,
+  isWorkItemAutomationTerminal,
 } from '@forgeloop/domain';
 
 import * as schema from '../schema';
@@ -97,6 +98,8 @@ import type {
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
   P0Repository,
+  RuntimeSnapshotRepositoryData,
+  RuntimeSnapshotTargetRow,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
   ResolveAutomationProjectSettingsInput,
@@ -204,6 +207,15 @@ const timestampAtOrBefore = (left: string | undefined, right: string): boolean =
   const leftMillis = timestampMillis(left);
   const rightMillis = timestampMillis(right);
   return leftMillis !== undefined && rightMillis !== undefined ? leftMillis <= rightMillis : left !== undefined && left <= right;
+};
+
+const compareTimestamp = (left: string | undefined, right: string | undefined): number => {
+  const leftMillis = timestampMillis(left);
+  const rightMillis = timestampMillis(right);
+  if (leftMillis !== undefined && rightMillis !== undefined) {
+    return leftMillis - rightMillis;
+  }
+  return (left ?? '').localeCompare(right ?? '');
 };
 
 const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
@@ -1146,8 +1158,92 @@ export class DrizzleP0Repository implements P0Repository {
     return rows.map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
   }
 
-  async listRuntimeSnapshotRows(): Promise<Record<string, unknown>[]> {
-    return [];
+  async getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData> {
+    const [projectRecords, repoRecords, workItemRecords, specRecords, planRecords, planRevisionRecords, generationRunRecords, holdRecords] =
+      await Promise.all([
+        this.db.select().from(projects).orderBy(asc(projects.createdAt), asc(projects.id)),
+        this.db
+          .select()
+          .from(project_repos)
+          .where(eq(project_repos.status, 'active'))
+          .orderBy(asc(project_repos.createdAt), asc(project_repos.id)),
+        this.db.select().from(work_items).orderBy(asc(work_items.createdAt), asc(work_items.id)),
+        this.db.select().from(specs),
+        this.db.select().from(plans).orderBy(asc(plans.createdAt), asc(plans.id)),
+        this.db.select().from(plan_revisions),
+        this.db.select().from(execution_package_generation_runs),
+        this.db.select().from(manual_path_holds).where(eq(manual_path_holds.status, 'active')),
+      ]);
+    const projectRows = projectRecords.map((row) => fromDbRecord<Project>(row));
+    const repoRows = repoRecords.map((row) => fromDbRecord<ProjectRepo>(row));
+    const workItemRows = workItemRecords.map((row) => fromDbRecord<WorkItem>(row));
+    const allActions = (await this.db.select().from(automation_action_runs)).map((row) =>
+      redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)),
+    );
+    const projectSnapshotRows = await Promise.all(
+      projectRows.map(async (project) => {
+        const settings = await this.resolveAutomationProjectSettings({ project_id: project.id });
+        return {
+          project_id: project.id,
+          automation_scope: `project:${project.id}` as const,
+          automation_settings_version: settings.version,
+          capability_fingerprint: settings.capability_fingerprint,
+        };
+      }),
+    );
+    const repoSnapshotRows = await Promise.all(
+      repoRows.map(async (repo) => {
+        const settings = await this.resolveAutomationProjectSettings({ project_id: repo.project_id, repo_id: repo.repo_id });
+        return {
+          project_id: repo.project_id,
+          repo_id: repo.repo_id,
+          automation_scope: `repo:${repo.project_id}:${repo.repo_id}` as const,
+          automation_settings_version: settings.version,
+          capability_fingerprint: settings.capability_fingerprint,
+          daemon_internal_local_path: repo.local_path,
+        };
+      }),
+    );
+    const holds = holdRecords.map((row) => fromDbRecord<ManualPathHold>(row));
+    const specsById = new Map(
+      specRecords.map((row) => {
+        const record = fromDbRecord<Spec>(row);
+        return [record.id, record] as const;
+      }),
+    );
+    const planRevisionsById = new Map(
+      planRevisionRecords.map((row) => {
+        const record = fromDbRecord<PlanRevision>(row);
+        return [record.id, record] as const;
+      }),
+    );
+    const workItemsById = new Map(workItemRows.map((record) => [record.id, record] as const));
+    const generationRuns = generationRunRecords.map((row) => fromDbRecord<ExecutionPackageGenerationRun>(row));
+
+    return {
+      projects: projectSnapshotRows,
+      repos: repoSnapshotRows,
+      work_items_requiring_plan: await this.runtimeSnapshotWorkItemsRequiringPlan(
+        workItemRows,
+        repoRows,
+        specsById,
+        holds,
+        allActions,
+      ),
+      plan_revisions_requiring_packages: await this.runtimeSnapshotPlanRevisionsRequiringPackages(
+        planRecords.map((row) => fromDbRecord<Plan>(row)),
+        repoRows,
+        planRevisionsById,
+        workItemsById,
+        generationRuns,
+        holds,
+        allActions,
+      ),
+      recent_action_runs: allActions.sort(this.compareAutomationActionRecency).slice(0, 50),
+      policy_projection_action_runs: allActions
+        .filter((actionRun) => actionRun.action_type === 'project_runtime_snapshot' && actionRun.status === 'succeeded')
+        .sort(this.compareAutomationActionRecency),
+    };
   }
 
   async saveRelease(release: Release): Promise<void> {
@@ -1941,6 +2037,144 @@ export class DrizzleP0Repository implements P0Repository {
       predicates.push(sql`${automation_action_runs.automationScope} like ${`repo:%:${input.repo_id}`}`);
     }
     return predicates.length === 0 ? undefined : and(...predicates);
+  }
+
+  private compareAutomationActionRecency(left: AutomationActionRun, right: AutomationActionRun): number {
+    return (
+      compareTimestamp(right.finished_at ?? right.updated_at ?? right.created_at, left.finished_at ?? left.updated_at ?? left.created_at) ||
+      right.id.localeCompare(left.id)
+    );
+  }
+
+  private async runtimeSnapshotWorkItemsRequiringPlan(
+    workItems: WorkItem[],
+    repos: ProjectRepo[],
+    specsById: Map<string, Spec>,
+    holds: ManualPathHold[],
+    actions: AutomationActionRun[],
+  ): Promise<RuntimeSnapshotTargetRow[]> {
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const workItem of workItems) {
+      if (isWorkItemAutomationTerminal(workItem) || workItem.current_plan_id !== undefined || workItem.current_spec_id === undefined) {
+        continue;
+      }
+      const spec = specsById.get(workItem.current_spec_id);
+      const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id ?? workItem.current_spec_revision_id;
+      if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
+        continue;
+      }
+      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
+      if (repo === undefined) {
+        continue;
+      }
+      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
+      if (!settings.capabilities_json.canGeneratePlanDraft) {
+        continue;
+      }
+      if (this.hasActiveManualHold(holds, [`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'work_item',
+        target_object_id: workItem.id,
+        target_revision_id: specRevisionId,
+        target_status: 'approved',
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        ...this.latestMatchingActionFields(actions, 'ensure_plan_draft', workItem.id, specRevisionId),
+      });
+    }
+    return targets;
+  }
+
+  private async runtimeSnapshotPlanRevisionsRequiringPackages(
+    plansToEvaluate: Plan[],
+    repos: ProjectRepo[],
+    planRevisionsById: Map<string, PlanRevision>,
+    workItemsById: Map<string, WorkItem>,
+    generationRuns: ExecutionPackageGenerationRun[],
+    holds: ManualPathHold[],
+    actions: AutomationActionRun[],
+  ): Promise<RuntimeSnapshotTargetRow[]> {
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const plan of plansToEvaluate) {
+      if (plan.status !== 'approved') {
+        continue;
+      }
+      const planRevisionId = plan.approved_revision_id ?? plan.current_revision_id;
+      if (planRevisionId === undefined || this.hasCurrentPackageGeneration(generationRuns, planRevisionId)) {
+        continue;
+      }
+      const planRevision = planRevisionsById.get(planRevisionId);
+      const workItem = planRevision === undefined ? undefined : workItemsById.get(planRevision.work_item_id);
+      if (planRevision === undefined || workItem === undefined || isWorkItemAutomationTerminal(workItem)) {
+        continue;
+      }
+      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
+      if (repo === undefined) {
+        continue;
+      }
+      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
+      if (!settings.capabilities_json.canGeneratePackageDrafts) {
+        continue;
+      }
+      const generationKey = `default:${planRevisionId}`;
+      if (this.hasActiveManualHold(holds, [`plan_revision:${planRevisionId}`, `package_generation:${planRevisionId}:${generationKey}`])) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'plan_revision',
+        target_object_id: planRevisionId,
+        target_revision_id: generationKey,
+        target_status: 'approved',
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        generation_key: generationKey,
+        ...this.latestMatchingActionFields(actions, 'ensure_package_drafts', planRevisionId, generationKey),
+      });
+    }
+    return targets;
+  }
+
+  private hasCurrentPackageGeneration(generationRuns: ExecutionPackageGenerationRun[], planRevisionId: string): boolean {
+    return generationRuns.some(
+      (run) => run.plan_revision_id === planRevisionId && (run.status === 'pending' || run.status === 'running' || run.status === 'succeeded'),
+    );
+  }
+
+  private hasActiveManualHold(holds: ManualPathHold[], scopeKeys: string[]): boolean {
+    const scopeKeySet = new Set(scopeKeys);
+    return holds.some((hold) => hold.status === 'active' && scopeKeySet.has(hold.scope_key));
+  }
+
+  private latestMatchingActionFields(
+    actions: AutomationActionRun[],
+    actionType: string,
+    targetObjectId: string,
+    targetRevisionId: string,
+  ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'> {
+    const actionRun = actions
+      .filter(
+        (candidate) =>
+          candidate.action_type === actionType &&
+          candidate.target_object_id === targetObjectId &&
+          candidate.target_revision_id === targetRevisionId,
+      )
+      .sort(this.compareAutomationActionRecency)[0];
+    if (actionRun === undefined) {
+      return {};
+    }
+    return {
+      latest_matching_action_status: actionRun.status,
+      ...(actionRun.status !== 'blocked'
+        ? {}
+        : {
+            ...(actionRun.reason === undefined ? {} : { blocked_reason_code: actionRun.reason }),
+            ...(actionRun.error_code === undefined ? {} : { blocked_summary: actionRun.error_code }),
+          }),
+    };
   }
 
   private isAutomationActionClaimable(actionRun: AutomationActionRun, now: string): boolean {
