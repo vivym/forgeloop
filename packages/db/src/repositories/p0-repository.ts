@@ -298,6 +298,7 @@ export interface RuntimeSnapshotTargetRow {
   blocked_reason_code?: string;
   blocked_summary?: string;
   generation_key?: string;
+  disabled_reason?: 'run_enqueue_disabled_by_scope';
 }
 
 export interface RuntimeSnapshotProjectRow {
@@ -316,11 +317,24 @@ export interface RuntimeSnapshotRepoRow {
   daemon_internal_local_path: string;
 }
 
+export interface RuntimeSnapshotManualHoldRow {
+  object_type: string;
+  object_id: string;
+  scope_key: string;
+  reason_code: string;
+  status: ManualPathHold['status'];
+  requested_at: string;
+  resolved_at?: string;
+  fingerprint: string;
+}
+
 export interface RuntimeSnapshotRepositoryData {
   projects: RuntimeSnapshotProjectRow[];
   repos: RuntimeSnapshotRepoRow[];
   work_items_requiring_plan: RuntimeSnapshotTargetRow[];
   plan_revisions_requiring_packages: RuntimeSnapshotTargetRow[];
+  run_enqueue_disabled_packages: RuntimeSnapshotTargetRow[];
+  active_holds: RuntimeSnapshotManualHoldRow[];
   recent_action_runs: AutomationActionRun[];
   policy_projection_action_runs: AutomationActionRun[];
 }

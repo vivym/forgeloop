@@ -1159,8 +1159,17 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData> {
-    const [projectRecords, repoRecords, workItemRecords, specRecords, planRecords, planRevisionRecords, generationRunRecords, holdRecords] =
-      await Promise.all([
+    const [
+      projectRecords,
+      repoRecords,
+      workItemRecords,
+      specRecords,
+      planRecords,
+      planRevisionRecords,
+      generationRunRecords,
+      executionPackageRecords,
+      holdRecords,
+    ] = await Promise.all([
         this.db.select().from(projects).orderBy(asc(projects.createdAt), asc(projects.id)),
         this.db
           .select()
@@ -1172,7 +1181,12 @@ export class DrizzleP0Repository implements P0Repository {
         this.db.select().from(plans).orderBy(asc(plans.createdAt), asc(plans.id)),
         this.db.select().from(plan_revisions),
         this.db.select().from(execution_package_generation_runs),
-        this.db.select().from(manual_path_holds).where(eq(manual_path_holds.status, 'active')),
+        this.db.select().from(execution_packages).orderBy(asc(execution_packages.createdAt), asc(execution_packages.id)),
+        this.db
+          .select()
+          .from(manual_path_holds)
+          .where(eq(manual_path_holds.status, 'active'))
+          .orderBy(asc(manual_path_holds.requestedAt), asc(manual_path_holds.id)),
       ]);
     const projectRows = projectRecords.map((row) => fromDbRecord<Project>(row));
     const repoRows = repoRecords.map((row) => fromDbRecord<ProjectRepo>(row));
@@ -1239,6 +1253,11 @@ export class DrizzleP0Repository implements P0Repository {
         holds,
         allActions,
       ),
+      run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(
+        executionPackageRecords.map((row) => fromDbRecord<ExecutionPackage>(row)),
+        repoRows,
+      ),
+      active_holds: this.runtimeSnapshotActiveHolds(holds),
       recent_action_runs: allActions.sort(this.compareAutomationActionRecency).slice(0, 50),
       policy_projection_action_runs: allActions
         .filter((actionRun) => actionRun.action_type === 'project_runtime_snapshot' && actionRun.status === 'succeeded')
@@ -2120,7 +2139,13 @@ export class DrizzleP0Repository implements P0Repository {
         continue;
       }
       const generationKey = `default:${planRevisionId}`;
-      if (this.hasActiveManualHold(holds, [`plan_revision:${planRevisionId}`, `package_generation:${planRevisionId}:${generationKey}`])) {
+      if (
+        this.hasActiveManualHold(holds, [
+          `work_item:${workItem.id}`,
+          `plan_revision:${planRevisionId}`,
+          `package_generation:${planRevisionId}:${generationKey}`,
+        ])
+      ) {
         continue;
       }
       targets.push({
@@ -2136,6 +2161,41 @@ export class DrizzleP0Repository implements P0Repository {
       });
     }
     return targets;
+  }
+
+  private runtimeSnapshotRunEnqueueDisabledPackages(
+    executionPackages: ExecutionPackage[],
+    repos: ProjectRepo[],
+  ): RuntimeSnapshotTargetRow[] {
+    return executionPackages
+      .filter(
+        (executionPackage) =>
+          executionPackage.phase === 'ready' &&
+          repos.some((repo) => repo.project_id === executionPackage.project_id && repo.repo_id === executionPackage.repo_id),
+      )
+      .map((executionPackage) => ({
+        target_object_type: 'execution_package',
+        target_object_id: executionPackage.id,
+        target_revision_id: executionPackage.plan_revision_id,
+        target_status: executionPackage.phase,
+        project_id: executionPackage.project_id,
+        repo_id: executionPackage.repo_id,
+        automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}` as const,
+        disabled_reason: 'run_enqueue_disabled_by_scope',
+      }));
+  }
+
+  private runtimeSnapshotActiveHolds(holds: ManualPathHold[]) {
+    return holds.map((hold) => ({
+      object_type: hold.object_type,
+      object_id: hold.object_id,
+      scope_key: hold.scope_key,
+      reason_code: hold.reason_code,
+      status: hold.status,
+      requested_at: hold.requested_at,
+      ...(hold.resolved_at === undefined ? {} : { resolved_at: hold.resolved_at }),
+      fingerprint: `${hold.scope_key}:${hold.reason_code}`,
+    }));
   }
 
   private hasCurrentPackageGeneration(generationRuns: ExecutionPackageGenerationRun[], planRevisionId: string): boolean {

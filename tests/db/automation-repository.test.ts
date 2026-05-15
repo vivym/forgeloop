@@ -138,6 +138,38 @@ describe('automation repository primitives', () => {
     ).resolves.toMatchObject({ id: hold.id, status: 'resolved', source_automation_action_id: 'automation-action-plan' });
   });
 
+  it('suppresses runtime package draft eligibility for active work item ancestor holds', async () => {
+    const repository = new InMemoryP0Repository();
+    await seedPackageEligibilityGraph(repository);
+
+    await expect(repository.getRuntimeSnapshotData()).resolves.toMatchObject({
+      plan_revisions_requiring_packages: [
+        expect.objectContaining({
+          target_object_type: 'plan_revision',
+          target_object_id: 'plan-revision-automation',
+          target_revision_id: 'default:plan-revision-automation',
+        }),
+      ],
+    });
+
+    await repository.requestManualPathHold({
+      id: 'hold-work-item-package-ancestor',
+      object_type: 'work_item',
+      object_id: 'work-item-automation',
+      scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: 'work-item-automation' }),
+      reason_code: 'needs_human_triage',
+      reason: 'Human triage required before package drafting.',
+      evidence_refs: [],
+      requested_by: 'daemon-1',
+      requested_at: now,
+      idempotency_key: 'hold-work-item-package-ancestor-idem',
+    });
+
+    await expect(repository.getRuntimeSnapshotData()).resolves.toMatchObject({
+      plan_revisions_requiring_packages: [],
+    });
+  });
+
   it('replays terminal idempotency records and rejects precondition drift', async () => {
     const repository = new InMemoryP0Repository();
 
@@ -730,5 +762,94 @@ async function seedPackageGraph(repository: P0Repository): Promise<void> {
     version: 0,
     created_at: now,
     updated_at: now,
+  });
+}
+
+async function seedPackageEligibilityGraph(repository: P0Repository): Promise<void> {
+  await repository.saveProject({
+    id: 'project-automation',
+    name: 'Automation project',
+    repo_ids: ['repo-1'],
+    owner_actor_id: 'actor-admin',
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.saveProjectRepo({
+    id: 'project-repo-automation',
+    repo_id: 'repo-1',
+    project_id: 'project-automation',
+    name: 'repo-1',
+    status: 'active',
+    local_path: '/workspace/repo-1',
+    default_branch: 'main',
+    base_commit_sha: 'abc123',
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.setAutomationProjectSettings({
+    id: 'automation-settings-package-eligibility',
+    project_id: 'project-automation',
+    repo_id: 'repo-1',
+    scope_type: 'repo',
+    preset: 'draft_only',
+    expected_version: 0,
+    reason: 'enable package eligibility',
+    evidence_refs: [],
+    actor: { actor_id: 'actor-admin', actor_class: 'human_admin' },
+    now,
+  });
+  await repository.saveWorkItem({
+    id: 'work-item-automation',
+    project_id: 'project-automation',
+    kind: 'requirement',
+    title: 'Automation graph',
+    goal: 'Test package eligibility.',
+    success_criteria: ['Ancestor holds block package drafting.'],
+    priority: 'P0',
+    risk: 'medium',
+    owner_actor_id: 'actor-admin',
+    phase: 'plan',
+    activity_state: 'idle',
+    gate_state: 'none',
+    resolution: 'none',
+    current_spec_id: 'spec-automation',
+    current_spec_revision_id: 'spec-revision-automation',
+    current_plan_id: 'plan-automation',
+    current_plan_revision_id: 'plan-revision-automation',
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.savePlan({
+    id: 'plan-automation',
+    work_item_id: 'work-item-automation',
+    entity_type: 'plan',
+    status: 'approved',
+    editing_state: 'idle',
+    gate_state: 'approved',
+    resolution: 'approved',
+    current_revision_id: 'plan-revision-automation',
+    approved_revision_id: 'plan-revision-automation',
+    approved_at: now,
+    approved_by_actor_id: 'actor-admin',
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.savePlanRevision({
+    id: 'plan-revision-automation',
+    plan_id: 'plan-automation',
+    work_item_id: 'work-item-automation',
+    based_on_spec_revision_id: 'spec-revision-automation',
+    revision_number: 1,
+    summary: 'Plan',
+    content: 'Plan',
+    implementation_summary: 'Implement',
+    split_strategy: 'Single package',
+    dependency_order: [],
+    test_matrix: ['pnpm test'],
+    risk_mitigations: [],
+    rollback_notes: 'Revert',
+    structured_document: {},
+    artifact_refs: [],
+    created_at: now,
   });
 }

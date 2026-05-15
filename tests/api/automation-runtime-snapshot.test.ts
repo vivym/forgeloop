@@ -374,6 +374,74 @@ describe('internal automation runtime snapshot', () => {
       .expect(200)
       .expect(({ body }) => {
         expect(body.run_enqueue_disabled_reason).toBe('run_enqueue_disabled_by_scope');
+        expect(body.run_enqueue_disabled_packages).toContainEqual(
+          expect.objectContaining({
+            target_object_type: 'execution_package',
+            target_object_id: 'execution-package-1',
+            target_revision_id: 'plan-revision-1',
+            target_status: 'ready',
+            project_id: 'project-1',
+            repo_id: 'repo-1',
+            automation_scope: 'repo:project-1:repo-1',
+            disabled_reason: 'run_enqueue_disabled_by_scope',
+          }),
+        );
+      });
+  });
+
+  it('suppresses package draft eligibility for active work item ancestor holds', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.requestManualPathHold({
+      id: 'hold-work-item-package-ancestor',
+      object_type: 'work_item',
+      object_id: 'work-item-1',
+      scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: 'work-item-1' }),
+      reason_code: 'needs_human_triage',
+      reason: 'Human triage required before package drafting.',
+      evidence_refs: [],
+      requested_by: 'daemon-1',
+      requested_at: now,
+      idempotency_key: 'hold-work-item-package-ancestor-idempotency',
+    });
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).toEqual([]);
+      });
+  });
+
+  it('includes public-safe active hold summaries', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.requestManualPathHold({
+      id: 'hold-public-summary',
+      object_type: 'work_item',
+      object_id: 'work-item-1',
+      scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: 'work-item-1' }),
+      reason_code: 'needs_human_triage',
+      reason: 'Human triage required.',
+      evidence_refs: [{ kind: 'file', uri: `${rawSecretPath}/hold-evidence.txt` }],
+      requested_by: 'daemon-1',
+      requested_at: now,
+      idempotency_key: 'hold-public-summary-idempotency',
+    });
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.active_holds).toContainEqual({
+          object_type: 'work_item',
+          object_id: 'work-item-1',
+          scope_key: 'work_item:work-item-1',
+          reason_code: 'needs_human_triage',
+          status: 'active',
+          requested_at: now,
+          fingerprint: 'work_item:work-item-1:needs_human_triage',
+        });
+        expect(JSON.stringify(body.active_holds)).not.toContain(rawSecretPath);
+        expect(JSON.stringify(body.active_holds)).not.toContain('evidence_refs');
       });
   });
 

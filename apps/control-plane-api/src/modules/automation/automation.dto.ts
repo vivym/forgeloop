@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
+  RuntimeSnapshotManualHoldRow,
   RuntimeSnapshotProjectRow,
   RuntimeSnapshotRepoRow,
   RuntimeSnapshotRepositoryData,
@@ -240,6 +241,8 @@ export interface AutomationRuntimeSnapshotDto {
   repos: AutomationRuntimeSnapshotRepoDto[];
   work_items_requiring_plan: AutomationRuntimeSnapshotTargetDto[];
   plan_revisions_requiring_packages: AutomationRuntimeSnapshotTargetDto[];
+  run_enqueue_disabled_packages: AutomationRuntimeSnapshotTargetDto[];
+  active_holds: AutomationRuntimeSnapshotManualHoldDto[];
   recent_action_runs: AutomationRuntimeSnapshotActionRunSummaryDto[];
   run_enqueue_disabled_reason: 'run_enqueue_disabled_by_scope';
 }
@@ -275,6 +278,18 @@ export interface AutomationRuntimeSnapshotTargetDto {
   blocked_reason_code?: string;
   blocked_summary?: string;
   generation_key?: string;
+  disabled_reason?: 'run_enqueue_disabled_by_scope';
+}
+
+export interface AutomationRuntimeSnapshotManualHoldDto {
+  object_type: string;
+  object_id: string;
+  scope_key: string;
+  reason_code: string;
+  status: string;
+  requested_at: string;
+  resolved_at?: string;
+  fingerprint: string;
 }
 
 export interface AutomationRuntimeSnapshotActionRunSummaryDto {
@@ -387,6 +402,8 @@ export const toRuntimeSnapshotDto = (input: {
   repos: input.data.repos.map((repo) => toRuntimeSnapshotRepoDto(repo, input.policyProjectionsByRepoId.get(repo.repo_id))),
   work_items_requiring_plan: input.data.work_items_requiring_plan.map(toRuntimeSnapshotTargetDto),
   plan_revisions_requiring_packages: input.data.plan_revisions_requiring_packages.map(toRuntimeSnapshotTargetDto),
+  run_enqueue_disabled_packages: input.data.run_enqueue_disabled_packages.map(toRuntimeSnapshotTargetDto),
+  active_holds: input.data.active_holds.map(toRuntimeSnapshotManualHoldDto),
   recent_action_runs: input.data.recent_action_runs.map(toActionRunSummaryDto),
   run_enqueue_disabled_reason: 'run_enqueue_disabled_by_scope',
 });
@@ -427,6 +444,20 @@ export const toRuntimeSnapshotTargetDto = (target: RuntimeSnapshotTargetRow): Au
   ...(target.blocked_reason_code === undefined ? {} : { blocked_reason_code: target.blocked_reason_code }),
   ...(target.blocked_summary === undefined ? {} : { blocked_summary: target.blocked_summary }),
   ...(target.generation_key === undefined ? {} : { generation_key: target.generation_key }),
+  ...(target.disabled_reason === undefined ? {} : { disabled_reason: target.disabled_reason }),
+});
+
+export const toRuntimeSnapshotManualHoldDto = (
+  hold: RuntimeSnapshotManualHoldRow,
+): AutomationRuntimeSnapshotManualHoldDto => ({
+  object_type: hold.object_type,
+  object_id: hold.object_id,
+  scope_key: hold.scope_key,
+  reason_code: hold.reason_code,
+  status: hold.status,
+  requested_at: hold.requested_at,
+  ...(hold.resolved_at === undefined ? {} : { resolved_at: hold.resolved_at }),
+  fingerprint: hold.fingerprint,
 });
 
 export const toActionRunSummaryDto = (actionRun: AutomationActionRun): AutomationRuntimeSnapshotActionRunSummaryDto => ({

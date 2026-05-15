@@ -1192,6 +1192,8 @@ export class InMemoryP0Repository implements P0Repository {
       repos: repoRows,
       work_items_requiring_plan: await this.runtimeSnapshotWorkItemsRequiringPlan(repos),
       plan_revisions_requiring_packages: await this.runtimeSnapshotPlanRevisionsRequiringPackages(repos),
+      run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(repos),
+      active_holds: this.runtimeSnapshotActiveHolds(),
       recent_action_runs: valuesFor(this.automationActionRuns)
         .sort(this.compareAutomationActionRecency)
         .slice(0, 50)
@@ -1780,7 +1782,13 @@ export class InMemoryP0Repository implements P0Repository {
         continue;
       }
       const generationKey = `default:${planRevisionId}`;
-      if (this.hasActiveManualHold([`plan_revision:${planRevisionId}`, `package_generation:${planRevisionId}:${generationKey}`])) {
+      if (
+        this.hasActiveManualHold([
+          `work_item:${workItem.id}`,
+          `plan_revision:${planRevisionId}`,
+          `package_generation:${planRevisionId}:${generationKey}`,
+        ])
+      ) {
         continue;
       }
       targets.push({
@@ -1796,6 +1804,42 @@ export class InMemoryP0Repository implements P0Repository {
       });
     }
     return targets;
+  }
+
+  private runtimeSnapshotRunEnqueueDisabledPackages(repos: ProjectRepo[]): RuntimeSnapshotTargetRow[] {
+    return valuesFor(this.executionPackages)
+      .filter(
+        (executionPackage) =>
+          executionPackage.phase === 'ready' &&
+          repos.some((repo) => repo.project_id === executionPackage.project_id && repo.repo_id === executionPackage.repo_id),
+      )
+      .sort(byCreatedAtThenId)
+      .map((executionPackage) => ({
+        target_object_type: 'execution_package',
+        target_object_id: executionPackage.id,
+        target_revision_id: executionPackage.plan_revision_id,
+        target_status: executionPackage.phase,
+        project_id: executionPackage.project_id,
+        repo_id: executionPackage.repo_id,
+        automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}` as const,
+        disabled_reason: 'run_enqueue_disabled_by_scope',
+      }));
+  }
+
+  private runtimeSnapshotActiveHolds() {
+    return valuesFor(this.manualPathHolds)
+      .filter((hold) => hold.status === 'active')
+      .sort((left, right) => compareTimestamp(left.requested_at, right.requested_at) || left.id.localeCompare(right.id))
+      .map((hold) => ({
+        object_type: hold.object_type,
+        object_id: hold.object_id,
+        scope_key: hold.scope_key,
+        reason_code: hold.reason_code,
+        status: hold.status,
+        requested_at: hold.requested_at,
+        ...(hold.resolved_at === undefined ? {} : { resolved_at: hold.resolved_at }),
+        fingerprint: `${hold.scope_key}:${hold.reason_code}`,
+      }));
   }
 
   private hasCurrentPackageGeneration(planRevisionId: string): boolean {
