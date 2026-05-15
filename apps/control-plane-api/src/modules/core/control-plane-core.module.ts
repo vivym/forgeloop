@@ -7,6 +7,7 @@ import {
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from './control-plane-tokens';
+import { ControlPlaneRuntimeService } from './control-plane-runtime.service';
 
 const createRepository = (): P0Repository => {
   const databaseUrl = process.env.FORGELOOP_DATABASE_URL;
@@ -31,7 +32,8 @@ const durabilityMode = (): RunDurabilityMode =>
       useFactory: (mode: RunDurabilityMode) => mode === 'volatile_demo',
       inject: [RUN_DURABILITY_MODE],
     },
+    ControlPlaneRuntimeService,
   ],
-  exports: [P0_REPOSITORY, RUN_DURABILITY_MODE, P0_DEMO_ACTOR_ID_FALLBACK],
+  exports: [P0_REPOSITORY, RUN_DURABILITY_MODE, P0_DEMO_ACTOR_ID_FALLBACK, ControlPlaneRuntimeService],
 })
 export class ControlPlaneCoreModule {}

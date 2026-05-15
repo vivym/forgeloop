@@ -68,6 +68,7 @@ import {
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../modules/core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../modules/core/control-plane-runtime.service';
 import { AutomationCommandService } from '../modules/automation/automation-command.service';
 import {
   createRunEventStreamToken as signRunEventStreamToken,
@@ -138,17 +139,6 @@ const productGateRejectedActorClasses = new Set<AutomationActorClass>([
   'external_tracker',
   'repo_policy',
 ]);
-const uuidBackedP0IdPrefixes = new Set([
-  'project',
-  'work-item',
-  'spec',
-  'spec-revision',
-  'plan',
-  'plan-revision',
-  'execution-package',
-  'run-session',
-  'decision',
-]);
 const streamPollMs = 500;
 const runEventStreamTokenTtlMs = 60_000;
 const beginningOfStreamCursor = '0000000000';
@@ -210,16 +200,12 @@ type SupersedeExecutionPackageGenerationRunResult = {
 
 @Injectable()
 export class P0Service {
-  private idCounter = 0;
-  private timeCounter = 0;
-  private durableTimeMs = 0;
-  private readonly durableInstanceId = randomUUID().replace(/-/g, '').slice(0, 12);
-
   constructor(
     @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
     @Inject(RUN_WORKER) private readonly runWorker: RunWorker,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
+    private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     private readonly automationCommandService: AutomationCommandService,
   ) {}
 
@@ -2409,25 +2395,11 @@ export class P0Service {
   }
 
   private id(prefix: string): string {
-    this.idCounter += 1;
-    if (this.durabilityMode === 'durable' && uuidBackedP0IdPrefixes.has(prefix)) {
-      return randomUUID();
-    }
-    if (this.durabilityMode === 'durable') {
-      return `${prefix}-${this.durableInstanceId}-${this.idCounter}`;
-    }
-    return `${prefix}-${this.idCounter}`;
+    return this.controlPlaneRuntime.id(prefix);
   }
 
   private now(): string {
-    if (this.durabilityMode === 'durable') {
-      const current = Date.now();
-      this.durableTimeMs = current > this.durableTimeMs ? current : this.durableTimeMs + 1;
-      return new Date(this.durableTimeMs).toISOString();
-    }
-
-    this.timeCounter += 1;
-    return new Date(Date.UTC(2026, 4, 5, 0, 0, this.timeCounter)).toISOString();
+    return this.controlPlaneRuntime.now();
   }
 
   private lockedUntil(now: string): string {

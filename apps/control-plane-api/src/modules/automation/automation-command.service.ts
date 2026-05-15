@@ -11,7 +11,7 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import type { ArtifactRef, ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
+import type { ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
 import type { P0Repository } from '@forgeloop/db';
 import {
   DomainError,
@@ -44,6 +44,7 @@ import {
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import type { ActorContext } from '../../p0/actor-context';
 import type {
   AutomationActorContextDto,
@@ -70,18 +71,6 @@ import type {
 } from './automation.dto';
 
 const commandClaimTtlMs = 5 * 60 * 1000;
-const uuidBackedP0IdPrefixes = new Set([
-  'project',
-  'work-item',
-  'spec',
-  'spec-revision',
-  'plan',
-  'plan-revision',
-  'execution-package',
-  'run-session',
-  'decision',
-]);
-
 type EnsurePlanDraftResult = { plan_id: string; plan_revision_id: string; status: 'created' | 'existing' };
 type CommandBoundaryOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 type EnsurePackageDraftsInput = {
@@ -144,14 +133,10 @@ const stableJson = (value: unknown): string => {
 
 @Injectable()
 export class AutomationCommandService {
-  private idCounter = 0;
-  private timeCounter = 0;
-  private durableTimeMs = 0;
-  private readonly durableInstanceId = randomUUID().replace(/-/g, '').slice(0, 12);
-
   constructor(
     @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Optional() @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback = false,
   ) {}
 
@@ -386,7 +371,7 @@ export class AutomationCommandService {
         scope_key: input.scope_key,
         reason_code: input.reason_code,
         reason: input.reason,
-        evidence_refs: input.evidence_refs as ArtifactRef[],
+        evidence_refs: input.evidence_refs,
         requested_by: input.requested_by,
         idempotency_key: input.idempotency_key,
         source_automation_action_id: input.action_run_id,
@@ -1498,25 +1483,11 @@ export class AutomationCommandService {
   }
 
   private id(prefix: string): string {
-    this.idCounter += 1;
-    if (this.durabilityMode === 'durable' && uuidBackedP0IdPrefixes.has(prefix)) {
-      return randomUUID();
-    }
-    if (this.durabilityMode === 'durable') {
-      return `${prefix}-${this.durableInstanceId}-${this.idCounter}`;
-    }
-    return `${prefix}-${this.idCounter}`;
+    return this.controlPlaneRuntime.id(prefix);
   }
 
   private now(): string {
-    if (this.durabilityMode === 'durable') {
-      const current = Date.now();
-      this.durableTimeMs = current > this.durableTimeMs ? current : this.durableTimeMs + 1;
-      return new Date(this.durableTimeMs).toISOString();
-    }
-
-    this.timeCounter += 1;
-    return new Date(Date.UTC(2026, 4, 5, 0, 0, this.timeCounter)).toISOString();
+    return this.controlPlaneRuntime.now();
   }
 
   private lockedUntil(now: string): string {

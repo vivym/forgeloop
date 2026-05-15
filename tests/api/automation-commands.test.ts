@@ -647,6 +647,32 @@ describe('automation command boundaries', () => {
       .expect(403);
   });
 
+  it('preserves automation settings audit events after P0 service writes created earlier events', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const { project } = await seedProjectRepoWorkItem(app);
+
+    const settings = await request(app.getHttpServer())
+      .post(`/p0/projects/${project.id}/automation/capabilities`)
+      .set(humanAdminHeaders)
+      .send({
+        repo_id: 'repo-1',
+        preset: 'draft_only',
+        expected_version: 0,
+        reason: 'enable draft automation',
+        evidence_refs: [],
+        actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
+      })
+      .expect(201);
+
+    await expect(repository.listObjectEvents(settings.body.id, 'automation_project_settings')).resolves.toEqual([
+      expect.objectContaining({
+        object_id: settings.body.id,
+        event_type: 'automation_capabilities_updated',
+      }),
+    ]);
+  });
+
   it('rejects automation actors, missing actor class headers, and body-only actors from P0 approval gates', async () => {
     const { app } = await createTestApp();
     apps.push(app);
@@ -710,6 +736,31 @@ describe('automation command boundaries', () => {
       action_input_json: {
         execution_package_id: 'execution-package-1',
         expected_package_version: 1,
+      },
+    }).expect(400);
+  });
+
+  it('rejects request manual path actions with unsupported object types at the internal boundary', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+
+    await signedAutomationPost(app, '/internal/automation/actions', {
+      id: 'action-manual-invalid-object-type',
+      action_type: 'request_manual_path',
+      target_object_type: 'work_item',
+      target_object_id: 'work-item-1',
+      target_status: 'blocked',
+      idempotency_key: 'action-manual-invalid-object-type-idempotency',
+      automation_scope: 'repo:project-1:repo-1',
+      automation_settings_version: 1,
+      capability_fingerprint: 'capability-fingerprint-1',
+      precondition_fingerprint: 'precondition-fingerprint-1',
+      action_input_json: {
+        object_type: 'unsupported_object',
+        object_id: 'work-item-1',
+        scope_key: 'work_item:work-item-1',
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
       },
     }).expect(400);
   });
@@ -838,6 +889,20 @@ describe('automation command boundaries', () => {
     const response = await signedAutomationPost(app, '/internal/automation/manual-path-holds', ctx.commandBody);
 
     expect([409, 422]).toContain(response.status);
+    await expectNoManualPathCommandWrites(repository, ctx);
+  });
+
+  it('rejects internal manual path commands with malformed evidence refs before manual hold writes', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedManualPathAction(app, repository, {
+      id: 'action-manual-claim-binding-bad-evidence',
+    });
+
+    await signedAutomationPost(app, '/internal/automation/manual-path-holds', {
+      ...ctx.commandBody,
+      evidence_refs: [{ kind: 'diff' }],
+    }).expect(400);
     await expectNoManualPathCommandWrites(repository, ctx);
   });
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 
 const nonBlankString = z.string().min(1);
@@ -10,6 +11,17 @@ const automationScopeSchema = z.custom<AutomationScope>(
   (value) => typeof value === 'string' && (/^project:[^:]+$/.test(value) || /^repo:[^:]+:[^:]+$/.test(value)),
   'automation_scope must be project:<projectId> or repo:<projectId>:<repoId>',
 );
+
+const manualPathHoldObjectTypeSchema = z.enum([
+  'work_item',
+  'spec_revision',
+  'plan_revision',
+  'package_generation',
+  'execution_package',
+  'run_session',
+  'review_packet',
+  'release_gate',
+]);
 
 const ensurePlanDraftActionInputSchema = z
   .object({
@@ -27,7 +39,7 @@ const ensurePackageDraftsActionInputSchema = z
 
 const requestManualPathActionInputSchema = z
   .object({
-    object_type: nonBlankString,
+    object_type: manualPathHoldObjectTypeSchema,
     object_id: nonBlankString,
     scope_key: nonBlankString,
     reason_code: nonBlankString,
@@ -193,12 +205,12 @@ export const ensurePackageDraftsCommandSchema = z
 export const requestManualPathCommandSchema = z
   .object({
     ...internalCommandBaseShape,
-    object_type: nonBlankString,
+    object_type: manualPathHoldObjectTypeSchema,
     object_id: nonBlankString,
     scope_key: nonBlankString,
     reason_code: nonBlankString,
     reason: nonBlankString,
-    evidence_refs: z.array(z.unknown()).default([]),
+    evidence_refs: z.array(artifactRefSchema).default([]),
     requested_by: nonBlankString,
     generation_key: nonBlankString.optional(),
     gate_key: nonBlankString.optional(),
