@@ -196,11 +196,60 @@ export interface ClaimAutomationActionRunInput
     | 'claimed_at'
     | 'started_at'
     | 'finished_at'
+    | 'precondition_fingerprint'
+    | 'action_input_json'
   > {
   automation_scope: AutomationScope;
+  precondition_fingerprint?: string;
+  action_input_json?: Record<string, unknown>;
   claim_token: string;
   locked_until: string;
   now: string;
+}
+
+export interface CreateOrReplayAutomationActionRunInput
+  extends Pick<
+    AutomationActionRun,
+    | 'id'
+    | 'action_type'
+    | 'target_object_type'
+    | 'target_object_id'
+    | 'target_status'
+    | 'idempotency_key'
+    | 'automation_scope'
+    | 'automation_settings_version'
+    | 'capability_fingerprint'
+    | 'precondition_fingerprint'
+    | 'action_input_json'
+  > {
+  target_revision_id?: string;
+  target_version?: number;
+  created_by?: string;
+  status?: Extract<AutomationActionRun['status'], 'pending'>;
+  now: string;
+}
+
+export interface ClaimNextAutomationActionRunInput {
+  now: string;
+  claim_token: string;
+  locked_until: string;
+  limit: number;
+  project_id?: string;
+  repo_id?: string;
+  automation_scope?: AutomationScope;
+}
+
+export interface GetClaimedAutomationActionRunInput {
+  id: string;
+  claim_token: string;
+}
+
+export interface LatestCompletedProjectionActionRunInput {
+  repo_id: string;
+  policy_status: string;
+  policy_digest?: string;
+  parser_version: string;
+  reason_code?: string;
 }
 
 export interface MarkAutomationActionGatePendingInput {
@@ -367,6 +416,12 @@ export interface P0Repository {
   supersedeExecutionPackageGenerationRun(
     input: SupersedeExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun>;
+  createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun>;
+  claimNextAutomationActionRun(input: ClaimNextAutomationActionRunInput): Promise<AutomationActionRun | undefined>;
+  getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun>;
+  latestCompletedProjectionActionRun(
+    input: LatestCompletedProjectionActionRunInput,
+  ): Promise<AutomationActionRun | undefined>;
   claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun>;
   completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun>;
   markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun>;
