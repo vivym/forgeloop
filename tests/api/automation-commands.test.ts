@@ -126,12 +126,16 @@ class OverlapDetectingRepository extends InMemoryP0Repository {
 
 const createTestApp = async (
   repositoryOverride?: P0Repository,
+  runWorkerOverride: { kick: () => void; drainOnce: () => Promise<void> } = {
+    kick: () => undefined,
+    drainOnce: async () => undefined,
+  },
 ): Promise<{ app: INestApplication; repository: P0Repository; service: P0Service }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(P0_REPOSITORY)
     .useValue(repositoryOverride ?? new InMemoryP0Repository())
     .overrideProvider(RUN_WORKER)
-    .useValue({ kick: () => undefined, drainOnce: async () => undefined })
+    .useValue(runWorkerOverride)
     .compile();
   const app = moduleRef.createNestApplication({ rawBody: true });
   await app.init();
@@ -276,6 +280,24 @@ type ClaimedPlanDraftActionContext = ApprovedSpecContext & {
   commandBody: Record<string, unknown>;
 };
 
+type ClaimedPackageDraftActionContext = ApprovedSpecContext & {
+  plan: Plan;
+  planRevisionId: string;
+  precondition: AutomationPrecondition;
+  actionId: string;
+  claimToken: string;
+  commandBody: Record<string, unknown>;
+};
+
+type ClaimedManualPathActionContext = {
+  project: { id: string };
+  workItem: WorkItem;
+  precondition: AutomationPrecondition;
+  actionId: string;
+  claimToken: string;
+  commandBody: Record<string, unknown>;
+};
+
 const planDraftActionBody = (
   ctx: ApprovedSpecContext,
   precondition: AutomationPrecondition,
@@ -299,6 +321,62 @@ const planDraftActionBody = (
   },
   ...overrides,
 });
+
+const packageDraftActionBody = (
+  ctx: ApprovedSpecContext & { planRevisionId: string },
+  precondition: AutomationPrecondition,
+  actionId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => {
+  const generationKey = `default:${ctx.planRevisionId}`;
+  return {
+    id: actionId,
+    action_type: 'ensure_package_drafts',
+    target_object_type: 'plan_revision',
+    target_object_id: ctx.planRevisionId,
+    target_revision_id: generationKey,
+    target_status: 'approved',
+    idempotency_key: `${actionId}-idempotency`,
+    automation_scope: precondition.automation_scope,
+    automation_settings_version: precondition.automation_settings_version,
+    capability_fingerprint: precondition.capability_fingerprint,
+    precondition_fingerprint: automationPreconditionFingerprint(precondition),
+    action_input_json: {
+      plan_revision_id: ctx.planRevisionId,
+      generation_key: generationKey,
+    },
+    ...overrides,
+  };
+};
+
+const manualPathActionBody = (
+  ctx: { project: { id: string }; workItem: WorkItem },
+  precondition: AutomationPrecondition,
+  actionId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => {
+  const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: ctx.workItem.id });
+  return {
+    id: actionId,
+    action_type: 'request_manual_path',
+    target_object_type: 'work_item',
+    target_object_id: ctx.workItem.id,
+    target_status: 'blocked',
+    idempotency_key: `${actionId}-idempotency`,
+    automation_scope: precondition.automation_scope,
+    automation_settings_version: precondition.automation_settings_version,
+    capability_fingerprint: precondition.capability_fingerprint,
+    precondition_fingerprint: automationPreconditionFingerprint(precondition),
+    action_input_json: {
+      object_type: 'work_item',
+      object_id: ctx.workItem.id,
+      scope_key: scopeKey,
+      reason_code: 'needs_human_triage',
+      reason: 'Automation stopped for human triage.',
+    },
+    ...overrides,
+  };
+};
 
 const seedClaimedPlanDraftAction = async (
   app: INestApplication,
@@ -355,6 +433,118 @@ const seedClaimedPlanDraftAction = async (
   };
 };
 
+const seedClaimedPackageDraftAction = async (
+  app: INestApplication,
+  repository: P0Repository,
+  overrides: Record<string, unknown> = {},
+): Promise<ClaimedPackageDraftActionContext> => {
+  const ctx = await seedApprovedPlanThroughApi(app);
+  const settings = await repository.setAutomationProjectSettings({
+    id: `automation-settings-package-claim-binding-${overrides.id ?? 'default'}`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    scope_type: 'repo',
+    preset: 'draft_only',
+    expected_version: 0,
+    reason: 'enable package draft claim binding test',
+    evidence_refs: [],
+    actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+    now: '2026-05-05T00:00:00.000Z',
+  });
+  const precondition: AutomationPrecondition = {
+    automation_scope: `repo:${ctx.project.id}:repo-1`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    automation_settings_version: settings.version,
+    capability_fingerprint: settings.capability_fingerprint,
+    required_capability: 'canGeneratePackageDrafts',
+    actor_class: 'automation_daemon',
+    daemon_identity: automationDaemonIdentity,
+  };
+  const actionId = typeof overrides.id === 'string' ? overrides.id : `action-package-claim-binding-${ctx.planRevisionId}`;
+  const actionBody = packageDraftActionBody(ctx, precondition, actionId, overrides);
+  await signedAutomationPost(app, '/internal/automation/actions', actionBody).expect(201);
+  const claimToken = `claim-${actionId}`;
+  await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+    claim_token: claimToken,
+    lease_ms: 10 * 60 * 1000,
+    limit: 1,
+  }).expect(200);
+
+  return {
+    ...ctx,
+    precondition,
+    actionId,
+    claimToken,
+    commandBody: {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+    },
+  };
+};
+
+const seedClaimedManualPathAction = async (
+  app: INestApplication,
+  repository: P0Repository,
+  overrides: Record<string, unknown> = {},
+): Promise<ClaimedManualPathActionContext> => {
+  const ctx = await seedProjectRepoWorkItem(app);
+  const settings = await repository.setAutomationProjectSettings({
+    id: `automation-settings-manual-claim-binding-${overrides.id ?? 'default'}`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    scope_type: 'repo',
+    preset: 'draft_only',
+    expected_version: 0,
+    reason: 'enable manual path claim binding test',
+    evidence_refs: [],
+    actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+    now: '2026-05-05T00:00:00.000Z',
+  });
+  const precondition: AutomationPrecondition = {
+    automation_scope: `repo:${ctx.project.id}:repo-1`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    automation_settings_version: settings.version,
+    capability_fingerprint: settings.capability_fingerprint,
+    required_capability: 'canGeneratePlanDraft',
+    actor_class: 'automation_daemon',
+    daemon_identity: automationDaemonIdentity,
+  };
+  const actionId = typeof overrides.id === 'string' ? overrides.id : `action-manual-claim-binding-${ctx.workItem.id}`;
+  const actionBody = manualPathActionBody(ctx, precondition, actionId, overrides);
+  await signedAutomationPost(app, '/internal/automation/actions', actionBody).expect(201);
+  const claimToken = `claim-${actionId}`;
+  await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+    claim_token: claimToken,
+    lease_ms: 10 * 60 * 1000,
+    limit: 1,
+  }).expect(200);
+  const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: ctx.workItem.id });
+
+  return {
+    ...ctx,
+    precondition,
+    actionId,
+    claimToken,
+    commandBody: {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      object_type: 'work_item',
+      object_id: ctx.workItem.id,
+      scope_key: scopeKey,
+      reason_code: 'needs_human_triage',
+      reason: 'Automation stopped for human triage.',
+      evidence_refs: [],
+      requested_by: automationDaemonIdentity,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+    },
+  };
+};
+
 const expectNoPlanDraftCommandWrites = async (
   service: P0Service,
   repository: P0Repository,
@@ -363,6 +553,22 @@ const expectNoPlanDraftCommandWrites = async (
   const workItem = await repository.getWorkItem(ctx.workItem.id);
   expect(workItem?.current_plan_id).toBeUndefined();
   await expect(service.listExecutionPackages(ctx.workItem.id)).resolves.toHaveLength(0);
+  await expect(
+    repository.listActiveManualPathHolds({
+      object_type: 'work_item',
+      object_id: ctx.workItem.id,
+    }),
+  ).resolves.toHaveLength(0);
+};
+
+const expectNoPackageDraftCommandWrites = async (service: P0Service, ctx: ClaimedPackageDraftActionContext): Promise<void> => {
+  await expect(service.listExecutionPackages(ctx.workItem.id)).resolves.toHaveLength(0);
+};
+
+const expectNoManualPathCommandWrites = async (
+  repository: P0Repository,
+  ctx: ClaimedManualPathActionContext,
+): Promise<void> => {
   await expect(
     repository.listActiveManualPathHolds({
       object_type: 'work_item',
@@ -593,6 +799,47 @@ describe('automation command boundaries', () => {
       await expectNoPlanDraftCommandWrites(service, repository, ctx);
     },
   );
+
+  it('rejects internal package draft commands before execution package writes on claim binding mismatch', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedPackageDraftAction(app, repository, {
+      id: 'action-package-claim-binding-wrong-input',
+      action_input_json: {
+        plan_revision_id: 'plan-revision-other',
+        generation_key: 'default:plan-revision-other',
+      },
+    });
+
+    const response = await signedAutomationPost(
+      app,
+      `/internal/automation/plan-revisions/${ctx.planRevisionId}/ensure-package-drafts`,
+      ctx.commandBody,
+    );
+
+    expect([409, 422]).toContain(response.status);
+    await expectNoPackageDraftCommandWrites(service, ctx);
+  });
+
+  it('rejects internal manual path commands before manual hold writes on claim binding mismatch', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedManualPathAction(app, repository, {
+      id: 'action-manual-claim-binding-wrong-input',
+      action_input_json: {
+        object_type: 'work_item',
+        object_id: 'work-item-other',
+        scope_key: 'work_item:other',
+        reason_code: 'needs_human_triage',
+        reason: 'Automation stopped for human triage.',
+      },
+    });
+
+    const response = await signedAutomationPost(app, '/internal/automation/manual-path-holds', ctx.commandBody);
+
+    expect([409, 422]).toContain(response.status);
+    await expectNoManualPathCommandWrites(repository, ctx);
+  });
 
   it('requires signed actor headers when trusted actor signature enforcement is enabled', () => {
     const previousSecret = process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
@@ -1940,6 +2187,53 @@ describe('automation command boundaries', () => {
     });
 
     expect(replayed).toEqual(first);
+  });
+
+  it('wakes the run worker after a successful compatibility run enqueue command', async () => {
+    let kickCount = 0;
+    const { app, repository, service } = await createTestApp(undefined, {
+      kick: () => {
+        kickCount += 1;
+      },
+      drainOnce: async () => undefined,
+    });
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-kick',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable run enqueue wake-up test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:10.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      packageId: executionPackage.id,
+      expectedPackageVersion: executionPackage.version,
+      automationPrecondition: precondition,
+      idempotencyKey: 'idem-run-enqueue-kick',
+      actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+      executorType: 'mock',
+      workflowOnly: true,
+      runtimeSafetyAttestation: runtimeSafetyAttestation(),
+    });
+
+    expect(kickCount).toBe(1);
   });
 
   it('rejects run enqueue with a stale package version after a ready package edit', async () => {

@@ -106,6 +106,7 @@ type EnqueueRunInput = {
   executorType: ExecutorType;
   workflowOnly: boolean;
   runtimeSafetyAttestation?: RuntimeSafetyAttestation;
+  onRunQueued?: () => void;
 };
 
 const claimConflictBody = {
@@ -1348,6 +1349,7 @@ export class AutomationCommandService {
       run_session_id: runSessionId,
     });
 
+    input.onRunQueued?.();
     return {
       status: 'accepted',
       run_session_id: runSessionId,

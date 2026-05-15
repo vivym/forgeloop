@@ -456,7 +456,12 @@ export class P0Service {
   }
 
   async enqueueRunIfPackageStillReady(input: EnqueueRunInput): Promise<RunAcceptedResponse> {
-    return this.automationCommandService.enqueueRunIfPackageStillReady(input);
+    return this.automationCommandService.enqueueRunIfPackageStillReady({
+      ...input,
+      onRunQueued: () => {
+        this.kickRunWorker();
+      },
+    });
   }
 
   async supersedeExecutionPackageGenerationRun(
