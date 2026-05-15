@@ -108,13 +108,6 @@ import {
 import { buildEvidenceChain } from './evidence-chain';
 import { serializePublicRunSession } from './run-session-serialization';
 
-export {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
-  RUN_DURABILITY_MODE,
-  type RunDurabilityMode,
-} from '../modules/core/control-plane-tokens';
-
 type RunReplacementRecordedPayload = {
   mode: 'rerun_package' | 'force_rerun_package';
   execution_package_id: string;

@@ -10,7 +10,7 @@ import request from 'supertest';
 import type { Test as SupertestTest } from 'supertest';
 
 import { AppModule } from '../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY, RUN_DURABILITY_MODE } from '../apps/control-plane-api/src/p0/p0.service';
+import { P0_REPOSITORY, RUN_DURABILITY_MODE } from '../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import type { P0Repository } from '../packages/db/src';
 import {
   deriveRequiredArtifactPresence,

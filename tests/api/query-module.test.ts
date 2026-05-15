@@ -53,6 +53,14 @@ describe('query module', () => {
     }
   });
 
+  it('does not re-export shared core tokens from the P0 service boundary', async () => {
+    const p0ServiceModule = await import('../../apps/control-plane-api/src/p0/p0.service');
+
+    expect(p0ServiceModule).not.toHaveProperty('P0_REPOSITORY');
+    expect(p0ServiceModule).not.toHaveProperty('RUN_DURABILITY_MODE');
+    expect(p0ServiceModule).not.toHaveProperty('P0_DEMO_ACTOR_ID_FALLBACK');
+  });
+
   const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {
     const repo = new InMemoryP0Repository();
     let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
