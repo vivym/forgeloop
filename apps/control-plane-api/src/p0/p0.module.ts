@@ -20,6 +20,7 @@ import { AutomationModule } from '../modules/automation/automation.module';
 import { ProjectsModule } from '../modules/projects/projects.module';
 import { DELIVERY_RUN_WORKER } from '../modules/run-control/run-worker.token';
 import { RunWorkerLifecycleService } from '../modules/run-control/run-worker-lifecycle.service';
+import { SpecPlanModule } from '../modules/spec-plan/spec-plan.module';
 import { WorkItemsModule } from '../modules/work-items/work-items.module';
 import { P0Controller } from './p0.controller';
 import { P0Service } from './p0.service';
@@ -112,7 +113,7 @@ const createRunWorker = (repository: DeliveryRepository): RunWorker => {
 };
 
 @Module({
-  imports: [ControlPlaneCoreModule, AutomationModule, ProjectsModule, WorkItemsModule],
+  imports: [ControlPlaneCoreModule, AutomationModule, ProjectsModule, WorkItemsModule, SpecPlanModule],
   controllers: [P0Controller],
   providers: [
     {

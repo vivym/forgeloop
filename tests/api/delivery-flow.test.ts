@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { ProjectService } from '../../apps/control-plane-api/src/modules/projects/project.service';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-items/work-item.service';
 import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
@@ -167,6 +168,7 @@ const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
 const replaceRuntimeRepository = (app: INestApplication, repository: InMemoryDeliveryRepository): void => {
   (app.get(P0Service) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(ProjectService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(SpecPlanService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(WorkItemService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
 };

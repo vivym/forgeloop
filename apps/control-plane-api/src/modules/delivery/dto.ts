@@ -1,3 +1,4 @@
+import { jsonObjectSchema } from '@forgeloop/contracts';
 import { workItemKinds, type WorkItemKind } from '@forgeloop/domain';
 import { z } from 'zod';
 
@@ -50,3 +51,43 @@ export const updateWorkItemSchema = z
   })
   .strict();
 export type UpdateWorkItemDto = z.infer<typeof updateWorkItemSchema>;
+
+export const actorCommandSchema = z
+  .object({
+    actor_id: nonEmptyString.optional(),
+  })
+  .strict();
+export type ActorCommandDto = z.infer<typeof actorCommandSchema>;
+
+export const createSpecRevisionSchema = z
+  .object({
+    summary: nonEmptyString,
+    content: nonEmptyString,
+    background: nonEmptyString,
+    goals: stringList,
+    scope_in: stringList,
+    scope_out: stringList,
+    acceptance_criteria: stringList,
+    risk_notes: stringList.default([]),
+    test_strategy_summary: nonEmptyString,
+    structured_document: jsonObjectSchema.optional(),
+    author_actor_id: nonEmptyString.optional(),
+  })
+  .strict();
+export type CreateSpecRevisionDto = z.infer<typeof createSpecRevisionSchema>;
+
+export const createPlanRevisionSchema = z
+  .object({
+    summary: nonEmptyString,
+    content: nonEmptyString,
+    implementation_summary: nonEmptyString,
+    split_strategy: nonEmptyString,
+    dependency_order: stringList.default([]),
+    test_matrix: stringList,
+    risk_mitigations: stringList.default([]),
+    rollback_notes: nonEmptyString,
+    structured_document: jsonObjectSchema.optional(),
+    author_actor_id: nonEmptyString.optional(),
+  })
+  .strict();
+export type CreatePlanRevisionDto = z.infer<typeof createPlanRevisionSchema>;
