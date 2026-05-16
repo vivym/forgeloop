@@ -38,32 +38,32 @@ describe('automation dogfood script', () => {
   });
 
   it('fails the dogfood gate unless every expected daemon artifact is present exactly once', () => {
+    const passing = {
+      planDraftCreated: true,
+      packageDraftCount: 1,
+      completedActionTypes: ['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+      runSessionCount: 0,
+      restartRecoveredFromActionRuns: true,
+    } as const;
+
+    expect(automationDogfoodExitCode(passing)).toBe(0);
+    expect(automationDogfoodExitCode({ ...passing, planDraftCreated: false })).toBe(1);
+    expect(automationDogfoodExitCode({ ...passing, packageDraftCount: 0 })).toBe(1);
+    expect(automationDogfoodExitCode({ ...passing, packageDraftCount: 2 })).toBe(1);
+    expect(automationDogfoodExitCode({ ...passing, completedActionTypes: ['ensure_plan_draft'] })).toBe(1);
     expect(
       automationDogfoodExitCode({
-        planDraftCreated: true,
-        packageDraftCount: 1,
-        completedActionTypes: ['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
-        runSessionCount: 0,
-        restartRecoveredFromActionRuns: true,
-      }),
-    ).toBe(0);
-    expect(
-      automationDogfoodExitCode({
-        planDraftCreated: true,
-        packageDraftCount: 2,
-        completedActionTypes: ['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
-        runSessionCount: 0,
-        restartRecoveredFromActionRuns: true,
-      }),
-    ).toBe(1);
-    expect(
-      automationDogfoodExitCode({
-        planDraftCreated: true,
-        packageDraftCount: 1,
-        completedActionTypes: ['ensure_plan_draft'],
-        runSessionCount: 0,
-        restartRecoveredFromActionRuns: true,
+        ...passing,
+        completedActionTypes: ['ensure_plan_draft', 'ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
       }),
     ).toBe(1);
+    expect(
+      automationDogfoodExitCode({
+        ...passing,
+        completedActionTypes: ['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot', 'unexpected_action'],
+      }),
+    ).toBe(1);
+    expect(automationDogfoodExitCode({ ...passing, runSessionCount: 1 })).toBe(1);
+    expect(automationDogfoodExitCode({ ...passing, restartRecoveredFromActionRuns: false })).toBe(1);
   });
 });

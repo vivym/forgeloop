@@ -62,7 +62,7 @@ const reviewerHeaders = {
 export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryInput): string => {
   const completedActionTypes = [...new Set(input.completedActionTypes)].sort();
   const packageDraftPassed = input.packageDraftCount === 1;
-  const actionRunsPassed = hasExpectedAutomationDogfoodActionTypes(completedActionTypes);
+  const actionRunsPassed = hasExactlyExpectedAutomationDogfoodActionTypes(input.completedActionTypes);
   const runSessionLine =
     input.runSessionCount === 0
       ? '- Run enqueue disabled: PASSED (no run session was enqueued)'
@@ -78,13 +78,18 @@ export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryIn
   ].join('\n');
 };
 
-export const hasExpectedAutomationDogfoodActionTypes = (actionTypes: readonly string[]): boolean =>
-  expectedAutomationDogfoodActionTypes.every((actionType) => actionTypes.includes(actionType));
+export const hasExactlyExpectedAutomationDogfoodActionTypes = (actionTypes: readonly string[]): boolean => {
+  const sorted = [...actionTypes].sort();
+  return (
+    sorted.length === expectedAutomationDogfoodActionTypes.length &&
+    expectedAutomationDogfoodActionTypes.every((actionType, index) => sorted[index] === actionType)
+  );
+};
 
 export const automationDogfoodExitCode = (input: AutomationDogfoodSummaryInput): 0 | 1 =>
   input.planDraftCreated &&
   input.packageDraftCount === 1 &&
-  hasExpectedAutomationDogfoodActionTypes(input.completedActionTypes) &&
+  hasExactlyExpectedAutomationDogfoodActionTypes(input.completedActionTypes) &&
   input.runSessionCount === 0 &&
   input.restartRecoveredFromActionRuns
     ? 0

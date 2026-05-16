@@ -17,6 +17,7 @@ import {
   type AutomationActionResponse,
   type AutomationFetch,
   type ClaimNextActionInput,
+  type NextAction,
 } from '../../packages/automation/src/index';
 import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
 import type { AutomationActionRun } from '../../packages/domain/src/automation';
@@ -194,6 +195,13 @@ const runUntil = async (daemon: AutomationDaemon, predicate: () => Promise<boole
 };
 
 class RestartBeforeClaimClient extends AutomationHttpClient {
+  readonly createOrReplayActions: NextAction[] = [];
+
+  override async createOrReplayAction(action: NextAction): Promise<AutomationActionResponse> {
+    this.createOrReplayActions.push(action);
+    return super.createOrReplayAction(action);
+  }
+
   override async claimNextAction(_input: ClaimNextActionInput): Promise<AutomationActionResponse> {
     throw new Error('simulated_restart_before_claim');
   }
@@ -333,6 +341,18 @@ describe('HTTP automation daemon integration', () => {
     const pendingIdempotencyKeys = new Set(pendingActionRuns.map((actionRun) => actionRun.idempotency_key));
     expect(pendingIds.size).toBe(pendingActionRuns.length);
     expect(pendingIdempotencyKeys.size).toBe(pendingActionRuns.length);
+
+    const replayedAction = interruptedClient.createOrReplayActions[0]!;
+    const existingReplayRow = pendingActionRuns.find((actionRun) => actionRun.idempotency_key === replayedAction.idempotencyKey);
+    expect(existingReplayRow).toBeDefined();
+    const replayed = await createAutomationClient(app).createOrReplayAction(replayedAction);
+    expect(replayed.action).toMatchObject({
+      id: existingReplayRow!.id,
+      status: 'pending',
+      attempt: 0,
+      idempotencyKey: replayedAction.idempotencyKey,
+    });
+    expect(await actionRuns(repository)).toHaveLength(pendingActionRuns.length);
 
     const restarted = createDaemon(app);
     await runUntil(
