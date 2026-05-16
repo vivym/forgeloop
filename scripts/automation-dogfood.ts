@@ -24,6 +24,12 @@ export const requiredAutomationDogfoodSummaryMarkers = [
   'Run enqueue disabled: PASSED',
 ];
 
+export const expectedAutomationDogfoodActionTypes = [
+  'ensure_package_drafts',
+  'ensure_plan_draft',
+  'project_runtime_snapshot',
+] as const;
+
 export interface AutomationDogfoodSummaryInput {
   planDraftCreated: boolean;
   packageDraftCount: number;
@@ -55,6 +61,8 @@ const reviewerHeaders = {
 
 export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryInput): string => {
   const completedActionTypes = [...new Set(input.completedActionTypes)].sort();
+  const packageDraftPassed = input.packageDraftCount === 1;
+  const actionRunsPassed = hasExpectedAutomationDogfoodActionTypes(completedActionTypes);
   const runSessionLine =
     input.runSessionCount === 0
       ? '- Run enqueue disabled: PASSED (no run session was enqueued)'
@@ -63,12 +71,24 @@ export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryIn
     '# Automation daemon dogfood',
     '',
     `- Plan draft: ${input.planDraftCreated ? 'PASSED' : 'FAILED'}`,
-    `- ExecutionPackage drafts: ${input.packageDraftCount > 0 ? 'PASSED' : 'FAILED'} (${input.packageDraftCount} draft package(s))`,
-    `- Action runs: ${completedActionTypes.length > 0 ? 'PASSED' : 'FAILED'} (${completedActionTypes.join(', ') || 'none'})`,
+    `- ExecutionPackage drafts: ${packageDraftPassed ? 'PASSED' : 'FAILED'} (${input.packageDraftCount} draft package(s))`,
+    `- Action runs: ${actionRunsPassed ? 'PASSED' : 'FAILED'} (${completedActionTypes.join(', ') || 'none'})`,
     `- Action-run restart recovery: ${input.restartRecoveredFromActionRuns ? 'PASSED' : 'FAILED'}`,
     runSessionLine,
   ].join('\n');
 };
+
+export const hasExpectedAutomationDogfoodActionTypes = (actionTypes: readonly string[]): boolean =>
+  expectedAutomationDogfoodActionTypes.every((actionType) => actionTypes.includes(actionType));
+
+export const automationDogfoodExitCode = (input: AutomationDogfoodSummaryInput): 0 | 1 =>
+  input.planDraftCreated &&
+  input.packageDraftCount === 1 &&
+  hasExpectedAutomationDogfoodActionTypes(input.completedActionTypes) &&
+  input.runSessionCount === 0 &&
+  input.restartRecoveredFromActionRuns
+    ? 0
+    : 1;
 
 const bootControlPlane = async (): Promise<{ app: INestApplication; repository: P0Repository; baseUrl: string }> => {
   const [{ AppModule }, { P0_REPOSITORY }, { RUN_WORKER }] = await Promise.all([
@@ -248,13 +268,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
         restartResult.executed.reasonCode === 'no_claimable_action' &&
         restartActionRunCount === actionRunCount,
     };
-    const failed =
-      !summary.planDraftCreated ||
-      summary.packageDraftCount === 0 ||
-      summary.completedActionTypes.length === 0 ||
-      summary.runSessionCount > 0 ||
-      !summary.restartRecoveredFromActionRuns;
-    return { ...summary, exitCode: failed ? 1 : 0 };
+    return { ...summary, exitCode: automationDogfoodExitCode(summary) };
   } finally {
     if (app !== undefined) {
       await app.close();

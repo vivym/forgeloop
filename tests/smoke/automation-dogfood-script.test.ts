@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
+  automationDogfoodExitCode,
   automationDogfoodCommand,
   renderAutomationDogfoodSummary,
   requiredAutomationDogfoodSummaryMarkers,
@@ -34,5 +35,35 @@ describe('automation dogfood script', () => {
     }
     expect(summary).toContain('no run session was enqueued');
     expect(summary).not.toContain('/Users/');
+  });
+
+  it('fails the dogfood gate unless every expected daemon artifact is present exactly once', () => {
+    expect(
+      automationDogfoodExitCode({
+        planDraftCreated: true,
+        packageDraftCount: 1,
+        completedActionTypes: ['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+        runSessionCount: 0,
+        restartRecoveredFromActionRuns: true,
+      }),
+    ).toBe(0);
+    expect(
+      automationDogfoodExitCode({
+        planDraftCreated: true,
+        packageDraftCount: 2,
+        completedActionTypes: ['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+        runSessionCount: 0,
+        restartRecoveredFromActionRuns: true,
+      }),
+    ).toBe(1);
+    expect(
+      automationDogfoodExitCode({
+        planDraftCreated: true,
+        packageDraftCount: 1,
+        completedActionTypes: ['ensure_plan_draft'],
+        runSessionCount: 0,
+        restartRecoveredFromActionRuns: true,
+      }),
+    ).toBe(1);
   });
 });

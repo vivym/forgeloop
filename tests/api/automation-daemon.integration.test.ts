@@ -7,13 +7,19 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { AutomationDaemon } from '../../apps/automation-daemon/src/automation-daemon';
+import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
 import { loadDaemonWorkflowPolicyDigest } from '../../apps/automation-daemon/src/workflow-policy-loader';
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { AutomationHttpClient, type AutomationFetch } from '../../packages/automation/src/index';
+import {
+  AutomationHttpClient,
+  type AutomationActionResponse,
+  type AutomationFetch,
+  type ClaimNextActionInput,
+} from '../../packages/automation/src/index';
 import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import type { AutomationActionRun } from '../../packages/domain/src/automation';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../../packages/domain/src/index';
 
 const automationSecret = 'test-secret';
@@ -35,6 +41,8 @@ const reviewerHeaders = {
 const apps: INestApplication[] = [];
 let tempRoot: string;
 let repoRoot: string;
+let previousAutomationSecret: string | undefined;
+let previousAutomationTestNow: string | undefined;
 
 const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: P0Repository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -78,16 +86,19 @@ const automationFetchFor = (app: INestApplication): AutomationFetch => async (ur
   };
 };
 
-const createDaemon = (app: INestApplication): AutomationDaemon =>
+const createAutomationClient = (app: INestApplication): AutomationHttpClient =>
+  new AutomationHttpClient({
+    baseUrl: 'http://forgeloop.test',
+    actorId: automationActorId,
+    daemonIdentity: automationDaemonIdentity,
+    secret: automationSecret,
+    fetch: automationFetchFor(app),
+    now: () => new Date().toISOString(),
+  });
+
+const createDaemon = (app: INestApplication, client: AutomationDaemonClient = createAutomationClient(app)): AutomationDaemon =>
   new AutomationDaemon({
-    client: new AutomationHttpClient({
-      baseUrl: 'http://forgeloop.test',
-      actorId: automationActorId,
-      daemonIdentity: automationDaemonIdentity,
-      secret: automationSecret,
-      fetch: automationFetchFor(app),
-      now: () => new Date().toISOString(),
-    }),
+    client,
     actorId: automationActorId,
     daemonIdentity: automationDaemonIdentity,
     allowedRepoRoots: [tempRoot],
@@ -182,7 +193,35 @@ const runUntil = async (daemon: AutomationDaemon, predicate: () => Promise<boole
   throw new Error(`automation_daemon_condition_not_met:${label}`);
 };
 
+class RestartBeforeClaimClient extends AutomationHttpClient {
+  override async claimNextAction(_input: ClaimNextActionInput): Promise<AutomationActionResponse> {
+    throw new Error('simulated_restart_before_claim');
+  }
+}
+
+const actionRuns = async (repository: P0Repository): Promise<AutomationActionRun[]> =>
+  (await repository.getRuntimeSnapshotData()).recent_action_runs;
+
+const expectSucceededActionLifecycle = (runs: AutomationActionRun[], actionType: string): AutomationActionRun => {
+  const matching = runs.filter((actionRun) => actionRun.action_type === actionType);
+  expect(matching).toHaveLength(1);
+  expect(matching[0]).toMatchObject({
+    action_type: actionType,
+    status: 'succeeded',
+    attempt: 1,
+    created_at: expect.any(String),
+    claimed_at: expect.any(String),
+    started_at: expect.any(String),
+    finished_at: expect.any(String),
+  });
+  expect(matching[0]!.claim_token).toBeUndefined();
+  expect(matching[0]!.locked_until).toBeUndefined();
+  return matching[0]!;
+};
+
 beforeEach(async () => {
+  previousAutomationSecret = process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
+  previousAutomationTestNow = process.env.FORGELOOP_AUTOMATION_TEST_NOW;
   process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = automationSecret;
   process.env.FORGELOOP_AUTOMATION_TEST_NOW = now;
   tempRoot = await mkdtemp(path.join(tmpdir(), 'forgeloop-automation-daemon-e2e-'));
@@ -192,8 +231,16 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
-  delete process.env.FORGELOOP_AUTOMATION_TEST_NOW;
+  if (previousAutomationSecret === undefined) {
+    delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
+  } else {
+    process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = previousAutomationSecret;
+  }
+  if (previousAutomationTestNow === undefined) {
+    delete process.env.FORGELOOP_AUTOMATION_TEST_NOW;
+  } else {
+    process.env.FORGELOOP_AUTOMATION_TEST_NOW = previousAutomationTestNow;
+  }
   await Promise.all(apps.splice(0).map((app) => app.close()));
   await rm(tempRoot, { recursive: true, force: true });
 });
@@ -235,20 +282,22 @@ describe('HTTP automation daemon integration', () => {
     });
     await expect(repository.listRunSessionsForPackage(packages[0]!.id)).resolves.toEqual([]);
 
-    const actionRuns = (await repository.getRuntimeSnapshotData()).recent_action_runs;
-    expect(actionRuns).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ action_type: 'ensure_plan_draft', status: 'succeeded', attempt: 1 }),
-        expect.objectContaining({ action_type: 'ensure_package_drafts', status: 'succeeded', attempt: 1 }),
-        expect.objectContaining({ action_type: 'project_runtime_snapshot', status: 'succeeded', attempt: 1 }),
-      ]),
-    );
-    const actionRunCount = actionRuns.length;
+    const completedActionRuns = await actionRuns(repository);
+    const planAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_plan_draft');
+    const packageAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_package_drafts');
+    expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
+    expect(new Set(completedActionRuns.map((actionRun) => actionRun.idempotency_key)).size).toBe(completedActionRuns.length);
+    expect(planAction.action_input_json).toMatchObject({ work_item_id: seeded.workItem.id, spec_revision_id: seeded.specRevisionId });
+    expect(packageAction.action_input_json).toMatchObject({
+      plan_revision_id: planContext.revision.id,
+      generation_key: `default:${planContext.revision.id}`,
+    });
+    const actionRunCount = completedActionRuns.length;
 
     const restarted = createDaemon(app);
     const restartResult = await restarted.runOnce();
     const packagesAfterRestart = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
-    const actionRunsAfterRestart = (await repository.getRuntimeSnapshotData()).recent_action_runs;
+    const actionRunsAfterRestart = await actionRuns(repository);
 
     expect(restartResult).toMatchObject({
       plannedActionCount: 0,
@@ -257,5 +306,49 @@ describe('HTTP automation daemon integration', () => {
     expect(packagesAfterRestart).toHaveLength(1);
     expect(actionRunsAfterRestart).toHaveLength(actionRunCount);
     await expect(repository.listRunSessionsForPackage(packagesAfterRestart[0]!.id)).resolves.toEqual([]);
+  });
+
+  it('continues from pending automation_action_runs after daemon restart without duplicating actions', async () => {
+    const { app, repository } = await bootAutomationApp();
+    const seeded = await seedDraftOnlyApprovedSpec(app);
+    const interruptedClient = new RestartBeforeClaimClient({
+      baseUrl: 'http://forgeloop.test',
+      actorId: automationActorId,
+      daemonIdentity: automationDaemonIdentity,
+      secret: automationSecret,
+      fetch: automationFetchFor(app),
+      now: () => new Date().toISOString(),
+    });
+
+    await expect(createDaemon(app, interruptedClient).runOnce()).rejects.toThrow('simulated_restart_before_claim');
+
+    const pendingActionRuns = await actionRuns(repository);
+    expect(pendingActionRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action_type: 'ensure_plan_draft', status: 'pending', attempt: 0 }),
+        expect.objectContaining({ action_type: 'project_runtime_snapshot', status: 'pending', attempt: 0 }),
+      ]),
+    );
+    const pendingIds = new Set(pendingActionRuns.map((actionRun) => actionRun.id));
+    const pendingIdempotencyKeys = new Set(pendingActionRuns.map((actionRun) => actionRun.idempotency_key));
+    expect(pendingIds.size).toBe(pendingActionRuns.length);
+    expect(pendingIdempotencyKeys.size).toBe(pendingActionRuns.length);
+
+    const restarted = createDaemon(app);
+    await runUntil(
+      restarted,
+      async () => {
+        const runs = await actionRuns(repository);
+        return runs.length === pendingActionRuns.length && runs.every((actionRun) => actionRun.status === 'succeeded');
+      },
+      'pending_action_runs_completed_after_restart',
+    );
+
+    const recoveredActionRuns = await actionRuns(repository);
+    expect(new Set(recoveredActionRuns.map((actionRun) => actionRun.id))).toEqual(pendingIds);
+    expect(new Set(recoveredActionRuns.map((actionRun) => actionRun.idempotency_key))).toEqual(pendingIdempotencyKeys);
+    expectSucceededActionLifecycle(recoveredActionRuns, 'ensure_plan_draft');
+    expectSucceededActionLifecycle(recoveredActionRuns, 'project_runtime_snapshot');
+    expect((await repository.getWorkItem(seeded.workItem.id))?.current_plan_id).toEqual(expect.any(String));
   });
 });
