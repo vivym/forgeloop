@@ -29,6 +29,12 @@ const automationDaemonIdentity = 'daemon-1';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const now = '2026-05-16T00:00:00.000Z';
+const expectedCompletedActionTypes = [
+  'ensure_package_drafts',
+  'ensure_plan_draft',
+  'project_runtime_snapshot',
+] as const;
+const expectedInitialPendingActionTypes = ['ensure_plan_draft', 'project_runtime_snapshot'] as const;
 
 const humanAdminHeaders = {
   'x-forgeloop-actor-id': actorOwner,
@@ -223,6 +229,8 @@ class RestartBeforeClaimClient extends AutomationHttpClient {
 const actionRuns = async (repository: P0Repository): Promise<AutomationActionRun[]> =>
   (await repository.getRuntimeSnapshotData()).recent_action_runs;
 
+const sortedActionTypes = (runs: AutomationActionRun[]): string[] => runs.map((actionRun) => actionRun.action_type).sort();
+
 const expectSucceededActionLifecycle = (runs: AutomationActionRun[], actionType: string): AutomationActionRun => {
   const matching = runs.filter((actionRun) => actionRun.action_type === actionType);
   expect(matching).toHaveLength(1);
@@ -297,6 +305,9 @@ describe('HTTP automation daemon integration', () => {
     await expect(repository.listRunSessionsForPackage(packages[0]!.id)).resolves.toEqual([]);
 
     const completedActionRuns = await actionRuns(repository);
+    expect(completedActionRuns).toHaveLength(expectedCompletedActionTypes.length);
+    expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
+    expect(sortedActionTypes(completedActionRuns)).toEqual([...expectedCompletedActionTypes]);
     const planAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_plan_draft');
     const packageAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_package_drafts');
     expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
@@ -337,6 +348,8 @@ describe('HTTP automation daemon integration', () => {
     await expect(createDaemon(app, interruptedClient).runOnce()).rejects.toThrow('simulated_restart_before_claim');
 
     const pendingActionRuns = await actionRuns(repository);
+    expect(pendingActionRuns).toHaveLength(expectedInitialPendingActionTypes.length);
+    expect(sortedActionTypes(pendingActionRuns)).toEqual([...expectedInitialPendingActionTypes]);
     expect(pendingActionRuns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action_type: 'ensure_plan_draft', status: 'pending', attempt: 0 }),

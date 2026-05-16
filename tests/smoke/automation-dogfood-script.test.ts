@@ -8,7 +8,7 @@ import {
   expectedAutomationDogfoodActionTypes,
   renderAutomationDogfoodSummary,
   requiredAutomationDogfoodSummaryMarkers,
-} from '../../scripts/automation-dogfood';
+} from '../../scripts/automation-dogfood-summary';
 
 const rootUrl = new URL('../..', import.meta.url);
 

@@ -17,33 +17,11 @@ import {
 } from '../packages/automation/src/index';
 import { InMemoryP0Repository, type P0Repository } from '../packages/db/src/index';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
-
-export const automationDogfoodCommand = 'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/automation-dogfood.ts';
-
-export const requiredAutomationDogfoodSummaryMarkers = [
-  'Automation daemon dogfood',
-  'Plan draft: PASSED',
-  'ExecutionPackage drafts: PASSED',
-  'Action runs: PASSED',
-  'Action-run restart recovery: PASSED',
-  'Run enqueue disabled: PASSED',
-];
-
-export const expectedAutomationDogfoodActionTypes = [
-  'ensure_package_drafts',
-  'ensure_plan_draft',
-  'project_runtime_snapshot',
-] as const;
-
-export interface AutomationDogfoodSummaryInput {
-  planDraftCreated: boolean;
-  packageDraftCount: number;
-  completedActionTypes: string[];
-  actionRunCount: number;
-  nonSucceededActionRunCount: number;
-  runSessionCount: number;
-  restartRecoveredFromActionRuns: boolean;
-}
+import {
+  automationDogfoodExitCode,
+  renderAutomationDogfoodSummary,
+  type AutomationDogfoodSummaryInput,
+} from './automation-dogfood-summary';
 
 interface AutomationDogfoodResult extends AutomationDogfoodSummaryInput {
   exitCode: number;
@@ -56,6 +34,7 @@ const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
 const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
+const expectedPendingBeforeRestartActionTypes = ['ensure_plan_draft', 'project_runtime_snapshot'] as const;
 
 const humanAdminHeaders = {
   'x-forgeloop-actor-id': actorOwner,
@@ -65,47 +44,6 @@ const reviewerHeaders = {
   'x-forgeloop-actor-id': actorReviewer,
   'x-forgeloop-actor-class': 'human',
 };
-
-export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryInput): string => {
-  const completedActionTypes = [...new Set(input.completedActionTypes)].sort();
-  const packageDraftPassed = input.packageDraftCount === 1;
-  const actionRunsPassed =
-    input.actionRunCount === expectedAutomationDogfoodActionTypes.length &&
-    input.nonSucceededActionRunCount === 0 &&
-    hasExactlyExpectedAutomationDogfoodActionTypes(input.completedActionTypes);
-  const runSessionLine =
-    input.runSessionCount === 0
-      ? '- Run enqueue disabled: PASSED (no run session was enqueued)'
-      : `- Run enqueue disabled: FAILED (${input.runSessionCount} run session(s) were enqueued)`;
-  return [
-    '# Automation daemon dogfood',
-    '',
-    `- Plan draft: ${input.planDraftCreated ? 'PASSED' : 'FAILED'}`,
-    `- ExecutionPackage drafts: ${packageDraftPassed ? 'PASSED' : 'FAILED'} (${input.packageDraftCount} draft package(s))`,
-    `- Action runs: ${actionRunsPassed ? 'PASSED' : 'FAILED'} (${completedActionTypes.join(', ') || 'none'}; ${input.actionRunCount} total, ${input.nonSucceededActionRunCount} incomplete)`,
-    `- Action-run restart recovery: ${input.restartRecoveredFromActionRuns ? 'PASSED' : 'FAILED'}`,
-    runSessionLine,
-  ].join('\n');
-};
-
-export const hasExactlyExpectedAutomationDogfoodActionTypes = (actionTypes: readonly string[]): boolean => {
-  const sorted = [...actionTypes].sort();
-  return (
-    sorted.length === expectedAutomationDogfoodActionTypes.length &&
-    expectedAutomationDogfoodActionTypes.every((actionType, index) => sorted[index] === actionType)
-  );
-};
-
-export const automationDogfoodExitCode = (input: AutomationDogfoodSummaryInput): 0 | 1 =>
-  input.planDraftCreated &&
-  input.packageDraftCount === 1 &&
-  input.actionRunCount === expectedAutomationDogfoodActionTypes.length &&
-  input.nonSucceededActionRunCount === 0 &&
-  hasExactlyExpectedAutomationDogfoodActionTypes(input.completedActionTypes) &&
-  input.runSessionCount === 0 &&
-  input.restartRecoveredFromActionRuns
-    ? 0
-    : 1;
 
 const bootControlPlane = async (): Promise<{ app: INestApplication; repository: P0Repository; baseUrl: string }> => {
   const [{ AppModule }, { P0_REPOSITORY }, { RUN_WORKER }] = await Promise.all([
@@ -264,6 +202,8 @@ class RestartBeforeClaimClient extends AutomationHttpClient {
   }
 }
 
+const sortedActionTypes = (runs: { action_type: string }[]): string[] => runs.map((actionRun) => actionRun.action_type).sort();
+
 const runDogfood = async (): Promise<AutomationDogfoodResult> => {
   const previousSecret = process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
   process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = automationSecret;
@@ -294,6 +234,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     );
     const pendingBeforeRestartIds = new Set(pendingBeforeRestart.map((actionRun) => actionRun.id));
     const pendingBeforeRestartKeys = new Set(pendingBeforeRestart.map((actionRun) => actionRun.idempotency_key));
+    const pendingBeforeRestartActionTypes = sortedActionTypes(pendingBeforeRestart);
     const daemon = createDaemon(baseUrl);
 
     await runUntil(
@@ -326,6 +267,8 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
       runSessionCount: runSessions.length,
       restartRecoveredFromActionRuns:
         pendingBeforeRestart.length > 0 &&
+        pendingBeforeRestart.length === expectedPendingBeforeRestartActionTypes.length &&
+        pendingBeforeRestartActionTypes.every((actionType, index) => actionType === expectedPendingBeforeRestartActionTypes[index]) &&
         interruptedClient.createOrReplayActions.length === pendingBeforeRestart.length &&
         pendingBeforeRestartIds.size === pendingBeforeRestart.length &&
         pendingBeforeRestartKeys.size === pendingBeforeRestart.length &&
