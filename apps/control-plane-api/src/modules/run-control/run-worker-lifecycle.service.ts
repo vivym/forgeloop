@@ -1,14 +1,13 @@
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import type { RunWorker } from '@forgeloop/run-worker';
 
-import { DELIVERY_RUN_WORKER } from './run-worker.token';
+import { DELIVERY_RUN_WORKER, type DeliveryRunWorker } from './run-worker.token';
 
 @Injectable()
 export class RunWorkerLifecycleService implements OnModuleInit, OnModuleDestroy {
   private interval: ReturnType<typeof setInterval> | undefined;
   private draining = false;
 
-  constructor(@Inject(DELIVERY_RUN_WORKER) private readonly runWorker: RunWorker) {}
+  constructor(@Inject(DELIVERY_RUN_WORKER) private readonly runWorker: DeliveryRunWorker) {}
 
   onModuleInit(): void {
     void this.drain();

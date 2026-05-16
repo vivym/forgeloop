@@ -1,5 +1,6 @@
 import {
   artifactKindSchema,
+  executorTypeSchema,
   jsonObjectSchema,
   requiredCheckSpecSchema,
   type ArtifactKind,
@@ -64,6 +65,36 @@ export const actorCommandSchema = z
   })
   .strict();
 export type ActorCommandDto = z.infer<typeof actorCommandSchema>;
+
+export const runPackageSchema = z
+  .object({
+    execution_package_id: nonEmptyString.optional(),
+    requested_by_actor_id: nonEmptyString,
+    executor_type: executorTypeSchema.optional(),
+    workflow_only: z.boolean().optional(),
+    previous_run_session_id: nonEmptyString.optional(),
+    force: z.literal(true).optional(),
+    force_reason: nonEmptyString.optional(),
+  })
+  .strict();
+export type RunPackageDto = z.infer<typeof runPackageSchema>;
+
+export const runInputSchema = z
+  .object({
+    actor_id: nonEmptyString.optional(),
+    message: nonEmptyString,
+    target_turn_id: nonEmptyString.optional(),
+  })
+  .strict();
+export type RunInputDto = z.infer<typeof runInputSchema>;
+
+export const runControlSchema = z
+  .object({
+    actor_id: nonEmptyString.optional(),
+    reason: nonEmptyString.optional(),
+  })
+  .strict();
+export type RunControlDto = z.infer<typeof runControlSchema>;
 
 export const markPackageReadySchema = actorCommandSchema.extend({
   expected_package_version: z.number().int().min(0),
