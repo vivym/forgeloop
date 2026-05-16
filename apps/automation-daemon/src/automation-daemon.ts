@@ -34,6 +34,7 @@ export interface AutomationDaemonOptions {
   noClaimBackoffMs: number;
   claimToken?: string;
   sleep?: (ms: number) => Promise<void>;
+  onIterationError?: (error: unknown) => void;
 }
 
 export interface AutomationDaemonRunOnceResult {
@@ -41,8 +42,6 @@ export interface AutomationDaemonRunOnceResult {
   executed: AutomationExecutorResult;
   backoffMs?: number;
 }
-
-const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const policyProjectionFor = (
   repo: RuntimeSnapshotRepo,
@@ -58,25 +57,38 @@ const policyProjectionFor = (
 });
 
 export class AutomationDaemon {
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly stopWaiters = new Set<() => void>();
   private stopped = false;
   private claimCounter = 0;
 
-  constructor(private readonly options: AutomationDaemonOptions) {
-    this.sleep = options.sleep ?? defaultSleep;
-  }
+  constructor(private readonly options: AutomationDaemonOptions) {}
 
   stop(): void {
+    if (this.stopped) {
+      return;
+    }
     this.stopped = true;
+    const waiters = [...this.stopWaiters];
+    this.stopWaiters.clear();
+    for (const waiter of waiters) {
+      waiter();
+    }
   }
 
   async run(): Promise<void> {
     while (!this.stopped) {
-      const result = await this.runOnce();
+      let sleepMs = this.options.loopIntervalMs;
+      try {
+        const result = await this.runOnce();
+        sleepMs = result.backoffMs ?? this.options.loopIntervalMs;
+      } catch (error) {
+        this.reportIterationError(error);
+        sleepMs = this.options.noClaimBackoffMs;
+      }
       if (this.stopped) {
         break;
       }
-      await this.sleep(result.backoffMs ?? this.options.loopIntervalMs);
+      await this.sleepUntilStopped(sleepMs);
     }
   }
 
@@ -136,5 +148,43 @@ export class AutomationDaemon {
     }
     this.claimCounter += 1;
     return `${this.options.daemonIdentity}:${Date.now()}:${this.claimCounter}`;
+  }
+
+  private async sleepUntilStopped(ms: number): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+
+    let stopWaiter!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      stopWaiter = () => resolve();
+      this.stopWaiters.add(stopWaiter);
+    });
+
+    try {
+      if (this.options.sleep !== undefined) {
+        await Promise.race([this.options.sleep(ms), stopped]);
+        return;
+      }
+
+      let timer: ReturnType<typeof setTimeout>;
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, ms);
+        }),
+        stopped,
+      ]);
+      clearTimeout(timer!);
+    } finally {
+      this.stopWaiters.delete(stopWaiter);
+    }
+  }
+
+  private reportIterationError(error: unknown): void {
+    try {
+      this.options.onIterationError?.(error);
+    } catch {
+      // Keep transient reporting failures from terminating the daemon loop.
+    }
   }
 }

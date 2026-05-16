@@ -266,4 +266,87 @@ describe('automation daemon loop', () => {
     expect(client.calls.filter((call) => call.method === 'runtimeSnapshot')).toHaveLength(1);
     expect(client.calls.map((call) => call.method)).toContain('completeAction');
   });
+
+  it('continues after a transient iteration failure using backoff', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      repos: [],
+      projects: [],
+    });
+    client.actionToClaim = null;
+    let attempts = 0;
+    client.runtimeSnapshot = async () => {
+      attempts += 1;
+      client.calls.push({ method: 'runtimeSnapshot', args: [] });
+      if (attempts === 1) {
+        throw new Error('temporary control plane outage');
+      }
+      return client.snapshot;
+    };
+    const sleeps: number[] = [];
+    let daemon!: AutomationDaemon;
+    daemon = new AutomationDaemon({
+      client,
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+      claimToken: 'claim-token-1',
+      allowedRepoRoots: ['/workspace'],
+      policyParserVersion: parserVersion,
+      policyLoader: async () => loadedPolicy(),
+      noClaimBackoffMs: 50,
+      loopIntervalMs: 1_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        if (sleeps.length === 2) {
+          daemon.stop();
+        }
+      },
+    });
+
+    await daemon.run();
+
+    expect(attempts).toBe(2);
+    expect(sleeps).toEqual([50, 50]);
+    expect(client.calls.map((call) => call.method)).toContain('claimNextAction');
+  });
+
+  it('stop wakes the daemon while it is sleeping between iterations', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      repos: [],
+      projects: [],
+    });
+    client.actionToClaim = null;
+    let sleepStarted!: () => void;
+    const sleepStartedPromise = new Promise<void>((resolve) => {
+      sleepStarted = resolve;
+    });
+    const daemon = new AutomationDaemon({
+      client,
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+      claimToken: 'claim-token-1',
+      allowedRepoRoots: ['/workspace'],
+      policyParserVersion: parserVersion,
+      policyLoader: async () => loadedPolicy(),
+      noClaimBackoffMs: 10_000,
+      loopIntervalMs: 10_000,
+      sleep: async () => {
+        sleepStarted();
+        await new Promise(() => undefined);
+      },
+    });
+
+    const runPromise = daemon.run();
+    await sleepStartedPromise;
+    daemon.stop();
+    const outcome = await Promise.race([
+      runPromise.then(() => 'stopped'),
+      new Promise<'timed_out'>((resolve) => {
+        setTimeout(() => resolve('timed_out'), 50);
+      }),
+    ]);
+
+    expect(outcome).toBe('stopped');
+  });
 });

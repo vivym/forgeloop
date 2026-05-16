@@ -20,6 +20,9 @@ const daemon = new AutomationDaemon({
   policyLoader: loadDaemonWorkflowPolicyDigest,
   loopIntervalMs: config.loopIntervalMs,
   noClaimBackoffMs: config.noClaimBackoffMs,
+  onIterationError: (error) => {
+    console.error(error instanceof Error ? error.message : error);
+  },
 });
 
 const stop = (): void => daemon.stop();
