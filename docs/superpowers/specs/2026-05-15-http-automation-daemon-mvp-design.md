@@ -272,7 +272,7 @@ This endpoint requires domain/schema/repository refinements in Slice 2:
 - add `action_input_json` to `AutomationActionRun` and `automation_action_runs` for allowlisted command input needed after restart;
 - add `createOrReplayAutomationActionRun(input)` that creates/replays `pending` rows without claiming them;
 - for mutating actions, compare action type, target object type/id, target revision id, target version, target status, automation scope, automation settings version, capability fingerprint, precondition fingerprint, and full `action_input_json` when deciding replay vs conflict;
-- for `project_runtime_snapshot`, compare only action type plus the stable policy observation identity when deciding replay vs conflict. Automation scope, settings version, capability fingerprint, observed timestamp, and last-known-good fields may be recorded for context/result projection, but they do not participate in idempotency or replay/conflict comparison.
+- for `project_runtime_snapshot`, compare only action type plus the stable policy observation identity when deciding replay vs conflict. Canonical repo automation scope participates because `repo_id` is project-local; settings version, capability fingerprint, observed timestamp, and last-known-good fields may be recorded for context/result projection, but they do not participate in idempotency or replay/conflict comparison.
 - preserve the current `claimAutomationActionRun` behavior only as an internal helper if useful, not as the HTTP create/replay contract.
 
 `action_input_json` is intentionally public-safe. For mutating actions, the full `action_input_json` is part of the durable action identity. For `project_runtime_snapshot`, only the stable policy observation identity fields are part of the durable identity; observation timestamp and last-known-good fields are result/projection details. It is the only durable command payload the daemon may use after a restart; the daemon must not re-plan from a newer snapshot to fill in missing command inputs for an already-created action.
@@ -401,13 +401,14 @@ Each action type defines an allowlisted `action_input_json` envelope:
 
 For `project_runtime_snapshot`, the stable policy observation identity is:
 
+- canonical repo `automation_scope`
 - `repo_id`
 - `policy_status`
 - `policy_digest`
 - `parser_version`
 - `reason_code`
 
-The projection idempotency key, precondition fingerprint, and replay/conflict comparison all use exactly that stable observation identity. `observed_at`, `last_known_good_policy_digest`, and `last_known_good_observed_at` are completion-result fields only. They must not participate in idempotency, precondition, or replay comparison, so repeated observation of the same missing/loaded/failed policy does not create heartbeat rows or idempotency conflicts.
+The projection idempotency key, precondition fingerprint, and replay/conflict comparison all use exactly that stable observation identity. `repo_id` is project-local, so the canonical repo `automation_scope` is required to keep observations for `repo:project-a:repo-1` and `repo:project-b:repo-1` distinct. `observed_at`, `last_known_good_policy_digest`, and `last_known_good_observed_at` are completion-result fields only. They must not participate in idempotency, precondition, or replay comparison, so repeated observation of the same missing/loaded/failed policy does not create heartbeat rows or idempotency conflicts.
 
 The executor uses this persisted envelope, plus the claim token and action identity fields, to call command endpoints. No action can be created unless its required action input envelope is complete. Controllers may return this envelope on create/replay/claim responses because it is public-safe by construction, but they still must not return raw `metadata_json`.
 
@@ -430,7 +431,7 @@ The completed projection result envelope is allowlisted:
 - `last_known_good_policy_digest`
 - `last_known_good_observed_at`
 
-`RuntimeSnapshotService` may derive repo policy projection fields from the latest completed `project_runtime_snapshot` action run for that repo and stable policy observation identity, ordered by `finished_at desc, updated_at desc, id desc`. Projection lookup and duplicate suppression do not filter by automation scope. They must expose only curated projection fields, not raw action-run `result_json` or `metadata_json`. Slice 2/3 must add a repository query for latest completed projection action runs by repo plus stable policy observation identity. No separate runtime snapshot table, local daemon cache, `automation_cursors` table/state, or additional daemon recovery table is introduced for this MVP.
+`RuntimeSnapshotService` may derive repo policy projection fields from the latest completed `project_runtime_snapshot` action run for that repo and stable policy observation identity, ordered by `finished_at desc, updated_at desc, id desc`. Projection lookup and duplicate suppression use canonical repo `automation_scope` plus `repo_id` because `repo_id` is not globally unique. They must expose only curated projection fields, not raw action-run `result_json` or `metadata_json`. Slice 2/3 must add a repository query for latest completed projection action runs by canonical repo scope plus repo and stable policy observation identity. No separate runtime snapshot table, local daemon cache, `automation_cursors` table/state, or additional daemon recovery table is introduced for this MVP.
 
 ### Response DTO Boundaries
 
@@ -537,7 +538,7 @@ Mutating action idempotency keys include:
 - precondition fingerprint;
 - generation key for package generation.
 
-`project_runtime_snapshot` idempotency keys include only action type plus the stable policy observation identity: repo id, policy status, policy digest when present, parser version, and reason code when present. They exclude target revision/version, automation scope, settings version, capability fingerprint, observed timestamp, and last-known-good fields.
+`project_runtime_snapshot` idempotency keys include only action type plus the stable policy observation identity: canonical repo automation scope, repo id, policy status, policy digest when present, parser version, and reason code when present. They exclude target revision/version, settings version, capability fingerprint, observed timestamp, and last-known-good fields.
 
 `NextAction` shape:
 

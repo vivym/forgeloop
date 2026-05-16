@@ -307,6 +307,7 @@ expect(mutatingActionIdempotencyKey(base)).toBe(mutatingActionIdempotencyKey(bas
 expect(mutatingActionIdempotencyKey({ ...base, capabilityFingerprint: 'changed' })).not.toBe(mutatingActionIdempotencyKey(base));
 expect(mutatingActionIdempotencyKey({ ...base, policyDigest: 'ignored' })).toBe(mutatingActionIdempotencyKey(base));
 expect(projectRuntimeSnapshotIdempotencyKey(observationA)).toBe(projectRuntimeSnapshotIdempotencyKey({ ...observationA, observedAt: '2026-05-15T00:00:01.000Z' }));
+expect(projectRuntimeSnapshotIdempotencyKey({ ...observationA, automationScope: 'repo:project-2:repo-1' })).not.toBe(projectRuntimeSnapshotIdempotencyKey(observationA));
 expect(projectRuntimeSnapshotIdempotencyKey({ ...observationA, policyStatus: 'parse_failed' })).not.toBe(projectRuntimeSnapshotIdempotencyKey(observationA));
 ```
 
@@ -385,6 +386,7 @@ export type AutomationActionType =
   | 'project_runtime_snapshot';
 
 export interface StablePolicyObservationIdentity {
+  automationScope: AutomationScope;
   repoId: string;
   policyStatus: 'missing' | 'loaded' | 'parse_failed' | 'unsafe_path';
   policyDigest?: string;
@@ -700,7 +702,7 @@ Add replay conflict coverage for:
 
 - mutating action `action_input_json` mismatch under the same idempotency key;
 - `project_runtime_snapshot` replay with changed stable observation identity under the same idempotency key;
-- `project_runtime_snapshot` replay ignores automation scope, settings version, capability fingerprint, observed timestamp, and last-known-good fields when stable policy observation identity is unchanged.
+- `project_runtime_snapshot` replay uses canonical repo automation scope plus repo id because repo ids are project-local, and ignores settings version, capability fingerprint, observed timestamp, and last-known-good fields when stable policy observation identity is unchanged.
 
 Add claim-next filter coverage for optional project/repo/scope inputs: a daemon scoped to one repo must not claim an action from another repo or project.
 
@@ -759,7 +761,7 @@ Implement:
 - replay if mutating identity or stable projection identity matches;
 - throw `DomainError('INVALID_TRANSITION', ...)` on mismatch;
 - atomic claim-next using existing object lock manager;
-- latest projection lookup by repo id + stable policy observation identity.
+- latest projection lookup by canonical repo automation scope + repo id + stable policy observation identity.
 
 - [ ] **Step 8: Implement drizzle repository**
 
@@ -1037,7 +1039,7 @@ Required query result data:
 - current approved PlanRevisions without package drafts;
 - active holds;
 - latest action summaries;
-- latest completed projection by repo + stable policy observation identity;
+- latest completed projection by canonical repo automation scope + repo id + stable policy observation identity;
 - latest completed loaded projection by repo for last-known-good policy derivation;
 - ready package `run_enqueue_disabled_by_scope` projection.
 
