@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, UseGuards } from '@nestjs/common';
 import {
   automationActorClassHeaderName,
   automationActorIdHeaderName,
@@ -59,8 +59,11 @@ const actorContextFromAutomationHeaders = (headers: Record<string, string | stri
 @UseGuards(TrustedAutomationActorGuard)
 export class AutomationController {
   constructor(
+    @Inject(AutomationActionService)
     private readonly automationActionService: AutomationActionService,
+    @Inject(AutomationCommandService)
     private readonly automationCommandService: AutomationCommandService,
+    @Inject(RuntimeSnapshotService)
     private readonly runtimeSnapshotService: RuntimeSnapshotService,
   ) {}
 
