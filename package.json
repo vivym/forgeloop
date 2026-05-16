@@ -8,6 +8,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:api": "pnpm --filter @forgeloop/control-plane-api start:dev",
+    "dev:automation-daemon": "pnpm --filter @forgeloop/automation-daemon start",
     "dev:executor": "pnpm --filter @forgeloop/executor-gateway start:dev",
     "dev:worker": "pnpm --filter @forgeloop/workflow-worker start:dev",
     "dev:web": "pnpm --filter @forgeloop/web dev",

@@ -17,6 +17,13 @@ export interface ExecuteClaimedActionInput {
   leaseMs?: number;
 }
 
+export interface ExecuteActionRunInput {
+  client: AutomationExecutorClient;
+  action: AutomationActionRunRecord;
+  actorId: string;
+  daemonIdentity?: string;
+}
+
 const projectAndRepoFromScope = (automationScope: AutomationScope): { projectId: string; repoId?: string } => {
   const [scopeType, projectId, repoId] = automationScope.split(':');
   if (scopeType === 'repo' && projectId !== undefined && repoId !== undefined) {
@@ -218,7 +225,7 @@ const completeProjection = async (
 const executeCommand = async (
   client: AutomationExecutorClient,
   action: AutomationActionRunRecord,
-  input: ExecuteClaimedActionInput,
+  input: Pick<ExecuteActionRunInput, 'actorId' | 'daemonIdentity'>,
 ): Promise<void> => {
   const precondition = preconditionFor(action);
   if (action.actionType === 'ensure_plan_draft') {
@@ -369,7 +376,16 @@ export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Pr
     return { actionRunId: input.action.idempotencyKey, status: 'skipped', retryable: false, reasonCode: 'no_claimable_action' };
   }
 
-  const action = claim.action;
+  return executeActionRun({
+    client: input.client,
+    action: claim.action,
+    actorId: input.actorId,
+    ...(input.daemonIdentity === undefined ? {} : { daemonIdentity: input.daemonIdentity }),
+  });
+};
+
+export const executeActionRun = async (input: ExecuteActionRunInput): Promise<AutomationExecutorResult> => {
+  const action = input.action;
   try {
     if (action.actionType === 'project_runtime_snapshot') {
       return await completeProjection(input.client, action);

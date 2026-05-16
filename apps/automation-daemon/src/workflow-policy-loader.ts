@@ -1,7 +1,7 @@
 import {
   loadWorkflowPolicyDigest,
   type WorkflowPolicyDigestStatus,
-} from '../../../packages/automation/src/index.js';
+} from '@forgeloop/automation';
 
 export interface LoadDaemonWorkflowPolicyDigestInput {
   repoRoot: string;
