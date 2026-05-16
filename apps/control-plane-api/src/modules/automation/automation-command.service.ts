@@ -352,6 +352,8 @@ export class AutomationCommandService {
       actionType: 'request_manual_path',
       targetObjectType: input.object_type,
       targetObjectId: input.object_id,
+      ...(precondition.target_revision_id === undefined ? {} : { targetRevisionId: precondition.target_revision_id }),
+      ...(precondition.target_version === undefined ? {} : { targetVersion: precondition.target_version }),
       idempotencyKey: input.idempotency_key,
       automationSettingsVersion: precondition.automation_settings_version,
       capabilityFingerprint: precondition.capability_fingerprint,

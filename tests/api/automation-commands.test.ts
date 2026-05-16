@@ -942,6 +942,80 @@ describe('automation command boundaries', () => {
     await expectNoManualPathCommandWrites(repository, ctx);
   });
 
+  it('accepts planner-style manual path commands with target revision in the daemon precondition', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-manual-target-aware-claim-binding',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable manual target-aware claim binding test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: ctx.workItem.id });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      target_object_type: 'work_item',
+      target_object_id: ctx.workItem.id,
+      target_revision_id: ctx.specRevisionId,
+      target_status: 'approved',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      command_concurrency_token: `${scopeKey}:multi_repo_ambiguity`,
+      actor_class: 'automation_daemon',
+    } as AutomationPrecondition;
+    const actionId = `action-manual-target-aware-claim-binding-${ctx.workItem.id}`;
+    const actionInput = {
+      object_type: 'work_item',
+      object_id: ctx.workItem.id,
+      scope_key: scopeKey,
+      reason_code: 'multi_repo_ambiguity',
+      reason: 'Automation target matches multiple repos; choose the canonical path manually.',
+    };
+
+    await signedAutomationPost(
+      app,
+      '/internal/automation/actions',
+      manualPathActionBody(ctx, precondition, actionId, {
+        target_revision_id: ctx.specRevisionId,
+        target_status: 'approved',
+        action_input_json: actionInput,
+      }),
+    ).expect(201);
+    const claimToken = `claim-${actionId}`;
+    await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+      claim_token: claimToken,
+      lease_ms: 10 * 60 * 1000,
+      limit: 1,
+    }).expect(200);
+
+    await signedAutomationPost(app, '/internal/automation/manual-path-holds', {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      ...actionInput,
+      evidence_refs: [],
+      requested_by: automationDaemonIdentity,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+    }).expect(201);
+
+    await expect(
+      repository.listActiveManualPathHolds({
+        object_type: 'work_item',
+        object_id: ctx.workItem.id,
+      }),
+    ).resolves.toHaveLength(1);
+  });
+
   it('rejects internal manual path commands with malformed evidence refs before manual hold writes', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);

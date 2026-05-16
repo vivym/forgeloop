@@ -329,6 +329,7 @@ describe('automation executor', () => {
       repo_id: 'repo-1',
       target_object_type: 'work_item',
       target_object_id: 'work-item-ambiguous',
+      target_revision_id: 'spec-revision-ambiguous',
       target_status: 'approved',
       automation_settings_version: 3,
       capability_fingerprint: 'capability-fingerprint-1',
@@ -340,7 +341,7 @@ describe('automation executor', () => {
       actionType: 'request_manual_path',
       targetObjectType: 'work_item',
       targetObjectId: 'work-item-ambiguous',
-      targetRevisionId: undefined,
+      targetRevisionId: 'spec-revision-ambiguous',
       targetStatus: 'approved',
       preconditionFingerprint: automationPreconditionFingerprint(expectedPrecondition),
       actionInputJson: {
@@ -358,13 +359,14 @@ describe('automation executor', () => {
         actionType: 'request_manual_path',
         targetObjectType: 'work_item',
         targetObjectId: 'work-item-ambiguous',
-        targetRevisionId: undefined,
+        targetRevisionId: 'spec-revision-ambiguous',
       }),
     );
 
     const manualPathCall = client.calls.find((call) => call.method === 'requestManualPathHold');
     const commandInput = manualPathCall?.args[0] as { automation_precondition?: AutomationPrecondition } | undefined;
     expect(commandInput?.automation_precondition).toMatchObject({
+      target_revision_id: 'spec-revision-ambiguous',
       command_concurrency_token: 'work_item:work-item-ambiguous:multi_repo_ambiguity',
     });
     expect(automationPreconditionFingerprint(commandInput?.automation_precondition as AutomationPrecondition)).toBe(
