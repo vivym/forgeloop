@@ -6,10 +6,7 @@ import {
   actorCommandSchema,
   createExecutionPackageSchema,
   createPlanRevisionSchema,
-  createProjectRepoSchema,
-  createProjectSchema,
   createSpecRevisionSchema,
-  createWorkItemSchema,
   disableAutomationCapabilitiesSchema,
   markPackageReadySchema,
   patchExecutionPackageSchema,
@@ -25,10 +22,7 @@ import type {
   ActorCommandDto,
   CreateExecutionPackageDto,
   CreatePlanRevisionDto,
-  CreateProjectDto,
-  CreateProjectRepoDto,
   CreateSpecRevisionDto,
-  CreateWorkItemDto,
   DisableAutomationCapabilitiesDto,
   MarkPackageReadyDto,
   PatchExecutionPackageDto,
@@ -47,24 +41,6 @@ import { P0Service } from './p0.service';
 @Controller()
 export class P0Controller {
   constructor(@Inject(P0Service) private readonly service: P0Service) {}
-
-  @Post('projects')
-  createProject(@Body(new ZodValidationPipe(createProjectSchema)) body: CreateProjectDto) {
-    return this.service.createProject(body);
-  }
-
-  @Post('projects/:projectId/repos')
-  createProjectRepo(
-    @Param('projectId') projectId: string,
-    @Body(new ZodValidationPipe(createProjectRepoSchema)) body: CreateProjectRepoDto,
-  ) {
-    return this.service.createProjectRepo(projectId, body);
-  }
-
-  @Get('projects/:projectId/repos')
-  listProjectRepos(@Param('projectId') projectId: string) {
-    return this.service.listProjectRepos(projectId);
-  }
 
   @Get('p0/projects/:projectId/automation/capabilities')
   getAutomationCapabilities(@Param('projectId') projectId: string, @Query('repo_id') repoId?: string) {
@@ -104,26 +80,6 @@ export class P0Controller {
     @Body(new ZodValidationPipe(resolveManualPathHoldSchema)) body: ResolveManualPathHoldDto,
   ) {
     return this.service.resolveManualPath(holdId, body, actorContextFromHeaders(headers));
-  }
-
-  @Get('projects/:projectId')
-  getProject(@Param('projectId') projectId: string) {
-    return this.service.getProject(projectId);
-  }
-
-  @Post('work-items')
-  createWorkItem(@Body(new ZodValidationPipe(createWorkItemSchema)) body: CreateWorkItemDto) {
-    return this.service.createWorkItem(body);
-  }
-
-  @Get('work-items')
-  listWorkItems(@Query('project_id') projectId?: string) {
-    return this.service.listWorkItems(projectId);
-  }
-
-  @Get('work-items/:workItemId')
-  getWorkItem(@Param('workItemId') workItemId: string) {
-    return this.service.getWorkItem(workItemId);
   }
 
   @Get('work-items/:workItemId/evidence-chain')

@@ -1,0 +1,52 @@
+import { workItemKinds, type WorkItemKind } from '@forgeloop/domain';
+import { z } from 'zod';
+
+const nonEmptyString = z.string().trim().min(1);
+const stringList = z.array(nonEmptyString);
+const workItemReadinessPhases = ['draft', 'triage'] as const;
+
+export const createProjectSchema = z
+  .object({
+    name: nonEmptyString,
+    owner_actor_id: nonEmptyString.optional(),
+  })
+  .strict();
+export type CreateProjectDto = z.infer<typeof createProjectSchema>;
+
+export const createProjectRepoSchema = z
+  .object({
+    repo_id: nonEmptyString,
+    name: nonEmptyString,
+    local_path: nonEmptyString,
+    default_branch: nonEmptyString.optional(),
+    remote_url: nonEmptyString.optional(),
+    base_commit_sha: nonEmptyString,
+  })
+  .strict();
+export type CreateProjectRepoDto = z.infer<typeof createProjectRepoSchema>;
+
+export const createWorkItemSchema = z
+  .object({
+    project_id: nonEmptyString,
+    kind: z.enum(workItemKinds) satisfies z.ZodType<WorkItemKind>,
+    title: nonEmptyString,
+    goal: nonEmptyString,
+    success_criteria: stringList.default([]),
+    priority: nonEmptyString,
+    risk: nonEmptyString,
+    owner_actor_id: nonEmptyString,
+  })
+  .strict();
+export type CreateWorkItemDto = z.infer<typeof createWorkItemSchema>;
+
+export const updateWorkItemSchema = z
+  .object({
+    goal: nonEmptyString.optional(),
+    success_criteria: stringList.optional(),
+    priority: nonEmptyString.optional(),
+    risk: nonEmptyString.optional(),
+    owner_actor_id: nonEmptyString.optional(),
+    phase: z.enum(workItemReadinessPhases).optional(),
+  })
+  .strict();
+export type UpdateWorkItemDto = z.infer<typeof updateWorkItemSchema>;

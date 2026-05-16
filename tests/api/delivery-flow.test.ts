@@ -8,7 +8,9 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { ProjectService } from '../../apps/control-plane-api/src/modules/projects/project.service';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-items/work-item.service';
 import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
@@ -161,6 +163,13 @@ const createManualPackage = async (
 
 const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
   (app.get(P0Service) as unknown as { repository: InMemoryDeliveryRepository }).repository;
+
+const replaceRuntimeRepository = (app: INestApplication, repository: InMemoryDeliveryRepository): void => {
+  (app.get(P0Service) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(ProjectService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(WorkItemService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+};
 
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
   const repository = repositoryFor(app);
@@ -733,10 +742,8 @@ describe('P0 control plane API', () => {
   it('commits rerun primary records when replacement trace writes fail', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
-      const service = app.get(P0Service);
       const repository = new FailingTraceRepository();
-      (service as unknown as { repository: FailingTraceRepository }).repository = repository;
-      (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: FailingTraceRepository }).repository = repository;
+      replaceRuntimeRepository(app, repository);
       const server = app.getHttpServer();
       const { workItem } = await createProjectRepoWorkItem(app);
       await approveSpec(app, workItem.id);
@@ -874,10 +881,8 @@ describe('P0 control plane API', () => {
   });
 
   it('archives the current open ReviewPacket before saving the force-rerun RunSession', async () => {
-    const service = app.get(P0Service);
     const repository = new SequencingRepository();
-    (service as unknown as { repository: SequencingRepository }).repository = repository;
-    (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: SequencingRepository }).repository = repository;
+    replaceRuntimeRepository(app, repository);
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);

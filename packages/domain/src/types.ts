@@ -88,7 +88,7 @@ export interface ProjectRepo {
   updated_at: IsoDateTime;
 }
 
-export const workItemKinds = ['requirement', 'bug', 'tech_debt'] as const;
+export const workItemKinds = ['initiative', 'requirement', 'bug', 'tech_debt'] as const;
 export type WorkItemKind = (typeof workItemKinds)[number];
 
 export const workItemPhases = [

@@ -43,7 +43,7 @@ const expectDomainError = (fn: () => unknown, code: string) => {
 
 describe('domain state transitions', () => {
   it('exports normalized work item and execution package state values', () => {
-    expect(workItemKinds).toEqual(['requirement', 'bug', 'tech_debt']);
+    expect(workItemKinds).toEqual(['initiative', 'requirement', 'bug', 'tech_debt']);
     expect(workItemPhases).toEqual([
       'draft',
       'triage',

@@ -89,15 +89,19 @@ import {
 } from '../modules/run-control/run-event-stream-token';
 import { DELIVERY_RUN_WORKER } from '../modules/run-control/run-worker.token';
 import { serializePublicRunSession } from '../modules/query/public-run-session-projection';
+import { ProjectService } from '../modules/projects/project.service';
+import { WorkItemService } from '../modules/work-items/work-item.service';
+import type {
+  CreateProjectDto,
+  CreateProjectRepoDto,
+  CreateWorkItemDto,
+} from '../modules/delivery/dto';
 import type {
   ActorCommandDto,
   AutomationActorContextDto,
   CreateExecutionPackageDto,
   CreatePlanRevisionDto,
-  CreateProjectDto,
-  CreateProjectRepoDto,
   CreateSpecRevisionDto,
-  CreateWorkItemDto,
   DisableAutomationCapabilitiesDto,
   PatchExecutionPackageDto,
   ReviewDecisionDto,
@@ -208,51 +212,26 @@ export class P0Service {
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Inject(AutomationCommandService)
     private readonly automationCommandService: AutomationCommandService,
+    @Inject(ProjectService)
+    private readonly projectService: ProjectService,
+    @Inject(WorkItemService)
+    private readonly workItemService: WorkItemService,
   ) {}
 
   async createProject(dto: CreateProjectDto): Promise<Project> {
-    const at = this.now();
-    const project: Project = {
-      id: this.id('project'),
-      name: this.required(dto.name, 'name'),
-      repo_ids: [],
-      ...(dto.owner_actor_id !== undefined ? { owner_actor_id: dto.owner_actor_id } : {}),
-      created_at: at,
-      updated_at: at,
-    };
-    await this.repository.saveProject(project);
-    await this.event('project', project.id, 'project_created', dto.owner_actor_id, {});
-    return project;
+    return this.projectService.createProject(dto);
   }
 
   async getProject(projectId: string): Promise<Project> {
-    return this.requireFound(await this.repository.getProject(projectId), `Project ${projectId}`);
+    return this.projectService.getProject(projectId);
   }
 
   async createProjectRepo(projectId: string, dto: CreateProjectRepoDto): Promise<ProjectRepo> {
-    const project = await this.getProject(projectId);
-    const at = this.now();
-    const repo: ProjectRepo = {
-      id: this.id('project-repo'),
-      repo_id: this.required(dto.repo_id, 'repo_id'),
-      project_id: project.id,
-      name: this.required(dto.name, 'name'),
-      status: 'active',
-      local_path: this.required(dto.local_path, 'local_path'),
-      default_branch: dto.default_branch ?? 'main',
-      ...(dto.remote_url !== undefined ? { remote_url: dto.remote_url } : {}),
-      base_commit_sha: this.required(dto.base_commit_sha, 'base_commit_sha'),
-      created_at: at,
-      updated_at: at,
-    };
-    await this.repository.saveProjectRepo(repo);
-    await this.repository.saveProject({ ...project, repo_ids: [...new Set([...project.repo_ids, repo.repo_id])], updated_at: at });
-    await this.event('project_repo', repo.id, 'repo_bound', project.owner_actor_id, { project_id: project.id });
-    return repo;
+    return this.projectService.createProjectRepo(projectId, dto);
   }
 
   listProjectRepos(projectId: string): Promise<ProjectRepo[]> {
-    return this.repository.listProjectRepos(projectId);
+    return this.projectService.listProjectRepos(projectId);
   }
 
   async getAutomationCapabilities(projectId: string, repoId?: string): Promise<AutomationProjectSettings> {
@@ -284,31 +263,15 @@ export class P0Service {
   }
 
   async createWorkItem(dto: CreateWorkItemDto): Promise<WorkItem> {
-    await this.getProject(dto.project_id);
-    const workItem = transitionWorkItem(undefined, {
-      type: 'create',
-      id: this.id('work-item'),
-      project_id: dto.project_id,
-      kind: dto.kind,
-      title: this.required(dto.title, 'title'),
-      goal: this.required(dto.goal, 'goal'),
-      success_criteria: dto.success_criteria ?? [],
-      priority: this.required(dto.priority, 'priority'),
-      risk: this.required(dto.risk, 'risk'),
-      owner_actor_id: this.required(dto.owner_actor_id, 'owner_actor_id'),
-      at: this.now(),
-    });
-    await this.repository.saveWorkItem(workItem);
-    await this.event('work_item', workItem.id, 'work_item_created', workItem.owner_actor_id, {});
-    return workItem;
+    return this.workItemService.createWorkItem(dto);
   }
 
   listWorkItems(projectId?: string): Promise<WorkItem[]> {
-    return this.repository.listWorkItems(projectId);
+    return this.workItemService.listWorkItems(projectId);
   }
 
   async getWorkItem(workItemId: string): Promise<WorkItem> {
-    return this.requireFound(await this.repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
+    return this.workItemService.getWorkItem(workItemId);
   }
 
   async createSpec(workItemId: string): Promise<Spec> {

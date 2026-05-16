@@ -13,7 +13,7 @@ export const work_item_phase_values = [
   'done',
   'closed',
 ] as const;
-export const work_item_kind_values = ['requirement', 'bug', 'tech_debt'] as const;
+export const work_item_kind_values = ['initiative', 'requirement', 'bug', 'tech_debt'] as const;
 export const work_item_activity_state_values = [
   'idle',
   'in_progress',

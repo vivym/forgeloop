@@ -208,7 +208,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
       'done',
       'closed',
     ]);
-    expect(work_item_kind_values).toEqual(['requirement', 'bug', 'tech_debt']);
+    expect(work_item_kind_values).toEqual(['initiative', 'requirement', 'bug', 'tech_debt']);
     expect(work_item_activity_state_values).toEqual([
       'idle',
       'in_progress',
