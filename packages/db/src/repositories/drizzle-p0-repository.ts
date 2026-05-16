@@ -40,6 +40,7 @@ import {
   automationCapabilitiesForPreset,
   capabilityFingerprint,
   isActiveRunSessionStatus,
+  isWorkItemAutomationTerminal,
 } from '@forgeloop/domain';
 
 import * as schema from '../schema';
@@ -82,17 +83,23 @@ import {
 } from '../schema';
 import type {
   ClaimAutomationActionRunInput,
+  ClaimNextAutomationActionRunInput,
   ClaimCommandIdempotencyInput,
   ClaimExecutionPackageGenerationRunInput,
   CompleteAutomationActionRunInput,
   CompleteExecutionPackageGenerationRunInput,
+  CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
   ExecutionPackageGenerationPackageRecord,
   FinishCommandIdempotencyInput,
+  GetClaimedAutomationActionRunInput,
+  LatestCompletedProjectionActionRunInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
   P0Repository,
+  RuntimeSnapshotRepositoryData,
+  RuntimeSnapshotTargetRow,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
   ResolveAutomationProjectSettingsInput,
@@ -155,6 +162,77 @@ const fromDbRecord = <T>(record: Record<string, unknown>): T =>
       .map(([key, value]) => [camelToSnake(key), normalizeTimestampValue(key, value)]),
   ) as T;
 
+type CanonicalJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly CanonicalJsonValue[]
+  | { readonly [key: string]: CanonicalJsonValue };
+
+const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : canonicalizeJson(item)));
+  }
+
+  const record = value as { readonly [key: string]: CanonicalJsonValue };
+  return Object.keys(record)
+    .sort()
+    .reduce<Record<string, CanonicalJsonValue>>((accumulator, key) => {
+      const item = record[key];
+      if (item !== undefined) {
+        accumulator[key] = canonicalizeJson(item);
+      }
+      return accumulator;
+    }, {});
+};
+
+const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
+
+const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
+
+const timestampMillis = (value: string | undefined): number | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+};
+
+const timestampAtOrBefore = (left: string | undefined, right: string): boolean => {
+  const leftMillis = timestampMillis(left);
+  const rightMillis = timestampMillis(right);
+  return leftMillis !== undefined && rightMillis !== undefined ? leftMillis <= rightMillis : left !== undefined && left <= right;
+};
+
+const compareTimestamp = (left: string | undefined, right: string | undefined): number => {
+  const leftMillis = timestampMillis(left);
+  const rightMillis = timestampMillis(right);
+  if (leftMillis !== undefined && rightMillis !== undefined) {
+    return leftMillis - rightMillis;
+  }
+  return (left ?? '').localeCompare(right ?? '');
+};
+
+const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
+  repo_id: actionInputJson.repo_id,
+  policy_status: actionInputJson.policy_status,
+  policy_digest: actionInputJson.policy_digest,
+  parser_version: actionInputJson.parser_version,
+  reason_code: actionInputJson.reason_code,
+});
+
+const automationScopeParts = (automationScope: string): { projectId: string; repoId?: string } => {
+  const [scopeType, projectId, repoId] = automationScope.split(':');
+  return scopeType === 'repo' && repoId !== undefined ? { projectId: projectId ?? '', repoId } : { projectId: projectId ?? '' };
+};
+
+const repoAutomationScopeRepoId = (automationScope: string): string | undefined => automationScopeParts(automationScope).repoId;
+
 const recoverableRunSessionStatuses: RunSession['status'][] = [
   'queued',
   'running',
@@ -167,6 +245,12 @@ const terminalCommandStatuses = new Set<CommandIdempotencyRecord['status']>(['su
 const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
 const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
+const RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT = 50;
+const RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK = 100;
+const RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK = 500;
+
+const runtimeSnapshotActionRunLookback = (targetCount: number): number =>
+  Math.min(RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK, Math.max(RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK, targetCount * 20));
 
 export class DrizzleP0Repository implements P0Repository {
   constructor(private readonly db: ForgeloopDrizzleDatabase) {}
@@ -967,14 +1051,62 @@ export class DrizzleP0Repository implements P0Repository {
     return superseded;
   }
 
+  async createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun> {
+    return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`], (repository) =>
+      (repository as DrizzleP0Repository).createOrReplayAutomationActionRunUnlocked(input),
+    );
+  }
+
+  async claimNextAutomationActionRun(
+    input: ClaimNextAutomationActionRunInput,
+  ): Promise<AutomationActionRun | undefined> {
+    return this.withAdvisoryLocks(['automation-action:claim-next'], (repository) =>
+      (repository as DrizzleP0Repository).claimNextAutomationActionRunUnlocked(input),
+    );
+  }
+
+  async getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun> {
+    return this.claimedAutomationActionRun(input.id, input.claim_token);
+  }
+
+  async latestCompletedProjectionActionRun(
+    input: LatestCompletedProjectionActionRunInput,
+  ): Promise<AutomationActionRun | undefined> {
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
+    const jsonTextEquals = (key: string, value: string) => sql`${automation_action_runs.actionInputJson}->>${key} = ${value}`;
+    const optionalJsonTextEquals = (key: string, value: string | undefined) =>
+      value === undefined
+        ? sql`coalesce(${automation_action_runs.actionInputJson}->>${key}, '') = ''`
+        : jsonTextEquals(key, value);
+    const [row] = await this.db
+      .select()
+      .from(automation_action_runs)
+      .where(
+        and(
+          eq(automation_action_runs.actionType, 'project_runtime_snapshot'),
+          eq(automation_action_runs.status, 'succeeded'),
+          eq(automation_action_runs.automationScope, input.automation_scope),
+          jsonTextEquals('repo_id', input.repo_id),
+          jsonTextEquals('policy_status', input.policy_status),
+          optionalJsonTextEquals('policy_digest', input.policy_digest),
+          jsonTextEquals('parser_version', input.parser_version),
+          optionalJsonTextEquals('reason_code', input.reason_code),
+        ),
+      )
+      .orderBy(desc(automation_action_runs.finishedAt), desc(automation_action_runs.updatedAt), desc(automation_action_runs.id))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<AutomationActionRun>(row);
+  }
+
   async claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
-    return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).claimAutomationActionRunUnlocked(input),
+    return this.withAdvisoryLocks(
+      ['automation-action:claim-next', `automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`],
+      (repository) => (repository as DrizzleP0Repository).claimAutomationActionRunUnlocked(input),
     );
   }
 
   async markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun> {
-    return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`], (repository) =>
+    return this.withAdvisoryLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], (repository) =>
       (repository as DrizzleP0Repository).markAutomationActionGatePendingUnlocked(input),
     );
   }
@@ -999,7 +1131,7 @@ export class DrizzleP0Repository implements P0Repository {
   }
 
   async completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun> {
-    return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`], (repository) =>
+    return this.withAdvisoryLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], (repository) =>
       (repository as DrizzleP0Repository).completeAutomationActionRunUnlocked(input),
     );
   }
@@ -1050,8 +1182,167 @@ export class DrizzleP0Repository implements P0Repository {
     return rows.map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
   }
 
-  async listRuntimeSnapshotRows(): Promise<Record<string, unknown>[]> {
-    return [];
+  async getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData> {
+    const [
+      projectRecords,
+      repoRecords,
+      workItemRecords,
+      specRecords,
+      planRecords,
+      planRevisionRecords,
+      generationRunRecords,
+      executionPackageRecords,
+      holdRecords,
+      settingsRecords,
+      recentActionRunRecords,
+    ] = await Promise.all([
+        this.db.select().from(projects).orderBy(asc(projects.createdAt), asc(projects.id)),
+        this.db
+          .select()
+          .from(project_repos)
+          .where(eq(project_repos.status, 'active'))
+          .orderBy(asc(project_repos.createdAt), asc(project_repos.id)),
+        this.db.select().from(work_items).orderBy(asc(work_items.createdAt), asc(work_items.id)),
+        this.db.select().from(specs),
+        this.db.select().from(plans).orderBy(asc(plans.createdAt), asc(plans.id)),
+        this.db.select().from(plan_revisions),
+        this.db.select().from(execution_package_generation_runs),
+        this.db.select().from(execution_packages).orderBy(asc(execution_packages.createdAt), asc(execution_packages.id)),
+        this.db
+          .select()
+          .from(manual_path_holds)
+          .where(eq(manual_path_holds.status, 'active'))
+          .orderBy(asc(manual_path_holds.requestedAt), asc(manual_path_holds.id)),
+        this.db.select().from(automation_project_settings),
+        this.db
+          .select()
+          .from(automation_action_runs)
+          .orderBy(
+            desc(automation_action_runs.finishedAt),
+            desc(automation_action_runs.updatedAt),
+            desc(automation_action_runs.createdAt),
+            desc(automation_action_runs.id),
+          )
+          .limit(RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT),
+      ]);
+    const projectRows = projectRecords.map((row) => fromDbRecord<Project>(row));
+    const repoRows = repoRecords.map((row) => fromDbRecord<ProjectRepo>(row));
+    const workItemRows = workItemRecords.map((row) => fromDbRecord<WorkItem>(row));
+    const settingsByScope = new Map(
+      settingsRecords.map((row) => {
+        const settings = fromDbRecord<AutomationProjectSettings>(row);
+        return [this.automationSettingsKey(settings.project_id, settings.repo_id), settings] as const;
+      }),
+    );
+    const projectSnapshotRows = projectRows.map((project) => {
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, { project_id: project.id });
+      return {
+        project_id: project.id,
+        automation_scope: `project:${project.id}` as const,
+        automation_settings_version: settings.version,
+        capability_fingerprint: settings.capability_fingerprint,
+      };
+    });
+    const repoSnapshotRows = repoRows.map((repo) => {
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
+        project_id: repo.project_id,
+        repo_id: repo.repo_id,
+      });
+      return {
+        project_id: repo.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${repo.project_id}:${repo.repo_id}` as const,
+        automation_settings_version: settings.version,
+        capability_fingerprint: settings.capability_fingerprint,
+        daemon_internal_local_path: repo.local_path,
+      };
+    });
+    const holds = holdRecords.map((row) => fromDbRecord<ManualPathHold>(row));
+    const specsById = new Map(
+      specRecords.map((row) => {
+        const record = fromDbRecord<Spec>(row);
+        return [record.id, record] as const;
+      }),
+    );
+    const planRevisionsById = new Map(
+      planRevisionRecords.map((row) => {
+        const record = fromDbRecord<PlanRevision>(row);
+        return [record.id, record] as const;
+      }),
+    );
+    const workItemsById = new Map(workItemRows.map((record) => [record.id, record] as const));
+    const generationRuns = generationRunRecords.map((row) => fromDbRecord<ExecutionPackageGenerationRun>(row));
+    const workItemsRequiringPlan = await this.runtimeSnapshotWorkItemsRequiringPlan(
+      workItemRows,
+      repoRows,
+      specsById,
+      holds,
+      settingsByScope,
+    );
+    const planRevisionsRequiringPackages = await this.runtimeSnapshotPlanRevisionsRequiringPackages(
+      planRecords.map((row) => fromDbRecord<Plan>(row)),
+      repoRows,
+      planRevisionsById,
+      workItemsById,
+      generationRuns,
+      holds,
+      settingsByScope,
+    );
+    const latestMatchingTargets = [...workItemsRequiringPlan, ...planRevisionsRequiringPackages];
+    const latestMatchingActionRuns =
+      latestMatchingTargets.length === 0
+        ? []
+        : (
+            await this.db
+              .select()
+              .from(automation_action_runs)
+              .where(
+                and(
+                  inArray(automation_action_runs.actionType, ['ensure_plan_draft', 'ensure_package_drafts']),
+                  inArray(
+                    automation_action_runs.targetObjectId,
+                    [...new Set(latestMatchingTargets.map((target) => target.target_object_id))],
+                  ),
+                  inArray(
+                    automation_action_runs.targetRevisionId,
+                    [...new Set(latestMatchingTargets.flatMap((target) => (target.target_revision_id === undefined ? [] : [target.target_revision_id])))],
+                  ),
+                ),
+              )
+              .orderBy(
+                desc(automation_action_runs.finishedAt),
+                desc(automation_action_runs.updatedAt),
+                desc(automation_action_runs.createdAt),
+                desc(automation_action_runs.id),
+              )
+              .limit(runtimeSnapshotActionRunLookback(latestMatchingTargets.length))
+          ).map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
+    const latestMatchingActionFields = this.latestMatchingActionFieldsByTarget(latestMatchingActionRuns);
+    const policyProjectionActionRuns = (
+      await this.db
+        .select()
+        .from(automation_action_runs)
+        .where(and(eq(automation_action_runs.actionType, 'project_runtime_snapshot'), eq(automation_action_runs.status, 'succeeded')))
+        .orderBy(desc(automation_action_runs.finishedAt), desc(automation_action_runs.updatedAt), desc(automation_action_runs.id))
+        .limit(runtimeSnapshotActionRunLookback(repoRows.length))
+    ).map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
+
+    return {
+      projects: projectSnapshotRows,
+      repos: repoSnapshotRows,
+      work_items_requiring_plan: this.applyLatestMatchingActionFields(workItemsRequiringPlan, latestMatchingActionFields),
+      plan_revisions_requiring_packages: this.applyLatestMatchingActionFields(
+        planRevisionsRequiringPackages,
+        latestMatchingActionFields,
+      ),
+      run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(
+        executionPackageRecords.map((row) => fromDbRecord<ExecutionPackage>(row)),
+        repoRows,
+      ),
+      active_holds: this.runtimeSnapshotActiveHolds(holds),
+      recent_action_runs: recentActionRunRecords.map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row))),
+      policy_projection_action_runs: policyProjectionActionRuns,
+    };
   }
 
   async saveRelease(release: Release): Promise<void> {
@@ -1541,7 +1832,90 @@ export class DrizzleP0Repository implements P0Repository {
     return completed;
   }
 
+  private async createOrReplayAutomationActionRunUnlocked(
+    input: CreateOrReplayAutomationActionRunInput,
+  ): Promise<AutomationActionRun> {
+    if (input.action_type === 'project_runtime_snapshot') {
+      this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+    }
+    const existing = await this.automationActionRunByIdempotencyKey(input.idempotency_key);
+    if (existing !== undefined) {
+      this.assertAutomationActionReplayMatches(existing, input);
+      return redactAutomationActionClaim(existing);
+    }
+    await this.assertAutomationActionIdIsUnused(input.id, input.idempotency_key);
+
+    const actionRun: AutomationActionRun = {
+      id: input.id,
+      action_type: input.action_type,
+      target_object_type: input.target_object_type,
+      target_object_id: input.target_object_id,
+      ...(input.target_revision_id === undefined ? {} : { target_revision_id: input.target_revision_id }),
+      ...(input.target_version === undefined ? {} : { target_version: input.target_version }),
+      target_status: input.target_status,
+      idempotency_key: input.idempotency_key,
+      automation_scope: input.automation_scope,
+      automation_settings_version: input.automation_settings_version,
+      capability_fingerprint: input.capability_fingerprint,
+      precondition_fingerprint: input.precondition_fingerprint,
+      action_input_json: input.action_input_json,
+      status: 'pending',
+      attempt: 0,
+      ...(input.created_by === undefined ? {} : { created_by: input.created_by }),
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    await this.upsert(automation_action_runs, automation_action_runs.id, actionRun);
+    return actionRun;
+  }
+
+  private async claimNextAutomationActionRunUnlocked(
+    input: ClaimNextAutomationActionRunInput,
+  ): Promise<AutomationActionRun | undefined> {
+    const filterPredicate = this.automationActionClaimFilterPredicate(input);
+    const claimablePredicate = this.claimableAutomationActionPredicate(input.now);
+    const wherePredicate = filterPredicate === undefined ? claimablePredicate : and(claimablePredicate, filterPredicate);
+    const rows = await this.db
+      .select()
+      .from(automation_action_runs)
+      .where(wherePredicate)
+      .orderBy(
+        sql`coalesce(${automation_action_runs.nextAttemptAt}, ${automation_action_runs.createdAt})`,
+        asc(automation_action_runs.createdAt),
+        asc(automation_action_runs.id),
+      )
+      .limit(input.limit);
+
+    for (const row of rows) {
+      const actionRun = fromDbRecord<AutomationActionRun>(row);
+      if (!this.matchesAutomationActionClaimFilter(actionRun, input)) {
+        continue;
+      }
+      const claimed = this.toRunningAutomationActionRun(actionRun, {
+        claim_token: input.claim_token,
+        locked_until: input.locked_until,
+        now: input.now,
+      });
+      const [updated] = await this.db
+        .update(automation_action_runs)
+        .set(toDbRecord(claimed, automation_action_runs) as never)
+        .where(and(eq(automation_action_runs.id, actionRun.id), this.claimableAutomationActionPredicate(input.now)))
+        .returning();
+      if (updated !== undefined) {
+        return fromDbRecord<AutomationActionRun>(updated);
+      }
+    }
+
+    return undefined;
+  }
+
   private async claimAutomationActionRunUnlocked(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
+    if (input.precondition_fingerprint === undefined || input.action_input_json === undefined) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${input.idempotency_key} requires precondition fingerprint and action input`,
+      );
+    }
     const existing = await this.automationActionRunByIdempotencyKey(input.idempotency_key);
     if (existing !== undefined) {
       this.assertAutomationActionIdentityMatches(existing, input);
@@ -1551,6 +1925,8 @@ export class DrizzleP0Repository implements P0Repository {
         }
         return redactAutomationActionClaim(existing);
       }
+    } else {
+      await this.assertAutomationActionIdIsUnused(input.id, input.idempotency_key);
     }
     const actionRun: AutomationActionRun = {
       id: existing?.id ?? input.id,
@@ -1558,15 +1934,19 @@ export class DrizzleP0Repository implements P0Repository {
       target_object_type: input.target_object_type,
       target_object_id: input.target_object_id,
       ...(input.target_revision_id === undefined ? {} : { target_revision_id: input.target_revision_id }),
+      ...(input.target_version === undefined ? {} : { target_version: input.target_version }),
       target_status: input.target_status,
       idempotency_key: input.idempotency_key,
       automation_scope: input.automation_scope,
       automation_settings_version: input.automation_settings_version,
       capability_fingerprint: input.capability_fingerprint,
+      precondition_fingerprint: input.precondition_fingerprint,
+      action_input_json: input.action_input_json,
       status: 'running',
       claim_token: input.claim_token,
       attempt: (existing?.attempt ?? 0) + 1,
       locked_until: input.locked_until,
+      ...(existing?.created_by === undefined ? {} : { created_by: existing.created_by }),
       claimed_at: input.now,
       started_at: existing?.started_at ?? input.now,
       created_at: existing?.created_at ?? input.now,
@@ -1574,6 +1954,46 @@ export class DrizzleP0Repository implements P0Repository {
     };
     await this.upsert(automation_action_runs, automation_action_runs.id, actionRun);
     return actionRun;
+  }
+
+  private async assertAutomationActionIdIsUnused(id: string, idempotencyKey: string): Promise<void> {
+    const existing = await this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, id);
+    if (existing !== undefined && existing.idempotency_key !== idempotencyKey) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${id} already exists with a different idempotency key`,
+      );
+    }
+  }
+
+  private toRunningAutomationActionRun(
+    actionRun: AutomationActionRun,
+    input: { claim_token: string; locked_until: string; now: string },
+  ): AutomationActionRun {
+    return {
+      id: actionRun.id,
+      action_type: actionRun.action_type,
+      target_object_type: actionRun.target_object_type,
+      target_object_id: actionRun.target_object_id,
+      ...(actionRun.target_revision_id === undefined ? {} : { target_revision_id: actionRun.target_revision_id }),
+      ...(actionRun.target_version === undefined ? {} : { target_version: actionRun.target_version }),
+      target_status: actionRun.target_status,
+      idempotency_key: actionRun.idempotency_key,
+      automation_scope: actionRun.automation_scope,
+      automation_settings_version: actionRun.automation_settings_version,
+      capability_fingerprint: actionRun.capability_fingerprint,
+      precondition_fingerprint: actionRun.precondition_fingerprint,
+      action_input_json: actionRun.action_input_json,
+      status: 'running',
+      claim_token: input.claim_token,
+      attempt: actionRun.attempt + 1,
+      locked_until: input.locked_until,
+      ...(actionRun.created_by === undefined ? {} : { created_by: actionRun.created_by }),
+      claimed_at: input.now,
+      started_at: actionRun.started_at ?? input.now,
+      ...(actionRun.created_at === undefined ? {} : { created_at: actionRun.created_at }),
+      updated_at: input.now,
+    };
   }
 
   private assertCommandIdempotencyMatches(
@@ -1602,13 +2022,358 @@ export class DrizzleP0Repository implements P0Repository {
       existing.target_object_type !== input.target_object_type ||
       existing.target_object_id !== input.target_object_id ||
       existing.target_revision_id !== input.target_revision_id ||
+      existing.target_version !== input.target_version ||
       existing.target_status !== input.target_status ||
       existing.automation_scope !== input.automation_scope ||
       existing.automation_settings_version !== input.automation_settings_version ||
-      existing.capability_fingerprint !== input.capability_fingerprint;
+      existing.capability_fingerprint !== input.capability_fingerprint ||
+      existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} identity changed`);
     }
+  }
+
+  private assertAutomationActionReplayMatches(
+    existing: AutomationActionRun,
+    input: CreateOrReplayAutomationActionRunInput,
+  ): void {
+    if (existing.action_type === 'project_runtime_snapshot' || input.action_type === 'project_runtime_snapshot') {
+      if (existing.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(existing.automation_scope, existing.action_input_json.repo_id);
+      }
+      if (input.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+      }
+      const mismatched =
+        existing.action_type !== input.action_type ||
+        existing.automation_scope !== input.automation_scope ||
+        !valuesEqual(
+          stablePolicyObservationIdentity(existing.action_input_json),
+          stablePolicyObservationIdentity(input.action_input_json),
+        );
+      if (mismatched) {
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          `Automation action ${input.idempotency_key} project_runtime_snapshot identity changed`,
+        );
+      }
+      return;
+    }
+
+    const mismatched =
+      existing.action_type !== input.action_type ||
+      existing.target_object_type !== input.target_object_type ||
+      existing.target_object_id !== input.target_object_id ||
+      existing.target_revision_id !== input.target_revision_id ||
+      existing.target_version !== input.target_version ||
+      existing.target_status !== input.target_status ||
+      existing.automation_scope !== input.automation_scope ||
+      existing.automation_settings_version !== input.automation_settings_version ||
+      existing.capability_fingerprint !== input.capability_fingerprint ||
+      existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      !valuesEqual(existing.action_input_json, input.action_input_json);
+    if (mismatched) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${input.idempotency_key} idempotency identity, precondition, or action input changed`,
+      );
+    }
+  }
+
+  private stablePolicyObservationIdentityMatches(
+    actionInputJson: Record<string, unknown>,
+    input: LatestCompletedProjectionActionRunInput,
+  ): boolean {
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
+    const stableIdentity = stablePolicyObservationIdentity(actionInputJson);
+    return (
+      stableIdentity.repo_id === input.repo_id &&
+      stableIdentity.policy_status === input.policy_status &&
+      stableIdentity.policy_digest === input.policy_digest &&
+      stableIdentity.parser_version === input.parser_version &&
+      stableIdentity.reason_code === input.reason_code
+    );
+  }
+
+  private assertProjectionAutomationScope(automationScope: string, repoId: unknown): void {
+    const scopeRepoId = repoAutomationScopeRepoId(automationScope);
+    if (scopeRepoId === undefined || repoId !== scopeRepoId) {
+      throw new DomainError('INVALID_TRANSITION', `Projection action requires matching repo automation scope`);
+    }
+  }
+
+  private matchesAutomationActionClaimFilter(
+    actionRun: AutomationActionRun,
+    input: ClaimNextAutomationActionRunInput,
+  ): boolean {
+    if (input.automation_scope !== undefined && actionRun.automation_scope !== input.automation_scope) {
+      return false;
+    }
+    const scope = automationScopeParts(actionRun.automation_scope);
+    if (input.project_id !== undefined && scope.projectId !== input.project_id) {
+      return false;
+    }
+    if (input.repo_id !== undefined && scope.repoId !== input.repo_id) {
+      return false;
+    }
+    return true;
+  }
+
+  private claimableAutomationActionPredicate(now: string) {
+    return or(
+      eq(automation_action_runs.status, 'pending'),
+      and(
+        eq(automation_action_runs.status, 'gate_pending'),
+        or(sql`${automation_action_runs.nextAttemptAt} is null`, sql`${automation_action_runs.nextAttemptAt} <= ${now}`),
+      ),
+      and(
+        or(eq(automation_action_runs.status, 'blocked'), eq(automation_action_runs.status, 'failed')),
+        eq(automation_action_runs.retryable, true),
+        or(sql`${automation_action_runs.nextAttemptAt} is null`, sql`${automation_action_runs.nextAttemptAt} <= ${now}`),
+      ),
+      and(eq(automation_action_runs.status, 'running'), sql`${automation_action_runs.lockedUntil} <= ${now}`),
+    );
+  }
+
+  private automationActionClaimFilterPredicate(input: ClaimNextAutomationActionRunInput) {
+    const predicates = [];
+    if (input.automation_scope !== undefined) {
+      predicates.push(eq(automation_action_runs.automationScope, input.automation_scope));
+    }
+    if (input.project_id !== undefined && input.repo_id !== undefined) {
+      predicates.push(eq(automation_action_runs.automationScope, `repo:${input.project_id}:${input.repo_id}`));
+    } else if (input.project_id !== undefined) {
+      predicates.push(
+        or(
+          eq(automation_action_runs.automationScope, `project:${input.project_id}`),
+          sql`${automation_action_runs.automationScope} like ${`repo:${input.project_id}:%`}`,
+        ),
+      );
+    } else if (input.repo_id !== undefined) {
+      predicates.push(sql`${automation_action_runs.automationScope} like ${`repo:%:${input.repo_id}`}`);
+    }
+    return predicates.length === 0 ? undefined : and(...predicates);
+  }
+
+  private compareAutomationActionRecency(left: AutomationActionRun, right: AutomationActionRun): number {
+    return (
+      compareTimestamp(right.finished_at ?? right.updated_at ?? right.created_at, left.finished_at ?? left.updated_at ?? left.created_at) ||
+      right.id.localeCompare(left.id)
+    );
+  }
+
+  private async runtimeSnapshotWorkItemsRequiringPlan(
+    workItems: WorkItem[],
+    repos: ProjectRepo[],
+    specsById: Map<string, Spec>,
+    holds: ManualPathHold[],
+    settingsByScope: Map<string, AutomationProjectSettings>,
+  ): Promise<RuntimeSnapshotTargetRow[]> {
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const workItem of workItems) {
+      if (isWorkItemAutomationTerminal(workItem) || workItem.current_plan_id !== undefined || workItem.current_spec_id === undefined) {
+        continue;
+      }
+      const spec = specsById.get(workItem.current_spec_id);
+      const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id ?? workItem.current_spec_revision_id;
+      if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
+        continue;
+      }
+      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
+      if (repo === undefined) {
+        continue;
+      }
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+      });
+      if (!settings.capabilities_json.canGeneratePlanDraft) {
+        continue;
+      }
+      if (this.hasActiveManualHold(holds, [`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'work_item',
+        target_object_id: workItem.id,
+        target_revision_id: specRevisionId,
+        target_status: 'approved',
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+      });
+    }
+    return targets;
+  }
+
+  private async runtimeSnapshotPlanRevisionsRequiringPackages(
+    plansToEvaluate: Plan[],
+    repos: ProjectRepo[],
+    planRevisionsById: Map<string, PlanRevision>,
+    workItemsById: Map<string, WorkItem>,
+    generationRuns: ExecutionPackageGenerationRun[],
+    holds: ManualPathHold[],
+    settingsByScope: Map<string, AutomationProjectSettings>,
+  ): Promise<RuntimeSnapshotTargetRow[]> {
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const plan of plansToEvaluate) {
+      if (plan.status !== 'approved') {
+        continue;
+      }
+      const planRevisionId = plan.approved_revision_id ?? plan.current_revision_id;
+      if (planRevisionId === undefined || this.hasCurrentPackageGeneration(generationRuns, planRevisionId)) {
+        continue;
+      }
+      const planRevision = planRevisionsById.get(planRevisionId);
+      const workItem = planRevision === undefined ? undefined : workItemsById.get(planRevision.work_item_id);
+      if (planRevision === undefined || workItem === undefined || isWorkItemAutomationTerminal(workItem)) {
+        continue;
+      }
+      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
+      if (repo === undefined) {
+        continue;
+      }
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+      });
+      if (!settings.capabilities_json.canGeneratePackageDrafts) {
+        continue;
+      }
+      const generationKey = `default:${planRevisionId}`;
+      if (
+        this.hasActiveManualHold(holds, [
+          `work_item:${workItem.id}`,
+          `spec_revision:${planRevision.based_on_spec_revision_id}`,
+          `plan_revision:${planRevisionId}`,
+          `package_generation:${planRevisionId}:${generationKey}`,
+        ])
+      ) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'plan_revision',
+        target_object_id: planRevisionId,
+        target_revision_id: generationKey,
+        target_status: 'approved',
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        generation_key: generationKey,
+      });
+    }
+    return targets;
+  }
+
+  private runtimeSnapshotRunEnqueueDisabledPackages(
+    executionPackages: ExecutionPackage[],
+    repos: ProjectRepo[],
+  ): RuntimeSnapshotTargetRow[] {
+    return executionPackages
+      .filter(
+        (executionPackage) =>
+          executionPackage.phase === 'ready' &&
+          repos.some((repo) => repo.project_id === executionPackage.project_id && repo.repo_id === executionPackage.repo_id),
+      )
+      .map((executionPackage) => ({
+        target_object_type: 'execution_package',
+        target_object_id: executionPackage.id,
+        target_revision_id: executionPackage.plan_revision_id,
+        target_status: executionPackage.phase,
+        project_id: executionPackage.project_id,
+        repo_id: executionPackage.repo_id,
+        automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}` as const,
+        disabled_reason: 'run_enqueue_disabled_by_scope',
+      }));
+  }
+
+  private runtimeSnapshotActiveHolds(holds: ManualPathHold[]) {
+    return holds.map((hold) => ({
+      object_type: hold.object_type,
+      object_id: hold.object_id,
+      scope_key: hold.scope_key,
+      reason_code: hold.reason_code,
+      status: hold.status,
+      requested_at: hold.requested_at,
+      ...(hold.resolved_at === undefined ? {} : { resolved_at: hold.resolved_at }),
+      fingerprint: `${hold.scope_key}:${hold.reason_code}`,
+    }));
+  }
+
+  private hasCurrentPackageGeneration(generationRuns: ExecutionPackageGenerationRun[], planRevisionId: string): boolean {
+    return generationRuns.some(
+      (run) => run.plan_revision_id === planRevisionId && (run.status === 'pending' || run.status === 'running' || run.status === 'succeeded'),
+    );
+  }
+
+  private hasActiveManualHold(holds: ManualPathHold[], scopeKeys: string[]): boolean {
+    const scopeKeySet = new Set(scopeKeys);
+    return holds.some((hold) => hold.status === 'active' && scopeKeySet.has(hold.scope_key));
+  }
+
+  private applyLatestMatchingActionFields(
+    targets: RuntimeSnapshotTargetRow[],
+    latestMatchingActionFields: Map<
+      string,
+      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>
+    >,
+  ): RuntimeSnapshotTargetRow[] {
+    return targets.map((target) => ({
+      ...target,
+      ...latestMatchingActionFields.get(
+        this.latestMatchingActionKey(
+          this.runtimeSnapshotActionTypeForTarget(target),
+          target.target_object_id,
+          target.target_revision_id ?? '',
+        ),
+      ),
+    }));
+  }
+
+  private latestMatchingActionFieldsByTarget(
+    actions: AutomationActionRun[],
+  ): Map<string, Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>> {
+    const fieldsByTarget = new Map<
+      string,
+      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>
+    >();
+    for (const actionRun of actions) {
+      const targetRevisionId = actionRun.target_revision_id;
+      if (targetRevisionId === undefined) {
+        continue;
+      }
+      const key = this.latestMatchingActionKey(actionRun.action_type, actionRun.target_object_id, targetRevisionId);
+      if (!fieldsByTarget.has(key)) {
+        fieldsByTarget.set(key, this.latestMatchingActionFields(actionRun));
+      }
+    }
+    return fieldsByTarget;
+  }
+
+  private latestMatchingActionFields(
+    actionRun: AutomationActionRun | undefined,
+  ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'> {
+    if (actionRun === undefined) {
+      return {};
+    }
+    return {
+      latest_matching_action_status: actionRun.status,
+      ...(actionRun.status !== 'blocked'
+        ? {}
+        : {
+            ...(actionRun.reason === undefined ? {} : { blocked_reason_code: actionRun.reason }),
+            ...(actionRun.error_code === undefined ? {} : { blocked_summary: actionRun.error_code }),
+          }),
+    };
+  }
+
+  private runtimeSnapshotActionTypeForTarget(target: RuntimeSnapshotTargetRow): 'ensure_plan_draft' | 'ensure_package_drafts' {
+    return target.target_object_type === 'plan_revision' ? 'ensure_package_drafts' : 'ensure_plan_draft';
+  }
+
+  private latestMatchingActionKey(actionType: string, targetObjectId: string, targetRevisionId: string): string {
+    return `${actionType}:${targetObjectId}:${targetRevisionId}`;
   }
 
   private isAutomationActionClaimable(actionRun: AutomationActionRun, now: string): boolean {
@@ -1616,13 +2381,13 @@ export class DrizzleP0Repository implements P0Repository {
       return true;
     }
     if (actionRun.status === 'running') {
-      return actionRun.locked_until !== undefined && actionRun.locked_until <= now;
+      return timestampAtOrBefore(actionRun.locked_until, now);
     }
     if (actionRun.status === 'gate_pending') {
-      return actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now;
+      return actionRun.next_attempt_at === undefined || timestampAtOrBefore(actionRun.next_attempt_at, now);
     }
     if (actionRun.status === 'blocked' || actionRun.status === 'failed') {
-      return actionRun.retryable === true && (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now);
+      return actionRun.retryable === true && (actionRun.next_attempt_at === undefined || timestampAtOrBefore(actionRun.next_attempt_at, now));
     }
     return false;
   }
@@ -1667,6 +2432,29 @@ export class DrizzleP0Repository implements P0Repository {
 
   private automationSettingsKey(projectId: string, repoId: string | undefined): string {
     return repoId === undefined ? `project:${projectId}` : `repo:${projectId}:${repoId}`;
+  }
+
+  private resolvePreloadedAutomationProjectSettings(
+    settingsByScope: Map<string, AutomationProjectSettings>,
+    input: ResolveAutomationProjectSettingsInput,
+  ): AutomationProjectSettings {
+    const existing = settingsByScope.get(this.automationSettingsKey(input.project_id, input.repo_id));
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const capabilities = automationCapabilitiesForPreset('off');
+    return {
+      id: `default:${this.automationSettingsKey(input.project_id, input.repo_id)}`,
+      project_id: input.project_id,
+      ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+      preset: 'off',
+      capabilities_json: capabilities,
+      capability_fingerprint: capabilityFingerprint(capabilities),
+      scope_type: input.repo_id === undefined ? 'project' : 'repo',
+      version: 0,
+      evidence_refs: [],
+    };
   }
 
   private supportsSelect(): boolean {

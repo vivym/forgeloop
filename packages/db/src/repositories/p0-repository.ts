@@ -191,6 +191,16 @@ export interface ClaimAutomationActionRunInput
     | 'attempt'
     | 'claim_token'
     | 'locked_until'
+    | 'last_heartbeat_at'
+    | 'next_attempt_at'
+    | 'retryable'
+    | 'result_json'
+    | 'metadata_json'
+    | 'reason'
+    | 'error_code'
+    | 'error_message'
+    | 'policy_digest'
+    | 'created_by'
     | 'created_at'
     | 'updated_at'
     | 'claimed_at'
@@ -201,6 +211,52 @@ export interface ClaimAutomationActionRunInput
   claim_token: string;
   locked_until: string;
   now: string;
+}
+
+export interface CreateOrReplayAutomationActionRunInput
+  extends Pick<
+    AutomationActionRun,
+    | 'id'
+    | 'action_type'
+    | 'target_object_type'
+    | 'target_object_id'
+    | 'target_status'
+    | 'idempotency_key'
+    | 'automation_scope'
+    | 'automation_settings_version'
+    | 'capability_fingerprint'
+    | 'precondition_fingerprint'
+    | 'action_input_json'
+  > {
+  target_revision_id?: string;
+  target_version?: number;
+  created_by?: string;
+  status?: Extract<AutomationActionRun['status'], 'pending'>;
+  now: string;
+}
+
+export interface ClaimNextAutomationActionRunInput {
+  now: string;
+  claim_token: string;
+  locked_until: string;
+  limit: number;
+  project_id?: string;
+  repo_id?: string;
+  automation_scope?: AutomationScope;
+}
+
+export interface GetClaimedAutomationActionRunInput {
+  id: string;
+  claim_token: string;
+}
+
+export interface LatestCompletedProjectionActionRunInput {
+  automation_scope: AutomationScope;
+  repo_id: string;
+  policy_status: string;
+  policy_digest?: string;
+  parser_version: string;
+  reason_code?: string;
 }
 
 export interface MarkAutomationActionGatePendingInput {
@@ -227,6 +283,61 @@ export interface CompleteAutomationActionRunInput {
 export interface ListClaimableAutomationActionRunsInput {
   now: string;
   limit: number;
+}
+
+export interface RuntimeSnapshotTargetRow {
+  target_object_type: string;
+  target_object_id: string;
+  target_revision_id?: string;
+  target_version?: number;
+  target_status: string;
+  project_id?: string;
+  repo_id?: string;
+  automation_scope: AutomationScope;
+  active_hold_fingerprint?: string;
+  latest_matching_action_status?: string;
+  blocked_reason_code?: string;
+  blocked_summary?: string;
+  generation_key?: string;
+  disabled_reason?: 'run_enqueue_disabled_by_scope';
+}
+
+export interface RuntimeSnapshotProjectRow {
+  project_id: string;
+  automation_scope: AutomationScope;
+  automation_settings_version: number;
+  capability_fingerprint: string;
+}
+
+export interface RuntimeSnapshotRepoRow {
+  project_id: string;
+  repo_id: string;
+  automation_scope: AutomationScope;
+  automation_settings_version: number;
+  capability_fingerprint: string;
+  daemon_internal_local_path: string;
+}
+
+export interface RuntimeSnapshotManualHoldRow {
+  object_type: string;
+  object_id: string;
+  scope_key: string;
+  reason_code: string;
+  status: ManualPathHold['status'];
+  requested_at: string;
+  resolved_at?: string;
+  fingerprint: string;
+}
+
+export interface RuntimeSnapshotRepositoryData {
+  projects: RuntimeSnapshotProjectRow[];
+  repos: RuntimeSnapshotRepoRow[];
+  work_items_requiring_plan: RuntimeSnapshotTargetRow[];
+  plan_revisions_requiring_packages: RuntimeSnapshotTargetRow[];
+  run_enqueue_disabled_packages: RuntimeSnapshotTargetRow[];
+  active_holds: RuntimeSnapshotManualHoldRow[];
+  recent_action_runs: AutomationActionRun[];
+  policy_projection_action_runs: AutomationActionRun[];
 }
 
 export interface P0Repository {
@@ -367,11 +478,17 @@ export interface P0Repository {
   supersedeExecutionPackageGenerationRun(
     input: SupersedeExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun>;
+  createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun>;
+  claimNextAutomationActionRun(input: ClaimNextAutomationActionRunInput): Promise<AutomationActionRun | undefined>;
+  getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun>;
+  latestCompletedProjectionActionRun(
+    input: LatestCompletedProjectionActionRunInput,
+  ): Promise<AutomationActionRun | undefined>;
   claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun>;
   completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun>;
   markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun>;
   listClaimableAutomationActionRuns(input: ListClaimableAutomationActionRunsInput): Promise<AutomationActionRun[]>;
-  listRuntimeSnapshotRows(): Promise<Record<string, unknown>[]>;
+  getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData>;
 
   saveRelease(release: Release): Promise<void>;
   getRelease(releaseId: string): Promise<Release | undefined>;

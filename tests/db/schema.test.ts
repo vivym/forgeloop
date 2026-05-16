@@ -41,7 +41,6 @@ import {
   plans,
   artifacts,
   automation_action_runs,
-  automation_cursors,
   automation_project_settings,
   command_idempotency_records,
   execution_package_generation_packages,
@@ -73,7 +72,6 @@ const requiredTables = {
   execution_package_generation_runs,
   execution_package_generation_packages,
   automation_action_runs,
-  automation_cursors,
   organizations,
   actors,
   projects,
@@ -148,7 +146,6 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
         'automation_action_runs',
-        'automation_cursors',
         'automation_project_settings',
         'actors',
         'artifacts',
@@ -431,6 +428,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(column(manual_path_hold_idempotency_records, 'idempotency_key').primary).toBe(true);
     expect(column(command_idempotency_records, 'idempotency_key').isUnique).toBe(true);
     expect(column(automation_action_runs, 'idempotency_key').isUnique).toBe(true);
+    expect(columnType(automation_action_runs, 'target_version')).toBe('PgInteger');
+    expect(columnNotNull(automation_action_runs, 'precondition_fingerprint')).toBe(true);
+    expect(columnNotNull(automation_action_runs, 'action_input_json')).toBe(true);
   });
 
   it('defines durable project and actor foreign keys', () => {

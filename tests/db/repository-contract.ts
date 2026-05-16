@@ -1201,6 +1201,8 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     automation_scope: `repo:${ids.project}:repo-1`,
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
+    precondition_fingerprint: 'precondition-contract-active',
+    action_input_json: { work_item_id: ids.workItem, spec_revision_id: ids.specRevision2 },
     claim_token: 'automation-claim-1',
     locked_until: '2026-05-05T00:05:00.000Z',
     now: at,
@@ -1229,6 +1231,15 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     locked_until: '2026-05-05T00:10:00.000Z',
   });
   expect(reclaimedActionRun).toMatchObject({ id: actionRun.id, status: 'running', attempt: 2 });
+  await expect(
+    repository.completeAutomationActionRun({
+      id: actionRun.id,
+      idempotency_key: actionRun.idempotency_key,
+      claim_token: 'automation-claim-1',
+      status: 'succeeded',
+      finished_at: '2026-05-05T00:06:30.000Z',
+    }),
+  ).rejects.toThrow(/claimed|running/i);
   const pendingActionRun = await repository.markAutomationActionGatePending({
     id: actionRun.id,
     idempotency_key: actionRun.idempotency_key,
@@ -1321,6 +1332,8 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
     automation_scope: `repo:${ids.project}:repo-1`,
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
+    precondition_fingerprint: 'precondition-contract-retryable',
+    action_input_json: { execution_package_id: ids.package },
     claim_token: 'automation-claim-retryable-1',
     locked_until: '2026-05-05T00:05:00.000Z',
     now: at,
@@ -1341,14 +1354,211 @@ async function expectAutomationRepositoryContract(repository: P0Repository): Pro
   expect((await repository.listClaimableAutomationActionRuns({ now: '2026-05-05T00:21:00.000Z', limit: 10 })).map(
     (run) => run.id,
   )).toContain(retryableActionRun.id);
+  const resumedRetryableActionRun = await repository.claimAutomationActionRun({
+    ...retryableActionRun,
+    claim_token: 'automation-claim-retryable-2',
+    locked_until: '2026-05-05T00:25:00.000Z',
+    now: '2026-05-05T00:21:00.000Z',
+  });
+  expect(resumedRetryableActionRun).toMatchObject({ id: retryableActionRun.id, status: 'running', attempt: 2 });
+  expect(resumedRetryableActionRun.result_json).toBeUndefined();
+  expect(resumedRetryableActionRun.retryable).toBeUndefined();
+  expect(resumedRetryableActionRun.next_attempt_at).toBeUndefined();
+  expect(resumedRetryableActionRun.finished_at).toBeUndefined();
+  await repository.completeAutomationActionRun({
+    id: retryableActionRun.id,
+    idempotency_key: retryableActionRun.idempotency_key,
+    claim_token: 'automation-claim-retryable-2',
+    status: 'blocked',
+    finished_at: '2026-05-05T00:22:00.000Z',
+  });
+  expect((await repository.listClaimableAutomationActionRuns({ now: '2026-05-05T00:26:00.000Z', limit: 10 })).map(
+    (run) => run.id,
+  )).not.toContain(retryableActionRun.id);
+
+  const pendingActionInput = {
+    id: 'automation-action-contract-pending',
+    action_type: 'ensure_plan_draft',
+    target_object_type: 'work_item',
+    target_object_id: ids.workItem,
+    target_revision_id: ids.specRevision2,
+    target_status: 'approved',
+    target_version: 1,
+    idempotency_key: 'action-key-contract-pending',
+    automation_scope: `repo:${ids.project}:repo-contract-pending` as const,
+    automation_settings_version: 2,
+    capability_fingerprint: disabled.capability_fingerprint,
+    precondition_fingerprint: 'precondition-contract-a',
+    action_input_json: { work_item_id: ids.workItem, spec_revision_id: ids.specRevision2 },
+    now: '2026-05-05T00:30:00.000Z',
+  };
+  const pendingNewAction = await repository.createOrReplayAutomationActionRun(pendingActionInput);
+  expect(pendingNewAction).toMatchObject({ id: pendingActionInput.id, status: 'pending', attempt: 0 });
   await expect(
-    repository.claimAutomationActionRun({
-      ...retryableActionRun,
-      claim_token: 'automation-claim-retryable-2',
-      locked_until: '2026-05-05T00:25:00.000Z',
-      now: '2026-05-05T00:21:00.000Z',
+    repository.createOrReplayAutomationActionRun({
+      ...pendingActionInput,
+      idempotency_key: 'action-key-contract-pending-duplicate-id',
     }),
-  ).resolves.toMatchObject({ id: retryableActionRun.id, status: 'running', attempt: 2 });
+  ).rejects.toThrow(/idempotency|identity|duplicate/i);
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...pendingActionInput,
+      action_input_json: {
+        spec_revision_id: ids.specRevision2,
+        work_item_id: ids.workItem,
+      },
+    }),
+  ).resolves.toMatchObject({ id: pendingActionInput.id, status: 'pending' });
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...pendingActionInput,
+      precondition_fingerprint: 'precondition-contract-b',
+    }),
+  ).rejects.toThrow(/idempotency|identity|precondition/i);
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...pendingActionInput,
+      action_input_json: { work_item_id: ids.workItem2, spec_revision_id: ids.specRevision2 },
+    }),
+  ).rejects.toThrow(/idempotency|identity|action/i);
+  await expect(
+    repository.claimNextAutomationActionRun({
+      now: '2026-05-05T00:30:01.000Z',
+      claim_token: 'automation-claim-next-contract',
+      locked_until: '2026-05-05T00:35:00.000Z',
+      limit: 10,
+      project_id: ids.project,
+      repo_id: 'repo-contract-pending',
+      automation_scope: `repo:${ids.project}:repo-contract-pending`,
+    }),
+  ).resolves.toMatchObject({ id: pendingNewAction.id, status: 'running', attempt: 1 });
+
+  await repository.createOrReplayAutomationActionRun({
+    ...pendingActionInput,
+    id: 'automation-action-contract-filter-outside',
+    idempotency_key: 'action-key-contract-filter-outside',
+    automation_scope: `repo:${ids.project}:repo-contract-outside`,
+    target_object_id: ids.workItem2,
+  });
+  await expect(
+    repository.claimNextAutomationActionRun({
+      now: '2026-05-05T00:30:02.000Z',
+      claim_token: 'automation-claim-next-contract-empty',
+      locked_until: '2026-05-05T00:35:00.000Z',
+      limit: 10,
+      project_id: ids.project,
+      repo_id: 'repo-contract-pending',
+      automation_scope: `repo:${ids.project}:repo-contract-pending`,
+    }),
+  ).resolves.toBeUndefined();
+
+  const snapshotActionInput = {
+    id: 'automation-action-contract-snapshot',
+    action_type: 'project_runtime_snapshot',
+    target_object_type: 'repo',
+    target_object_id: 'repo-contract-projection',
+    target_status: 'observed',
+    idempotency_key: 'action-key-contract-snapshot',
+    automation_scope: `repo:${ids.project}:repo-contract-projection` as const,
+    automation_settings_version: 2,
+    capability_fingerprint: disabled.capability_fingerprint,
+    precondition_fingerprint: 'snapshot-precondition-a',
+    action_input_json: {
+      repo_id: 'repo-contract-projection',
+      policy_status: 'loaded',
+      policy_digest: 'policy-contract-a',
+      parser_version: 'workflow-md-parser:v1',
+      reason_code: 'loaded',
+      observed_at: '2026-05-05T00:30:00.000Z',
+      last_known_good: { repo_id: 'repo-contract-projection', policy_status: 'loaded', policy_digest: 'older' },
+    },
+    now: '2026-05-05T00:30:00.000Z',
+  };
+  await repository.createOrReplayAutomationActionRun(snapshotActionInput);
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...snapshotActionInput,
+      target_object_type: 'repo',
+      target_object_id: 'repo-contract-projection-renamed',
+      target_status: 'reobserved',
+      automation_scope: `repo:${ids.project}:repo-contract-projection`,
+      automation_settings_version: 99,
+      capability_fingerprint: 'ignored-capability-change',
+      action_input_json: {
+        repo_id: 'repo-contract-projection',
+        policy_status: 'loaded',
+        policy_digest: 'policy-contract-a',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'loaded',
+        observed_at: '2026-05-05T00:31:00.000Z',
+        last_known_good: { repo_id: 'repo-contract-projection', policy_status: 'loaded', policy_digest: 'newer' },
+      },
+    }),
+  ).resolves.toMatchObject({ id: snapshotActionInput.id, status: 'pending' });
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...snapshotActionInput,
+      automation_scope: `repo:${ids.project}-other:repo-contract-projection`,
+    }),
+  ).rejects.toThrow(/identity|policy/i);
+  await expect(
+    repository.createOrReplayAutomationActionRun({
+      ...snapshotActionInput,
+      action_input_json: {
+        repo_id: 'repo-contract-projection',
+        policy_status: 'loaded',
+        policy_digest: 'policy-contract-b',
+        parser_version: 'workflow-md-parser:v1',
+        reason_code: 'loaded',
+      },
+    }),
+  ).rejects.toThrow(/identity|policy/i);
+  const claimedProjection = await repository.claimNextAutomationActionRun({
+    now: '2026-05-05T00:31:00.000Z',
+    claim_token: 'automation-claim-projection-contract',
+    locked_until: '2026-05-05T00:36:00.000Z',
+    limit: 10,
+    automation_scope: `repo:${ids.project}:repo-contract-projection`,
+  });
+  await repository.completeAutomationActionRun({
+    id: claimedProjection?.id ?? '',
+    idempotency_key: claimedProjection?.idempotency_key ?? '',
+    claim_token: 'automation-claim-projection-contract',
+    status: 'succeeded',
+    finished_at: '2026-05-05T00:32:00.000Z',
+    result_json: { projected: true },
+  });
+  await expect(
+    repository.latestCompletedProjectionActionRun({
+      automation_scope: `repo:${ids.project}:repo-contract-projection`,
+      repo_id: 'repo-contract-projection',
+      policy_status: 'loaded',
+      policy_digest: 'policy-contract-a',
+      parser_version: 'workflow-md-parser:v1',
+      reason_code: 'loaded',
+    }),
+  ).resolves.toMatchObject({ id: snapshotActionInput.id, status: 'succeeded' });
+
+  const concurrentInput = {
+    ...pendingActionInput,
+    id: 'automation-action-contract-concurrent',
+    idempotency_key: 'action-key-contract-concurrent',
+    automation_scope: `repo:${ids.project}:repo-contract-concurrent` as const,
+    target_object_id: ids.workItem2,
+  };
+  const concurrentPending = await repository.createOrReplayAutomationActionRun(concurrentInput);
+  const concurrentResults = await Promise.all(
+    Array.from({ length: 8 }, (_, index) =>
+      repository.claimNextAutomationActionRun({
+        now: '2026-05-05T00:33:00.000Z',
+        claim_token: `automation-claim-concurrent-${index}`,
+        locked_until: '2026-05-05T00:38:00.000Z',
+        limit: 10,
+        automation_scope: `repo:${ids.project}:repo-contract-concurrent`,
+      }),
+    ),
+  );
+  expect(concurrentResults.filter((result) => result?.id === concurrentPending.id)).toHaveLength(1);
 }
 
 const artifactRef = (kind: string, name: string) => ({

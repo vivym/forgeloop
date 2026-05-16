@@ -6,7 +6,8 @@ import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryP0Repository } from '../../packages/db/src';
 
 import { seedAppWithRunSession, seedQueuedPackageRun } from '../helpers/p0-runtime-fixtures';

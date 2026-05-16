@@ -11,8 +11,8 @@ import {
   P0_DEMO_ACTOR_ID_FALLBACK,
   P0_REPOSITORY,
   RUN_DURABILITY_MODE,
-  RUN_WORKER,
-} from '../../apps/control-plane-api/src/p0/p0.service';
+} from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import {
   assertNoUnsafeReleaseDogfoodStrings,
   buildDurableReleaseDogfoodIdentity,

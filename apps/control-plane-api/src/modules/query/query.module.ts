@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
 
-import { P0Module } from '../../p0/p0.module';
+import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
 import { QueryController } from './query.controller';
 import { QueryService } from './query.service';
 
 @Module({
-  imports: [P0Module],
+  imports: [ControlPlaneCoreModule],
   controllers: [QueryController],
   providers: [QueryService],
   exports: [QueryService],

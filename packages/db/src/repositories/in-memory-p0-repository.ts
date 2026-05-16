@@ -38,21 +38,28 @@ import {
   capabilityFingerprint,
   isActiveRunSessionStatus,
   isOpenReviewPacketStatus,
+  isWorkItemAutomationTerminal,
 } from '@forgeloop/domain';
 
 import type {
   ClaimAutomationActionRunInput,
+  ClaimNextAutomationActionRunInput,
   ClaimCommandIdempotencyInput,
   ClaimExecutionPackageGenerationRunInput,
   CompleteAutomationActionRunInput,
   CompleteExecutionPackageGenerationRunInput,
+  CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
   ExecutionPackageGenerationPackageRecord,
   FinishCommandIdempotencyInput,
+  GetClaimedAutomationActionRunInput,
+  LatestCompletedProjectionActionRunInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
   P0Repository,
+  RuntimeSnapshotRepositoryData,
+  RuntimeSnapshotTargetRow,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
   ResolveAutomationProjectSettingsInput,
@@ -68,7 +75,76 @@ import { ObjectLockManager } from './object-lock';
 
 const clone = <T>(value: T): T => structuredClone(value);
 
-const valuesEqual = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
+type CanonicalJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly CanonicalJsonValue[]
+  | { readonly [key: string]: CanonicalJsonValue };
+
+const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : canonicalizeJson(item)));
+  }
+
+  const record = value as { readonly [key: string]: CanonicalJsonValue };
+  return Object.keys(record)
+    .sort()
+    .reduce<Record<string, CanonicalJsonValue>>((accumulator, key) => {
+      const item = record[key];
+      if (item !== undefined) {
+        accumulator[key] = canonicalizeJson(item);
+      }
+      return accumulator;
+    }, {});
+};
+
+const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
+
+const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
+
+const timestampMillis = (value: string | undefined): number | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+};
+
+const timestampAtOrBefore = (left: string | undefined, right: string): boolean => {
+  const leftMillis = timestampMillis(left);
+  const rightMillis = timestampMillis(right);
+  return leftMillis !== undefined && rightMillis !== undefined ? leftMillis <= rightMillis : left !== undefined && left <= right;
+};
+
+const compareTimestamp = (left: string | undefined, right: string | undefined): number => {
+  const leftMillis = timestampMillis(left);
+  const rightMillis = timestampMillis(right);
+  if (leftMillis !== undefined && rightMillis !== undefined) {
+    return leftMillis - rightMillis;
+  }
+  return (left ?? '').localeCompare(right ?? '');
+};
+
+const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
+  repo_id: actionInputJson.repo_id,
+  policy_status: actionInputJson.policy_status,
+  policy_digest: actionInputJson.policy_digest,
+  parser_version: actionInputJson.parser_version,
+  reason_code: actionInputJson.reason_code,
+});
+
+const automationScopeParts = (automationScope: string): { projectId: string; repoId?: string } => {
+  const [scopeType, projectId, repoId] = automationScope.split(':');
+  return scopeType === 'repo' && repoId !== undefined ? { projectId: projectId ?? '', repoId } : { projectId: projectId ?? '' };
+};
+
+const repoAutomationScopeRepoId = (automationScope: string): string | undefined => automationScopeParts(automationScope).repoId;
 
 const redactAutomationActionClaim = (actionRun: AutomationActionRun): AutomationActionRun => {
   const { claim_token: _claimToken, locked_until: _lockedUntil, ...redacted } = actionRun;
@@ -968,14 +1044,68 @@ export class InMemoryP0Repository implements P0Repository {
     return clone(superseded);
   }
 
+  async createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun> {
+    return this.objectLocks.withLocks([`automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`], async () =>
+      this.createOrReplayAutomationActionRunUnlocked(input),
+    );
+  }
+
+  async claimNextAutomationActionRun(
+    input: ClaimNextAutomationActionRunInput,
+  ): Promise<AutomationActionRun | undefined> {
+    return this.objectLocks.withLock('automation-action:claim-next', async () => {
+      const candidates = valuesFor(this.automationActionRuns)
+        .filter((actionRun) => this.isAutomationActionClaimable(actionRun, input.now))
+        .filter((actionRun) => this.matchesAutomationActionClaimFilter(actionRun, input))
+        .sort(this.compareAutomationActionClaimOrder);
+      const selected = candidates.slice(0, input.limit)[0];
+      if (selected === undefined) {
+        return undefined;
+      }
+      const claimed = this.toRunningAutomationActionRun(selected, {
+        claim_token: input.claim_token,
+        locked_until: input.locked_until,
+        now: input.now,
+      });
+      this.automationActionRuns.set(claimed.id, clone(claimed));
+      return clone(claimed);
+    });
+  }
+
+  async getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun> {
+    return clone(this.getClaimedAutomationActionRunRecord(input.id, input.claim_token));
+  }
+
+  async latestCompletedProjectionActionRun(
+    input: LatestCompletedProjectionActionRunInput,
+  ): Promise<AutomationActionRun | undefined> {
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
+    const matched = valuesFor(this.automationActionRuns)
+      .filter(
+        (actionRun) =>
+          actionRun.action_type === 'project_runtime_snapshot' &&
+          actionRun.status === 'succeeded' &&
+          actionRun.automation_scope === input.automation_scope &&
+          this.stablePolicyObservationIdentityMatches(actionRun.action_input_json, input),
+      )
+      .sort(
+        (left, right) =>
+          (right.finished_at ?? '').localeCompare(left.finished_at ?? '') ||
+          (right.updated_at ?? '').localeCompare(left.updated_at ?? '') ||
+          right.id.localeCompare(left.id),
+      )[0];
+    return matched === undefined ? undefined : clone(matched);
+  }
+
   async claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
-    return this.objectLocks.withLock(`automation-action:${input.idempotency_key}`, () =>
-      this.claimAutomationActionRunUnlocked(input),
+    return this.objectLocks.withLocks(
+      ['automation-action:claim-next', `automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`],
+      () => this.claimAutomationActionRunUnlocked(input),
     );
   }
 
   async markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun> {
-    return this.objectLocks.withLock(`automation-action:${input.idempotency_key}`, () =>
+    return this.objectLocks.withLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], () =>
       this.markAutomationActionGatePendingUnlocked(input),
     );
   }
@@ -983,7 +1113,7 @@ export class InMemoryP0Repository implements P0Repository {
   private async markAutomationActionGatePendingUnlocked(
     input: MarkAutomationActionGatePendingInput,
   ): Promise<AutomationActionRun> {
-    const actionRun = this.getClaimedAutomationActionRun(input.id, input.claim_token);
+    const actionRun = this.getClaimedAutomationActionRunRecord(input.id, input.claim_token);
     if (actionRun.idempotency_key !== input.idempotency_key) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.id} idempotency key mismatch`);
     }
@@ -1000,13 +1130,13 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   async completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun> {
-    return this.objectLocks.withLock(`automation-action:${input.idempotency_key}`, () =>
+    return this.objectLocks.withLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], () =>
       this.completeAutomationActionRunUnlocked(input),
     );
   }
 
   private async completeAutomationActionRunUnlocked(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun> {
-    const actionRun = this.getClaimedAutomationActionRun(input.id, input.claim_token);
+    const actionRun = this.getClaimedAutomationActionRunRecord(input.id, input.claim_token);
     if (actionRun.idempotency_key !== input.idempotency_key) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.id} idempotency key mismatch`);
     }
@@ -1025,28 +1155,58 @@ export class InMemoryP0Repository implements P0Repository {
 
   async listClaimableAutomationActionRuns(input: ListClaimableAutomationActionRunsInput): Promise<AutomationActionRun[]> {
     return valuesFor(this.automationActionRuns)
-      .filter(
-        (actionRun) =>
-          actionRun.status === 'pending' ||
-          (actionRun.status === 'gate_pending' &&
-            (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= input.now)) ||
-          ((actionRun.status === 'blocked' || actionRun.status === 'failed') &&
-            actionRun.retryable === true &&
-            (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= input.now)) ||
-          (actionRun.status === 'running' && actionRun.locked_until !== undefined && actionRun.locked_until <= input.now),
-      )
-      .sort(
-        (left, right) =>
-          (left.next_attempt_at ?? left.created_at ?? '').localeCompare(right.next_attempt_at ?? right.created_at ?? '') ||
-          (left.created_at ?? '').localeCompare(right.created_at ?? '') ||
-          left.id.localeCompare(right.id),
-      )
+      .filter((actionRun) => this.isAutomationActionClaimable(actionRun, input.now))
+      .sort(this.compareAutomationActionClaimOrder)
       .map(redactAutomationActionClaim)
       .slice(0, input.limit);
   }
 
-  async listRuntimeSnapshotRows(): Promise<Record<string, unknown>[]> {
-    return [];
+  async getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData> {
+    const projects = valuesFor(this.projects).sort(byCreatedAtThenId);
+    const repos = valuesFor(this.projectRepos)
+      .filter((repo) => repo.status === 'active')
+      .sort(byCreatedAtThenId);
+    const projectRows = await Promise.all(
+      projects.map(async (project) => {
+        const settings = await this.resolveAutomationProjectSettings({ project_id: project.id });
+        return {
+          project_id: project.id,
+          automation_scope: `project:${project.id}` as const,
+          automation_settings_version: settings.version,
+          capability_fingerprint: settings.capability_fingerprint,
+        };
+      }),
+    );
+    const repoRows = await Promise.all(
+      repos.map(async (repo) => {
+        const settings = await this.resolveAutomationProjectSettings({ project_id: repo.project_id, repo_id: repo.repo_id });
+        return {
+          project_id: repo.project_id,
+          repo_id: repo.repo_id,
+          automation_scope: `repo:${repo.project_id}:${repo.repo_id}` as const,
+          automation_settings_version: settings.version,
+          capability_fingerprint: settings.capability_fingerprint,
+          daemon_internal_local_path: repo.local_path,
+        };
+      }),
+    );
+
+    return {
+      projects: projectRows,
+      repos: repoRows,
+      work_items_requiring_plan: await this.runtimeSnapshotWorkItemsRequiringPlan(repos),
+      plan_revisions_requiring_packages: await this.runtimeSnapshotPlanRevisionsRequiringPackages(repos),
+      run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(repos),
+      active_holds: this.runtimeSnapshotActiveHolds(),
+      recent_action_runs: valuesFor(this.automationActionRuns)
+        .sort(this.compareAutomationActionRecency)
+        .slice(0, 50)
+        .map(redactAutomationActionClaim),
+      policy_projection_action_runs: valuesFor(this.automationActionRuns)
+        .filter((actionRun) => actionRun.action_type === 'project_runtime_snapshot' && actionRun.status === 'succeeded')
+        .sort(this.compareAutomationActionRecency)
+        .map(redactAutomationActionClaim),
+    };
   }
 
   async saveRelease(release: Release): Promise<void> {
@@ -1338,7 +1498,50 @@ export class InMemoryP0Repository implements P0Repository {
     }
   }
 
+  private createOrReplayAutomationActionRunUnlocked(input: CreateOrReplayAutomationActionRunInput): AutomationActionRun {
+    if (input.action_type === 'project_runtime_snapshot') {
+      this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+    }
+    const existingId = this.automationActionRunIdempotency.get(input.idempotency_key);
+    const existing = existingId === undefined ? undefined : this.automationActionRuns.get(existingId);
+    if (existing !== undefined) {
+      this.assertAutomationActionReplayMatches(existing, input);
+      return clone(redactAutomationActionClaim(existing));
+    }
+    this.assertAutomationActionIdIsUnused(input.id, input.idempotency_key);
+
+    const actionRun: AutomationActionRun = {
+      id: input.id,
+      action_type: input.action_type,
+      target_object_type: input.target_object_type,
+      target_object_id: input.target_object_id,
+      ...(input.target_revision_id === undefined ? {} : { target_revision_id: input.target_revision_id }),
+      ...(input.target_version === undefined ? {} : { target_version: input.target_version }),
+      target_status: input.target_status,
+      idempotency_key: input.idempotency_key,
+      automation_scope: input.automation_scope,
+      automation_settings_version: input.automation_settings_version,
+      capability_fingerprint: input.capability_fingerprint,
+      precondition_fingerprint: input.precondition_fingerprint,
+      action_input_json: clone(input.action_input_json),
+      status: 'pending',
+      attempt: 0,
+      ...(input.created_by === undefined ? {} : { created_by: input.created_by }),
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    this.automationActionRuns.set(actionRun.id, clone(actionRun));
+    this.automationActionRunIdempotency.set(actionRun.idempotency_key, actionRun.id);
+    return clone(actionRun);
+  }
+
   private async claimAutomationActionRunUnlocked(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
+    if (input.precondition_fingerprint === undefined || input.action_input_json === undefined) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${input.idempotency_key} requires precondition fingerprint and action input`,
+      );
+    }
     const existingId = this.automationActionRunIdempotency.get(input.idempotency_key);
     const existing = existingId === undefined ? undefined : this.automationActionRuns.get(existingId);
     if (existing !== undefined) {
@@ -1349,6 +1552,8 @@ export class InMemoryP0Repository implements P0Repository {
         }
         return clone(redactAutomationActionClaim(existing));
       }
+    } else {
+      this.assertAutomationActionIdIsUnused(input.id, input.idempotency_key);
     }
 
     const actionRun: AutomationActionRun = {
@@ -1357,15 +1562,19 @@ export class InMemoryP0Repository implements P0Repository {
       target_object_type: input.target_object_type,
       target_object_id: input.target_object_id,
       ...(input.target_revision_id === undefined ? {} : { target_revision_id: input.target_revision_id }),
+      ...(input.target_version === undefined ? {} : { target_version: input.target_version }),
       target_status: input.target_status,
       idempotency_key: input.idempotency_key,
       automation_scope: input.automation_scope,
       automation_settings_version: input.automation_settings_version,
       capability_fingerprint: input.capability_fingerprint,
+      precondition_fingerprint: input.precondition_fingerprint,
+      action_input_json: clone(input.action_input_json),
       status: 'running',
       claim_token: input.claim_token,
       attempt: (existing?.attempt ?? 0) + 1,
       locked_until: input.locked_until,
+      ...(existing?.created_by === undefined ? {} : { created_by: existing.created_by }),
       claimed_at: input.now,
       started_at: existing?.started_at ?? input.now,
       created_at: existing?.created_at ?? input.now,
@@ -1376,19 +1585,322 @@ export class InMemoryP0Repository implements P0Repository {
     return actionRun;
   }
 
+  private assertAutomationActionIdIsUnused(id: string, idempotencyKey: string): void {
+    const existing = this.automationActionRuns.get(id);
+    if (existing !== undefined && existing.idempotency_key !== idempotencyKey) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${id} already exists with a different idempotency key`,
+      );
+    }
+  }
+
+  private toRunningAutomationActionRun(
+    actionRun: AutomationActionRun,
+    input: { claim_token: string; locked_until: string; now: string },
+  ): AutomationActionRun {
+    return {
+      id: actionRun.id,
+      action_type: actionRun.action_type,
+      target_object_type: actionRun.target_object_type,
+      target_object_id: actionRun.target_object_id,
+      ...(actionRun.target_revision_id === undefined ? {} : { target_revision_id: actionRun.target_revision_id }),
+      ...(actionRun.target_version === undefined ? {} : { target_version: actionRun.target_version }),
+      target_status: actionRun.target_status,
+      idempotency_key: actionRun.idempotency_key,
+      automation_scope: actionRun.automation_scope,
+      automation_settings_version: actionRun.automation_settings_version,
+      capability_fingerprint: actionRun.capability_fingerprint,
+      precondition_fingerprint: actionRun.precondition_fingerprint,
+      action_input_json: clone(actionRun.action_input_json),
+      status: 'running',
+      claim_token: input.claim_token,
+      attempt: actionRun.attempt + 1,
+      locked_until: input.locked_until,
+      ...(actionRun.created_by === undefined ? {} : { created_by: actionRun.created_by }),
+      claimed_at: input.now,
+      started_at: actionRun.started_at ?? input.now,
+      ...(actionRun.created_at === undefined ? {} : { created_at: actionRun.created_at }),
+      updated_at: input.now,
+    };
+  }
+
   private assertAutomationActionIdentityMatches(existing: AutomationActionRun, input: ClaimAutomationActionRunInput): void {
     const mismatched =
       existing.action_type !== input.action_type ||
       existing.target_object_type !== input.target_object_type ||
       existing.target_object_id !== input.target_object_id ||
       existing.target_revision_id !== input.target_revision_id ||
+      existing.target_version !== input.target_version ||
       existing.target_status !== input.target_status ||
       existing.automation_scope !== input.automation_scope ||
       existing.automation_settings_version !== input.automation_settings_version ||
-      existing.capability_fingerprint !== input.capability_fingerprint;
+      existing.capability_fingerprint !== input.capability_fingerprint ||
+      existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} identity changed`);
     }
+  }
+
+  private assertAutomationActionReplayMatches(
+    existing: AutomationActionRun,
+    input: CreateOrReplayAutomationActionRunInput,
+  ): void {
+    if (existing.action_type === 'project_runtime_snapshot' || input.action_type === 'project_runtime_snapshot') {
+      if (existing.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(existing.automation_scope, existing.action_input_json.repo_id);
+      }
+      if (input.action_type === 'project_runtime_snapshot') {
+        this.assertProjectionAutomationScope(input.automation_scope, input.action_input_json.repo_id);
+      }
+      const mismatched =
+        existing.action_type !== input.action_type ||
+        existing.automation_scope !== input.automation_scope ||
+        !valuesEqual(
+          stablePolicyObservationIdentity(existing.action_input_json),
+          stablePolicyObservationIdentity(input.action_input_json),
+        );
+      if (mismatched) {
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          `Automation action ${input.idempotency_key} project_runtime_snapshot identity changed`,
+        );
+      }
+      return;
+    }
+
+    const mismatched =
+      existing.action_type !== input.action_type ||
+      existing.target_object_type !== input.target_object_type ||
+      existing.target_object_id !== input.target_object_id ||
+      existing.target_revision_id !== input.target_revision_id ||
+      existing.target_version !== input.target_version ||
+      existing.target_status !== input.target_status ||
+      existing.automation_scope !== input.automation_scope ||
+      existing.automation_settings_version !== input.automation_settings_version ||
+      existing.capability_fingerprint !== input.capability_fingerprint ||
+      existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      !valuesEqual(existing.action_input_json, input.action_input_json);
+    if (mismatched) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        `Automation action ${input.idempotency_key} idempotency identity, precondition, or action input changed`,
+      );
+    }
+  }
+
+  private stablePolicyObservationIdentityMatches(
+    actionInputJson: Record<string, unknown>,
+    input: LatestCompletedProjectionActionRunInput,
+  ): boolean {
+    this.assertProjectionAutomationScope(input.automation_scope, input.repo_id);
+    const stableIdentity = stablePolicyObservationIdentity(actionInputJson);
+    return (
+      stableIdentity.repo_id === input.repo_id &&
+      stableIdentity.policy_status === input.policy_status &&
+      stableIdentity.policy_digest === input.policy_digest &&
+      stableIdentity.parser_version === input.parser_version &&
+      stableIdentity.reason_code === input.reason_code
+    );
+  }
+
+  private assertProjectionAutomationScope(automationScope: string, repoId: unknown): void {
+    const scopeRepoId = repoAutomationScopeRepoId(automationScope);
+    if (scopeRepoId === undefined || repoId !== scopeRepoId) {
+      throw new DomainError('INVALID_TRANSITION', `Projection action requires matching repo automation scope`);
+    }
+  }
+
+  private matchesAutomationActionClaimFilter(
+    actionRun: AutomationActionRun,
+    input: ClaimNextAutomationActionRunInput,
+  ): boolean {
+    if (input.automation_scope !== undefined && actionRun.automation_scope !== input.automation_scope) {
+      return false;
+    }
+    const scope = automationScopeParts(actionRun.automation_scope);
+    if (input.project_id !== undefined && scope.projectId !== input.project_id) {
+      return false;
+    }
+    if (input.repo_id !== undefined && scope.repoId !== input.repo_id) {
+      return false;
+    }
+    return true;
+  }
+
+  private compareAutomationActionClaimOrder(left: AutomationActionRun, right: AutomationActionRun): number {
+    return (
+      compareTimestamp(left.next_attempt_at ?? left.created_at, right.next_attempt_at ?? right.created_at) ||
+      compareTimestamp(left.created_at, right.created_at) ||
+      left.id.localeCompare(right.id)
+    );
+  }
+
+  private compareAutomationActionRecency(left: AutomationActionRun, right: AutomationActionRun): number {
+    return (
+      compareTimestamp(right.finished_at ?? right.updated_at ?? right.created_at, left.finished_at ?? left.updated_at ?? left.created_at) ||
+      right.id.localeCompare(left.id)
+    );
+  }
+
+  private async runtimeSnapshotWorkItemsRequiringPlan(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const workItem of valuesFor(this.workItems).sort(byCreatedAtThenId)) {
+      if (isWorkItemAutomationTerminal(workItem) || workItem.current_plan_id !== undefined || workItem.current_spec_id === undefined) {
+        continue;
+      }
+      const spec = this.specs.get(workItem.current_spec_id);
+      const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id ?? workItem.current_spec_revision_id;
+      if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
+        continue;
+      }
+      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
+      if (repo === undefined) {
+        continue;
+      }
+      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
+      if (!settings.capabilities_json.canGeneratePlanDraft) {
+        continue;
+      }
+      if (this.hasActiveManualHold([`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'work_item',
+        target_object_id: workItem.id,
+        target_revision_id: specRevisionId,
+        target_status: 'approved',
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        ...this.latestMatchingActionFields('ensure_plan_draft', workItem.id, specRevisionId),
+      });
+    }
+    return targets;
+  }
+
+  private async runtimeSnapshotPlanRevisionsRequiringPackages(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const plan of valuesFor(this.plans).sort(byCreatedAtThenId)) {
+      if (plan.status !== 'approved') {
+        continue;
+      }
+      const planRevisionId = plan.approved_revision_id ?? plan.current_revision_id;
+      if (planRevisionId === undefined || this.hasCurrentPackageGeneration(planRevisionId)) {
+        continue;
+      }
+      const planRevision = this.planRevisions.get(planRevisionId);
+      const workItem = planRevision === undefined ? undefined : this.workItems.get(planRevision.work_item_id);
+      if (planRevision === undefined || workItem === undefined || isWorkItemAutomationTerminal(workItem)) {
+        continue;
+      }
+      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
+      if (repo === undefined) {
+        continue;
+      }
+      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
+      if (!settings.capabilities_json.canGeneratePackageDrafts) {
+        continue;
+      }
+      const generationKey = `default:${planRevisionId}`;
+      if (
+        this.hasActiveManualHold([
+          `work_item:${workItem.id}`,
+          `spec_revision:${planRevision.based_on_spec_revision_id}`,
+          `plan_revision:${planRevisionId}`,
+          `package_generation:${planRevisionId}:${generationKey}`,
+        ])
+      ) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'plan_revision',
+        target_object_id: planRevisionId,
+        target_revision_id: generationKey,
+        target_status: 'approved',
+        project_id: workItem.project_id,
+        repo_id: repo.repo_id,
+        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        generation_key: generationKey,
+        ...this.latestMatchingActionFields('ensure_package_drafts', planRevisionId, generationKey),
+      });
+    }
+    return targets;
+  }
+
+  private runtimeSnapshotRunEnqueueDisabledPackages(repos: ProjectRepo[]): RuntimeSnapshotTargetRow[] {
+    return valuesFor(this.executionPackages)
+      .filter(
+        (executionPackage) =>
+          executionPackage.phase === 'ready' &&
+          repos.some((repo) => repo.project_id === executionPackage.project_id && repo.repo_id === executionPackage.repo_id),
+      )
+      .sort(byCreatedAtThenId)
+      .map((executionPackage) => ({
+        target_object_type: 'execution_package',
+        target_object_id: executionPackage.id,
+        target_revision_id: executionPackage.plan_revision_id,
+        target_status: executionPackage.phase,
+        project_id: executionPackage.project_id,
+        repo_id: executionPackage.repo_id,
+        automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}` as const,
+        disabled_reason: 'run_enqueue_disabled_by_scope',
+      }));
+  }
+
+  private runtimeSnapshotActiveHolds() {
+    return valuesFor(this.manualPathHolds)
+      .filter((hold) => hold.status === 'active')
+      .sort((left, right) => compareTimestamp(left.requested_at, right.requested_at) || left.id.localeCompare(right.id))
+      .map((hold) => ({
+        object_type: hold.object_type,
+        object_id: hold.object_id,
+        scope_key: hold.scope_key,
+        reason_code: hold.reason_code,
+        status: hold.status,
+        requested_at: hold.requested_at,
+        ...(hold.resolved_at === undefined ? {} : { resolved_at: hold.resolved_at }),
+        fingerprint: `${hold.scope_key}:${hold.reason_code}`,
+      }));
+  }
+
+  private hasCurrentPackageGeneration(planRevisionId: string): boolean {
+    return valuesFor(this.executionPackageGenerationRuns).some(
+      (run) => run.plan_revision_id === planRevisionId && (run.status === 'pending' || run.status === 'running' || run.status === 'succeeded'),
+    );
+  }
+
+  private hasActiveManualHold(scopeKeys: string[]): boolean {
+    const scopeKeySet = new Set(scopeKeys);
+    return valuesFor(this.manualPathHolds).some((hold) => hold.status === 'active' && scopeKeySet.has(hold.scope_key));
+  }
+
+  private latestMatchingActionFields(
+    actionType: string,
+    targetObjectId: string,
+    targetRevisionId: string,
+  ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'> {
+    const actionRun = valuesFor(this.automationActionRuns)
+      .filter(
+        (candidate) =>
+          candidate.action_type === actionType &&
+          candidate.target_object_id === targetObjectId &&
+          candidate.target_revision_id === targetRevisionId,
+      )
+      .sort(this.compareAutomationActionRecency)[0];
+    if (actionRun === undefined) {
+      return {};
+    }
+    return {
+      latest_matching_action_status: actionRun.status,
+      ...(actionRun.status !== 'blocked'
+        ? {}
+        : {
+            ...(actionRun.reason === undefined ? {} : { blocked_reason_code: actionRun.reason }),
+            ...(actionRun.error_code === undefined ? {} : { blocked_summary: actionRun.error_code }),
+          }),
+    };
   }
 
   private isAutomationActionClaimable(actionRun: AutomationActionRun, now: string): boolean {
@@ -1396,13 +1908,13 @@ export class InMemoryP0Repository implements P0Repository {
       return true;
     }
     if (actionRun.status === 'running') {
-      return actionRun.locked_until !== undefined && actionRun.locked_until <= now;
+      return timestampAtOrBefore(actionRun.locked_until, now);
     }
     if (actionRun.status === 'gate_pending') {
-      return actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now;
+      return actionRun.next_attempt_at === undefined || timestampAtOrBefore(actionRun.next_attempt_at, now);
     }
     if (actionRun.status === 'blocked' || actionRun.status === 'failed') {
-      return actionRun.retryable === true && (actionRun.next_attempt_at === undefined || actionRun.next_attempt_at <= now);
+      return actionRun.retryable === true && (actionRun.next_attempt_at === undefined || timestampAtOrBefore(actionRun.next_attempt_at, now));
     }
     return false;
   }
@@ -1535,7 +2047,7 @@ export class InMemoryP0Repository implements P0Repository {
     return clone(run);
   }
 
-  private getClaimedAutomationActionRun(id: string, claimToken: string): AutomationActionRun {
+  private getClaimedAutomationActionRunRecord(id: string, claimToken: string): AutomationActionRun {
     const actionRun = this.automationActionRuns.get(id);
     if (actionRun === undefined || actionRun.status !== 'running' || actionRun.claim_token !== claimToken) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${id} is not claimed`);

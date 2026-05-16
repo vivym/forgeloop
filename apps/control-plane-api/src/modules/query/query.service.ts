@@ -8,7 +8,7 @@ import {
 } from '@forgeloop/db';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
-import { P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../../p0/p0.service';
+import { P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
 import { serializePublicRunSession } from '../../p0/run-session-serialization';
 
 @Injectable()

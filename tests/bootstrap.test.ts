@@ -15,6 +15,7 @@ describe('workspace bootstrap contract', () => {
       test: 'vitest run',
       'test:watch': 'vitest',
       'dev:api': 'pnpm --filter @forgeloop/control-plane-api start:dev',
+      'dev:automation-daemon': 'pnpm --filter @forgeloop/automation-daemon start',
       'dev:executor': 'pnpm --filter @forgeloop/executor-gateway start:dev',
       'dev:worker': 'pnpm --filter @forgeloop/workflow-worker start:dev',
       'dev:web': 'pnpm --filter @forgeloop/web dev',
@@ -26,10 +27,12 @@ describe('workspace bootstrap contract', () => {
 
   it('keeps the expected apps and packages registered as private modules', () => {
     const manifests = {
+      'apps/automation-daemon/package.json': '@forgeloop/automation-daemon',
       'apps/control-plane-api/package.json': '@forgeloop/control-plane-api',
       'apps/executor-gateway/package.json': '@forgeloop/executor-gateway',
       'apps/web/package.json': '@forgeloop/web',
       'apps/workflow-worker/package.json': '@forgeloop/workflow-worker',
+      'packages/automation/package.json': '@forgeloop/automation',
       'packages/contracts/package.json': '@forgeloop/contracts',
       'packages/db/package.json': '@forgeloop/db',
       'packages/domain/package.json': '@forgeloop/domain',
@@ -50,6 +53,7 @@ describe('workspace bootstrap contract', () => {
     const baseTsconfig = readJson('tsconfig.base.json');
 
     expect(baseTsconfig.compilerOptions.paths).toEqual({
+      '@forgeloop/automation': ['packages/automation/src/index.ts'],
       '@forgeloop/contracts': ['packages/contracts/src/index.ts'],
       '@forgeloop/domain': ['packages/domain/src/index.ts'],
       '@forgeloop/db': ['packages/db/src/index.ts'],

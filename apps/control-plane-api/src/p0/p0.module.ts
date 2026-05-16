@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { Module } from '@nestjs/common';
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
-import { createDbClient, createDrizzleP0Repository, InMemoryP0Repository, type P0Repository } from '@forgeloop/db';
+import type { P0Repository } from '@forgeloop/db';
 import {
   captureLocalCodexEvidence,
   CodexAppServerDriver,
@@ -14,15 +14,11 @@ import {
 } from '@forgeloop/executor';
 import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
 
+import { ControlPlaneCoreModule } from '../modules/core/control-plane-core.module';
+import { P0_REPOSITORY } from '../modules/core/control-plane-tokens';
+import { AutomationModule } from '../modules/automation/automation.module';
 import { P0Controller } from './p0.controller';
-import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
-  P0Service,
-  RUN_DURABILITY_MODE,
-  RUN_WORKER,
-  type RunDurabilityMode,
-} from './p0.service';
+import { P0Service, RUN_WORKER } from './p0.service';
 import { RunWorkerLifecycleService } from './run-worker-lifecycle.service';
 
 const safePathSegment = (value: string): string => {
@@ -81,15 +77,6 @@ const mockEvidence = (input: LocalCodexEvidenceInput): ExecutorResult => ({
   raw_metadata: { workflow_only: input.runSpec.workflow_only },
 });
 
-const createRepository = (): P0Repository => {
-  const databaseUrl = process.env.FORGELOOP_DATABASE_URL;
-  if (databaseUrl !== undefined && databaseUrl.trim().length > 0) {
-    return createDrizzleP0Repository(createDbClient({ connectionString: databaseUrl }).db);
-  }
-
-  return new InMemoryP0Repository();
-};
-
 const createRunWorker = (repository: P0Repository): RunWorker => {
   const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
   const rawLogStore = new LocalCodexRawLogStore({ artifactRoot: join(artifactRoot, 'raw-logs') });
@@ -121,21 +108,10 @@ const createRunWorker = (repository: P0Repository): RunWorker => {
   });
 };
 
-const durabilityMode = (): RunDurabilityMode =>
-  process.env.FORGELOOP_DATABASE_URL === undefined || process.env.FORGELOOP_DATABASE_URL.trim().length === 0
-    ? 'volatile_demo'
-    : 'durable';
-
 @Module({
+  imports: [ControlPlaneCoreModule, AutomationModule],
   controllers: [P0Controller],
   providers: [
-    { provide: P0_REPOSITORY, useFactory: createRepository },
-    { provide: RUN_DURABILITY_MODE, useFactory: durabilityMode },
-    {
-      provide: P0_DEMO_ACTOR_ID_FALLBACK,
-      useFactory: (mode: RunDurabilityMode) => mode === 'volatile_demo',
-      inject: [RUN_DURABILITY_MODE],
-    },
     {
       provide: RUN_WORKER,
       useFactory: createRunWorker,
@@ -144,6 +120,5 @@ const durabilityMode = (): RunDurabilityMode =>
     P0Service,
     RunWorkerLifecycleService,
   ],
-  exports: [P0_REPOSITORY, RUN_DURABILITY_MODE, P0_DEMO_ACTOR_ID_FALLBACK],
 })
 export class P0Module {}

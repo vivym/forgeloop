@@ -13,7 +13,8 @@ import { createServer as createViteServer, type ViteDevServer } from 'vite';
 import { afterEach, describe, expect as expectValue, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import type { InMemoryP0Repository } from '../../packages/db/src';
 import { transitionRunSession } from '../../packages/domain/src/index';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';

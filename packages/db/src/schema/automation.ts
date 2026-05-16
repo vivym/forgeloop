@@ -159,11 +159,14 @@ export const automation_action_runs = pgTable(
     targetObjectType: text('target_object_type').notNull(),
     targetObjectId: text('target_object_id').notNull(),
     targetRevisionId: text('target_revision_id'),
+    targetVersion: integer('target_version'),
     targetStatus: text('target_status').notNull(),
     idempotencyKey: text('idempotency_key').notNull().unique(),
     automationScope: text('automation_scope').notNull(),
     automationSettingsVersion: integer('automation_settings_version').notNull(),
     capabilityFingerprint: text('capability_fingerprint').notNull(),
+    preconditionFingerprint: text('precondition_fingerprint').notNull(),
+    actionInputJson: jsonb('action_input_json').$type<AutomationActionRun['action_input_json']>().notNull(),
     status: text('status').$type<AutomationActionRun['status']>().notNull(),
     claimToken: text('claim_token'),
     attempt: integer('attempt').notNull(),
@@ -185,9 +188,3 @@ export const automation_action_runs = pgTable(
     updatedAt: timestampColumn('updated_at'),
   },
 );
-
-export const automation_cursors = pgTable('automation_cursors', {
-  daemonId: text('daemon_id').primaryKey(),
-  cursor: text('cursor').notNull(),
-  updatedAt: timestampColumn('updated_at').notNull(),
-});

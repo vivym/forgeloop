@@ -38,9 +38,16 @@ export interface AutomationPrecondition {
   automation_scope: AutomationScope;
   project_id: string;
   repo_id?: string;
+  target_object_type?: string;
+  target_object_id?: string;
+  target_revision_id?: string;
+  target_version?: number;
+  target_status?: string;
   automation_settings_version: number;
   capability_fingerprint: string;
+  active_hold_fingerprint?: string;
   required_capability: AutomationPreconditionCapability;
+  command_concurrency_token?: string;
   actor_class: AutomationActorClass;
   daemon_identity?: string;
 }
@@ -166,11 +173,14 @@ export interface AutomationActionRun {
   target_object_type: string;
   target_object_id: string;
   target_revision_id?: string;
+  target_version?: number;
   target_status: string;
   idempotency_key: string;
   automation_scope: AutomationScope;
   automation_settings_version: number;
   capability_fingerprint: string;
+  precondition_fingerprint: string;
+  action_input_json: Record<string, unknown>;
   status: AutomationActionRunStatus;
   claim_token?: string;
   attempt: number;
