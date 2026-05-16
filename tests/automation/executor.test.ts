@@ -428,6 +428,83 @@ describe('automation executor', () => {
     ]);
   });
 
+  it('fails malformed plan draft action input before calling command endpoints', async () => {
+    const client = new FakeAutomationClient();
+    client.actionToClaim = claimedAction({
+      actionInputJson: {
+        work_item_id: 'persisted-work-item',
+      },
+    });
+
+    const result = await execute(client);
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: false,
+      reasonCode: 'invalid_action_input_json',
+    });
+    expect(client.calls.map((call) => call.method)).not.toContain('ensurePlanDraft');
+    expect(client.calls.find((call) => call.method === 'failAction')?.args).toEqual([
+      'action-run-1',
+      expect.objectContaining({
+        claim_token: 'claim-token-1',
+        idempotency_key: 'idempotency-key-1',
+        retryable: false,
+        result_json: {
+          status: 422,
+          code: 'invalid_action_input_json',
+        },
+      }),
+    ]);
+  });
+
+  it('fails malformed project runtime snapshot input instead of completing synthesized projection data', async () => {
+    const client = new FakeAutomationClient();
+    client.actionToClaim = claimedAction({
+      actionType: 'project_runtime_snapshot',
+      targetObjectType: 'repo',
+      targetObjectId: 'repo-1',
+      targetRevisionId: undefined,
+      targetStatus: 'loaded',
+      actionInputJson: {
+        repo_id: 'repo-1',
+        policy_status: 'loaded',
+      },
+    });
+
+    const result = await execute(
+      client,
+      baseAction({
+        actionType: 'project_runtime_snapshot',
+        targetObjectType: 'repo',
+        targetObjectId: 'repo-1',
+        targetStatus: 'loaded',
+        actionInputJson: {
+          repo_id: 'repo-1',
+          policy_status: 'loaded',
+          parser_version: 'workflow-md-parser:v1',
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: false,
+      reasonCode: 'invalid_action_input_json',
+    });
+    expect(client.calls.map((call) => call.method)).not.toContain('completeAction');
+    expect(client.calls.find((call) => call.method === 'failAction')?.args).toEqual([
+      'action-run-1',
+      expect.objectContaining({
+        claim_token: 'claim-token-1',
+        idempotency_key: 'idempotency-key-1',
+        retryable: false,
+      }),
+    ]);
+  });
+
   it('completes project_runtime_snapshot without calling draft commands and only uses current public-safe observation fields', async () => {
     const client = new FakeAutomationClient();
     client.actionToClaim = claimedAction({

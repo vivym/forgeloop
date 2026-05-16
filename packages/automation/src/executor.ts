@@ -35,6 +35,9 @@ const requiredCapabilityFor = (action: AutomationActionRunRecord): AutomationPre
   return 'canGeneratePlanDraft';
 };
 
+const stringField = (input: Record<string, unknown>, field: string): string | undefined =>
+  typeof input[field] === 'string' ? input[field] : undefined;
+
 const commandConcurrencyTokenFor = (action: AutomationActionRunRecord): string | undefined => {
   if (action.actionType === 'ensure_package_drafts') {
     return stringField(action.actionInputJson, 'generation_key') ?? action.targetRevisionId;
@@ -67,8 +70,94 @@ const preconditionFor = (action: AutomationActionRunRecord): AutomationPrecondit
   };
 };
 
-const stringField = (input: Record<string, unknown>, field: string): string | undefined =>
-  typeof input[field] === 'string' ? input[field] : undefined;
+type EnsurePlanDraftActionInput = {
+  workItemId: string;
+  specRevisionId: string;
+};
+
+type EnsurePackageDraftsActionInput = {
+  planRevisionId: string;
+  generationKey: string;
+};
+
+type RequestManualPathActionInput = {
+  objectType: string;
+  objectId: string;
+  scopeKey: string;
+  reasonCode: string;
+  reason: string;
+  generationKey?: string;
+  gateKey?: string;
+};
+
+type ProjectRuntimeSnapshotActionInput = {
+  repoId: string;
+  policyStatus: 'missing' | 'loaded' | 'parse_failed' | 'unsafe_path';
+  policyDigest?: string;
+  parserVersion: string;
+  reasonCode?: string;
+  observedAt?: string;
+};
+
+const policyStatuses = new Set<ProjectRuntimeSnapshotActionInput['policyStatus']>([
+  'missing',
+  'loaded',
+  'parse_failed',
+  'unsafe_path',
+]);
+
+const invalidActionInputJson = (): AutomationHttpError =>
+  new AutomationHttpError(422, { code: 'invalid_action_input_json' }, 'Invalid automation action input JSON');
+
+const requiredString = (input: Record<string, unknown>, field: string): string => {
+  const value = stringField(input, field);
+  if (value === undefined) {
+    throw invalidActionInputJson();
+  }
+  return value;
+};
+
+const parseEnsurePlanDraftInput = (action: AutomationActionRunRecord): EnsurePlanDraftActionInput => ({
+  workItemId: requiredString(action.actionInputJson, 'work_item_id'),
+  specRevisionId: requiredString(action.actionInputJson, 'spec_revision_id'),
+});
+
+const parseEnsurePackageDraftsInput = (action: AutomationActionRunRecord): EnsurePackageDraftsActionInput => ({
+  planRevisionId: requiredString(action.actionInputJson, 'plan_revision_id'),
+  generationKey: requiredString(action.actionInputJson, 'generation_key'),
+});
+
+const parseRequestManualPathInput = (action: AutomationActionRunRecord): RequestManualPathActionInput => {
+  const generationKey = stringField(action.actionInputJson, 'generation_key');
+  const gateKey = stringField(action.actionInputJson, 'gate_key');
+  return {
+    objectType: requiredString(action.actionInputJson, 'object_type'),
+    objectId: requiredString(action.actionInputJson, 'object_id'),
+    scopeKey: requiredString(action.actionInputJson, 'scope_key'),
+    reasonCode: requiredString(action.actionInputJson, 'reason_code'),
+    reason: requiredString(action.actionInputJson, 'reason'),
+    ...(generationKey === undefined ? {} : { generationKey }),
+    ...(gateKey === undefined ? {} : { gateKey }),
+  };
+};
+
+const parseProjectRuntimeSnapshotInput = (action: AutomationActionRunRecord): ProjectRuntimeSnapshotActionInput => {
+  const policyStatus = requiredString(action.actionInputJson, 'policy_status');
+  const policyDigest = stringField(action.actionInputJson, 'policy_digest');
+  const reasonCode = stringField(action.actionInputJson, 'reason_code');
+  const observedAt = stringField(action.actionInputJson, 'observed_at');
+  if (!policyStatuses.has(policyStatus as ProjectRuntimeSnapshotActionInput['policyStatus'])) {
+    throw invalidActionInputJson();
+  }
+  return {
+    repoId: requiredString(action.actionInputJson, 'repo_id'),
+    policyStatus: policyStatus as ProjectRuntimeSnapshotActionInput['policyStatus'],
+    ...(policyDigest === undefined ? {} : { policyDigest }),
+    parserVersion: requiredString(action.actionInputJson, 'parser_version'),
+    ...(reasonCode === undefined ? {} : { reasonCode }),
+    ...(observedAt === undefined ? {} : { observedAt }),
+  };
+};
 
 const errorCode = (error: unknown): string | undefined => {
   if (error instanceof AutomationHttpError) {
@@ -109,14 +198,14 @@ const completeProjection = async (
   client: AutomationExecutorClient,
   action: AutomationActionRunRecord,
 ): Promise<AutomationExecutorResult> => {
-  const input = action.actionInputJson;
+  const input = parseProjectRuntimeSnapshotInput(action);
   const resultJson = {
-    repo_id: stringField(input, 'repo_id') ?? action.targetObjectId,
-    policy_status: stringField(input, 'policy_status') ?? action.targetStatus,
-    ...(stringField(input, 'policy_digest') === undefined ? {} : { policy_digest: stringField(input, 'policy_digest') }),
-    parser_version: stringField(input, 'parser_version') ?? 'unknown',
-    ...(stringField(input, 'reason_code') === undefined ? {} : { reason_code: stringField(input, 'reason_code') }),
-    ...(stringField(input, 'observed_at') === undefined ? {} : { observed_at: stringField(input, 'observed_at') }),
+    repo_id: input.repoId,
+    policy_status: input.policyStatus,
+    ...(input.policyDigest === undefined ? {} : { policy_digest: input.policyDigest }),
+    parser_version: input.parserVersion,
+    ...(input.reasonCode === undefined ? {} : { reason_code: input.reasonCode }),
+    ...(input.observedAt === undefined ? {} : { observed_at: input.observedAt }),
   };
   await client.completeAction(action.id, {
     claim_token: action.claimToken ?? '',
@@ -133,51 +222,45 @@ const executeCommand = async (
 ): Promise<void> => {
   const precondition = preconditionFor(action);
   if (action.actionType === 'ensure_plan_draft') {
-    const workItemId = stringField(action.actionInputJson, 'work_item_id') ?? action.targetObjectId;
-    const specRevisionId = stringField(action.actionInputJson, 'spec_revision_id') ?? action.targetRevisionId;
-    if (specRevisionId === undefined) {
-      throw new AutomationHttpError(422, { code: 'invalid_request_schema' });
-    }
-    await client.ensurePlanDraft(workItemId, {
+    const actionInput = parseEnsurePlanDraftInput(action);
+    await client.ensurePlanDraft(actionInput.workItemId, {
       action_run_id: action.id,
       ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
       idempotency_key: action.idempotencyKey,
       automation_precondition: precondition,
-      spec_revision_id: specRevisionId,
+      spec_revision_id: actionInput.specRevisionId,
     });
     return;
   }
 
   if (action.actionType === 'ensure_package_drafts') {
-    const planRevisionId = stringField(action.actionInputJson, 'plan_revision_id') ?? action.targetObjectId;
-    const generationKey = stringField(action.actionInputJson, 'generation_key') ?? action.targetRevisionId;
-    await client.ensurePackageDrafts(planRevisionId, {
+    const actionInput = parseEnsurePackageDraftsInput(action);
+    await client.ensurePackageDrafts(actionInput.planRevisionId, {
       action_run_id: action.id,
       ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
       idempotency_key: action.idempotencyKey,
       automation_precondition: precondition,
-      ...(generationKey === undefined ? {} : { generation_key: generationKey }),
+      generation_key: actionInput.generationKey,
     });
     return;
   }
 
   if (action.actionType === 'request_manual_path') {
-    const generationKey = stringField(action.actionInputJson, 'generation_key');
-    const gateKey = stringField(action.actionInputJson, 'gate_key');
+    const actionInput = parseRequestManualPathInput(action);
     await client.requestManualPathHold({
       action_run_id: action.id,
       ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
       idempotency_key: action.idempotencyKey,
       automation_precondition: precondition,
-      object_type: stringField(action.actionInputJson, 'object_type') ?? action.targetObjectType,
-      object_id: stringField(action.actionInputJson, 'object_id') ?? action.targetObjectId,
-      scope_key: stringField(action.actionInputJson, 'scope_key') ?? `${action.targetObjectType}:${action.targetObjectId}`,
-      reason_code: stringField(action.actionInputJson, 'reason_code') ?? 'manual_path_required',
-      reason: stringField(action.actionInputJson, 'reason') ?? 'Automation requires a manual path.',
+      object_type: actionInput.objectType,
+      object_id: actionInput.objectId,
+      scope_key: actionInput.scopeKey,
+      reason_code: actionInput.reasonCode,
+      reason: actionInput.reason,
       evidence_refs: [],
       requested_by: input.daemonIdentity ?? input.actorId,
-      ...(generationKey === undefined ? {} : { generation_key: generationKey }),
-      ...(gateKey === undefined ? {} : { gate_key: gateKey }),
+      ...(actionInput.generationKey === undefined ? {} : { generation_key: actionInput.generationKey }),
+      ...(actionInput.gateKey === undefined ? {} : { gate_key: actionInput.gateKey }),
     });
   }
 };
@@ -287,11 +370,10 @@ export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Pr
   }
 
   const action = claim.action;
-  if (action.actionType === 'project_runtime_snapshot') {
-    return completeProjection(input.client, action);
-  }
-
   try {
+    if (action.actionType === 'project_runtime_snapshot') {
+      return await completeProjection(input.client, action);
+    }
     await executeCommand(input.client, action, input);
     await input.client.completeAction(action.id, {
       claim_token: action.claimToken ?? '',
