@@ -75,6 +75,7 @@ export interface RuntimeSnapshotTarget {
   targetStatus: string;
   projectId?: string;
   repoId?: string;
+  eligibleRepoIds?: string[];
   automationScope: AutomationScope;
   activeHoldFingerprint?: string;
   latestMatchingActionStatus?: string;

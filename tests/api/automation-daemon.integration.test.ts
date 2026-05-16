@@ -390,4 +390,64 @@ describe('HTTP automation daemon integration', () => {
     expectSucceededActionLifecycle(recoveredActionRuns, 'project_runtime_snapshot');
     expect((await repository.getWorkItem(seeded.workItem.id))?.current_plan_id).toEqual(expect.any(String));
   });
+
+  it('requests manual path instead of drafting when a project target matches multiple draft-enabled repos', async () => {
+    const { app, repository } = await bootAutomationApp();
+    const seeded = await seedDraftOnlyApprovedSpec(app);
+    const server = app.getHttpServer();
+    const repoTwoRoot = path.join(tempRoot, 'repo-2');
+    await mkdir(repoTwoRoot, { recursive: true });
+    await writeFile(path.join(repoTwoRoot, 'WORKFLOW.md'), '# Runtime policy\n\nSecond active repo.\n', 'utf8');
+
+    await request(server)
+      .post(`/projects/${seeded.project.id}/repos`)
+      .send({
+        repo_id: 'repo-2',
+        name: 'forgeloop-secondary',
+        local_path: repoTwoRoot,
+        default_branch: 'main',
+        base_commit_sha: 'def456',
+      })
+      .expect(201);
+    await request(server)
+      .post(`/p0/projects/${seeded.project.id}/automation/capabilities`)
+      .set(humanAdminHeaders)
+      .send({
+        repo_id: 'repo-2',
+        preset: 'draft_only',
+        expected_version: 0,
+        reason: 'enable ambiguity regression coverage',
+        evidence_refs: [],
+        actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
+      })
+      .expect(201);
+
+    await runUntil(
+      createDaemon(app),
+      async () => {
+        const holds = await repository.listActiveManualPathHolds({
+          object_type: 'work_item',
+          object_id: seeded.workItem.id,
+        });
+        return holds.some((hold) => hold.reason_code === 'multi_repo_ambiguity');
+      },
+      'multi_repo_manual_path_created',
+    );
+
+    const workItem = await repository.getWorkItem(seeded.workItem.id);
+    const holds = await repository.listActiveManualPathHolds({
+      object_type: 'work_item',
+      object_id: seeded.workItem.id,
+    });
+    expect(workItem?.current_plan_id).toBeUndefined();
+    expect(holds).toContainEqual(
+      expect.objectContaining({
+        object_type: 'work_item',
+        object_id: seeded.workItem.id,
+        scope_key: `work_item:${seeded.workItem.id}`,
+        reason_code: 'multi_repo_ambiguity',
+      }),
+    );
+    expect((await actionRuns(repository)).map((actionRun) => actionRun.action_type)).toContain('request_manual_path');
+  });
 });

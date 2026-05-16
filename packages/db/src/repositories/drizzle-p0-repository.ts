@@ -2180,15 +2180,13 @@ export class DrizzleP0Repository implements P0Repository {
       if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
         continue;
       }
-      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
-      if (repo === undefined) {
-        continue;
-      }
-      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
-        project_id: workItem.project_id,
-        repo_id: repo.repo_id,
-      });
-      if (!settings.capabilities_json.canGeneratePlanDraft) {
+      const targetScope = this.runtimeSnapshotDraftTargetScope(
+        repos,
+        workItem.project_id,
+        'canGeneratePlanDraft',
+        settingsByScope,
+      );
+      if (targetScope === undefined) {
         continue;
       }
       if (this.hasActiveManualHold(holds, [`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
@@ -2200,8 +2198,7 @@ export class DrizzleP0Repository implements P0Repository {
         target_revision_id: specRevisionId,
         target_status: 'approved',
         project_id: workItem.project_id,
-        repo_id: repo.repo_id,
-        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        ...targetScope,
       });
     }
     return targets;
@@ -2230,15 +2227,13 @@ export class DrizzleP0Repository implements P0Repository {
       if (planRevision === undefined || workItem === undefined || isWorkItemAutomationTerminal(workItem)) {
         continue;
       }
-      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
-      if (repo === undefined) {
-        continue;
-      }
-      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
-        project_id: workItem.project_id,
-        repo_id: repo.repo_id,
-      });
-      if (!settings.capabilities_json.canGeneratePackageDrafts) {
+      const targetScope = this.runtimeSnapshotDraftTargetScope(
+        repos,
+        workItem.project_id,
+        'canGeneratePackageDrafts',
+        settingsByScope,
+      );
+      if (targetScope === undefined) {
         continue;
       }
       const generationKey = `default:${planRevisionId}`;
@@ -2258,12 +2253,44 @@ export class DrizzleP0Repository implements P0Repository {
         target_revision_id: generationKey,
         target_status: 'approved',
         project_id: workItem.project_id,
-        repo_id: repo.repo_id,
-        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        ...targetScope,
         generation_key: generationKey,
       });
     }
     return targets;
+  }
+
+  private runtimeSnapshotDraftTargetScope(
+    repos: ProjectRepo[],
+    projectId: string,
+    capability: 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
+    settingsByScope: Map<string, AutomationProjectSettings>,
+  ): Pick<RuntimeSnapshotTargetRow, 'repo_id' | 'eligible_repo_ids' | 'automation_scope'> | undefined {
+    const eligibleReposById = new Map<string, ProjectRepo>();
+    for (const repo of repos) {
+      if (repo.project_id !== projectId) {
+        continue;
+      }
+      const settings = this.resolvePreloadedAutomationProjectSettings(settingsByScope, {
+        project_id: projectId,
+        repo_id: repo.repo_id,
+      });
+      if (settings.capabilities_json[capability]) {
+        eligibleReposById.set(repo.repo_id, eligibleReposById.get(repo.repo_id) ?? repo);
+      }
+    }
+    const eligibleRepos = [...eligibleReposById.values()];
+    if (eligibleRepos.length === 0) {
+      return undefined;
+    }
+    if (eligibleRepos.length === 1) {
+      const repo = eligibleRepos[0]!;
+      return { repo_id: repo.repo_id, automation_scope: `repo:${projectId}:${repo.repo_id}` as const };
+    }
+    return {
+      eligible_repo_ids: eligibleRepos.map((repo) => repo.repo_id),
+      automation_scope: `project:${projectId}` as const,
+    };
   }
 
   private runtimeSnapshotRunEnqueueDisabledPackages(

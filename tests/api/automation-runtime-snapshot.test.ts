@@ -193,6 +193,29 @@ const seedProjectRepo = async (repository: P0Repository, overrides: { repo?: Par
   });
 };
 
+const addDraftOnlyRepo = async (repository: P0Repository, repo: Partial<ProjectRepo> & { repo_id: string }) => {
+  await repository.saveProjectRepo(
+    projectRepo({
+      id: `project-${repo.repo_id}`,
+      name: repo.repo_id,
+      local_path: `/workspace/${repo.repo_id}`,
+      ...repo,
+    }),
+  );
+  return repository.setAutomationProjectSettings({
+    id: `automation-settings-${repo.repo_id}`,
+    project_id: repo.project_id ?? 'project-1',
+    repo_id: repo.repo_id,
+    scope_type: 'repo',
+    preset: 'draft_only',
+    expected_version: 0,
+    reason: 'enable second repo ambiguity test',
+    evidence_refs: [],
+    actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+    now,
+  });
+};
+
 const seedApprovedSpec = async (repository: P0Repository, overrides: { item?: Partial<WorkItem> } = {}) => {
   await seedProjectRepo(repository);
   await repository.saveWorkItem(workItem(overrides.item));
@@ -309,6 +332,57 @@ describe('internal automation runtime snapshot', () => {
       });
   });
 
+  it('preserves project scope for approved specs when multiple active repos can draft plans', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await addDraftOnlyRepo(repository, { repo_id: 'repo-2' });
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).toEqual([
+          expect.objectContaining({
+            target_object_type: 'work_item',
+            target_object_id: 'work-item-1',
+            target_revision_id: 'spec-revision-1',
+            target_status: 'approved',
+            project_id: 'project-1',
+            eligible_repo_ids: ['repo-1', 'repo-2'],
+            automation_scope: 'project:project-1',
+          }),
+        ]);
+        expect(body.work_items_requiring_plan[0]).not.toHaveProperty('repo_id');
+      });
+  });
+
+  it('keeps duplicate active project repo rows as a single logical repo for plan draft targets', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.saveProjectRepo(
+      projectRepo({
+        id: 'project-repo-duplicate-row',
+        name: 'forgeloop duplicate row',
+        local_path: '/workspace/forgeloop-duplicate',
+      }),
+    );
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).toEqual([
+          expect.objectContaining({
+            target_object_type: 'work_item',
+            target_object_id: 'work-item-1',
+            target_revision_id: 'spec-revision-1',
+            project_id: 'project-1',
+            repo_id: 'repo-1',
+            automation_scope: 'repo:project-1:repo-1',
+          }),
+        ]);
+        expect(body.work_items_requiring_plan[0]).not.toHaveProperty('eligible_repo_ids');
+      });
+  });
+
   it('lists approved plan revisions missing package generation', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedPlan(repository);
@@ -327,6 +401,59 @@ describe('internal automation runtime snapshot', () => {
             generation_key: 'default:plan-revision-1',
           }),
         );
+      });
+  });
+
+  it('preserves project scope for approved plan revisions when multiple active repos can draft packages', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await addDraftOnlyRepo(repository, { repo_id: 'repo-2' });
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).toEqual([
+          expect.objectContaining({
+            target_object_type: 'plan_revision',
+            target_object_id: 'plan-revision-1',
+            target_revision_id: 'default:plan-revision-1',
+            target_status: 'approved',
+            project_id: 'project-1',
+            eligible_repo_ids: ['repo-1', 'repo-2'],
+            automation_scope: 'project:project-1',
+            generation_key: 'default:plan-revision-1',
+          }),
+        ]);
+        expect(body.plan_revisions_requiring_packages[0]).not.toHaveProperty('repo_id');
+      });
+  });
+
+  it('keeps duplicate active project repo rows as a single logical repo for package draft targets', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.saveProjectRepo(
+      projectRepo({
+        id: 'project-repo-duplicate-row',
+        name: 'forgeloop duplicate row',
+        local_path: '/workspace/forgeloop-duplicate',
+      }),
+    );
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).toEqual([
+          expect.objectContaining({
+            target_object_type: 'plan_revision',
+            target_object_id: 'plan-revision-1',
+            target_revision_id: 'default:plan-revision-1',
+            project_id: 'project-1',
+            repo_id: 'repo-1',
+            automation_scope: 'repo:project-1:repo-1',
+            generation_key: 'default:plan-revision-1',
+          }),
+        ]);
+        expect(body.plan_revisions_requiring_packages[0]).not.toHaveProperty('eligible_repo_ids');
       });
   });
 

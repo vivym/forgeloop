@@ -47,22 +47,29 @@ const matchingReposForTarget = (snapshot: RuntimeSnapshot, target: RuntimeSnapsh
   return snapshot.repos.filter((repo) => repo.projectId === (target.projectId ?? projectIdFromScope(target.automationScope)));
 };
 
-const projectSettingsFor = (snapshot: RuntimeSnapshot, target: RuntimeSnapshotTarget) => {
+const manualPathSettingsFor = (snapshot: RuntimeSnapshot, target: RuntimeSnapshotTarget) => {
+  const projectId = target.projectId ?? projectIdFromScope(target.automationScope);
+  const eligibleRepoIds = new Set(target.eligibleRepoIds ?? []);
+  const repoFallback = snapshot.repos.find(
+    (repo) => repo.projectId === projectId && (eligibleRepoIds.size === 0 || eligibleRepoIds.has(repo.repoId)),
+  );
+  if (target.repoId === undefined && repoFallback !== undefined) {
+    // Ambiguous targets are project-scoped, but the repo capability is what made the target eligible.
+    return {
+      projectId,
+      automationScope: repoFallback.automationScope,
+      automationSettingsVersion: repoFallback.automationSettingsVersion,
+      capabilityFingerprint: repoFallback.capabilityFingerprint,
+    };
+  }
   const exact = snapshot.projects.find((project) => project.automationScope === target.automationScope);
   if (exact !== undefined) {
     return exact;
   }
-  const projectId = target.projectId ?? projectIdFromScope(target.automationScope);
-  const repoFallback = snapshot.repos.find((repo) => repo.projectId === projectId);
   if (repoFallback === undefined) {
     return undefined;
   }
-  return {
-    projectId,
-    automationScope: target.automationScope,
-    automationSettingsVersion: repoFallback.automationSettingsVersion,
-    capabilityFingerprint: repoFallback.capabilityFingerprint,
-  };
+  return repoFallback;
 };
 
 const targetPrecondition = (
@@ -94,7 +101,7 @@ const targetPrecondition = (
 };
 
 const requestManualPathForAmbiguity = (snapshot: RuntimeSnapshot, target: RuntimeSnapshotTarget): NextAction | undefined => {
-  const settings = projectSettingsFor(snapshot, target);
+  const settings = manualPathSettingsFor(snapshot, target);
   if (settings === undefined) {
     return undefined;
   }

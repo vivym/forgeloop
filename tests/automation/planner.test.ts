@@ -145,6 +145,7 @@ describe('automation planner', () => {
       targetObjectId: 'work-item-ambiguous',
       projectId: 'project-1',
       repoId: undefined,
+      eligibleRepoIds: ['repo-2', 'repo-3'],
       automationScope: 'project:project-1',
     });
     const actions = planNextActions(
@@ -159,6 +160,14 @@ describe('automation planner', () => {
             capabilityFingerprint: 'capability-fingerprint-2',
             daemonInternalLocalPath: '/private/repo-2',
           },
+          {
+            projectId: 'project-1',
+            repoId: 'repo-3',
+            automationScope: 'repo:project-1:repo-3',
+            automationSettingsVersion: 5,
+            capabilityFingerprint: 'capability-fingerprint-3',
+            daemonInternalLocalPath: '/private/repo-3',
+          },
         ],
         workItemsRequiringPlan: [ambiguousTarget],
       }),
@@ -169,6 +178,7 @@ describe('automation planner', () => {
       actionType: 'request_manual_path',
       targetObjectType: 'work_item',
       targetObjectId: 'work-item-ambiguous',
+      automationScope: 'repo:project-1:repo-2',
       reasonCode: 'multi_repo_ambiguity',
       actionInputJson: {
         object_type: 'work_item',

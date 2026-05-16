@@ -293,6 +293,7 @@ export interface RuntimeSnapshotTargetRow {
   target_status: string;
   project_id?: string;
   repo_id?: string;
+  eligible_repo_ids?: string[];
   automation_scope: AutomationScope;
   active_hold_fingerprint?: string;
   latest_matching_action_status?: string;

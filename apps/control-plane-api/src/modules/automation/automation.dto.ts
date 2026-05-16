@@ -290,6 +290,7 @@ export interface AutomationRuntimeSnapshotTargetDto {
   target_status: string;
   project_id?: string;
   repo_id?: string;
+  eligible_repo_ids?: string[];
   automation_scope: AutomationScope;
   active_hold_fingerprint?: string;
   latest_matching_action_status?: string;
@@ -454,6 +455,7 @@ export const toRuntimeSnapshotTargetDto = (target: RuntimeSnapshotTargetRow): Au
   target_status: target.target_status,
   ...(target.project_id === undefined ? {} : { project_id: target.project_id }),
   ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }),
+  ...(target.eligible_repo_ids === undefined ? {} : { eligible_repo_ids: target.eligible_repo_ids }),
   automation_scope: target.automation_scope,
   ...(target.active_hold_fingerprint === undefined ? {} : { active_hold_fingerprint: target.active_hold_fingerprint }),
   ...(target.latest_matching_action_status === undefined
