@@ -69,6 +69,11 @@ import type {
   EnsurePlanDraftCommandDto,
   RequestManualPathCommandDto,
 } from './automation.dto';
+import {
+  DEFAULT_PACKAGE_POLICY_DIGEST,
+  DEFAULT_PACKAGE_POLICY_SOURCE_PATH,
+  defaultPackagePolicyFields,
+} from '../execution-packages/package-policy-fields';
 
 const commandClaimTtlMs = 5 * 60 * 1000;
 type EnsurePlanDraftResult = { plan_id: string; plan_revision_id: string; status: 'created' | 'existing' };
@@ -988,7 +993,7 @@ export class AutomationCommandService {
       plan_revision_id: input.planRevisionId,
       generation_key: input.generationKey,
       generator_version: 'mock-package-drafter@1',
-      policy_digest: 'p0-default-policy',
+      policy_digest: DEFAULT_PACKAGE_POLICY_DIGEST,
       manifest_digest: 'api-package-v1',
       expected_package_count: 1,
       expected_package_keys: ['api-package'],
@@ -1038,9 +1043,9 @@ export class AutomationCommandService {
           forbidden_paths: ['packages/db/**'],
           at: this.now(),
         }),
-        ...this.defaultPackagePolicyFields({
-          policyDigest: 'p0-default-policy',
-          policySourcePath: 'forgeloop://p0/default-package-policy',
+        ...defaultPackagePolicyFields({
+          policyDigest: DEFAULT_PACKAGE_POLICY_DIGEST,
+          policySourcePath: DEFAULT_PACKAGE_POLICY_SOURCE_PATH,
           loadedAt: this.now(),
           requiredChecks: [
             {
@@ -1342,48 +1347,6 @@ export class AutomationCommandService {
       status: 'accepted',
       run_session_id: runSessionId,
       execution_package_id: packageId,
-    };
-  }
-
-  private defaultPackagePolicyFields(input: {
-    policyDigest: string;
-    policySourcePath: string;
-    loadedAt: string;
-    requiredChecks: ExecutionPackage['required_checks'];
-    allowedPaths: string[];
-    forbiddenPaths: string[];
-  }): Pick<
-    ExecutionPackage,
-    | 'validation_strategy'
-    | 'validation_strategy_version'
-    | 'validation_public_summary'
-    | 'policy_snapshot_status'
-    | 'policy_snapshot_version'
-    | 'package_policy_snapshot'
-  > {
-    return {
-      validation_strategy: 'checks_required',
-      validation_strategy_version: 1,
-      validation_public_summary: 'Required checks and package path policy are frozen for this package.',
-      policy_snapshot_status: 'captured',
-      policy_snapshot_version: 1,
-      package_policy_snapshot: {
-        policy_snapshot_version: 1,
-        policy_digest: input.policyDigest,
-        policy_source_path: input.policySourcePath,
-        policy_loaded_at: input.loadedAt,
-        policy_last_known_good: true,
-        hooks: [],
-        command_policy: { required_checks: input.requiredChecks.map((check) => check.check_id) },
-        check_policy: { required_checks: input.requiredChecks.map((check) => check.check_id) },
-        env_policy: {},
-        path_policy: { allowed_paths: input.allowedPaths, forbidden_paths: input.forbiddenPaths },
-        codex_runtime_mode: 'mock',
-        fallback_policy: { allow_exec_fallback: false },
-        validation_strategy_version: 1,
-        validation_strategy: 'checks_required',
-        validation_public_summary: 'Required checks and package path policy are frozen for this package.',
-      },
     };
   }
 

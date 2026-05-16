@@ -8,6 +8,8 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { AutomationCommandService } from '../../apps/control-plane-api/src/modules/automation/automation-command.service';
+import { ExecutionPackageService } from '../../apps/control-plane-api/src/modules/execution-packages/execution-package.service';
 import { ProjectService } from '../../apps/control-plane-api/src/modules/projects/project.service';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
@@ -163,10 +165,12 @@ const createManualPackage = async (
 };
 
 const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
-  (app.get(P0Service) as unknown as { repository: InMemoryDeliveryRepository }).repository;
+  (app.get(ExecutionPackageService) as unknown as { repository: InMemoryDeliveryRepository }).repository;
 
 const replaceRuntimeRepository = (app: INestApplication, repository: InMemoryDeliveryRepository): void => {
   (app.get(P0Service) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(ExecutionPackageService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(AutomationCommandService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(ProjectService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(SpecPlanService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(WorkItemService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
@@ -524,7 +528,7 @@ describe('P0 control plane API', () => {
     });
   });
 
-  it('archives an open ReviewPacket on package edit while preserving old RunSessions and completed packets', async () => {
+  it('blocks package edits while an open ReviewPacket exists', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
@@ -543,44 +547,25 @@ describe('P0 control plane API', () => {
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
-    const patchedPackage = (await request(server)
-      .patch(`/execution-packages/${executionPackage.id}`)
-      .send({ objective: 'Edited package creates a fresh run spec.' })
-      .expect(200)).body;
-
-    const oldRun = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
-    const archivedPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
-    expect(oldRun.status).toBe('succeeded');
-    expect(archivedPacket.status).toBe('archived');
 
     await request(server)
-      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
-      .set(ownerHeaders)
-      .send({ actor_id: actorOwner, expected_package_version: patchedPackage.version })
-      .expect(201);
-    const newRun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
-        .expect(201)
-    ).body;
-    const newRunSession = (await request(server).get(`/run-sessions/${newRun.run_session_id}`).expect(200)).body;
+      .patch(`/execution-packages/${executionPackage.id}`)
+      .send({ objective: 'Edited package creates a fresh run spec.' })
+      .expect(422);
 
-    expect(newRun.run_session_id).not.toBe(run.run_session_id);
-    expect(newRunSession).not.toHaveProperty('run_spec');
-    expect((await repositoryFor(app).getRunSession(newRun.run_session_id))?.run_spec?.objective).toBe(
-      'Edited package creates a fresh run spec.',
-    );
+    const oldRun = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
+    const openPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
+    expect(oldRun.status).toBe('succeeded');
+    expect(openPacket.status).toBe('ready');
   });
 
-  it('archives an in-review ReviewPacket on package edit and preserves the previous RunSession', async () => {
+  it('blocks package edits while a ReviewPacket is in review', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
-    const service = app.get(P0Service);
-    const repository = (service as unknown as { repository: InMemoryDeliveryRepository }).repository;
+    const repository = repositoryFor(app);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const run = (
@@ -596,10 +581,10 @@ describe('P0 control plane API', () => {
     await request(server)
       .patch(`/execution-packages/${executionPackage.id}`)
       .send({ objective: 'Edit while human review has started.' })
-      .expect(200);
+      .expect(422);
 
     expect((await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body.status).toBe('succeeded');
-    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('archived');
+    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('in_review');
   });
 
   it('validates run, rerun, and force-rerun request bodies and previous run ids', async () => {

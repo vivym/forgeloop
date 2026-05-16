@@ -4,10 +4,7 @@ import type { Observable } from 'rxjs';
 
 import {
   actorCommandSchema,
-  createExecutionPackageSchema,
   disableAutomationCapabilitiesSchema,
-  markPackageReadySchema,
-  patchExecutionPackageSchema,
   reviewDecisionSchema,
   requestManualPathHoldSchema,
   resolveManualPathHoldSchema,
@@ -18,10 +15,7 @@ import {
 } from './dto';
 import type {
   ActorCommandDto,
-  CreateExecutionPackageDto,
   DisableAutomationCapabilitiesDto,
-  MarkPackageReadyDto,
-  PatchExecutionPackageDto,
   ReviewDecisionDto,
   RequestManualPathHoldDto,
   ResolveManualPathHoldDto,
@@ -81,46 +75,6 @@ export class P0Controller {
   @Get('work-items/:workItemId/evidence-chain')
   evidenceChain(@Param('workItemId') workItemId: string, @Query('review_packet_id') reviewPacketId?: string) {
     return this.service.evidenceChain(workItemId, reviewPacketId);
-  }
-
-  @Post('plan-revisions/:planRevisionId/generate-packages')
-  generatePackages(@Param('planRevisionId') planRevisionId: string) {
-    return this.service.generatePackages(planRevisionId);
-  }
-
-  @Post('plan-revisions/:planRevisionId/execution-packages')
-  createExecutionPackage(
-    @Param('planRevisionId') planRevisionId: string,
-    @Body(new ZodValidationPipe(createExecutionPackageSchema)) body: CreateExecutionPackageDto,
-  ) {
-    return this.service.createExecutionPackage(planRevisionId, body);
-  }
-
-  @Get('work-items/:workItemId/execution-packages')
-  listExecutionPackages(@Param('workItemId') workItemId: string) {
-    return this.service.listExecutionPackages(workItemId);
-  }
-
-  @Get('execution-packages/:packageId')
-  getExecutionPackage(@Param('packageId') packageId: string) {
-    return this.service.getExecutionPackage(packageId);
-  }
-
-  @Patch('execution-packages/:packageId')
-  patchExecutionPackage(
-    @Param('packageId') packageId: string,
-    @Body(new ZodValidationPipe(patchExecutionPackageSchema)) body: PatchExecutionPackageDto,
-  ) {
-    return this.service.patchExecutionPackage(packageId, body);
-  }
-
-  @Post('execution-packages/:packageId/mark-ready')
-  markPackageReady(
-    @Param('packageId') packageId: string,
-    @Body(new ZodValidationPipe(markPackageReadySchema)) body: MarkPackageReadyDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-  ) {
-    return this.service.markPackageReady(packageId, body, actorContextFromHeaders(headers));
   }
 
   @Post('execution-packages/:packageId/run')

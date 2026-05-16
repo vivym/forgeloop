@@ -17,6 +17,7 @@ import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
 import { ControlPlaneCoreModule } from '../modules/core/control-plane-core.module';
 import { DELIVERY_REPOSITORY } from '../modules/core/control-plane-tokens';
 import { AutomationModule } from '../modules/automation/automation.module';
+import { ExecutionPackagesModule } from '../modules/execution-packages/execution-packages.module';
 import { ProjectsModule } from '../modules/projects/projects.module';
 import { DELIVERY_RUN_WORKER } from '../modules/run-control/run-worker.token';
 import { RunWorkerLifecycleService } from '../modules/run-control/run-worker-lifecycle.service';
@@ -113,7 +114,7 @@ const createRunWorker = (repository: DeliveryRepository): RunWorker => {
 };
 
 @Module({
-  imports: [ControlPlaneCoreModule, AutomationModule, ProjectsModule, WorkItemsModule, SpecPlanModule],
+  imports: [ControlPlaneCoreModule, AutomationModule, ProjectsModule, WorkItemsModule, SpecPlanModule, ExecutionPackagesModule],
   controllers: [P0Controller],
   providers: [
     {

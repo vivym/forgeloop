@@ -1,12 +1,8 @@
 import {
   artifactRefSchema,
-  artifactKindSchema,
   executorTypeSchema,
   jsonObjectSchema,
   requestedChangeSchema,
-  requiredCheckSpecSchema,
-  type ArtifactKind,
-  type RequiredCheckSpec,
 } from '@forgeloop/contracts';
 import { workItemKinds, type WorkItemKind } from '@forgeloop/domain';
 import { z } from 'zod';
@@ -55,11 +51,6 @@ export const actorCommandSchema = z
   .strict();
 export type ActorCommandDto = z.infer<typeof actorCommandSchema>;
 
-export const markPackageReadySchema = actorCommandSchema.extend({
-  expected_package_version: z.number().int().min(0),
-});
-export type MarkPackageReadyDto = z.infer<typeof markPackageReadySchema>;
-
 export const createSpecRevisionSchema = z
   .object({
     summary: nonEmptyString,
@@ -92,35 +83,6 @@ export const createPlanRevisionSchema = z
   })
   .strict();
 export type CreatePlanRevisionDto = z.infer<typeof createPlanRevisionSchema>;
-
-export const createExecutionPackageSchema = z
-  .object({
-    repo_id: nonEmptyString,
-    objective: nonEmptyString,
-    owner_actor_id: nonEmptyString,
-    reviewer_actor_id: nonEmptyString,
-    qa_owner_actor_id: nonEmptyString,
-    required_checks: z.array(requiredCheckSpecSchema) satisfies z.ZodType<RequiredCheckSpec[]>,
-    required_artifact_kinds: z.array(artifactKindSchema) satisfies z.ZodType<ArtifactKind[]>,
-    allowed_paths: stringList,
-    forbidden_paths: stringList,
-  })
-  .strict();
-export type CreateExecutionPackageDto = z.infer<typeof createExecutionPackageSchema>;
-
-export const patchExecutionPackageSchema = z
-  .object({
-    objective: nonEmptyString.optional(),
-    owner_actor_id: nonEmptyString.optional(),
-    reviewer_actor_id: nonEmptyString.optional(),
-    qa_owner_actor_id: nonEmptyString.optional(),
-    required_checks: z.array(requiredCheckSpecSchema).optional(),
-    required_artifact_kinds: z.array(artifactKindSchema).optional(),
-    allowed_paths: stringList.optional(),
-    forbidden_paths: stringList.optional(),
-  })
-  .strict();
-export type PatchExecutionPackageDto = z.infer<typeof patchExecutionPackageSchema>;
 
 export const runPackageSchema = z
   .object({

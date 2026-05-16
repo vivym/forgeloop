@@ -40,9 +40,7 @@ import {
   transitionReviewPacket,
   transitionRunSession,
   transitionSpecPlan,
-  validateExecutionPackage,
   validateForceRerunAllowed,
-  validatePackageEditAllowed,
 } from '@forgeloop/domain';
 import type { DeliveryRepository, TraceLinkRecord } from '@forgeloop/db';
 import type {
@@ -69,6 +67,7 @@ import {
 } from '../modules/core/control-plane-tokens';
 import { ControlPlaneRuntimeService } from '../modules/core/control-plane-runtime.service';
 import { AutomationCommandService } from '../modules/automation/automation-command.service';
+import { ExecutionPackageService } from '../modules/execution-packages/execution-package.service';
 import {
   assertAutomationPreconditionStillCurrent,
   assertCommandCapabilityStillEnabled,
@@ -95,22 +94,22 @@ import type {
   ActorCommandDto,
   CreateProjectDto,
   CreateProjectRepoDto,
+  CreateExecutionPackageDto,
   CreatePlanRevisionDto,
   CreateSpecRevisionDto,
+  MarkPackageReadyDto,
+  PatchExecutionPackageDto,
   CreateWorkItemDto,
 } from '../modules/delivery/dto';
 import type {
   AutomationActorContextDto,
-  CreateExecutionPackageDto,
   DisableAutomationCapabilitiesDto,
-  PatchExecutionPackageDto,
   ReviewDecisionDto,
   RunControlDto,
   RunInputDto,
   RunPackageDto,
   RequestManualPathHoldDto,
   ResolveManualPathHoldDto,
-  MarkPackageReadyDto,
   SetAutomationCapabilitiesDto,
 } from './dto';
 import { buildEvidenceChain } from './evidence-chain';
@@ -153,13 +152,6 @@ type RunEventAccessOptions = {
 
 type EnsurePlanDraftResult = { plan_id: string; plan_revision_id: string; status: 'created' | 'existing' };
 type CommandBoundaryOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
-type LegacyGeneratedPackageMetadata = {
-  execution_package_set_id: string;
-  generation_key: string;
-  package_key: string;
-  sequence: number;
-  manifest_digest: string;
-};
 type EnsurePackageDraftsInput = {
   planRevisionId: string;
   automationPrecondition: AutomationPrecondition;
@@ -216,6 +208,8 @@ export class P0Service {
     private readonly workItemService: WorkItemService,
     @Inject(SpecPlanService)
     private readonly specPlanService: SpecPlanService,
+    @Inject(ExecutionPackageService)
+    private readonly executionPackageService: ExecutionPackageService,
   ) {}
 
   async createProject(dto: CreateProjectDto): Promise<Project> {
@@ -448,125 +442,27 @@ export class P0Service {
   }
 
   async generatePackages(planRevisionId: string): Promise<ExecutionPackage[]> {
-    return this.repository.withObjectLock(`plan-revision:${planRevisionId}`, async (repository) => {
-      const context = await this.packageContextFromRepository(repository, planRevisionId);
-      const repo = (await repository.listProjectRepos(context.project.id))[0];
-      if (repo === undefined) {
-        throw new BadRequestException('Project has no bound repos');
-      }
-      const generationKey = `legacy:${planRevisionId}`;
-      const existingPackage = (await repository.listExecutionPackagesForWorkItem(context.workItem.id)).find(
-        (executionPackage) =>
-          executionPackage.plan_revision_id === context.planRevision.id &&
-          executionPackage.generation_key === generationKey &&
-          executionPackage.package_key === 'api-package',
-      );
-      if (existingPackage !== undefined) {
-        return [existingPackage];
-      }
-      const executionPackage = await this.createExecutionPackageFromContext(
-        repository,
-        context,
-        {
-          repo_id: repo.repo_id,
-          objective: `Implement ${context.workItem.title}.`,
-          owner_actor_id: context.workItem.owner_actor_id,
-          reviewer_actor_id: 'actor-reviewer',
-          qa_owner_actor_id: 'actor-qa',
-          required_checks: [
-            {
-              check_id: 'unit',
-              display_name: 'Unit tests',
-              command: 'pnpm test tests/api',
-              timeout_seconds: 120,
-              blocks_review: true,
-            },
-          ],
-          required_artifact_kinds: ['execution_summary'],
-          allowed_paths: ['apps/control-plane-api/**', 'tests/api/**'],
-          forbidden_paths: ['packages/db/**'],
-        },
-        {
-          execution_package_set_id: `legacy:${planRevisionId}`,
-          generation_key: generationKey,
-          package_key: 'api-package',
-          sequence: 0,
-          manifest_digest: 'api-package-v1',
-        },
-      );
-      await this.eventWithRepository(repository, 'execution_package', executionPackage.id, 'package_draft_generated', 'ai-package-drafter', {
-        plan_revision_id: planRevisionId,
-      });
-      return [executionPackage];
-    });
+    return this.executionPackageService.generatePackages(planRevisionId);
   }
 
   async createExecutionPackage(planRevisionId: string, dto: CreateExecutionPackageDto): Promise<ExecutionPackage> {
-    return this.repository.withObjectLock(`plan-revision:${planRevisionId}`, async (repository) =>
-      this.createExecutionPackageFromContext(repository, await this.packageContextFromRepository(repository, planRevisionId), dto),
-    );
+    return this.executionPackageService.createExecutionPackage(planRevisionId, dto);
   }
 
   async listExecutionPackages(workItemId: string): Promise<ExecutionPackage[]> {
-    return this.repository.listExecutionPackagesForWorkItem(workItemId);
+    return this.executionPackageService.listExecutionPackages(workItemId);
   }
 
   async getExecutionPackage(packageId: string): Promise<ExecutionPackage> {
-    return this.requireFound(await this.repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
+    return this.executionPackageService.getExecutionPackage(packageId);
   }
 
   async patchExecutionPackage(packageId: string, dto: PatchExecutionPackageDto): Promise<ExecutionPackage> {
-    return this.repository.withObjectLock(`execution-package:${packageId}`, async (repository) => {
-      const executionPackage = this.requireFound(await repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
-      const openPacket = await repository.findOpenReviewPacketForPackage(packageId);
-      if (openPacket === undefined) {
-        validatePackageEditAllowed(executionPackage);
-      } else {
-        await this.archiveReviewPacket(openPacket, 'package_edited', repository);
-      }
-
-      const editablePackage: ExecutionPackage =
-        executionPackage.phase === 'review'
-          ? {
-              ...executionPackage,
-              phase: 'draft',
-              activity_state: 'idle',
-              gate_state: 'not_submitted',
-              resolution: 'none',
-            }
-          : executionPackage;
-      const patch = Object.fromEntries(Object.entries(dto).filter(([, value]) => value !== undefined)) as Partial<ExecutionPackage>;
-      const updated: ExecutionPackage = {
-        ...editablePackage,
-        ...patch,
-        version: editablePackage.version + 1,
-        updated_at: this.now(),
-      };
-      const project = this.requireFound(await repository.getProject(updated.project_id), `Project ${updated.project_id}`);
-      validateExecutionPackage(project, updated);
-      await repository.saveExecutionPackage(updated);
-      await this.eventWithRepository(repository, 'execution_package', updated.id, 'package_edited', updated.owner_actor_id, {});
-      return updated;
-    });
+    return this.executionPackageService.patchExecutionPackage(packageId, dto);
   }
 
   async markPackageReady(packageId: string, dto: MarkPackageReadyDto, actorContext?: ActorContext): Promise<ExecutionPackage> {
-    const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
-    return this.repository.withObjectLock(`execution-package:${packageId}`, async (repository) => {
-      const executionPackage = this.requireFound(await repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
-      if (executionPackage.version !== dto.expected_package_version) {
-        throw new UnprocessableEntityException({
-          code: 'stale_execution_package_revision',
-          message: 'Execution package version changed before mark ready.',
-        });
-      }
-      await this.assertExecutionPackageGraphStillCurrent(repository, executionPackage);
-      const updated = transitionExecutionPackage(executionPackage, { type: 'mark_ready', at: this.now() });
-      validateExecutionPackage(this.requireFound(await repository.getProject(updated.project_id), `Project ${updated.project_id}`), updated);
-      await repository.saveExecutionPackage(updated);
-      await this.historyWithRepository(repository, 'execution_package', packageId, statusForPackage(executionPackage), statusForPackage(updated), actorId);
-      return updated;
-    });
+    return this.executionPackageService.markPackageReady(packageId, dto, actorContext);
   }
 
   async runPackage(
@@ -590,7 +486,7 @@ export class P0Service {
     actorContext: ActorContext,
   ): Promise<RunAcceptedResponse> {
     const executionPackage = this.requireFound(await repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
-    await this.assertExecutionPackageGraphStillCurrent(repository, executionPackage);
+    await this.executionPackageService.assertExecutionPackageGraphStillCurrent(repository, executionPackage);
     const reviewPackets = await repository.listReviewPacketsForPackage(packageId);
     const requestedByActorId = this.resolveRunActor({
       ...(actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: actorContext.authenticatedActorId }),
@@ -1196,244 +1092,6 @@ export class P0Service {
     }
   }
 
-  private async writeExecutionPackageDraftsForPlanRevision(
-    repository: DeliveryRepository,
-    input: {
-      planRevisionId: string;
-      generationKey: string;
-      claimToken: string;
-      precondition: AutomationPrecondition;
-      regenerationApproval?: EnsurePackageDraftsInput['regenerationApproval'];
-    },
-  ): Promise<EnsurePackageDraftsResult> {
-    const settings = await repository.resolveAutomationProjectSettings({
-      project_id: input.precondition.project_id,
-      ...(input.precondition.repo_id === undefined ? {} : { repo_id: input.precondition.repo_id }),
-    });
-    assertAutomationPreconditionStillCurrent(settings, input.precondition);
-    assertCommandCapabilityStillEnabled(settings, 'canGeneratePackageDrafts');
-    await this.assertRepoScopeCurrent(repository, input.precondition.project_id, input.precondition.repo_id);
-    const context = await this.packageContextFromRepository(repository, input.planRevisionId);
-    if (
-      context.project.id !== input.precondition.project_id ||
-      (input.precondition.repo_id !== undefined && context.project.repo_ids.includes(input.precondition.repo_id) !== true)
-    ) {
-      throw new ConflictException('Plan revision scope no longer matches automation precondition');
-    }
-    if (isWorkItemAutomationTerminal(context.workItem)) {
-      throw new UnprocessableEntityException({
-        code: 'work_item_terminal',
-        message: `WorkItem ${context.workItem.id} is terminal for automation.`,
-      });
-    }
-    await assertNoActiveHolds(repository, [
-      { object_type: 'work_item', object_id: context.workItem.id },
-      { object_type: 'spec_revision', object_id: context.specRevision.id },
-      { object_type: 'plan_revision', object_id: context.planRevision.id },
-      { object_type: 'package_generation', object_id: context.planRevision.id, generation_key: input.generationKey },
-    ]);
-    await this.assertPackageRegenerationApproval(repository, {
-      planRevisionId: input.planRevisionId,
-      generationKey: input.generationKey,
-      regenerationApproval: input.regenerationApproval,
-    });
-    const packageRepoId = this.packageDraftRepoIdFor(context.project, input.precondition.repo_id);
-
-    const generationRun = await repository.claimExecutionPackageGenerationRun({
-      plan_revision_id: input.planRevisionId,
-      generation_key: input.generationKey,
-      generator_version: 'mock-package-drafter@1',
-      policy_digest: 'p0-default-policy',
-      manifest_digest: 'api-package-v1',
-      expected_package_count: 1,
-      expected_package_keys: ['api-package'],
-      claim_token: input.claimToken,
-      locked_until: this.lockedUntil(this.now()),
-      now: this.now(),
-    });
-    const replayed = this.replayedPackageDraftsResult(generationRun.result_json);
-    if (generationRun.status === 'succeeded' && replayed !== undefined) {
-      return { ...replayed, status: 'existing' };
-    }
-
-    const existingPackages = (await repository.listExecutionPackagesForWorkItem(context.workItem.id)).filter(
-      (executionPackage) =>
-        executionPackage.plan_revision_id === context.planRevision.id &&
-        executionPackage.generation_key === input.generationKey &&
-        executionPackage.package_key === 'api-package',
-    );
-    const executionPackage =
-      existingPackages[0] ??
-      ({
-        ...transitionExecutionPackage(undefined, {
-          type: 'generate_package',
-          id: this.id('execution-package'),
-          work_item_id: context.workItem.id,
-          spec_id: context.spec.id,
-          spec_revision_id: context.specRevision.id,
-          plan_id: context.plan.id,
-          plan_revision_id: context.planRevision.id,
-          project_id: context.project.id,
-          repo_id: packageRepoId,
-          objective: `Implement ${context.workItem.title}.`,
-          owner_actor_id: context.workItem.owner_actor_id,
-          reviewer_actor_id: context.workItem.owner_actor_id,
-          qa_owner_actor_id: context.workItem.owner_actor_id,
-          required_checks: [
-            {
-              check_id: 'unit',
-              display_name: 'Unit tests',
-              command: 'pnpm test tests/api',
-              timeout_seconds: 120,
-              blocks_review: true,
-            },
-          ],
-          required_artifact_kinds: ['execution_summary'],
-          allowed_paths: ['apps/control-plane-api/**', 'tests/api/**'],
-          forbidden_paths: ['packages/db/**'],
-          at: this.now(),
-        }),
-        ...this.defaultPackagePolicyFields({
-          policyDigest: 'p0-default-policy',
-          policySourcePath: 'forgeloop://p0/default-package-policy',
-          loadedAt: this.now(),
-          requiredChecks: [
-            {
-              check_id: 'unit',
-              display_name: 'Unit tests',
-              command: 'pnpm test tests/api',
-              timeout_seconds: 120,
-              blocks_review: true,
-            },
-          ],
-          allowedPaths: ['apps/control-plane-api/**', 'tests/api/**'],
-          forbiddenPaths: ['packages/db/**'],
-        }),
-        execution_package_set_id: generationRun.execution_package_set_id,
-        generation_key: input.generationKey,
-        package_key: 'api-package',
-        sequence: 0,
-        manifest_digest: 'api-package-v1',
-        required_test_gates: [],
-      } satisfies ExecutionPackage);
-    validateExecutionPackage(context.project, executionPackage);
-    if (existingPackages[0] === undefined) {
-      await repository.saveExecutionPackage(executionPackage);
-      await this.eventWithRepository(
-        repository,
-        'execution_package',
-        executionPackage.id,
-        'package_draft_generated',
-        'automation-package-drafter',
-        {
-          plan_revision_id: context.planRevision.id,
-        },
-      );
-    }
-    await repository.saveExecutionPackageGenerationPackage({
-      execution_package_set_id: generationRun.execution_package_set_id,
-      execution_package_id: executionPackage.id,
-      plan_revision_id: input.planRevisionId,
-      generation_key: input.generationKey,
-      package_key: 'api-package',
-      sequence: 0,
-      manifest_digest: 'api-package-v1',
-      claim_token: input.claimToken,
-    });
-    const result: EnsurePackageDraftsResult = {
-      execution_package_set_id: generationRun.execution_package_set_id,
-      package_ids: [executionPackage.id],
-      status: existingPackages[0] === undefined ? 'created' : 'existing',
-    };
-    await repository.completeExecutionPackageGenerationRun({
-      plan_revision_id: input.planRevisionId,
-      execution_package_set_id: generationRun.execution_package_set_id,
-      claim_token: input.claimToken,
-      result_json: result,
-      completed_at: this.now(),
-    });
-    return result;
-  }
-
-  private async packageContextFromRepository(
-    repository: DeliveryRepository,
-    planRevisionId: string,
-  ): Promise<{
-    project: Project;
-    workItem: WorkItem;
-    spec: Spec;
-    specRevision: SpecRevision;
-    plan: Plan;
-    planRevision: PlanRevision;
-  }> {
-    const planRevision = this.requireFound(await repository.getPlanRevision(planRevisionId), `PlanRevision ${planRevisionId}`);
-    const plan = this.requireFound(await repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
-    if (plan.status !== 'approved' || plan.current_revision_id !== planRevisionId) {
-      throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
-    }
-    const workItem = this.requireFound(await repository.getWorkItem(plan.work_item_id), `WorkItem ${plan.work_item_id}`);
-    if (workItem.current_plan_id !== plan.id) {
-      throw new ConflictException('WorkItem current plan no longer matches PlanRevision');
-    }
-    const spec = await this.requireApprovedCurrentSpecFromRepository(repository, workItem);
-    const specRevision = this.requireFound(await repository.getSpecRevision(spec.current_revision_id!), `SpecRevision ${spec.current_revision_id}`);
-    if (planRevision.based_on_spec_revision_id === undefined) {
-      throw new ConflictException('PlanRevision is not based on the WorkItem current approved SpecRevision');
-    }
-    if (planRevision.based_on_spec_revision_id !== specRevision.id) {
-      throw new ConflictException('PlanRevision is no longer based on the WorkItem current approved SpecRevision');
-    }
-    return {
-      project: this.requireFound(await repository.getProject(workItem.project_id), `Project ${workItem.project_id}`),
-      workItem,
-      spec,
-      specRevision,
-      plan,
-      planRevision,
-    };
-  }
-
-  private packageDraftRepoIdFor(project: Project, repoId: string | undefined): string {
-    if (repoId !== undefined) {
-      return repoId;
-    }
-    if (project.repo_ids.length === 1) {
-      return project.repo_ids[0]!;
-    }
-    throw new UnprocessableEntityException({
-      code: 'automation_gate_blocked',
-      message: 'Project-scoped package generation requires an unambiguous repo scope.',
-    });
-  }
-
-  private async requireApprovedCurrentSpecFromRepository(repository: DeliveryRepository, workItem: WorkItem): Promise<Spec> {
-    if (workItem.current_spec_id === undefined) {
-      throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
-    }
-    const spec = this.requireFound(await repository.getSpec(workItem.current_spec_id), `Spec ${workItem.current_spec_id}`);
-    if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id === undefined) {
-      throw new BadRequestException(`Spec ${spec.id} is not approved`);
-    }
-    return spec;
-  }
-
-  private replayedPackageDraftsResult(result: Record<string, unknown> | undefined): EnsurePackageDraftsResult | undefined {
-    if (
-      result === undefined ||
-      typeof result.execution_package_set_id !== 'string' ||
-      !Array.isArray(result.package_ids) ||
-      !result.package_ids.every((packageId) => typeof packageId === 'string') ||
-      (result.status !== 'created' && result.status !== 'existing')
-    ) {
-      return undefined;
-    }
-    return {
-      execution_package_set_id: result.execution_package_set_id,
-      package_ids: result.package_ids,
-      status: result.status,
-    };
-  }
-
   private replayedRunAcceptedResponse(result: Record<string, unknown> | undefined): RunAcceptedResponse | undefined {
     if (
       result === undefined ||
@@ -1468,95 +1126,6 @@ export class P0Service {
       next_generation_key: result.next_generation_key,
       supersede_command_id: result.supersede_command_id,
     };
-  }
-
-  private async assertExecutionPackageGraphStillCurrent(
-    repository: DeliveryRepository,
-    executionPackage: ExecutionPackage,
-  ): Promise<void> {
-    const stale = (message: string): never => {
-      throw new UnprocessableEntityException({ code: 'stale_execution_package_revision', message });
-    };
-    const workItem = this.requireFound(await repository.getWorkItem(executionPackage.work_item_id), `WorkItem ${executionPackage.work_item_id}`);
-    if (isWorkItemAutomationTerminal(workItem)) {
-      throw new UnprocessableEntityException({
-        code: 'work_item_terminal',
-        message: `WorkItem ${workItem.id} is terminal for automation.`,
-      });
-    }
-    if (workItem.current_spec_id !== executionPackage.spec_id) {
-      stale(`ExecutionPackage ${executionPackage.id} spec_id ${executionPackage.spec_id} is not the WorkItem current spec`);
-    }
-    if (workItem.current_plan_id !== executionPackage.plan_id) {
-      stale(`ExecutionPackage ${executionPackage.id} plan_id ${executionPackage.plan_id} is not the WorkItem current plan`);
-    }
-    const spec = this.requireFound(await repository.getSpec(executionPackage.spec_id), `Spec ${executionPackage.spec_id}`);
-    if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id !== executionPackage.spec_revision_id) {
-      stale(
-        `ExecutionPackage ${executionPackage.id} spec_revision_id ${executionPackage.spec_revision_id} is not current approved revision ${spec.current_revision_id ?? 'none'}`,
-      );
-    }
-    const plan = this.requireFound(await repository.getPlan(executionPackage.plan_id), `Plan ${executionPackage.plan_id}`);
-    if (plan.status !== 'approved' || plan.resolution !== 'approved' || plan.current_revision_id !== executionPackage.plan_revision_id) {
-      stale(
-        `ExecutionPackage ${executionPackage.id} plan_revision_id ${executionPackage.plan_revision_id} is not current approved revision ${plan.current_revision_id ?? 'none'}`,
-      );
-    }
-    const specRevision = this.requireFound(
-      await repository.getSpecRevision(executionPackage.spec_revision_id),
-      `SpecRevision ${executionPackage.spec_revision_id}`,
-    );
-    const planRevision = this.requireFound(
-      await repository.getPlanRevision(executionPackage.plan_revision_id),
-      `PlanRevision ${executionPackage.plan_revision_id}`,
-    );
-    if (specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
-      stale(`ExecutionPackage ${executionPackage.id} spec revision no longer belongs to the current WorkItem spec`);
-    }
-    if (planRevision.plan_id !== plan.id || planRevision.work_item_id !== workItem.id) {
-      stale(`ExecutionPackage ${executionPackage.id} plan revision no longer belongs to the current WorkItem plan`);
-    }
-    if (planRevision.based_on_spec_revision_id === undefined) {
-      stale(`ExecutionPackage ${executionPackage.id} plan revision is missing a frozen spec revision target`);
-    }
-    if (planRevision.based_on_spec_revision_id !== specRevision.id) {
-      stale(`ExecutionPackage ${executionPackage.id} plan revision is based on a stale spec revision`);
-    }
-    const dependencies = await repository.listExecutionPackageDependencies(executionPackage.id);
-    for (const dependency of dependencies) {
-      const upstream = this.requireFound(
-        await repository.getExecutionPackage(dependency.depends_on_package_id),
-        `ExecutionPackage ${dependency.depends_on_package_id}`,
-      );
-      if (upstream.resolution !== 'completed') {
-        throw new UnprocessableEntityException({
-          code: 'automation_gate_pending',
-          message: `ExecutionPackage ${executionPackage.id} dependency ${upstream.id} is not completed.`,
-        });
-      }
-    }
-    const linkedReleases = (await repository.listReleasesForProject(executionPackage.project_id)).filter((release) =>
-      release.execution_package_ids.includes(executionPackage.id),
-    );
-    for (const release of linkedReleases) {
-      const releaseGateHolds = await repository.listActiveManualPathHolds({
-        object_type: 'release_gate',
-        object_id: release.id,
-      });
-      if (releaseGateHolds.length > 0) {
-        throw new UnprocessableEntityException({
-          code: 'manual_path_hold_active',
-          message: `Release gate manual hold blocks run enqueue for ${executionPackage.id}.`,
-          hold_ids: releaseGateHolds.map((hold) => hold.id),
-        });
-      }
-      if (release.phase !== 'completed' && release.phase !== 'closed') {
-        throw new UnprocessableEntityException({
-          code: 'automation_gate_pending',
-          message: `Release ${release.id} blocks automatic run enqueue for ${executionPackage.id}.`,
-        });
-      }
-    }
   }
 
   private async enqueueRunWithRepository(
@@ -1618,149 +1187,6 @@ export class P0Service {
       run_session_id: runSessionId,
       execution_package_id: packageId,
     };
-  }
-
-  private async createExecutionPackageFromContext(
-    repository: DeliveryRepository,
-    context: Awaited<ReturnType<P0Service['packageContextFromRepository']>>,
-    dto: CreateExecutionPackageDto,
-    generation?: LegacyGeneratedPackageMetadata,
-  ): Promise<ExecutionPackage> {
-    const executionPackage = {
-      ...transitionExecutionPackage(undefined, {
-        type: 'generate_package',
-        id: this.id('execution-package'),
-        work_item_id: context.workItem.id,
-        spec_id: context.spec.id,
-        spec_revision_id: context.specRevision.id,
-        plan_id: context.plan.id,
-        plan_revision_id: context.planRevision.id,
-        project_id: context.project.id,
-        repo_id: dto.repo_id,
-        objective: dto.objective,
-        owner_actor_id: dto.owner_actor_id,
-        reviewer_actor_id: dto.reviewer_actor_id,
-        qa_owner_actor_id: dto.qa_owner_actor_id,
-        required_checks: dto.required_checks,
-        required_artifact_kinds: dto.required_artifact_kinds,
-        allowed_paths: dto.allowed_paths,
-        forbidden_paths: dto.forbidden_paths,
-        at: this.now(),
-      }),
-      ...(generation === undefined
-        ? {}
-        : {
-            execution_package_set_id: generation.execution_package_set_id,
-            generation_key: generation.generation_key,
-            package_key: generation.package_key,
-            sequence: generation.sequence,
-            manifest_digest: generation.manifest_digest,
-          }),
-      required_test_gates: [],
-      ...this.defaultPackagePolicyFields({
-        policyDigest: 'p0-manual-package-policy',
-        policySourcePath: 'forgeloop://p0/manual-package-policy',
-        loadedAt: this.now(),
-        requiredChecks: dto.required_checks,
-        allowedPaths: dto.allowed_paths,
-        forbiddenPaths: dto.forbidden_paths,
-      }),
-    };
-    validateExecutionPackage(context.project, executionPackage);
-    await repository.saveExecutionPackage(executionPackage);
-    await this.eventWithRepository(repository, 'execution_package', executionPackage.id, 'package_created', executionPackage.owner_actor_id, {
-      plan_revision_id: context.planRevision.id,
-    });
-    return executionPackage;
-  }
-
-  private defaultPackagePolicyFields(input: {
-    policyDigest: string;
-    policySourcePath: string;
-    loadedAt: string;
-    requiredChecks: ExecutionPackage['required_checks'];
-    allowedPaths: string[];
-    forbiddenPaths: string[];
-  }): Pick<
-    ExecutionPackage,
-    | 'validation_strategy'
-    | 'validation_strategy_version'
-    | 'validation_public_summary'
-    | 'policy_snapshot_status'
-    | 'policy_snapshot_version'
-    | 'package_policy_snapshot'
-  > {
-    return {
-      validation_strategy: 'checks_required',
-      validation_strategy_version: 1,
-      validation_public_summary: 'Required checks and package path policy are frozen for this package.',
-      policy_snapshot_status: 'captured',
-      policy_snapshot_version: 1,
-      package_policy_snapshot: {
-        policy_snapshot_version: 1,
-        policy_digest: input.policyDigest,
-        policy_source_path: input.policySourcePath,
-        policy_loaded_at: input.loadedAt,
-        policy_last_known_good: true,
-        hooks: [],
-        command_policy: { required_checks: input.requiredChecks.map((check) => check.check_id) },
-        check_policy: { required_checks: input.requiredChecks.map((check) => check.check_id) },
-        env_policy: {},
-        path_policy: { allowed_paths: input.allowedPaths, forbidden_paths: input.forbiddenPaths },
-        codex_runtime_mode: 'mock',
-        fallback_policy: { allow_exec_fallback: false },
-        validation_strategy_version: 1,
-        validation_strategy: 'checks_required',
-        validation_public_summary: 'Required checks and package path policy are frozen for this package.',
-      },
-    };
-  }
-
-  private async packageContext(planRevisionId: string): Promise<{
-    project: Project;
-    workItem: WorkItem;
-    spec: Spec;
-    specRevision: SpecRevision;
-    plan: Plan;
-    planRevision: PlanRevision;
-  }> {
-    const planRevision = await this.getPlanRevision(planRevisionId);
-    const plan = await this.getPlan(planRevision.plan_id);
-    if (plan.status !== 'approved' || plan.current_revision_id === undefined) {
-      throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
-    }
-    const currentPlanRevision = await this.getPlanRevision(plan.current_revision_id);
-    if (currentPlanRevision.id !== planRevisionId) {
-      throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
-    }
-    const workItem = await this.getWorkItem(plan.work_item_id);
-    const spec = await this.requireApprovedCurrentSpec(workItem);
-    const specRevision = await this.getSpecRevision(spec.current_revision_id!);
-    if (currentPlanRevision.based_on_spec_revision_id === undefined) {
-      throw new ConflictException('PlanRevision is not based on the WorkItem current approved SpecRevision');
-    }
-    if (currentPlanRevision.based_on_spec_revision_id !== specRevision.id) {
-      throw new ConflictException('PlanRevision is no longer based on the WorkItem current approved SpecRevision');
-    }
-    return {
-      project: await this.getProject(workItem.project_id),
-      workItem,
-      spec,
-      specRevision,
-      plan,
-      planRevision: currentPlanRevision,
-    };
-  }
-
-  private async requireApprovedCurrentSpec(workItem: WorkItem): Promise<Spec> {
-    if (workItem.current_spec_id === undefined) {
-      throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
-    }
-    const spec = await this.getSpec(workItem.current_spec_id);
-    if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id === undefined) {
-      throw new BadRequestException(`Spec ${spec.id} is not approved`);
-    }
-    return spec;
   }
 
   private initialRuntimeMetadata(): RunRuntimeMetadata {
