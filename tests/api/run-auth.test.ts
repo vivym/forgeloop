@@ -16,12 +16,12 @@ import {
   actorHeaderName as trustedActorHeaderName,
 } from '../../apps/control-plane-api/src/p0/actor-context';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import type { InMemoryP0Repository } from '../../packages/db/src';
+import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { seedAppWithRunSession, seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
 const actorHeaderName = 'X-Forgeloop-Actor-Id';
@@ -38,18 +38,18 @@ const track = async <T extends { app: INestApplication }>(value: Promise<T>): Pr
   return resolved;
 };
 
-const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository }> => {
+const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('durable')
-    .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
     .useValue(false)
     .compile();
   const app = moduleRef.createNestApplication();
   await app.init();
-  return { app, repo: app.get(P0_REPOSITORY) as InMemoryP0Repository };
+  return { app, repo: app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository };
 };
 
 const startDurableRun = async (

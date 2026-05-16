@@ -1,9 +1,9 @@
-import type { P0Repository } from '../../db/src/index.js';
+import type { DeliveryRepository } from '../../db/src/index.js';
 import type { RunCommand, RunRuntimeMetadata } from '../../domain/src/index.js';
 import type { CodexSessionDriver } from '../../executor/src/index.js';
 
 interface ApplyPendingRunCommandsInput {
-  repository: P0Repository;
+  repository: DeliveryRepository;
   runSessionId: string;
   workerId: string;
   leaseToken: string;
@@ -75,7 +75,7 @@ const scalarField = (record: Record<string, unknown>, keys: string[]): string | 
 };
 
 const appendDeliveryEvent = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   command: RunCommand,
   lease: { workerId: string; leaseToken: string },
   ack: Record<string, unknown>,
@@ -100,7 +100,7 @@ const appendDeliveryEvent = async (
 };
 
 const appendWarning = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   command: RunCommand,
   lease: { workerId: string; leaseToken: string },
   reason: string,

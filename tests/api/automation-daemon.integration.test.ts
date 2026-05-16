@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
 import { loadDaemonWorkflowPolicyDigest } from '../../apps/automation-daemon/src/workflow-policy-loader';
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import {
   AutomationHttpClient,
@@ -19,7 +19,7 @@ import {
   type ClaimNextActionInput,
   type NextAction,
 } from '../../packages/automation/src/index';
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import type { AutomationActionRun } from '../../packages/domain/src/automation';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../../packages/domain/src/index';
 
@@ -51,10 +51,10 @@ let repoRoot: string;
 let previousAutomationSecret: string | undefined;
 let previousAutomationTestNow: string | undefined;
 
-const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: P0Repository }> => {
+const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
-    .useValue(new InMemoryP0Repository())
+    .overrideProvider(DELIVERY_REPOSITORY)
+    .useValue(new InMemoryDeliveryRepository())
     .overrideProvider(RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
@@ -62,7 +62,7 @@ const bootAutomationApp = async (): Promise<{ app: INestApplication; repository:
   app.useLogger(false);
   await app.init();
   apps.push(app);
-  return { app, repository: app.get(P0_REPOSITORY) as P0Repository };
+  return { app, repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository };
 };
 
 const automationFetchFor = (app: INestApplication): AutomationFetch => async (url, init) => {
@@ -171,7 +171,7 @@ const seedDraftOnlyApprovedSpec = async (
 
 const approveCurrentPlan = async (
   app: INestApplication,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   workItemId: string,
 ): Promise<{ plan: Plan; revision: PlanRevision }> => {
   const workItem = await repository.getWorkItem(workItemId);
@@ -226,7 +226,7 @@ class RestartBeforeClaimClient extends AutomationHttpClient {
   }
 }
 
-const actionRuns = async (repository: P0Repository): Promise<AutomationActionRun[]> =>
+const actionRuns = async (repository: DeliveryRepository): Promise<AutomationActionRun[]> =>
   (await repository.getRuntimeSnapshotData()).recent_action_runs;
 
 const sortedActionTypes = (runs: AutomationActionRun[]): string[] => runs.map((actionRun) => actionRun.action_type).sort();

@@ -97,7 +97,7 @@ import type {
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
-  P0Repository,
+  DeliveryRepository,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
   RenewCommandIdempotencyInput,
@@ -110,7 +110,7 @@ import type {
   TraceArtifactRefRecord,
   TraceEventRecord,
   TraceLinkRecord,
-} from './p0-repository';
+} from './delivery-repository';
 
 export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 
@@ -252,14 +252,14 @@ const RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK = 500;
 const runtimeSnapshotActionRunLookback = (targetCount: number): number =>
   Math.min(RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK, Math.max(RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK, targetCount * 20));
 
-export class DrizzleP0Repository implements P0Repository {
+export class DrizzleDeliveryRepository implements DeliveryRepository {
   constructor(private readonly db: ForgeloopDrizzleDatabase) {}
 
-  async withP0Transaction<T>(write: (repository: P0Repository) => Promise<T>): Promise<T> {
-    return this.db.transaction((tx) => write(new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase)));
+  async withDeliveryTransaction<T>(write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => write(new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase)));
   }
 
-  async withObjectLock<T>(key: string, write: (repository: P0Repository) => Promise<T>): Promise<T> {
+  async withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
     return this.withAdvisoryLocks([key], write);
   }
 
@@ -739,11 +739,11 @@ export class DrizzleP0Repository implements P0Repository {
   async withActiveRunWorkerLease<T>(
     runSessionId: string,
     lease: { workerId: string; leaseToken: string; now: string },
-    write: (repository: P0Repository) => Promise<T>,
+    write: (repository: DeliveryRepository) => Promise<T>,
   ): Promise<T> {
     return this.db.transaction(async (tx) => {
       await this.lockActiveRunWorkerLease(tx as ForgeloopDrizzleDatabase, runSessionId, lease.workerId, lease.leaseToken, lease.now);
-      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
       const result = await write(repository);
       await repository.assertActiveRunWorkerLease(runSessionId, lease.workerId, lease.leaseToken, lease.now);
       return result;
@@ -822,7 +822,7 @@ export class DrizzleP0Repository implements P0Repository {
   async setAutomationProjectSettings(input: SetAutomationProjectSettingsInput): Promise<AutomationProjectSettings> {
     return this.withAdvisoryLocks(
       [`automation-settings:${this.automationSettingsKey(input.project_id, input.repo_id)}`],
-      (repository) => (repository as DrizzleP0Repository).setAutomationProjectSettingsUnlocked(input),
+      (repository) => (repository as DrizzleDeliveryRepository).setAutomationProjectSettingsUnlocked(input),
     );
   }
 
@@ -859,7 +859,7 @@ export class DrizzleP0Repository implements P0Repository {
 
   async requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold> {
     return this.withAdvisoryLocks(this.manualPathHoldLockKeys(input), (repository) =>
-      (repository as DrizzleP0Repository).requestManualPathHoldUnlocked(input),
+      (repository as DrizzleDeliveryRepository).requestManualPathHoldUnlocked(input),
     );
   }
 
@@ -887,13 +887,13 @@ export class DrizzleP0Repository implements P0Repository {
 
   async claimCommandIdempotency(input: ClaimCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
     return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).claimCommandIdempotencyUnlocked(input),
+      (repository as DrizzleDeliveryRepository).claimCommandIdempotencyUnlocked(input),
     );
   }
 
   async renewCommandIdempotency(input: RenewCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
     return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).renewCommandIdempotencyUnlocked(input),
+      (repository as DrizzleDeliveryRepository).renewCommandIdempotencyUnlocked(input),
     );
   }
 
@@ -911,19 +911,19 @@ export class DrizzleP0Repository implements P0Repository {
 
   async completeCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
     return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).finishCommandIdempotency(input, 'succeeded'),
+      (repository as DrizzleDeliveryRepository).finishCommandIdempotency(input, 'succeeded'),
     );
   }
 
   async failCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
     return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).finishCommandIdempotency(input, 'failed'),
+      (repository as DrizzleDeliveryRepository).finishCommandIdempotency(input, 'failed'),
     );
   }
 
   async blockCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {
     return this.withAdvisoryLocks([`command-idempotency:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).finishCommandIdempotency(input, 'blocked'),
+      (repository as DrizzleDeliveryRepository).finishCommandIdempotency(input, 'blocked'),
     );
   }
 
@@ -931,13 +931,13 @@ export class DrizzleP0Repository implements P0Repository {
     input: ClaimExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun> {
     return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
-      (repository as DrizzleP0Repository).claimExecutionPackageGenerationRunUnlocked(input),
+      (repository as DrizzleDeliveryRepository).claimExecutionPackageGenerationRunUnlocked(input),
     );
   }
 
   async saveExecutionPackageGenerationPackage(input: SaveExecutionPackageGenerationPackageInput): Promise<void> {
     return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
-      (repository as DrizzleP0Repository).saveExecutionPackageGenerationPackageUnlocked(input),
+      (repository as DrizzleDeliveryRepository).saveExecutionPackageGenerationPackageUnlocked(input),
     );
   }
 
@@ -995,7 +995,7 @@ export class DrizzleP0Repository implements P0Repository {
     input: CompleteExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun> {
     return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
-      (repository as DrizzleP0Repository).completeExecutionPackageGenerationRunUnlocked(input),
+      (repository as DrizzleDeliveryRepository).completeExecutionPackageGenerationRunUnlocked(input),
     );
   }
 
@@ -1003,7 +1003,7 @@ export class DrizzleP0Repository implements P0Repository {
     input: SupersedeExecutionPackageGenerationRunInput,
   ): Promise<ExecutionPackageGenerationRun> {
     return this.withAdvisoryLocks([`package-generation:${input.plan_revision_id}`], (repository) =>
-      (repository as DrizzleP0Repository).supersedeExecutionPackageGenerationRunUnlocked(input),
+      (repository as DrizzleDeliveryRepository).supersedeExecutionPackageGenerationRunUnlocked(input),
     );
   }
 
@@ -1053,7 +1053,7 @@ export class DrizzleP0Repository implements P0Repository {
 
   async createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun> {
     return this.withAdvisoryLocks([`automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`], (repository) =>
-      (repository as DrizzleP0Repository).createOrReplayAutomationActionRunUnlocked(input),
+      (repository as DrizzleDeliveryRepository).createOrReplayAutomationActionRunUnlocked(input),
     );
   }
 
@@ -1061,7 +1061,7 @@ export class DrizzleP0Repository implements P0Repository {
     input: ClaimNextAutomationActionRunInput,
   ): Promise<AutomationActionRun | undefined> {
     return this.withAdvisoryLocks(['automation-action:claim-next'], (repository) =>
-      (repository as DrizzleP0Repository).claimNextAutomationActionRunUnlocked(input),
+      (repository as DrizzleDeliveryRepository).claimNextAutomationActionRunUnlocked(input),
     );
   }
 
@@ -1101,13 +1101,13 @@ export class DrizzleP0Repository implements P0Repository {
   async claimAutomationActionRun(input: ClaimAutomationActionRunInput): Promise<AutomationActionRun> {
     return this.withAdvisoryLocks(
       ['automation-action:claim-next', `automation-action:${input.idempotency_key}`, `automation-action-id:${input.id}`],
-      (repository) => (repository as DrizzleP0Repository).claimAutomationActionRunUnlocked(input),
+      (repository) => (repository as DrizzleDeliveryRepository).claimAutomationActionRunUnlocked(input),
     );
   }
 
   async markAutomationActionGatePending(input: MarkAutomationActionGatePendingInput): Promise<AutomationActionRun> {
     return this.withAdvisoryLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).markAutomationActionGatePendingUnlocked(input),
+      (repository as DrizzleDeliveryRepository).markAutomationActionGatePendingUnlocked(input),
     );
   }
 
@@ -1132,7 +1132,7 @@ export class DrizzleP0Repository implements P0Repository {
 
   async completeAutomationActionRun(input: CompleteAutomationActionRunInput): Promise<AutomationActionRun> {
     return this.withAdvisoryLocks(['automation-action:claim-next', `automation-action:${input.idempotency_key}`], (repository) =>
-      (repository as DrizzleP0Repository).completeAutomationActionRunUnlocked(input),
+      (repository as DrizzleDeliveryRepository).completeAutomationActionRunUnlocked(input),
     );
   }
 
@@ -1357,7 +1357,7 @@ export class DrizzleP0Repository implements P0Repository {
     };
     await this.db.transaction(async (tx) => {
       // Reuse the repository methods inside one transaction so the release row and link tables stay aligned.
-      const repository = new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase);
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
       await repository.saveReleaseRecord(normalized);
       await repository.replaceReleaseWorkItems(normalized.id, normalized.work_item_ids);
       await repository.replaceReleaseExecutionPackages(normalized.id, normalized.execution_package_ids);
@@ -1584,7 +1584,7 @@ export class DrizzleP0Repository implements P0Repository {
       .returning();
 
     if (row === undefined) {
-      const existing = await new DrizzleP0Repository(db).getById<RunEvent>(run_events, run_events.id, event.id);
+      const existing = await new DrizzleDeliveryRepository(db).getById<RunEvent>(run_events, run_events.id, event.id);
       if (existing === undefined) {
         throw new DomainError('INVALID_TRANSITION', `Run event ${event.id} could not be appended`);
       }
@@ -1595,12 +1595,12 @@ export class DrizzleP0Repository implements P0Repository {
     return fromDbRecord<RunEvent>(row);
   }
 
-  private async withAdvisoryLocks<T>(keys: readonly string[], write: (repository: P0Repository) => Promise<T>): Promise<T> {
+  private async withAdvisoryLocks<T>(keys: readonly string[], write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
     return this.db.transaction(async (tx) => {
       for (const key of [...new Set(keys)].sort()) {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
       }
-      return write(new DrizzleP0Repository(tx as ForgeloopDrizzleDatabase));
+      return write(new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase));
     });
   }
 

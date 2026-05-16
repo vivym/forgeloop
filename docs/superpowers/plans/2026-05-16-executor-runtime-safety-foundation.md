@@ -33,9 +33,9 @@ Before implementation, read:
 - `apps/control-plane-api/src/modules/automation/automation-command.service.ts`
 - `apps/control-plane-api/src/modules/automation/runtime-snapshot.service.ts`
 - `apps/control-plane-api/src/modules/automation/automation.dto.ts`
-- `packages/db/src/repositories/p0-repository.ts`
-- `packages/db/src/repositories/in-memory-p0-repository.ts`
-- `packages/db/src/repositories/drizzle-p0-repository.ts`
+- `packages/db/src/repositories/delivery-repository.ts`
+- `packages/db/src/repositories/in-memory-delivery-repository.ts`
+- `packages/db/src/repositories/drizzle-delivery-repository.ts`
 - `packages/automation/src/types.ts`
 - `packages/automation/src/http-client.ts`
 - `packages/automation/src/planner.ts`
@@ -118,9 +118,9 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
   - Add `source_mutation_policy` to `RunSpec`; change `allowed_paths` validation to allow `[]` only for `no_source_changes`; add runtime failure/blocker reason enums where contracts own wire data.
 - Modify: `packages/db/src/schema/execution-package.ts`
   - Persist `source_mutation_policy`.
-- Modify: `packages/db/src/repositories/in-memory-p0-repository.ts`
+- Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
   - Preserve `source_mutation_policy` in package records.
-- Modify: `packages/db/src/repositories/drizzle-p0-repository.ts`
+- Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
   - Preserve `source_mutation_policy` in package records.
 
 ### Control Plane, DB, Automation Projection
@@ -133,11 +133,11 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
   - Strengthen enqueue preflight attestation validation; keep daemon planner enqueue disabled.
 - Modify: `apps/control-plane-api/src/p0/automation-command-helpers.ts`
   - Validate scope-aware `enqueue_preflight` attestations and reject `run_execution` attestations before RunSession creation.
-- Modify: `packages/db/src/repositories/p0-repository.ts`
+- Modify: `packages/db/src/repositories/delivery-repository.ts`
   - Add `RuntimeSnapshotBlockerRow`; add `blockers?: RuntimeSnapshotBlockerRow[]` to `RuntimeSnapshotTargetRow`.
-- Modify: `packages/db/src/repositories/in-memory-p0-repository.ts`
+- Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
   - Derive deterministic runtime blockers at query time.
-- Modify: `packages/db/src/repositories/drizzle-p0-repository.ts`
+- Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
   - Derive the same runtime blockers from existing rows without a blocker table.
 - Modify: `apps/control-plane-api/src/modules/automation/automation.dto.ts`
   - Add `AutomationRuntimeBlockerDto`; map sorted `blockers[]`; keep singular compatibility fields from first blocker.
@@ -241,8 +241,8 @@ Expected: all selected packages build.
 - Modify: `packages/domain/src/validators.ts`
 - Modify: `packages/domain/src/states.ts`
 - Modify: `packages/db/src/schema/execution-package.ts`
-- Modify: `packages/db/src/repositories/in-memory-p0-repository.ts`
-- Modify: `packages/db/src/repositories/drizzle-p0-repository.ts`
+- Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
+- Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
 - Modify: `apps/control-plane-api/src/p0/dto.ts`
 - Modify: `apps/control-plane-api/src/p0/p0.service.ts`
 - Modify: `apps/control-plane-api/src/modules/automation/automation-command.service.ts`
@@ -422,7 +422,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add packages/contracts/src/executor.ts packages/domain/src/automation.ts packages/domain/src/types.ts packages/domain/src/validators.ts packages/domain/src/states.ts packages/db/src/schema/execution-package.ts packages/db/src/repositories/in-memory-p0-repository.ts packages/db/src/repositories/drizzle-p0-repository.ts apps/control-plane-api/src/p0/dto.ts apps/control-plane-api/src/p0/p0.service.ts apps/control-plane-api/src/modules/automation/automation-command.service.ts apps/control-plane-api/src/p0/automation-command-helpers.ts tests/contracts/contracts.test.ts tests/api/run-spec-validation.test.ts tests/domain/automation.test.ts tests/domain/validators.test.ts tests/domain/states.test.ts tests/db/repository.test.ts tests/db/automation-repository.test.ts tests/api/automation-commands.test.ts
+git add packages/contracts/src/executor.ts packages/domain/src/automation.ts packages/domain/src/types.ts packages/domain/src/validators.ts packages/domain/src/states.ts packages/db/src/schema/execution-package.ts packages/db/src/repositories/in-memory-delivery-repository.ts packages/db/src/repositories/drizzle-delivery-repository.ts apps/control-plane-api/src/p0/dto.ts apps/control-plane-api/src/p0/p0.service.ts apps/control-plane-api/src/modules/automation/automation-command.service.ts apps/control-plane-api/src/p0/automation-command-helpers.ts tests/contracts/contracts.test.ts tests/api/run-spec-validation.test.ts tests/domain/automation.test.ts tests/domain/validators.test.ts tests/domain/states.test.ts tests/db/repository.test.ts tests/db/automation-repository.test.ts tests/api/automation-commands.test.ts
 git commit -m "feat: add runtime safety source mutation contracts"
 ```
 
@@ -1807,9 +1807,9 @@ git commit -m "fix: close legacy local codex execution bypasses"
 ## Task 13: Public Runtime Blocker Projection
 
 **Files:**
-- Modify: `packages/db/src/repositories/p0-repository.ts`
-- Modify: `packages/db/src/repositories/in-memory-p0-repository.ts`
-- Modify: `packages/db/src/repositories/drizzle-p0-repository.ts`
+- Modify: `packages/db/src/repositories/delivery-repository.ts`
+- Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
+- Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
 - Modify: `apps/control-plane-api/src/modules/automation/automation.dto.ts`
 - Modify: `apps/control-plane-api/src/modules/automation/runtime-snapshot.service.ts`
 - Modify: `packages/automation/src/types.ts`
@@ -1864,7 +1864,7 @@ Expected: FAIL because `blockers[]` is not yet projected.
 
 - [ ] **Step 4: Add repository row types**
 
-In `packages/db/src/repositories/p0-repository.ts`, add:
+In `packages/db/src/repositories/delivery-repository.ts`, add:
 
 ```ts
 export interface RuntimeSnapshotBlockerRow {
@@ -1940,7 +1940,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add packages/db/src/repositories/p0-repository.ts packages/db/src/repositories/in-memory-p0-repository.ts packages/db/src/repositories/drizzle-p0-repository.ts apps/control-plane-api/src/modules/automation/automation.dto.ts apps/control-plane-api/src/modules/automation/runtime-snapshot.service.ts packages/automation/src/types.ts packages/automation/src/http-client.ts tests/api/automation-runtime-snapshot.test.ts tests/automation/planner.test.ts tests/db/automation-repository.test.ts
+git add packages/db/src/repositories/delivery-repository.ts packages/db/src/repositories/in-memory-delivery-repository.ts packages/db/src/repositories/drizzle-delivery-repository.ts apps/control-plane-api/src/modules/automation/automation.dto.ts apps/control-plane-api/src/modules/automation/runtime-snapshot.service.ts packages/automation/src/types.ts packages/automation/src/http-client.ts tests/api/automation-runtime-snapshot.test.ts tests/automation/planner.test.ts tests/db/automation-repository.test.ts
 git commit -m "feat: project sanitized runtime blockers"
 ```
 

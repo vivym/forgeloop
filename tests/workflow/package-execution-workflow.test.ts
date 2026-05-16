@@ -13,7 +13,7 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
-import { InMemoryP0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
 import { transitionExecutionPackage, transitionReviewPacket, transitionRunSession } from '../../packages/domain/src/index';
 import { createPackageExecutionActivities, executePackageRun, reviewPacketIdForRunSession } from '../../packages/workflow/src/index';
 
@@ -124,7 +124,7 @@ interface FixtureOptions {
 }
 
 const createFixture = async (options: FixtureOptions = {}) => {
-  const repository = new InMemoryP0Repository();
+  const repository = new InMemoryDeliveryRepository();
 
   const project: Project = {
     id: 'project-1',
@@ -300,7 +300,7 @@ const createFixture = async (options: FixtureOptions = {}) => {
 };
 
 const runWorkflow = async (
-  repository: InMemoryP0Repository,
+  repository: InMemoryDeliveryRepository,
   runSessionId: string,
   options: {
     executor?: (runSpec: RunSpec) => Promise<ExecutorResult>;

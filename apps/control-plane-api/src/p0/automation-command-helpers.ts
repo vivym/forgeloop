@@ -14,7 +14,7 @@ import {
   type RuntimeSafetyAttestation,
 } from '@forgeloop/domain';
 import type { ExecutorType } from '@forgeloop/contracts';
-import type { P0Repository } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 
 export const normalizeAutomationPrecondition = (precondition: AutomationPrecondition): AutomationPrecondition => ({
   ...precondition,
@@ -74,7 +74,7 @@ export const assertCommandCapabilityStillEnabled = (
 };
 
 export const assertNoActiveHolds = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   targets: Array<{ object_type: string; object_id: string; generation_key?: string; gate_key?: string }>,
 ): Promise<void> => {
   for (const target of targets) {

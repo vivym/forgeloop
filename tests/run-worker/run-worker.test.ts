@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
-import { InMemoryP0Repository } from '../../packages/db/src';
+import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
 import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
@@ -70,7 +70,7 @@ afterEach(async () => {
 });
 
 const runWorker = (input: {
-  repository: InMemoryP0Repository;
+  repository: InMemoryDeliveryRepository;
   driver: CodexSessionDriver;
   workerId?: string;
   now?: () => string;
@@ -99,13 +99,13 @@ const runWorker = (input: {
     idleThresholdMs: input.idleThresholdMs ?? 30_000,
   });
 
-class FailingClaimRepository extends InMemoryP0Repository {
+class FailingClaimRepository extends InMemoryDeliveryRepository {
   override async claimNextRunCommand(): Promise<undefined> {
     throw new Error('injected command polling failure');
   }
 }
 
-class FailingHeartbeatRepository extends InMemoryP0Repository {
+class FailingHeartbeatRepository extends InMemoryDeliveryRepository {
   override async heartbeatRunWorkerLease(): Promise<void> {
     throw new Error('injected heartbeat failure');
   }
@@ -113,7 +113,7 @@ class FailingHeartbeatRepository extends InMemoryP0Repository {
 
 describe('RunWorker', () => {
   it('runs a follow-up drain when kick is called during an active drain', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
     const driver = new FakeCodexSessionDriver({
       script: [{ kind: 'delay', ms: 20 }, { kind: 'terminal', status: 'succeeded', summary: 'Driver completed.' }],
@@ -158,7 +158,7 @@ describe('RunWorker', () => {
   });
 
   it('discovers queued runs, emits live events, and finalizes only after terminal driver completion', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     const driver = new FakeCodexSessionDriver({
       script: [
@@ -198,7 +198,7 @@ describe('RunWorker', () => {
   });
 
   it('moves idle active runs to stalled instead of timed_out', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.saveRunSession({
       ...runSession,
@@ -223,7 +223,7 @@ describe('RunWorker', () => {
   });
 
   it('heartbeats lease during long driver execution and releases on terminal completion', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     const driver = new FakeCodexSessionDriver({
       script: [
@@ -251,7 +251,7 @@ describe('RunWorker', () => {
   });
 
   it('polls active commands while a long driver stream is running', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     const driver = new FakeCodexSessionDriver({
       script: [
@@ -297,7 +297,7 @@ describe('RunWorker', () => {
   });
 
   it('delivers queued app-server input with runtime metadata from the primed thread event', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     const driver = new FakeCodexSessionDriver({
       kind: 'app_server',
@@ -380,7 +380,7 @@ describe('RunWorker', () => {
   });
 
   it('reclaims expired running lease before recovery', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.claimRunWorkerLease({
       run_session_id: runSession.id,
@@ -407,7 +407,7 @@ describe('RunWorker', () => {
   });
 
   it('reattaches app-server recovery before applying pending input', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedRunningRunWithCommand(repository, {
       command_type: 'input',
       payload: { message: 'please continue' },
@@ -470,7 +470,7 @@ describe('RunWorker', () => {
   });
 
   it('marks synchronous app-server recovery and exec fallback failure as stalled', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.saveRunSession({
       ...runSession,
@@ -509,7 +509,7 @@ describe('RunWorker', () => {
   });
 
   it('marks async app-server and exec fallback terminal recovery failures as stalled', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.saveRunSession({
       ...runSession,
@@ -573,7 +573,7 @@ describe('RunWorker', () => {
   });
 
   it('uses exec fallback when app-server recovery emits fallback event and ends', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.saveRunSession({
       ...runSession,
@@ -649,7 +649,7 @@ describe('RunWorker', () => {
   });
 
   it('resumes exec fallback directly when recovery metadata already selected fallback', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.saveRunSession({
       ...runSession,
@@ -724,7 +724,7 @@ describe('RunWorker', () => {
   });
 
   it('uses exec fallback when app-server start emits fallback event and ends', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     const appServerDriver = new FakeCodexSessionDriver({
       kind: 'app_server',
@@ -806,7 +806,7 @@ describe('RunWorker', () => {
   });
 
   it('uses a run-session worktree and snapshots the source checkout before app-server execution', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { repo, head } = await createGitRepo();
     const { runSession } = await seedQueuedPackageRun(repository);
     const [projectRepo] = await repository.listProjectRepos('project-1');
@@ -861,7 +861,7 @@ describe('RunWorker', () => {
   }, 15_000);
 
   it('uses exec fallback when app-server emits a fallback event after initial progress', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     const appServerDriver = new FakeCodexSessionDriver({
       kind: 'app_server',
@@ -953,7 +953,7 @@ describe('RunWorker', () => {
   });
 
   it('closes the app-server driver after switching to exec fallback', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     let appServerCloseCalls = 0;
     const appServerDriver: CodexSessionDriver & { close(): Promise<void> } = {
@@ -1052,7 +1052,7 @@ describe('RunWorker', () => {
   });
 
   it('uses exec fallback when app-server emits a failed terminal after initial progress', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     const appServerDriver = new FakeCodexSessionDriver({
       kind: 'app_server',
@@ -1140,7 +1140,7 @@ describe('RunWorker', () => {
   });
 
   it('resumes a dirty local Codex worktree instead of rejecting it before recovery', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { repo, head } = await createGitRepo();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     const workspacePath = join(repo, '.worktrees', runSession.id);
@@ -1186,7 +1186,7 @@ describe('RunWorker', () => {
   });
 
   it('starts exec fallback when recovery has no persisted Codex thread id', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { repo, head } = await createGitRepo();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     const workspacePath = join(repo, '.worktrees', runSession.id);
@@ -1262,7 +1262,7 @@ describe('RunWorker', () => {
   });
 
   it('preserves fallback metadata when recovery fallback stalls', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     await repository.saveRunSession({
       ...runSession,
@@ -1331,7 +1331,7 @@ describe('RunWorker', () => {
   });
 
   it('stalls local Codex finalization instead of late-snapshotting when pre-run source snapshot is missing', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { repo, head } = await createGitRepo();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     let evidenceCalled = false;
@@ -1371,7 +1371,7 @@ describe('RunWorker', () => {
   });
 
   it('finalizes start fallback terminal failure instead of leaving the run stalled', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repository);
     const appServerDriver = new FakeCodexSessionDriver({
       kind: 'app_server',
@@ -1433,7 +1433,7 @@ describe('RunWorker', () => {
   });
 
   it('watchdog stalls a long active stream when Codex activity goes stale', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     let currentTime = Date.parse('2026-05-08T00:00:00.000Z');
     await repository.saveRunSession({
@@ -1481,7 +1481,7 @@ describe('RunWorker', () => {
   });
 
   it('stalls and releases lease when driver stream ends without terminal', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     const driver = new FakeCodexSessionDriver({
       script: [
@@ -1513,7 +1513,7 @@ describe('RunWorker', () => {
   });
 
   it('watchdog interrupts a stream stuck before the first item', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
     let currentTime = Date.parse('2026-05-08T00:00:00.000Z');
     await repository.saveRunSession({

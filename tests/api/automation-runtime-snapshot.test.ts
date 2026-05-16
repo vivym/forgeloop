@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { signAutomationRequest } from '../../packages/automation/src/index';
 import type {
@@ -19,7 +19,7 @@ import type {
   WorkItem,
 } from '../../packages/domain/src/index';
 import { buildManualScopeKey, transitionExecutionPackage } from '../../packages/domain/src/index';
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const secret = 'test-secret';
 const actorOwner = 'actor-owner';
@@ -31,17 +31,17 @@ const rawSecretPath = '/Users/viv/projs/forgeloop/.worktrees/feature/http-automa
 
 const apps: INestApplication[] = [];
 
-const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: P0Repository }> => {
+const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
-    .useValue(new InMemoryP0Repository())
+    .overrideProvider(DELIVERY_REPOSITORY)
+    .useValue(new InMemoryDeliveryRepository())
     .overrideProvider(RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
   const app = moduleRef.createNestApplication({ rawBody: true });
   await app.init();
   apps.push(app);
-  return { app, repository: app.get(P0_REPOSITORY) as P0Repository };
+  return { app, repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository };
 };
 
 const signedAutomationGet = (app: INestApplication, pathAndQuery = '/internal/automation/runtime-snapshot') => {
@@ -176,7 +176,7 @@ const planRevision = (overrides: Partial<PlanRevision> = {}): PlanRevision => ({
   ...overrides,
 });
 
-const seedProjectRepo = async (repository: P0Repository, overrides: { repo?: Partial<ProjectRepo> } = {}) => {
+const seedProjectRepo = async (repository: DeliveryRepository, overrides: { repo?: Partial<ProjectRepo> } = {}) => {
   await repository.saveProject(project());
   await repository.saveProjectRepo(projectRepo(overrides.repo));
   return repository.setAutomationProjectSettings({
@@ -193,7 +193,7 @@ const seedProjectRepo = async (repository: P0Repository, overrides: { repo?: Par
   });
 };
 
-const addDraftOnlyRepo = async (repository: P0Repository, repo: Partial<ProjectRepo> & { repo_id: string }) => {
+const addDraftOnlyRepo = async (repository: DeliveryRepository, repo: Partial<ProjectRepo> & { repo_id: string }) => {
   await repository.saveProjectRepo(
     projectRepo({
       id: `project-${repo.repo_id}`,
@@ -216,20 +216,20 @@ const addDraftOnlyRepo = async (repository: P0Repository, repo: Partial<ProjectR
   });
 };
 
-const seedApprovedSpec = async (repository: P0Repository, overrides: { item?: Partial<WorkItem> } = {}) => {
+const seedApprovedSpec = async (repository: DeliveryRepository, overrides: { item?: Partial<WorkItem> } = {}) => {
   await seedProjectRepo(repository);
   await repository.saveWorkItem(workItem(overrides.item));
   await repository.saveSpec(spec({ work_item_id: overrides.item?.id ?? 'work-item-1' }));
   await repository.saveSpecRevision(specRevision({ work_item_id: overrides.item?.id ?? 'work-item-1' }));
 };
 
-const seedApprovedPlan = async (repository: P0Repository) => {
+const seedApprovedPlan = async (repository: DeliveryRepository) => {
   await seedApprovedSpec(repository, { item: { phase: 'plan', current_plan_id: 'plan-1', current_plan_revision_id: 'plan-revision-1' } });
   await repository.savePlan(plan());
   await repository.savePlanRevision(planRevision());
 };
 
-const seedReadyExecutionPackage = async (repository: P0Repository): Promise<ExecutionPackage> => {
+const seedReadyExecutionPackage = async (repository: DeliveryRepository): Promise<ExecutionPackage> => {
   const generated = transitionExecutionPackage(undefined, {
     type: 'generate_package',
     id: 'execution-package-1',
@@ -256,7 +256,7 @@ const seedReadyExecutionPackage = async (repository: P0Repository): Promise<Exec
 };
 
 const seedCompletedAction = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   input: {
     id: string;
     actionType: string;

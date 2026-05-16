@@ -57,7 +57,7 @@ import type {
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
-  P0Repository,
+  DeliveryRepository,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
   RenewCommandIdempotencyInput,
@@ -70,7 +70,7 @@ import type {
   TraceArtifactRefRecord,
   TraceEventRecord,
   TraceLinkRecord,
-} from './p0-repository';
+} from './delivery-repository';
 import { ObjectLockManager } from './object-lock';
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -171,7 +171,7 @@ const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
 const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
 
-export class InMemoryP0Repository implements P0Repository {
+export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly objectLocks = new ObjectLockManager();
   private readonly organizations = new Map<string, Organization>();
   private readonly actors = new Map<string, Actor>();
@@ -212,9 +212,9 @@ export class InMemoryP0Repository implements P0Repository {
   private readonly automationActionRuns = new Map<string, AutomationActionRun>();
   private readonly automationActionRunIdempotency = new Map<string, string>();
 
-  async withP0Transaction<T>(write: (repository: P0Repository) => Promise<T>): Promise<T> {
-    return this.objectLocks.withLock('p0-transaction', async () => {
-      const transaction = new InMemoryP0Repository();
+  async withDeliveryTransaction<T>(write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
+    return this.objectLocks.withLock('delivery-transaction', async () => {
+      const transaction = new InMemoryDeliveryRepository();
       this.copyTransactionalStateTo(transaction);
       const snapshots = transaction.snapshotTransactionalMaps();
       const result = await write(transaction);
@@ -223,7 +223,7 @@ export class InMemoryP0Repository implements P0Repository {
     });
   }
 
-  async withObjectLock<T>(key: string, write: (repository: P0Repository) => Promise<T>): Promise<T> {
+  async withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
     return this.objectLocks.withLock(key, () => write(this));
   }
 
@@ -632,7 +632,7 @@ export class InMemoryP0Repository implements P0Repository {
   async withActiveRunWorkerLease<T>(
     runSessionId: string,
     lease: { workerId: string; leaseToken: string; now: string },
-    write: (repository: P0Repository) => Promise<T>,
+    write: (repository: DeliveryRepository) => Promise<T>,
   ): Promise<T> {
     await this.assertActiveRunWorkerLease(runSessionId, lease.workerId, lease.leaseToken, lease.now);
     const result = await write(this);
@@ -2081,7 +2081,7 @@ export class InMemoryP0Repository implements P0Repository {
     ]);
   }
 
-  private copyTransactionalStateTo(target: InMemoryP0Repository): void {
+  private copyTransactionalStateTo(target: InMemoryDeliveryRepository): void {
     const sourceMaps = this.transactionalMaps();
     const targetMaps = target.transactionalMaps();
     sourceMaps.forEach((source, index) => {
@@ -2094,7 +2094,7 @@ export class InMemoryP0Repository implements P0Repository {
   }
 
   private mergeTransactionalChangesFrom(
-    transaction: InMemoryP0Repository,
+    transaction: InMemoryDeliveryRepository,
     snapshots: Array<readonly [Map<string, unknown>, Map<string, unknown>]>,
   ): void {
     const targetMaps = this.transactionalMaps();

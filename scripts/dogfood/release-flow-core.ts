@@ -11,15 +11,15 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { ReleaseController } from '../../apps/control-plane-api/src/modules/release/release.controller';
 import { ReleaseService } from '../../apps/control-plane-api/src/modules/release/release.service';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/p0/run-worker-lifecycle.service';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { createDbClient, createDrizzleP0Repository, InMemoryP0Repository } from '../../packages/db/src';
-import type { DbClient, P0Repository } from '../../packages/db/src';
+import { createDbClient, createDrizzleDeliveryRepository, InMemoryDeliveryRepository } from '../../packages/db/src';
+import type { DbClient, DeliveryRepository } from '../../packages/db/src';
 import { worktreePathForRun } from '../../packages/executor/src/index.js';
 import {
   artifactIdForRunSessionArtifact,
@@ -401,19 +401,19 @@ export const assertNoUnsafeReleaseDogfoodStrings = (label: string, value: unknow
   }
 };
 
-const createDogfoodApp = async (): Promise<{ app: INestApplication; repository: InMemoryP0Repository }> => {
-  const repository = new InMemoryP0Repository();
+const createDogfoodApp = async (): Promise<{ app: INestApplication; repository: InMemoryDeliveryRepository }> => {
+  const repository = new InMemoryDeliveryRepository();
   (Reflect as typeof Reflect & { defineMetadata?: (key: string, value: unknown, target: object) => void }).defineMetadata?.(
     'design:paramtypes',
     [ReleaseService],
     ReleaseController,
   );
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
+    .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('volatile_demo')
-    .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
     .useValue(true)
     .overrideProvider(RUN_WORKER)
     .useValue(noopRunWorker)
@@ -424,7 +424,7 @@ const createDogfoodApp = async (): Promise<{ app: INestApplication; repository: 
 };
 
 const createDurableReleaseDogfoodApp = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   options: { useRealWorker: boolean } = { useRealWorker: false },
 ): Promise<{ app: INestApplication; runWorker?: StrictRunWorker }> => {
   (Reflect as typeof Reflect & { defineMetadata?: (key: string, value: unknown, target: object) => void }).defineMetadata?.(
@@ -433,11 +433,11 @@ const createDurableReleaseDogfoodApp = async (
     ReleaseController,
   );
   let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
+    .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('durable')
-    .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
     .useValue(false);
   if (options.useRealWorker) {
     moduleBuilder = moduleBuilder.overrideProvider(RunWorkerLifecycleService).useValue({
@@ -466,7 +466,7 @@ const checkResults = (): CheckResult[] => [
 ];
 
 const seedCompletedReleaseReadyRuntime = async (
-  repository: InMemoryP0Repository,
+  repository: InMemoryDeliveryRepository,
   executionPackage: ExecutionPackage,
 ): Promise<{ workItem: WorkItem; executionPackage: ExecutionPackage; runSession: RunSession; reviewPacket: ReviewPacket }> => {
   const workItem = await repository.getWorkItem(executionPackage.work_item_id);
@@ -561,7 +561,7 @@ const seedCompletedReleaseReadyRuntime = async (
 };
 
 export const seedDurableReleaseReadyPackageEvidence = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   executionPackage: ExecutionPackage,
   input: { ownerActorId: string; reviewerActorId: string; at: string },
 ): Promise<{ workItem: WorkItem; executionPackage: ExecutionPackage; runSession: RunSession; reviewPacket: ReviewPacket }> => {
@@ -673,7 +673,7 @@ export const seedDurableReleaseReadyPackageEvidence = async (
 
 const createP0DeliveryPath = async (
   app: INestApplication,
-  repository: InMemoryP0Repository,
+  repository: InMemoryDeliveryRepository,
 ): Promise<{ projectId: string; workItem: WorkItem; executionPackage: ExecutionPackage }> => {
   const server = app.getHttpServer();
   const project = (
@@ -943,7 +943,7 @@ type StrictLocalCodexLifecycleDeps = {
   }) => Promise<PreflightResult<'RELEASE_STRICT_DIRTY_ALLOWLIST'>>;
   runStrictLocalCodexPackage?: (input: {
     server: Parameters<typeof request>[0];
-    repository: P0Repository;
+    repository: DeliveryRepository;
     planRevisionId: string;
     releaseId: string;
     projectId: string;
@@ -971,21 +971,21 @@ export type StrictReleaseFlowDogfoodDeps = {
   inspectDockerPostgres?: (runner: CommandRunner) => Promise<DockerPostgresCandidate | undefined>;
   startDisposablePostgres?: (runner: CommandRunner, timestamp: number) => Promise<{ containerId: string; candidate: DockerPostgresCandidate }>;
   createDbClient?: (input: { connectionString: string }) => StrictDbClient;
-  createRepository?: (db: unknown) => P0Repository;
-  createDurableApp?: (repository: P0Repository, options?: { useRealWorker: boolean }) => Promise<StrictDurableDogfoodApp>;
+  createRepository?: (db: unknown) => DeliveryRepository;
+  createDurableApp?: (repository: DeliveryRepository, options?: { useRealWorker: boolean }) => Promise<StrictDurableDogfoodApp>;
   runDurableReleaseLifecycle?: (input: {
     app: Pick<INestApplication, 'getHttpServer'>;
-    repository: P0Repository;
+    repository: DeliveryRepository;
     identity: ReturnType<typeof buildDurableReleaseDogfoodIdentity>;
     env: Env;
     deps?: StrictLocalCodexLifecycleDeps;
   }) => Promise<StrictLifecycleResult>;
   reopenDbClient?: (input: { connectionString: string }) => StrictDbClient;
-  createFreshRepository?: (db: unknown) => P0Repository;
-  createFreshDurableApp?: (repository: P0Repository, options?: { useRealWorker: boolean }) => Promise<StrictDurableDogfoodApp>;
+  createFreshRepository?: (db: unknown) => DeliveryRepository;
+  createFreshDurableApp?: (repository: DeliveryRepository, options?: { useRealWorker: boolean }) => Promise<StrictDurableDogfoodApp>;
   verifyDurableReleaseAfterReopen?: (input: {
     app: Pick<INestApplication, 'getHttpServer'>;
-    repository: P0Repository;
+    repository: DeliveryRepository;
     releaseId: string;
     lifecycle: StrictLifecycleResult;
   }) => Promise<void>;
@@ -1245,7 +1245,7 @@ const cleanupStrictLocalCodexWorktree = async (input: {
 
 const runReleaseStrictLocalCodexPackage = async (input: {
   server: Parameters<typeof request>[0];
-  repository: P0Repository;
+  repository: DeliveryRepository;
   planRevisionId: string;
   releaseId: string;
   projectId: string;
@@ -1405,7 +1405,7 @@ const runReleaseStrictLocalCodexPackage = async (input: {
 
 export const runDurableReleaseLifecycle = async (input: {
   app: Pick<INestApplication, 'getHttpServer'>;
-  repository: P0Repository;
+  repository: DeliveryRepository;
   identity: ReturnType<typeof buildDurableReleaseDogfoodIdentity>;
   env?: Env;
   deps?: StrictLocalCodexLifecycleDeps;
@@ -1711,7 +1711,7 @@ export const runDurableReleaseLifecycle = async (input: {
 
 export const verifyDurableReleaseAfterReopen = async (input: {
   app: Pick<INestApplication, 'getHttpServer'>;
-  repository: P0Repository;
+  repository: DeliveryRepository;
   releaseId: string;
   lifecycle: StrictLifecycleResult;
 }): Promise<void> => {
@@ -1914,7 +1914,7 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
     firstClient = (deps.createDbClient ?? ((args) => createDbClient({ connectionString: args.connectionString })))({
       connectionString: strictPlan.databaseUrl,
     });
-    const firstRepository = (deps.createRepository ?? ((db) => createDrizzleP0Repository(db as DbClient['db'])))(firstClient.db);
+    const firstRepository = (deps.createRepository ?? ((db) => createDrizzleDeliveryRepository(db as DbClient['db'])))(firstClient.db);
     const identity = buildDurableReleaseDogfoodIdentity(new Date().toISOString());
     const first = await (deps.createDurableApp ?? createDurableReleaseDogfoodApp)(firstRepository, {
       useRealWorker: shouldAttemptReleaseStrictLocalCodex(input.env),
@@ -1945,7 +1945,7 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
     freshClient = (deps.reopenDbClient ?? deps.createDbClient ?? ((args) => createDbClient({ connectionString: args.connectionString })))({
       connectionString: strictPlan.databaseUrl,
     });
-    const freshRepository = (deps.createFreshRepository ?? deps.createRepository ?? ((db) => createDrizzleP0Repository(db as DbClient['db'])))(
+    const freshRepository = (deps.createFreshRepository ?? deps.createRepository ?? ((db) => createDrizzleDeliveryRepository(db as DbClient['db'])))(
       freshClient.db,
     );
     const fresh = await (deps.createFreshDurableApp ?? deps.createDurableApp ?? createDurableReleaseDogfoodApp)(freshRepository, {

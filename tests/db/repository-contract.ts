@@ -28,7 +28,7 @@ import type {
 } from '@forgeloop/domain';
 
 import type {
-  P0Repository,
+  DeliveryRepository,
   ReleaseExecutionPackageRecord,
   ReleaseWorkItemRecord,
   TraceArtifactRefRecord,
@@ -93,7 +93,7 @@ const requiredTestGate = {
   blocks_release: true,
 };
 
-export async function runP0RepositoryContract(repository: P0Repository): Promise<void> {
+export async function runDeliveryRepositoryContract(repository: DeliveryRepository): Promise<void> {
   const organization: Organization = {
     id: ids.org,
     name: 'ForgeLoop Test Org',
@@ -624,7 +624,7 @@ export async function runP0RepositoryContract(repository: P0Repository): Promise
   await expectAutomationRepositoryContract(repository);
 }
 
-async function expectAutomationRepositoryContract(repository: P0Repository): Promise<void> {
+async function expectAutomationRepositoryContract(repository: DeliveryRepository): Promise<void> {
   const defaultSettings = await repository.resolveAutomationProjectSettings({
     project_id: ids.project,
     repo_id: 'repo-1',

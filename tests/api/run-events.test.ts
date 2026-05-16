@@ -6,9 +6,9 @@ import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository } from '../../packages/db/src';
+import { InMemoryDeliveryRepository } from '../../packages/db/src';
 
 import { seedAppWithRunSession, seedQueuedPackageRun } from '../helpers/p0-runtime-fixtures';
 
@@ -72,11 +72,11 @@ describe('run event API', () => {
       req.on('error', reject);
     });
 
-  const seedAppWithEmptyRunSession = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository; runSessionId: string }> => {
-    const repo = new InMemoryP0Repository();
+  const seedAppWithEmptyRunSession = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository; runSessionId: string }> => {
+    const repo = new InMemoryDeliveryRepository();
     const { runSession } = await seedQueuedPackageRun(repo);
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
       .overrideProvider(RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })

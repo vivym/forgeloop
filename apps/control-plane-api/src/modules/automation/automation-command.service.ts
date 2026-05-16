@@ -12,7 +12,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type { ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
-import type { P0Repository } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 import {
   DomainError,
   isWorkItemAutomationTerminal,
@@ -39,8 +39,8 @@ import {
 import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
 
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
@@ -134,11 +134,11 @@ const stableJson = (value: unknown): string => {
 @Injectable()
 export class AutomationCommandService {
   constructor(
-    @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
+    @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
-    @Optional() @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback = false,
+    @Optional() @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback = false,
   ) {}
 
   async getAutomationCapabilities(projectId: string, repoId?: string): Promise<AutomationProjectSettings> {
@@ -692,7 +692,7 @@ export class AutomationCommandService {
     }
   }
 
-  private async assertAutomationPreconditionForHold(repository: P0Repository, precondition: AutomationPrecondition): Promise<void> {
+  private async assertAutomationPreconditionForHold(repository: DeliveryRepository, precondition: AutomationPrecondition): Promise<void> {
     const settings = await repository.resolveAutomationProjectSettings({
       project_id: precondition.project_id,
       ...(precondition.repo_id === undefined ? {} : { repo_id: precondition.repo_id }),
@@ -703,7 +703,7 @@ export class AutomationCommandService {
   }
 
   private async assertRepoScopeCurrent(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     projectId: string,
     repoId: string | undefined,
   ): Promise<void> {
@@ -739,7 +739,7 @@ export class AutomationCommandService {
   }
 
   private async writePlanDraftForApprovedSpec(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     workItemId: string,
     specRevisionId: string,
     precondition: AutomationPrecondition,
@@ -899,7 +899,7 @@ export class AutomationCommandService {
   }
 
   private async blockCommandIdempotencyAfterError(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: { idempotency_key: string; claim_token: string; error: unknown },
   ): Promise<void> {
     await repository.blockCommandIdempotency({
@@ -911,7 +911,7 @@ export class AutomationCommandService {
   }
 
   private async assertPackageRegenerationApproval(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: {
       planRevisionId: string;
       generationKey: string;
@@ -942,7 +942,7 @@ export class AutomationCommandService {
   }
 
   private async writeExecutionPackageDraftsForPlanRevision(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: {
       planRevisionId: string;
       generationKey: string;
@@ -1101,7 +1101,7 @@ export class AutomationCommandService {
   }
 
   private async packageContextFromRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     planRevisionId: string,
   ): Promise<{
     project: Project;
@@ -1151,7 +1151,7 @@ export class AutomationCommandService {
     });
   }
 
-  private async requireApprovedCurrentSpecFromRepository(repository: P0Repository, workItem: WorkItem): Promise<Spec> {
+  private async requireApprovedCurrentSpecFromRepository(repository: DeliveryRepository, workItem: WorkItem): Promise<Spec> {
     if (workItem.current_spec_id === undefined) {
       throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
     }
@@ -1196,7 +1196,7 @@ export class AutomationCommandService {
   }
 
   private async assertExecutionPackageGraphStillCurrent(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     executionPackage: ExecutionPackage,
   ): Promise<void> {
     const stale = (message: string): never => {
@@ -1285,7 +1285,7 @@ export class AutomationCommandService {
   }
 
   private async enqueueRunWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     executionPackage: ExecutionPackage,
     input: EnqueueRunInput,
   ): Promise<RunAcceptedResponse> {
@@ -1412,7 +1412,7 @@ export class AutomationCommandService {
   }
 
   private async eventWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     objectType: string,
     objectId: string,
     eventType: string,

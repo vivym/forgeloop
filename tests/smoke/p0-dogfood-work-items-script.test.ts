@@ -8,7 +8,7 @@ import type { ArtifactKind } from '@forgeloop/contracts';
 import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem } from '@forgeloop/domain';
 import { describe, expect, it, vi } from 'vitest';
 
-import { InMemoryP0Repository } from '../../packages/db/src';
+import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import * as dogfoodWorkItemsScript from '../../scripts/p0-dogfood-work-items';
 
 const execFile = promisify(execFileCallback);
@@ -360,7 +360,7 @@ describe('p0 dogfood work items script', () => {
     const candidate = (dogfoodWorkItemsScript as Record<string, unknown>).loadCompletedDogfoodRecordsFromRepository;
     expect(candidate).toEqual(expect.any(Function));
     const loadCompletedDogfoodRecordsFromRepository = candidate as (
-      repository: InMemoryP0Repository,
+      repository: InMemoryDeliveryRepository,
       workItemId: string,
     ) => Promise<{
       workItem: WorkItem;
@@ -368,7 +368,7 @@ describe('p0 dogfood work items script', () => {
       runSessions: RunSession[];
       reviewPackets: ReviewPacket[];
     }>;
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const bundle = qualifyingBundle(1);
     await repository.saveWorkItem(bundle.item);
     await repository.saveExecutionPackage(bundle.pkg);

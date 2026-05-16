@@ -12,9 +12,9 @@ import {
   actorTimestampHeaderName,
   trustedActorHeaderSignature,
 } from '../../apps/control-plane-api/src/p0/actor-context';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import { signAutomationRequest } from '../../packages/automation/src/index';
 import {
   automationPreconditionFingerprint,
@@ -105,7 +105,7 @@ type AutomationPlanDraftService = P0Service & {
   }): Promise<{ status: 'accepted'; run_session_id: string; execution_package_id: string }>;
 };
 
-class OverlapDetectingRepository extends InMemoryP0Repository {
+class OverlapDetectingRepository extends InMemoryDeliveryRepository {
   delayActiveRunChecks = false;
   activeRunChecksInFlight = 0;
   maxActiveRunChecksInFlight = 0;
@@ -125,15 +125,15 @@ class OverlapDetectingRepository extends InMemoryP0Repository {
 }
 
 const createTestApp = async (
-  repositoryOverride?: P0Repository,
+  repositoryOverride?: DeliveryRepository,
   runWorkerOverride: { kick: () => void; drainOnce: () => Promise<void> } = {
     kick: () => undefined,
     drainOnce: async () => undefined,
   },
-): Promise<{ app: INestApplication; repository: P0Repository; service: P0Service }> => {
+): Promise<{ app: INestApplication; repository: DeliveryRepository; service: P0Service }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
-    .useValue(repositoryOverride ?? new InMemoryP0Repository())
+    .overrideProvider(DELIVERY_REPOSITORY)
+    .useValue(repositoryOverride ?? new InMemoryDeliveryRepository())
     .overrideProvider(RUN_WORKER)
     .useValue(runWorkerOverride)
     .compile();
@@ -141,7 +141,7 @@ const createTestApp = async (
   await app.init();
   return {
     app,
-    repository: app.get(P0_REPOSITORY) as P0Repository,
+    repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository,
     service: app.get(P0Service),
   };
 };
@@ -380,7 +380,7 @@ const manualPathActionBody = (
 
 const seedClaimedPlanDraftAction = async (
   app: INestApplication,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   overrides: Record<string, unknown> = {},
   claimOverrides: Record<string, unknown> = {},
 ): Promise<ClaimedPlanDraftActionContext> => {
@@ -435,7 +435,7 @@ const seedClaimedPlanDraftAction = async (
 
 const seedClaimedPackageDraftAction = async (
   app: INestApplication,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   overrides: Record<string, unknown> = {},
 ): Promise<ClaimedPackageDraftActionContext> => {
   const ctx = await seedApprovedPlanThroughApi(app);
@@ -487,7 +487,7 @@ const seedClaimedPackageDraftAction = async (
 
 const seedClaimedManualPathAction = async (
   app: INestApplication,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   overrides: Record<string, unknown> = {},
 ): Promise<ClaimedManualPathActionContext> => {
   const ctx = await seedProjectRepoWorkItem(app);
@@ -547,7 +547,7 @@ const seedClaimedManualPathAction = async (
 
 const expectNoPlanDraftCommandWrites = async (
   service: P0Service,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   ctx: ClaimedPlanDraftActionContext,
 ): Promise<void> => {
   const workItem = await repository.getWorkItem(ctx.workItem.id);
@@ -566,7 +566,7 @@ const expectNoPackageDraftCommandWrites = async (service: P0Service, ctx: Claime
 };
 
 const expectNoManualPathCommandWrites = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   ctx: ClaimedManualPathActionContext,
 ): Promise<void> => {
   await expect(

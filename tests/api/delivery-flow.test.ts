@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository, type TraceEventRecord } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import type { RunWorker } from '../../packages/run-worker/src';
 
@@ -158,8 +158,8 @@ const createManualPackage = async (
     .body;
 };
 
-const repositoryFor = (app: INestApplication): InMemoryP0Repository =>
-  (app.get(P0Service) as unknown as { repository: InMemoryP0Repository }).repository;
+const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
+  (app.get(P0Service) as unknown as { repository: InMemoryDeliveryRepository }).repository;
 
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
   const repository = repositoryFor(app);
@@ -244,7 +244,7 @@ const waitForRuntimeCreateProject = async (
   throw lastError instanceof Error ? lastError : new Error('Timed out waiting for runtime API');
 };
 
-class SequencingRepository extends InMemoryP0Repository {
+class SequencingRepository extends InMemoryDeliveryRepository {
   readonly operations: string[] = [];
 
   override async saveRunSession(runSession: RunSession): Promise<void> {
@@ -260,7 +260,7 @@ class SequencingRepository extends InMemoryP0Repository {
   }
 }
 
-class FailingTraceRepository extends InMemoryP0Repository {
+class FailingTraceRepository extends InMemoryDeliveryRepository {
   override async saveTraceEvent(_event: TraceEventRecord): Promise<void> {
     throw new Error('trace store unavailable');
   }
@@ -568,7 +568,7 @@ describe('P0 control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
     const service = app.get(P0Service);
-    const repository = (service as unknown as { repository: InMemoryP0Repository }).repository;
+    const repository = (service as unknown as { repository: InMemoryDeliveryRepository }).repository;
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const run = (

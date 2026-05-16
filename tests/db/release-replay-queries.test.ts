@@ -13,7 +13,7 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
-import { getObjectReplayTimeline, InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { getObjectReplayTimeline, InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const now = '2026-05-11T00:00:00.000Z';
 const later = '2026-05-11T00:01:00.000Z';
@@ -296,7 +296,7 @@ const statusHistory = (object_type: string, object_id: string, id = `status-${ob
   created_at: later,
 });
 
-const seedReleaseReplay = async (repo: P0Repository): Promise<void> => {
+const seedReleaseReplay = async (repo: DeliveryRepository): Promise<void> => {
   await repo.saveProject(project());
   await repo.saveWorkItem(workItem());
   await repo.saveExecutionPackage(executionPackage());
@@ -366,7 +366,7 @@ const seedReleaseReplay = async (repo: P0Repository): Promise<void> => {
 
 describe('getObjectReplayTimeline release support', () => {
   it('returns release and linked object replay entries through the public serializer', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReleaseReplay(repo);
 
     const timeline = await getObjectReplayTimeline(repo, 'release', 'release-1');
@@ -459,7 +459,7 @@ describe('getObjectReplayTimeline release support', () => {
   });
 
   it('returns undefined for a missing release', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
 
     await expect(getObjectReplayTimeline(repo, 'release', 'missing-release')).resolves.toBeUndefined();
   });

@@ -30,7 +30,7 @@ import {
   type WorkItem,
 } from '@forgeloop/domain';
 
-import type { P0Repository } from '../repositories/p0-repository';
+import type { DeliveryRepository } from '../repositories/delivery-repository';
 import {
   serializePublicArtifactRef,
   serializePublicDecision,
@@ -61,7 +61,7 @@ const omitArtifactId = (evidence: ReleaseEvidence): ReleaseEvidence => {
 };
 
 const resolveWorkItemLinks = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   release: Release,
 ): Promise<ReleaseResolvedWorkItemLink[]> =>
   Promise.all(
@@ -84,7 +84,7 @@ const resolveWorkItemLinks = async (
   );
 
 const resolveExecutionPackageLinks = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   release: Release,
 ): Promise<ReleaseResolvedExecutionPackageLink[]> =>
   Promise.all(
@@ -122,7 +122,7 @@ const resolvedExecutionPackages = (links: readonly ReleaseResolvedExecutionPacka
   );
 
 const latestRunSessionForPackage = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   release: Release,
   executionPackage: ExecutionPackage,
 ): Promise<{ latest: RunSession | undefined; all: RunSession[] }> => {
@@ -137,7 +137,7 @@ const latestRunSessionForPackage = async (
 };
 
 const artifactForEvidence = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   evidence: ReleaseEvidence,
 ): Promise<Artifact | undefined> => {
   const artifacts = await repository.listArtifactsForObject('release_evidence', evidence.id);
@@ -382,7 +382,7 @@ const productNextActions = (release: Release, blockers: readonly { overrideable:
 };
 
 export async function getReleaseCockpit(
-  repository: P0Repository,
+  repository: DeliveryRepository,
   releaseId: string,
 ): Promise<ReleaseCockpitResponse | undefined> {
   const release = await repository.getRelease(releaseId);

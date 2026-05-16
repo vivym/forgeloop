@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
@@ -40,14 +40,14 @@ describe('query module', () => {
   });
 
   it('allows AppModule to override core query providers without QueryModule owning P0Module wiring', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
       .compile();
 
     try {
-      expect(moduleRef.get(P0_REPOSITORY)).toBe(repository);
+      expect(moduleRef.get(DELIVERY_REPOSITORY)).toBe(repository);
     } finally {
       await moduleRef.close();
     }
@@ -56,15 +56,15 @@ describe('query module', () => {
   it('does not re-export shared core tokens from the P0 service boundary', async () => {
     const p0ServiceModule = await import('../../apps/control-plane-api/src/p0/p0.service');
 
-    expect(p0ServiceModule).not.toHaveProperty('P0_REPOSITORY');
+    expect(p0ServiceModule).not.toHaveProperty('DELIVERY_REPOSITORY');
     expect(p0ServiceModule).not.toHaveProperty('RUN_DURABILITY_MODE');
-    expect(p0ServiceModule).not.toHaveProperty('P0_DEMO_ACTOR_ID_FALLBACK');
+    expect(p0ServiceModule).not.toHaveProperty('DELIVERY_DEMO_ACTOR_ID_FALLBACK');
   });
 
   const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
       .overrideProvider(RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined });

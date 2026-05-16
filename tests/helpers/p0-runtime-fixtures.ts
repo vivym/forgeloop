@@ -20,12 +20,12 @@ import { transitionExecutionPackage, transitionRunSession } from '../../packages
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
@@ -310,7 +310,7 @@ const runSpecFor = (executionPackage: ExecutionPackage, runSessionId: string): R
 });
 
 const saveBaseRecords = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   executionPackage: ExecutionPackage,
   records: ReturnType<typeof baseRecords>,
 ): Promise<void> => {
@@ -325,7 +325,7 @@ const saveBaseRecords = async (
 };
 
 export const seedQueuedPackageRun = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
 ): Promise<{ executionPackage: ExecutionPackage; runSession: RunSession }> => {
   const records = baseRecords();
   const runSessionId = 'run-session-1';
@@ -350,7 +350,7 @@ export const seedQueuedPackageRun = async (
 };
 
 export const seedReadyStartedPackageRun = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
 ): Promise<{ executionPackage: ExecutionPackage; runSession: RunSession }> => {
   const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
   const startedAt = '2026-05-05T00:00:30.000Z';
@@ -376,7 +376,7 @@ export const seedReadyStartedPackageRun = async (
 };
 
 export const seedRunningRunWithCommand = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   command: Partial<RunCommand>,
 ): Promise<{ runSession: RunSession; command: RunCommand }> => {
   const { runSession } = await seedReadyStartedPackageRun(repository);
@@ -504,7 +504,7 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
 
 export const seedAppWithRunSession = async (
   options: { durabilityMode?: 'durable' | 'volatile_demo'; allowDemoActorIdFallback?: boolean } = {},
-): Promise<{ app: INestApplication; repo: InMemoryP0Repository; runSessionId: string }> => {
+): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository; runSessionId: string }> => {
   let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined });
@@ -512,14 +512,14 @@ export const seedAppWithRunSession = async (
     moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);
   }
   if (options.allowDemoActorIdFallback !== undefined) {
-    moduleBuilder = moduleBuilder.overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK).useValue(options.allowDemoActorIdFallback);
+    moduleBuilder = moduleBuilder.overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK).useValue(options.allowDemoActorIdFallback);
   }
   const moduleRef = await moduleBuilder.compile();
   const app = moduleRef.createNestApplication();
   await app.init();
 
   const executionPackage = await seedReadyExecutionPackageThroughApi(app);
-  const repo = app.get(P0_REPOSITORY) as InMemoryP0Repository;
+  const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
 
   if (options.durabilityMode === 'durable' && options.allowDemoActorIdFallback === false) {
     const runSessionId = 'run-session-seeded';
@@ -580,10 +580,10 @@ export const seedAppWithRunSession = async (
   return { app, repo, runSessionId: run.run_session_id };
 };
 
-const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository }> => {
-  const repo = new InMemoryP0Repository();
+const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {
+  const repo = new InMemoryDeliveryRepository();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
+    .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repo)
     .overrideProvider(RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
@@ -648,7 +648,7 @@ const reviewPacketForEvidence = (
 
 export const seedEvidenceChainBase = async (): Promise<{
   app: INestApplication;
-  repo: InMemoryP0Repository;
+  repo: InMemoryDeliveryRepository;
   records: ReturnType<typeof baseRecords>;
   executionPackage: ExecutionPackage;
 }> => {
@@ -661,7 +661,7 @@ export const seedEvidenceChainBase = async (): Promise<{
 
 export const seedEvidenceChainScenario = async (): Promise<{
   app: INestApplication;
-  repo: InMemoryP0Repository;
+  repo: InMemoryDeliveryRepository;
   workItemId: string;
   executionPackageId: string;
   currentReviewPacketId: string;

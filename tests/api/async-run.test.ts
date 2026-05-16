@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_DEMO_ACTOR_ID_FALLBACK, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_DEMO_ACTOR_ID_FALLBACK, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
@@ -44,7 +44,7 @@ describe('async run API', () => {
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
       .useValue(false)
       .compile();
     app = moduleRef.createNestApplication();

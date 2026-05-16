@@ -25,12 +25,12 @@ import { transitionExecutionPackage, transitionRunSession } from '../packages/do
 
 import { AppModule } from '../apps/control-plane-api/src/app.module';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../apps/control-plane-api/src/p0/p0.service';
-import { createDbClient, createDrizzleP0Repository, InMemoryP0Repository, type DbClient, type P0Repository } from '../packages/db/src';
+import { createDbClient, createDrizzleDeliveryRepository, InMemoryDeliveryRepository, type DbClient, type DeliveryRepository } from '../packages/db/src';
 import type { CodexSessionDriver } from '../packages/executor/src';
 import { FakeCodexSessionDriver, type FakeCodexScriptItem, RunWorker } from '../packages/run-worker/src';
 
@@ -516,15 +516,15 @@ const waitForRunStatus = async (
 };
 
 const createApiApp = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   options: { durabilityMode?: DogfoodDurabilityMode } = {},
 ): Promise<{ app: INestApplication; apiUrl: string }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
+    .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue(options.durabilityMode ?? 'volatile_demo')
-    .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
     .useValue((options.durabilityMode ?? 'volatile_demo') === 'volatile_demo')
     .overrideProvider(RUN_WORKER)
     .useValue(noopRunWorker)
@@ -579,7 +579,7 @@ const dogfoodSelfReview = async (input: SelfReviewInput): Promise<SelfReviewResu
   follow_up_questions: [],
 });
 
-const createWorker = (repository: P0Repository, driver: CodexSessionDriver, workerId: string, now = makeClock('2026-05-08T00:00:00.000Z')) =>
+const createWorker = (repository: DeliveryRepository, driver: CodexSessionDriver, workerId: string, now = makeClock('2026-05-08T00:00:00.000Z')) =>
   new RunWorker({
     repository,
     workerId,
@@ -788,7 +788,7 @@ const runControlCommand = async (
   return stringField(response, 'command_id');
 };
 
-const reviewPacketIdForRun = async (repository: P0Repository, runSessionId: string): Promise<string> => {
+const reviewPacketIdForRun = async (repository: DeliveryRepository, runSessionId: string): Promise<string> => {
   const runSession = await repository.getRunSession(runSessionId);
   if (runSession === undefined) {
     throw new Error(`Missing RunSession ${runSessionId}`);
@@ -804,7 +804,7 @@ const reviewPacketIdForRun = async (repository: P0Repository, runSessionId: stri
 
 const assertFinalEvidence = async (
   apiUrl: string,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   runSessionId: string,
   mode: DogfoodDurabilityMode,
   evidence?: PublicApiAuthEvidence,
@@ -832,7 +832,7 @@ const assertFinalEvidence = async (
   return reviewPacketId;
 };
 
-const assertRepositoryFinalEvidence = async (repository: P0Repository, runSessionId: string): Promise<void> => {
+const assertRepositoryFinalEvidence = async (repository: DeliveryRepository, runSessionId: string): Promise<void> => {
   const runSession = await repository.getRunSession(runSessionId);
   if (runSession === undefined) {
     throw new Error(`Missing durable RunSession ${runSessionId}`);
@@ -859,7 +859,7 @@ const assertRepositoryFinalEvidence = async (repository: P0Repository, runSessio
 
 const dogfoodLiveInputRun = async (
   apiUrl: string,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   projectId: string,
   mode: DogfoodDurabilityMode,
   evidence: PublicApiAuthEvidence,
@@ -958,7 +958,7 @@ const dogfoodLiveInputRun = async (
 const dogfoodRestartRun = async (
   app: INestApplication,
   apiUrl: string,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   projectId: string,
   mode: DogfoodDurabilityMode,
   evidence: PublicApiAuthEvidence,
@@ -1257,7 +1257,7 @@ const durableRecordsFor = (prefix: string): {
   return { project, projectRepo, workItem, spec, specRevision, plan, planRevision, executionPackage, runSession, command };
 };
 
-const seedDurableRecoverableRun = async (repository: P0Repository, prefix: string): Promise<{ runSessionId: string; queuedCursor: string }> => {
+const seedDurableRecoverableRun = async (repository: DeliveryRepository, prefix: string): Promise<{ runSessionId: string; queuedCursor: string }> => {
   const records = durableRecordsFor(prefix);
   await repository.saveProject(records.project);
   await repository.saveProjectRepo(records.projectRepo);
@@ -1300,9 +1300,9 @@ const seedDurableRecoverableRun = async (repository: P0Repository, prefix: strin
   return { runSessionId: records.runSession.id, queuedCursor: queued.cursor };
 };
 
-const createDurableRepository = (connectionString: string): { client: DbClient; repository: P0Repository } => {
+const createDurableRepository = (connectionString: string): { client: DbClient; repository: DeliveryRepository } => {
   const client = createDbClient({ connectionString });
-  return { client, repository: createDrizzleP0Repository(client.db) };
+  return { client, repository: createDrizzleDeliveryRepository(client.db) };
 };
 
 const runDbPushCheck = async (): Promise<VerificationCheck> => {
@@ -1525,7 +1525,7 @@ const main = async (): Promise<number> => {
   if (durableRepository !== undefined) {
     durableClient = durableRepository.client;
   }
-  const repository = durableRepository?.repository ?? new InMemoryP0Repository();
+  const repository = durableRepository?.repository ?? new InMemoryDeliveryRepository();
   let app: INestApplication | undefined;
   let apiUrl: string | undefined;
   const results: DogfoodResult[] = [];

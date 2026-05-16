@@ -4,7 +4,7 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import { RUN_DURABILITY_MODE, type RunDurabilityMode } from './control-plane-tokens';
 
-const uuidBackedP0IdPrefixes = new Set([
+const uuidBackedDeliveryIdPrefixes = new Set([
   'project',
   'work-item',
   'spec',
@@ -27,7 +27,7 @@ export class ControlPlaneRuntimeService {
 
   id(prefix: string): string {
     this.idCounter += 1;
-    if (this.durabilityMode === 'durable' && uuidBackedP0IdPrefixes.has(prefix)) {
+    if (this.durabilityMode === 'durable' && uuidBackedDeliveryIdPrefixes.has(prefix)) {
       return randomUUID();
     }
     if (this.durabilityMode === 'durable') {

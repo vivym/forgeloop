@@ -1,7 +1,7 @@
 import type { PublicReplayEntry } from '@forgeloop/contracts';
 import { selectReleaseReviewPacket, type Artifact, type ExecutionPackage, type ReleaseEvidence } from '@forgeloop/domain';
 
-import type { P0Repository } from '../repositories/p0-repository';
+import type { DeliveryRepository } from '../repositories/delivery-repository';
 import { serializePublicArtifactRef, serializePublicReplayEntry } from './public-evidence-serialization';
 
 export type TimelineEntry = PublicReplayEntry;
@@ -57,7 +57,7 @@ const observationLinksFor = (evidence: ReleaseEvidence): ObservationLink[] => {
 };
 
 const latestRunSessionForPackage = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   releaseCurrentRunSessionIds: readonly string[] | undefined,
   executionPackage: ExecutionPackage,
 ) => {
@@ -72,7 +72,7 @@ const latestRunSessionForPackage = async (
 };
 
 const artifactForEvidence = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   evidence: ReleaseEvidence,
 ): Promise<Artifact | undefined> => {
   const artifacts = await repository.listArtifactsForObject('release_evidence', evidence.id);
@@ -127,7 +127,7 @@ const filterEvidencePublicRefs = (
 };
 
 const appendSerializedReplayEntries = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   entries: PublicReplayEntry[],
   objectRefs: readonly ObjectRef[],
   visibleRefKeys?: Set<string>,
@@ -195,7 +195,7 @@ const appendSerializedReplayEntries = async (
 };
 
 const getWorkItemReplayTimeline = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   objectId: string,
 ): Promise<PublicReplayEntry[] | undefined> => {
   const workItem = await repository.getWorkItem(objectId);
@@ -235,7 +235,7 @@ const getWorkItemReplayTimeline = async (
 };
 
 const getReleaseReplayTimeline = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   objectId: string,
 ): Promise<PublicReplayEntry[] | undefined> => {
   const release = await repository.getRelease(objectId);
@@ -401,7 +401,7 @@ const getReleaseReplayTimeline = async (
 };
 
 export async function getObjectReplayTimeline(
-  repository: P0Repository,
+  repository: DeliveryRepository,
   objectType: string,
   objectId: string,
 ): Promise<PublicReplayEntry[] | undefined> {

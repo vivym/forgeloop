@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import type { P0Repository } from '../../packages/db/src';
+import type { DeliveryRepository } from '../../packages/db/src';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
@@ -160,7 +160,7 @@ const waitForTerminalRunSession = async (app: INestApplication, runSessionId: st
   throw new Error(`Timed out waiting for terminal RunSession ${runSessionId}`);
 };
 
-const repositoryFor = (app: INestApplication): P0Repository => app.get(P0_REPOSITORY) as P0Repository;
+const repositoryFor = (app: INestApplication): DeliveryRepository => app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
 describe('control-plane local_codex routing', () => {
   let app: INestApplication;
@@ -174,8 +174,8 @@ describe('control-plane local_codex routing', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(RUN_WORKER)
       .useFactory({
-        inject: [P0_REPOSITORY],
-        factory: (repository: P0Repository) =>
+        inject: [DELIVERY_REPOSITORY],
+        factory: (repository: DeliveryRepository) =>
           new RunWorker({
             repository,
             workerId: 'local-codex-routing-test-worker',

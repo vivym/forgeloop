@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DomainError, type RunCommand, type RunEvent, type RunSession } from '@forgeloop/domain';
 
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const runtimeMetadata = {
   durability_mode: 'durable',
@@ -11,7 +11,7 @@ const runtimeMetadata = {
 
 const now = '2026-05-05T00:00:00.000Z';
 
-const createRepository = (): P0Repository => new InMemoryP0Repository();
+const createRepository = (): DeliveryRepository => new InMemoryDeliveryRepository();
 
 const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
   id: overrides.id ?? 'run-session-1',

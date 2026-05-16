@@ -544,7 +544,7 @@ The projection contract for this scope is the automation runtime snapshot DTO. I
 
 The implementation landing is explicit:
 
-- add `RuntimeSnapshotBlockerRow` and `RuntimeSnapshotTargetRow.blockers?: RuntimeSnapshotBlockerRow[]` in `packages/db/src/repositories/p0-repository.ts`; each blocker row stores `blocked_reason_code`, `blocked_summary`, `retryable`, and optional `policy_digest`, `policy_snapshot_version`, and `diagnostic_ref`, while the parent target row stores target identity fields;
+- add `RuntimeSnapshotBlockerRow` and `RuntimeSnapshotTargetRow.blockers?: RuntimeSnapshotBlockerRow[]` in `packages/db/src/repositories/delivery-repository.ts`; each blocker row stores `blocked_reason_code`, `blocked_summary`, `retryable`, and optional `policy_digest`, `policy_snapshot_version`, and `diagnostic_ref`, while the parent target row stores target identity fields;
 - add `AutomationRuntimeBlockerDto` in `apps/control-plane-api/src/modules/automation/automation.dto.ts` and map blocker rows to DTOs;
 - update `RuntimeSnapshotService` and `toRuntimeSnapshotTargetDto` to compute and sort blockers, then fill singular `blocked_reason_code` and `blocked_summary` from the first blocker for compatibility;
 - add `AutomationRuntimeBlocker` and `RuntimeSnapshotTarget.blockers?: AutomationRuntimeBlocker[]` to `packages/automation/src/types.ts`, and update `packages/automation/src/http-client.ts` wire parsing to preserve `blockers[]`; singular `blockedReasonCode` and `blockedSummary` remain compatibility aliases only;

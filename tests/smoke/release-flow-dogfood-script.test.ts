@@ -2,14 +2,14 @@ import { createServer } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { InMemoryP0Repository } from '../../packages/db/src';
+import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { deriveReleaseBlockers } from '../../packages/domain/src';
 import type { Decision, ExecutionPackage, Release, ReleaseEvidence, ReviewPacket, RunSession, WorkItem } from '../../packages/domain/src';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
@@ -37,15 +37,15 @@ import {
 import { requiredReleaseFlowReportMarkers as wrapperRequiredReleaseFlowReportMarkers } from '../../scripts/release-flow-dogfood';
 
 describe('release flow dogfood script helpers', () => {
-  const createDurableTestApp = async (repository: InMemoryP0Repository): Promise<INestApplication> => {
+  const createDurableTestApp = async (repository: InMemoryDeliveryRepository): Promise<INestApplication> => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
       .overrideProvider(RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
       .useValue(false)
       .compile();
     const app = moduleRef.createNestApplication({ logger: false });
@@ -280,7 +280,7 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: async () => undefined } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: async () => undefined } }),
         runDurableReleaseLifecycle: async ({ env, deps }) => {
           expect(env.FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD).toBeUndefined();
@@ -292,7 +292,7 @@ describe('release flow dogfood script helpers', () => {
           };
         },
         reopenDbClient: () => ({ db: {}, pool: { end: async () => undefined } }),
-        createFreshRepository: () => new InMemoryP0Repository(),
+        createFreshRepository: () => new InMemoryDeliveryRepository(),
         createFreshDurableApp: async () => ({ app: { close: async () => undefined } }),
         verifyDurableReleaseAfterReopen: async () => undefined,
         preflightStrictLocalCodex,
@@ -307,7 +307,7 @@ describe('release flow dogfood script helpers', () => {
   });
 
   it('does not require git when real strict local Codex is disabled', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const app = await createDurableTestApp(repository);
     const runCommand = vi.fn(async () => {
       throw new Error('git should not run when strict local Codex is disabled');
@@ -332,7 +332,7 @@ describe('release flow dogfood script helpers', () => {
   });
 
   it('kicks the real strict local Codex worker path before polling terminal evidence', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const app = await createDurableTestApp(repository);
     const realWorkerDrain = vi.fn<() => Promise<void>>(() => Promise.resolve());
     const cleanupActions: Array<{ label: string; run: () => Promise<void> }> = [];
@@ -464,7 +464,7 @@ describe('release flow dogfood script helpers', () => {
   });
 
   it('registers strict local Codex worktree cleanup before failed terminal runs throw', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const app = await createDurableTestApp(repository);
     let failedRunId = '';
     const realWorkerDrain = vi.fn(async () => {
@@ -572,11 +572,11 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => ({ releaseId: 'release-1', markers: [] }),
         reopenDbClient: () => ({ db: {}, pool: { end: closeFreshPool } }),
-        createFreshRepository: () => new InMemoryP0Repository(),
+        createFreshRepository: () => new InMemoryDeliveryRepository(),
         createFreshDurableApp: async () => ({ app: { close: closeFreshApp } }),
         verifyDurableReleaseAfterReopen,
         dropDatabase: async () => undefined,
@@ -696,7 +696,7 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => {
           throw new Error('lifecycle failed with /Users/viv/private/path');
@@ -739,7 +739,7 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => {
           throw new Error('lifecycle failed before reopen');
@@ -778,7 +778,7 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => {
           throw new Error('lifecycle failed before first app close');
@@ -821,7 +821,7 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async ({ deps }) => {
           deps?.cleanupActions?.push(
@@ -868,14 +868,14 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => ({
           releaseId: 'release-1',
           markers: [{ marker: 'P0 delivery path', status: 'PASSED', details: ['safe lifecycle marker'] }],
         }),
         reopenDbClient: () => ({ db: {}, pool: { end: closeFreshPool } }),
-        createFreshRepository: () => new InMemoryP0Repository(),
+        createFreshRepository: () => new InMemoryDeliveryRepository(),
         createFreshDurableApp: async () => ({ app: { close: closeFreshApp } }),
         verifyDurableReleaseAfterReopen: async () => undefined,
         dropDatabase,
@@ -912,7 +912,7 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => ({
           releaseId: 'release-1',
@@ -922,7 +922,7 @@ describe('release flow dogfood script helpers', () => {
           ],
         }),
         reopenDbClient: () => ({ db: {}, pool: { end: closeFreshPool } }),
-        createFreshRepository: () => new InMemoryP0Repository(),
+        createFreshRepository: () => new InMemoryDeliveryRepository(),
         createFreshDurableApp: async () => ({ app: { close: closeFreshApp } }),
         verifyDurableReleaseAfterReopen: async () => {
           throw new Error('reopen failed with /tmp/private-artifact');
@@ -967,7 +967,7 @@ describe('release flow dogfood script helpers', () => {
         pushSchema: async () => undefined,
         resetDatabase: async () => undefined,
         createDbClient: () => ({ db: {}, pool: { end: closeFirstPool } }),
-        createRepository: () => new InMemoryP0Repository(),
+        createRepository: () => new InMemoryDeliveryRepository(),
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => ({
           releaseId: 'release-1',
@@ -990,7 +990,7 @@ describe('release flow dogfood script helpers', () => {
           },
         }),
         reopenDbClient: () => ({ db: {}, pool: { end: closeFreshPool } }),
-        createFreshRepository: () => new InMemoryP0Repository(),
+        createFreshRepository: () => new InMemoryDeliveryRepository(),
         createFreshDurableApp: async () => ({ app: { close: closeFreshApp } }),
         verifyDurableReleaseAfterReopen: async () => {
           throw new Error('strict local Codex public cockpit projection missing supports/generated_by links');
@@ -1017,7 +1017,7 @@ describe('release flow dogfood script helpers', () => {
   });
 
   it('creates observation evidence before closing the strict durable release lifecycle', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const app = await createDurableTestApp(repository);
     try {
       const lifecycle = await runDurableReleaseLifecycle({
@@ -1123,7 +1123,7 @@ describe('release flow dogfood script helpers', () => {
       decision?: Decision | undefined;
     } = {},
   ) => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const workItem: WorkItem = {
       id: 'work-item-reopen',
       project_id: 'project-reopen',
@@ -1486,7 +1486,7 @@ describe('release flow dogfood script helpers', () => {
   });
 
   it('verifies lifecycle-created release closure rows through a fresh app boundary', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const firstApp = await createDurableTestApp(repository);
     let lifecycle: Awaited<ReturnType<typeof runDurableReleaseLifecycle>>;
     try {
@@ -1560,7 +1560,7 @@ describe('release flow dogfood script helpers', () => {
   });
 
   it('seeds durable release-ready package evidence without release evidence blockers', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const workItem: WorkItem = {
       id: 'work-item-1',
       project_id: 'project-1',

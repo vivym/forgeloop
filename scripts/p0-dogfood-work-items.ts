@@ -10,8 +10,8 @@ import request from 'supertest';
 import type { Test as SupertestTest } from 'supertest';
 
 import { AppModule } from '../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY, RUN_DURABILITY_MODE } from '../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import type { P0Repository } from '../packages/db/src';
+import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE } from '../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import type { DeliveryRepository } from '../packages/db/src';
 import {
   deriveRequiredArtifactPresence,
   deriveWorkItemCompletion,
@@ -447,7 +447,7 @@ const createApp = async (): Promise<INestApplication> => {
   return app;
 };
 
-type ReviewPacketRepository = Pick<P0Repository, 'getRunSession' | 'listReviewPacketsForPackage'>;
+type ReviewPacketRepository = Pick<DeliveryRepository, 'getRunSession' | 'listReviewPacketsForPackage'>;
 
 type ReviewPacketWaitOptions = {
   timeoutMs?: number;
@@ -487,13 +487,13 @@ export const waitForReviewPacketFromRepository = async (
 };
 
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
-  const repository = app.get(P0_REPOSITORY) as P0Repository;
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
   return waitForReviewPacketFromRepository(repository, runSessionId);
 };
 
 const expectSucceededRun = async (app: INestApplication, runSessionId: string): Promise<RunSession> => {
-  const repository = app.get(P0_REPOSITORY) as P0Repository;
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const runSession = await repository.getRunSession(runSessionId);
   if (runSession === undefined) {
     throw new Error(`Missing RunSession ${runSessionId}`);
@@ -686,7 +686,7 @@ const approveReviewPacket = async (
 };
 
 export const loadCompletedDogfoodRecordsFromRepository = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   workItemId: string,
 ): Promise<CompletedDogfoodItem['records']> => {
   const workItem = await repository.getWorkItem(workItemId);
@@ -788,7 +788,7 @@ const completeDogfoodItem = async (
   if (cockpit.work_item === undefined) {
     throw new Error(`Cockpit response for ${item.key} is missing Work Item record`);
   }
-  const records = await loadCompletedDogfoodRecordsFromRepository(app.get(P0_REPOSITORY) as P0Repository, workItemId);
+  const records = await loadCompletedDogfoodRecordsFromRepository(app.get(DELIVERY_REPOSITORY) as DeliveryRepository, workItemId);
 
   return {
     result: {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryP0Repository } from '../../packages/db/src';
+import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import type { RunCommand, RunEvent } from '../../packages/domain/src';
 
 import { applyPendingRunCommands, FakeCodexSessionDriver } from '../../packages/run-worker/src';
@@ -15,7 +15,7 @@ const command = (overrides: Partial<RunCommand> = {}): Partial<RunCommand> => ({
   ...overrides,
 });
 
-const acquireLease = async (repository: InMemoryP0Repository, runSessionId: string) => {
+const acquireLease = async (repository: InMemoryDeliveryRepository, runSessionId: string) => {
   await repository.claimRunWorkerLease({
     run_session_id: runSessionId,
     worker_id: lease.workerId,
@@ -25,7 +25,7 @@ const acquireLease = async (repository: InMemoryP0Repository, runSessionId: stri
   });
 };
 
-class FailingDeliveryEventRepository extends InMemoryP0Repository {
+class FailingDeliveryEventRepository extends InMemoryDeliveryRepository {
   override async appendWorkerRunEvent(
     event: Omit<RunEvent, 'sequence' | 'cursor'>,
     leaseInput: { workerId: string; leaseToken: string },
@@ -40,7 +40,7 @@ class FailingDeliveryEventRepository extends InMemoryP0Repository {
 
 describe('command inbox', () => {
   it('applies pending input exactly once to the active turn', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedRunningRunWithCommand(repository, command());
     await acquireLease(repository, runSession.id);
     const driver = new FakeCodexSessionDriver({
@@ -89,7 +89,7 @@ describe('command inbox', () => {
   });
 
   it('emits public delivery event with fallback continuity after driver acknowledgement', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedRunningRunWithCommand(repository, command());
     await acquireLease(repository, runSession.id);
     const driver = new FakeCodexSessionDriver({
@@ -142,7 +142,7 @@ describe('command inbox', () => {
   });
 
   it('emits fallback continuity from exec fallback driver acknowledgement without sensitive fields', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedRunningRunWithCommand(repository, command());
     await acquireLease(repository, runSession.id);
     const driver = new FakeCodexSessionDriver({
@@ -192,7 +192,7 @@ describe('command inbox', () => {
   });
 
   it('emits thread continuation from app server acknowledgement without raw response data', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedRunningRunWithCommand(repository, command());
     await acquireLease(repository, runSession.id);
     const driver = new FakeCodexSessionDriver({
@@ -239,7 +239,7 @@ describe('command inbox', () => {
   });
 
   it('omits continuity details for active turn steering acknowledgements', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedRunningRunWithCommand(repository, command());
     await acquireLease(repository, runSession.id);
     const driver = new FakeCodexSessionDriver({
@@ -284,7 +284,7 @@ describe('command inbox', () => {
   });
 
   it('does not re-send stale claimed input with unknown delivery state and marks warning', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const { runSession, command: staleCommand } = await seedRunningRunWithCommand(
       repository,
       command({

@@ -16,14 +16,14 @@ import type {
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
@@ -176,22 +176,22 @@ describe('release module', () => {
   });
 
   it('allows AppModule to override core release providers without ReleaseModule owning P0Module wiring', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const durabilityMode: RunDurabilityMode = 'durable';
     const allowDemoActorIdFallback = false;
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue(durabilityMode)
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
       .useValue(allowDemoActorIdFallback)
       .compile();
 
     try {
-      expect(moduleRef.get(P0_REPOSITORY)).toBe(repository);
+      expect(moduleRef.get(DELIVERY_REPOSITORY)).toBe(repository);
       expect(moduleRef.get(RUN_DURABILITY_MODE)).toBe(durabilityMode);
-      expect(moduleRef.get(P0_DEMO_ACTOR_ID_FALLBACK)).toBe(allowDemoActorIdFallback);
+      expect(moduleRef.get(DELIVERY_DEMO_ACTOR_ID_FALLBACK)).toBe(allowDemoActorIdFallback);
     } finally {
       await moduleRef.close();
     }
@@ -199,33 +199,33 @@ describe('release module', () => {
 
   const createTestApp = async (
     durabilityMode: RunDurabilityMode = 'volatile_demo',
-    repositoryOverride?: P0Repository,
+    repositoryOverride?: DeliveryRepository,
   ) => {
-    const repo = repositoryOverride ?? new InMemoryP0Repository();
+    const repo = repositoryOverride ?? new InMemoryDeliveryRepository();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue(durabilityMode)
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
+      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
       .useValue(durabilityMode === 'volatile_demo')
       .overrideProvider(RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();
     const app = moduleRef.createNestApplication();
     await app.init();
-    return { app, repo: repo as InMemoryP0Repository };
+    return { app, repo: repo as InMemoryDeliveryRepository };
   };
 
   const repositoryFailingNextTransactionDecision = (
-    repo: InMemoryP0Repository,
+    repo: InMemoryDeliveryRepository,
     failure: { enabled: boolean },
-  ): P0Repository =>
+  ): DeliveryRepository =>
     new Proxy(repo, {
       get(target, property, receiver) {
-        if (property === 'withP0Transaction') {
-          return async (write: (repository: P0Repository) => Promise<unknown>) =>
-            target.withP0Transaction((transaction) => {
+        if (property === 'withDeliveryTransaction') {
+          return async (write: (repository: DeliveryRepository) => Promise<unknown>) =>
+            target.withDeliveryTransaction((transaction) => {
               const transactionProxy = new Proxy(transaction, {
                 get(transactionTarget, transactionProperty, transactionReceiver) {
                   if (transactionProperty === 'saveDecision') {
@@ -240,28 +240,28 @@ describe('release module', () => {
                   const value = Reflect.get(transactionTarget, transactionProperty, transactionReceiver);
                   return typeof value === 'function' ? value.bind(transactionTarget) : value;
                 },
-              }) as P0Repository;
+              }) as DeliveryRepository;
               return write(transactionProxy);
             });
         }
         const value = Reflect.get(target, property, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
       },
-    }) as P0Repository;
+    }) as DeliveryRepository;
 
   const repositoryFailingNextTransactionObjectEvent = (
-    repo: InMemoryP0Repository,
+    repo: InMemoryDeliveryRepository,
     failure: { enabled: boolean },
-  ): P0Repository =>
+  ): DeliveryRepository =>
     new Proxy(repo, {
       get(target, property, receiver) {
-        if (property === 'withP0Transaction') {
-          return async (write: (repository: P0Repository) => Promise<unknown>) =>
-            target.withP0Transaction((transaction) => {
+        if (property === 'withDeliveryTransaction') {
+          return async (write: (repository: DeliveryRepository) => Promise<unknown>) =>
+            target.withDeliveryTransaction((transaction) => {
               const transactionProxy = new Proxy(transaction, {
                 get(transactionTarget, transactionProperty, transactionReceiver) {
                   if (transactionProperty === 'appendObjectEvent') {
-                    return async (...args: Parameters<P0Repository['appendObjectEvent']>) => {
+                    return async (...args: Parameters<DeliveryRepository['appendObjectEvent']>) => {
                       if (failure.enabled) {
                         failure.enabled = false;
                         throw new Error('object event store unavailable');
@@ -272,21 +272,21 @@ describe('release module', () => {
                   const value = Reflect.get(transactionTarget, transactionProperty, transactionReceiver);
                   return typeof value === 'function' ? value.bind(transactionTarget) : value;
                 },
-              }) as P0Repository;
+              }) as DeliveryRepository;
               return write(transactionProxy);
             });
         }
         const value = Reflect.get(target, property, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
       },
-    }) as P0Repository;
+    }) as DeliveryRepository;
 
-  const seedProject = async (repo: InMemoryP0Repository, id = 'project-1') => {
+  const seedProject = async (repo: InMemoryDeliveryRepository, id = 'project-1') => {
     await repo.saveProject(project({ id, repo_ids: [`repo-${id}`] }));
   };
 
   const seedReadyScope = async (
-    repo: InMemoryP0Repository,
+    repo: InMemoryDeliveryRepository,
     overrides: {
       work_item?: Partial<WorkItem>;
       execution_package?: Partial<ExecutionPackage>;
@@ -335,7 +335,7 @@ describe('release module', () => {
 
   const createReadyRelease = async (
     app: INestApplication,
-    repo: InMemoryP0Repository,
+    repo: InMemoryDeliveryRepository,
     headers: Record<string, string> = {},
   ) => {
     const scope = await seedReadyScope(repo);
@@ -383,7 +383,7 @@ describe('release module', () => {
   });
 
   it('does not commit release creation when audit event persistence fails', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const eventFailure = { enabled: false };
     const { app } = await track(createTestApp('volatile_demo', repositoryFailingNextTransactionObjectEvent(repo, eventFailure)));
     await seedProject(repo);
@@ -874,7 +874,7 @@ describe('release module', () => {
   });
 
   it('does not commit release approval when decision persistence fails', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const decisionFailure = { enabled: false };
     const { app } = await track(createTestApp('volatile_demo', repositoryFailingNextTransactionDecision(repo, decisionFailure)));
     await seedProject(repo);

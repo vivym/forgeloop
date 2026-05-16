@@ -45,7 +45,7 @@ import {
   validateForceRerunAllowed,
   validatePackageEditAllowed,
 } from '@forgeloop/domain';
-import type { P0Repository, TraceLinkRecord } from '@forgeloop/db';
+import type { DeliveryRepository, TraceLinkRecord } from '@forgeloop/db';
 import type {
   ArtifactRef,
   EvidenceChainResponse,
@@ -63,8 +63,8 @@ import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
 import { Observable } from 'rxjs';
 
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../modules/core/control-plane-tokens';
@@ -201,10 +201,10 @@ type SupersedeExecutionPackageGenerationRunResult = {
 @Injectable()
 export class P0Service {
   constructor(
-    @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
+    @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_WORKER) private readonly runWorker: RunWorker,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
-    @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
+    @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
     @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Inject(AutomationCommandService)
@@ -774,7 +774,7 @@ export class P0Service {
   }
 
   private async runPackageWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     packageId: string,
     dto: RunPackageDto,
     mode: 'run' | 'rerun' | 'force_rerun',
@@ -1138,7 +1138,7 @@ export class P0Service {
     return this.requireFound(response, `ReviewPacket ${reviewPacketId}`);
   }
 
-  private async assertAutomationPreconditionForHold(repository: P0Repository, precondition: AutomationPrecondition): Promise<void> {
+  private async assertAutomationPreconditionForHold(repository: DeliveryRepository, precondition: AutomationPrecondition): Promise<void> {
     const settings = await repository.resolveAutomationProjectSettings({
       project_id: precondition.project_id,
       ...(precondition.repo_id === undefined ? {} : { repo_id: precondition.repo_id }),
@@ -1149,7 +1149,7 @@ export class P0Service {
   }
 
   private async assertRepoScopeCurrent(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     projectId: string,
     repoId: string | undefined,
   ): Promise<void> {
@@ -1185,7 +1185,7 @@ export class P0Service {
   }
 
   private async writePlanDraftForApprovedSpec(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     workItemId: string,
     specRevisionId: string,
     precondition: AutomationPrecondition,
@@ -1345,7 +1345,7 @@ export class P0Service {
   }
 
   private async blockCommandIdempotencyAfterError(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: { idempotency_key: string; claim_token: string; error: unknown },
   ): Promise<void> {
     await repository.blockCommandIdempotency({
@@ -1357,7 +1357,7 @@ export class P0Service {
   }
 
   private async assertPackageRegenerationApproval(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: {
       planRevisionId: string;
       generationKey: string;
@@ -1388,7 +1388,7 @@ export class P0Service {
   }
 
   private async writeExecutionPackageDraftsForPlanRevision(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: {
       planRevisionId: string;
       generationKey: string;
@@ -1547,7 +1547,7 @@ export class P0Service {
   }
 
   private async packageContextFromRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     planRevisionId: string,
   ): Promise<{
     project: Project;
@@ -1597,7 +1597,7 @@ export class P0Service {
     });
   }
 
-  private async requireApprovedCurrentSpecFromRepository(repository: P0Repository, workItem: WorkItem): Promise<Spec> {
+  private async requireApprovedCurrentSpecFromRepository(repository: DeliveryRepository, workItem: WorkItem): Promise<Spec> {
     if (workItem.current_spec_id === undefined) {
       throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
     }
@@ -1662,7 +1662,7 @@ export class P0Service {
   }
 
   private async assertExecutionPackageGraphStillCurrent(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     executionPackage: ExecutionPackage,
   ): Promise<void> {
     const stale = (message: string): never => {
@@ -1751,7 +1751,7 @@ export class P0Service {
   }
 
   private async enqueueRunWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     executionPackage: ExecutionPackage,
     input: EnqueueRunInput,
   ): Promise<RunAcceptedResponse> {
@@ -1812,7 +1812,7 @@ export class P0Service {
   }
 
   private async createExecutionPackageFromContext(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     context: Awaited<ReturnType<P0Service['packageContextFromRepository']>>,
     dto: CreateExecutionPackageDto,
     generation?: LegacyGeneratedPackageMetadata,
@@ -2230,7 +2230,7 @@ export class P0Service {
   private async archiveReviewPacket(
     reviewPacket: ReviewPacket,
     reason: string,
-    repository: P0Repository = this.repository,
+    repository: DeliveryRepository = this.repository,
   ): Promise<void> {
     const updated = transitionReviewPacket(reviewPacket, { type: 'archive_for_newer_run', at: this.now() });
     await repository.saveReviewPacket(updated);
@@ -2329,7 +2329,7 @@ export class P0Service {
   }
 
   private async eventWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     objectType: string,
     objectId: string,
     eventType: string,
@@ -2359,7 +2359,7 @@ export class P0Service {
   }
 
   private async historyWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     objectType: string,
     objectId: string,
     fromStatus: string | undefined,

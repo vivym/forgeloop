@@ -57,12 +57,12 @@ import {
   type StatusHistory,
   type WorkItem,
 } from '@forgeloop/domain';
-import type { P0Repository } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 import { buildReleasePublicLinkVisibility } from '@forgeloop/db';
 
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
@@ -148,9 +148,9 @@ export class ReleaseService {
   private readonly durableInstanceId = randomUUID().replace(/-/g, '').slice(0, 12);
 
   constructor(
-    @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
+    @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
-    @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
+    @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
   ) {}
 
   async createRelease(body: CreateReleaseRequest, actorContext?: ActorContext): Promise<ReleaseControlResponse> {
@@ -183,7 +183,7 @@ export class ReleaseService {
       updated_at: at,
     };
 
-    await this.repository.withP0Transaction(async (repository) => {
+    await this.repository.withDeliveryTransaction(async (repository) => {
       await repository.saveRelease(release);
       await this.writeObjectEventWithRepository(repository, 'release_created', release, actorId, {});
       await this.writeStatusHistoryWithRepository(repository, undefined, release, actorId);
@@ -606,7 +606,7 @@ export class ReleaseService {
   }
 
   private async controlResponseWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     release: Release,
     decisionIntents: ReleaseTransitionResult['decision_intents'],
     overriddenBlockers: ReleaseBlocker[],
@@ -635,7 +635,7 @@ export class ReleaseService {
     return this.gateContextWithRepository(this.repository, release);
   }
 
-  private async gateContextWithRepository(repository: P0Repository, release: Release): Promise<ReleaseGateContext> {
+  private async gateContextWithRepository(repository: DeliveryRepository, release: Release): Promise<ReleaseGateContext> {
     const [workItemLinks, executionPackageLinks, evidence] = await Promise.all([
       resolveReleaseWorkItemLinks(repository, release),
       resolveReleaseExecutionPackageLinks(repository, release),
@@ -700,7 +700,7 @@ export class ReleaseService {
   }
 
   private async publicLinkVisibilityWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     release: Release,
     workItems: readonly WorkItem[],
     executionPackages: readonly ExecutionPackage[],
@@ -806,7 +806,7 @@ export class ReleaseService {
   }
 
   private async requireLinkableWorkItemWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     release: Release,
     workItemId: string,
   ): Promise<WorkItem> {
@@ -828,7 +828,7 @@ export class ReleaseService {
   }
 
   private async requireLinkableExecutionPackageWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     release: Release,
     packageId: string,
   ): Promise<ExecutionPackage> {
@@ -857,7 +857,7 @@ export class ReleaseService {
     return this.requireReleaseWithRepository(this.repository, releaseId);
   }
 
-  private async requireReleaseWithRepository(repository: P0Repository, releaseId: string): Promise<Release> {
+  private async requireReleaseWithRepository(repository: DeliveryRepository, releaseId: string): Promise<Release> {
     const release = await repository.getRelease(releaseId);
     if (release === undefined) {
       throw new NotFoundException(`Release ${releaseId} not found`);
@@ -927,13 +927,13 @@ export class ReleaseService {
     eventType: ReleaseMutationEventType,
     options: { payload?: Record<string, unknown>; decisionOptionsFor?: DecisionPersistenceOptionsFor } = {},
   ): Promise<void> {
-    await this.repository.withP0Transaction(async (repository) => {
+    await this.repository.withDeliveryTransaction(async (repository) => {
       await this.persistTransitionWithRepository(repository, before, result, actorId, eventType, options);
     });
   }
 
   private async persistTransitionWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     before: Release,
     result: Pick<ReleaseTransitionResult, 'release' | 'decision_intents'>,
     actorId: string,
@@ -950,8 +950,8 @@ export class ReleaseService {
     );
   }
 
-  private async withReleaseLock<T>(releaseId: string, write: (repository: P0Repository) => Promise<T>): Promise<T> {
-    return this.repository.withObjectLock(`release:${releaseId}`, () => this.repository.withP0Transaction(write));
+  private async withReleaseLock<T>(releaseId: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
+    return this.repository.withObjectLock(`release:${releaseId}`, () => this.repository.withDeliveryTransaction(write));
   }
 
   private async persistDecisionIntent(
@@ -962,7 +962,7 @@ export class ReleaseService {
   }
 
   private async persistDecisionIntentWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     intent: ReleaseTransitionResult['decision_intents'][number],
     options: DecisionPersistenceOptions = {},
   ): Promise<void> {
@@ -994,7 +994,7 @@ export class ReleaseService {
   }
 
   private async writeObjectEventWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     eventType: ReleaseMutationEventType,
     release: Release,
     actorId: string,
@@ -1019,7 +1019,7 @@ export class ReleaseService {
   }
 
   private async writeStatusHistoryWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     before: Release | undefined,
     after: Release,
     actorId: string,

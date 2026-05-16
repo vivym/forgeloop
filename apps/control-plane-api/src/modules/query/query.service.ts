@@ -1,20 +1,20 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 
 import {
-  type P0Repository,
+  type DeliveryRepository,
   getObjectReplayTimeline,
   getReleaseCockpit as getReleaseCockpitQuery,
   getWorkItemCockpit,
 } from '@forgeloop/db';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
-import { P0_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
 import { serializePublicRunSession } from '../../p0/run-session-serialization';
 
 @Injectable()
 export class QueryService {
   constructor(
-    @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
+    @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
   ) {}
 

@@ -12,7 +12,7 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
-import { getReleaseCockpit, InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { getReleaseCockpit, InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const now = '2026-05-11T00:00:00.000Z';
 const later = '2026-05-11T00:01:00.000Z';
@@ -243,7 +243,7 @@ const decision = (overrides: Partial<Decision> = {}): Decision => ({
   ...overrides,
 });
 
-const seedReadyRelease = async (repo: P0Repository, overrides: {
+const seedReadyRelease = async (repo: DeliveryRepository, overrides: {
   project?: Partial<Project>;
   work_item?: Partial<WorkItem>;
   execution_package?: Partial<ExecutionPackage>;
@@ -272,7 +272,7 @@ const unsafeJson = (value: unknown): string => JSON.stringify(value);
 
 describe('getReleaseCockpit', () => {
   it('returns a public-safe release cockpit for a release-ready scope', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo);
 
     const cockpit = await getReleaseCockpit(repo, 'release-1');
@@ -321,7 +321,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('summarizes readiness from the selected review packet run and honors log refs', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       execution_package: {
         required_artifact_kinds: ['execution_summary', 'logs'],
@@ -379,7 +379,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('reports overrideable planning and evidence blockers when plans and evidence are missing', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       save_evidence: false,
       release: {
@@ -406,7 +406,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('keeps unsafe observation evidence facts but omits unsafe public backlinks and reports a blocker', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       evidence: {
         extra: {
@@ -456,7 +456,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('omits non-public exact artifact ids and unsafe top-level object refs', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       evidence: {
         object_ref: { object_type: 'run_session', object_id: 'run-private', relationship: 'generated_by' },
@@ -496,7 +496,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('treats decisions on selected release graph objects as public backlinks', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       evidence: {
         extra: {
@@ -541,7 +541,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('selects fallback run sessions by creation time and requires exact public artifact refs', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const packageWithoutRunPointers = executionPackage();
     delete packageWithoutRunPointers.current_run_session_id;
     delete packageWithoutRunPointers.last_run_session_id;
@@ -601,7 +601,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('resolves stale stored scope links to valid same-project public ids and reports invalid links', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await repo.saveProject(project());
     await repo.saveProject(project({ id: 'project-2', key: 'P2', name: 'Other Project' }));
 

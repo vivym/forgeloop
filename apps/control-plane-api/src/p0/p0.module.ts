@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { Module } from '@nestjs/common';
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
-import type { P0Repository } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 import {
   captureLocalCodexEvidence,
   CodexAppServerDriver,
@@ -15,7 +15,7 @@ import {
 import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
 
 import { ControlPlaneCoreModule } from '../modules/core/control-plane-core.module';
-import { P0_REPOSITORY } from '../modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../modules/core/control-plane-tokens';
 import { AutomationModule } from '../modules/automation/automation.module';
 import { P0Controller } from './p0.controller';
 import { P0Service, RUN_WORKER } from './p0.service';
@@ -77,7 +77,7 @@ const mockEvidence = (input: LocalCodexEvidenceInput): ExecutorResult => ({
   raw_metadata: { workflow_only: input.runSpec.workflow_only },
 });
 
-const createRunWorker = (repository: P0Repository): RunWorker => {
+const createRunWorker = (repository: DeliveryRepository): RunWorker => {
   const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
   const rawLogStore = new LocalCodexRawLogStore({ artifactRoot: join(artifactRoot, 'raw-logs') });
 
@@ -115,7 +115,7 @@ const createRunWorker = (repository: P0Repository): RunWorker => {
     {
       provide: RUN_WORKER,
       useFactory: createRunWorker,
-      inject: [P0_REPOSITORY],
+      inject: [DELIVERY_REPOSITORY],
     },
     P0Service,
     RunWorkerLifecycleService,

@@ -20,7 +20,7 @@ import {
   type WorkItem,
 } from '@forgeloop/domain';
 import { artifactRedactionReason, serializePublicArtifactRef } from '@forgeloop/db';
-import type { P0Repository, TraceEventRecord, TraceLinkRecord } from '@forgeloop/db';
+import type { DeliveryRepository, TraceEventRecord, TraceLinkRecord } from '@forgeloop/db';
 
 type ProjectionInput = {
   reviewPacketId?: string;
@@ -258,7 +258,7 @@ const redactionItem = (input: {
   details: { redaction_reason: input.reason },
 });
 
-const loadTraceProjection = async (repository: P0Repository, runs: RunSession[]): Promise<TraceProjection> => {
+const loadTraceProjection = async (repository: DeliveryRepository, runs: RunSession[]): Promise<TraceProjection> => {
   const events = (
     await Promise.all(runs.map((runSession) => repository.listTraceEventsForSubject('run_session', runSession.id)))
   ).flat();
@@ -287,7 +287,7 @@ const loadTraceProjection = async (repository: P0Repository, runs: RunSession[])
   return { events, linksByTraceEventId, artifactRefCountByTraceEventId, supersededRunIds, replacedReviewPacketIds, traceArtifactRefCount };
 };
 
-const loadPackageEvidence = async (repository: P0Repository, workItemId: string): Promise<PackageEvidence[]> => {
+const loadPackageEvidence = async (repository: DeliveryRepository, workItemId: string): Promise<PackageEvidence[]> => {
   const executionPackages = await repository.listExecutionPackagesForWorkItem(workItemId);
   return Promise.all(
     executionPackages.map(async (executionPackage) => ({
@@ -404,7 +404,7 @@ const filterTraceProjection = (trace: TraceProjection, traceEventIds: Set<string
 };
 
 export const buildEvidenceChain = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   workItem: WorkItem,
   input: ProjectionInput,
 ): Promise<EvidenceChainResponse | undefined> => {

@@ -341,9 +341,9 @@ export interface RuntimeSnapshotRepositoryData {
   policy_projection_action_runs: AutomationActionRun[];
 }
 
-export interface P0Repository {
-  withP0Transaction<T>(write: (repository: P0Repository) => Promise<T>): Promise<T>;
-  withObjectLock<T>(key: string, write: (repository: P0Repository) => Promise<T>): Promise<T>;
+export interface DeliveryRepository {
+  withDeliveryTransaction<T>(write: (repository: DeliveryRepository) => Promise<T>): Promise<T>;
+  withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T>;
 
   saveOrganization(organization: Organization): Promise<void>;
   getOrganization(organizationId: string): Promise<Organization | undefined>;
@@ -448,7 +448,7 @@ export interface P0Repository {
   withActiveRunWorkerLease<T>(
     runSessionId: string,
     lease: { workerId: string; leaseToken: string; now: string },
-    write: (repository: P0Repository) => Promise<T>,
+    write: (repository: DeliveryRepository) => Promise<T>,
   ): Promise<T>;
 
   saveReviewPacket(reviewPacket: ReviewPacket): Promise<void>;

@@ -4,9 +4,9 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import { signAutomationRequest } from '../../packages/automation/src/index';
 
 const secret = 'test-secret';
@@ -21,17 +21,17 @@ const rawSecretPath = '/Users/viv/projs/forgeloop/.worktrees/feature/http-automa
 
 const apps: INestApplication[] = [];
 
-const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: P0Repository }> => {
+const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
-    .useValue(new InMemoryP0Repository())
+    .overrideProvider(DELIVERY_REPOSITORY)
+    .useValue(new InMemoryDeliveryRepository())
     .overrideProvider(RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
   const app = moduleRef.createNestApplication({ rawBody: true });
   await app.init();
   apps.push(app);
-  return { app, repository: app.get(P0_REPOSITORY) as P0Repository };
+  return { app, repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository };
 };
 
 const signedPost = (app: INestApplication, pathAndQuery: string, body: Record<string, unknown>) => {
