@@ -1755,12 +1755,8 @@ export class InMemoryP0Repository implements P0Repository {
       if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
         continue;
       }
-      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
-      if (repo === undefined) {
-        continue;
-      }
-      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
-      if (!settings.capabilities_json.canGeneratePlanDraft) {
+      const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGeneratePlanDraft');
+      if (targetScope === undefined) {
         continue;
       }
       if (this.hasActiveManualHold([`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
@@ -1772,8 +1768,7 @@ export class InMemoryP0Repository implements P0Repository {
         target_revision_id: specRevisionId,
         target_status: 'approved',
         project_id: workItem.project_id,
-        repo_id: repo.repo_id,
-        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        ...targetScope,
         ...this.latestMatchingActionFields('ensure_plan_draft', workItem.id, specRevisionId),
       });
     }
@@ -1795,12 +1790,8 @@ export class InMemoryP0Repository implements P0Repository {
       if (planRevision === undefined || workItem === undefined || isWorkItemAutomationTerminal(workItem)) {
         continue;
       }
-      const repo = repos.find((candidate) => candidate.project_id === workItem.project_id);
-      if (repo === undefined) {
-        continue;
-      }
-      const settings = await this.resolveAutomationProjectSettings({ project_id: workItem.project_id, repo_id: repo.repo_id });
-      if (!settings.capabilities_json.canGeneratePackageDrafts) {
+      const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGeneratePackageDrafts');
+      if (targetScope === undefined) {
         continue;
       }
       const generationKey = `default:${planRevisionId}`;
@@ -1820,13 +1811,41 @@ export class InMemoryP0Repository implements P0Repository {
         target_revision_id: generationKey,
         target_status: 'approved',
         project_id: workItem.project_id,
-        repo_id: repo.repo_id,
-        automation_scope: `repo:${workItem.project_id}:${repo.repo_id}`,
+        ...targetScope,
         generation_key: generationKey,
         ...this.latestMatchingActionFields('ensure_package_drafts', planRevisionId, generationKey),
       });
     }
     return targets;
+  }
+
+  private async runtimeSnapshotDraftTargetScope(
+    repos: ProjectRepo[],
+    projectId: string,
+    capability: 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
+  ): Promise<Pick<RuntimeSnapshotTargetRow, 'repo_id' | 'eligible_repo_ids' | 'automation_scope'> | undefined> {
+    const eligibleReposById = new Map<string, ProjectRepo>();
+    for (const repo of repos) {
+      if (repo.project_id !== projectId) {
+        continue;
+      }
+      const settings = await this.resolveAutomationProjectSettings({ project_id: projectId, repo_id: repo.repo_id });
+      if (settings.capabilities_json[capability]) {
+        eligibleReposById.set(repo.repo_id, eligibleReposById.get(repo.repo_id) ?? repo);
+      }
+    }
+    const eligibleRepos = [...eligibleReposById.values()];
+    if (eligibleRepos.length === 0) {
+      return undefined;
+    }
+    if (eligibleRepos.length === 1) {
+      const repo = eligibleRepos[0]!;
+      return { repo_id: repo.repo_id, automation_scope: `repo:${projectId}:${repo.repo_id}` as const };
+    }
+    return {
+      eligible_repo_ids: eligibleRepos.map((repo) => repo.repo_id),
+      automation_scope: `project:${projectId}` as const,
+    };
   }
 
   private runtimeSnapshotRunEnqueueDisabledPackages(repos: ProjectRepo[]): RuntimeSnapshotTargetRow[] {

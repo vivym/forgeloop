@@ -137,6 +137,9 @@ const runtimeSnapshotFromWire = (wire: unknown): RuntimeSnapshot => {
         targetStatus: String(row.target_status),
         ...(typeof row.project_id === 'string' ? { projectId: row.project_id } : {}),
         ...(typeof row.repo_id === 'string' ? { repoId: row.repo_id } : {}),
+        ...(Array.isArray(row.eligible_repo_ids)
+          ? { eligibleRepoIds: row.eligible_repo_ids.filter((repoId): repoId is string => typeof repoId === 'string') }
+          : {}),
         automationScope: row.automation_scope as AutomationScope,
         ...(typeof row.active_hold_fingerprint === 'string' ? { activeHoldFingerprint: row.active_hold_fingerprint } : {}),
         ...(typeof row.latest_matching_action_status === 'string' ? { latestMatchingActionStatus: row.latest_matching_action_status } : {}),
