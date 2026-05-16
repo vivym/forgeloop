@@ -186,8 +186,21 @@ const approveCurrentPlan = async (
 
 const runUntil = async (daemon: AutomationDaemon, predicate: () => Promise<boolean>, label: string): Promise<void> => {
   for (let index = 0; index < 6; index += 1) {
-    await daemon.runOnce();
     if (await predicate()) {
+      return;
+    }
+    await daemon.runOnce();
+  }
+  if (await predicate()) {
+    return;
+  }
+  throw new Error(`automation_daemon_condition_not_met:${label}`);
+};
+
+const drainDaemon = async (daemon: AutomationDaemon, label: string): Promise<void> => {
+  for (let index = 0; index < 6; index += 1) {
+    const result = await daemon.runOnce();
+    if (result.plannedActionCount === 0 && result.executed.reasonCode === 'no_claimable_action') {
       return;
     }
   }
@@ -271,14 +284,7 @@ describe('HTTP automation daemon integration', () => {
       async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length > 0,
       'package_drafts_created',
     );
-    await runUntil(
-      daemon,
-      async () => {
-        const result = await daemon.runOnce();
-        return result.plannedActionCount === 0 && result.executed.reasonCode === 'no_claimable_action';
-      },
-      'daemon_drained',
-    );
+    await drainDaemon(daemon, 'daemon_drained');
 
     const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
     expect(packages).toHaveLength(1);

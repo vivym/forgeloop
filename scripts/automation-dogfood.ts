@@ -9,7 +9,12 @@ import request from 'supertest';
 
 import { AutomationDaemon } from '../apps/automation-daemon/src/automation-daemon';
 import { loadDaemonWorkflowPolicyDigest } from '../apps/automation-daemon/src/workflow-policy-loader';
-import { AutomationHttpClient } from '../packages/automation/src/index';
+import {
+  AutomationHttpClient,
+  type AutomationActionResponse,
+  type ClaimNextActionInput,
+  type NextAction,
+} from '../packages/automation/src/index';
 import { InMemoryP0Repository, type P0Repository } from '../packages/db/src/index';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
 
@@ -34,6 +39,8 @@ export interface AutomationDogfoodSummaryInput {
   planDraftCreated: boolean;
   packageDraftCount: number;
   completedActionTypes: string[];
+  actionRunCount: number;
+  nonSucceededActionRunCount: number;
   runSessionCount: number;
   restartRecoveredFromActionRuns: boolean;
 }
@@ -62,7 +69,10 @@ const reviewerHeaders = {
 export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryInput): string => {
   const completedActionTypes = [...new Set(input.completedActionTypes)].sort();
   const packageDraftPassed = input.packageDraftCount === 1;
-  const actionRunsPassed = hasExactlyExpectedAutomationDogfoodActionTypes(input.completedActionTypes);
+  const actionRunsPassed =
+    input.actionRunCount === expectedAutomationDogfoodActionTypes.length &&
+    input.nonSucceededActionRunCount === 0 &&
+    hasExactlyExpectedAutomationDogfoodActionTypes(input.completedActionTypes);
   const runSessionLine =
     input.runSessionCount === 0
       ? '- Run enqueue disabled: PASSED (no run session was enqueued)'
@@ -72,7 +82,7 @@ export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryIn
     '',
     `- Plan draft: ${input.planDraftCreated ? 'PASSED' : 'FAILED'}`,
     `- ExecutionPackage drafts: ${packageDraftPassed ? 'PASSED' : 'FAILED'} (${input.packageDraftCount} draft package(s))`,
-    `- Action runs: ${actionRunsPassed ? 'PASSED' : 'FAILED'} (${completedActionTypes.join(', ') || 'none'})`,
+    `- Action runs: ${actionRunsPassed ? 'PASSED' : 'FAILED'} (${completedActionTypes.join(', ') || 'none'}; ${input.actionRunCount} total, ${input.nonSucceededActionRunCount} incomplete)`,
     `- Action-run restart recovery: ${input.restartRecoveredFromActionRuns ? 'PASSED' : 'FAILED'}`,
     runSessionLine,
   ].join('\n');
@@ -89,6 +99,8 @@ export const hasExactlyExpectedAutomationDogfoodActionTypes = (actionTypes: read
 export const automationDogfoodExitCode = (input: AutomationDogfoodSummaryInput): 0 | 1 =>
   input.planDraftCreated &&
   input.packageDraftCount === 1 &&
+  input.actionRunCount === expectedAutomationDogfoodActionTypes.length &&
+  input.nonSucceededActionRunCount === 0 &&
   hasExactlyExpectedAutomationDogfoodActionTypes(input.completedActionTypes) &&
   input.runSessionCount === 0 &&
   input.restartRecoveredFromActionRuns
@@ -114,14 +126,17 @@ const bootControlPlane = async (): Promise<{ app: INestApplication; repository: 
   return { app, repository: app.get(P0_REPOSITORY) as P0Repository, baseUrl: `http://127.0.0.1:${address.port}` };
 };
 
-const createDaemon = (baseUrl: string): AutomationDaemon =>
+const createAutomationClient = (baseUrl: string): AutomationHttpClient =>
+  new AutomationHttpClient({
+    baseUrl,
+    actorId: automationActorId,
+    daemonIdentity: automationDaemonIdentity,
+    secret: automationSecret,
+  });
+
+const createDaemon = (baseUrl: string, client = createAutomationClient(baseUrl)): AutomationDaemon =>
   new AutomationDaemon({
-    client: new AutomationHttpClient({
-      baseUrl,
-      actorId: automationActorId,
-      daemonIdentity: automationDaemonIdentity,
-      secret: automationSecret,
-    }),
+    client,
     actorId: automationActorId,
     daemonIdentity: automationDaemonIdentity,
     allowedRepoRoots: [repoPath],
@@ -215,13 +230,39 @@ const approveCurrentPlan = async (
 
 const runUntil = async (daemon: AutomationDaemon, predicate: () => Promise<boolean>, label: string): Promise<void> => {
   for (let index = 0; index < 6; index += 1) {
-    await daemon.runOnce();
     if (await predicate()) {
+      return;
+    }
+    await daemon.runOnce();
+  }
+  if (await predicate()) {
+    return;
+  }
+  throw new Error(`automation_dogfood_condition_not_met:${label}`);
+};
+
+const drainDaemon = async (daemon: AutomationDaemon, label: string): Promise<void> => {
+  for (let index = 0; index < 6; index += 1) {
+    const result = await daemon.runOnce();
+    if (result.plannedActionCount === 0 && result.executed.reasonCode === 'no_claimable_action') {
       return;
     }
   }
   throw new Error(`automation_dogfood_condition_not_met:${label}`);
 };
+
+class RestartBeforeClaimClient extends AutomationHttpClient {
+  readonly createOrReplayActions: NextAction[] = [];
+
+  override async createOrReplayAction(action: NextAction): Promise<AutomationActionResponse> {
+    this.createOrReplayActions.push(action);
+    return super.createOrReplayAction(action);
+  }
+
+  override async claimNextAction(_input: ClaimNextActionInput): Promise<AutomationActionResponse> {
+    throw new Error('automation_dogfood_simulated_restart_before_claim');
+  }
+}
 
 const runDogfood = async (): Promise<AutomationDogfoodResult> => {
   const previousSecret = process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
@@ -232,6 +273,27 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     app = booted.app;
     const { repository, baseUrl } = booted;
     const seeded = await seedDraftOnlyApprovedSpec(app);
+    const interruptedClient = new RestartBeforeClaimClient({
+      baseUrl,
+      actorId: automationActorId,
+      daemonIdentity: automationDaemonIdentity,
+      secret: automationSecret,
+    });
+
+    try {
+      await createDaemon(baseUrl, interruptedClient).runOnce();
+      throw new Error('automation_dogfood_expected_restart_before_claim');
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'automation_dogfood_simulated_restart_before_claim') {
+        throw error;
+      }
+    }
+
+    const pendingBeforeRestart = (await repository.getRuntimeSnapshotData()).recent_action_runs.filter(
+      (actionRun) => actionRun.status === 'pending',
+    );
+    const pendingBeforeRestartIds = new Set(pendingBeforeRestart.map((actionRun) => actionRun.id));
+    const pendingBeforeRestartKeys = new Set(pendingBeforeRestart.map((actionRun) => actionRun.idempotency_key));
     const daemon = createDaemon(baseUrl);
 
     await runUntil(
@@ -245,14 +307,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
       async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length > 0,
       'package_drafts_created',
     );
-    await runUntil(
-      daemon,
-      async () => {
-        const result = await daemon.runOnce();
-        return result.plannedActionCount === 0 && result.executed.reasonCode === 'no_claimable_action';
-      },
-      'daemon_drained',
-    );
+    await drainDaemon(daemon, 'daemon_drained');
 
     const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
     const runSessions = (await Promise.all(packages.map((item) => repository.listRunSessionsForPackage(item.id)))).flat();
@@ -260,18 +315,23 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     const completedActionTypes = actionRuns
       .filter((actionRun) => actionRun.status === 'succeeded')
       .map((actionRun) => actionRun.action_type);
-    const actionRunCount = actionRuns.length;
-    const restartResult = await createDaemon(baseUrl).runOnce();
-    const restartActionRunCount = (await repository.getRuntimeSnapshotData()).recent_action_runs.length;
+    const recoveredPendingRuns = actionRuns.filter((actionRun) => pendingBeforeRestartIds.has(actionRun.id));
+    const pendingKeyOccurrences = actionRuns.filter((actionRun) => pendingBeforeRestartKeys.has(actionRun.idempotency_key));
     const summary: AutomationDogfoodSummaryInput = {
       planDraftCreated: (await repository.getWorkItem(seeded.workItem.id))?.current_plan_id !== undefined,
       packageDraftCount: packages.length,
       completedActionTypes,
+      actionRunCount: actionRuns.length,
+      nonSucceededActionRunCount: actionRuns.filter((actionRun) => actionRun.status !== 'succeeded').length,
       runSessionCount: runSessions.length,
       restartRecoveredFromActionRuns:
-        restartResult.plannedActionCount === 0 &&
-        restartResult.executed.reasonCode === 'no_claimable_action' &&
-        restartActionRunCount === actionRunCount,
+        pendingBeforeRestart.length > 0 &&
+        interruptedClient.createOrReplayActions.length === pendingBeforeRestart.length &&
+        pendingBeforeRestartIds.size === pendingBeforeRestart.length &&
+        pendingBeforeRestartKeys.size === pendingBeforeRestart.length &&
+        recoveredPendingRuns.length === pendingBeforeRestart.length &&
+        recoveredPendingRuns.every((actionRun) => actionRun.status === 'succeeded') &&
+        pendingKeyOccurrences.length === pendingBeforeRestart.length,
     };
     return { ...summary, exitCode: automationDogfoodExitCode(summary) };
   } finally {
