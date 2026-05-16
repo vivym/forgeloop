@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { RunSession } from '@forgeloop/domain';
 
-import { serializePublicRunSession } from '../../apps/control-plane-api/src/p0/run-session-serialization';
+import { serializePublicRunSession } from '../../apps/control-plane-api/src/modules/query/public-run-session-projection';
 
 describe('run session public serialization', () => {
   it('uses shared public artifact serialization for artifacts and check outputs', () => {

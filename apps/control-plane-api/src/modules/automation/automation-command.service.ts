@@ -45,7 +45,7 @@ import {
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
-import type { ActorContext } from '../../p0/actor-context';
+import type { ActorContext } from '../auth/actor-context';
 import type {
   AutomationActorContextDto,
   DisableAutomationCapabilitiesDto,
@@ -62,7 +62,7 @@ import {
   automationPreconditionFingerprint,
   commandIdempotencyTarget,
   normalizeAutomationPrecondition,
-} from '../../p0/automation-command-helpers';
+} from './automation-command-helpers';
 import type {
   AutomationActionType,
   EnsurePackageDraftsCommandDto,

@@ -21,8 +21,8 @@ import {
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
@@ -209,7 +209,7 @@ describe('release module', () => {
       .useValue(durabilityMode)
       .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
       .useValue(durabilityMode === 'volatile_demo')
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();
     const app = moduleRef.createNestApplication();

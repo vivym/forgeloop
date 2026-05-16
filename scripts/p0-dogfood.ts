@@ -29,7 +29,7 @@ import {
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { createDbClient, createDrizzleDeliveryRepository, InMemoryDeliveryRepository, type DbClient, type DeliveryRepository } from '../packages/db/src';
 import type { CodexSessionDriver } from '../packages/executor/src';
 import { FakeCodexSessionDriver, type FakeCodexScriptItem, RunWorker } from '../packages/run-worker/src';
@@ -526,7 +526,7 @@ const createApiApp = async (
     .useValue(options.durabilityMode ?? 'volatile_demo')
     .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
     .useValue((options.durabilityMode ?? 'volatile_demo') === 'volatile_demo')
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue(noopRunWorker)
     .compile();
 

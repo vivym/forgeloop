@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 import type { CheckResult, ExecutorResult } from '@forgeloop/contracts';
 import { serializePublicArtifactRef, serializePublicArtifactRefs } from '@forgeloop/db';
 import type { RunSession } from '@forgeloop/domain';
@@ -68,3 +69,10 @@ export const serializePublicRunSession = (runSession: RunSession): RunSession =>
         executor_result: serializePublicExecutorResult(executorResult),
       };
 };
+
+@Injectable()
+export class PublicRunSessionProjection {
+  serialize(runSession: RunSession): RunSession {
+    return serializePublicRunSession(runSession);
+  }
+}

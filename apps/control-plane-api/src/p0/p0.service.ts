@@ -71,12 +71,24 @@ import {
 import { ControlPlaneRuntimeService } from '../modules/core/control-plane-runtime.service';
 import { AutomationCommandService } from '../modules/automation/automation-command.service';
 import {
+  assertAutomationPreconditionStillCurrent,
+  assertCommandCapabilityStillEnabled,
+  assertNoActiveHolds,
+  assertPackageRunEligible,
+  assertRuntimeSafetyAttestation,
+  automationPreconditionFingerprint,
+  commandIdempotencyTarget,
+  normalizeAutomationPrecondition,
+} from '../modules/automation/automation-command-helpers';
+import type { ActorContext } from '../modules/auth/actor-context';
+import {
   createRunEventStreamToken as signRunEventStreamToken,
   resolveRunEventStreamTokenSecret,
-  type ActorContext,
   type RunEventStreamTokenPayload,
   verifyRunEventStreamToken,
-} from './actor-context';
+} from '../modules/run-control/run-event-stream-token';
+import { DELIVERY_RUN_WORKER } from '../modules/run-control/run-worker.token';
+import { serializePublicRunSession } from '../modules/query/public-run-session-projection';
 import type {
   ActorCommandDto,
   AutomationActorContextDto,
@@ -97,18 +109,7 @@ import type {
   MarkPackageReadyDto,
   SetAutomationCapabilitiesDto,
 } from './dto';
-import {
-  assertAutomationPreconditionStillCurrent,
-  assertCommandCapabilityStillEnabled,
-  assertNoActiveHolds,
-  assertPackageRunEligible,
-  assertRuntimeSafetyAttestation,
-  automationPreconditionFingerprint,
-  commandIdempotencyTarget,
-  normalizeAutomationPrecondition,
-} from './automation-command-helpers';
 import { buildEvidenceChain } from './evidence-chain';
-import { serializePublicRunSession } from './run-session-serialization';
 
 type RunReplacementRecordedPayload = {
   mode: 'rerun_package' | 'force_rerun_package';
@@ -128,8 +129,6 @@ const statusForPackage = (executionPackage: ExecutionPackage): string =>
 
 const traceReplacementModeFor = (mode: 'rerun' | 'force_rerun'): RunReplacementRecordedPayload['mode'] =>
   mode === 'rerun' ? 'rerun_package' : 'force_rerun_package';
-
-export const RUN_WORKER = Symbol('RUN_WORKER');
 
 const terminalRunStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const commandClaimTtlMs = 5 * 60 * 1000;
@@ -202,7 +201,7 @@ type SupersedeExecutionPackageGenerationRunResult = {
 export class P0Service {
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
-    @Inject(RUN_WORKER) private readonly runWorker: RunWorker,
+    @Inject(DELIVERY_RUN_WORKER) private readonly runWorker: RunWorker,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
     @Inject(ControlPlaneRuntimeService)

@@ -11,9 +11,10 @@ import {
   actorSignatureHeaderName,
   actorTimestampHeaderName,
   trustedActorHeaderSignature,
-} from '../../apps/control-plane-api/src/p0/actor-context';
+} from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import { signAutomationRequest } from '../../packages/automation/src/index';
 import {
@@ -134,7 +135,7 @@ const createTestApp = async (
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repositoryOverride ?? new InMemoryDeliveryRepository())
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue(runWorkerOverride)
     .compile();
   const app = moduleRef.createNestApplication({ rawBody: true });

@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { signAutomationRequest } from '../../packages/automation/src/index';
 
 const apps: INestApplication[] = [];
@@ -16,7 +16,7 @@ const track = async (app: INestApplication): Promise<INestApplication> => {
 
 const bootAutomationApp = async (): Promise<{ app: INestApplication }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
   const app = await track(moduleRef.createNestApplication({ rawBody: true }));

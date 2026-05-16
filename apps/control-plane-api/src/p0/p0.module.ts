@@ -17,9 +17,10 @@ import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
 import { ControlPlaneCoreModule } from '../modules/core/control-plane-core.module';
 import { DELIVERY_REPOSITORY } from '../modules/core/control-plane-tokens';
 import { AutomationModule } from '../modules/automation/automation.module';
+import { DELIVERY_RUN_WORKER } from '../modules/run-control/run-worker.token';
+import { RunWorkerLifecycleService } from '../modules/run-control/run-worker-lifecycle.service';
 import { P0Controller } from './p0.controller';
-import { P0Service, RUN_WORKER } from './p0.service';
-import { RunWorkerLifecycleService } from './run-worker-lifecycle.service';
+import { P0Service } from './p0.service';
 
 const safePathSegment = (value: string): string => {
   const sanitized = value
@@ -113,7 +114,7 @@ const createRunWorker = (repository: DeliveryRepository): RunWorker => {
   controllers: [P0Controller],
   providers: [
     {
-      provide: RUN_WORKER,
+      provide: DELIVERY_RUN_WORKER,
       useFactory: createRunWorker,
       inject: [DELIVERY_REPOSITORY],
     },

@@ -209,7 +209,7 @@ export const startApi = async (): Promise<{ apiUrl: string; close: () => Promise
   const [{ Test }, { AppModule }, { RunWorkerLifecycleService }] = await Promise.all([
     import('@nestjs/testing'),
     import('../apps/control-plane-api/src/app.module.js'),
-    import('../apps/control-plane-api/src/p0/run-worker-lifecycle.service.js'),
+    import('../apps/control-plane-api/src/modules/run-control/run-worker-lifecycle.service.js'),
   ]);
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(RunWorkerLifecycleService)

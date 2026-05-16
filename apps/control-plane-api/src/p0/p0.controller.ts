@@ -40,9 +40,9 @@ import type {
   RunPackageDto,
   SetAutomationCapabilitiesDto,
 } from './dto';
-import { actorContextFromHeaders } from './actor-context';
+import { actorContextFromHeaders } from '../modules/auth/actor-context';
+import { ZodValidationPipe } from '../modules/http/zod-validation.pipe';
 import { P0Service } from './p0.service';
-import { ZodValidationPipe } from './zod-validation.pipe';
 
 @Controller()
 export class P0Controller {

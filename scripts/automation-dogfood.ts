@@ -46,15 +46,15 @@ const reviewerHeaders = {
 };
 
 const bootControlPlane = async (): Promise<{ app: INestApplication; repository: DeliveryRepository; baseUrl: string }> => {
-  const [{ AppModule }, { DELIVERY_REPOSITORY }, { RUN_WORKER }] = await Promise.all([
+  const [{ AppModule }, { DELIVERY_REPOSITORY }, { DELIVERY_RUN_WORKER }] = await Promise.all([
     import('../apps/control-plane-api/src/app.module'),
     import('../apps/control-plane-api/src/modules/core/control-plane-tokens'),
-    import('../apps/control-plane-api/src/p0/p0.service'),
+    import('../apps/control-plane-api/src/modules/run-control/run-worker.token'),
   ]);
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(new InMemoryDeliveryRepository())
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
   const app = moduleRef.createNestApplication({ logger: false, rawBody: true });

@@ -7,8 +7,8 @@ import type { RunSession } from '@forgeloop/domain';
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
@@ -66,7 +66,7 @@ describe('query module', () => {
     let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined });
     if (options.durabilityMode !== undefined) {
       moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);

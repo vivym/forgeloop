@@ -14,13 +14,13 @@ import {
   actorTimestampHeaderName,
   trustedActorHeaderSignature,
   actorHeaderName as trustedActorHeaderName,
-} from '../../apps/control-plane-api/src/p0/actor-context';
+} from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import {
   DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { seedAppWithRunSession, seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
 
@@ -40,7 +40,7 @@ const track = async <T extends { app: INestApplication }>(value: Promise<T>): Pr
 
 const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('durable')

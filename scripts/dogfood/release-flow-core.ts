@@ -15,9 +15,9 @@ import {
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/p0/run-worker-lifecycle.service';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/modules/run-control/run-worker-lifecycle.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { createDbClient, createDrizzleDeliveryRepository, InMemoryDeliveryRepository } from '../../packages/db/src';
 import type { DbClient, DeliveryRepository } from '../../packages/db/src';
 import { worktreePathForRun } from '../../packages/executor/src/index.js';
@@ -415,7 +415,7 @@ const createDogfoodApp = async (): Promise<{ app: INestApplication; repository: 
     .useValue('volatile_demo')
     .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
     .useValue(true)
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue(noopRunWorker)
     .compile();
   const app = moduleRef.createNestApplication({ logger: false });
@@ -445,13 +445,13 @@ const createDurableReleaseDogfoodApp = async (
       onModuleDestroy: () => undefined,
     });
   } else {
-    moduleBuilder = moduleBuilder.overrideProvider(RUN_WORKER).useValue(noopRunWorker);
+    moduleBuilder = moduleBuilder.overrideProvider(DELIVERY_RUN_WORKER).useValue(noopRunWorker);
   }
   const moduleRef = await moduleBuilder.compile();
   const app = moduleRef.createNestApplication({ logger: false });
   app.useLogger(false);
   await app.init();
-  return options.useRealWorker ? { app, runWorker: moduleRef.get<StrictRunWorker>(RUN_WORKER) } : { app };
+  return options.useRealWorker ? { app, runWorker: moduleRef.get<StrictRunWorker>(DELIVERY_RUN_WORKER) } : { app };
 };
 
 const checkResults = (): CheckResult[] => [

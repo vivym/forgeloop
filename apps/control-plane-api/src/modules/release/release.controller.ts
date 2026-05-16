@@ -28,8 +28,8 @@ import {
   type UnlinkReleaseObjectRequest,
 } from '@forgeloop/contracts';
 
-import { ZodValidationPipe } from '../../p0/zod-validation.pipe';
-import { actorContextFromHeaders } from '../../p0/actor-context';
+import { actorContextFromHeaders } from '../auth/actor-context';
+import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import { ReleaseService } from './release.service';
 
 @Controller('releases')

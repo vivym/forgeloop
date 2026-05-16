@@ -9,13 +9,15 @@ import {
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
-import { serializePublicRunSession } from '../../p0/run-session-serialization';
+import { PublicRunSessionProjection } from './public-run-session-projection';
 
 @Injectable()
 export class QueryService {
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    @Inject(PublicRunSessionProjection)
+    private readonly publicRunSessionProjection: PublicRunSessionProjection,
   ) {}
 
   async getWorkItemCockpit(workItemId: string) {
@@ -28,7 +30,7 @@ export class QueryService {
 
     return {
       ...cockpit,
-      run_sessions: cockpit.run_sessions.map(serializePublicRunSession),
+      run_sessions: cockpit.run_sessions.map((runSession) => this.publicRunSessionProjection.serialize(runSession)),
     };
   }
 

@@ -11,7 +11,7 @@ import {
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { createDbClient, DrizzleDeliveryRepository, type ForgeloopDb, plan_revisions, plans, specs } from '../../packages/db/src';
 
 const connectionString =
@@ -62,7 +62,7 @@ describeIfDb('durable revision lookup', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')

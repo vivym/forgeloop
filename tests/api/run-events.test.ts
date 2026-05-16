@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository } from '../../packages/db/src';
 
 import { seedAppWithRunSession, seedQueuedPackageRun } from '../helpers/p0-runtime-fixtures';
@@ -78,7 +78,7 @@ describe('run event API', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();
     const app = moduleRef.createNestApplication();

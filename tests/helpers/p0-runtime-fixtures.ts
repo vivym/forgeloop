@@ -24,7 +24,7 @@ import {
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src';
 
 const now = '2026-05-05T00:00:00.000Z';
@@ -506,7 +506,7 @@ export const seedAppWithRunSession = async (
   options: { durabilityMode?: 'durable' | 'volatile_demo'; allowDemoActorIdFallback?: boolean } = {},
 ): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository; runSessionId: string }> => {
   let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined });
   if (options.durabilityMode !== undefined) {
     moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);
@@ -585,7 +585,7 @@ const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryD
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repo)
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
   const app = moduleRef.createNestApplication();

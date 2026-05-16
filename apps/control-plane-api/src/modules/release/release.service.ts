@@ -66,7 +66,7 @@ import {
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
-import type { ActorContext } from '../../p0/actor-context';
+import type { ActorContext } from '../auth/actor-context';
 import {
   publicReleaseSummaryFor,
   resolveReleaseExecutionPackageLinks,

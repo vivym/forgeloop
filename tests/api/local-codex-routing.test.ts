@@ -7,9 +7,9 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { DeliveryRepository } from '../../packages/db/src';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 
@@ -146,7 +146,7 @@ const createReadyPackage = async (app: INestApplication, planRevisionId: string)
 };
 
 const waitForTerminalRunSession = async (app: INestApplication, runSessionId: string): Promise<Record<string, unknown>> => {
-  const worker = app.get(RUN_WORKER) as RunWorker;
+  const worker = app.get(DELIVERY_RUN_WORKER) as RunWorker;
   void worker.drainOnce();
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -172,7 +172,7 @@ describe('control-plane local_codex routing', () => {
     localCodexAdapter.mockClear();
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useFactory({
         inject: [DELIVERY_REPOSITORY],
         factory: (repository: DeliveryRepository) =>

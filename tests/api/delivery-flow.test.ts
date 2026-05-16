@@ -8,7 +8,8 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import type { RunWorker } from '../../packages/run-worker/src';
@@ -163,7 +164,7 @@ const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
 
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
   const repository = repositoryFor(app);
-  const worker = app.get(RUN_WORKER) as RunWorker;
+  const worker = app.get(DELIVERY_RUN_WORKER) as RunWorker;
   void worker.drainOnce();
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -735,7 +736,7 @@ describe('P0 control plane API', () => {
       const service = app.get(P0Service);
       const repository = new FailingTraceRepository();
       (service as unknown as { repository: FailingTraceRepository }).repository = repository;
-      (app.get(RUN_WORKER) as unknown as { repository: FailingTraceRepository }).repository = repository;
+      (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: FailingTraceRepository }).repository = repository;
       const server = app.getHttpServer();
       const { workItem } = await createProjectRepoWorkItem(app);
       await approveSpec(app, workItem.id);
@@ -876,7 +877,7 @@ describe('P0 control plane API', () => {
     const service = app.get(P0Service);
     const repository = new SequencingRepository();
     (service as unknown as { repository: SequencingRepository }).repository = repository;
-    (app.get(RUN_WORKER) as unknown as { repository: SequencingRepository }).repository = repository;
+    (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: SequencingRepository }).repository = repository;
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
