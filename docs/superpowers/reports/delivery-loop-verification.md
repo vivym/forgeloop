@@ -1,8 +1,8 @@
 # Delivery Loop Verification
 
-Generated: 2026-05-17T17:41:55.426Z
+Generated: 2026-05-17T18:13:24.921Z
 Dogfood status: PASS
-Source commit: c60107be095c86415186a5ac8bf33abd4d13040b
+Source commit: 81279690e1a4a21bc9fcc334094f80cd599a2b4a
 Source tree before report write: clean
 
 ## Commands
@@ -23,7 +23,7 @@ Source tree before report write: clean
 
 ## Dogfood Preconditions
 
-- API URL: http://127.0.0.1:53220
+- API URL: http://127.0.0.1:54824
 - Repo path: redacted local workspace
 - Repo id: forgeloop
 - Volatile dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.
@@ -34,14 +34,14 @@ Source tree before report write: clean
 ## Dogfood Results
 
 - live-input-fake-driver: PASSED
-  - Package: eb191d9f-4cc6-459a-92e6-aa0707c872d6
-  - RunSession: 8b3c9eaf-497a-495b-a38d-9ebddbbd4c35
-  - ReviewPacket: 58e53d95-7820-5864-92cf-2743c6de2c30
+  - Package: 34ccb946-0265-4e26-9762-29fbc7b19489
+  - RunSession: 764ed10d-1d7c-4969-bf42-b565376e5870
+  - ReviewPacket: e1d664f8-52f0-5383-8de5-370b570dfa37
   - Evidence checks passed.
 - restart-backfill-lease-takeover: PASSED
-  - Package: 37bed0b3-12a8-4b49-b448-fb4ff5d7ca0a
-  - RunSession: 4e198795-5cce-4472-9f36-55a1ba06af00
-  - ReviewPacket: 1e7c0ba9-90da-5cf8-bce9-6fcfbf81545c
+  - Package: 5db67c10-6de7-4e70-8e30-fac92958b852
+  - RunSession: 5db66f88-db62-419b-85a7-ff665bf8712f
+  - ReviewPacket: 2999f2a9-6e71-5e1f-a895-e9667890ba54
   - Evidence checks passed.
 
 ## DB And Manual/Web Verification
@@ -56,7 +56,7 @@ Source tree before report write: clean
   - SSE first requested a stream token with X-Forgeloop-Actor-Id and opened the stream with stream_token.
 - Durable repository restart recovery: PASSED
   - Used fresh Drizzle repository instances over the same Postgres database, with the pool closed and reopened across the restart boundary.
-  - RunSession b1ecf59b-e2fb-4e63-be5f-d7d388e1f5f7 backfilled events by cursor, reclaimed an expired lease, and completed without duplicate input delivery.
+  - RunSession bc8810f7-f2e0-48ce-a032-b141f21b5949 backfilled events by cursor, reclaimed an expired lease, and completed without duplicate input delivery.
   - Verified terminal changed files, checks, artifacts, and Review Packet readiness through repository reads.
 - Web app probe: PASSED
   - `pnpm e2e:run-console` started the API and Vite web app in-process and exercised the browser workbench.
