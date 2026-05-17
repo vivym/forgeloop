@@ -132,7 +132,7 @@ const seedDraftOnlyApprovedSpec = async (
     })
     .expect(201);
   await request(server)
-    .post(`/p0/projects/${project.id}/automation/capabilities`)
+    .post(`/automation/projects/${project.id}/capabilities`)
     .set(humanAdminHeaders)
     .send({
       repo_id: 'repo-1',
@@ -410,7 +410,7 @@ describe('HTTP automation daemon integration', () => {
       })
       .expect(201);
     await request(server)
-      .post(`/p0/projects/${seeded.project.id}/automation/capabilities`)
+      .post(`/automation/projects/${seeded.project.id}/capabilities`)
       .set(humanAdminHeaders)
       .send({
         repo_id: 'repo-2',

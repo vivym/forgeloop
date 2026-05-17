@@ -592,13 +592,61 @@ describe('automation command boundaries', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
+  it('serves product automation settings without old public P0 routes', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { project } = await seedProjectRepoWorkItem(app);
+
+    await request(app.getHttpServer())
+      .get(`/automation/projects/${project.id}/capabilities?repo_id=repo-1`)
+      .set(humanAdminHeaders)
+      .expect(200);
+
+    const capabilityBody = {
+      repo_id: 'repo-1',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'old public P0 route removal regression',
+      evidence_refs: [],
+      actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
+    };
+    const manualPathHoldBody = {
+      object_type: 'work_item',
+      object_id: 'work-item-old-route',
+      scope_key: 'manual:work_item:work-item-old-route',
+      reason_code: 'needs_human_triage',
+      reason: 'old public P0 route removal regression',
+      evidence_refs: [],
+      requested_by: 'test-reviewer',
+      idempotency_key: 'old-public-p0-manual-path-hold',
+    };
+
+    await request(app.getHttpServer()).get(`/p0/projects/${project.id}/automation/capabilities`).expect(404);
+    await request(app.getHttpServer()).post(`/p0/projects/${project.id}/automation/capabilities`).send(capabilityBody).expect(404);
+    await request(app.getHttpServer())
+      .post(`/p0/projects/${project.id}/automation/capabilities:disable`)
+      .send({ ...capabilityBody, reason: 'old public P0 disable route removal regression' })
+      .expect(404);
+    await request(app.getHttpServer()).post('/p0/manual-path-holds').send(manualPathHoldBody).expect(404);
+    await request(app.getHttpServer())
+      .post('/p0/manual-path-holds/hold-old-route/resolve')
+      .send({
+        resolved_by: 'test-reviewer',
+        resolution: 'resolved',
+        reason: 'old public P0 resolve route removal regression',
+        evidence_refs: [],
+        idempotency_key: 'old-public-p0-manual-path-hold-resolve',
+      })
+      .expect(404);
+  });
+
   it('rejects daemon actor capability updates and keeps production default off', async () => {
     const { app } = await createTestApp();
     apps.push(app);
     const { project } = await seedProjectRepoWorkItem(app);
 
     await request(app.getHttpServer())
-      .post(`/p0/projects/${project.id}/automation/capabilities`)
+      .post(`/automation/projects/${project.id}/capabilities`)
       .set(daemonHeaders)
       .send({
         repo_id: 'repo-1',
@@ -611,7 +659,7 @@ describe('automation command boundaries', () => {
       .expect(403);
 
     const settings = await request(app.getHttpServer())
-      .get(`/p0/projects/${project.id}/automation/capabilities`)
+      .get(`/automation/projects/${project.id}/capabilities`)
       .query({ repo_id: 'repo-1' })
       .expect(200);
 
@@ -629,13 +677,51 @@ describe('automation command boundaries', () => {
     });
   });
 
+  it('disables product automation capabilities for a repo scope', async () => {
+    const { app } = await createTestApp();
+    apps.push(app);
+    const { project } = await seedProjectRepoWorkItem(app);
+
+    const enabled = await request(app.getHttpServer())
+      .post(`/automation/projects/${project.id}/capabilities`)
+      .set(humanAdminHeaders)
+      .send({
+        repo_id: 'repo-1',
+        preset: 'draft_only',
+        expected_version: 0,
+        reason: 'enable draft automation before disable',
+        evidence_refs: [],
+        actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
+      })
+      .expect(201);
+
+    const disabled = await request(app.getHttpServer())
+      .post(`/automation/projects/${project.id}/capabilities:disable`)
+      .set(humanAdminHeaders)
+      .send({
+        repo_id: 'repo-1',
+        expected_version: enabled.body.version,
+        reason: 'disable draft automation',
+        evidence_refs: [],
+        actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
+      })
+      .expect(201);
+
+    expect(disabled.body).toMatchObject({
+      project_id: project.id,
+      repo_id: 'repo-1',
+      preset: 'off',
+      version: enabled.body.version + 1,
+    });
+  });
+
   it('rejects automation capability updates when body actor context does not match trusted headers', async () => {
     const { app } = await createTestApp();
     apps.push(app);
     const { project } = await seedProjectRepoWorkItem(app);
 
     await request(app.getHttpServer())
-      .post(`/p0/projects/${project.id}/automation/capabilities`)
+      .post(`/automation/projects/${project.id}/capabilities`)
       .set(daemonHeaders)
       .send({
         repo_id: 'repo-1',
@@ -654,7 +740,7 @@ describe('automation command boundaries', () => {
     const { project } = await seedProjectRepoWorkItem(app);
 
     const settings = await request(app.getHttpServer())
-      .post(`/p0/projects/${project.id}/automation/capabilities`)
+      .post(`/automation/projects/${project.id}/capabilities`)
       .set(humanAdminHeaders)
       .send({
         repo_id: 'repo-1',
@@ -1372,14 +1458,14 @@ describe('automation command boundaries', () => {
     });
   });
 
-  it('creates, replays, and resolves manual path holds through the narrow p0 endpoint', async () => {
+  it('creates, replays, and resolves manual path holds through the product automation endpoint', async () => {
     const { app } = await createTestApp();
     apps.push(app);
     const { workItem } = await seedProjectRepoWorkItem(app);
     const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id });
 
     const first = await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .send({
         object_type: 'work_item',
         object_id: workItem.id,
@@ -1393,7 +1479,7 @@ describe('automation command boundaries', () => {
       .expect(201);
 
     const replayed = await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .send({
         object_type: 'work_item',
         object_id: workItem.id,
@@ -1409,7 +1495,7 @@ describe('automation command boundaries', () => {
     expect(replayed.body).toMatchObject({ id: first.body.id, status: 'active', scope_key: scopeKey });
 
     const resolved = await request(app.getHttpServer())
-      .post(`/p0/manual-path-holds/${first.body.id}/resolve`)
+      .post(`/automation/manual-path-holds/${first.body.id}/resolve`)
       .set(reviewerHeaders)
       .send({
         resolved_by: actorReviewer,
@@ -1440,7 +1526,7 @@ describe('automation command boundaries', () => {
     const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id });
 
     const hold = await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .set(daemonHeaders)
       .send({
         object_type: 'work_item',
@@ -1467,7 +1553,7 @@ describe('automation command boundaries', () => {
       .expect(201);
 
     await request(app.getHttpServer())
-      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .post(`/automation/manual-path-holds/${hold.body.id}/resolve`)
       .set(daemonHeaders)
       .send({
         resolved_by: 'daemon-1',
@@ -1483,7 +1569,7 @@ describe('automation command boundaries', () => {
     const { workItem } = await seedProjectRepoWorkItem(app);
 
     await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .set(daemonHeaders)
       .send({
         object_type: 'work_item',
@@ -1517,7 +1603,7 @@ describe('automation command boundaries', () => {
     });
 
     await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .send({
         object_type: 'work_item',
         object_id: workItem.id,
@@ -1548,7 +1634,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const { workItem } = await seedProjectRepoWorkItem(app);
     const hold = await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .send({
         object_type: 'work_item',
         object_id: workItem.id,
@@ -1562,7 +1648,7 @@ describe('automation command boundaries', () => {
       .expect(201);
 
     await request(app.getHttpServer())
-      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .post(`/automation/manual-path-holds/${hold.body.id}/resolve`)
       .send({ resolved_by: actorReviewer, resolution: 'reviewed', evidence_refs: [] })
       .expect(401);
   });
@@ -1572,7 +1658,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const { workItem } = await seedProjectRepoWorkItem(app);
     const hold = await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .send({
         object_type: 'work_item',
         object_id: workItem.id,
@@ -1586,7 +1672,7 @@ describe('automation command boundaries', () => {
       .expect(201);
 
     await request(app.getHttpServer())
-      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .post(`/automation/manual-path-holds/${hold.body.id}/resolve`)
       .set(humanAdminHeaders)
       .send({ resolved_by: actorReviewer, resolution: 'reviewed', evidence_refs: [] })
       .expect(403);
@@ -1598,7 +1684,7 @@ describe('automation command boundaries', () => {
     const { workItem } = await seedProjectRepoWorkItem(app);
     const scopeKey = buildManualScopeKey({ object_type: 'work_item', object_id: workItem.id });
     const hold = await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .send({
         object_type: 'work_item',
         object_id: workItem.id,
@@ -1612,12 +1698,12 @@ describe('automation command boundaries', () => {
       .expect(201);
 
     await request(app.getHttpServer())
-      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .post(`/automation/manual-path-holds/${hold.body.id}/resolve`)
       .set(reviewerHeaders)
       .send({ resolved_by: actorReviewer, resolution: 'reviewed', evidence_refs: [] })
       .expect(201);
     await request(app.getHttpServer())
-      .post(`/p0/manual-path-holds/${hold.body.id}/resolve`)
+      .post(`/automation/manual-path-holds/${hold.body.id}/resolve`)
       .set(humanAdminHeaders)
       .send({ resolved_by: actorOwner, resolution: 'changed after resolution', evidence_refs: [] })
       .expect(409);
@@ -1641,7 +1727,7 @@ describe('automation command boundaries', () => {
     });
 
     await request(app.getHttpServer())
-      .post('/p0/manual-path-holds')
+      .post('/automation/manual-path-holds')
       .set({ ...daemonHeaders, 'x-forgeloop-daemon-identity': 'daemon-2' })
       .send({
         object_type: 'work_item',

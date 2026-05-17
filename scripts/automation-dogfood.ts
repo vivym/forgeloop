@@ -101,7 +101,7 @@ const seedDraftOnlyApprovedSpec = async (
     })
     .expect(201);
   await request(server)
-    .post(`/p0/projects/${project.id}/automation/capabilities`)
+    .post(`/automation/projects/${project.id}/capabilities`)
     .set(humanAdminHeaders)
     .send({
       repo_id: repoId,

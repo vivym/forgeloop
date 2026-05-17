@@ -12,6 +12,7 @@ import {
 
 const rootUrl = new URL('../..', import.meta.url);
 
+const readText = (path: string) => readFileSync(new URL(path, rootUrl), 'utf8');
 const readJson = (path: string) => JSON.parse(readFileSync(new URL(path, rootUrl), 'utf8'));
 
 describe('automation dogfood script', () => {
@@ -20,6 +21,14 @@ describe('automation dogfood script', () => {
     expect(readJson('package.json').scripts).toMatchObject({
       'automation:dogfood': automationDogfoodCommand,
     });
+  });
+
+  it('uses product automation settings routes instead of old public P0 routes', () => {
+    const source = readText('scripts/automation-dogfood.ts');
+
+    expect(source).toContain('/automation/projects/${project.id}/capabilities');
+    expect(source).not.toMatch(/\/p0\/projects\/[^'"`]+\/automation\/capabilities/);
+    expect(source).not.toContain('/p0/manual-path-holds');
   });
 
   it('renders required public-safe summary markers', () => {

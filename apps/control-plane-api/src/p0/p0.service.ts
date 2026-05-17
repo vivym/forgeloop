@@ -61,18 +61,16 @@ import { SpecPlanService } from '../modules/spec-plan/spec-plan.service';
 import { WorkItemService } from '../modules/work-items/work-item.service';
 import type {
   ActorCommandDto,
+  AutomationActorContextDto,
   CreateProjectDto,
   CreateProjectRepoDto,
   CreateExecutionPackageDto,
   CreatePlanRevisionDto,
   CreateSpecRevisionDto,
+  DisableAutomationCapabilitiesDto,
   MarkPackageReadyDto,
   PatchExecutionPackageDto,
   CreateWorkItemDto,
-} from '../modules/delivery/dto';
-import type {
-  AutomationActorContextDto,
-  DisableAutomationCapabilitiesDto,
   ReviewDecisionDto,
   RunControlDto,
   RunInputDto,
@@ -80,7 +78,7 @@ import type {
   RequestManualPathHoldDto,
   ResolveManualPathHoldDto,
   SetAutomationCapabilitiesDto,
-} from './dto';
+} from '../modules/delivery/dto';
 
 const commandClaimTtlMs = 5 * 60 * 1000;
 

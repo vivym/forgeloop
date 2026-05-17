@@ -52,7 +52,7 @@ import type {
   RequestManualPathHoldDto,
   ResolveManualPathHoldDto,
   SetAutomationCapabilitiesDto,
-} from '../../p0/dto';
+} from '../delivery/dto';
 import {
   assertAutomationPreconditionStillCurrent,
   assertCommandCapabilityStillEnabled,
