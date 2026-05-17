@@ -4,6 +4,19 @@ import { describe, expect, it } from 'vitest';
 import { App } from '../../apps/web/src/App';
 
 describe('Release Owner surface', () => {
+  it('server-renders role workbench controls from the MVP role matrix', () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain('Role Workbench');
+    expect(html).toContain('Intake');
+    expect(html).toContain('Spec Approver');
+    expect(html).toContain('Execution Owner');
+    expect(html).toContain('Reviewer');
+    expect(html).toContain('QA/Test Owner');
+    expect(html).toContain('Manager Health');
+    expect(html).toContain('Load role queue');
+  });
+
   it('server-renders compact release controls and backend-derived cockpit sections', () => {
     const html = renderToString(<App />);
 

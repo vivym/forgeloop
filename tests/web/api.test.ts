@@ -331,12 +331,22 @@ describe('Forgeloop web API client', () => {
 
     await queryApi.getWorkItemCockpit('work item/1');
     await queryApi.getWorkItemReplay('work item/1');
+    await queryApi.getExecutionPackageReplay('package/1');
+    await queryApi.getReviewPacketReplay('review/1');
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/work-item-cockpit/work%20item%2F1', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/root/query/replay/work_item/work%20item%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/query/replay/execution_package/package%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/query/replay/review_packet/review%2F1', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
@@ -443,6 +453,27 @@ describe('Forgeloop web API client', () => {
     );
   });
 
+  it('fetches role workbench projections with all supported filters', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ summary: {}, items: [] }), { status: 200 }));
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await queryApi.getRoleWorkbench('intake', {
+      project_id: 'project 1',
+      actor_id: 'actor/owner',
+      kind: 'initiative',
+      limit: 25,
+      cursor: 'item 1',
+      phase: 'triage',
+      status: 'needs_review',
+      risk: 'high risk',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/query/workbenches/intake?project_id=project+1&actor_id=actor%2Fowner&kind=initiative&limit=25&cursor=item+1&phase=triage&status=needs_review&risk=high+risk',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('keeps command and query client method surfaces separate', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
     const commandApi = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
@@ -456,8 +487,10 @@ describe('Forgeloop web API client', () => {
     expect(commandMethods).not.toContain('getWorkItemCockpit');
     expect(commandMethods).not.toContain('getWorkItemReplay');
     expect(Object.keys(queryApi).sort()).toEqual([
+      'getExecutionPackageReplay',
       'getReleaseCockpit',
       'getReleaseReplay',
+      'getReviewPacketReplay',
       'getRoleWorkbench',
       'getWorkItemCockpit',
       'getWorkItemReplay',

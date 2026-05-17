@@ -141,6 +141,19 @@ pre {
   gap: 8px;
 }
 
+.role-tabs {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.role-tabs button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .banner {
   display: flex;
   align-items: center;
@@ -190,6 +203,10 @@ pre {
 }
 
 .release-owner {
+  grid-column: 1 / -1;
+}
+
+.role-workbench {
   grid-column: 1 / -1;
 }
 
@@ -247,6 +264,47 @@ pre {
   max-height: 300px;
 }
 
+.role-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr)) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.role-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.role-queue {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 460px;
+  overflow: auto;
+}
+
+.role-queue-item {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #d8dee5;
+  border-radius: 6px;
+  background: #fbfcfd;
+  padding: 8px;
+}
+
+.role-queue-main {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  height: auto;
+  min-height: 58px;
+  text-align: left;
+}
+
 .list-row {
   display: grid;
   gap: 3px;
@@ -258,6 +316,9 @@ pre {
 
 .list-row strong,
 .list-row span,
+.role-queue-main strong,
+.role-queue-main span,
+.role-paging span,
 .entity-summary span,
 .detail-block span,
 .detail-block p {
@@ -265,9 +326,26 @@ pre {
 }
 
 .list-row.selected,
-.segmented .active {
+.segmented .active,
+.role-tabs .active {
   border-color: #315d86;
   background: #e8f1fa;
+}
+
+.role-queue-main span,
+.role-paging span {
+  color: #67717c;
+  font-size: 12px;
+}
+
+.role-actions button {
+  flex: 1 1 116px;
+}
+
+.role-item-snapshot {
+  max-height: 120px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .status-line {
@@ -674,6 +752,16 @@ pre {
   .release-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .role-tabs,
+  .role-queue {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .role-filter-grid,
+  .role-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -692,7 +780,11 @@ pre {
   .run-console-grid,
   .run-input-row,
   .release-load-row,
-  .release-grid {
+  .release-grid,
+  .role-tabs,
+  .role-filter-grid,
+  .role-summary,
+  .role-queue {
     grid-template-columns: 1fr;
   }
 

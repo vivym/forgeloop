@@ -24,6 +24,10 @@ import {
   type ReleaseCockpitResponse,
   type ReleaseEvidenceObjectRef,
   type ReviewPacket,
+  type RoleWorkbenchAction,
+  type RoleWorkbenchId,
+  type RoleWorkbenchQuery,
+  type RoleWorkbenchResponse,
   type RunEvent,
   type RunEventStream,
   type RunPackageBody,
@@ -37,6 +41,7 @@ import {
 import {
   appendRunEvents,
   buildObservationEvidencePayload,
+  createRoleWorkbenchRequestGate,
   evidenceChainDisplayItem,
   evidenceChainSummaryMetrics,
   groupReleaseBlockers,
@@ -46,6 +51,10 @@ import {
   latestPlanStep,
   renderableRunEvents,
   releaseNextActionLabel,
+  roleWorkbenchItemDetailLabels,
+  roleWorkbenchItemTitle,
+  roleWorkbenchObjectLabel,
+  roleWorkbenchTabs,
   runArtifactDisplayLabel,
   runArtifactsForDetail,
   visibleRunArtifacts,
@@ -110,6 +119,14 @@ export function App() {
   const [projectFilter, setProjectFilter] = useState('');
   const [manualWorkItemId, setManualWorkItemId] = useState('');
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
+  const [activeRoleWorkbenchId, setActiveRoleWorkbenchId] = useState<RoleWorkbenchId>('intake');
+  const [roleWorkbench, setRoleWorkbench] = useState<RoleWorkbenchResponse | null>(null);
+  const [roleActorFilter, setRoleActorFilter] = useState('');
+  const [roleKindFilter, setRoleKindFilter] = useState('');
+  const [rolePhaseFilter, setRolePhaseFilter] = useState('');
+  const [roleStatusFilter, setRoleStatusFilter] = useState('');
+  const [roleRiskFilter, setRoleRiskFilter] = useState('');
+  const [roleWorkbenchCursor, setRoleWorkbenchCursor] = useState('');
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [cockpit, setCockpit] = useState<CockpitResponse>({});
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
@@ -170,8 +187,11 @@ export function App() {
     change_severity: 'major',
     suggested_validation: '',
   });
+  const roleWorkbenchRequestGate = useMemo(createRoleWorkbenchRequestGate, []);
 
   const hasActiveCockpit = isActiveCockpit(cockpit, selectedWorkItemId);
+  const activeRoleWorkbenchTab = roleWorkbenchTabs.find((tab) => tab.id === activeRoleWorkbenchId) ?? roleWorkbenchTabs[0];
+  const roleWorkbenchItems = roleWorkbench?.items ?? [];
   const selectedWorkItem = hasActiveCockpit ? cockpit.work_item : workItems.find((item) => item.id === selectedWorkItemId);
   const currentSpec = hasActiveCockpit ? (cockpit.current_spec ?? null) : null;
   const currentPlan = hasActiveCockpit ? (cockpit.current_plan ?? null) : null;
@@ -211,6 +231,11 @@ export function App() {
   useEffect(() => {
     void loadWorkItems();
   }, []);
+
+  useEffect(() => {
+    setRoleWorkbenchCursor('');
+    void loadRoleWorkbench({ cursor: '' });
+  }, [activeRoleWorkbenchId]);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 30_000);
@@ -383,6 +408,57 @@ export function App() {
       setWorkItems(items);
       if (!selectedWorkItemId && items[0]) setSelectedWorkItemId(items[0].id);
     });
+  }
+
+  function roleWorkbenchQuery(cursor = roleWorkbenchCursor): RoleWorkbenchQuery {
+    return {
+      limit: 25,
+      ...(projectFilter.trim() ? { project_id: projectFilter.trim() } : {}),
+      ...(roleActorFilter.trim() ? { actor_id: roleActorFilter.trim() } : {}),
+      ...(roleKindFilter.trim() ? { kind: roleKindFilter.trim() } : {}),
+      ...(rolePhaseFilter.trim() ? { phase: rolePhaseFilter.trim() } : {}),
+      ...(roleStatusFilter.trim() ? { status: roleStatusFilter.trim() } : {}),
+      ...(roleRiskFilter.trim() ? { risk: roleRiskFilter.trim() } : {}),
+      ...(cursor.trim() ? { cursor: cursor.trim() } : {}),
+    };
+  }
+
+  async function loadRoleWorkbench(options: { cursor?: string; append?: boolean; workbenchId?: RoleWorkbenchId } = {}) {
+    const cursor = options.cursor ?? roleWorkbenchCursor;
+    const workbenchId = options.workbenchId ?? activeRoleWorkbenchId;
+    const query = roleWorkbenchQuery(cursor);
+    const requestId = roleWorkbenchRequestGate.begin();
+    setLoading(true);
+    setError('');
+    try {
+      const response = await queryApi.getRoleWorkbench(workbenchId, query);
+      if (!roleWorkbenchRequestGate.isCurrent(requestId)) return;
+      setRoleWorkbench((current) =>
+        options.append && current
+          ? {
+              ...response,
+              items: [...current.items, ...response.items],
+            }
+          : response,
+      );
+      setRoleWorkbenchCursor(response.next_cursor ?? '');
+      setNotice('Loaded role queue');
+    } catch (cause) {
+      if (roleWorkbenchRequestGate.isCurrent(requestId)) {
+        setError(cause instanceof Error ? cause.message : 'Request failed');
+      }
+    } finally {
+      if (roleWorkbenchRequestGate.isCurrent(requestId)) {
+        setLoading(false);
+      }
+    }
+  }
+
+  function selectRoleWorkbenchTab(workbenchId: RoleWorkbenchId) {
+    roleWorkbenchRequestGate.invalidate();
+    setRoleWorkbench(null);
+    setRoleWorkbenchCursor('');
+    setActiveRoleWorkbenchId(workbenchId);
   }
 
   function clearWorkbenchState() {
@@ -571,8 +647,8 @@ export function App() {
     return id;
   }
 
-  async function refreshReleaseCockpit(reloadReplay = false) {
-    const id = activeReleaseId();
+  async function refreshReleaseCockpit(reloadReplay = false, idOverride?: string) {
+    const id = idOverride ?? activeReleaseId();
     const [cockpitResponse, replayResponse] = await Promise.all([
       queryApi.getReleaseCockpit(id),
       reloadReplay ? queryApi.getReleaseReplay(id) : Promise.resolve(releaseReplay),
@@ -589,6 +665,65 @@ export function App() {
       observation_plan: cockpitResponse.release.observation_plan ?? '',
     }));
     setReleaseReplay(reloadReplay ? replayResponse : []);
+  }
+
+  async function applyRoleWorkbenchAction(action: RoleWorkbenchAction, item: Record<string, unknown>) {
+    if (action.method !== 'GET' || action.enabled === false) return;
+    const workItemCockpitId = pathTail(action.path, '/query/work-item-cockpit/');
+    if (workItemCockpitId) {
+      setSelectedWorkItemId(workItemCockpitId);
+      await refreshWorkbench(workItemCockpitId);
+      return;
+    }
+    const releaseCockpitId = pathTail(action.path, '/query/release-cockpit/');
+    if (releaseCockpitId) {
+      await refreshReleaseCockpit(false, releaseCockpitId);
+      return;
+    }
+    const releaseReplayId = pathTail(action.path, '/query/replay/release/');
+    if (releaseReplayId) {
+      await refreshReleaseCockpit(true, releaseReplayId);
+      return;
+    }
+    const executionPackageReplayId = pathTail(action.path, '/query/replay/execution_package/');
+    if (executionPackageReplayId) {
+      setSelectedPackageId(executionPackageReplayId);
+      setTimeline(await queryApi.getExecutionPackageReplay(executionPackageReplayId));
+      return;
+    }
+    const reviewPacketReplayId = pathTail(action.path, '/query/replay/review_packet/');
+    if (reviewPacketReplayId) {
+      setSelectedReviewId(reviewPacketReplayId);
+      setTimeline(await queryApi.getReviewPacketReplay(reviewPacketReplayId));
+      return;
+    }
+    const workItemReplayId = pathTail(action.path, '/query/replay/work_item/');
+    if (workItemReplayId) {
+      setSelectedWorkItemId(workItemReplayId);
+      setTimeline(await queryApi.getWorkItemReplay(workItemReplayId));
+      return;
+    }
+    if (action.path.startsWith('/query/workbenches/manager-health')) {
+      selectRoleWorkbenchTab('manager-health');
+      await loadRoleWorkbench({ cursor: '', workbenchId: 'manager-health' });
+      return;
+    }
+    selectRoleWorkbenchObject(item);
+  }
+
+  function roleWorkbenchAction(action: RoleWorkbenchAction, item: Record<string, unknown>) {
+    void runAction(action.label, async () => {
+      await applyRoleWorkbenchAction(action, item);
+    });
+  }
+
+  function selectRoleWorkbenchObject(item: Record<string, unknown>) {
+    const object = item.object;
+    if (!isRoleObjectRef(object)) return;
+    if (object.type === 'work_item') setSelectedWorkItemId(object.id);
+    if (object.type === 'release') setReleaseId(object.id);
+    if (object.type === 'execution_package') setSelectedPackageId(object.id);
+    if (object.type === 'review_packet') setSelectedReviewId(object.id);
   }
 
   function loadReleaseCockpit(event?: FormEvent) {
@@ -656,12 +791,13 @@ export function App() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <h1>ForgeLoop P0 Workbench</h1>
+          <h1>ForgeLoop Delivery Workbench</h1>
           <p>{selectedWorkItem ? `${selectedWorkItem.title} (${selectedWorkItem.id})` : 'No work item selected'}</p>
         </div>
         <div className="topbar-actions">
           <button onClick={() => void loadWorkItems()} disabled={loading}>Reload list</button>
           <button onClick={() => void refreshWorkbench()} disabled={loading || !selectedWorkItemId}>Refresh cockpit</button>
+          <button onClick={() => void loadRoleWorkbench({ cursor: '' })} disabled={loading}>Refresh role queue</button>
         </div>
       </header>
 
@@ -673,6 +809,58 @@ export function App() {
       )}
 
       <div className="workbench-grid">
+        <section className="panel role-workbench">
+          <SectionHeader title="Role Workbench" meta={`${activeRoleWorkbenchTab.label} / ${roleWorkbenchItems.length} shown`} />
+          <div className="role-tabs" role="tablist" aria-label="Role workbench">
+            {roleWorkbenchTabs.map((tab) => (
+              <button
+                aria-selected={tab.id === activeRoleWorkbenchId}
+                className={tab.id === activeRoleWorkbenchId ? 'active' : ''}
+                key={tab.id}
+                onClick={() => selectRoleWorkbenchTab(tab.id)}
+                role="tab"
+                type="button"
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <form
+            className="role-filter-grid"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void loadRoleWorkbench({ cursor: '' });
+            }}
+          >
+            <label>Project<input value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)} placeholder="project_id" /></label>
+            <label>Actor<input value={roleActorFilter} onChange={(event) => setRoleActorFilter(event.target.value)} placeholder="actor_id" /></label>
+            <label>Kind<input value={roleKindFilter} onChange={(event) => setRoleKindFilter(event.target.value)} placeholder="kind" /></label>
+            <label>Phase<input value={rolePhaseFilter} onChange={(event) => setRolePhaseFilter(event.target.value)} placeholder="phase" /></label>
+            <label>Status<input value={roleStatusFilter} onChange={(event) => setRoleStatusFilter(event.target.value)} placeholder="status" /></label>
+            <label>Risk<input value={roleRiskFilter} onChange={(event) => setRoleRiskFilter(event.target.value)} placeholder="risk" /></label>
+            <button type="submit" disabled={loading}>Load role queue</button>
+          </form>
+          <RoleWorkbenchSummary response={roleWorkbench} />
+          <div className="role-queue">
+            {roleWorkbenchItems.length === 0 && <EmptyState text="No role queue items loaded" />}
+            {roleWorkbenchItems.map((item) => (
+              <RoleWorkbenchQueueItem
+                actions={getRoleWorkbenchActions(item)}
+                item={item}
+                key={getRoleWorkbenchItemKey(item)}
+                onAction={roleWorkbenchAction}
+                onSelect={selectRoleWorkbenchObject}
+              />
+            ))}
+          </div>
+          <div className="button-row role-paging">
+            <button type="button" disabled={loading || !roleWorkbench?.next_cursor} onClick={() => void loadRoleWorkbench({ append: true })}>
+              Load next
+            </button>
+            {roleWorkbench?.next_cursor && <span>next cursor: {roleWorkbench.next_cursor}</span>}
+          </div>
+        </section>
+
         <section className="panel work-items">
           <SectionHeader title="Work Items" meta={workItems.length ? `${workItems.length} loaded` : 'empty'} />
           <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void loadWorkItems(); }}>
@@ -701,7 +889,7 @@ export function App() {
             <div className="form-grid two">
               <label>Project<input required value={workItemForm.project_id} onChange={(event) => setWorkItemForm({ ...workItemForm, project_id: event.target.value })} /></label>
               <label>Kind<select value={workItemForm.kind} onChange={(event) => setWorkItemForm({ ...workItemForm, kind: event.target.value as WorkItemKind })}>
-                <option value="requirement">requirement</option><option value="bug">bug</option><option value="tech_debt">tech_debt</option>
+                <option value="initiative">initiative</option><option value="requirement">requirement</option><option value="bug">bug</option><option value="tech_debt">tech_debt</option>
               </select></label>
               <label>Priority<input value={workItemForm.priority} onChange={(event) => setWorkItemForm({ ...workItemForm, priority: event.target.value })} /></label>
               <label>Risk<input value={workItemForm.risk} onChange={(event) => setWorkItemForm({ ...workItemForm, risk: event.target.value })} /></label>
@@ -1109,6 +1297,117 @@ function PillList({ values, empty }: { values: string[]; empty: string }) {
   return <div className="pill-list">{values.map((value) => <span className="pill" key={value}>{value}</span>)}</div>;
 }
 
+function RoleWorkbenchSummary({ response }: { response: RoleWorkbenchResponse | null }) {
+  const metrics = Object.entries(response?.summary ?? {})
+    .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+    .slice(0, 8)
+    .map(([key, value]) => ({ label: key.replace(/_/g, ' '), value: String(value) }));
+
+  if (metrics.length === 0) return <EmptyState text="No role summary loaded" />;
+  return (
+    <div className="role-summary">
+      {metrics.map((metric) => (
+        <Metric key={metric.label} label={metric.label} value={metric.value} />
+      ))}
+    </div>
+  );
+}
+
+function RoleWorkbenchQueueItem({
+  actions,
+  item,
+  onAction,
+  onSelect,
+}: {
+  actions: RoleWorkbenchAction[];
+  item: Record<string, unknown>;
+  onAction: (action: RoleWorkbenchAction, item: Record<string, unknown>) => void;
+  onSelect: (item: Record<string, unknown>) => void;
+}) {
+  const labels = roleWorkbenchItemDetailLabels(item);
+  return (
+    <article className="role-queue-item">
+      <button className="role-queue-main" type="button" onClick={() => onSelect(item)}>
+        <strong>{roleWorkbenchItemTitle(item)}</strong>
+        <span>{roleWorkbenchObjectLabel(item)}</span>
+        {typeof item.queue === 'string' && <span>{item.queue}</span>}
+      </button>
+      <PillList values={labels} empty="No item fields" />
+      <RoleWorkbenchItemSnapshot item={item} />
+      <div className="button-row role-actions">
+        {actions.length === 0 && <span className="status-line">No actions</span>}
+        {actions.map((action) => (
+          <button
+            disabled={!canRunRoleWorkbenchAction(action)}
+            key={`${action.method}:${action.path}:${action.label}`}
+            onClick={() => onAction(action, item)}
+            title={roleWorkbenchActionTitle(action)}
+            type="button"
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function RoleWorkbenchItemSnapshot({ item }: { item: Record<string, unknown> }) {
+  const snapshot = Object.fromEntries(
+    Object.entries(item).filter(([key, value]) => {
+      if (['id', 'object', 'title', 'summary', 'actions', 'queue'].includes(key)) return false;
+      return typeof value === 'object' && value !== null;
+    }),
+  );
+
+  if (Object.keys(snapshot).length === 0) return null;
+  return <pre className="role-item-snapshot">{JSON.stringify(snapshot, null, 2)}</pre>;
+}
+
+function canRunRoleWorkbenchAction(action: RoleWorkbenchAction) {
+  return action.enabled !== false && action.method === 'GET';
+}
+
+function roleWorkbenchActionTitle(action: RoleWorkbenchAction) {
+  if (action.enabled === false) return action.reason ?? 'Action is disabled by the projection';
+  if (action.method !== 'GET') return 'Use the matching command panel for this write action';
+  return action.path;
+}
+
+function getRoleWorkbenchActions(item: Record<string, unknown>): RoleWorkbenchAction[] {
+  return Array.isArray(item.actions) ? item.actions.filter(isRoleWorkbenchAction) : [];
+}
+
+function isRoleWorkbenchAction(value: unknown): value is RoleWorkbenchAction {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as Partial<RoleWorkbenchAction>;
+  return (
+    typeof candidate.label === 'string' &&
+    typeof candidate.path === 'string' &&
+    (candidate.method === 'GET' || candidate.method === 'POST' || candidate.method === 'PATCH' || candidate.method === 'DELETE')
+  );
+}
+
+function getRoleWorkbenchItemKey(item: Record<string, unknown>) {
+  return typeof item.id === 'string' ? item.id : JSON.stringify(item.object ?? item);
+}
+
+function pathTail(path: string, prefix: string): string {
+  if (!path.startsWith(prefix)) return '';
+  const tail = path.slice(prefix.length).split('?')[0] ?? '';
+  return decodeURIComponent(tail);
+}
+
+function isRoleObjectRef(value: unknown): value is { type: string; id: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { type?: unknown }).type === 'string' &&
+    typeof (value as { id?: unknown }).id === 'string'
+  );
+}
+
 function EntitySummary({ title, entity, revisions }: { title: string; entity: SpecPlan | null; revisions: Array<SpecRevision | PlanRevision> }) {
   return (
     <div className="entity-summary">
@@ -1375,15 +1674,18 @@ function ReleaseBlockersPanel({ groups }: { groups: ReturnType<typeof groupRelea
 
 function defaultRevisionForm(mode: SpecPlanMode) {
   return {
-    summary: mode === 'spec' ? 'Minimum P0 workbench' : 'Implement workbench UI and API client',
-    content: mode === 'spec' ? 'Single-screen operational browser workbench for the P0 delivery loop.' : 'Build a compact React workbench wired to the P0 control-plane API.',
+    summary: mode === 'spec' ? 'Minimum delivery workbench' : 'Implement workbench UI and API client',
+    content:
+      mode === 'spec'
+        ? 'Single-screen operational browser workbench for the delivery loop.'
+        : 'Build a compact React workbench wired to the delivery API.',
     actor: actorDefault,
-    background: 'Operators need one dense place to inspect and advance P0 objects.',
-    goals: 'Create and inspect P0 objects\nTrigger workflow actions\nRender timeline and evidence',
+    background: 'Operators need one dense place to inspect and advance delivery objects.',
+    goals: 'Create and inspect delivery objects\nTrigger workflow actions\nRender timeline and evidence',
     acceptance: 'Work item can be created\nSpec and plan can be approved\nPackage can be run and reviewed',
     testStrategy: 'pnpm --filter @forgeloop/web build',
     implementation: 'Add typed API client, stateful workbench screen, and compact CSS.',
-    splitStrategy: 'Single package for P0 dogfood.',
+    splitStrategy: 'Single package for delivery dogfood.',
     testMatrix: 'pnpm test tests/web/api.test.ts\npnpm --filter @forgeloop/web build',
     rollback: 'Revert the web app changes.',
   };
@@ -1395,7 +1697,7 @@ function toSpecRevision(form: ReturnType<typeof defaultRevisionForm>): CreateSpe
     content: form.content,
     background: form.background || form.content,
     goals: lines(form.goals),
-    scope_in: ['P0 browser workbench'],
+    scope_in: ['Delivery browser workbench'],
     scope_out: ['Backend service changes'],
     acceptance_criteria: lines(form.acceptance),
     risk_notes: [],

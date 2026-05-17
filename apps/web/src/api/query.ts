@@ -29,6 +29,10 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       request<CockpitResponse>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
     getWorkItemReplay: (workItemId: string) =>
       request<TimelineEntry[]>(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
+    getExecutionPackageReplay: (executionPackageId: string) =>
+      request<TimelineEntry[]>(`/query/replay/execution_package/${encodeURIComponent(executionPackageId)}`),
+    getReviewPacketReplay: (reviewPacketId: string) =>
+      request<TimelineEntry[]>(`/query/replay/review_packet/${encodeURIComponent(reviewPacketId)}`),
     getReleaseCockpit: (releaseId: string) =>
       request<ReleaseCockpitResponse>(`/query/release-cockpit/${encodeURIComponent(releaseId)}`),
     getReleaseReplay: (releaseId: string) =>

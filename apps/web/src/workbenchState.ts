@@ -5,8 +5,83 @@ import type {
   EvidenceChainResponse,
   ReleaseBlocker,
   ReleaseEvidenceObjectRef,
+  RoleWorkbenchId,
 } from './api';
 export { renderableRunEvents } from '@forgeloop/contracts';
+
+export const roleWorkbenchTabs = [
+  { id: 'intake', label: 'Intake' },
+  { id: 'spec-approver', label: 'Spec Approver' },
+  { id: 'execution-owner', label: 'Execution Owner' },
+  { id: 'reviewer', label: 'Reviewer' },
+  { id: 'qa-test-owner', label: 'QA/Test Owner' },
+  { id: 'release-owner', label: 'Release Owner' },
+  { id: 'manager-health', label: 'Manager Health' },
+] as const satisfies ReadonlyArray<{ id: RoleWorkbenchId; label: string }>;
+
+export const createRoleWorkbenchRequestGate = () => {
+  let currentRequestId = 0;
+  return {
+    begin: () => {
+      currentRequestId += 1;
+      return currentRequestId;
+    },
+    invalidate: () => {
+      currentRequestId += 1;
+    },
+    isCurrent: (requestId: number) => requestId === currentRequestId,
+  };
+};
+
+type RoleWorkbenchProjectionItem = Record<string, unknown> & {
+  id?: unknown;
+  object?: unknown;
+  title?: unknown;
+  summary?: unknown;
+};
+
+const roleWorkbenchDetailFields = [
+  ['project_id', 'project'],
+  ['kind', 'kind'],
+  ['phase', 'phase'],
+  ['status', 'status'],
+  ['risk', 'risk'],
+  ['owner_actor_id', 'owner'],
+  ['reviewer_actor_id', 'reviewer'],
+  ['qa_owner_actor_id', 'qa'],
+  ['release_owner_actor_id', 'release owner'],
+  ['decision', 'decision'],
+  ['changed_file_count', 'changed files'],
+] as const;
+
+export const roleWorkbenchItemTitle = (item: RoleWorkbenchProjectionItem): string => {
+  if (typeof item.title === 'string' && item.title.trim()) return item.title;
+  if (typeof item.summary === 'string' && item.summary.trim()) return item.summary;
+  if (typeof item.id === 'string' && item.id.trim()) return item.id;
+  return 'Untitled item';
+};
+
+export const roleWorkbenchObjectLabel = (item: RoleWorkbenchProjectionItem): string => {
+  const object = item.object;
+  if (isObjectRef(object)) return `${labelForToken(object.type)} / ${object.id}`;
+  if (typeof item.id === 'string' && item.id.trim()) return `item / ${item.id}`;
+  return 'item / unknown';
+};
+
+export const roleWorkbenchItemDetailLabels = (item: RoleWorkbenchProjectionItem): string[] =>
+  roleWorkbenchDetailFields.flatMap(([field, label]) => {
+    const value = item[field];
+    if (typeof value === 'string' && value.trim()) return [`${label}: ${value}`];
+    if (typeof value === 'number' || typeof value === 'boolean') return [`${label}: ${String(value)}`];
+    return [];
+  });
+
+const isObjectRef = (value: unknown): value is { type: string; id: string } =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  typeof (value as { type?: unknown }).type === 'string' &&
+  typeof (value as { id?: unknown }).id === 'string';
 
 export function isActiveCockpit(cockpit: { work_item?: { id?: string } | null }, selectedWorkItemId: string): boolean {
   return Boolean(selectedWorkItemId && cockpit.work_item?.id === selectedWorkItemId);

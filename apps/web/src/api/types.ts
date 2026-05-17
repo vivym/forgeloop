@@ -84,7 +84,7 @@ export interface RoleWorkbenchQuery {
   risk?: string;
 }
 
-export type WorkItemKind = 'requirement' | 'bug' | 'tech_debt';
+export type WorkItemKind = 'initiative' | 'requirement' | 'bug' | 'tech_debt';
 export type ArtifactKind =
   | 'diff'
   | 'changed_files'
