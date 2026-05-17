@@ -12,6 +12,10 @@ import { InMemoryDeliveryRepository } from '../../packages/db/src';
 
 import { seedAppWithRunSession, seedQueuedPackageRun } from '../helpers/delivery-runtime-fixtures';
 
+const actorHeaderName = 'X-Forgeloop-Actor-Id';
+const actorOwner = 'actor-owner';
+const actorStranger = 'actor-stranger';
+
 describe('run event API', () => {
   const apps: INestApplication[] = [];
   const track = async <T extends { app: INestApplication }>(value: Promise<T>): Promise<T> => {
@@ -107,7 +111,7 @@ describe('run event API', () => {
 
     const response = await request(app.getHttpServer())
       .get(`/run-sessions/${runSessionId}/events`)
-      .query({ actor_id: 'actor-owner' })
+      .set(actorHeaderName, actorOwner)
       .expect(200);
 
     const event = response.body.events.find((item: { event_type: string }) => item.event_type === 'agent_message_delta');
@@ -120,7 +124,7 @@ describe('run event API', () => {
 
     const response = await request(app.getHttpServer())
       .get(`/run-sessions/${runSessionId}/events`)
-      .query({ actor_id: 'actor-owner' })
+      .set(actorHeaderName, actorOwner)
       .expect(200);
 
     expect(response.body).toEqual({
@@ -136,7 +140,7 @@ describe('run event API', () => {
 
     const backfill = await request(app.getHttpServer())
       .get(`/run-sessions/${runSessionId}/events`)
-      .query({ actor_id: 'actor-owner' })
+      .set(actorHeaderName, actorOwner)
       .expect(200);
 
     expect(backfill.body).toMatchObject({
@@ -147,8 +151,8 @@ describe('run event API', () => {
 
     const sseBody = await expectSseFirstEvent(
       app,
-      `/run-sessions/${runSessionId}/events/stream?actor_id=actor-owner&after=${encodeURIComponent(backfill.body.next_cursor as string)}`,
-      {},
+      `/run-sessions/${runSessionId}/events/stream?after=${encodeURIComponent(backfill.body.next_cursor as string)}`,
+      { [actorHeaderName]: actorOwner },
       async () => {
         await repo.appendRunEvent({
           id: 'run-event-empty-backfill-live',
@@ -183,7 +187,7 @@ describe('run event API', () => {
 
     const response = await request(app.getHttpServer())
       .get(`/run-sessions/${runSessionId}/events`)
-      .query({ actor_id: 'actor-owner' })
+      .set(actorHeaderName, actorOwner)
       .expect(200);
 
     expect(response.body.events.map((event: { event_type: string }) => event.event_type)).toEqual(['run_queued']);
@@ -216,7 +220,7 @@ describe('run event API', () => {
 
     const response = await request(app.getHttpServer())
       .get(`/run-sessions/${runSessionId}/events`)
-      .query({ actor_id: 'actor-owner' })
+      .set(actorHeaderName, actorOwner)
       .expect(200);
 
     expect(response.body.events.map((event: { event_type: string }) => event.event_type)).toEqual([
@@ -233,8 +237,8 @@ describe('run event API', () => {
 
     const sseBody = await expectSseFirstEvent(
       app,
-      `/run-sessions/${runSessionId}/events/stream?actor_id=actor-owner`,
-      {},
+      `/run-sessions/${runSessionId}/events/stream`,
+      { [actorHeaderName]: actorOwner },
       async () => {
         await repo.appendRunEvent({
           id: 'run-event-live-tail',
@@ -283,7 +287,8 @@ describe('run event API', () => {
 
     const sseBody = await expectSseFirstEvent(
       app,
-      `/run-sessions/${runSessionId}/events/stream?actor_id=actor-owner&after=${encodeURIComponent(historicalEvent.cursor)}`,
+      `/run-sessions/${runSessionId}/events/stream?after=${encodeURIComponent(historicalEvent.cursor)}`,
+      { [actorHeaderName]: actorOwner },
     );
 
     expect(sseBody).toContain('Follow-up cursor event.');
@@ -436,13 +441,13 @@ describe('run event API', () => {
 
     await request(app.getHttpServer())
       .get(`/run-sessions/${runSessionId}/events`)
-      .query({ actor_id: 'actor-stranger' })
+      .set(actorHeaderName, actorStranger)
       .expect(403);
   });
 
-  it('rejects demo actor_id fallback when durable mode has no authenticated actor', async () => {
+  it('rejects query actor identity when durable mode has no authenticated actor', async () => {
     const { app, runSessionId } = await track(
-      seedAppWithRunSession({ durabilityMode: 'durable', allowDemoActorIdFallback: false }),
+      seedAppWithRunSession({ durabilityMode: 'durable' }),
     );
 
     await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: 'actor-owner' }).expect(401);
@@ -454,7 +459,7 @@ describe('run event API', () => {
     await request(app.getHttpServer())
       .get(`/run-sessions/${runSessionId}/events/stream`)
       .set('Accept', 'text/event-stream')
-      .query({ actor_id: 'actor-stranger' })
+      .set(actorHeaderName, actorStranger)
       .expect(403);
   });
 
@@ -518,7 +523,8 @@ describe('run event API', () => {
 
     const response = await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
-      .send({ actor_id: 'actor-owner', message: 'Continue with option B.' })
+      .set(actorHeaderName, actorOwner)
+      .send({ message: 'Continue with option B.' })
       .expect(201);
 
     expect(response.body).toMatchObject({ status: 'accepted', command_type: 'input' });
@@ -539,7 +545,8 @@ describe('run event API', () => {
 
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
-      .send({ actor_id: 'actor-stranger', message: 'Cancel the current approach.' })
+      .set(actorHeaderName, actorStranger)
+      .send({ message: 'Cancel the current approach.' })
       .expect(403);
   });
 });

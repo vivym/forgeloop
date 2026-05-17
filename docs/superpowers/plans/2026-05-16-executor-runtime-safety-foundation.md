@@ -140,13 +140,13 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
 - Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
   - Derive the same runtime blockers from existing rows without a blocker table.
 - Modify: `apps/control-plane-api/src/modules/automation/automation.dto.ts`
-  - Add `AutomationRuntimeBlockerDto`; map sorted `blockers[]`; keep singular compatibility fields from first blocker.
+  - Add `AutomationRuntimeBlockerDto`; map sorted `blockers[]`; remove old singular fields.
 - Modify: `apps/control-plane-api/src/modules/automation/runtime-snapshot.service.ts`
   - Compute/sort blockers and pass through DTO mapping.
 - Modify: `packages/automation/src/types.ts`
   - Add `AutomationRuntimeBlocker` and `RuntimeSnapshotTarget.blockers`.
 - Modify: `packages/automation/src/http-client.ts`
-  - Preserve `blockers[]` while retaining singular aliases.
+  - Preserve `blockers[]` without old singular fields.
 - Modify: `packages/automation/src/planner.ts`
   - Ignore runtime blockers for enqueue because enqueue remains disabled; maintain no run enqueue action tests.
 
@@ -157,7 +157,7 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
 - Modify: `packages/run-worker/src/index.ts`
   - Export any new runtime safety input types needed by app wiring.
 - Modify: `packages/workflow/src/execution-finalizer.ts`
-  - Split `finalizePackageRunWithExecutorResult` into `terminalizePackageRunWithRuntimeEvidence` and `completePackageRunReviewFinalization`; keep a mock/test-only compatibility wrapper.
+  - Split `finalizePackageRunWithExecutorResult` into `terminalizePackageRunWithRuntimeEvidence` and `completePackageRunReviewFinalization`; remove the old wrapper after callers move to the split functions.
 - Modify: `packages/workflow/src/activities.ts`
   - Build `RunSpec.source_mutation_policy`; fail closed or delegate production/local Codex to run-worker instead of legacy activity execution.
 - Modify: `apps/workflow-worker/src/worker.ts`
@@ -330,7 +330,7 @@ export type SourceMutationPolicy = 'path_policy_scoped' | 'no_source_changes';
 export type PolicySnapshotOrigin = 'workflow_md' | 'reviewed_safe_default';
 ```
 
-Extend `RuntimeSafetyAttestation` with optional scope-specific fields from the spec, preserving compatibility fields. Extend `PackageRuntimePolicySnapshot` with `snapshot_origin`, `normalized_policy_payload`, `workspace_policy`, `prompt_policy`, `artifact_visibility_policy`, policy digest fields, `safe_git_profile`, `safe_default_approval_evidence`, `frozen_command_check_policy`, `frozen_hook_specs`, and `source_mutation_policy`.
+Extend `RuntimeSafetyAttestation` with optional scope-specific fields from the spec and remove old fields. Extend `PackageRuntimePolicySnapshot` with `snapshot_origin`, `normalized_policy_payload`, `workspace_policy`, `prompt_policy`, `artifact_visibility_policy`, policy digest fields, `safe_git_profile`, `safe_default_approval_evidence`, `frozen_command_check_policy`, `frozen_hook_specs`, and `source_mutation_policy`.
 
 - [ ] **Step 5: Preserve source mutation in state transitions**
 
@@ -1641,9 +1641,9 @@ export async function completePackageRunReviewFinalization(input: CompletePackag
 
 It requires a terminalized succeeded RunSession, runs self-review when needed, creates/advances ReviewPacket, and writes trace links.
 
-- [ ] **Step 7: Keep compatibility wrapper mock/test-only**
+- [ ] **Step 7: Remove the old finalization wrapper**
 
-Refactor `finalizePackageRunWithExecutorResult` to call the split functions only for mock/test paths. Production/local Codex run-worker code must call the split sequence directly.
+Move mock/test paths to the split functions and delete `finalizePackageRunWithExecutorResult`. Production/local Codex run-worker code must call the split sequence directly.
 
 - [ ] **Step 8: Refactor run-worker finalization path**
 
@@ -1658,7 +1658,7 @@ if (terminalized.reviewEligible) {
 }
 ```
 
-Mock workflow dogfood may continue through compatibility wrapper.
+Mock workflow dogfood must call the split finalization sequence directly.
 
 - [ ] **Step 9: Build `RunSpec.source_mutation_policy`**
 
@@ -1745,7 +1745,7 @@ interface ExecutorExecutionRequest {
 }
 ```
 
-Update `apps/executor-gateway/src/executor.controller.ts` to pass the raw request body into `ExecutorService.createExecution`, where the service parses either this envelope or a bare mock `RunSpec`. For backward compatibility, continue accepting a bare `RunSpec` only when `executor_type === 'mock'`. For `local_codex`, require the envelope and validate `runtime_safety_attestation.attestation_scope === 'run_execution'`.
+Update `apps/executor-gateway/src/executor.controller.ts` to pass the raw request body into `ExecutorService.createExecution`, where the service parses this envelope for every executor type. Do not accept a bare `RunSpec`. For `local_codex`, require the envelope and validate `runtime_safety_attestation.attestation_scope === 'run_execution'`.
 
 Change adapter invocation from a bare `RunSpec` to a request object:
 
@@ -1846,11 +1846,11 @@ const requiredCodes = [
 ] as const;
 ```
 
-Assert each projection includes sanitized `blockers[]`, deterministic sorting, and compatibility `blocked_reason_code`/`blocked_summary` from the first blocker. Assert no raw command/stdout/stderr/diff/local path/env/secret substrings appear.
+Assert each projection includes sanitized `blockers[]` with deterministic sorting and no old singular fields. Assert no raw command/stdout/stderr/diff/local path/env/secret substrings appear.
 
 - [ ] **Step 2: Write failing automation client parsing tests**
 
-In `tests/automation/planner.test.ts` or a new HTTP client test, assert `AutomationHttpClient.runtimeSnapshot()` preserves `blockers[]` and singular aliases.
+In `tests/automation/planner.test.ts` or a new HTTP client test, assert `AutomationHttpClient.runtimeSnapshot()` preserves `blockers[]` without old singular fields.
 
 - [ ] **Step 3: Run tests and verify failure**
 

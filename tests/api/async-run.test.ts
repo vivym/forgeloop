@@ -4,9 +4,12 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { DELIVERY_DEMO_ACTOR_ID_FALLBACK, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
+
+const actorOwner = 'actor-owner';
+const actorHeaderName = 'X-Forgeloop-Actor-Id';
 
 describe('async run API', () => {
   let app: INestApplication;
@@ -26,7 +29,8 @@ describe('async run API', () => {
 
     const response = await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
-      .send({ requested_by_actor_id: 'actor-owner', workflow_only: true })
+      .set(actorHeaderName, actorOwner)
+      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
       .expect(201);
 
     expect(response.body).toMatchObject({
@@ -44,8 +48,6 @@ describe('async run API', () => {
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')
-      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(false)
       .compile();
     app = moduleRef.createNestApplication();
     await app.init();

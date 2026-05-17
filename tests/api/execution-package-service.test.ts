@@ -144,6 +144,8 @@ describe('ExecutionPackageService delivery API', () => {
     const generated = (await request(server).post(`/plan-revisions/${planRevision.id}/generate-packages`).send({}).expect(201))
       .body;
     expect(generated).toHaveLength(1);
+    expect(generated[0].execution_package_set_id).toBe(`generation:${planRevision.id}:default`);
+    expect(generated[0].generation_key).toBe('default');
     expect(generated[0].package_policy_snapshot.policy_digest).toBe('delivery-default-policy');
     expect(generated[0].package_policy_snapshot.policy_source_path).toBe('forgeloop://delivery/default-package-policy');
 

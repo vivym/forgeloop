@@ -58,7 +58,6 @@ describe('query module', () => {
 
     expect(coreTokensModule).toHaveProperty('DELIVERY_REPOSITORY');
     expect(coreTokensModule).toHaveProperty('RUN_DURABILITY_MODE');
-    expect(coreTokensModule).toHaveProperty('DELIVERY_DEMO_ACTOR_ID_FALLBACK');
   });
 
   const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {
@@ -81,6 +80,7 @@ describe('query module', () => {
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
     const releaseResponse = await request(app.getHttpServer())
       .post('/releases')
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         project_id: executionPackage.project_id,
@@ -94,10 +94,12 @@ describe('query module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${releaseId}/work-items/${executionPackage.work_item_id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${releaseId}/execution-packages/${executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
     await request(app.getHttpServer())

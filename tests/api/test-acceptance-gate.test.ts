@@ -17,7 +17,6 @@ import type {
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -255,8 +254,6 @@ describe('release test acceptance gate', () => {
       .useValue(repo)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('volatile_demo')
-      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(true)
       .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();

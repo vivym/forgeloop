@@ -16,7 +16,6 @@ import {
   actorHeaderName as trustedActorHeaderName,
 } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -44,8 +43,6 @@ const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemory
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('durable')
-    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-    .useValue(false)
     .compile();
   const app = moduleRef.createNestApplication();
   await app.init();
@@ -476,18 +473,25 @@ describe('durable run actor auth', () => {
   });
 });
 
-describe('volatile demo actor fallback', () => {
+describe('run actor authentication', () => {
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('still accepts body and query actor identity', async () => {
+  it('requires trusted actor headers instead of body and query actor identity', async () => {
     const { app, runSessionId } = await track(seedAppWithRunSession());
 
-    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(200);
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(401);
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
       .send({ actor_id: actorOwner, message: 'continue' })
+      .expect(401);
+
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).set(actorHeaderName, actorOwner).expect(200);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/input`)
+      .set(actorHeaderName, actorOwner)
+      .send({ message: 'continue' })
       .expect(201);
   });
 });

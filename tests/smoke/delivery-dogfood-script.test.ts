@@ -101,7 +101,7 @@ describe('delivery dogfood script helpers', () => {
     });
   });
 
-  it('does not send actor_id query fallback for durable event backfill', () => {
+  it('does not send actor_id query params for durable event backfill', () => {
     const request = buildRunEventListRequest('run-1', { mode: 'durable', actorId: 'actor-owner', after: '0001' });
 
     expect(request.path).toBe('/run-sessions/run-1/events?after=0001');
@@ -129,7 +129,7 @@ describe('delivery dogfood script helpers', () => {
     });
   });
 
-  it('opens durable SSE streams with stream_token instead of query-only actor_id fallback', () => {
+  it('opens durable SSE streams with stream_token instead of query-only actor identity', () => {
     const tokenRequest = buildRunEventStreamTokenRequest('run-1', { mode: 'durable', actorId: 'actor-owner' });
     const streamRequest = buildRunEventStreamRequest('http://api.local', 'run-1', {
       mode: 'durable',
@@ -151,12 +151,12 @@ describe('delivery dogfood script helpers', () => {
     const missingChecks = publicApiAuthChecks('durable', {
       durablePublicApiHeaderAuth: false,
       durableSseStreamTokenAuth: false,
-      volatileActorFallback: false,
+      volatilePublicApiHeaderAuth: false,
     });
     const passedChecks = publicApiAuthChecks('durable', {
       durablePublicApiHeaderAuth: true,
       durableSseStreamTokenAuth: true,
-      volatileActorFallback: false,
+      volatilePublicApiHeaderAuth: false,
     });
 
     expect(missingChecks.map((check) => [check.label, check.status])).toEqual([
@@ -189,6 +189,32 @@ describe('delivery dogfood script helpers', () => {
     ).toBe('FAIL');
   });
 
+  it('does not report dogfood PASS when browser workbench verification is skipped', () => {
+    expect(
+      deliveryDogfoodStatus(
+        [{ label: 'run', packageId: 'package-1', runSessionId: 'run-1', reviewPacketId: 'review-1', status: 'passed', notes: [] }],
+        [
+          { label: 'Web app probe', status: 'passed', details: [] },
+          { label: 'Browser visual/text-overflow verification', status: 'skipped', details: ['browser e2e was not run'] },
+        ],
+      ),
+    ).toBe('FAIL');
+  });
+
+  it('renders source metadata without leaking local repo paths', () => {
+    const report = renderReport({
+      status: 'PASS',
+      apiUrl: 'http://api.local',
+      results: [],
+      checks: [],
+    });
+
+    expect(report).toContain('Source commit: unknown');
+    expect(report).toContain('Source tree before report write: unknown');
+    expect(report).not.toContain(process.cwd());
+    expect(report).not.toContain('/Users/');
+  });
+
   it('can clear durable database env for browser e2e child commands', () => {
     const env = dogfoodChildEnv(
       { FORGELOOP_DATABASE_URL: 'postgresql://example', KEEP_ME: '1' },
@@ -199,15 +225,19 @@ describe('delivery dogfood script helpers', () => {
     expect(env).toMatchObject({ KEEP_ME: '1', EXTRA: '2' });
   });
 
-  it('keeps volatile_demo behavior compatible with body and query actor fallback', () => {
-    expect(buildRunEventListRequest('run-1', { mode: 'volatile_demo', actorId: 'actor-owner', after: '0001' }).path).toBe(
-      '/run-sessions/run-1/events?actor_id=actor-owner&after=0001',
-    );
-    expect(buildRunEventStreamRequest('http://api.local', 'run-1', { mode: 'volatile_demo', actorId: 'actor-owner', after: '0001' }).url).toBe(
-      'http://api.local/run-sessions/run-1/events/stream?actor_id=actor-owner&after=0001',
-    );
+  it('uses trusted actor headers for volatile_demo run APIs', () => {
+    const listRequest = buildRunEventListRequest('run-1', { mode: 'volatile_demo', actorId: 'actor-owner', after: '0001' });
+    const streamRequest = buildRunEventStreamRequest('http://api.local', 'run-1', {
+      mode: 'volatile_demo',
+      actorId: 'actor-owner',
+      after: '0001',
+    });
+
+    expect(listRequest.path).toBe('/run-sessions/run-1/events?after=0001');
+    expect(listRequest.init.headers).toMatchObject({ 'X-Forgeloop-Actor-Id': 'actor-owner' });
+    expect(streamRequest.url).toBe('http://api.local/run-sessions/run-1/events/stream?after=0001');
+    expect(streamRequest.headers).toMatchObject({ 'X-Forgeloop-Actor-Id': 'actor-owner' });
     expect(buildRunInputRequest('run-1', { mode: 'volatile_demo', actorId: 'actor-owner', message: 'Continue' }).init.body).toEqual({
-      actor_id: 'actor-owner',
       message: 'Continue',
     });
   });

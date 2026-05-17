@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { createDbClient, createDrizzleDeliveryRepository, InMemoryDeliveryRepository, type DeliveryRepository } from '@forgeloop/db';
 
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
@@ -27,13 +26,8 @@ const durabilityMode = (): RunDurabilityMode =>
   providers: [
     { provide: DELIVERY_REPOSITORY, useFactory: createRepository },
     { provide: RUN_DURABILITY_MODE, useFactory: durabilityMode },
-    {
-      provide: DELIVERY_DEMO_ACTOR_ID_FALLBACK,
-      useFactory: (mode: RunDurabilityMode) => mode === 'volatile_demo',
-      inject: [RUN_DURABILITY_MODE],
-    },
     ControlPlaneRuntimeService,
   ],
-  exports: [DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, DELIVERY_DEMO_ACTOR_ID_FALLBACK, ControlPlaneRuntimeService],
+  exports: [DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, ControlPlaneRuntimeService],
 })
 export class ControlPlaneCoreModule {}

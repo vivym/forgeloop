@@ -20,13 +20,11 @@ export class RunSessionsController {
   listRunEvents(
     @Param('runSessionId') runSessionId: string,
     @Query('after') after: string | undefined,
-    @Query('actor_id') actorId: string | undefined,
     @Query('stream_token') streamToken: string | undefined,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.runControlService.listRunEvents(runSessionId, {
       ...(after === undefined ? {} : { after }),
-      ...(actorId === undefined ? {} : { actorId }),
       ...(streamToken === undefined ? {} : { streamToken }),
       actorContext: actorContextFromHeaders(headers),
     });
@@ -36,13 +34,11 @@ export class RunSessionsController {
   streamRunEvents(
     @Param('runSessionId') runSessionId: string,
     @Query('after') after: string | undefined,
-    @Query('actor_id') actorId: string | undefined,
     @Query('stream_token') streamToken: string | undefined,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<Observable<MessageEvent>> {
     return this.runControlService.streamRunEvents(runSessionId, {
       ...(after === undefined ? {} : { after }),
-      ...(actorId === undefined ? {} : { actorId }),
       ...(streamToken === undefined ? {} : { streamToken }),
       actorContext: actorContextFromHeaders(headers),
     });
@@ -51,16 +47,9 @@ export class RunSessionsController {
   @Post('run-sessions/:runSessionId/events/stream-token')
   createRunEventStreamToken(
     @Param('runSessionId') runSessionId: string,
-    @Query('actor_id') actorId?: string,
-    @Body() body?: { actor_id?: string },
     @Headers() headers?: Record<string, string | string[] | undefined>,
   ) {
-    const demoActorId = actorId ?? body?.actor_id;
-    return this.runControlService.createRunEventStreamToken(
-      runSessionId,
-      actorContextFromHeaders(headers ?? {}),
-      demoActorId === undefined ? {} : { demoActorId },
-    );
+    return this.runControlService.createRunEventStreamToken(runSessionId, actorContextFromHeaders(headers ?? {}));
   }
 
   @Post('run-sessions/:runSessionId/input')

@@ -350,9 +350,8 @@ const pollRunToTerminal = async (
     const runStatusAtObservation = typeof runSession.status === 'string' ? runSession.status : undefined;
     const response = await requestJson<{ events: ObservedRunEvent[] }>(
       apiUrl,
-      `/run-sessions/${encodeURIComponent(runSessionId)}/events?actor_id=local-codex-dogfood-actor${
-        after === undefined ? '' : `&after=${encodeURIComponent(after)}`
-      }`,
+      `/run-sessions/${encodeURIComponent(runSessionId)}/events${after === undefined ? '' : `?after=${encodeURIComponent(after)}`}`,
+      { headers: { 'X-Forgeloop-Actor-Id': 'local-codex-dogfood-actor' } },
     );
     const events = response.events;
     for (const event of events) {

@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -66,8 +65,6 @@ describeIfDb('durable revision lookup', () => {
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')
-      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(false)
       .compile();
     const app = moduleRef.createNestApplication();
     await app.init();

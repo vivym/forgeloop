@@ -80,7 +80,7 @@ export class ExecutionPackageService {
       if (repo === undefined) {
         throw new BadRequestException('Project has no bound repos');
       }
-      const generationKey = `legacy:${planRevisionId}`;
+      const generationKey = 'default';
       const existingPackage = (await repository.listExecutionPackagesForWorkItem(context.workItem.id)).find(
         (executionPackage) =>
           executionPackage.plan_revision_id === context.planRevision.id &&
@@ -113,7 +113,7 @@ export class ExecutionPackageService {
           forbidden_paths: ['packages/db/**'],
         },
         {
-          execution_package_set_id: `legacy:${planRevisionId}`,
+          execution_package_set_id: `generation:${planRevisionId}:${generationKey}`,
           generation_key: generationKey,
           package_key: 'api-package',
           sequence: 0,

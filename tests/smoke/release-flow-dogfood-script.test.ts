@@ -8,7 +8,6 @@ import type { Decision, ExecutionPackage, Release, ReleaseEvidence, ReviewPacket
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -45,8 +44,6 @@ describe('release flow dogfood script helpers', () => {
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')
-      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(false)
       .compile();
     const app = moduleRef.createNestApplication({ logger: false });
     app.useLogger(false);

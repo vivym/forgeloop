@@ -20,7 +20,6 @@ import type {
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
@@ -257,20 +256,16 @@ describe('release module', () => {
   it('allows AppModule to override core release providers without ReleaseModule owning delivery wiring', async () => {
     const repository = new InMemoryDeliveryRepository();
     const durabilityMode: RunDurabilityMode = 'durable';
-    const allowDemoActorIdFallback = false;
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue(durabilityMode)
-      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(allowDemoActorIdFallback)
       .compile();
 
     try {
       expect(moduleRef.get(DELIVERY_REPOSITORY)).toBe(repository);
       expect(moduleRef.get(RUN_DURABILITY_MODE)).toBe(durabilityMode);
-      expect(moduleRef.get(DELIVERY_DEMO_ACTOR_ID_FALLBACK)).toBe(allowDemoActorIdFallback);
     } finally {
       await moduleRef.close();
     }
@@ -286,8 +281,6 @@ describe('release module', () => {
       .useValue(repo)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue(durabilityMode)
-      .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(durabilityMode === 'volatile_demo')
       .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();
@@ -422,7 +415,7 @@ describe('release module', () => {
   const createRelease = async (
     app: INestApplication,
     body: Record<string, unknown> = {},
-    headers: Record<string, string> = {},
+    headers: Record<string, string> = ownerHeaders,
   ): Promise<{ id: string; body: Record<string, any> }> => {
     const requestBuilder = request(app.getHttpServer()).post('/releases');
     for (const [name, value] of Object.entries(headers)) {
@@ -440,7 +433,7 @@ describe('release module', () => {
   const createReadyRelease = async (
     app: INestApplication,
     repo: InMemoryDeliveryRepository,
-    headers: Record<string, string> = {},
+    headers: Record<string, string> = ownerHeaders,
   ) => {
     const scope = await seedReadyScope(repo);
     const { id } = await createRelease(app, {
@@ -495,6 +488,7 @@ describe('release module', () => {
     eventFailure.enabled = true;
     await request(app.getHttpServer())
       .post('/releases')
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         project_id: 'project-1',
@@ -632,9 +626,14 @@ describe('release module', () => {
     const first = await createRelease(app);
     const second = await createRelease(app, { title: 'Release Radar second' });
     for (const releaseId of [first.id, second.id]) {
-      await request(app.getHttpServer()).post(`/releases/${releaseId}/work-items/${scope.workItem.id}`).send({ actor_id: actorOwner }).expect(201);
+      await request(app.getHttpServer())
+        .post(`/releases/${releaseId}/work-items/${scope.workItem.id}`)
+        .set(ownerHeaders)
+        .send({ actor_id: actorOwner })
+        .expect(201);
       await request(app.getHttpServer())
         .post(`/releases/${releaseId}/execution-packages/${scope.executionPackage.id}`)
+        .set(ownerHeaders)
         .send({ actor_id: actorOwner })
         .expect(201);
       await request(app.getHttpServer()).post(`/releases/${releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
@@ -771,8 +770,8 @@ describe('release module', () => {
         });
       });
 
-    await request(app.getHttpServer()).patch(`/releases/${id}`).send({ actor_id: actorOwner }).expect(400);
-    await request(app.getHttpServer()).patch('/releases/missing-release').send({ actor_id: actorOwner, title: 'No such release' }).expect(404);
+    await request(app.getHttpServer()).patch(`/releases/${id}`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(400);
+    await request(app.getHttpServer()).patch('/releases/missing-release').set(ownerHeaders).send({ actor_id: actorOwner, title: 'No such release' }).expect(404);
 
     const events = await repo.listObjectEvents(id, 'release');
     const history = await repo.listStatusHistory(id, 'release');
@@ -788,6 +787,7 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/work-items/${scope.workItem.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201)
       .expect(({ body }) => {
@@ -795,6 +795,7 @@ describe('release module', () => {
       });
     await request(app.getHttpServer())
       .delete(`/releases/${id}/work-items/${scope.workItem.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(200)
       .expect(({ body }) => {
@@ -802,6 +803,7 @@ describe('release module', () => {
       });
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/${scope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201)
       .expect(({ body }) => {
@@ -814,6 +816,7 @@ describe('release module', () => {
       });
     await request(app.getHttpServer())
       .delete(`/releases/${id}/execution-packages/${scope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(200)
       .expect(({ body }) => {
@@ -838,24 +841,28 @@ describe('release module', () => {
     await repo.saveExecutionPackage(executionPackage({ id: 'package-deleted', deleted_at: later }));
     await repo.saveExecutionPackage(executionPackage({ id: 'package-cross-project', project_id: 'project-2' }));
 
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/missing-work-item`).send({ actor_id: actorOwner }).expect(404);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-archived`).send({ actor_id: actorOwner }).expect(422);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-deleted`).send({ actor_id: actorOwner }).expect(422);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-cross-project`).send({ actor_id: actorOwner }).expect(422);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/missing-work-item`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(404);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-archived`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(422);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-deleted`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(422);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-cross-project`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(422);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/missing-package`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(404);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/package-archived`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(422);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/package-deleted`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(422);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/package-cross-project`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(422);
   });
@@ -868,9 +875,10 @@ describe('release module', () => {
       rollout_strategy: 'Ship behind a feature flag.',
       rollback_plan: 'Disable the feature flag.',
     });
-    await request(app.getHttpServer()).post(`/releases/${blocked.id}/work-items/${blockingScope.workItem.id}`).send({ actor_id: actorOwner });
+    await request(app.getHttpServer()).post(`/releases/${blocked.id}/work-items/${blockingScope.workItem.id}`).set(ownerHeaders).send({ actor_id: actorOwner });
     await request(app.getHttpServer())
       .post(`/releases/${blocked.id}/execution-packages/${blockingScope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner });
     const submitted = await request(app.getHttpServer())
       .post(`/releases/${blocked.id}/submit-for-approval`)
@@ -945,9 +953,10 @@ describe('release module', () => {
       review_packet: { id: 'review-packet-stale', execution_package_id: 'execution-package-stale', run_session_id: 'run-session-stale' },
     });
     const stale = await createRelease(app);
-    await request(app.getHttpServer()).post(`/releases/${stale.id}/work-items/${staleScope.workItem.id}`).send({ actor_id: actorOwner });
+    await request(app.getHttpServer()).post(`/releases/${stale.id}/work-items/${staleScope.workItem.id}`).set(ownerHeaders).send({ actor_id: actorOwner });
     await request(app.getHttpServer())
       .post(`/releases/${stale.id}/execution-packages/${staleScope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner });
     const staleSubmit = await request(app.getHttpServer())
       .post(`/releases/${stale.id}/submit-for-approval`)
@@ -1099,9 +1108,10 @@ describe('release module', () => {
     await seedProject(repo);
     const scope = await seedReadyScope(repo);
     const { id } = await createRelease(app);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/${scope.workItem.id}`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/${scope.workItem.id}`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/${scope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
 
@@ -1315,6 +1325,7 @@ describe('release module', () => {
     });
     const patched = await request(app.getHttpServer())
       .patch(`/releases/${id}`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         title: 'Release Radar v2',

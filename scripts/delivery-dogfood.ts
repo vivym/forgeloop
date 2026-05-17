@@ -28,7 +28,6 @@ import { transitionExecutionPackage, transitionRunSession } from '../packages/do
 
 import { AppModule } from '../apps/control-plane-api/src/app.module';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -60,6 +59,7 @@ type DogfoodResult = {
 };
 
 type CheckStatus = 'passed' | 'failed' | 'skipped';
+type SourceTreeStatus = 'clean' | 'dirty' | 'unknown';
 
 export type VerificationCheck = {
   label: string;
@@ -67,10 +67,15 @@ export type VerificationCheck = {
   details: string[];
 };
 
+type SourceMetadata = {
+  sourceCommit: string;
+  sourceTreeStatus: SourceTreeStatus;
+};
+
 export type PublicApiAuthEvidence = {
   durablePublicApiHeaderAuth: boolean;
   durableSseStreamTokenAuth: boolean;
-  volatileActorFallback: boolean;
+  volatilePublicApiHeaderAuth: boolean;
 };
 
 type DogfoodRequestInit = {
@@ -97,6 +102,7 @@ const databaseUrl = process.env.FORGELOOP_DATABASE_URL?.trim();
 const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:delivery', 'pnpm e2e:run-console', 'pnpm dogfood:delivery'];
 const terminalRunStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const mandatoryVerificationLabels = new Set(['Web app probe', 'Browser visual/text-overflow verification']);
 
 const noopRunWorker = {
   kick: () => undefined,
@@ -112,8 +118,7 @@ const humanActorHeaders = (actorId: string): Record<string, string> => ({
   [actorHeaderName]: actorId,
   [actorClassHeaderName]: actorId === actorReviewer ? 'human' : 'human_admin',
 });
-const actorHeaders = (mode: DogfoodDurabilityMode, actorId: string): Record<string, string> =>
-  mode === 'durable' ? humanActorHeaders(actorId) : {};
+const actorHeaders = (_mode: DogfoodDurabilityMode, actorId: string): Record<string, string> => humanActorHeaders(actorId);
 
 const maybeJsonHeaders = (body: JsonObject | undefined, headers: Record<string, string>): Record<string, string> =>
   body === undefined ? headers : { 'content-type': 'application/json', ...headers };
@@ -123,9 +128,6 @@ const runEventsPath = (
   options: { mode: DogfoodDurabilityMode; actorId: string; after?: string; streamToken?: string },
 ): string => {
   const params = new URLSearchParams();
-  if (options.mode === 'volatile_demo') {
-    params.set('actor_id', options.actorId);
-  }
   if (options.streamToken !== undefined) {
     params.set('stream_token', options.streamToken);
   }
@@ -163,7 +165,7 @@ export const buildRunInputRequest = (
   runSessionId: string,
   options: { mode: DogfoodDurabilityMode; actorId: string; message: string },
 ): DogfoodRequest => {
-  const body = options.mode === 'durable' ? { message: options.message } : { actor_id: options.actorId, message: options.message };
+  const body = { message: options.message };
   return {
     path: `/run-sessions/${encodeURIComponent(runSessionId)}/input`,
     init: {
@@ -179,7 +181,7 @@ export const buildRunControlRequest = (
   command: 'cancel' | 'resume',
   options: { mode: DogfoodDurabilityMode; actorId: string; reason: string },
 ): DogfoodRequest => {
-  const body = options.mode === 'durable' ? { reason: options.reason } : { actor_id: options.actorId, reason: options.reason };
+  const body = { reason: options.reason };
   return {
     path: `/run-sessions/${encodeURIComponent(runSessionId)}/${command}`,
     init: {
@@ -194,13 +196,11 @@ export const buildRunEventStreamTokenRequest = (
   runSessionId: string,
   options: { mode: DogfoodDurabilityMode; actorId: string },
 ): DogfoodRequest => {
-  const body = options.mode === 'durable' ? undefined : { actor_id: options.actorId };
   return {
     path: `/run-sessions/${encodeURIComponent(runSessionId)}/events/stream-token`,
     init: {
       method: 'POST',
       headers: actorHeaders(options.mode, options.actorId),
-      ...(body === undefined ? {} : { body }),
     },
   };
 };
@@ -246,12 +246,12 @@ export const publicApiAuthChecks = (mode: DogfoodDurabilityMode, evidence: Publi
 
   return [
     {
-      label: 'Volatile public API actor fallback',
-      status: evidence.volatileActorFallback ? 'passed' : 'failed',
+      label: 'Volatile public API actor header auth',
+      status: evidence.volatilePublicApiHeaderAuth ? 'passed' : 'failed',
       details: [
-        evidence.volatileActorFallback
-          ? 'Volatile demo public APIs were exercised with legacy body/query actor fallback.'
-          : 'Volatile demo actor fallback was not exercised.',
+        evidence.volatilePublicApiHeaderAuth
+          ? 'Volatile demo public APIs were exercised with X-Forgeloop-Actor-Id.'
+          : 'Volatile demo actor-header flow was not exercised.',
       ],
     },
   ];
@@ -382,7 +382,7 @@ const listRunEvents = async (
   if (mode === 'durable') {
     evidence && (evidence.durablePublicApiHeaderAuth = true);
   } else {
-    evidence && (evidence.volatileActorFallback = true);
+    evidence && (evidence.volatilePublicApiHeaderAuth = true);
   }
   const response = await requestBuiltJson(apiUrl, request);
   return arrayField(response, 'events') as PublicRunEvent[];
@@ -434,7 +434,7 @@ const waitForSseEvent = async (
     if (options.mode === 'durable') {
       options.evidence && (options.evidence.durableSseStreamTokenAuth = true);
     } else {
-      options.evidence && (options.evidence.volatileActorFallback = true);
+      options.evidence && (options.evidence.volatilePublicApiHeaderAuth = true);
     }
 
     const response = await fetch(streamRequest.url, {
@@ -539,8 +539,6 @@ const createApiApp = async (
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue(options.durabilityMode ?? 'volatile_demo')
-    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-    .useValue((options.durabilityMode ?? 'volatile_demo') === 'volatile_demo')
     .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue(noopRunWorker)
     .compile();
@@ -758,7 +756,7 @@ const runPackage = async (
   if (mode === 'durable') {
     evidence && (evidence.durablePublicApiHeaderAuth = true);
   } else {
-    evidence && (evidence.volatileActorFallback = true);
+    evidence && (evidence.volatilePublicApiHeaderAuth = true);
   }
   if (run.status !== 'accepted') {
     throw new Error(`Run command did not return accepted: ${JSON.stringify(run)}`);
@@ -795,7 +793,7 @@ const runControlCommand = async (
   if (mode === 'durable') {
     evidence && (evidence.durablePublicApiHeaderAuth = true);
   } else {
-    evidence && (evidence.volatileActorFallback = true);
+    evidence && (evidence.volatilePublicApiHeaderAuth = true);
   }
   if (response.status !== 'accepted' || response.command_type !== command) {
     throw new Error(`${command} command was not accepted: ${JSON.stringify(response)}`);
@@ -930,7 +928,7 @@ const dogfoodLiveInputRun = async (
   if (mode === 'durable') {
     evidence.durablePublicApiHeaderAuth = true;
   } else {
-    evidence.volatileActorFallback = true;
+    evidence.volatilePublicApiHeaderAuth = true;
   }
   const commandId = stringField(command, 'command_id');
   if (command.status !== 'accepted') {
@@ -995,7 +993,7 @@ const dogfoodRestartRun = async (
   if (mode === 'durable') {
     evidence.durablePublicApiHeaderAuth = true;
   } else {
-    evidence.volatileActorFallback = true;
+    evidence.volatilePublicApiHeaderAuth = true;
   }
   const commandId = stringField(command, 'command_id');
   const oldLease = { workerId: 'dogfood-worker-old', leaseToken: 'dogfood-old-lease' };
@@ -1520,14 +1518,46 @@ const runWebWorkbenchVerification = async (): Promise<VerificationCheck[]> => {
 export const deliveryDogfoodStatus = (results: readonly DogfoodResult[], checks: readonly VerificationCheck[]): 'PASS' | 'FAIL' => {
   const failed = results.filter((result) => result.status === 'failed');
   const failedChecks = checks.filter((check) => check.status === 'failed');
-  return failed.length === 0 && failedChecks.length === 0 ? 'PASS' : 'FAIL';
+  const incompleteMandatoryChecks = checks.filter(
+    (check) => mandatoryVerificationLabels.has(check.label) && check.status !== 'passed',
+  );
+  const missingMandatoryChecks = [...mandatoryVerificationLabels].filter((label) => !checks.some((check) => check.label === label));
+  return failed.length === 0 && failedChecks.length === 0 && incompleteMandatoryChecks.length === 0 && missingMandatoryChecks.length === 0
+    ? 'PASS'
+    : 'FAIL';
 };
+
+const getHeadSha = async (): Promise<string> => {
+  try {
+    const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoPath });
+    const sha = String(stdout).trim();
+    return sha.length === 0 ? 'unknown' : sha;
+  } catch {
+    return 'unknown';
+  }
+};
+
+const getSourceTreeStatus = async (): Promise<SourceTreeStatus> => {
+  try {
+    const { stdout } = await execFile('git', ['status', '--short'], { cwd: repoPath });
+    return String(stdout).trim().length === 0 ? 'clean' : 'dirty';
+  } catch {
+    return 'unknown';
+  }
+};
+
+const getSourceMetadata = async (): Promise<SourceMetadata> => ({
+  sourceCommit: await getHeadSha(),
+  sourceTreeStatus: await getSourceTreeStatus(),
+});
 
 export const renderReport = (data: {
   status: 'PASS' | 'FAIL';
   apiUrl?: string;
   results: DogfoodResult[];
   checks: VerificationCheck[];
+  sourceCommit?: string;
+  sourceTreeStatus?: SourceTreeStatus;
   error?: string;
 }): string => {
   const resultLines =
@@ -1552,6 +1582,8 @@ export const renderReport = (data: {
     '',
     `Generated: ${new Date().toISOString()}`,
     `Dogfood status: ${data.status}`,
+    `Source commit: ${data.sourceCommit ?? 'unknown'}`,
+    `Source tree before report write: ${data.sourceTreeStatus ?? 'unknown'}`,
     '',
     '## Commands',
     '',
@@ -1568,7 +1600,7 @@ export const renderReport = (data: {
     '## Dogfood Preconditions',
     '',
     `- API URL: ${data.apiUrl ?? 'not started'}`,
-    `- Repo path: ${repoPath}`,
+    '- Repo path: redacted local workspace',
     `- Repo id: ${repoId}`,
     '- Volatile dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.',
     '- Durable dogfood uses X-Forgeloop-Actor-Id for public run APIs and stream_token for SSE when `FORGELOOP_DATABASE_URL` is set.',
@@ -1597,10 +1629,11 @@ const writeReport = async (content: string): Promise<void> => {
 
 const main = async (): Promise<number> => {
   const mode = durableModeFromEnv();
+  const sourceMetadata = await getSourceMetadata();
   const publicApiAuthEvidence: PublicApiAuthEvidence = {
     durablePublicApiHeaderAuth: false,
     durableSseStreamTokenAuth: false,
-    volatileActorFallback: false,
+    volatilePublicApiHeaderAuth: false,
   };
   let durableClient: DbClient | undefined;
   const durableRepository = mode === 'durable' && databaseUrl !== undefined ? createDurableRepository(databaseUrl) : undefined;
@@ -1645,7 +1678,7 @@ const main = async (): Promise<number> => {
     checks.push(...(await runWebWorkbenchVerification()));
 
     const status = deliveryDogfoodStatus(results, checks);
-    await writeReport(renderReport({ status, apiUrl, results, checks }));
+    await writeReport(renderReport({ status, apiUrl, results, checks, ...sourceMetadata }));
     return status === 'PASS' ? 0 : 1;
   } catch (error) {
     await writeReport(
@@ -1654,6 +1687,7 @@ const main = async (): Promise<number> => {
         apiUrl,
         results,
         checks,
+        ...sourceMetadata,
         error: error instanceof Error ? error.message : String(error),
       }),
     );

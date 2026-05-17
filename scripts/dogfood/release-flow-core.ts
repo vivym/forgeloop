@@ -11,7 +11,6 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { ReleaseController } from '../../apps/control-plane-api/src/modules/release/release.controller';
 import { ReleaseService } from '../../apps/control-plane-api/src/modules/release/release.service';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -413,8 +412,6 @@ const createDogfoodApp = async (): Promise<{ app: INestApplication; repository: 
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('volatile_demo')
-    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-    .useValue(true)
     .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue(noopRunWorker)
     .compile();
@@ -436,9 +433,7 @@ const createDurableReleaseDogfoodApp = async (
     .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repository)
     .overrideProvider(RUN_DURABILITY_MODE)
-    .useValue('durable')
-    .overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK)
-    .useValue(false);
+    .useValue('durable');
   if (options.useRealWorker) {
     moduleBuilder = moduleBuilder.overrideProvider(RunWorkerLifecycleService).useValue({
       onModuleInit: () => undefined,
@@ -1299,11 +1294,7 @@ const runReleaseStrictLocalCodexPackage = async (input: {
     getPublicRunEvents: async () => {
       const body = requestJsonBody<{ events: ObservedRunEvent[] }>(
         await strictRequest(input.server, input.actorOwner)
-          .get(
-            `/run-sessions/${run.run_session_id}/events?actor_id=${encodeURIComponent(input.actorOwner)}${
-              after === undefined ? '' : `&after=${encodeURIComponent(after)}`
-            }`,
-          )
+          .get(`/run-sessions/${run.run_session_id}/events${after === undefined ? '' : `?after=${encodeURIComponent(after)}`}`)
           .expect(200),
       );
       const events = body.events;

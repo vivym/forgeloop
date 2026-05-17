@@ -40,7 +40,6 @@ import { AuditWriterService } from '../audit/audit-writer.service';
 import type { ActorContext } from '../auth/actor-context';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
@@ -70,7 +69,6 @@ type RunReplacementRecordedPayload = {
 
 type RunEventAccessOptions = {
   after?: string;
-  actorId?: string;
   actorContext?: ActorContext;
   streamToken?: string;
 };
@@ -89,7 +87,6 @@ export class RunControlService {
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(DELIVERY_RUN_WORKER) private readonly runWorker: RunWorker,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
-    @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
     @Inject(ControlPlaneRuntimeService) private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Inject(ExecutionPackageService) private readonly executionPackageService: ExecutionPackageService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
@@ -121,7 +118,6 @@ export class RunControlService {
     const reviewPackets = await repository.listReviewPacketsForPackage(packageId);
     const requestedByActorId = this.resolveRunActor({
       ...(actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: actorContext.authenticatedActorId }),
-      ...(dto.requested_by_actor_id === undefined ? {} : { demoActorId: dto.requested_by_actor_id }),
     });
     if (mode === 'run') {
       const activeRunSession = await repository.findActiveRunSessionForPackage(packageId);
@@ -256,7 +252,6 @@ export class RunControlService {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
     const actorId = this.resolveStreamActor(runSession, {
       ...(options.actorContext === undefined ? {} : { actorContext: options.actorContext }),
-      ...(options.actorId === undefined ? {} : { demoActorId: options.actorId }),
       ...(options.streamToken === undefined ? {} : { streamToken: options.streamToken }),
     });
     await this.assertRunViewerAllowed(runSession, actorId);
@@ -284,7 +279,6 @@ export class RunControlService {
           }
           const response = await this.listRunEvents(runSessionId, {
             ...(cursor === undefined ? {} : { after: cursor }),
-            ...(options.actorId === undefined ? {} : { actorId: options.actorId }),
             ...(options.streamToken === undefined ? {} : { streamToken: options.streamToken }),
             ...(options.actorContext === undefined ? {} : { actorContext: options.actorContext }),
           });
@@ -325,7 +319,6 @@ export class RunControlService {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
     const actorId = this.resolveStreamActor(runSession, {
       ...(options.actorContext === undefined ? {} : { actorContext: options.actorContext }),
-      ...(options.actorId === undefined ? {} : { demoActorId: options.actorId }),
       ...(options.streamToken === undefined ? {} : { streamToken: options.streamToken }),
     });
     await this.assertRunViewerAllowed(runSession, actorId);
@@ -338,7 +331,6 @@ export class RunControlService {
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'input', {
       actorContext,
-      ...(dto.actor_id === undefined ? {} : { demoActorId: dto.actor_id }),
       payload: { message: dto.message },
       ...(dto.target_turn_id === undefined ? {} : { targetTurnId: dto.target_turn_id }),
       eventSummary: 'User input submitted.',
@@ -352,7 +344,6 @@ export class RunControlService {
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'cancel', {
       actorContext,
-      ...(dto.actor_id === undefined ? {} : { demoActorId: dto.actor_id }),
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Cancel requested.',
     });
@@ -365,7 +356,6 @@ export class RunControlService {
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'resume', {
       actorContext,
-      ...(dto.actor_id === undefined ? {} : { demoActorId: dto.actor_id }),
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Run resume requested.',
     });
@@ -374,12 +364,10 @@ export class RunControlService {
   async createRunEventStreamToken(
     runSessionId: string,
     actorContext: ActorContext = {},
-    options: { demoActorId?: string } = {},
   ): Promise<{ token: string; expires_at: string }> {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
     const actorId = this.resolveRunActor({
       ...(actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: actorContext.authenticatedActorId }),
-      ...(options.demoActorId === undefined ? {} : { demoActorId: options.demoActorId }),
     });
     await this.assertRunViewerAllowed(runSession, actorId);
 
@@ -447,7 +435,6 @@ export class RunControlService {
     commandType: RunCommand['command_type'],
     input: {
       actorContext?: ActorContext;
-      demoActorId?: string;
       payload: Record<string, unknown>;
       targetTurnId?: string;
       eventSummary: string;
@@ -457,7 +444,6 @@ export class RunControlService {
     this.assertRunCommandTargetIsNonTerminal(runSession);
     const actorId = this.resolveRunActor({
       ...(input.actorContext?.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
-      ...(input.demoActorId === undefined ? {} : { demoActorId: input.demoActorId }),
     });
     await this.assertRunOperatorAllowed(runSession, actorId);
 
@@ -642,7 +628,9 @@ export class RunControlService {
     const packageId = executionPackage.id;
     const requestedByActorId = this.resolveRunActor({
       ...(input.actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
-      demoActorId: input.actorContext.authenticatedActorId ?? input.automationPrecondition.daemon_identity ?? 'automation-daemon',
+      ...(input.actorContext.daemonIdentity === undefined && input.automationPrecondition.daemon_identity === undefined
+        ? {}
+        : { systemActorId: input.actorContext.daemonIdentity ?? input.automationPrecondition.daemon_identity }),
     });
     const executorType: ExecutorType = input.workflowOnly ? 'mock' : input.executorType;
     const runSessionId = this.id('run-session');
@@ -712,13 +700,13 @@ export class RunControlService {
       });
   }
 
-  private resolveRunActor(input: { authenticatedActorId?: string; demoActorId?: string }): string {
+  private resolveRunActor(input: { authenticatedActorId?: string; systemActorId?: string }): string {
     if (input.authenticatedActorId !== undefined && input.authenticatedActorId.trim().length > 0) {
       return input.authenticatedActorId;
     }
 
-    if (this.allowDemoActorIdFallback && this.durabilityMode === 'volatile_demo') {
-      return this.required(input.demoActorId, 'actor_id');
+    if (input.systemActorId !== undefined && input.systemActorId.trim().length > 0) {
+      return input.systemActorId;
     }
 
     throw new UnauthorizedException('Authenticated actor is required');
@@ -726,7 +714,7 @@ export class RunControlService {
 
   private resolveStreamActor(
     runSession: RunSession,
-    input: { actorContext?: ActorContext; demoActorId?: string; streamToken?: string },
+    input: { actorContext?: ActorContext; streamToken?: string },
   ): string {
     if (input.streamToken !== undefined) {
       let payload: RunEventStreamTokenPayload;
@@ -745,7 +733,6 @@ export class RunControlService {
 
     return this.resolveRunActor({
       ...(input.actorContext?.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
-      ...(input.demoActorId === undefined ? {} : { demoActorId: input.demoActorId }),
     });
   }
 

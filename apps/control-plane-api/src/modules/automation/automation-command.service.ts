@@ -39,7 +39,6 @@ import {
 import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
 
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
@@ -159,7 +158,6 @@ export class AutomationCommandService {
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
-    @Optional() @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback = false,
     @Optional() @Inject(DELIVERY_RUN_WORKER) private readonly runWorker?: DeliveryRunWorker,
   ) {}
 
@@ -1408,7 +1406,9 @@ export class AutomationCommandService {
     const packageId = executionPackage.id;
     const requestedByActorId = this.resolveRunActor({
       ...(input.actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
-      demoActorId: input.actorContext.authenticatedActorId ?? input.automationPrecondition.daemon_identity ?? 'automation-daemon',
+      ...(input.actorContext.daemonIdentity === undefined && input.automationPrecondition.daemon_identity === undefined
+        ? {}
+        : { systemActorId: input.actorContext.daemonIdentity ?? input.automationPrecondition.daemon_identity }),
     });
     const executorType: ExecutorType = input.workflowOnly ? 'mock' : input.executorType;
     const runSessionId = this.id('run-session');
@@ -1481,13 +1481,13 @@ export class AutomationCommandService {
     };
   }
 
-  private resolveRunActor(input: { authenticatedActorId?: string; demoActorId?: string }): string {
+  private resolveRunActor(input: { authenticatedActorId?: string; systemActorId?: string }): string {
     if (input.authenticatedActorId !== undefined && input.authenticatedActorId.trim().length > 0) {
       return input.authenticatedActorId;
     }
 
-    if (this.allowDemoActorIdFallback && this.durabilityMode === 'volatile_demo') {
-      return this.required(input.demoActorId, 'actor_id');
+    if (input.systemActorId !== undefined && input.systemActorId.trim().length > 0) {
+      return input.systemActorId;
     }
 
     throw new UnauthorizedException('Authenticated actor is required');

@@ -20,7 +20,6 @@ import { transitionExecutionPackage, transitionRunSession } from '../../packages
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -503,16 +502,13 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
 };
 
 export const seedAppWithRunSession = async (
-  options: { durabilityMode?: 'durable' | 'volatile_demo'; allowDemoActorIdFallback?: boolean } = {},
+  options: { durabilityMode?: 'durable' | 'volatile_demo' } = {},
 ): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository; runSessionId: string }> => {
   let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined });
   if (options.durabilityMode !== undefined) {
     moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);
-  }
-  if (options.allowDemoActorIdFallback !== undefined) {
-    moduleBuilder = moduleBuilder.overrideProvider(DELIVERY_DEMO_ACTOR_ID_FALLBACK).useValue(options.allowDemoActorIdFallback);
   }
   const moduleRef = await moduleBuilder.compile();
   const app = moduleRef.createNestApplication();
@@ -521,42 +517,10 @@ export const seedAppWithRunSession = async (
   const executionPackage = await seedReadyExecutionPackageThroughApi(app);
   const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
 
-  if (options.durabilityMode === 'durable' && options.allowDemoActorIdFallback === false) {
-    const runSessionId = 'run-session-seeded';
-    const at = '2026-05-07T00:00:00.000Z';
-    await repo.saveExecutionPackage(transitionExecutionPackage(executionPackage, { type: 'run', run_session_id: runSessionId, at }));
-    await repo.saveRunSession({
-      ...transitionRunSession(undefined, {
-        type: 'create',
-        id: runSessionId,
-        execution_package_id: executionPackage.id,
-        requested_by_actor_id: actorOwner,
-        executor_type: 'mock',
-        at,
-      }),
-      runtime_metadata: {
-        durability_mode: 'durable',
-        recovery_attempt_count: 0,
-        effective_dangerous_mode: 'not_requested',
-      },
-    });
-    await repo.appendRunEvent({
-      id: 'run-event-seeded-queued',
-      run_session_id: runSessionId,
-      event_type: 'run_queued',
-      source: 'api',
-      visibility: 'public',
-      summary: 'Run queued.',
-      payload: { execution_package_id: executionPackage.id, mode: 'run', workflow_only: true, executor_type: 'mock' },
-      created_at: at,
-    });
-
-    return { app, repo, runSessionId };
-  }
-
   const run = (
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
+      .set(ownerHeaders)
       .send({
         requested_by_actor_id: actorOwner,
         workflow_only: true,

@@ -66,7 +66,6 @@ import {
 } from '@forgeloop/db';
 
 import {
-  DELIVERY_DEMO_ACTOR_ID_FALLBACK,
   DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
@@ -268,7 +267,6 @@ export class ReleaseService {
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
-    @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
   ) {}
 
@@ -1132,10 +1130,6 @@ export class ReleaseService {
     const authenticatedActorId = actorContext?.authenticatedActorId?.trim();
     if (authenticatedActorId !== undefined && authenticatedActorId.length > 0) {
       return authenticatedActorId;
-    }
-
-    if (this.allowDemoActorIdFallback && this.durabilityMode === 'volatile_demo') {
-      return body.actor_id;
     }
 
     throw new UnauthorizedException('Authenticated actor is required');
