@@ -1,10 +1,12 @@
 # Delivery Dogfood Work Items Completion
 
-Generated: 2026-05-17T14:18:08.803Z
+Generated: 2026-05-17T15:04:49.977Z
 Durability mode: volatile_demo
 Project: project-1
 Repo: forgeloop
-Commit: fb68538b2987ffb60cf915cd5d5b19e914d917d3
+Source commit: bcb1cecc10e1b28681f23447a9269ce81e65eac9
+Source tree before report write: clean
+Report scope: workflow dogfood only; strict local Codex acceptance is reported separately below
 
 ## Strict local_codex Acceptance
 
