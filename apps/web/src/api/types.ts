@@ -407,7 +407,6 @@ export interface MarkPackageReadyBody extends ActorCommandBody {
 
 export interface RunPackageBody {
   execution_package_id?: string;
-  requested_by_actor_id: string;
   executor_type?: ExecutorType;
   workflow_only?: boolean;
   previous_run_session_id?: string;

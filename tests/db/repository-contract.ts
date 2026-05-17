@@ -552,7 +552,7 @@ export async function runDeliveryRepositoryContract(repository: DeliveryReposito
     actor_type: 'human',
     reason: 'Review approved.',
     payload: { review_packet_id: ids.reviewPacket },
-    metadata: { legacy_payload: false },
+    metadata: { old_payload: false },
     created_at: at,
   };
   const statusHistory: StatusHistory = {

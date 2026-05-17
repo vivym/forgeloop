@@ -217,7 +217,8 @@ describe('control-plane local_codex routing', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${packageId}/run`)
-        .send({ requested_by_actor_id: actorOwner, executor_type: 'local_codex', workflow_only: false })
+        .set(ownerHeaders)
+        .send({ executor_type: 'local_codex', workflow_only: false })
         .expect(201)
     ).body;
     expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
@@ -264,7 +265,8 @@ describe('control-plane local_codex routing', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${packageId}/run`)
-        .send({ requested_by_actor_id: actorOwner, executor_type: 'local_codex', workflow_only: true })
+        .set(ownerHeaders)
+        .send({ executor_type: 'local_codex', workflow_only: true })
         .expect(201)
     ).body;
     expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });

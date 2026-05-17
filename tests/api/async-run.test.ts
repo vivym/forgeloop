@@ -30,7 +30,7 @@ describe('async run API', () => {
     const response = await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(actorHeaderName, actorOwner)
-      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+      .send({ workflow_only: true })
       .expect(201);
 
     expect(response.body).toMatchObject({
@@ -41,7 +41,7 @@ describe('async run API', () => {
     expect(response.body).not.toHaveProperty('workflow_result');
   });
 
-  it('rejects durable run requests that only provide a body actor id', async () => {
+  it('rejects durable run requests that provide the deleted body actor field', async () => {
     await app.close();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_RUN_WORKER)
@@ -56,6 +56,6 @@ describe('async run API', () => {
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .send({ requested_by_actor_id: 'actor-owner', workflow_only: true })
-      .expect(401);
+      .expect(400);
   });
 });

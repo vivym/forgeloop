@@ -365,7 +365,7 @@ async function startApi(): Promise<{
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set('X-Forgeloop-Actor-Id', actorOwner)
-      .send({ requested_by_actor_id: actorOwner, executor_type: 'mock', workflow_only: true })
+      .send({ executor_type: 'mock', workflow_only: true })
       .expect(201)
   ).body as { run_session_id: string };
 

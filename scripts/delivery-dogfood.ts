@@ -150,7 +150,7 @@ export const buildRunPackageRequest = (
   packageId: string,
   options: { mode: DogfoodDurabilityMode; actorId: string },
 ): DogfoodRequest => {
-  const body = { requested_by_actor_id: options.actorId, workflow_only: true, executor_type: 'mock' };
+  const body = { workflow_only: true, executor_type: 'mock' };
   return {
     path: `/execution-packages/${encodeURIComponent(packageId)}/run`,
     init: {

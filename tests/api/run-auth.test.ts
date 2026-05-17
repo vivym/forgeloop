@@ -56,7 +56,7 @@ const startDurableRun = async (
   const response = await request(app.getHttpServer())
     .post(`/execution-packages/${executionPackage.id}/run`)
     .set(actorHeaderName, actorOwner)
-    .send({ requested_by_actor_id: actorStranger, workflow_only: true })
+    .send({ workflow_only: true })
     .expect(201);
 
   return { executionPackageId: executionPackage.id, runSessionId: response.body.run_session_id as string };
@@ -139,12 +139,12 @@ describe('durable run actor auth', () => {
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .send({ requested_by_actor_id: actorOwner, workflow_only: true })
-      .expect(401);
+      .expect(400);
 
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(actorHeaderName, actorOwner)
-      .send({ requested_by_actor_id: actorStranger, workflow_only: true })
+      .send({ workflow_only: true })
       .expect(201);
   });
 

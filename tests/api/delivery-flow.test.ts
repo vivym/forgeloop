@@ -335,7 +335,8 @@ describe('delivery control plane API', () => {
     const firstRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     expect(firstRun).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
@@ -366,7 +367,8 @@ describe('delivery control plane API', () => {
     const rerun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
     const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
@@ -435,7 +437,8 @@ describe('delivery control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -510,7 +513,8 @@ describe('delivery control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -545,7 +549,8 @@ describe('delivery control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -573,7 +578,8 @@ describe('delivery control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -597,12 +603,13 @@ describe('delivery control plane API', () => {
     const executionPackage = await createManualPackage(app, planRevisionId);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(400);
+    await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(401);
 
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -619,29 +626,33 @@ describe('delivery control plane API', () => {
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
-      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+      .set(ownerHeaders)
+      .send({ workflow_only: true })
       .expect(400);
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
-      .send({ requested_by_actor_id: actorOwner, previous_run_session_id: 'run-session-stale', workflow_only: true })
+      .set(ownerHeaders)
+      .send({ previous_run_session_id: 'run-session-stale', workflow_only: true })
       .expect(400);
 
     const rerun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: run.run_session_id, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ previous_run_session_id: run.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
     await waitForReviewPacket(app, rerun.run_session_id);
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
-      .send({ requested_by_actor_id: actorOwner, previous_run_session_id: rerun.run_session_id, workflow_only: true })
+      .set(ownerHeaders)
+      .send({ previous_run_session_id: rerun.run_session_id, workflow_only: true })
       .expect(400);
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .set(ownerHeaders)
       .send({
-        requested_by_actor_id: actorOwner,
         previous_run_session_id: 'run-session-stale',
         force: true,
         force_reason: 'Stale run id.',
@@ -661,7 +672,8 @@ describe('delivery control plane API', () => {
     const firstRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
@@ -679,7 +691,8 @@ describe('delivery control plane API', () => {
     const rerun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
     const repository = repositoryFor(app);
@@ -743,7 +756,8 @@ describe('delivery control plane API', () => {
       const firstRun = (
         await request(server)
           .post(`/execution-packages/${executionPackage.id}/run`)
-          .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+          .set(ownerHeaders)
+          .send({ workflow_only: true })
           .expect(201)
       ).body;
       const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
@@ -762,7 +776,8 @@ describe('delivery control plane API', () => {
       const rerun = (
         await request(server)
           .post(`/execution-packages/${executionPackage.id}/rerun`)
-          .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+          .set(ownerHeaders)
+          .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
           .expect(201)
       ).body;
       const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
@@ -793,14 +808,15 @@ describe('delivery control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .set(reviewerHeaders)
       .send({
-        requested_by_actor_id: actorReviewer,
         previous_run_session_id: run.run_session_id,
         force: true,
         force_reason: 'Reviewer is not the owner.',
@@ -811,8 +827,8 @@ describe('delivery control plane API', () => {
     const forceRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+        .set(ownerHeaders)
         .send({
-          requested_by_actor_id: actorOwner,
           previous_run_session_id: run.run_session_id,
           force: true,
           force_reason: 'Owner wants a fresh run before review.',
@@ -837,7 +853,8 @@ describe('delivery control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -853,8 +870,8 @@ describe('delivery control plane API', () => {
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .set(ownerHeaders)
       .send({
-        requested_by_actor_id: actorOwner,
         previous_run_session_id: run.run_session_id,
         force: true,
         force_reason: 'Cannot force-rerun after completed review.',
@@ -882,7 +899,8 @@ describe('delivery control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -891,8 +909,8 @@ describe('delivery control plane API', () => {
     const forceRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+        .set(ownerHeaders)
         .send({
-          requested_by_actor_id: actorOwner,
           previous_run_session_id: run.run_session_id,
           force: true,
           force_reason: 'Owner wants a fresh run before review.',

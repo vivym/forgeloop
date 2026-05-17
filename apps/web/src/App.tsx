@@ -585,8 +585,8 @@ export function App() {
   function runPackage(mode: 'run' | 'rerun' | 'force') {
     if (!selectedPackage) return;
     packageCommand(`${mode} accepted`, async () => {
+      const actorId = runForm.actor_id.trim() || actorDefault;
       const body: RunPackageBody = {
-        requested_by_actor_id: runForm.actor_id.trim() || actorDefault,
         executor_type: runForm.executor_type,
         workflow_only: runForm.workflow_only,
         ...(mode === 'force' ? { force: true, force_reason: runForm.force_reason.trim() || 'Operator requested force rerun.' } : {}),
@@ -594,10 +594,10 @@ export function App() {
       };
       const response =
         mode === 'run'
-          ? await api.runPackage(selectedPackage.id, body)
+          ? await api.runPackage(selectedPackage.id, actorId, body)
           : mode === 'rerun'
-            ? await api.rerunPackage(selectedPackage.id, body)
-            : await api.forceRerunPackage(selectedPackage.id, body);
+            ? await api.rerunPackage(selectedPackage.id, actorId, body)
+            : await api.forceRerunPackage(selectedPackage.id, actorId, body);
       const runSessionId = typeof response.run_session_id === 'string' ? response.run_session_id : undefined;
       if (runSessionId) setSelectedRunId(runSessionId);
       const reviewPacketId = getNestedString(response, ['workflow_result', 'reviewPacketId']);

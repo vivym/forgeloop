@@ -490,7 +490,7 @@ describe('query module', () => {
     expect(response.body.message).toContain('Unsupported replay object type');
   });
 
-  it('does not expose legacy work item read routes', async () => {
+  it('does not expose old work item read routes', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
 
@@ -502,7 +502,7 @@ describe('query module', () => {
     const { app, repo } = await track(createTestApp({ durabilityMode: 'durable' }));
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
     const runSession: RunSession = {
-      id: 'run-session-with-legacy-metadata',
+      id: 'run-session-with-old-metadata',
       execution_package_id: executionPackage.id,
       requested_by_actor_id: 'actor-owner',
       status: 'running',

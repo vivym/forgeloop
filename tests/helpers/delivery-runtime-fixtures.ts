@@ -522,7 +522,6 @@ export const seedAppWithRunSession = async (
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(ownerHeaders)
       .send({
-        requested_by_actor_id: actorOwner,
         workflow_only: true,
       })
       .expect(201)

@@ -1275,7 +1275,7 @@ const runReleaseStrictLocalCodexPackage = async (input: {
   }
   const runResponse = await strictRequest(input.server, input.actorOwner)
     .post(`/execution-packages/${executionPackage.id}/run`)
-    .send({ requested_by_actor_id: input.actorOwner, executor_type: 'local_codex', workflow_only: false });
+    .send({ executor_type: 'local_codex', workflow_only: false });
   if (runResponse.status !== 201) {
     throw new Error(`run failed ${runResponse.status}: ${runResponse.text}`);
   }

@@ -661,7 +661,6 @@ const runPackage = async (
   const response = (
     await withActor(request(app.getHttpServer()).post(`/execution-packages/${packageId}/${path}`), actorOwner)
       .send({
-        requested_by_actor_id: actorOwner,
         executor_type: runMode.executorType,
         workflow_only: runMode.workflowOnly,
         ...body,

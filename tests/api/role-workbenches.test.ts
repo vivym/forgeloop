@@ -149,6 +149,7 @@ const seedLinkedRelease = async (app: INestApplication, executionPackage: Execut
   const release = (
     await request(server)
       .post('/releases')
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         project_id: executionPackage.project_id,
@@ -164,10 +165,12 @@ const seedLinkedRelease = async (app: INestApplication, executionPackage: Execut
 
   await request(server)
     .post(`/releases/${release.id}/work-items/${executionPackage.work_item_id}`)
+    .set(ownerHeaders)
     .send({ actor_id: actorOwner })
     .expect(201);
   await request(server)
     .post(`/releases/${release.id}/execution-packages/${executionPackage.id}`)
+    .set(ownerHeaders)
     .send({ actor_id: actorOwner })
     .expect(201);
 
@@ -499,6 +502,7 @@ describe('role workbench query routes', () => {
     const release = (
       await request(app.getHttpServer())
         .post('/releases')
+        .set(ownerHeaders)
         .send({
           actor_id: actorOwner,
           project_id: project.id,

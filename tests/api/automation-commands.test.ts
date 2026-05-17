@@ -2342,7 +2342,7 @@ describe('automation command boundaries', () => {
     });
   });
 
-  it('rejects legacy package generation endpoints when the plan revision has no frozen spec revision target', async () => {
+  it('rejects package generation routes when the plan revision has no frozen spec revision target', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
     const ctx = await seedApprovedPlanThroughApi(app);
@@ -2378,7 +2378,7 @@ describe('automation command boundaries', () => {
       .expect(409);
   });
 
-  it('replays legacy generated packages instead of creating duplicate drafts', async () => {
+  it('replays generated packages instead of creating duplicate drafts', async () => {
     const { app, service } = await createTestApp();
     apps.push(app);
     const ctx = await seedApprovedPlanThroughApi(app);
@@ -2684,10 +2684,12 @@ describe('automation command boundaries', () => {
     const results = await Promise.allSettled([
       request(app.getHttpServer())
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true }),
+        .set(humanAdminHeaders)
+        .send({ workflow_only: true }),
       request(app.getHttpServer())
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true }),
+        .set(humanAdminHeaders)
+        .send({ workflow_only: true }),
     ]);
 
     expect(repository.maxActiveRunChecksInFlight).toBe(1);
@@ -3251,7 +3253,7 @@ describe('automation command boundaries', () => {
     });
   });
 
-  it('rejects legacy run enqueue when the package plan revision has no frozen spec revision target', async () => {
+  it('rejects run enqueue when the package plan revision has no frozen spec revision target', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
@@ -3264,7 +3266,8 @@ describe('automation command boundaries', () => {
 
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
-      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+      .set(humanAdminHeaders)
+      .send({ workflow_only: true })
       .expect(422);
   });
 });

@@ -271,7 +271,7 @@ describe('delivery loop contracts', () => {
       createReleaseRequestSchema.safeParse({
         project_id: 'project-1',
         title: 'P1 release',
-        created_by_actor_id: 'legacy-actor',
+        created_by_actor_id: 'old-actor',
       }).success,
     ).toBe(false);
 

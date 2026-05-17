@@ -46,7 +46,7 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
 
 - Do not enable daemon `run_enqueue`, `enqueue_package_run`, or equivalent planner output.
 - Do not copy Symphony's product flow. ForgeLoop's PRD object model and approved spec remain authoritative.
-- Do not create a generalized shell runner. Shell strings remain rejected except for the constrained legacy required-check renderer.
+- Do not create a generalized shell runner. Shell strings remain rejected except for the constrained package required-check renderer.
 - Do not let `StructuredCommand` spawn processes. Only `ResourceGovernor` may launch subprocesses.
 - Do not let production/local Codex run unless the primary executor process or app-server worker is governed or leased with an enforcing `run_execution` attestation.
 - Do not let workflow-worker or executor-gateway remain a production/local Codex bypass.
@@ -69,7 +69,7 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
 - Create: `packages/executor/src/runtime-policy.ts`
   - Own `WORKFLOW.md` front matter parsing, strict schema validation, defaults, canonical normalized payloads, stable digests, last-known-good reload behavior, and frozen snapshot construction helpers.
 - Create: `packages/executor/src/structured-command.ts`
-  - Own command spec/result types, legacy required-check rendering, materialization rules, executable/cwd/env/PATH validation, command digesting, and result parsing. It never spawns.
+  - Own command spec/result types, package required-check rendering, materialization rules, executable/cwd/env/PATH validation, command digesting, and result parsing. It never spawns.
 - Create: `packages/executor/src/runtime-safety-config.ts`
   - Own typed runtime safety configuration and explicit `FORGELOOP_EXECUTOR_*` env parsing.
 - Create: `packages/executor/src/resource-limits.ts`
@@ -159,7 +159,7 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
 - Modify: `packages/workflow/src/execution-finalizer.ts`
   - Split `finalizePackageRunWithExecutorResult` into `terminalizePackageRunWithRuntimeEvidence` and `completePackageRunReviewFinalization`; remove the old wrapper after callers move to the split functions.
 - Modify: `packages/workflow/src/activities.ts`
-  - Build `RunSpec.source_mutation_policy`; fail closed or delegate production/local Codex to run-worker instead of legacy activity execution.
+  - Build `RunSpec.source_mutation_policy`; fail closed or delegate production/local Codex to run-worker instead of old activity execution.
 - Modify: `apps/workflow-worker/src/worker.ts`
   - Disable production/local Codex gateway adapter path unless routed through the new runtime safety boundary.
 - Modify: `apps/executor-gateway/src/executor.service.ts`
@@ -789,8 +789,8 @@ In `tests/executor/runtime-policy.test.ts`, add cases for the required-check mer
 
 - every `ExecutionPackage.required_checks[]` entry appears in `frozen_command_check_policy.required_checks`;
 - repo policy check with the same `check_id` may provide the structured command template but cannot change `display_name`, weaken `blocks_review`, or raise timeout above the package check timeout;
-- package checks without matching repo policy checks render through the constrained legacy command renderer;
-- legacy command rendering failure returns `required_check_command_invalid` and prevents package readiness;
+- package checks without matching repo policy checks render through the constrained package command renderer;
+- package command rendering failure returns `required_check_command_invalid` and prevents package readiness;
 - repo policy checks with new ids append as safety checks with `blocks_review: true` and `visibility: internal`;
 - duplicate repo policy check ids invalidate the snapshot;
 - incompatible duplicate package/policy metadata invalidates the snapshot.
@@ -801,11 +801,11 @@ In `buildPackageRuntimePolicySnapshot`, construct `FrozenStructuredCheckPolicy` 
 
 1. iterate all package required checks and preserve package `check_id`, `display_name`, timeout, and `blocks_review`;
 2. when a repo policy check has the same `check_id`, use only its structured command/template and only stricter timeout/output/visibility/write-policy overrides;
-3. render unmatched package legacy command text with `legacyRequiredCheckToStructuredCommand`;
+3. render unmatched package command text with `requiredCheckToStructuredCommand`;
 4. append repo-only safety checks after package checks;
-5. reject duplicate ids, incompatible metadata, weakening `blocks_review`, timeout increases, missing templates, invalid structured specs, or legacy command renderer failures.
+5. reject duplicate ids, incompatible metadata, weakening `blocks_review`, timeout increases, missing templates, invalid structured specs, or package command renderer failures.
 
-Return deterministic public blocker code `required_check_command_invalid` for legacy render failures and `policy_snapshot_invalid` for incompatible frozen policy structure.
+Return deterministic public blocker code `required_check_command_invalid` for package command render failures and `policy_snapshot_invalid` for incompatible frozen policy structure.
 
 - [ ] **Step 7: Add safe-default snapshot tests**
 
@@ -849,7 +849,7 @@ In `tests/executor/structured-command.test.ts`, add cases:
 
 - rejects shell strings, `shell: true`, absolute untrusted executables, unsafe cwd, unsafe env, command-local `PATH`, ambient PATH inheritance, unsafe PATH entries, writable toolchain roots, timeout/output caps above hard maxima, and missing exactly-one command/template fields;
 - renders `pnpm test tests/executor` into executable `pnpm` plus args;
-- rejects legacy commands with quotes, `$VAR`, `>`, `<`, `|`, `&&`, `;`, `*`, command substitution, env assignment prefixes, or absolute executable paths;
+- rejects package command strings with quotes, `$VAR`, `>`, `<`, `|`, `&&`, `;`, `*`, command substitution, env assignment prefixes, or absolute executable paths;
 - proves `StructuredCommand` never calls `child_process.spawn`, `exec`, or `execFile`.
 
 - [ ] **Step 2: Run tests and verify failure**
@@ -895,7 +895,7 @@ export interface StructuredCommandResult {
 }
 ```
 
-Add `validateStructuredCommandSpec`, `materializeCommandReference`, `legacyRequiredCheckToStructuredCommand`, `structuredCommandDigest`, and `structuredCommandResultFromGovernor`.
+Add `validateStructuredCommandSpec`, `materializeCommandReference`, `requiredCheckToStructuredCommand`, `structuredCommandDigest`, and `structuredCommandResultFromGovernor`.
 
 - [ ] **Step 4: Implement executable and env policy**
 
@@ -1390,7 +1390,7 @@ export async function runRequiredChecks(input: {
 }): Promise<RequiredCheckRunResult>;
 ```
 
-Return `CheckResult[]`, artifact refs, and sanitized blockers. Do not execute legacy `RequiredCheckSpec.command` strings directly.
+Return `CheckResult[]`, artifact refs, and sanitized blockers. Do not execute unstructured `RequiredCheckSpec.command` strings directly.
 
 - [ ] **Step 6: Export and run tests**
 
@@ -1439,7 +1439,7 @@ In `tests/executor/local-codex-preflight.test.ts`, add cases:
 
 - missing/invalid frozen snapshot blocks startup;
 - declared scope PathPolicy rejection maps to `path_policy_declared_scope_rejected`;
-- legacy required check command that cannot render maps to `required_check_command_invalid`;
+- package required check command that cannot render maps to `required_check_command_invalid`;
 - hard-limit unavailability maps to `runtime_hard_limits_unavailable`;
 - primary Codex not governed maps to `primary_executor_governor_unavailable`;
 - `before_run` hook failure blocks startup;
@@ -1685,7 +1685,7 @@ git add packages/run-worker/src/run-worker.ts packages/run-worker/src/index.ts p
 git commit -m "feat: split runtime terminalization and review finalization"
 ```
 
-## Task 12: Close Legacy Production/Local Codex Bypass Paths
+## Task 12: Close Old Production/Local Codex Bypass Paths
 
 **Files:**
 - Modify: `apps/executor-gateway/src/executor.service.ts`
@@ -1801,7 +1801,7 @@ Run:
 
 ```bash
 git add apps/executor-gateway/src/executor.service.ts apps/executor-gateway/src/executor.controller.ts apps/workflow-worker/src/worker.ts packages/workflow/src/activities.ts tests/executor-gateway/executor-gateway.test.ts tests/workflow-worker/worker.test.ts tests/workflow/package-execution-workflow.test.ts
-git commit -m "fix: close legacy local codex execution bypasses"
+git commit -m "fix: close local codex execution bypasses"
 ```
 
 ## Task 13: Public Runtime Blocker Projection
@@ -2080,7 +2080,7 @@ Use this checklist before marking implementation done:
 - [ ] Bootstrap governor and run governor are distinct.
 - [ ] Enqueue preflight and run execution attestations are distinct and not interchangeable.
 - [ ] Primary Codex execution is governed or leased.
-- [ ] Legacy workflow-worker/executor-gateway production/local Codex bypass is closed.
+- [ ] Old workflow-worker/executor-gateway production/local Codex bypass is closed.
 - [ ] Frozen package snapshots contain all accepted execution-affecting policy sections and the normalized payload digest.
 - [ ] Runtime policy reload cannot mutate ready/run-eligible packages.
 - [ ] `allowed_paths: []` is accepted only for `source_mutation_policy: no_source_changes`.

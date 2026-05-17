@@ -212,16 +212,16 @@ describe('Forgeloop web API client', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events?after=0000000000', expect.any(Object));
   });
 
-  it('propagates actor ids as headers to package run commands while preserving required body actor fields', async () => {
+  it('propagates actor ids as headers to package run commands without body actor fields', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
-    await api.runPackage('package-1', { requested_by_actor_id: 'actor-owner', workflow_only: true });
+    await api.runPackage('package-1', 'actor-owner', { workflow_only: true });
 
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/execution-packages/package-1/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
-      body: JSON.stringify({ requested_by_actor_id: 'actor-owner', workflow_only: true }),
+      body: JSON.stringify({ workflow_only: true }),
     });
   });
 

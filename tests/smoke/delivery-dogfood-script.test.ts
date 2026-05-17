@@ -80,7 +80,7 @@ describe('delivery dogfood script helpers', () => {
       init: {
         method: 'POST',
         headers: { 'X-Forgeloop-Actor-Id': 'actor-owner' },
-        body: { requested_by_actor_id: 'actor-owner', workflow_only: true, executor_type: 'mock' },
+        body: { workflow_only: true, executor_type: 'mock' },
       },
     });
     expect(buildRunEventListRequest('run-1', { mode: 'durable', actorId: 'actor-owner', after: '0001' })).toMatchObject({

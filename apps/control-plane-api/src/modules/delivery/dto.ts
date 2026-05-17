@@ -71,7 +71,6 @@ export type ActorCommandDto = z.infer<typeof actorCommandSchema>;
 export const runPackageSchema = z
   .object({
     execution_package_id: nonEmptyString.optional(),
-    requested_by_actor_id: nonEmptyString,
     executor_type: executorTypeSchema.optional(),
     workflow_only: z.boolean().optional(),
     previous_run_session_id: nonEmptyString.optional(),

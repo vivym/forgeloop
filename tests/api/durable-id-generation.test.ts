@@ -183,7 +183,6 @@ describe('durable delivery object IDs', () => {
         .post(`/execution-packages/${executionPackage.id}/run`)
         .set(ownerHeaders)
         .send({
-          requested_by_actor_id: ownerActorId,
           executor_type: 'mock',
           workflow_only: true,
         })

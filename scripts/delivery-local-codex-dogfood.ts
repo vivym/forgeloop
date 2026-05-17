@@ -520,7 +520,6 @@ export const main = async (env: Env = process.env, runCommand: CommandRunner = d
     const run = await requestJson<{ run_session_id: string }>(api.apiUrl, `/execution-packages/${encodeURIComponent(executionPackageId)}/run`, {
       method: 'POST',
       body: {
-        requested_by_actor_id: 'local-codex-dogfood-actor',
         executor_type: 'local_codex',
         workflow_only: false,
       },

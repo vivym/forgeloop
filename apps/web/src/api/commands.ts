@@ -229,23 +229,23 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}`, { method: 'PATCH', body }),
     markPackageReady: (packageId: string, body: MarkPackageReadyBody) =>
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}/mark-ready`, { method: 'POST', body }),
-    runPackage: (packageId: string, body: RunPackageBody) =>
+    runPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
       request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/run`, {
         method: 'POST',
         body,
-        actorId: body.requested_by_actor_id,
+        actorId,
       }),
-    rerunPackage: (packageId: string, body: RunPackageBody) =>
+    rerunPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
       request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/rerun`, {
         method: 'POST',
         body,
-        actorId: body.requested_by_actor_id,
+        actorId,
       }),
-    forceRerunPackage: (packageId: string, body: RunPackageBody) =>
+    forceRerunPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
       request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/force-rerun`, {
         method: 'POST',
         body,
-        actorId: body.requested_by_actor_id,
+        actorId,
       }),
 
     getRunSession: (runSessionId: string) => request<RunSession>(`/run-sessions/${encodeURIComponent(runSessionId)}`),

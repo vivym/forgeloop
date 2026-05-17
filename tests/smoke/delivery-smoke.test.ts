@@ -132,7 +132,8 @@ const runPackage = async (
   (
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackageId}/${path}`)
-      .send({ requested_by_actor_id: actorOwner, workflow_only: true, ...body })
+      .set(ownerHeaders)
+      .send({ workflow_only: true, ...body })
       .expect(201)
   ).body;
 
@@ -149,7 +150,7 @@ const expectAcceptedRunWithVisibleLiveEvent = async (
   }
 
   const events = (
-    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(200)
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).set(ownerHeaders).expect(200)
   ).body.events as PublicRunEvent[];
   expect(events.map((event) => event.event_type)).toEqual(expect.arrayContaining(['run_queued']));
   expect(events.some((event) => event.event_type === 'run_queued' || event.event_type === 'driver_started')).toBe(true);
