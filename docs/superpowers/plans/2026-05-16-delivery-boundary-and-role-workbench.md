@@ -267,10 +267,9 @@ In `apps/control-plane-api/src/modules/core/control-plane-tokens.ts`:
 ```ts
 export const DELIVERY_REPOSITORY = Symbol('DELIVERY_REPOSITORY');
 export const RUN_DURABILITY_MODE = Symbol('RUN_DURABILITY_MODE');
-export const DELIVERY_DEMO_ACTOR_ID_FALLBACK = Symbol('DELIVERY_DEMO_ACTOR_ID_FALLBACK');
 ```
 
-In `apps/control-plane-api/src/modules/core/control-plane-core.module.ts`, import `createDrizzleDeliveryRepository`, `InMemoryDeliveryRepository`, and `DeliveryRepository`, then provide/export `DELIVERY_REPOSITORY` and `DELIVERY_DEMO_ACTOR_ID_FALLBACK`.
+In `apps/control-plane-api/src/modules/core/control-plane-core.module.ts`, import `createDrizzleDeliveryRepository`, `InMemoryDeliveryRepository`, and `DeliveryRepository`, then provide/export `DELIVERY_REPOSITORY` and `RUN_DURABILITY_MODE`. Do not add actor identity fallback tokens; run operator identity must come from authenticated actor headers.
 
 - [ ] **Step 8: Rename durable id and workflow worker strings**
 
@@ -300,7 +299,7 @@ Update dynamic imports to call `createDrizzleDeliveryRepository`.
 
 - [ ] **Step 9: Update imports in tests and packages**
 
-Use `rg "P0Repository|InMemoryP0Repository|DrizzleP0Repository|createDrizzleP0Repository|P0_REPOSITORY|P0_DEMO_ACTOR_ID_FALLBACK|withP0Transaction|uuidBackedP0IdPrefixes|forgeloop-p0-package-execution"` to find all call sites.
+Use `rg "P0Repository|InMemoryP0Repository|DrizzleP0Repository|createDrizzleP0Repository|P0_REPOSITORY|withP0Transaction|uuidBackedP0IdPrefixes|forgeloop-p0-package-execution"` to find all call sites.
 
 Replace them with delivery names. Do not change `priority: 'P0'` literals.
 
