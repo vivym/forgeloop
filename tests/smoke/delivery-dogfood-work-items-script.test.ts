@@ -238,6 +238,9 @@ describe('delivery dogfood work items script', () => {
         expect(report).toContain('Remote CI gate');
         expect(report).toContain('Durable verification gaps');
         expect(report).toContain('Browser Run Console walkthrough');
+        expect(report).toContain('Source commit:');
+        expect(report).toMatch(/Source tree before report write: (clean|dirty)/);
+        expect(report).toContain('Report scope: workflow dogfood only');
         expect(report).toContain('changes_requested -> rerun -> approve');
         expect(report).toContain('object_event');
         expect(report).toContain('status_history');

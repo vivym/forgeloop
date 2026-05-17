@@ -8,6 +8,7 @@ import {
   buildRunEventStreamTokenRequest,
   buildRunInputRequest,
   buildRunPackageRequest,
+  deliveryDogfoodStatus,
   publicApiAuthChecks,
   renderReport,
   requestRunEventStreamToken,
@@ -173,6 +174,18 @@ describe('delivery dogfood script helpers', () => {
         checks: passedChecks,
       }),
     ).toContain('- Durable public API actor header auth: PASSED');
+  });
+
+  it('does not report dogfood PASS when browser workbench verification fails', () => {
+    expect(
+      deliveryDogfoodStatus(
+        [{ label: 'run', packageId: 'package-1', runSessionId: 'run-1', reviewPacketId: 'review-1', status: 'passed', notes: [] }],
+        [
+          { label: 'Web app probe', status: 'passed', details: [] },
+          { label: 'Browser visual/text-overflow verification', status: 'failed', details: ['browser e2e failed'] },
+        ],
+      ),
+    ).toBe('FAIL');
   });
 
   it('keeps volatile_demo behavior compatible with body and query actor fallback', () => {

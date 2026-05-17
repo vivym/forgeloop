@@ -48,6 +48,7 @@ const activeMigrationFiles = new Set([
   'docs/superpowers/specs/2026-05-16-delivery-boundary-and-role-workbench-design.md',
   'docs/superpowers/plans/2026-05-16-delivery-boundary-and-role-workbench.md',
 ]);
+const externallyOwnedFiles = new Set(['docs/superpowers/specs/2026-05-16-executor-runtime-safety-foundation-design.md']);
 const priorityLiteral = new RegExp(
   [
     String.raw`\b(?:priority|default_priority|defaultPriority):\s*['"]${oldPriority}['"]`,
@@ -98,6 +99,7 @@ describe('delivery naming cleanup', () => {
         continue;
       }
       if (activeMigrationFiles.has(rel)) continue;
+      if (externallyOwnedFiles.has(rel)) continue;
       if (oldSubsystem.test(content) || oldSubsystem.test(rel)) offenders.push(rel);
       oldSubsystem.lastIndex = 0;
     }

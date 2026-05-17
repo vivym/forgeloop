@@ -94,12 +94,7 @@ const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? '00000000-0000-4000-8000
 const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? '00000000-0000-4000-8000-000000000102';
 const actorQa = process.env.FORGELOOP_ACTOR_QA ?? '00000000-0000-4000-8000-000000000103';
 const databaseUrl = process.env.FORGELOOP_DATABASE_URL?.trim();
-const webUrlCandidates = (process.env.FORGELOOP_WEB_URL ?? 'http://localhost:5173,http://localhost:5174')
-  .split(',')
-  .map((value) => value.trim().replace(/\/$/, ''))
-  .filter((value) => value.length > 0);
-
-const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:delivery', 'pnpm dogfood:delivery'];
+const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:delivery', 'pnpm e2e:run-console', 'pnpm dogfood:delivery'];
 const terminalRunStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -1475,46 +1470,42 @@ const runDurableRepositoryCheck = async (dbPush: VerificationCheck): Promise<Ver
   }
 };
 
-const probeWebApp = async (): Promise<VerificationCheck[]> => {
-  for (const webUrl of webUrlCandidates) {
-    try {
-      const response = await fetch(webUrl, { signal: AbortSignal.timeout(1_500) });
-      const text = await response.text();
-      if (response.ok && text.includes('<div id="root"')) {
-        return [
-          {
-            label: 'Web app probe',
-            status: 'passed',
-            details: [`Web app responded at ${webUrl}.`],
-          },
-          {
-            label: 'Browser visual/text-overflow verification',
-            status: 'skipped',
-            details: [
-              'No in-app browser automation was available to this script; visual Run Console layout and narrow viewport text overflow remain manual checks.',
-            ],
-          },
-        ];
-      }
-    } catch {
-      // Try the next likely Vite URL.
-    }
+const runWebWorkbenchVerification = async (): Promise<VerificationCheck[]> => {
+  try {
+    await runCommand('pnpm', ['e2e:run-console'], { timeoutMs: 90_000 });
+    return [
+      {
+        label: 'Web app probe',
+        status: 'passed',
+        details: ['`pnpm e2e:run-console` started the API and Vite web app in-process and exercised the browser workbench.'],
+      },
+      {
+        label: 'Browser visual/text-overflow verification',
+        status: 'passed',
+        details: ['`pnpm e2e:run-console` asserted Run Console usability at desktop and mobile viewports.'],
+      },
+    ];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return [
+      {
+        label: 'Web app probe',
+        status: 'failed',
+        details: [`Run Console browser E2E failed: ${message}`],
+      },
+      {
+        label: 'Browser visual/text-overflow verification',
+        status: 'failed',
+        details: ['Run Console visual layout and narrow viewport text overflow were not verified because browser E2E failed.'],
+      },
+    ];
   }
+};
 
-  return [
-    {
-      label: 'Web app probe',
-      status: 'skipped',
-      details: [`No web app responded at ${webUrlCandidates.join(', ')}.`],
-    },
-    {
-      label: 'Browser visual/text-overflow verification',
-      status: 'skipped',
-      details: [
-        'Run Console visual layout and narrow viewport text overflow remain unverified because no web app/browser target was available to this script.',
-      ],
-    },
-  ];
+export const deliveryDogfoodStatus = (results: readonly DogfoodResult[], checks: readonly VerificationCheck[]): 'PASS' | 'FAIL' => {
+  const failed = results.filter((result) => result.status === 'failed');
+  const failedChecks = checks.filter((check) => check.status === 'failed');
+  return failed.length === 0 && failedChecks.length === 0 ? 'PASS' : 'FAIL';
 };
 
 export const renderReport = (data: {
@@ -1556,6 +1547,7 @@ export const renderReport = (data: {
     '- `pnpm test`: all Vitest suites pass.',
     '- `pnpm build`: all workspace packages and apps compile.',
     '- `pnpm smoke:delivery`: Delivery smoke suite passes and observes public run events before waiting for terminal evidence.',
+    '- `pnpm e2e:run-console`: browser Run Console E2E passes at desktop and mobile widths.',
     '- `pnpm dogfood:delivery`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.',
     '',
     '## Dogfood Preconditions',
@@ -1635,11 +1627,9 @@ const main = async (): Promise<number> => {
     });
     checks.push(...publicApiAuthChecks(mode, publicApiAuthEvidence));
     checks.push(await runDurableRepositoryCheck(dbPush));
-    checks.push(...(await probeWebApp()));
+    checks.push(...(await runWebWorkbenchVerification()));
 
-    const failed = results.filter((result) => result.status === 'failed');
-    const failedChecks = checks.filter((check) => check.status === 'failed');
-    const status = failed.length === 0 && failedChecks.length === 0 ? 'PASS' : 'FAIL';
+    const status = deliveryDogfoodStatus(results, checks);
     await writeReport(renderReport({ status, apiUrl, results, checks }));
     return status === 'PASS' ? 0 : 1;
   } catch (error) {

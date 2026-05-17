@@ -105,6 +105,7 @@ type DogfoodCompletionResult = {
   projectId: string;
   repoId: string;
   commitSha: string;
+  sourceTreeStatus: 'clean' | 'dirty';
   strictAcceptance: StrictDogfoodAcceptance;
   items: DogfoodItemResult[];
 };
@@ -438,6 +439,11 @@ const withActor = <T extends SupertestTest>(
 const getHeadSha = async (): Promise<string> => {
   const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoPath });
   return String(stdout).trim();
+};
+
+const getSourceTreeStatus = async (): Promise<'clean' | 'dirty'> => {
+  const { stdout } = await execFile('git', ['status', '--short'], { cwd: repoPath });
+  return String(stdout).trim().length === 0 ? 'clean' : 'dirty';
 };
 
 const createApp = async (): Promise<INestApplication> => {
@@ -831,6 +837,7 @@ export const runDeliveryDogfoodWorkItems = async (): Promise<DogfoodCompletionRe
   const app = await createApp();
   try {
     const commitSha = await getHeadSha();
+    const sourceTreeStatus = await getSourceTreeStatus();
     const projectId = await createProject(app, commitSha);
     const completedItems: CompletedDogfoodItem[] = [];
     for (const item of dogfoodWorkItems) {
@@ -855,6 +862,7 @@ export const runDeliveryDogfoodWorkItems = async (): Promise<DogfoodCompletionRe
       projectId,
       repoId,
       commitSha,
+      sourceTreeStatus,
       strictAcceptance,
       items: completedItems.map((item) => item.result),
     };
@@ -945,7 +953,9 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
     `Durability mode: ${result.durabilityMode}`,
     `Project: ${result.projectId}`,
     `Repo: ${result.repoId}`,
-    `Commit: ${result.commitSha}`,
+    `Source commit: ${result.commitSha}`,
+    `Source tree before report write: ${result.sourceTreeStatus}`,
+    `Report scope: ${result.strictAcceptance.status === 'passed' ? 'strict local Codex acceptance' : 'workflow dogfood only; strict local Codex acceptance is reported separately below'}`,
     '',
     ...strictLines,
     '',
