@@ -99,7 +99,7 @@ const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? '00000000-0000-4000-8000
 const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? '00000000-0000-4000-8000-000000000102';
 const actorQa = process.env.FORGELOOP_ACTOR_QA ?? '00000000-0000-4000-8000-000000000103';
 const databaseUrl = process.env.FORGELOOP_DATABASE_URL?.trim();
-const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:delivery', 'pnpm e2e:run-console', 'pnpm dogfood:delivery'];
+const commandLog = ['pnpm dogfood:delivery'];
 const terminalRunStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const mandatoryVerificationLabels = new Set(['Web app probe', 'Browser visual/text-overflow verification']);
@@ -1591,11 +1591,9 @@ export const renderReport = (data: {
     '',
     '## Expected Outcomes',
     '',
-    '- `pnpm test`: all Vitest suites pass.',
-    '- `pnpm build`: all workspace packages and apps compile.',
-    '- `pnpm smoke:delivery`: Delivery smoke suite passes and observes public run events before waiting for terminal evidence.',
-    '- `pnpm e2e:run-console`: browser Run Console E2E passes at desktop and mobile widths.',
     '- `pnpm dogfood:delivery`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.',
+    '- Durable dogfood invokes `pnpm e2e:run-console` internally and records the web app/browser checks under DB and Manual/Web Verification.',
+    '- Repository-wide `pnpm test`, `pnpm build`, and `pnpm smoke:delivery` are final release gates outside this dogfood report.',
     '',
     '## Dogfood Preconditions',
     '',
