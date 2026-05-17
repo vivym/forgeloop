@@ -102,29 +102,35 @@ export const roleWorkbenchResponseSchema = z
   .strict();
 export type RoleWorkbenchResponse = z.infer<typeof roleWorkbenchResponseSchema>;
 
-export const runPackageRequestSchema = z.object({
-  execution_package_id: z.string().min(1),
-  executor_type: executorTypeSchema.optional(),
-  workflow_only: z.boolean().default(false),
-  idempotency_key: z.string().min(1).optional(),
-});
+export const runPackageRequestSchema = z
+  .object({
+    execution_package_id: z.string().min(1),
+    executor_type: executorTypeSchema.optional(),
+    workflow_only: z.boolean().default(false),
+    idempotency_key: z.string().min(1).optional(),
+  })
+  .strict();
 export type RunPackageRequest = z.infer<typeof runPackageRequestSchema>;
 
-export const rerunPackageRequestSchema = z.object({
-  execution_package_id: z.string().min(1),
-  previous_run_session_id: z.string().min(1),
-  review_packet_id: z.string().min(1).optional(),
-  requested_changes_context: z.array(requestedChangeSchema).default([]),
-  executor_type: executorTypeSchema.optional(),
-  workflow_only: z.boolean().default(false),
-  idempotency_key: z.string().min(1).optional(),
-});
+export const rerunPackageRequestSchema = z
+  .object({
+    execution_package_id: z.string().min(1),
+    previous_run_session_id: z.string().min(1),
+    review_packet_id: z.string().min(1).optional(),
+    requested_changes_context: z.array(requestedChangeSchema).default([]),
+    executor_type: executorTypeSchema.optional(),
+    workflow_only: z.boolean().default(false),
+    idempotency_key: z.string().min(1).optional(),
+  })
+  .strict();
 export type RerunPackageRequest = z.infer<typeof rerunPackageRequestSchema>;
 
-export const forceRerunPackageRequestSchema = rerunPackageRequestSchema.extend({
-  force: z.literal(true).default(true),
-  force_reason: z.string().min(1),
-});
+export const forceRerunPackageRequestSchema = rerunPackageRequestSchema
+  .extend({
+    force: z.literal(true).default(true),
+    force_reason: z.string().min(1),
+  })
+  .strict();
 export type ForceRerunPackageRequest = z.infer<typeof forceRerunPackageRequestSchema>;
 
 export const runEventTypeSchema = z.enum([

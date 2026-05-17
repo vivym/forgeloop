@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft approved for spec review.
+Completed implementation record. Public automation settings now live under `/automation/*`; daemon-only commands live under `/internal/automation/*`; old public automation compatibility route prefixes are superseded and are not active surfaces.
 
 ## Context
 

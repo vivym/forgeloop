@@ -323,6 +323,12 @@ const saveBaseRecords = async (
   await repository.saveExecutionPackage(executionPackage);
 };
 
+export const seedReadyExecutionPackage = async (repository: DeliveryRepository): Promise<ExecutionPackage> => {
+  const records = baseRecords();
+  await saveBaseRecords(repository, records.executionPackage, records);
+  return records.executionPackage;
+};
+
 export const seedQueuedPackageRun = async (
   repository: DeliveryRepository,
 ): Promise<{ executionPackage: ExecutionPackage; runSession: RunSession }> => {

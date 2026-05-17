@@ -23,10 +23,14 @@ import type { ArtifactRef } from '../../packages/contracts/src/index';
 import {
   automationPreconditionFingerprint,
   buildManualScopeKey,
+  transitionSpecPlan,
+  transitionWorkItem,
   type AutomationPrecondition,
   type ExecutionPackage,
   type Plan,
   type PlanRevision,
+  type Project,
+  type ProjectRepo,
   type Release,
   type ReviewPacket,
   type RunSession,
@@ -35,7 +39,7 @@ import {
   type SpecRevision,
   type WorkItem,
 } from '../../packages/domain/src/index';
-import { seedReadyExecutionPackageThroughApi, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
+import { seedReadyExecutionPackage, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -56,6 +60,7 @@ const automationSecret = 'test-secret';
 const automationActorId = 'daemon-actor';
 const automationDaemonIdentity = 'daemon-1';
 const automationTestNow = '2026-05-05T00:00:00.000Z';
+let seedCounter = 0;
 
 type ApprovedSpecContext = {
   project: { id: string };
@@ -130,6 +135,25 @@ class OverlapDetectingRepository extends InMemoryDeliveryRepository {
   }
 }
 
+const proxiedRepository = (initialRepository: DeliveryRepository): {
+  proxy: DeliveryRepository;
+  setTarget: (repository: DeliveryRepository) => void;
+} => {
+  let target = initialRepository;
+  return {
+    proxy: new Proxy({} as DeliveryRepository, {
+      get: (_proxyTarget, property) => {
+        const value = Reflect.get(target as object, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+      set: (_proxyTarget, property, value) => Reflect.set(target as object, property, value),
+    }),
+    setTarget: (repository) => {
+      target = repository;
+    },
+  };
+};
+
 const createTestApp = async (
   repositoryOverride?: DeliveryRepository,
   runWorkerOverride: { kick: () => void; drainOnce: () => Promise<void> } = {
@@ -137,20 +161,65 @@ const createTestApp = async (
     drainOnce: async () => undefined,
   },
 ): Promise<{ app: INestApplication; repository: DeliveryRepository; service: AutomationCommandTestService }> => {
-  const repository = repositoryOverride ?? new InMemoryDeliveryRepository();
+  const repository = proxiedRepository(repositoryOverride ?? new InMemoryDeliveryRepository());
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
-      .useValue(repository)
+      .useValue(repository.proxy)
       .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue(runWorkerOverride)
       .compile();
     const app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
 
-    const routeProbe = await request(app.getHttpServer()).post('/projects').send({ name: { text: 'route-probe' } });
-    if (routeProbe.status === 400) {
+    const server = app.getHttpServer();
+    const projectRouteProbe = await request(server).post('/projects').send({ name: 'route-probe' });
+    const projectRepoRouteProbe =
+      projectRouteProbe.status === 201
+        ? await request(server)
+            .post(`/projects/${projectRouteProbe.body.id}/repos`)
+            .send({
+              repo_id: 'route-probe-repo',
+              name: 'route-probe',
+              local_path: '/tmp/route-probe',
+              base_commit_sha: 'route-probe-sha',
+            })
+        : { status: projectRouteProbe.status };
+    const workItemRouteProbe =
+      projectRepoRouteProbe.status === 201
+        ? await request(server)
+            .post('/work-items')
+            .send({
+              project_id: projectRouteProbe.body.id,
+              kind: 'requirement',
+              title: 'route-probe',
+              goal: 'Verify Work Item route readiness.',
+              success_criteria: ['Route is mounted and shares repository state.'],
+              priority: 'P1',
+              risk: 'low',
+              owner_actor_id: actorOwner,
+            })
+        : { status: projectRepoRouteProbe.status };
+    const publicAutomationRouteProbe = await request(server).post('/automation/manual-path-holds').send({});
+    const internalAutomationRouteProbe = await request(server).get('/internal/automation/runtime-snapshot');
+    const routeProbeStatuses = [
+      projectRouteProbe.status,
+      projectRepoRouteProbe.status,
+      workItemRouteProbe.status,
+      publicAutomationRouteProbe.status,
+      internalAutomationRouteProbe.status,
+    ];
+    if (
+      routeProbeStatuses[0] === 201 &&
+      routeProbeStatuses[1] === 201 &&
+      routeProbeStatuses[2] === 201 &&
+      routeProbeStatuses[3] === 400 &&
+      routeProbeStatuses[4] === 401
+    ) {
+      if (repositoryOverride === undefined) {
+        repository.setTarget(new InMemoryDeliveryRepository());
+      }
       const automationCommandService = app.get(AutomationCommandService);
       const executionPackageService = app.get(ExecutionPackageService);
       const specPlanService = app.get(SpecPlanService);
@@ -165,8 +234,8 @@ const createTestApp = async (
     }
 
     await app.close();
-    if (routeProbe.status !== 404) {
-      throw new Error(`Unexpected automation command route probe status ${routeProbe.status}`);
+    if (!routeProbeStatuses.includes(404)) {
+      throw new Error(`Unexpected automation command route probe statuses ${routeProbeStatuses.join(',')}`);
     }
   }
 
@@ -208,73 +277,183 @@ const signedAutomationGet = (app: INestApplication, pathAndQuery: string) => {
   return request(app.getHttpServer()).get(pathAndQuery).set(headers);
 };
 
-const seedProjectRepoWorkItem = async (app: INestApplication): Promise<{ project: { id: string }; workItem: WorkItem }> => {
-  const server = app.getHttpServer();
-  const project = (await request(server).post('/projects').send({ name: 'Forgeloop', owner_actor_id: actorOwner }).expect(201)).body as {
-    id: string;
+const nextSeedId = (prefix: string): string => `${prefix}-${++seedCounter}`;
+
+const seedProjectRepo = async (
+  repository: DeliveryRepository,
+  project: Project,
+  overrides: Partial<Omit<ProjectRepo, 'id' | 'project_id' | 'created_at' | 'updated_at'>> = {},
+): Promise<ProjectRepo> => {
+  const repoId = overrides.repo_id ?? 'repo-1';
+  const projectRepo: ProjectRepo = {
+    id: nextSeedId('project-repo'),
+    repo_id: repoId,
+    project_id: project.id,
+    name: overrides.name ?? 'forgeloop',
+    status: overrides.status ?? 'active',
+    local_path: overrides.local_path ?? '/workspace/forgeloop',
+    default_branch: overrides.default_branch ?? 'main',
+    base_commit_sha: overrides.base_commit_sha ?? 'abc123',
+    ...(overrides.org_id !== undefined ? { org_id: overrides.org_id } : {}),
+    ...(overrides.remote_url !== undefined ? { remote_url: overrides.remote_url } : {}),
+    created_at: automationTestNow,
+    updated_at: automationTestNow,
   };
+  await repository.saveProjectRepo(projectRepo);
+  if (!project.repo_ids.includes(repoId)) {
+    project.repo_ids.push(repoId);
+    await repository.saveProject({ ...project, repo_ids: [...project.repo_ids], updated_at: automationTestNow });
+  }
+  return projectRepo;
+};
 
-  await request(server)
-    .post(`/projects/${project.id}/repos`)
-    .send({
-      repo_id: 'repo-1',
-      name: 'forgeloop',
-      local_path: '/workspace/forgeloop',
-      default_branch: 'main',
-      base_commit_sha: 'abc123',
-    })
-    .expect(201);
+const seedProjectRepoWorkItem = async (app: INestApplication): Promise<{ project: { id: string }; workItem: WorkItem }> => {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  await repository.saveOrganization({
+    id: 'org-automation-command-tests',
+    name: 'Automation Command Tests',
+    created_at: automationTestNow,
+    updated_at: automationTestNow,
+  });
+  await repository.saveActor({
+    id: actorOwner,
+    org_id: 'org-automation-command-tests',
+    display_name: 'Owner',
+    actor_type: 'human',
+    created_at: automationTestNow,
+    updated_at: automationTestNow,
+  });
+  const project: Project = {
+    id: nextSeedId('project'),
+    name: 'Forgeloop',
+    repo_ids: [],
+    owner_actor_id: actorOwner,
+    created_at: automationTestNow,
+    updated_at: automationTestNow,
+  };
+  await repository.saveProject(project);
+  await seedProjectRepo(repository, project);
 
-  const workItem = (await request(server)
-    .post('/work-items')
-    .send({
-      project_id: project.id,
-      kind: 'requirement',
-      title: 'Ship automation plan drafts',
-      goal: 'Generate plan drafts only after PRD approval.',
-      success_criteria: ['Duplicate automation commands produce one plan draft.'],
-      priority: 'P0',
-      risk: 'medium',
-      owner_actor_id: actorOwner,
-    })
-    .expect(201)).body as WorkItem;
+  const workItem = transitionWorkItem(undefined, {
+    type: 'create',
+    id: nextSeedId('work-item'),
+    project_id: project.id,
+    kind: 'requirement',
+    title: 'Ship automation plan drafts',
+    goal: 'Generate plan drafts only after PRD approval.',
+    success_criteria: ['Duplicate automation commands produce one plan draft.'],
+    priority: 'P0',
+    risk: 'medium',
+    owner_actor_id: actorOwner,
+    at: automationTestNow,
+  });
+  await repository.saveWorkItem(workItem);
 
   return { project, workItem };
 };
 
-const seedApprovedSpecThroughApi = async (app: INestApplication): Promise<ApprovedSpecContext> => {
-  const server = app.getHttpServer();
+const seedApprovedSpec = async (app: INestApplication): Promise<ApprovedSpecContext> => {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const { project, workItem } = await seedProjectRepoWorkItem(app);
-  const createdSpec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
-  const generatedRevision = (await request(server).post(`/specs/${createdSpec.id}/generate-draft`).send({}).expect(201)).body as {
-    id: string;
+  const specRevisionId = nextSeedId('spec-revision');
+  const createdSpec = transitionSpecPlan(undefined, {
+    type: 'create',
+    entity_type: 'spec',
+    id: nextSeedId('spec'),
+    work_item_id: workItem.id,
+    at: automationTestNow,
+  }) as Spec;
+  const submittedSpec = transitionSpecPlan(createdSpec, { type: 'submit_for_approval', at: automationTestNow }) as Spec;
+  const approvedSpec = transitionSpecPlan(submittedSpec, { type: 'approve', at: automationTestNow }) as Spec;
+  const spec: Spec = {
+    ...approvedSpec,
+    current_revision_id: specRevisionId,
+    approved_revision_id: specRevisionId,
+    approved_at: automationTestNow,
+    approved_by_actor_id: actorReviewer,
   };
+  const specRevision: SpecRevision = {
+    id: specRevisionId,
+    spec_id: spec.id,
+    work_item_id: workItem.id,
+    revision_number: 1,
+    summary: 'Approved automation command spec',
+    content: 'Spec body',
+    background: 'Automation command tests',
+    goals: ['Generate deterministic automation command fixtures'],
+    scope_in: ['Automation command boundary behavior'],
+    scope_out: ['Product route behavior'],
+    acceptance_criteria: ['Automation commands respect approved specs'],
+    risk_notes: [],
+    test_strategy_summary: 'Vitest automation command coverage',
+    artifact_refs: [],
+    created_at: automationTestNow,
+  };
+  const submittedWorkItem = transitionWorkItem(workItem, { type: 'submit_spec', at: automationTestNow });
+  const approvedWorkItem = transitionWorkItem(submittedWorkItem, { type: 'approve_spec', at: automationTestNow });
+  const updatedWorkItem: WorkItem = {
+    ...approvedWorkItem,
+    current_spec_id: spec.id,
+    current_spec_revision_id: specRevision.id,
+    updated_at: automationTestNow,
+  };
+  await repository.saveSpec(spec);
+  await repository.saveSpecRevision(specRevision);
+  await repository.saveWorkItem(updatedWorkItem);
 
-  await request(server).post(`/specs/${createdSpec.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
-  const spec = (await request(server)
-    .post(`/specs/${createdSpec.id}/approve`)
-    .set(reviewerHeaders)
-    .send({ actor_id: actorReviewer })
-    .expect(201)).body as Spec;
-
-  return { project, workItem, spec, specRevisionId: generatedRevision.id };
+  return { project, workItem: updatedWorkItem, spec, specRevisionId };
 };
 
-const seedApprovedPlanThroughApi = async (app: INestApplication): Promise<ApprovedSpecContext & { plan: Plan; planRevisionId: string }> => {
-  const ctx = await seedApprovedSpecThroughApi(app);
-  const server = app.getHttpServer();
-  const createdPlan = (await request(server).post(`/work-items/${ctx.workItem.id}/plans`).send({}).expect(201)).body as Plan;
-  const generatedRevision = (await request(server).post(`/plans/${createdPlan.id}/generate-draft`).send({}).expect(201)).body as {
-    id: string;
+const seedApprovedPlan = async (app: INestApplication): Promise<ApprovedSpecContext & { plan: Plan; planRevisionId: string }> => {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const ctx = await seedApprovedSpec(app);
+  const planRevisionId = nextSeedId('plan-revision');
+  const createdPlan = transitionSpecPlan(undefined, {
+    type: 'create',
+    entity_type: 'plan',
+    id: nextSeedId('plan'),
+    work_item_id: ctx.workItem.id,
+    at: automationTestNow,
+  }) as Plan;
+  const submittedPlan = transitionSpecPlan(createdPlan, { type: 'submit_for_approval', at: automationTestNow }) as Plan;
+  const approvedPlan = transitionSpecPlan(submittedPlan, { type: 'approve', at: automationTestNow }) as Plan;
+  const plan: Plan = {
+    ...approvedPlan,
+    current_revision_id: planRevisionId,
+    approved_revision_id: planRevisionId,
+    approved_at: automationTestNow,
+    approved_by_actor_id: actorReviewer,
   };
+  const planRevision: PlanRevision = {
+    id: planRevisionId,
+    plan_id: plan.id,
+    work_item_id: ctx.workItem.id,
+    revision_number: 1,
+    summary: 'Approved automation command plan',
+    content: 'Plan body',
+    implementation_summary: 'Exercise automation command boundaries.',
+    split_strategy: 'Single automation command fixture.',
+    dependency_order: [],
+    test_matrix: ['pnpm vitest run tests/api/automation-commands.test.ts'],
+    risk_mitigations: [],
+    rollback_notes: 'Discard fixture records.',
+    based_on_spec_revision_id: ctx.specRevisionId,
+    artifact_refs: [],
+    created_at: automationTestNow,
+  };
+  const submittedWorkItem = transitionWorkItem(ctx.workItem, { type: 'submit_plan', at: automationTestNow });
+  const approvedWorkItem = transitionWorkItem(submittedWorkItem, { type: 'approve_plan', at: automationTestNow });
+  const updatedWorkItem: WorkItem = {
+    ...approvedWorkItem,
+    current_plan_id: plan.id,
+    current_plan_revision_id: planRevision.id,
+    updated_at: automationTestNow,
+  };
+  await repository.savePlan(plan);
+  await repository.savePlanRevision(planRevision);
+  await repository.saveWorkItem(updatedWorkItem);
 
-  await request(server).post(`/plans/${createdPlan.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
-  const plan = (await request(server)
-    .post(`/plans/${createdPlan.id}/approve`)
-    .set(reviewerHeaders)
-    .send({ actor_id: actorReviewer })
-    .expect(201)).body as Plan;
-  return { ...ctx, plan, planRevisionId: generatedRevision.id };
+  return { ...ctx, workItem: updatedWorkItem, plan, planRevisionId };
 };
 
 const runtimeSafetyAttestation = (
@@ -411,7 +590,7 @@ const seedClaimedPlanDraftAction = async (
   overrides: Record<string, unknown> = {},
   claimOverrides: Record<string, unknown> = {},
 ): Promise<ClaimedPlanDraftActionContext> => {
-  const ctx = await seedApprovedSpecThroughApi(app);
+  const ctx = await seedApprovedSpec(app);
   const settings = await repository.setAutomationProjectSettings({
     id: `automation-settings-claim-binding-${overrides.id ?? 'default'}`,
     project_id: ctx.project.id,
@@ -465,7 +644,7 @@ const seedClaimedPackageDraftAction = async (
   repository: DeliveryRepository,
   overrides: Record<string, unknown> = {},
 ): Promise<ClaimedPackageDraftActionContext> => {
-  const ctx = await seedApprovedPlanThroughApi(app);
+  const ctx = await seedApprovedPlan(app);
   const settings = await repository.setAutomationProjectSettings({
     id: `automation-settings-package-claim-binding-${overrides.id ?? 'default'}`,
     project_id: ctx.project.id,
@@ -967,7 +1146,7 @@ describe('automation command boundaries', () => {
   it('accepts claimed plan draft commands with target-aware daemon preconditions', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-target-aware-claim-binding',
       project_id: ctx.project.id,
@@ -1058,7 +1237,7 @@ describe('automation command boundaries', () => {
   it('accepts planner-style manual path commands with target revision in the daemon precondition', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-manual-target-aware-claim-binding',
       project_id: ctx.project.id,
@@ -1182,7 +1361,7 @@ describe('automation command boundaries', () => {
   it('ensures one plan draft for an approved spec under duplicate daemon and manual calls', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-plan-draft',
       project_id: ctx.project.id,
@@ -1224,7 +1403,7 @@ describe('automation command boundaries', () => {
   it('does not create duplicate plan drafts when equivalent commands use different idempotency keys', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-plan-draft-target-lock',
       project_id: ctx.project.id,
@@ -1261,7 +1440,7 @@ describe('automation command boundaries', () => {
   it('rejects malformed succeeded plan draft idempotency replay instead of re-entering side effects', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-plan-draft-malformed-replay',
       project_id: ctx.project.id,
@@ -1319,7 +1498,7 @@ describe('automation command boundaries', () => {
   it('rejects blocked plan draft idempotency replay instead of re-entering side effects', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-plan-draft-blocked-replay',
       project_id: ctx.project.id,
@@ -1377,7 +1556,7 @@ describe('automation command boundaries', () => {
   it('does not overwrite a concurrently changed current spec while attaching an automation plan draft', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-plan-draft-current-spec-race',
       project_id: ctx.project.id,
@@ -1445,7 +1624,7 @@ describe('automation command boundaries', () => {
   it('rejects plan draft commands when the repo-scoped automation precondition is no longer active for the project', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-plan-draft-repo-moved',
       project_id: ctx.project.id,
@@ -1783,7 +1962,7 @@ describe('automation command boundaries', () => {
   it('ensures one execution package draft set for an approved plan revision under duplicate commands', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-draft',
       project_id: ctx.project.id,
@@ -1833,7 +2012,7 @@ describe('automation command boundaries', () => {
   it('allows project-scoped package draft automation for repos in the project', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-project-scope',
       project_id: ctx.project.id,
@@ -1868,17 +2047,18 @@ describe('automation command boundaries', () => {
   it('blocks project-scoped package draft automation when multiple repos make the package repo ambiguous', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
-    await request(app.getHttpServer())
-      .post(`/projects/${ctx.project.id}/repos`)
-      .send({
-        repo_id: 'repo-2',
-        name: 'forgeloop-worker',
-        local_path: '/workspace/forgeloop-worker',
-        default_branch: 'main',
-        base_commit_sha: 'def456',
-      })
-      .expect(201);
+    const ctx = await seedApprovedPlan(app);
+    const project = await repository.getProject(ctx.project.id);
+    if (project === undefined) {
+      throw new Error(`Missing seeded project ${ctx.project.id}`);
+    }
+    await seedProjectRepo(repository, project, {
+      repo_id: 'repo-2',
+      name: 'forgeloop-worker',
+      local_path: '/workspace/forgeloop-worker',
+      default_branch: 'main',
+      base_commit_sha: 'def456',
+    });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-project-scope-ambiguous',
       project_id: ctx.project.id,
@@ -1915,7 +2095,7 @@ describe('automation command boundaries', () => {
   it('rejects manual mark-ready when the package plan revision has no frozen spec revision target', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-mark-ready-missing-spec-target',
       project_id: ctx.project.id,
@@ -1959,7 +2139,7 @@ describe('automation command boundaries', () => {
   it('rejects manual mark-ready when the package version is stale', async () => {
     const { app } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const executionPackage = (await request(app.getHttpServer())
       .post(`/plan-revisions/${ctx.planRevisionId}/execution-packages`)
       .send({
@@ -2001,7 +2181,7 @@ describe('automation command boundaries', () => {
   it('rejects stale package generation supersede versions', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-supersede-version',
       project_id: ctx.project.id,
@@ -2049,7 +2229,7 @@ describe('automation command boundaries', () => {
   it('rejects non-default package regeneration when the supersede approval reference does not match', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-regeneration-approval',
       project_id: ctx.project.id,
@@ -2125,7 +2305,7 @@ describe('automation command boundaries', () => {
   it('persists package generation supersede evidence refs', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-regeneration-evidence',
       project_id: ctx.project.id,
@@ -2181,7 +2361,7 @@ describe('automation command boundaries', () => {
   it('rejects package generation when a package-generation manual hold is active', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-generation-hold',
       project_id: ctx.project.id,
@@ -2234,7 +2414,7 @@ describe('automation command boundaries', () => {
   it('rejects package regeneration when the same idempotency key is reused for a different generation key', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-generation-idem-key',
       project_id: ctx.project.id,
@@ -2292,7 +2472,7 @@ describe('automation command boundaries', () => {
   it('rejects package generation for plan revisions without a frozen spec revision target', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
     expect(planRevision).toBeDefined();
     await repository.savePlanRevision({
@@ -2335,7 +2515,7 @@ describe('automation command boundaries', () => {
   it('stores based_on_spec_revision_id for manually created plan revisions', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecThroughApi(app);
+    const ctx = await seedApprovedSpec(app);
     const createdPlan = (await request(app.getHttpServer()).post(`/work-items/${ctx.workItem.id}/plans`).send({}).expect(201)).body as Plan;
 
     const revision = (await request(app.getHttpServer())
@@ -2360,7 +2540,7 @@ describe('automation command boundaries', () => {
   it('rejects package generation routes when the plan revision has no frozen spec revision target', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
     const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
     expect(planRevision).toBeDefined();
     await repository.savePlanRevision({
@@ -2396,7 +2576,7 @@ describe('automation command boundaries', () => {
   it('replays generated packages instead of creating duplicate drafts', async () => {
     const { app, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlanThroughApi(app);
+    const ctx = await seedApprovedPlan(app);
 
     const first = await request(app.getHttpServer()).post(`/plan-revisions/${ctx.planRevisionId}/generate-packages`).send({}).expect(201);
     const second = await request(app.getHttpServer()).post(`/plan-revisions/${ctx.planRevisionId}/generate-packages`).send({}).expect(201);
@@ -2408,7 +2588,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when runtime safety attestation is missing', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-enqueue',
       project_id: executionPackage.project_id,
@@ -2450,7 +2630,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when a local Codex request uses a non-enforcing runtime attestation', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-enqueue-local-codex-safety',
       project_id: executionPackage.project_id,
@@ -2498,7 +2678,7 @@ describe('automation command boundaries', () => {
   it('replays a succeeded run enqueue command even when a later attestation is stale', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-enqueue-replay',
       project_id: executionPackage.project_id,
@@ -2547,7 +2727,7 @@ describe('automation command boundaries', () => {
     expect(replayed).toEqual(first);
   });
 
-  it('wakes the run worker after a successful compatibility run enqueue command', async () => {
+  it('wakes the run worker after a successful run enqueue command', async () => {
     let kickCount = 0;
     const { app, repository, service } = await createTestApp(undefined, {
       kick: () => {
@@ -2556,7 +2736,7 @@ describe('automation command boundaries', () => {
       drainOnce: async () => undefined,
     });
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-enqueue-kick',
       project_id: executionPackage.project_id,
@@ -2602,7 +2782,7 @@ describe('automation command boundaries', () => {
       drainOnce: async () => undefined,
     });
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-enqueue-kick-failure',
       project_id: executionPackage.project_id,
@@ -2643,7 +2823,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue with a stale package version after a ready package edit', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-stale-after-edit',
       project_id: executionPackage.project_id,
@@ -2693,7 +2873,7 @@ describe('automation command boundaries', () => {
     const repository = new OverlapDetectingRepository();
     const { app } = await createTestApp(repository);
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     repository.delayActiveRunChecks = true;
 
     const results = await Promise.allSettled([
@@ -2715,7 +2895,7 @@ describe('automation command boundaries', () => {
   it('blocks a run enqueue idempotency key after completion persistence fails post side effect', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-complete-failure',
       project_id: executionPackage.project_id,
@@ -2776,7 +2956,7 @@ describe('automation command boundaries', () => {
   it('allows project-scoped run enqueue automation for repo packages in the project', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-project-scope',
       project_id: executionPackage.project_id,
@@ -2815,7 +2995,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when a work item ancestor manual hold is active', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-work-item-hold',
       project_id: executionPackage.project_id,
@@ -2870,7 +3050,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when a terminal run session manual hold is still active', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const terminalRun: RunSession = {
       id: 'run-session-held-terminal',
       execution_package_id: executionPackage.id,
@@ -2941,7 +3121,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when a completed review packet manual hold is still active', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const terminalRun: RunSession = {
       id: 'run-session-held-review-packet',
       execution_package_id: executionPackage.id,
@@ -3034,7 +3214,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when an upstream execution package dependency is not completed', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     await repository.saveExecutionPackage({
       ...executionPackage,
       id: 'execution-package-upstream-not-complete',
@@ -3095,7 +3275,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when the package is linked to an active release gate', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const release: Release = {
       id: 'release-run-enqueue-gate',
       org_id: 'org-1',
@@ -3154,7 +3334,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when the package no longer matches the current approved plan revision', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-run-enqueue-stale-plan',
       project_id: executionPackage.project_id,
@@ -3222,7 +3402,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when the package plan revision has no frozen spec revision target', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const planRevision = await repository.getPlanRevision(executionPackage.plan_revision_id);
     expect(planRevision).toBeDefined();
     await repository.savePlanRevision({
@@ -3271,7 +3451,7 @@ describe('automation command boundaries', () => {
   it('rejects run enqueue when the package plan revision has no frozen spec revision target', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyExecutionPackage(repository);
     const planRevision = await repository.getPlanRevision(executionPackage.plan_revision_id);
     expect(planRevision).toBeDefined();
     await repository.savePlanRevision({

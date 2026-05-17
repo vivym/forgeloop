@@ -2,15 +2,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/modules/run-control/run-worker-lifecycle.service';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src';
-import type { RunWorker } from '../../packages/run-worker/src';
+import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -29,6 +32,86 @@ const requiredChecks = [
     blocks_review: true,
   },
 ];
+
+const safePathSegment = (value: string): string => {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/^-+|-+$/g, '');
+
+  return sanitized.length > 0 ? sanitized : 'artifact';
+};
+
+const evidenceChangedFilePath = (allowedPaths: string[]): string => {
+  const firstAllowedPath = allowedPaths[0] ?? 'forgeloop-generated.txt';
+  return firstAllowedPath.replace(/\/\*\*$/, '/forgeloop-generated.txt').replace(/\*+$/, 'forgeloop-generated.txt');
+};
+
+const mockSelfReview = (input: SelfReviewInput): SelfReviewResult => ({
+  status: 'succeeded',
+  summary: `Smoke self-review completed for run ${input.run_session_id}.`,
+  spec_plan_alignment: 'The smoke run uses the approved spec and plan revision ids.',
+  test_assessment: `${input.check_results.length} required checks were reported.`,
+  risk_notes: [],
+  follow_up_questions: [],
+});
+
+const mockEvidence = (input: Parameters<ConstructorParameters<typeof RunWorker>[0]['evidenceCollector']>[0]): ExecutorResult => ({
+  run_session_id: input.runSpec.run_session_id,
+  executor_type: input.runSpec.executor_type,
+  executor_version: 'delivery-smoke-test-driver',
+  status: 'succeeded',
+  started_at: input.startedAt,
+  finished_at: input.startedAt,
+  summary: input.summary,
+  changed_files: [
+    {
+      repo_id: input.runSpec.repo.repo_id,
+      path: evidenceChangedFilePath(input.runSpec.allowed_paths),
+      change_kind: 'modified',
+    },
+  ],
+  checks: input.runSpec.required_checks.map((check) => ({
+    check_id: check.check_id,
+    command: check.command,
+    status: 'succeeded',
+    exit_code: 0,
+    duration_seconds: 0,
+    blocks_review: check.blocks_review,
+  })),
+  artifacts: [...new Set(input.runSpec.artifact_policy.requested_artifacts)].map((kind) => ({
+    kind,
+    name: `${kind}.txt`,
+    content_type: 'text/plain',
+    local_ref: `/tmp/forgeloop-delivery-smoke/${safePathSegment(input.runSpec.run_session_id)}/${kind}.txt`,
+  })),
+  raw_metadata: { workflow_only: input.runSpec.workflow_only },
+});
+
+class ManualDrainRunWorker extends RunWorker {
+  override kick(): void {
+    return undefined;
+  }
+}
+
+const createTestRunWorker = (repository: InMemoryDeliveryRepository): RunWorker =>
+  new ManualDrainRunWorker({
+    repository,
+    workerId: 'delivery-smoke-test-worker',
+    driverFactory: () =>
+      new FakeCodexSessionDriver({
+        kind: 'fake',
+        script: [{ kind: 'terminal', status: 'succeeded', summary: 'Smoke fake driver completed.' }],
+      }),
+    evidenceCollector: (input) => Promise.resolve(mockEvidence(input)),
+    selfReview: (input) => Promise.resolve(mockSelfReview(input)),
+    heartbeatIntervalMs: 1,
+    commandPollIntervalMs: 1,
+    leaseDurationMs: 1_000,
+    idleThresholdMs: 1_000,
+    artifactRoot: '/tmp/forgeloop-delivery-smoke',
+  });
 
 type SmokeContext = {
   project: { id: string };
@@ -167,7 +250,7 @@ const repositoryFor = (app: INestApplication) =>
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
   const worker = app.get(DELIVERY_RUN_WORKER) as RunWorker;
   const repository = repositoryFor(app);
-  void worker.drainOnce();
+  await worker.drainOnce();
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const runSession = await repository.getRunSession(runSessionId);
@@ -200,7 +283,15 @@ describe('Delivery smoke delivery loop', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(RunWorkerLifecycleService)
+      .useValue({ onModuleInit: () => undefined, onModuleDestroy: () => undefined })
+      .overrideProvider(DELIVERY_RUN_WORKER)
+      .useFactory({
+        inject: [DELIVERY_REPOSITORY],
+        factory: (repository: InMemoryDeliveryRepository) => createTestRunWorker(repository),
+      })
+      .compile();
     app = moduleRef.createNestApplication();
     await app.init();
   });

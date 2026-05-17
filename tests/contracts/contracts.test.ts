@@ -1260,7 +1260,6 @@ describe('delivery loop contracts', () => {
   it('parses the run package request DTO', () => {
     const parsed = runPackageRequestSchema.parse({
       execution_package_id: 'exec-package-1',
-      requested_by_actor_id: 'actor-1',
       executor_type: 'local_codex',
       idempotency_key: 'run-package-1',
     });
@@ -1275,7 +1274,6 @@ describe('delivery loop contracts', () => {
       previous_run_session_id: 'run-session-1',
       review_packet_id: 'review-packet-1',
       requested_changes_context: [validRequestedChange],
-      requested_by_actor_id: 'actor-1',
       workflow_only: true,
     });
 
@@ -1287,12 +1285,35 @@ describe('delivery loop contracts', () => {
     const parsed = forceRerunPackageRequestSchema.parse({
       execution_package_id: 'exec-package-1',
       previous_run_session_id: 'run-session-1',
-      requested_by_actor_id: 'actor-1',
       force_reason: 'Reviewer approved a manual rerun after transient executor failure.',
     });
 
     expect(parsed.force).toBe(true);
     expect(parsed.requested_changes_context).toEqual([]);
+  });
+
+  it('rejects actor identity fields in run package request bodies', () => {
+    expect(
+      runPackageRequestSchema.safeParse({
+        execution_package_id: 'exec-package-1',
+        requested_by_actor_id: 'actor-1',
+      }).success,
+    ).toBe(false);
+    expect(
+      rerunPackageRequestSchema.safeParse({
+        execution_package_id: 'exec-package-1',
+        previous_run_session_id: 'run-session-1',
+        actor_id: 'actor-1',
+      }).success,
+    ).toBe(false);
+    expect(
+      forceRerunPackageRequestSchema.safeParse({
+        execution_package_id: 'exec-package-1',
+        previous_run_session_id: 'run-session-1',
+        force_reason: 'Reviewer approved a manual rerun after transient executor failure.',
+        requested_by_actor_id: 'actor-1',
+      }).success,
+    ).toBe(false);
   });
 
   it('parses async accepted run package response DTOs', () => {

@@ -343,6 +343,58 @@ const noopRunWorker = {
   drainOnce: async () => undefined,
 };
 
+const probeDeliveryRouteReadiness = async (
+  app: INestApplication,
+  repository: DeliveryRepository,
+): Promise<{ ready: boolean; statuses: number[] }> => {
+  const at = new Date().toISOString();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  await repository.saveActor({
+    id: actorId,
+    actor_type: 'human',
+    display_name: 'Route Probe',
+    created_at: at,
+    updated_at: at,
+  });
+  await repository.saveProject({
+    id: projectId,
+    name: 'Release Flow Route Probe',
+    repo_ids: [],
+    owner_actor_id: actorId,
+    created_at: at,
+    updated_at: at,
+  });
+
+  const server = app.getHttpServer();
+  const projectRepo = await request(server)
+    .post(`/projects/${projectId}/repos`)
+    .send({
+      repo_id: `route-probe-${projectId}`,
+      name: 'route-probe',
+      local_path: '/tmp/route-probe',
+      default_branch: 'main',
+      base_commit_sha: 'route-probe-sha',
+    });
+  const workItem =
+    projectRepo.status === 201
+      ? await request(server)
+          .post('/work-items')
+          .send({
+            project_id: projectId,
+            kind: 'requirement',
+            title: 'Release flow route probe',
+            goal: 'Verify delivery route readiness.',
+            success_criteria: ['Route is mounted and shares repository state.'],
+            priority: 'P1',
+            risk: 'low',
+            owner_actor_id: actorId,
+          })
+      : { status: projectRepo.status };
+
+  return { ready: projectRepo.status === 201 && workItem.status === 201, statuses: [projectRepo.status, workItem.status] };
+};
+
 const execFile = promisify(execFileCallback);
 
 const runCommand: CommandRunner = async (command, args, options = {}) => {
@@ -401,52 +453,78 @@ export const assertNoUnsafeReleaseDogfoodStrings = (label: string, value: unknow
 };
 
 const createDogfoodApp = async (): Promise<{ app: INestApplication; repository: InMemoryDeliveryRepository }> => {
-  const repository = new InMemoryDeliveryRepository();
-  (Reflect as typeof Reflect & { defineMetadata?: (key: string, value: unknown, target: object) => void }).defineMetadata?.(
-    'design:paramtypes',
-    [ReleaseService],
-    ReleaseController,
-  );
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(DELIVERY_REPOSITORY)
-    .useValue(repository)
-    .overrideProvider(RUN_DURABILITY_MODE)
-    .useValue('volatile_demo')
-    .overrideProvider(DELIVERY_RUN_WORKER)
-    .useValue(noopRunWorker)
-    .compile();
-  const app = moduleRef.createNestApplication({ logger: false });
-  await app.init();
-  return { app, repository };
+  let lastStatuses: number[] = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const repository = new InMemoryDeliveryRepository();
+    (Reflect as typeof Reflect & { defineMetadata?: (key: string, value: unknown, target: object) => void }).defineMetadata?.(
+      'design:paramtypes',
+      [ReleaseService],
+      ReleaseController,
+    );
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(DELIVERY_REPOSITORY)
+      .useValue(repository)
+      .overrideProvider(RUN_DURABILITY_MODE)
+      .useValue('volatile_demo')
+      .overrideProvider(DELIVERY_RUN_WORKER)
+      .useValue(noopRunWorker)
+      .compile();
+    const app = moduleRef.createNestApplication({ logger: false });
+    await app.init();
+    const probe = await probeDeliveryRouteReadiness(app, repository);
+    if (probe.ready) {
+      return { app, repository };
+    }
+    lastStatuses = probe.statuses;
+    await app.close();
+    if (!probe.statuses.includes(404)) {
+      throw new Error(`Unexpected release dogfood route probe statuses ${probe.statuses.join(',')}`);
+    }
+  }
+
+  throw new Error(`Timed out waiting for release dogfood routes to mount; last statuses ${lastStatuses.join(',')}`);
 };
 
 const createDurableReleaseDogfoodApp = async (
   repository: DeliveryRepository,
   options: { useRealWorker: boolean } = { useRealWorker: false },
 ): Promise<{ app: INestApplication; runWorker?: StrictRunWorker }> => {
-  (Reflect as typeof Reflect & { defineMetadata?: (key: string, value: unknown, target: object) => void }).defineMetadata?.(
-    'design:paramtypes',
-    [ReleaseService],
-    ReleaseController,
-  );
-  let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(DELIVERY_REPOSITORY)
-    .useValue(repository)
-    .overrideProvider(RUN_DURABILITY_MODE)
-    .useValue('durable');
-  if (options.useRealWorker) {
-    moduleBuilder = moduleBuilder.overrideProvider(RunWorkerLifecycleService).useValue({
-      onModuleInit: () => undefined,
-      onModuleDestroy: () => undefined,
-    });
-  } else {
-    moduleBuilder = moduleBuilder.overrideProvider(DELIVERY_RUN_WORKER).useValue(noopRunWorker);
+  let lastStatuses: number[] = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    (Reflect as typeof Reflect & { defineMetadata?: (key: string, value: unknown, target: object) => void }).defineMetadata?.(
+      'design:paramtypes',
+      [ReleaseService],
+      ReleaseController,
+    );
+    let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(DELIVERY_REPOSITORY)
+      .useValue(repository)
+      .overrideProvider(RUN_DURABILITY_MODE)
+      .useValue('durable');
+    if (options.useRealWorker) {
+      moduleBuilder = moduleBuilder.overrideProvider(RunWorkerLifecycleService).useValue({
+        onModuleInit: () => undefined,
+        onModuleDestroy: () => undefined,
+      });
+    } else {
+      moduleBuilder = moduleBuilder.overrideProvider(DELIVERY_RUN_WORKER).useValue(noopRunWorker);
+    }
+    const moduleRef = await moduleBuilder.compile();
+    const app = moduleRef.createNestApplication({ logger: false });
+    app.useLogger(false);
+    await app.init();
+    const probe = await probeDeliveryRouteReadiness(app, repository);
+    if (probe.ready) {
+      return options.useRealWorker ? { app, runWorker: moduleRef.get<StrictRunWorker>(DELIVERY_RUN_WORKER) } : { app };
+    }
+    lastStatuses = probe.statuses;
+    await app.close();
+    if (!probe.statuses.includes(404)) {
+      throw new Error(`Unexpected durable release dogfood route probe statuses ${probe.statuses.join(',')}`);
+    }
   }
-  const moduleRef = await moduleBuilder.compile();
-  const app = moduleRef.createNestApplication({ logger: false });
-  app.useLogger(false);
-  await app.init();
-  return options.useRealWorker ? { app, runWorker: moduleRef.get<StrictRunWorker>(DELIVERY_RUN_WORKER) } : { app };
+
+  throw new Error(`Timed out waiting for durable release dogfood routes to mount; last statuses ${lastStatuses.join(',')}`);
 };
 
 const checkResults = (): CheckResult[] => [

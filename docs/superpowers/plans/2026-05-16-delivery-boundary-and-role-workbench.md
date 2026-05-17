@@ -1,5 +1,11 @@
 # Delivery Boundary And Role Workbench Implementation Plan
 
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
+## Status
+
+Completed implementation record. Active operating instructions are the delivery/product modules, `/automation/*` public automation settings routes, `/internal/automation/*` daemon routes, and the role workbench surfaces in code.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the historical P0 control-plane boundary with delivery/product modules, remove every active P0 subsystem surface, and add the first role workbench MVP with release-blocking Test/Acceptance gates.

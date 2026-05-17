@@ -1,8 +1,10 @@
 # Delivery Boundary And Role Workbench Design
 
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 ## Status
 
-Draft approved by user for spec review.
+Completed implementation record. The active delivery boundary has replaced the historical subsystem surface; old public routes and compatibility facades are removed, with `/p0` references retained only as 404 regression assertions.
 
 ## Context
 
