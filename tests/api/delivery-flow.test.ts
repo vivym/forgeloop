@@ -4,21 +4,24 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { AutomationCommandService } from '../../apps/control-plane-api/src/modules/automation/automation-command.service';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { ExecutionPackageService } from '../../apps/control-plane-api/src/modules/execution-packages/execution-package.service';
 import { ProjectService } from '../../apps/control-plane-api/src/modules/projects/project.service';
 import { ReviewEvidenceService } from '../../apps/control-plane-api/src/modules/review-evidence/review-evidence.service';
 import { RunControlService } from '../../apps/control-plane-api/src/modules/run-control/run-control.service';
+import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/modules/run-control/run-worker-lifecycle.service';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-items/work-item.service';
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
-import type { RunWorker } from '../../packages/run-worker/src';
+import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -41,6 +44,86 @@ const requiredChecks = [
     blocks_review: true,
   },
 ];
+
+const safePathSegment = (value: string): string => {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/^-+|-+$/g, '');
+
+  return sanitized.length > 0 ? sanitized : 'artifact';
+};
+
+const evidenceChangedFilePath = (allowedPaths: string[]): string => {
+  const firstAllowedPath = allowedPaths[0] ?? 'forgeloop-generated.txt';
+  return firstAllowedPath.replace(/\/\*\*$/, '/forgeloop-generated.txt').replace(/\*+$/, 'forgeloop-generated.txt');
+};
+
+const mockSelfReview = (input: SelfReviewInput): SelfReviewResult => ({
+  status: 'succeeded',
+  summary: `Mock self-review completed for run ${input.run_session_id}.`,
+  spec_plan_alignment: 'The mock run uses the approved spec and plan revision ids.',
+  test_assessment: `${input.check_results.length} required checks were reported.`,
+  risk_notes: [],
+  follow_up_questions: [],
+});
+
+const mockEvidence = (input: Parameters<ConstructorParameters<typeof RunWorker>[0]['evidenceCollector']>[0]): ExecutorResult => ({
+  run_session_id: input.runSpec.run_session_id,
+  executor_type: input.runSpec.executor_type,
+  executor_version: 'delivery-flow-test-driver',
+  status: 'succeeded',
+  started_at: input.startedAt,
+  finished_at: input.startedAt,
+  summary: input.summary,
+  changed_files: [
+    {
+      repo_id: input.runSpec.repo.repo_id,
+      path: evidenceChangedFilePath(input.runSpec.allowed_paths),
+      change_kind: 'modified',
+    },
+  ],
+  checks: input.runSpec.required_checks.map((check) => ({
+    check_id: check.check_id,
+    command: check.command,
+    status: 'succeeded',
+    exit_code: 0,
+    duration_seconds: 0,
+    blocks_review: check.blocks_review,
+  })),
+  artifacts: [...new Set(input.runSpec.artifact_policy.requested_artifacts)].map((kind) => ({
+    kind,
+    name: `${kind}.txt`,
+    content_type: 'text/plain',
+    local_ref: `/tmp/forgeloop-delivery-flow/${safePathSegment(input.runSpec.run_session_id)}/${kind}.txt`,
+  })),
+  raw_metadata: { workflow_only: input.runSpec.workflow_only },
+});
+
+class ManualDrainRunWorker extends RunWorker {
+  override kick(): void {
+    return undefined;
+  }
+}
+
+const createTestRunWorker = (repository: InMemoryDeliveryRepository): RunWorker =>
+  new ManualDrainRunWorker({
+    repository,
+    workerId: 'delivery-flow-test-worker',
+    driverFactory: () =>
+      new FakeCodexSessionDriver({
+        kind: 'fake',
+        script: [{ kind: 'terminal', status: 'succeeded', summary: 'Test fake driver completed.' }],
+      }),
+    evidenceCollector: (input) => Promise.resolve(mockEvidence(input)),
+    selfReview: (input) => Promise.resolve(mockSelfReview(input)),
+    heartbeatIntervalMs: 1,
+    commandPollIntervalMs: 1,
+    leaseDurationMs: 1_000,
+    idleThresholdMs: 1_000,
+    artifactRoot: '/tmp/forgeloop-delivery-flow',
+  });
 
 const createProjectRepoWorkItem = async (app: INestApplication) => {
   const server = app.getHttpServer();
@@ -182,7 +265,7 @@ const replaceRuntimeRepository = (app: INestApplication, repository: InMemoryDel
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
   const repository = repositoryFor(app);
   const worker = app.get(DELIVERY_RUN_WORKER) as RunWorker;
-  void worker.drainOnce();
+  await worker.drainOnce();
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const runSession = await repository.getRunSession(runSessionId);
@@ -197,7 +280,17 @@ const waitForReviewPacket = async (app: INestApplication, runSessionId: string):
     await delay(10);
   }
 
-  throw new Error(`Timed out waiting for ReviewPacket for ${runSessionId}`);
+  const runSession = await repository.getRunSession(runSessionId);
+  const runEvents = await repository.listRunEvents(runSessionId);
+  const eventSummaries = runEvents
+    .map((event) => `${event.event_type}:${event.summary}:${JSON.stringify(event.payload)}`)
+    .join(' | ');
+  const runtimeMetadata = JSON.stringify(runSession?.runtime_metadata ?? {});
+  throw new Error(
+    `Timed out waiting for ReviewPacket for ${runSessionId}; status=${
+      runSession?.status ?? 'missing'
+    }; runtimeMetadata=${runtimeMetadata}; events=${eventSummaries}`,
+  );
 };
 
 const getAvailablePort = async (): Promise<number> =>
@@ -288,7 +381,15 @@ describe('delivery control plane API', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(RunWorkerLifecycleService)
+      .useValue({ onModuleInit: () => undefined, onModuleDestroy: () => undefined })
+      .overrideProvider(DELIVERY_RUN_WORKER)
+      .useFactory({
+        inject: [DELIVERY_REPOSITORY],
+        factory: (repository: InMemoryDeliveryRepository) => createTestRunWorker(repository),
+      })
+      .compile();
     app = moduleRef.createNestApplication();
     await app.init();
   });

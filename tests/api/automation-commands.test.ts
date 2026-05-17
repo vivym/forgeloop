@@ -137,25 +137,40 @@ const createTestApp = async (
     drainOnce: async () => undefined,
   },
 ): Promise<{ app: INestApplication; repository: DeliveryRepository; service: AutomationCommandTestService }> => {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(DELIVERY_REPOSITORY)
-    .useValue(repositoryOverride ?? new InMemoryDeliveryRepository())
-    .overrideProvider(DELIVERY_RUN_WORKER)
-    .useValue(runWorkerOverride)
-    .compile();
-  const app = moduleRef.createNestApplication({ rawBody: true });
-  await app.init();
-  const automationCommandService = app.get(AutomationCommandService);
-  const executionPackageService = app.get(ExecutionPackageService);
-  const specPlanService = app.get(SpecPlanService);
-  return {
-    app,
-    repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository,
-    service: Object.assign(automationCommandService, {
-      listExecutionPackages: executionPackageService.listExecutionPackages.bind(executionPackageService),
-      listPlanRevisions: specPlanService.listPlanRevisions.bind(specPlanService),
-    }),
-  };
+  const repository = repositoryOverride ?? new InMemoryDeliveryRepository();
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(DELIVERY_REPOSITORY)
+      .useValue(repository)
+      .overrideProvider(DELIVERY_RUN_WORKER)
+      .useValue(runWorkerOverride)
+      .compile();
+    const app = moduleRef.createNestApplication({ rawBody: true });
+    await app.init();
+
+    const routeProbe = await request(app.getHttpServer()).post('/projects').send({ name: { text: 'route-probe' } });
+    if (routeProbe.status === 400) {
+      const automationCommandService = app.get(AutomationCommandService);
+      const executionPackageService = app.get(ExecutionPackageService);
+      const specPlanService = app.get(SpecPlanService);
+      return {
+        app,
+        repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository,
+        service: Object.assign(automationCommandService, {
+          listExecutionPackages: executionPackageService.listExecutionPackages.bind(executionPackageService),
+          listPlanRevisions: specPlanService.listPlanRevisions.bind(specPlanService),
+        }),
+      };
+    }
+
+    await app.close();
+    if (routeProbe.status !== 404) {
+      throw new Error(`Unexpected automation command route probe status ${routeProbe.status}`);
+    }
+  }
+
+  throw new Error('Timed out waiting for automation command test routes to mount');
 };
 
 const signedAutomationPost = (app: INestApplication, pathAndQuery: string, body: Record<string, unknown>) => {

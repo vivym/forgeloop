@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r build",
-    "test": "vitest run --pool=forks",
+    "test": "vitest run --pool=forks --no-file-parallelism --maxWorkers=1",
     "test:watch": "vitest",
     "dev:api": "pnpm --filter @forgeloop/control-plane-api start:dev",
     "dev:automation-daemon": "pnpm --filter @forgeloop/automation-daemon start",
