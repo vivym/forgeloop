@@ -39,7 +39,7 @@ describe('query module', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('allows AppModule to override core query providers without QueryModule owning P0Module wiring', async () => {
+  it('allows AppModule to override core query providers without QueryModule owning delivery wiring', async () => {
     const repository = new InMemoryDeliveryRepository();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
@@ -53,12 +53,12 @@ describe('query module', () => {
     }
   });
 
-  it('does not re-export shared core tokens from the P0 service boundary', async () => {
-    const p0ServiceModule = await import('../../apps/control-plane-api/src/p0/p0.service');
+  it('exposes shared core tokens from the semantic core boundary', async () => {
+    const coreTokensModule = await import('../../apps/control-plane-api/src/modules/core/control-plane-tokens');
 
-    expect(p0ServiceModule).not.toHaveProperty('DELIVERY_REPOSITORY');
-    expect(p0ServiceModule).not.toHaveProperty('RUN_DURABILITY_MODE');
-    expect(p0ServiceModule).not.toHaveProperty('DELIVERY_DEMO_ACTOR_ID_FALLBACK');
+    expect(coreTokensModule).toHaveProperty('DELIVERY_REPOSITORY');
+    expect(coreTokensModule).toHaveProperty('RUN_DURABILITY_MODE');
+    expect(coreTokensModule).toHaveProperty('DELIVERY_DEMO_ACTOR_ID_FALLBACK');
   });
 
   const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {

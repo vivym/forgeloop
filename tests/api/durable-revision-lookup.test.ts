@@ -22,7 +22,7 @@ const assertSafeTestDatabaseUrl = (url: string): void => {
   const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
   if (!databaseName.toLowerCase().includes('test')) {
     throw new Error(
-      `durable revision lookup tests truncate P0 tables; refusing database "${databaseName}". ` +
+      `durable revision lookup tests truncate delivery tables; refusing database "${databaseName}". ` +
         'Set FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL to a disposable database whose name contains "test".',
     );
   }
@@ -137,7 +137,7 @@ describeIfDb('durable revision lookup', () => {
         .send({
           project_id: project.id,
           kind: 'requirement',
-          title: 'Ship P0 control plane API',
+          title: 'Ship delivery control plane API',
           goal: 'Expose the delivery loop commands over REST.',
           success_criteria: ['Spec, plan, package, run, and review commands are available.'],
           priority: 'P0',
@@ -159,12 +159,12 @@ describeIfDb('durable revision lookup', () => {
         .send({
           summary: 'Manual API spec',
           content: 'Manual control plane API spec.',
-          background: 'P0 needs command coverage.',
-          goals: ['Expose P0 commands'],
+          background: 'Delivery needs command coverage.',
+          goals: ['Expose delivery commands'],
           scope_in: ['Control plane API'],
           scope_out: ['Web UI'],
           acceptance_criteria: ['API tests cover the delivery flow'],
-          risk_notes: ['Keep P0 durable for restart tests'],
+          risk_notes: ['Keep delivery durable for restart tests'],
           test_strategy_summary: 'Nest + Supertest API tests',
           author_actor_id: actorOwner,
         })

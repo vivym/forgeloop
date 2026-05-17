@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
-import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src';
 import type { RunWorker } from '../../packages/run-worker/src';
 
@@ -158,12 +158,10 @@ const expectAcceptedRunWithVisibleLiveEvent = async (
 };
 
 const repositoryFor = (app: INestApplication) =>
-  (app.get(P0Service) as unknown as {
-    repository: {
-      getRunSession(runSessionId: string): Promise<RunSession | undefined>;
-      listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
-    };
-  }).repository;
+  app.get(DELIVERY_REPOSITORY) as {
+    getRunSession(runSessionId: string): Promise<RunSession | undefined>;
+    listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
+  };
 
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
   const worker = app.get(DELIVERY_RUN_WORKER) as RunWorker;

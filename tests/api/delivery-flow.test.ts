@@ -16,7 +16,6 @@ import { RunControlService } from '../../apps/control-plane-api/src/modules/run-
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-items/work-item.service';
-import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import type { RunWorker } from '../../packages/run-worker/src';
@@ -66,7 +65,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
       .send({
         project_id: project.id,
         kind: 'requirement',
-        title: 'Ship P0 control plane API',
+        title: 'Ship delivery control plane API',
         goal: 'Expose the delivery loop commands over REST.',
         success_criteria: ['Spec, plan, package, run, and review commands are available.'],
         priority: 'P0',
@@ -88,12 +87,12 @@ const approveSpec = async (app: INestApplication, workItemId: string) => {
       .send({
         summary: 'Manual API spec',
         content: 'Manual control plane API spec.',
-        background: 'P0 needs command coverage.',
-        goals: ['Expose P0 commands'],
+        background: 'Delivery needs command coverage.',
+        goals: ['Expose delivery commands'],
         scope_in: ['Control plane API'],
         scope_out: ['Web UI'],
         acceptance_criteria: ['API tests cover the delivery flow'],
-        risk_notes: ['Keep P0 in-memory for tests'],
+        risk_notes: ['Keep delivery in-memory for tests'],
         test_strategy_summary: 'Nest + Supertest API tests',
         author_actor_id: actorOwner,
       })
@@ -151,7 +150,7 @@ const createManualPackage = async (
 ) => {
   const body = {
     repo_id: 'repo-1',
-    objective: 'Implement the P0 API package.',
+    objective: 'Implement the delivery API package.',
     owner_actor_id: actorOwner,
     reviewer_actor_id: actorReviewer,
     qa_owner_actor_id: actorQa,
@@ -170,7 +169,6 @@ const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
   (app.get(ExecutionPackageService) as unknown as { repository: InMemoryDeliveryRepository }).repository;
 
 const replaceRuntimeRepository = (app: INestApplication, repository: InMemoryDeliveryRepository): void => {
-  (app.get(P0Service) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(ExecutionPackageService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(AutomationCommandService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(ProjectService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
@@ -286,7 +284,7 @@ class FailingTraceRepository extends InMemoryDeliveryRepository {
   }
 }
 
-describe('P0 control plane API', () => {
+describe('delivery control plane API', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
@@ -299,7 +297,7 @@ describe('P0 control plane API', () => {
     await app.close();
   });
 
-  it('runs the P0 delivery flow through the command inventory and read APIs', async () => {
+  it('runs the delivery flow through the command inventory and read APIs', async () => {
     const server = app.getHttpServer();
     const { project, workItem } = await createProjectRepoWorkItem(app);
 

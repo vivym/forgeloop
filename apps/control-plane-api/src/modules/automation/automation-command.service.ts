@@ -11,7 +11,7 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import type { ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
+import type { ArtifactRef, ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
 import {
   DomainError,
@@ -46,6 +46,7 @@ import {
 } from '../core/control-plane-tokens';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import type { ActorContext } from '../auth/actor-context';
+import { DELIVERY_RUN_WORKER, type DeliveryRunWorker } from '../run-control/run-worker.token';
 import type {
   AutomationActorContextDto,
   DisableAutomationCapabilitiesDto,
@@ -102,6 +103,21 @@ type EnqueueRunInput = {
   runtimeSafetyAttestation?: RuntimeSafetyAttestation;
   onRunQueued?: () => void;
 };
+type SupersedeExecutionPackageGenerationRunCommandInput = {
+  planRevisionId: string;
+  generationKey: string;
+  expectedGenerationRunVersion: number;
+  reason: string;
+  evidenceRefs: ArtifactRef[];
+  approvedBy: AutomationActorContext;
+  idempotencyKey: string;
+};
+type SupersedeExecutionPackageGenerationRunResult = {
+  execution_package_set_id: string;
+  status: 'superseded';
+  next_generation_key: string;
+  supersede_command_id: string;
+};
 
 const claimConflictBody = {
   code: 'automation_action_claim_conflict',
@@ -144,6 +160,7 @@ export class AutomationCommandService {
     @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Optional() @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback = false,
+    @Optional() @Inject(DELIVERY_RUN_WORKER) private readonly runWorker?: DeliveryRunWorker,
   ) {}
 
   async getAutomationCapabilities(projectId: string, repoId?: string): Promise<AutomationProjectSettings> {
@@ -655,6 +672,80 @@ export class AutomationCommandService {
     return outcome.value;
   }
 
+  async supersedeExecutionPackageGenerationRun(
+    input: SupersedeExecutionPackageGenerationRunCommandInput,
+  ): Promise<SupersedeExecutionPackageGenerationRunResult> {
+    if (input.approvedBy.actor_class !== 'human' && input.approvedBy.actor_class !== 'human_admin') {
+      throw new ForbiddenException('package generation supersede requires a human approver');
+    }
+    const claimToken = randomUUID();
+    const claimedAt = this.now();
+    const supersedeCommandId = this.id('command-idempotency');
+    const outcome = await this.repository.withObjectLock(`automation-command:supersede-package-generation:${input.planRevisionId}`, async (
+      repository,
+    ): Promise<CommandBoundaryOutcome<SupersedeExecutionPackageGenerationRunResult>> => {
+      const claim = await repository.claimCommandIdempotency({
+        id: supersedeCommandId,
+        command_name: 'supersede_execution_package_generation_run',
+        idempotency_key: input.idempotencyKey,
+        ...commandIdempotencyTarget({
+          objectType: 'plan_revision',
+          objectId: input.planRevisionId,
+          revisionId: input.generationKey,
+          version: input.expectedGenerationRunVersion,
+        }),
+        actor_scope: `${input.approvedBy.actor_class}:${input.approvedBy.actor_id}`,
+        claim_token: claimToken,
+        locked_until: this.lockedUntil(claimedAt),
+        now: claimedAt,
+      });
+      const replayed = this.replayedSupersedeGenerationResult(claim.result_json);
+      const replayable = this.replayableCommandResultOrThrow(claim, replayed);
+      if (replayable !== undefined) {
+        return { ok: true, value: replayable };
+      }
+      try {
+        const superseded = await repository.supersedeExecutionPackageGenerationRun({
+          plan_revision_id: input.planRevisionId,
+          execution_package_set_id: `generation:${input.planRevisionId}:${input.generationKey}`,
+          expected_version: input.expectedGenerationRunVersion,
+          supersede_command_id: supersedeCommandId,
+          superseded_by: input.approvedBy.actor_id,
+          superseded_at: this.now(),
+          reason: input.reason,
+          evidence_refs: input.evidenceRefs,
+        });
+        if (superseded.next_generation_key === undefined) {
+          throw new ConflictException('Superseded generation did not produce a next generation key');
+        }
+        const result: SupersedeExecutionPackageGenerationRunResult = {
+          execution_package_set_id: superseded.execution_package_set_id,
+          status: 'superseded',
+          next_generation_key: superseded.next_generation_key,
+          supersede_command_id: supersedeCommandId,
+        };
+        await repository.completeCommandIdempotency({
+          idempotency_key: input.idempotencyKey,
+          claim_token: claimToken,
+          result_json: result,
+          finished_at: this.now(),
+        });
+        return { ok: true, value: result };
+      } catch (error) {
+        await this.blockCommandIdempotencyAfterError(repository, {
+          idempotency_key: input.idempotencyKey,
+          claim_token: claimToken,
+          error,
+        });
+        return { ok: false, error };
+      }
+    });
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  }
+
   private async assertActiveActionClaim(input: {
     actionRunId: string;
     claimToken: string;
@@ -846,7 +937,7 @@ export class AutomationCommandService {
       revision_number: (await repository.listPlanRevisions(drafting.id)).length + 1,
       summary: `Draft plan for ${workItem.title}`,
       content: `Implement the approved spec revision ${specRevision.id} with a bounded package and required checks.`,
-      implementation_summary: `Deliver ${workItem.title} through the P0 control plane.`,
+      implementation_summary: `Deliver ${workItem.title} through the delivery control plane.`,
       split_strategy: 'Create one repo-bound execution package for the approved plan.',
       dependency_order: ['api-package'],
       test_matrix: ['pnpm test tests/api'],
@@ -944,6 +1035,26 @@ export class AutomationCommandService {
     ) {
       throw new BadRequestException('non-default package generation requires a matching supersede approval');
     }
+  }
+
+  private replayedSupersedeGenerationResult(
+    result: Record<string, unknown> | undefined,
+  ): SupersedeExecutionPackageGenerationRunResult | undefined {
+    if (
+      result === undefined ||
+      result.status !== 'superseded' ||
+      typeof result.execution_package_set_id !== 'string' ||
+      typeof result.next_generation_key !== 'string' ||
+      typeof result.supersede_command_id !== 'string'
+    ) {
+      return undefined;
+    }
+    return {
+      execution_package_set_id: result.execution_package_set_id,
+      status: 'superseded',
+      next_generation_key: result.next_generation_key,
+      supersede_command_id: result.supersede_command_id,
+    };
   }
 
   private async writeExecutionPackageDraftsForPlanRevision(
@@ -1342,12 +1453,24 @@ export class AutomationCommandService {
       run_session_id: runSessionId,
     });
 
-    input.onRunQueued?.();
+    this.notifyRunQueued(input);
     return {
       status: 'accepted',
       run_session_id: runSessionId,
       execution_package_id: packageId,
     };
+  }
+
+  private notifyRunQueued(input: Pick<EnqueueRunInput, 'onRunQueued'>): void {
+    if (input.onRunQueued !== undefined) {
+      input.onRunQueued();
+      return;
+    }
+    try {
+      this.runWorker?.kick();
+    } catch {
+      // The durable repository state is authoritative; kick is only an in-process wake-up.
+    }
   }
 
   private initialRuntimeMetadata(): RunRuntimeMetadata {

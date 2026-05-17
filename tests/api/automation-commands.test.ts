@@ -12,11 +12,14 @@ import {
   actorTimestampHeaderName,
   trustedActorHeaderSignature,
 } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { AutomationCommandService } from '../../apps/control-plane-api/src/modules/automation/automation-command.service';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { ExecutionPackageService } from '../../apps/control-plane-api/src/modules/execution-packages/execution-package.service';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
-import { P0Service } from '../../apps/control-plane-api/src/p0/p0.service';
+import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import { signAutomationRequest } from '../../packages/automation/src/index';
+import type { ArtifactRef } from '../../packages/contracts/src/index';
 import {
   automationPreconditionFingerprint,
   buildManualScopeKey,
@@ -61,7 +64,9 @@ type ApprovedSpecContext = {
   specRevisionId: string;
 };
 
-type AutomationPlanDraftService = P0Service & {
+type AutomationCommandTestService = AutomationCommandService & {
+  listExecutionPackages(workItemId: string): Promise<ExecutionPackage[]>;
+  listPlanRevisions(planId: string): Promise<PlanRevision[]>;
   ensurePlanDraftForApprovedSpec(
     workItemId: string,
     specRevisionId: string,
@@ -85,7 +90,7 @@ type AutomationPlanDraftService = P0Service & {
     generationKey: string;
     expectedGenerationRunVersion: number;
     reason: string;
-    evidenceRefs: [];
+    evidenceRefs: ArtifactRef[];
     approvedBy: { actor_id: string; actor_class: 'human' | 'human_admin' };
     idempotencyKey: string;
   }): Promise<{
@@ -131,7 +136,7 @@ const createTestApp = async (
     kick: () => undefined,
     drainOnce: async () => undefined,
   },
-): Promise<{ app: INestApplication; repository: DeliveryRepository; service: P0Service }> => {
+): Promise<{ app: INestApplication; repository: DeliveryRepository; service: AutomationCommandTestService }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repositoryOverride ?? new InMemoryDeliveryRepository())
@@ -140,10 +145,16 @@ const createTestApp = async (
     .compile();
   const app = moduleRef.createNestApplication({ rawBody: true });
   await app.init();
+  const automationCommandService = app.get(AutomationCommandService);
+  const executionPackageService = app.get(ExecutionPackageService);
+  const specPlanService = app.get(SpecPlanService);
   return {
     app,
     repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository,
-    service: app.get(P0Service),
+    service: Object.assign(automationCommandService, {
+      listExecutionPackages: executionPackageService.listExecutionPackages.bind(executionPackageService),
+      listPlanRevisions: specPlanService.listPlanRevisions.bind(specPlanService),
+    }),
   };
 };
 
@@ -547,7 +558,7 @@ const seedClaimedManualPathAction = async (
 };
 
 const expectNoPlanDraftCommandWrites = async (
-  service: P0Service,
+  service: AutomationCommandTestService,
   repository: DeliveryRepository,
   ctx: ClaimedPlanDraftActionContext,
 ): Promise<void> => {
@@ -562,7 +573,7 @@ const expectNoPlanDraftCommandWrites = async (
   ).resolves.toHaveLength(0);
 };
 
-const expectNoPackageDraftCommandWrites = async (service: P0Service, ctx: ClaimedPackageDraftActionContext): Promise<void> => {
+const expectNoPackageDraftCommandWrites = async (service: AutomationCommandTestService, ctx: ClaimedPackageDraftActionContext): Promise<void> => {
   await expect(service.listExecutionPackages(ctx.workItem.id)).resolves.toHaveLength(0);
 };
 
@@ -592,7 +603,7 @@ describe('automation command boundaries', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('serves product automation settings without old public P0 routes', async () => {
+  it('serves product automation settings without old public automation routes', async () => {
     const { app } = await createTestApp();
     apps.push(app);
     const { project } = await seedProjectRepoWorkItem(app);
@@ -606,7 +617,7 @@ describe('automation command boundaries', () => {
       repo_id: 'repo-1',
       preset: 'draft_only',
       expected_version: 0,
-      reason: 'old public P0 route removal regression',
+      reason: 'old public automation route removal regression',
       evidence_refs: [],
       actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
     };
@@ -615,7 +626,7 @@ describe('automation command boundaries', () => {
       object_id: 'work-item-old-route',
       scope_key: 'manual:work_item:work-item-old-route',
       reason_code: 'needs_human_triage',
-      reason: 'old public P0 route removal regression',
+      reason: 'old public automation route removal regression',
       evidence_refs: [],
       requested_by: 'test-reviewer',
       idempotency_key: 'old-public-p0-manual-path-hold',
@@ -625,7 +636,7 @@ describe('automation command boundaries', () => {
     await request(app.getHttpServer()).post(`/p0/projects/${project.id}/automation/capabilities`).send(capabilityBody).expect(404);
     await request(app.getHttpServer())
       .post(`/p0/projects/${project.id}/automation/capabilities:disable`)
-      .send({ ...capabilityBody, reason: 'old public P0 disable route removal regression' })
+      .send({ ...capabilityBody, reason: 'old public automation disable route removal regression' })
       .expect(404);
     await request(app.getHttpServer()).post('/p0/manual-path-holds').send(manualPathHoldBody).expect(404);
     await request(app.getHttpServer())
@@ -633,7 +644,7 @@ describe('automation command boundaries', () => {
       .send({
         resolved_by: 'test-reviewer',
         resolution: 'resolved',
-        reason: 'old public P0 resolve route removal regression',
+        reason: 'old public automation resolve route removal regression',
         evidence_refs: [],
         idempotency_key: 'old-public-p0-manual-path-hold-resolve',
       })
@@ -734,7 +745,7 @@ describe('automation command boundaries', () => {
       .expect(403);
   });
 
-  it('preserves automation settings audit events after P0 service writes created earlier events', async () => {
+  it('preserves automation settings audit events after delivery service writes created earlier events', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
     const { project } = await seedProjectRepoWorkItem(app);
@@ -760,7 +771,7 @@ describe('automation command boundaries', () => {
     ]);
   });
 
-  it('rejects automation actors, missing actor class headers, and body-only actors from P0 approval gates', async () => {
+  it('rejects automation actors, missing actor class headers, and body-only actors from delivery approval gates', async () => {
     const { app } = await createTestApp();
     apps.push(app);
     const { workItem } = await seedProjectRepoWorkItem(app);
@@ -1179,7 +1190,7 @@ describe('automation command boundaries', () => {
       actor_class: 'automation_daemon',
       daemon_identity: 'daemon-1',
     };
-    const automationService = service as AutomationPlanDraftService;
+    const automationService = service as AutomationCommandTestService;
 
     const [first, second] = await Promise.all([
       automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-1'),
@@ -1221,7 +1232,7 @@ describe('automation command boundaries', () => {
       actor_class: 'automation_daemon',
       daemon_identity: 'daemon-1',
     };
-    const automationService = service as AutomationPlanDraftService;
+    const automationService = service as AutomationCommandTestService;
 
     const [first, second] = await Promise.all([
       automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-target-a'),
@@ -1280,7 +1291,7 @@ describe('automation command boundaries', () => {
     });
 
     await expect(
-      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+      (service as AutomationCommandTestService).ensurePlanDraftForApprovedSpec(
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
@@ -1338,7 +1349,7 @@ describe('automation command boundaries', () => {
     });
 
     await expect(
-      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+      (service as AutomationCommandTestService).ensurePlanDraftForApprovedSpec(
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
@@ -1405,7 +1416,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+      (service as AutomationCommandTestService).ensurePlanDraftForApprovedSpec(
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
@@ -1447,7 +1458,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).ensurePlanDraftForApprovedSpec(
+      (service as AutomationCommandTestService).ensurePlanDraftForApprovedSpec(
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
@@ -1780,7 +1791,7 @@ describe('automation command boundaries', () => {
       actor_class: 'automation_daemon',
       daemon_identity: 'daemon-1',
     };
-    const automationService = service as AutomationPlanDraftService;
+    const automationService = service as AutomationCommandTestService;
 
     const [first, second] = await Promise.all([
       automationService.ensureExecutionPackageDraftsForPlanRevision({
@@ -1830,7 +1841,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+      (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
@@ -1875,7 +1886,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+      (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
@@ -1902,7 +1913,7 @@ describe('automation command boundaries', () => {
       actor: { actor_id: actorOwner, actor_class: 'human_admin' },
       now: '2026-05-05T00:25:50.000Z',
     });
-    const generated = await (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+    const generated = await (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
       planRevisionId: ctx.planRevisionId,
       automationPrecondition: {
         automation_scope: `repo:${ctx.project.id}:repo-1`,
@@ -1998,7 +2009,7 @@ describe('automation command boundaries', () => {
       actor_class: 'automation_daemon',
       daemon_identity: 'daemon-1',
     };
-    const automationService = service as AutomationPlanDraftService;
+    const automationService = service as AutomationCommandTestService;
 
     await automationService.ensureExecutionPackageDraftsForPlanRevision({
       planRevisionId: ctx.planRevisionId,
@@ -2045,7 +2056,7 @@ describe('automation command boundaries', () => {
       required_capability: 'canGeneratePackageDrafts',
       actor_class: 'human_admin',
     };
-    const automationService = service as AutomationPlanDraftService;
+    const automationService = service as AutomationCommandTestService;
 
     const defaultGeneration = await automationService.ensureExecutionPackageDraftsForPlanRevision({
       planRevisionId: ctx.planRevisionId,
@@ -2096,6 +2107,62 @@ describe('automation command boundaries', () => {
     });
   });
 
+  it('persists package generation supersede evidence refs', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-package-regeneration-evidence',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable package generation evidence test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:27:30.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'human_admin',
+    };
+    const generationKey = `default:${ctx.planRevisionId}`;
+    await (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: precondition,
+      actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
+      idempotencyKey: 'idem-package-regeneration-evidence-default',
+    });
+    const evidenceRefs: ArtifactRef[] = [
+      {
+        kind: 'self_review',
+        name: 'Package split approval',
+        content_type: 'text/markdown',
+        local_ref: 'docs/reviews/package-split.md',
+      },
+    ];
+
+    await (service as AutomationCommandTestService).supersedeExecutionPackageGenerationRun({
+      planRevisionId: ctx.planRevisionId,
+      generationKey,
+      expectedGenerationRunVersion: 1,
+      reason: 'regenerate with evidence',
+      evidenceRefs,
+      approvedBy: { actor_id: actorReviewer, actor_class: 'human_admin' },
+      idempotencyKey: 'idem-package-regeneration-evidence-supersede',
+    });
+
+    await expect(
+      repository.getExecutionPackageGenerationRun({ plan_revision_id: ctx.planRevisionId, generation_key: generationKey }),
+    ).resolves.toMatchObject({ evidence_refs: evidenceRefs });
+  });
+
   it('rejects package generation when a package-generation manual hold is active', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
@@ -2138,7 +2205,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+      (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
@@ -2174,7 +2241,7 @@ describe('automation command boundaries', () => {
       required_capability: 'canGeneratePackageDrafts',
       actor_class: 'human_admin',
     };
-    const automationService = service as AutomationPlanDraftService;
+    const automationService = service as AutomationCommandTestService;
     const defaultGeneration = await automationService.ensureExecutionPackageDraftsForPlanRevision({
       planRevisionId: ctx.planRevisionId,
       automationPrecondition: precondition,
@@ -2241,7 +2308,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).ensureExecutionPackageDraftsForPlanRevision({
+      (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
@@ -2351,7 +2418,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -2393,7 +2460,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -2439,7 +2506,7 @@ describe('automation command boundaries', () => {
       actor_class: 'automation_daemon',
       daemon_identity: 'daemon-1',
     };
-    const automationService = service as AutomationPlanDraftService;
+    const automationService = service as AutomationCommandTestService;
 
     const first = await automationService.enqueueRunIfPackageStillReady({
       packageId: executionPackage.id,
@@ -2498,7 +2565,7 @@ describe('automation command boundaries', () => {
       daemon_identity: 'daemon-1',
     };
 
-    await (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+    await (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
       packageId: executionPackage.id,
       expectedPackageVersion: executionPackage.version,
       automationPrecondition: precondition,
@@ -2510,6 +2577,52 @@ describe('automation command boundaries', () => {
     });
 
     expect(kickCount).toBe(1);
+  });
+
+  it('accepts run enqueue when the best-effort worker wake-up fails', async () => {
+    const { app, repository, service } = await createTestApp(undefined, {
+      kick: () => {
+        throw new Error('wake-up unavailable');
+      },
+      drainOnce: async () => undefined,
+    });
+    apps.push(app);
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-run-enqueue-kick-failure',
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      scope_type: 'repo',
+      preset: 'run_enqueue',
+      expected_version: 0,
+      reason: 'enable run enqueue best-effort wake-up test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:31:20.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}`,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canEnqueueRuns',
+      actor_class: 'automation_daemon',
+      daemon_identity: 'daemon-1',
+    };
+
+    await expect(
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
+        packageId: executionPackage.id,
+        expectedPackageVersion: executionPackage.version,
+        automationPrecondition: precondition,
+        idempotencyKey: 'idem-run-enqueue-kick-failure',
+        actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
+        executorType: 'mock',
+        workflowOnly: true,
+        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      }),
+    ).resolves.toMatchObject({ status: 'accepted', execution_package_id: executionPackage.id });
   });
 
   it('rejects run enqueue with a stale package version after a ready package edit', async () => {
@@ -2545,7 +2658,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -2628,7 +2741,7 @@ describe('automation command boundaries', () => {
       runtimeSafetyAttestation: runtimeSafetyAttestation(),
     };
 
-    await expect((service as AutomationPlanDraftService).enqueueRunIfPackageStillReady(input)).rejects.toThrow(
+    await expect((service as AutomationCommandTestService).enqueueRunIfPackageStillReady(input)).rejects.toThrow(
       /simulated command completion write failure/i,
     );
     expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(1);
@@ -2638,7 +2751,7 @@ describe('automation command boundaries', () => {
       activeRunChecks += 1;
       return originalFindActiveRun(packageId);
     };
-    await expect((service as AutomationPlanDraftService).enqueueRunIfPackageStillReady(input)).rejects.toThrow(/idempotency/i);
+    await expect((service as AutomationCommandTestService).enqueueRunIfPackageStillReady(input)).rejects.toThrow(/idempotency/i);
     expect(activeRunChecks).toBe(0);
     expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(1);
   });
@@ -2669,7 +2782,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -2722,7 +2835,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -2793,7 +2906,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -2886,7 +2999,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -2947,7 +3060,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -3006,7 +3119,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -3056,7 +3169,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,
@@ -3123,7 +3236,7 @@ describe('automation command boundaries', () => {
     };
 
     await expect(
-      (service as AutomationPlanDraftService).enqueueRunIfPackageStillReady({
+      (service as AutomationCommandTestService).enqueueRunIfPackageStillReady({
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         automationPrecondition: precondition,

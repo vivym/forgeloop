@@ -15,7 +15,7 @@ import { InMemoryDeliveryRepository } from '../../packages/db/src';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-describe('durable P0 object IDs', () => {
+describe('durable delivery object IDs', () => {
   const apps: INestApplication[] = [];
 
   afterEach(async () => {
@@ -63,7 +63,7 @@ describe('durable P0 object IDs', () => {
     expect(secondProject.id).not.toBe(firstProject.id);
   });
 
-  it('uses UUID ids for durable public P0 API-created aggregates', async () => {
+  it('uses UUID ids for durable public delivery API-created aggregates', async () => {
     const repository = new InMemoryDeliveryRepository();
     const app = await createDurableApp(repository);
     const server = app.getHttpServer();

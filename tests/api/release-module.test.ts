@@ -254,7 +254,7 @@ describe('release module', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('allows AppModule to override core release providers without ReleaseModule owning P0Module wiring', async () => {
+  it('allows AppModule to override core release providers without ReleaseModule owning delivery wiring', async () => {
     const repository = new InMemoryDeliveryRepository();
     const durabilityMode: RunDurabilityMode = 'durable';
     const allowDemoActorIdFallback = false;

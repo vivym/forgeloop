@@ -604,7 +604,7 @@ const runSessionForEvidence = (
   requested_by_actor_id: actorOwner,
   status: 'succeeded',
   executor_type: 'mock',
-  changed_files: [{ repo_id: 'repo-1', path: 'apps/control-plane-api/src/p0/p0.service.ts', change_kind: 'modified' }],
+  changed_files: [{ repo_id: 'repo-1', path: 'apps/control-plane-api/src/modules/run-control/run-control.service.ts', change_kind: 'modified' }],
   check_results: successfulChecks(),
   artifacts: [
     {
