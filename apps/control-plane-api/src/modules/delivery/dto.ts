@@ -82,7 +82,6 @@ export type RunPackageDto = z.infer<typeof runPackageSchema>;
 
 export const runInputSchema = z
   .object({
-    actor_id: nonEmptyString.optional(),
     message: nonEmptyString,
     target_turn_id: nonEmptyString.optional(),
   })
@@ -91,7 +90,6 @@ export type RunInputDto = z.infer<typeof runInputSchema>;
 
 export const runControlSchema = z
   .object({
-    actor_id: nonEmptyString.optional(),
     reason: nonEmptyString.optional(),
   })
   .strict();

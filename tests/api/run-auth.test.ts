@@ -172,15 +172,15 @@ describe('durable run actor auth', () => {
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
       .send({ actor_id: actorOwner, message: 'continue' })
-      .expect(401);
+      .expect(400);
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/cancel`)
       .send({ actor_id: actorOwner, reason: 'stop' })
-      .expect(401);
+      .expect(400);
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/resume`)
       .send({ actor_id: actorOwner, reason: 'resume' })
-      .expect(401);
+      .expect(400);
 
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
@@ -202,6 +202,33 @@ describe('durable run actor auth', () => {
       .set(actorHeaderName, actorOwner)
       .send({ reason: 'resume' })
       .expect(201);
+  });
+
+  it('rejects body actor identity on authenticated durable operator commands', async () => {
+    const { app, repo } = await track(bootDurableApp());
+    const { runSessionId: inputRunSessionId } = await startDurableRun(app);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${inputRunSessionId}/input`)
+      .set(actorHeaderName, actorOwner)
+      .send({ actor_id: actorOwner, message: 'continue' })
+      .expect(400);
+
+    const { runSessionId: cancelRunSessionId } = await startDurableRun(app);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${cancelRunSessionId}/cancel`)
+      .set(actorHeaderName, actorOwner)
+      .send({ actor_id: actorOwner, reason: 'stop' })
+      .expect(400);
+
+    const { runSessionId: resumeRunSessionId } = await startDurableRun(app);
+    const resumeRunSession = await repo.getRunSession(resumeRunSessionId);
+    expect(resumeRunSession).toBeDefined();
+    await repo.saveRunSession({ ...resumeRunSession!, status: 'waiting_for_input' });
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${resumeRunSessionId}/resume`)
+      .set(actorHeaderName, actorOwner)
+      .send({ actor_id: actorOwner, reason: 'resume' })
+      .expect(400);
   });
 
   it('allows authenticated durable viewers but restricts operator-only commands', async () => {
@@ -485,7 +512,7 @@ describe('run actor authentication', () => {
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
       .send({ actor_id: actorOwner, message: 'continue' })
-      .expect(401);
+      .expect(400);
 
     await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).set(actorHeaderName, actorOwner).expect(200);
     await request(app.getHttpServer())
