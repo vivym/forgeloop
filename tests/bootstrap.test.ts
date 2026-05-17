@@ -19,7 +19,7 @@ describe('workspace bootstrap contract', () => {
       'dev:executor': 'pnpm --filter @forgeloop/executor-gateway start:dev',
       'dev:worker': 'pnpm --filter @forgeloop/workflow-worker start:dev',
       'dev:web': 'pnpm --filter @forgeloop/web dev',
-      'smoke:p0': 'vitest run tests/smoke',
+      'smoke:delivery': 'vitest run tests/smoke',
     });
 
     expect(readText('pnpm-workspace.yaml')).toBe("packages:\n  - 'apps/*'\n  - 'packages/*'\n");

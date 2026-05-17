@@ -10,7 +10,7 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository } from '../../packages/db/src';
 
-import { seedAppWithRunSession, seedQueuedPackageRun } from '../helpers/p0-runtime-fixtures';
+import { seedAppWithRunSession, seedQueuedPackageRun } from '../helpers/delivery-runtime-fixtures';
 
 describe('run event API', () => {
   const apps: INestApplication[] = [];

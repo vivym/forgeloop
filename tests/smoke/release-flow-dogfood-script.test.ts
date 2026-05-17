@@ -56,7 +56,7 @@ describe('release flow dogfood script helpers', () => {
 
   it('exports the exact required verification report markers', () => {
     expect(requiredReleaseFlowReportMarkers).toEqual([
-      'P0 delivery path',
+      'Delivery path',
       'Release create/link/submit',
       'Release approval or override approval',
       'Release observing/close',
@@ -872,7 +872,7 @@ describe('release flow dogfood script helpers', () => {
         createDurableApp: async () => ({ app: { close: closeFirstApp } }),
         runDurableReleaseLifecycle: async () => ({
           releaseId: 'release-1',
-          markers: [{ marker: 'P0 delivery path', status: 'PASSED', details: ['safe lifecycle marker'] }],
+          markers: [{ marker: 'Delivery path', status: 'PASSED', details: ['safe lifecycle marker'] }],
         }),
         reopenDbClient: () => ({ db: {}, pool: { end: closeFreshPool } }),
         createFreshRepository: () => new InMemoryDeliveryRepository(),
@@ -882,7 +882,7 @@ describe('release flow dogfood script helpers', () => {
       },
     });
 
-    expect(markers.find((marker) => marker.marker === 'P0 delivery path')).toMatchObject({ status: 'PASSED' });
+    expect(markers.find((marker) => marker.marker === 'Delivery path')).toMatchObject({ status: 'PASSED' });
     expect(markers.find((marker) => marker.marker === 'Durable local reset')).toMatchObject({
       status: 'FAILED',
       details: expect.arrayContaining(['cleanup_failed']),
@@ -917,7 +917,7 @@ describe('release flow dogfood script helpers', () => {
         runDurableReleaseLifecycle: async () => ({
           releaseId: 'release-1',
           markers: [
-            { marker: 'P0 delivery path', status: 'PASSED', details: ['safe p0 marker'] },
+            { marker: 'Delivery path', status: 'PASSED', details: ['safe delivery marker'] },
             { marker: 'Release create/link/submit', status: 'PASSED', details: ['safe release marker'] },
           ],
         }),
@@ -935,7 +935,7 @@ describe('release flow dogfood script helpers', () => {
     expect(closeFirstPool).toHaveBeenCalled();
     expect(closeFreshApp).toHaveBeenCalled();
     expect(closeFreshPool).toHaveBeenCalled();
-    expect(markers.find((marker) => marker.marker === 'P0 delivery path')).toMatchObject({ status: 'PASSED' });
+    expect(markers.find((marker) => marker.marker === 'Delivery path')).toMatchObject({ status: 'PASSED' });
     expect(markers.find((marker) => marker.marker === 'Release create/link/submit')).toMatchObject({ status: 'PASSED' });
     expect(markers.find((marker) => marker.marker === 'Durable local reset')).toMatchObject({
       status: 'FAILED',
@@ -972,7 +972,7 @@ describe('release flow dogfood script helpers', () => {
         runDurableReleaseLifecycle: async () => ({
           releaseId: 'release-1',
           markers: [
-            { marker: 'P0 delivery path', status: 'PASSED', details: ['safe p0 marker'] },
+            { marker: 'Delivery path', status: 'PASSED', details: ['safe delivery marker'] },
             { marker: 'Release create/link/submit', status: 'PASSED', details: ['safe release marker'] },
             { marker: 'Strict local_codex run', status: 'PASSED', details: ['strict evidence completed before projection'] },
           ],
@@ -1003,7 +1003,7 @@ describe('release flow dogfood script helpers', () => {
     expect(closeFirstPool).toHaveBeenCalled();
     expect(closeFreshApp).toHaveBeenCalled();
     expect(closeFreshPool).toHaveBeenCalled();
-    expect(markers.find((marker) => marker.marker === 'P0 delivery path')).toMatchObject({ status: 'PASSED' });
+    expect(markers.find((marker) => marker.marker === 'Delivery path')).toMatchObject({ status: 'PASSED' });
     expect(markers.find((marker) => marker.marker === 'Release create/link/submit')).toMatchObject({ status: 'PASSED' });
     expect(markers.find((marker) => marker.marker === 'Durable local reset')).toMatchObject({
       status: 'FAILED',

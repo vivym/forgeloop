@@ -120,7 +120,7 @@ export const renderLocalCodexDogfoodReport = (input: {
   error?: string;
 }): string => {
   const lines = [
-    '# P0 Real Local Codex Dogfood',
+    '# Delivery Real Local Codex Dogfood',
     '',
     `- Status: ${input.status}`,
   ];

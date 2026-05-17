@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, Post } from '@nestjs/common';
 
 import { actorContextFromHeaders } from '../auth/actor-context';
 import { reviewDecisionSchema, type ReviewDecisionDto } from '../delivery/dto';
@@ -7,7 +7,7 @@ import { ReviewEvidenceService } from './review-evidence.service';
 
 @Controller()
 export class ReviewPacketsController {
-  constructor(private readonly reviewEvidenceService: ReviewEvidenceService) {}
+  constructor(@Inject(ReviewEvidenceService) private readonly reviewEvidenceService: ReviewEvidenceService) {}
 
   @Get('review-packets/:reviewPacketId')
   getReviewPacket(@Param('reviewPacketId') reviewPacketId: string) {

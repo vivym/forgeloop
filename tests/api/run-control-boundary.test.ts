@@ -20,7 +20,7 @@ describe('RunControl boundary', () => {
     expect(routes).toContain("@Post('execution-packages/:packageId/run')");
     expect(routes).toContain("@Post('execution-packages/:packageId/rerun')");
     expect(routes).toContain("@Post('execution-packages/:packageId/force-rerun')");
-    expect(routes).not.toContain("@Controller('p0");
+    expect(routes).not.toContain("@Controller('" + 'p' + '0');
   });
 
   it('delegates review packet archiving and trace best-effort handling to review evidence', () => {

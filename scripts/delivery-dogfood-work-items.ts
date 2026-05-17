@@ -24,7 +24,7 @@ import {
   preflightLocalCodexDogfood,
   STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST,
   STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE,
-} from './p0-local-codex-dogfood';
+} from './delivery-local-codex-dogfood';
 
 type WorkItemKind = 'requirement' | 'bug' | 'tech_debt';
 type DogfoodExecutorType = 'mock' | 'local_codex';
@@ -132,14 +132,14 @@ const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
 const reportPath = resolve(
   process.env.FORGELOOP_WORK_ITEM_DOGFOOD_REPORT_PATH ??
-    'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
+    'docs/superpowers/reports/delivery-dogfood-work-items-completion.md',
 );
 
 export const dogfoodRequiredChecks = [
   {
     check_id: 'dogfood-work-item',
-    display_name: 'P0 dogfood work item',
-    command: 'pnpm install --frozen-lockfile && pnpm smoke:p0',
+    display_name: 'Delivery dogfood work item',
+    command: 'pnpm install --frozen-lockfile && pnpm smoke:delivery',
     timeout_seconds: 300,
     blocks_review: true,
   },
@@ -159,9 +159,9 @@ const boundedLocalCodexObjective = (input: {
 }): string =>
   [
     `Make a minimal docs-only dogfood evidence update for ${input.itemKey}.`,
-    'Edit `docs/dogfood/p0-dogfood-work-items.md` and add or update one short bullet for this Work Item.',
+    'Edit `docs/dogfood/delivery-dogfood-work-items.md` and add or update one short bullet for this Work Item.',
     `Mention this validation focus: ${input.validationFocus}.`,
-    'Do not run `pnpm dogfood:p0:work-items`.',
+    'Do not run `pnpm dogfood:delivery:work-items`.',
     'Do not run `pnpm test`.',
     'Do not run `pnpm build`.',
     'Do not start servers or background processes.',
@@ -408,7 +408,7 @@ export const dogfoodWorkItems: DogfoodItemDefinition[] = [
     key: 'bugfix-durable-verification',
     kind: 'bug',
     title: 'Durable verification gaps',
-    goal: 'Close the documented durable DB and browser verification gaps for P0 readiness.',
+    goal: 'Close the documented durable DB and browser verification gaps for delivery readiness.',
     successCriteria: ['Durable schema push passes', 'Durable dogfood passes', 'Browser Run Console E2E passes'],
     objective: boundedLocalCodexObjective({
       itemKey: 'Durable verification gaps',
@@ -526,7 +526,7 @@ const createProject = async (app: INestApplication, commitSha: string): Promise<
   const server = app.getHttpServer();
   const project = (
     await withActor(request(server).post('/projects'), actorOwner)
-      .send({ name: `P0 dogfood completion ${new Date().toISOString()}`, owner_actor_id: actorOwner })
+      .send({ name: `Delivery dogfood completion ${new Date().toISOString()}`, owner_actor_id: actorOwner })
       .expect(201)
   ).body as { id: string };
 
@@ -572,7 +572,7 @@ const approveSpecAndPlan = async (
     .send({
       summary: `${item.title} spec`,
       content: item.goal,
-      background: 'P0 dogfood completion validates the product loop using a real ForgeLoop Work Item record.',
+      background: 'Delivery dogfood completion validates the product loop using a real ForgeLoop Work Item record.',
       goals: [item.goal],
       scope_in: item.successCriteria,
       scope_out: ['Release object productization', 'Incident productization', 'Production deployment'],
@@ -600,8 +600,8 @@ const approveSpecAndPlan = async (
         implementation_summary: item.objective,
         split_strategy: 'Single package for this dogfood completion item.',
         dependency_order: [],
-        test_matrix: ['pnpm smoke:p0', 'pnpm test', 'pnpm build'],
-        risk_mitigations: ['Keep this P0 completion inside review-approved handoff scope.'],
+        test_matrix: ['pnpm smoke:delivery', 'pnpm test', 'pnpm build'],
+        risk_mitigations: ['Keep this delivery completion inside review-approved handoff scope.'],
         rollback_notes: 'Revert the dogfood completion record/report if the evidence is invalid.',
         author_actor_id: actorOwner,
       })
@@ -731,9 +731,9 @@ const completeDogfoodItem = async (
       {
         title: 'Exercise rerun review path',
         description: 'Carry review feedback into a replacement run before approving the work item.',
-        file_path: 'docs/dogfood/p0-dogfood-work-items.md',
+        file_path: 'docs/dogfood/delivery-dogfood-work-items.md',
         severity: 'major',
-        suggested_validation: 'pnpm dogfood:p0:work-items',
+        suggested_validation: 'pnpm dogfood:delivery:work-items',
       },
     ]);
     const rerunSessionId = await runPackage(
@@ -750,7 +750,7 @@ const completeDogfoodItem = async (
     reviewPacketIds.push(rerunPacket.id);
     exercisedChangesRequestedRerun = true;
   } else {
-    await approveReviewPacket(app, firstPacket.id, 'Approved for P0 dogfood completion.');
+    await approveReviewPacket(app, firstPacket.id, 'Approved for Delivery dogfood completion.');
   }
 
   const cockpit = (await withActor(
@@ -809,7 +809,7 @@ const completeDogfoodItem = async (
   };
 };
 
-export const runP0DogfoodWorkItems = async (): Promise<DogfoodCompletionResult> => {
+export const runDeliveryDogfoodWorkItems = async (): Promise<DogfoodCompletionResult> => {
   const strictEnabled = isStrictLocalCodexDogfoodEnabled();
   let strictDirtySource: StrictDirtySourceSummary | undefined;
   if (strictEnabled) {
@@ -939,7 +939,7 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
         ]),
   ];
   const lines = [
-    '# P0 Dogfood Work Items Completion',
+    '# Delivery Dogfood Work Items Completion',
     '',
     `Generated: ${result.generatedAt}`,
     `Durability mode: ${result.durabilityMode}`,
@@ -979,7 +979,7 @@ export const renderDogfoodCompletionReport = (result: DogfoodCompletionResult): 
     '## P1 Decision Summary',
     '',
     '- Decision: prioritize Trace / Evidence Plane for P1.',
-    '- Rationale: the P0 dogfood path showed that reviewers need a faster way to reconstruct cause and effect across runs, reruns, artifacts, and review decisions.',
+    '- Rationale: the Delivery dogfood path showed that reviewers need a faster way to reconstruct cause and effect across runs, reruns, artifacts, and review decisions.',
   ];
   return `${lines.join('\n')}\n`;
 };
@@ -993,10 +993,10 @@ export const writeDogfoodCompletionReport = async (
 };
 
 export const strictAcceptanceExitMessage = (status: 'blocked' | 'failed'): string =>
-  `P0 dogfood work items strict acceptance ${status}. Report: ${reportPath}`;
+  `Delivery dogfood work items strict acceptance ${status}. Report: ${reportPath}`;
 
 export const main = async (): Promise<number> => {
-  const result = await runP0DogfoodWorkItems();
+  const result = await runDeliveryDogfoodWorkItems();
   await writeDogfoodCompletionReport(result);
   if (result.strictAcceptance.status === 'failed' || result.strictAcceptance.status === 'blocked') {
     console.error(strictAcceptanceExitMessage(result.strictAcceptance.status));
@@ -1005,7 +1005,7 @@ export const main = async (): Promise<number> => {
     }
     return 1;
   }
-  console.log(`P0 dogfood work items completed. Report: ${reportPath}`);
+  console.log(`Delivery dogfood work items completed. Report: ${reportPath}`);
   return 0;
 };
 

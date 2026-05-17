@@ -125,13 +125,13 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
 
 ### Control Plane, DB, Automation Projection
 
-- Modify: `apps/control-plane-api/src/p0/dto.ts`
+- Modify: `apps/control-plane-api/src/modules/delivery/dto.ts`
   - Add optional `source_mutation_policy` to create/patch package DTOs.
-- Modify: `apps/control-plane-api/src/p0/p0.service.ts`
+- Modify: `apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts`
   - Default omitted `source_mutation_policy` to `path_policy_scoped`; reject empty `allowed_paths` except no-source-change packages; capture extended snapshot fields in package creation helpers.
 - Modify: `apps/control-plane-api/src/modules/automation/automation-command.service.ts`
   - Strengthen enqueue preflight attestation validation; keep daemon planner enqueue disabled.
-- Modify: `apps/control-plane-api/src/p0/automation-command-helpers.ts`
+- Modify: `apps/control-plane-api/src/modules/automation/automation-command-helpers.ts`
   - Validate scope-aware `enqueue_preflight` attestations and reject `run_execution` attestations before RunSession creation.
 - Modify: `packages/db/src/repositories/delivery-repository.ts`
   - Add `RuntimeSnapshotBlockerRow`; add `blockers?: RuntimeSnapshotBlockerRow[]` to `RuntimeSnapshotTargetRow`.
@@ -191,7 +191,7 @@ Use @superpowers:test-driven-development for every code-changing task. Use @supe
 - Create or modify: `tests/api/run-spec-validation.test.ts`
 - Modify: `tests/api/automation-runtime-snapshot.test.ts`
 - Modify: `tests/automation/planner.test.ts`
-- Modify fixtures: `tests/helpers/p0-runtime-fixtures.ts`, `tests/executor/test-fixtures.ts`
+- Modify fixtures: `tests/helpers/delivery-runtime-fixtures.ts`, `tests/executor/test-fixtures.ts`
 
 ## Task 0: Baseline Guardrails
 
@@ -243,10 +243,10 @@ Expected: all selected packages build.
 - Modify: `packages/db/src/schema/execution-package.ts`
 - Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
 - Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
-- Modify: `apps/control-plane-api/src/p0/dto.ts`
-- Modify: `apps/control-plane-api/src/p0/p0.service.ts`
+- Modify: `apps/control-plane-api/src/modules/delivery/dto.ts`
+- Modify: `apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts`
 - Modify: `apps/control-plane-api/src/modules/automation/automation-command.service.ts`
-- Modify: `apps/control-plane-api/src/p0/automation-command-helpers.ts`
+- Modify: `apps/control-plane-api/src/modules/automation/automation-command-helpers.ts`
 - Modify: `tests/contracts/contracts.test.ts`
 - Create or modify: `tests/api/run-spec-validation.test.ts`
 - Modify: `tests/domain/automation.test.ts`
@@ -379,7 +379,7 @@ In `tests/api/automation-commands.test.ts`, add cases:
 
 - [ ] **Step 9: Implement scoped enqueue attestation validation**
 
-In `apps/control-plane-api/src/p0/automation-command-helpers.ts`, change `assertRuntimeSafetyAttestation` to require:
+In `apps/control-plane-api/src/modules/automation/automation-command-helpers.ts`, change `assertRuntimeSafetyAttestation` to require:
 
 ```ts
 attestation.attestation_scope === 'enqueue_preflight'
@@ -393,9 +393,9 @@ and reject `attestation_scope: 'run_execution'` for enqueue commands.
 
 - [ ] **Step 10: Update create/patch DTO and service defaults**
 
-In `apps/control-plane-api/src/p0/dto.ts`, accept optional `source_mutation_policy`.
+In `apps/control-plane-api/src/modules/delivery/dto.ts`, accept optional `source_mutation_policy`.
 
-In `apps/control-plane-api/src/p0/p0.service.ts`, default omitted policy to `path_policy_scoped`, reject empty `allowed_paths` unless `source_mutation_policy === 'no_source_changes'`, and persist the field in execution package creation/update paths.
+In `apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts`, default omitted policy to `path_policy_scoped`, reject empty `allowed_paths` unless `source_mutation_policy === 'no_source_changes'`, and persist the field in execution package creation/update paths.
 
 - [ ] **Step 11: Persist source mutation policy**
 
@@ -422,7 +422,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add packages/contracts/src/executor.ts packages/domain/src/automation.ts packages/domain/src/types.ts packages/domain/src/validators.ts packages/domain/src/states.ts packages/db/src/schema/execution-package.ts packages/db/src/repositories/in-memory-delivery-repository.ts packages/db/src/repositories/drizzle-delivery-repository.ts apps/control-plane-api/src/p0/dto.ts apps/control-plane-api/src/p0/p0.service.ts apps/control-plane-api/src/modules/automation/automation-command.service.ts apps/control-plane-api/src/p0/automation-command-helpers.ts tests/contracts/contracts.test.ts tests/api/run-spec-validation.test.ts tests/domain/automation.test.ts tests/domain/validators.test.ts tests/domain/states.test.ts tests/db/repository.test.ts tests/db/automation-repository.test.ts tests/api/automation-commands.test.ts
+git add packages/contracts/src/executor.ts packages/domain/src/automation.ts packages/domain/src/types.ts packages/domain/src/validators.ts packages/domain/src/states.ts packages/db/src/schema/execution-package.ts packages/db/src/repositories/in-memory-delivery-repository.ts packages/db/src/repositories/drizzle-delivery-repository.ts apps/control-plane-api/src/modules/delivery/dto.ts apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts apps/control-plane-api/src/modules/automation/automation-command.service.ts apps/control-plane-api/src/modules/automation/automation-command-helpers.ts tests/contracts/contracts.test.ts tests/api/run-spec-validation.test.ts tests/domain/automation.test.ts tests/domain/validators.test.ts tests/domain/states.test.ts tests/db/repository.test.ts tests/db/automation-repository.test.ts tests/api/automation-commands.test.ts
 git commit -m "feat: add runtime safety source mutation contracts"
 ```
 
@@ -701,9 +701,9 @@ git commit -m "feat: add executor path policy validation"
 - Modify: `packages/executor/src/index.ts`
 - Modify: `packages/executor/package.json`
 - Modify: `pnpm-lock.yaml`
-- Modify: `apps/control-plane-api/src/p0/p0.service.ts`
+- Modify: `apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts`
 - Modify: `apps/control-plane-api/src/modules/automation/automation-command.service.ts`
-- Modify: `tests/helpers/p0-runtime-fixtures.ts`
+- Modify: `tests/helpers/delivery-runtime-fixtures.ts`
 - Create: `tests/executor/runtime-policy.test.ts`
 - Modify: `tests/api/automation-commands.test.ts`
 - Modify: `tests/domain/validators.test.ts`
@@ -813,7 +813,7 @@ In `tests/executor/runtime-policy.test.ts` and `tests/domain/validators.test.ts`
 
 - [ ] **Step 8: Integrate capture paths without enabling enqueue**
 
-In `apps/control-plane-api/src/p0/p0.service.ts` and `apps/control-plane-api/src/modules/automation/automation-command.service.ts`, update package generation helpers to fill the extended snapshot shape by calling `buildPackageRuntimePolicySnapshot`. Ready/run-eligible packages must have the new required fields; tests should use real snapshot fixture builders rather than hand-written partial snapshot objects.
+In `apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts` and `apps/control-plane-api/src/modules/automation/automation-command.service.ts`, update package generation helpers to fill the extended snapshot shape by calling `buildPackageRuntimePolicySnapshot`. Ready/run-eligible packages must have the new required fields; tests should use real snapshot fixture builders rather than hand-written partial snapshot objects.
 
 - [ ] **Step 9: Run focused tests**
 
@@ -832,7 +832,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add packages/executor/package.json pnpm-lock.yaml packages/executor/src/runtime-policy.ts packages/executor/src/index.ts apps/control-plane-api/src/p0/p0.service.ts apps/control-plane-api/src/modules/automation/automation-command.service.ts tests/helpers/p0-runtime-fixtures.ts tests/executor/runtime-policy.test.ts tests/api/automation-commands.test.ts tests/domain/validators.test.ts
+git add packages/executor/package.json pnpm-lock.yaml packages/executor/src/runtime-policy.ts packages/executor/src/index.ts apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts apps/control-plane-api/src/modules/automation/automation-command.service.ts tests/helpers/delivery-runtime-fixtures.ts tests/executor/runtime-policy.test.ts tests/api/automation-commands.test.ts tests/domain/validators.test.ts
 git commit -m "feat: capture frozen runtime policy snapshots"
 ```
 
@@ -1050,7 +1050,7 @@ export function validateEnqueuePreflightAttestation(input: {
 }): RuntimeSafetyAttestationValidationResult;
 ```
 
-Then call that helper from `apps/control-plane-api/src/p0/automation-command-helpers.ts`. `packages/executor/src/resource-limits.ts` may wrap the same domain helper for executor startup, but control-plane must not import executor just to validate enqueue commands. Do not make `packages/contracts` import domain.
+Then call that helper from `apps/control-plane-api/src/modules/automation/automation-command-helpers.ts`. `packages/executor/src/resource-limits.ts` may wrap the same domain helper for executor startup, but control-plane must not import executor just to validate enqueue commands. Do not make `packages/contracts` import domain.
 
 - [ ] **Step 7: Export and run tests**
 
@@ -1076,7 +1076,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add packages/executor/src/runtime-safety-config.ts packages/executor/src/resource-limits.ts packages/domain/src/automation.ts packages/executor/src/index.ts apps/control-plane-api/src/p0/automation-command-helpers.ts tests/executor/runtime-safety-config.test.ts tests/executor/resource-limits.test.ts tests/api/automation-commands.test.ts
+git add packages/executor/src/runtime-safety-config.ts packages/executor/src/resource-limits.ts packages/domain/src/automation.ts packages/executor/src/index.ts apps/control-plane-api/src/modules/automation/automation-command-helpers.ts tests/executor/runtime-safety-config.test.ts tests/executor/resource-limits.test.ts tests/api/automation-commands.test.ts
 git commit -m "feat: add runtime safety config and attestations"
 ```
 
@@ -1948,7 +1948,7 @@ git commit -m "feat: project sanitized runtime blockers"
 
 **Files:**
 - Modify as needed only to fix integration breakage in files touched by prior tasks
-- Modify: `tests/smoke/p0-local-codex-dogfood-script.test.ts`
+- Modify: `tests/smoke/delivery-local-codex-dogfood-script.test.ts`
 - Modify: `tests/smoke/dogfood-strict-local-codex.test.ts`
 - Modify: `tests/smoke/automation-dogfood-script.test.ts`
 - Modify: `tests/automation/planner.test.ts`
@@ -2045,7 +2045,7 @@ Expected:
 Run:
 
 ```bash
-git add tests/smoke/p0-local-codex-dogfood-script.test.ts tests/smoke/dogfood-strict-local-codex.test.ts tests/smoke/automation-dogfood-script.test.ts tests/automation/planner.test.ts
+git add tests/smoke/delivery-local-codex-dogfood-script.test.ts tests/smoke/dogfood-strict-local-codex.test.ts tests/smoke/automation-dogfood-script.test.ts tests/automation/planner.test.ts
 git commit -m "test: verify runtime safety integration"
 ```
 

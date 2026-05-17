@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   approveReleaseRequestSchema,
   acknowledgeReleaseTestAcceptanceRequestSchema,
@@ -36,7 +36,7 @@ import { ReleaseService } from './release.service';
 
 @Controller('releases')
 export class ReleaseController {
-  constructor(private readonly releaseService: ReleaseService) {}
+  constructor(@Inject(ReleaseService) private readonly releaseService: ReleaseService) {}
 
   @Post()
   createRelease(

@@ -6,7 +6,7 @@ import {
   providedDatabaseUrlFromEnv,
   startDisposablePostgres,
 } from '../../scripts/dogfood/durable-postgres';
-import { parseDurableDogfoodReport } from '../../scripts/p0-durable-dogfood';
+import { parseDurableDogfoodReport } from '../../scripts/delivery-durable-dogfood';
 
 const dockerInspect = [
   {
@@ -22,7 +22,7 @@ const dockerInspect = [
   },
 ];
 
-describe('p0 durable dogfood script helpers', () => {
+describe('delivery durable dogfood script helpers', () => {
   it('parses FORGELOOP_DATABASE_URL from the environment', () => {
     expect(providedDatabaseUrlFromEnv({ FORGELOOP_DATABASE_URL: '  postgresql://user:pass@localhost:5432/forgeloop  ' })).toBe(
       'postgresql://user:pass@localhost:5432/forgeloop',
@@ -139,7 +139,7 @@ describe('p0 durable dogfood script helpers', () => {
 
   it('verifies report text contains durable PASS markers', () => {
     const reportText = `
-# P0 Delivery Loop Verification
+# Delivery Loop Verification
 
 - DB schema push: PASSED
 - Durable public API actor header auth: PASSED

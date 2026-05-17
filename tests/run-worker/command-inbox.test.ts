@@ -3,7 +3,7 @@ import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import type { RunCommand, RunEvent } from '../../packages/domain/src';
 
 import { applyPendingRunCommands, FakeCodexSessionDriver } from '../../packages/run-worker/src';
-import { seedRunningRunWithCommand } from '../helpers/p0-runtime-fixtures';
+import { seedRunningRunWithCommand } from '../helpers/delivery-runtime-fixtures';
 
 const now = '2026-05-08T00:00:00.000Z';
 const lease = { workerId: 'worker-1', leaseToken: 'lease-token-1' };

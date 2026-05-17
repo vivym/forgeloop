@@ -436,7 +436,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
       .send({
         project_id: project.id,
         kind: 'requirement',
-        title: 'Ship P0 control plane API',
+        title: 'Ship delivery control plane API',
         goal: 'Expose the delivery loop commands over REST.',
         success_criteria: ['Spec, plan, package, run, and review commands are available.'],
         priority: 'P0',
@@ -483,7 +483,7 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
       .post(`/plan-revisions/${planRevisionId}/execution-packages`)
       .send({
         repo_id: 'repo-1',
-        objective: 'Implement the P0 API package.',
+        objective: 'Implement the delivery API package.',
         owner_actor_id: actorOwner,
         reviewer_actor_id: actorReviewer,
         qa_owner_actor_id: actorQa,

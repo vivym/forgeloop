@@ -2,7 +2,7 @@
 
 The automation daemon is a standalone HTTP-only sidecar for the ForgeLoop control plane. It reads the internal runtime snapshot, plans eligible automation actions, creates or replays durable `automation_action_runs`, claims one action, and executes it through `/internal/automation/*` HTTP commands.
 
-The control plane remains the only authoritative product-state writer. The daemon must not import `P0Service`, Nest control-plane modules, database schemas, or repository implementations for product writes.
+The control plane remains the only authoritative product-state writer. The daemon must not import delivery command services, Nest control-plane modules, database schemas, or repository implementations for product writes.
 
 ## Runtime Boundary
 

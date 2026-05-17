@@ -23,8 +23,8 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 const requiredChecks = [
   {
     check_id: 'smoke',
-    display_name: 'P0 smoke',
-    command: 'pnpm smoke:p0',
+    display_name: 'Delivery smoke',
+    command: 'pnpm smoke:delivery',
     timeout_seconds: 120,
     blocks_review: true,
   },
@@ -47,7 +47,7 @@ const createApprovedSpecAndPlan = async (
 ): Promise<SmokeContext> => {
   const server = app.getHttpServer();
   const project = (
-    await request(server).post('/projects').send({ name: `P0 smoke ${kind}`, owner_actor_id: actorOwner }).expect(201)
+    await request(server).post('/projects').send({ name: `Delivery smoke ${kind}`, owner_actor_id: actorOwner }).expect(201)
   ).body;
 
   await request(server)
@@ -67,8 +67,8 @@ const createApprovedSpecAndPlan = async (
       .send({
         project_id: project.id,
         kind,
-        title: `P0 ${kind} smoke item`,
-        goal: 'Exercise the approved P0 delivery loop.',
+        title: `Delivery ${kind} smoke item`,
+        goal: 'Exercise the approved delivery loop.',
         success_criteria: ['Spec, plan, package, run, review, and timeline evidence are persisted.'],
         priority: 'P0',
         risk: 'medium',
@@ -95,7 +95,7 @@ const createApprovedSpecAndPlan = async (
   };
 };
 
-const createReadyPackage = async (app: INestApplication, planRevisionId: string, objective = 'Deliver the P0 smoke package.') => {
+const createReadyPackage = async (app: INestApplication, planRevisionId: string, objective = 'Deliver the Delivery smoke package.') => {
   const server = app.getHttpServer();
   const executionPackage = (
     await request(server)
@@ -189,13 +189,13 @@ const approveReviewPacket = async (app: INestApplication, reviewPacketId: string
     .post(`/review-packets/${reviewPacketId}/approve`)
     .set(reviewerHeaders)
     .send({
-      summary: 'Approved for P0 handoff.',
+      summary: 'Approved for delivery handoff.',
       reviewed_by_actor_id: actorReviewer,
       reviewed_at: reviewedAt,
     })
     .expect(201);
 
-describe('P0 smoke delivery loop', () => {
+describe('Delivery smoke delivery loop', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
@@ -265,7 +265,7 @@ describe('P0 smoke delivery loop', () => {
   it('records changes_requested, reruns with a new run session and review packet, then approves the rerun', async () => {
     const server = app.getHttpServer();
     const { workItem, planRevisionId } = await createApprovedSpecAndPlan(app, 'bug');
-    const executionPackage = await createReadyPackage(app, planRevisionId, 'Fix the P0 smoke bug.');
+    const executionPackage = await createReadyPackage(app, planRevisionId, 'Fix the Delivery smoke bug.');
 
     const firstRun = await runPackage(app, executionPackage.id);
     const firstAcceptedRun = await expectAcceptedRunWithVisibleLiveEvent(app, firstRun);
@@ -281,9 +281,9 @@ describe('P0 smoke delivery loop', () => {
           {
             title: 'Add rerun evidence',
             description: 'Show that review feedback is carried into the replacement run.',
-            file_path: 'tests/smoke/p0-smoke.test.ts',
+            file_path: 'tests/smoke/delivery-smoke.test.ts',
             severity: 'major',
-            suggested_validation: 'pnpm smoke:p0',
+            suggested_validation: 'pnpm smoke:delivery',
           },
         ],
       })
@@ -302,7 +302,7 @@ describe('P0 smoke delivery loop', () => {
       requested_changes: [
         expect.objectContaining({
           title: 'Add rerun evidence',
-          file_path: 'tests/smoke/p0-smoke.test.ts',
+          file_path: 'tests/smoke/delivery-smoke.test.ts',
         }),
       ],
     });
@@ -325,7 +325,7 @@ describe('P0 smoke delivery loop', () => {
   it('archives the open review packet when force-rerun creates replacement run evidence before a decision', async () => {
     const server = app.getHttpServer();
     const { planRevisionId } = await createApprovedSpecAndPlan(app, 'tech_debt');
-    const executionPackage = await createReadyPackage(app, planRevisionId, 'Refresh P0 smoke coverage.');
+    const executionPackage = await createReadyPackage(app, planRevisionId, 'Refresh Delivery smoke coverage.');
 
     const firstRun = await runPackage(app, executionPackage.id);
     const firstAcceptedRun = await expectAcceptedRunWithVisibleLiveEvent(app, firstRun);

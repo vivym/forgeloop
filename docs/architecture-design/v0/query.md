@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 好，继续。下面我把两块直接补上：
 
 1. **`release-cockpit-queries.ts`**

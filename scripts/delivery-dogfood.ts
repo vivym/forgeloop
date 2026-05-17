@@ -83,7 +83,7 @@ type DogfoodRequest = {
 
 const actorHeaderName = 'X-Forgeloop-Actor-Id';
 
-const reportPath = resolve(process.env.FORGELOOP_REPORT_PATH ?? 'docs/superpowers/reports/p0-delivery-loop-verification.md');
+const reportPath = resolve(process.env.FORGELOOP_REPORT_PATH ?? 'docs/superpowers/reports/delivery-loop-verification.md');
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
@@ -95,7 +95,7 @@ const webUrlCandidates = (process.env.FORGELOOP_WEB_URL ?? 'http://localhost:517
   .map((value) => value.trim().replace(/\/$/, ''))
   .filter((value) => value.length > 0);
 
-const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:p0', 'pnpm dogfood:p0'];
+const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:delivery', 'pnpm dogfood:delivery'];
 const terminalRunStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
 
 const noopRunWorker = {
@@ -549,7 +549,7 @@ const dogfoodEvidence = async (input: Parameters<ConstructorParameters<typeof Ru
   changed_files: [
     {
       repo_id: input.runSpec.repo.repo_id,
-      path: 'docs/superpowers/reports/p0-dogfood-generated.md',
+      path: 'docs/superpowers/reports/delivery-dogfood-generated.md',
       change_kind: 'modified',
     },
   ],
@@ -638,7 +638,7 @@ const terminalSucceeded = (summary: string): FakeCodexScriptItem => ({
 const createProjectAndRepo = async (apiUrl: string): Promise<string> => {
   const project = await requestJson(apiUrl, '/projects', {
     method: 'POST',
-    body: { name: 'Forgeloop P0 dogfood', owner_actor_id: actorOwner },
+    body: { name: 'Forgeloop Delivery dogfood', owner_actor_id: actorOwner },
   });
   const projectId = stringField(project, 'id');
   await requestJson(apiUrl, `/projects/${encodeURIComponent(projectId)}/repos`, {
@@ -713,7 +713,7 @@ const createReadyPackage = async (apiUrl: string, planRevisionId: string, label:
         {
           check_id: 'dogfood-required',
           display_name: 'Dogfood required check',
-          command: 'pnpm dogfood:p0',
+          command: 'pnpm dogfood:delivery',
           timeout_seconds: 600,
           blocks_review: true,
         },
@@ -1057,7 +1057,7 @@ const durableRecordsFor = (prefix: string): {
   const runSessionId = `${prefix}-run-session`;
   const project: Project = {
     id: `${prefix}-project`,
-    name: `Forgeloop P0 durable dogfood ${prefix}`,
+    name: `Forgeloop delivery durable dogfood ${prefix}`,
     repo_ids: [`${prefix}-repo`],
     owner_actor_id: actorOwner,
     created_at: now,
@@ -1145,7 +1145,7 @@ const durableRecordsFor = (prefix: string): {
     implementation_summary: 'Use Drizzle/Postgres repository instances over the same database.',
     split_strategy: 'Single durable recovery check.',
     dependency_order: [`${prefix}-execution-package`],
-    test_matrix: ['pnpm dogfood:p0'],
+    test_matrix: ['pnpm dogfood:delivery'],
     risk_mitigations: [],
     rollback_notes: 'Remove dogfood records by prefix if needed.',
     artifact_refs: [],
@@ -1169,7 +1169,7 @@ const durableRecordsFor = (prefix: string): {
       {
         check_id: 'dogfood-required',
         display_name: 'Dogfood required check',
-        command: 'pnpm dogfood:p0',
+        command: 'pnpm dogfood:delivery',
         timeout_seconds: 600,
         blocks_review: true,
       },
@@ -1467,7 +1467,7 @@ export const renderReport = (data: {
       : data.checks.map((check) => [`- ${check.label}: ${check.status.toUpperCase()}`, ...check.details.map((detail) => `  - ${detail}`)].join('\n'));
 
   return [
-    '# P0 Delivery Loop Verification',
+    '# Delivery Loop Verification',
     '',
     `Generated: ${new Date().toISOString()}`,
     `Dogfood status: ${data.status}`,
@@ -1480,8 +1480,8 @@ export const renderReport = (data: {
     '',
     '- `pnpm test`: all Vitest suites pass.',
     '- `pnpm build`: all workspace packages and apps compile.',
-    '- `pnpm smoke:p0`: P0 smoke suite passes and observes public run events before waiting for terminal evidence.',
-    '- `pnpm dogfood:p0`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.',
+    '- `pnpm smoke:delivery`: Delivery smoke suite passes and observes public run events before waiting for terminal evidence.',
+    '- `pnpm dogfood:delivery`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.',
     '',
     '## Dogfood Preconditions',
     '',

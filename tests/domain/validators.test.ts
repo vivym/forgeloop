@@ -107,7 +107,7 @@ const workItem: WorkItem = {
   kind: 'requirement',
   title: 'Domain rules',
   goal: 'Enforce domain state rules.',
-  success_criteria: ['Completion and review validators reflect the P0 domain spec.'],
+  success_criteria: ['Completion and review validators reflect the delivery domain spec.'],
   priority: 'P0',
   risk: 'medium',
   owner_actor_id: 'actor-owner',
@@ -175,7 +175,7 @@ const approvedReviewPacket = (overrides: Partial<ReviewPacket> = {}): ReviewPack
   check_result_summary: 'pnpm test tests/domain passed.',
   self_review: {
     status: 'succeeded',
-    summary: 'Changes match the P0 domain spec.',
+    summary: 'Changes match the delivery domain spec.',
     spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
     test_assessment: 'Domain transition tests cover the new review packet context.',
     risk_notes: [],
@@ -208,7 +208,7 @@ const openReviewPacket = (overrides: Partial<ReviewPacket> = {}): ReviewPacket =
   check_result_summary: 'pnpm test tests/domain passed.',
   self_review: {
     status: 'succeeded',
-    summary: 'Changes match the P0 domain spec.',
+    summary: 'Changes match the delivery domain spec.',
     spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
     test_assessment: 'Domain transition tests cover the new review packet context.',
     risk_notes: [],

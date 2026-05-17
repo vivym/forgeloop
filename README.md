@@ -1,6 +1,6 @@
 # ForgeLoop
 
-ForgeLoop is a P0 delivery-loop control plane for taking a Work Item through approved spec, approved plan, execution package, run evidence, AI self-review, review packet, and human review handoff.
+ForgeLoop is a delivery-loop control plane for taking a Work Item through approved spec, approved plan, execution package, run evidence, AI self-review, review packet, and human review handoff.
 
 ## Install
 
@@ -23,7 +23,7 @@ Default endpoints:
 - Redis: `redis://localhost:6379`
 - Temporal: `localhost:7233`
 
-The current P0 control-plane API test path uses an in-memory repository. Local infra is still useful when running worker and executor processes together.
+The current delivery control-plane API test path uses an in-memory repository. Local infra is still useful when running worker and executor processes together.
 
 ## Local Services
 
@@ -54,10 +54,10 @@ When `FORGELOOP_DATABASE_URL` is unset, the control-plane API runs in in-memory 
 ```bash
 pnpm test
 pnpm build
-pnpm smoke:p0
+pnpm smoke:delivery
 ```
 
-`pnpm smoke:p0` runs `tests/smoke/p0-smoke.test.ts`. It covers:
+`pnpm smoke:delivery` runs `tests/smoke/delivery-smoke.test.ts`. It covers:
 
 - Work Item -> Spec approval -> Plan approval -> Package run -> Review approval.
 - Work Item -> Spec approval -> Plan approval -> Package run -> changes_requested -> rerun -> new RunSession -> new ReviewPacket -> approve.
@@ -65,13 +65,13 @@ pnpm smoke:p0
 
 ## Dogfood
 
-Run the deterministic P0 dogfood flow with:
+Run the deterministic Delivery dogfood flow with:
 
 ```bash
-pnpm dogfood:p0
+pnpm dogfood:delivery
 ```
 
-`pnpm dogfood:p0` starts an in-process `volatile_demo` API, creates approved spec/plan/package fixtures, runs fake-driver packages through the async run API, and prints event progress before terminal completion. It verifies:
+`pnpm dogfood:delivery` starts an in-process `volatile_demo` API, creates approved spec/plan/package fixtures, runs fake-driver packages through the async run API, and prints event progress before terminal completion. It verifies:
 
 - `POST /execution-packages/:packageId/run` returns `status: accepted` with a `run_session_id` and no synchronous `workflow_result`.
 - `/run-sessions/:id/events` backfills `run_queued` and live driver events.
@@ -84,33 +84,33 @@ pnpm dogfood:p0
 Real `local_codex` acceptance is separate from the deterministic fake-driver dogfood pass. It is opt-in and disabled by default:
 
 ```bash
-pnpm dogfood:p0:local-codex
-FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 pnpm dogfood:p0:local-codex
+pnpm dogfood:delivery:local-codex
+FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 pnpm dogfood:delivery:local-codex
 ```
 
-`pnpm dogfood:p0:local-codex` exits with a documented skipped status unless `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` is set. When enabled, it requires the local `codex` command and authenticated runtime, refuses a dirty source checkout, creates a bounded `executor_type: local_codex` package, attempts the `codex app-server` path before `codex exec --json --dangerously-bypass-approvals-and-sandbox` fallback, verifies public live events before terminal status, and checks terminal changed files, checks, artifacts, and Review Packet evidence. During Task 5 development only, `FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY=1` permits dirty files if and only if the dirty list is limited to the expected Task 5 files recorded by the script report.
+`pnpm dogfood:delivery:local-codex` exits with a documented skipped status unless `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` is set. When enabled, it requires the local `codex` command and authenticated runtime, refuses a dirty source checkout, creates a bounded `executor_type: local_codex` package, attempts the `codex app-server` path before `codex exec --json --dangerously-bypass-approvals-and-sandbox` fallback, verifies public live events before terminal status, and checks terminal changed files, checks, artifacts, and Review Packet evidence. During Task 5 development only, `FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY=1` permits dirty files if and only if the dirty list is limited to the expected Task 5 files recorded by the script report.
 
-The dogfood script writes `docs/superpowers/reports/p0-delivery-loop-verification.md` with preflight notes, expected outcomes, and the last dogfood result summary.
+The dogfood script writes `docs/superpowers/reports/delivery-loop-verification.md` with preflight notes, expected outcomes, and the last dogfood result summary.
 
 Run the durable one-command dogfood flow with:
 
 ```bash
-pnpm dogfood:p0:durable
+pnpm dogfood:delivery:durable
 ```
 
-`pnpm dogfood:p0:durable` uses `FORGELOOP_DATABASE_URL` when provided and never drops that database. Without it, the script looks for a running Docker Postgres container with a published 5432 port, creates a temporary `forgeloop_dogfood_<timestamp>` database, runs schema push and `pnpm dogfood:p0`, verifies durable PASS markers in the generated report, then drops only the temporary database it created. Set `FORGELOOP_DOGFOOD_START_POSTGRES=1` to allow the script to start and remove a disposable Postgres container when no candidate exists.
+`pnpm dogfood:delivery:durable` uses `FORGELOOP_DATABASE_URL` when provided and never drops that database. Without it, the script looks for a running Docker Postgres container with a published 5432 port, creates a temporary `forgeloop_dogfood_<timestamp>` database, runs schema push and `pnpm dogfood:delivery`, verifies durable PASS markers in the generated report, then drops only the temporary database it created. Set `FORGELOOP_DOGFOOD_START_POSTGRES=1` to allow the script to start and remove a disposable Postgres container when no candidate exists.
 
-Run the three P0 dogfood Work Items from `docs/dogfood/p0-dogfood-work-items.md` with:
+Run the three Delivery dogfood Work Items from `docs/dogfood/delivery-dogfood-work-items.md` with:
 
 ```bash
-pnpm dogfood:p0:work-items
+pnpm dogfood:delivery:work-items
 ```
 
-The script creates feature, bugfix, and test/refactor Work Items, approves their Spec and Plan records, runs Execution Packages, records Review Packets, and exercises `changes_requested -> rerun -> approve` for the browser Run Console item. It writes `docs/superpowers/reports/p0-dogfood-work-items-completion.md`.
+The script creates feature, bugfix, and test/refactor Work Items, approves their Spec and Plan records, runs Execution Packages, records Review Packets, and exercises `changes_requested -> rerun -> approve` for the browser Run Console item. It writes `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`.
 
 ## API
 
-Core P0 endpoints include:
+Core delivery endpoints include:
 
 - `POST /projects`
 - `POST /projects/:projectId/repos`
@@ -147,7 +147,7 @@ Run the web app with:
 pnpm dev:web
 ```
 
-The web workbench targets the control-plane API and exposes the P0 objects, package run controls, review decisions, cockpit, and evidence views.
+The web workbench targets the control-plane API and exposes the delivery objects, package run controls, review decisions, cockpit, and evidence views.
 
 To start a local workflow-only run in the web app:
 
@@ -157,8 +157,8 @@ To start a local workflow-only run in the web app:
 4. Select the created run from the `Run` dropdown. The `Run Console` appears in the same `Run/Review` panel and backfills prior events before the SSE stream appends new ones.
 5. Use the Run Console input, cancel, and resume controls to create accepted run commands and visible run events.
 
-## P0 Boundaries
+## Delivery Boundaries
 
-P0 stops at persisted evidence and review-approved handoff. It does not push branches, open pull requests, merge changes, deploy, release, or promote to production. Those actions belong to later workflow stages outside the P0 boundary.
+Delivery stops at persisted evidence and review-approved handoff. It does not push branches, open pull requests, merge changes, deploy, release, or promote to production. Those actions belong to later workflow stages outside the delivery boundary.
 
 Non-mock local Codex runs use `.worktrees/<run-session-id>` below the configured source repo as their Git and evidence boundary. That worktree boundary protects the source checkout from normal run mutations and makes evidence collection explicit, but it is not a security sandbox. Treat permissions, dangerous/yolo mode, and host filesystem access as operator-controlled preflight concerns.

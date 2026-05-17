@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, Patch, Post } from '@nestjs/common';
 
 import { actorContextFromHeaders } from '../auth/actor-context';
 import {
@@ -14,7 +14,7 @@ import { ExecutionPackageService } from './execution-package.service';
 
 @Controller()
 export class ExecutionPackagesController {
-  constructor(private readonly service: ExecutionPackageService) {}
+  constructor(@Inject(ExecutionPackageService) private readonly service: ExecutionPackageService) {}
 
   @Post('plan-revisions/:planRevisionId/generate-packages')
   generatePackages(@Param('planRevisionId') planRevisionId: string) {

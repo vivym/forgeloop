@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 下面是一版**最终实体设计方案**。
 它把我们前面讨论的几个关键结论都固化了：
 

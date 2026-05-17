@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, Post, Query } from '@nestjs/common';
 
 import { actorContextFromHeaders } from '../auth/actor-context';
 import {
@@ -16,7 +16,7 @@ import { AutomationCommandService } from './automation-command.service';
 
 @Controller('automation')
 export class AutomationSettingsController {
-  constructor(private readonly automationCommandService: AutomationCommandService) {}
+  constructor(@Inject(AutomationCommandService) private readonly automationCommandService: AutomationCommandService) {}
 
   @Get('projects/:projectId/capabilities')
   getAutomationCapabilities(@Param('projectId') projectId: string, @Query('repo_id') repoId?: string) {

@@ -35,7 +35,7 @@ import {
   type SpecRevision,
   type WorkItem,
 } from '../../packages/domain/src/index';
-import { seedReadyExecutionPackageThroughApi, succeededSelfReview } from '../helpers/p0-runtime-fixtures';
+import { seedReadyExecutionPackageThroughApi, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -629,7 +629,7 @@ describe('automation command boundaries', () => {
       reason: 'old public automation route removal regression',
       evidence_refs: [],
       requested_by: 'test-reviewer',
-      idempotency_key: 'old-public-p0-manual-path-hold',
+      idempotency_key: 'old-public-delivery-manual-path-hold',
     };
 
     await request(app.getHttpServer()).get(`/p0/projects/${project.id}/automation/capabilities`).expect(404);
@@ -646,7 +646,7 @@ describe('automation command boundaries', () => {
         resolution: 'resolved',
         reason: 'old public automation resolve route removal regression',
         evidence_refs: [],
-        idempotency_key: 'old-public-p0-manual-path-hold-resolve',
+        idempotency_key: 'old-public-delivery-manual-path-hold-resolve',
       })
       .expect(404);
   });

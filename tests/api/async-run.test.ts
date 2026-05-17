@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_DEMO_ACTOR_ID_FALLBACK, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
-import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
 
 describe('async run API', () => {
   let app: INestApplication;

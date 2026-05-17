@@ -77,9 +77,9 @@ const workItem: WorkItem = {
   id: 'work-item-1',
   project_id: project.id,
   kind: 'requirement',
-  title: 'Ship P0 db boundary',
-  goal: 'Persist the P0 delivery loop state.',
-  success_criteria: ['Required P0 records can be saved and queried.'],
+  title: 'Ship delivery db boundary',
+  goal: 'Persist the delivery loop state.',
+  success_criteria: ['Required delivery records can be saved and queried.'],
   priority: 'P0',
   risk: 'medium',
   owner_actor_id: 'actor-owner',
@@ -114,9 +114,9 @@ const specRevision: SpecRevision = {
   summary: 'Approved spec',
   content: 'Spec body',
   background: 'Background',
-  goals: ['Persist P0 state'],
+  goals: ['Persist delivery state'],
   scope_in: ['DB package'],
-  scope_out: ['Non-P0 workflows'],
+  scope_out: ['Non-delivery workflows'],
   acceptance_criteria: ['Repository can replay minimal flow'],
   risk_notes: ['Adapter is not integration-tested against Postgres yet'],
   test_strategy_summary: 'Vitest repository tests',
@@ -165,7 +165,7 @@ const executionPackage: ExecutionPackage = {
   plan_revision_id: planRevision.id,
   project_id: project.id,
   repo_id: projectRepo.repo_id,
-  objective: 'Add the P0 db boundary.',
+  objective: 'Add the delivery db boundary.',
   owner_actor_id: 'actor-owner',
   reviewer_actor_id: 'actor-reviewer',
   qa_owner_actor_id: 'actor-qa',
@@ -294,7 +294,7 @@ const reviewPacket: ReviewPacket = {
     status: 'succeeded',
     summary: 'The db boundary matches the approved plan.',
     spec_plan_alignment: 'Aligned.',
-    test_assessment: 'DB repository tests cover the P0 flow.',
+    test_assessment: 'DB repository tests cover the delivery flow.',
     risk_notes: ['Postgres integration remains future work.'],
     follow_up_questions: [],
   },
@@ -569,7 +569,7 @@ describe('DeliveryRepository in-memory adapter', () => {
     await runDeliveryRepositoryContract(new InMemoryDeliveryRepository());
   });
 
-  it('persists and queries a minimal P0 delivery flow', async () => {
+  it('persists and queries a minimal delivery flow', async () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
     await repository.saveProject(project);

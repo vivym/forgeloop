@@ -18,7 +18,7 @@ import {
   seedRunningRunWithCommand,
   succeededExecutorResult,
   succeededSelfReview,
-} from '../helpers/p0-runtime-fixtures';
+} from '../helpers/delivery-runtime-fixtures';
 
 const execFile = promisify(execFileCallback);
 const tempRoots: string[] = [];

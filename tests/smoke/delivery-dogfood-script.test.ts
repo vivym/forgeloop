@@ -10,9 +10,9 @@ import {
   publicApiAuthChecks,
   renderReport,
   requestRunEventStreamToken,
-} from '../../scripts/p0-dogfood';
+} from '../../scripts/delivery-dogfood';
 
-describe('p0 dogfood script helpers', () => {
+describe('delivery dogfood script helpers', () => {
   it('sends durable public run API actor identity as X-Forgeloop-Actor-Id headers', () => {
     expect(buildRunPackageRequest('package-1', { mode: 'durable', actorId: 'actor-owner' })).toMatchObject({
       path: '/execution-packages/package-1/run',

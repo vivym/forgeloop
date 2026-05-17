@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 可以。我给你一个**长期可演进**、同时又适合现在开工的版本。
 
 ## 先给结论

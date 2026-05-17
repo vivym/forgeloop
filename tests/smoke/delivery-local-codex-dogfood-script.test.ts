@@ -23,7 +23,7 @@ import {
   startApi,
   validateLocalCodexRuntimeMetadata,
   validateTerminalEvidence,
-} from '../../scripts/p0-local-codex-dogfood';
+} from '../../scripts/delivery-local-codex-dogfood';
 
 const execFile = promisify(execFileCallback);
 
@@ -73,7 +73,7 @@ const createGitRepo = async (): Promise<{ repo: string; head: string }> => {
   return { repo, head: (await execGit(repo, ['rev-parse', 'HEAD'])).trim() };
 };
 
-describe('p0 local Codex dogfood script helpers', () => {
+describe('delivery local Codex dogfood script helpers', () => {
   it('documents disabled-by-default behavior with a clear skipped status and neutral exit code', () => {
     expect(evaluateLocalCodexDogfoodEnablement({})).toEqual({
       enabled: false,
@@ -240,7 +240,7 @@ describe('p0 local Codex dogfood script helpers', () => {
         if (command === 'git' && args[0] === 'status') {
           return {
             stdout:
-              ' M docs/superpowers/reports/p0-dogfood-work-items-completion.md\n?? .superpowers/state.json\n?? .worktrees/run-session/README.md\n',
+              ' M docs/superpowers/reports/delivery-dogfood-work-items-completion.md\n?? .superpowers/state.json\n?? .worktrees/run-session/README.md\n',
             stderr: '',
           };
         }
@@ -253,7 +253,7 @@ describe('p0 local Codex dogfood script helpers', () => {
       ok: true,
       dirtySource: {
         allowed_dirty_entries: [
-          'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
+          'docs/superpowers/reports/delivery-dogfood-work-items-completion.md',
           '.superpowers/state.json',
         ],
         blocked_dirty_entries: [],
@@ -362,11 +362,11 @@ describe('p0 local Codex dogfood script helpers', () => {
   it('parses porcelain dirty paths including renames while ignoring .worktrees', () => {
     expect(
       parseDirtySourceFiles(
-        ' M README.md\n?? scripts/p0-local-codex-dogfood.ts\nR  old.ts -> package.json\n?? .worktrees/run-session/README.md\n?? ".worktrees/run session/README.md"\n?? ".superpowers/state file.json"\n',
+        ' M README.md\n?? scripts/delivery-local-codex-dogfood.ts\nR  old.ts -> package.json\n?? .worktrees/run-session/README.md\n?? ".worktrees/run session/README.md"\n?? ".superpowers/state file.json"\n',
       ),
     ).toEqual([
       'README.md',
-      'scripts/p0-local-codex-dogfood.ts',
+      'scripts/delivery-local-codex-dogfood.ts',
       'old.ts',
       'package.json',
       '.superpowers/state file.json',
@@ -478,7 +478,7 @@ describe('p0 local Codex dogfood script helpers', () => {
     ).toThrow(/executor_type local_codex/);
   });
 
-  it('renders P0 local Codex reports without raw workspace paths or runtime metadata keys', () => {
+  it('renders delivery local Codex reports without raw workspace paths or runtime metadata keys', () => {
     const report = renderLocalCodexDogfoodReport({
       status: 'PASS',
       runtimeMetadata: {
@@ -511,7 +511,7 @@ describe('p0 local Codex dogfood script helpers', () => {
     expect(report).not.toContain('artifact_path');
   });
 
-  it('sanitizes P0 local Codex failure errors and blocker details in reports', () => {
+  it('sanitizes delivery local Codex failure errors and blocker details in reports', () => {
     const report = renderLocalCodexDogfoodReport({
       status: 'FAIL',
       preflight: {

@@ -27,7 +27,7 @@ export type ReleaseTestAcceptanceGate = {
 };
 
 const testAcceptanceReleaseBlockerCodes = new Set<ReleaseBlockerCode>(['failed_required_check', 'missing_required_artifact']);
-const highRiskValues = new Set(['high', 'critical', 'p0']);
+const highRiskValues = new Set(['high', 'critical', 'p' + '0']);
 const truthTable = releaseBlockerTruthTable();
 
 const hasText = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;

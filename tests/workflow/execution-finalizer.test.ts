@@ -7,7 +7,7 @@ import {
   seedReadyStartedPackageRun,
   succeededExecutorResult,
   succeededSelfReview,
-} from '../helpers/p0-runtime-fixtures';
+} from '../helpers/delivery-runtime-fixtures';
 
 class LeasingRepository extends InMemoryDeliveryRepository {
   calls = 0;
@@ -251,7 +251,7 @@ describe('execution finalizer', () => {
       ]);
       expect(await repo.listTraceEventsForSubject('run_session', context.runSession.id)).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(
-        '[forgeloop:p0.trace] best-effort trace write failed',
+        '[forgeloop:delivery.trace] best-effort trace write failed',
         expect.objectContaining({ source: 'workflow-finalizer', error: 'trace store unavailable' }),
       );
     } finally {
@@ -292,7 +292,7 @@ describe('execution finalizer', () => {
       expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(1);
       expect(await repo.listArtifactsForObject('run_session', context.runSession.id)).toHaveLength(result.artifacts.length);
       expect(warnSpy).toHaveBeenCalledWith(
-        '[forgeloop:p0.trace] best-effort trace write failed',
+        '[forgeloop:delivery.trace] best-effort trace write failed',
         expect.objectContaining({ source: 'workflow-finalizer', error: 'trace store unavailable' }),
       );
     } finally {

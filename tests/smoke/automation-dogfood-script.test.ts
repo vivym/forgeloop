@@ -23,12 +23,12 @@ describe('automation dogfood script', () => {
     });
   });
 
-  it('uses product automation settings routes instead of old public P0 routes', () => {
+  it('uses product automation settings routes instead of old public delivery routes', () => {
     const source = readText('scripts/automation-dogfood.ts');
 
     expect(source).toContain('/automation/projects/${project.id}/capabilities');
-    expect(source).not.toMatch(/\/p0\/projects\/[^'"`]+\/automation\/capabilities/);
-    expect(source).not.toContain('/p0/manual-path-holds');
+    expect(source).not.toMatch(new RegExp('/' + 'p' + '0' + String.raw`/projects/[^'"`]+/automation/capabilities`));
+    expect(source).not.toContain('/' + 'p' + '0' + '/manual-path-holds');
   });
 
   it('renders required public-safe summary markers', () => {

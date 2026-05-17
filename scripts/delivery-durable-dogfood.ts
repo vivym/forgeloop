@@ -124,18 +124,18 @@ const main = async (): Promise<number> => {
     prepareSafeDatabaseTarget(plan);
     await createDatabase(plan);
     tmpDir = await mkdtemp(join(tmpdir(), 'forgeloop-durable-dogfood-'));
-    const reportPath = join(tmpDir, 'p0-delivery-loop-verification.md');
+    const reportPath = join(tmpDir, 'delivery-loop-verification.md');
 
     await pushSchema({ databaseUrl: plan.databaseUrl, runCommand });
     await resetDatabase(plan.databaseUrl);
-    await runCommand('pnpm', ['dogfood:p0'], {
+    await runCommand('pnpm', ['dogfood:delivery'], {
       env: { FORGELOOP_DATABASE_URL: plan.databaseUrl, FORGELOOP_REPORT_PATH: reportPath },
       timeoutMs: 120_000,
     });
 
     const report = await readFile(reportPath, 'utf8');
     assertDurableReportPassed(parseDurableDogfoodReport(report));
-    console.log(`Durable P0 dogfood passed using ${plan.kind} database ${plan.databaseName}. Report: ${reportPath}`);
+    console.log(`Durable Delivery dogfood passed using ${plan.kind} database ${plan.databaseName}. Report: ${reportPath}`);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

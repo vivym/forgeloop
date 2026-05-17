@@ -39,7 +39,7 @@ Build a pure HTTP automation sidecar with draft-only behavior:
 - The MVP can generate plan drafts and execution package drafts, request manual path holds, and project runtime state.
 - The MVP must not enqueue runs.
 - `WORKFLOW.md` is read only for safe path validation, parsing status, and digest projection. It does not change checks, paths, hooks, resource limits, or execution behavior in this iteration.
-- `P0Service` is treated as a legacy delivery-loop aggregate. This work extracts the automation command boundary into a new automation module but does not perform a full service decomposition.
+- `AutomationCommandService` owns daemon-origin command boundaries while delivery command behavior is composed through delivery/product modules.
 
 ## Goals
 
@@ -53,13 +53,13 @@ Build a pure HTTP automation sidecar with draft-only behavior:
 - Provide a runtime snapshot that explains why the daemon acted, skipped, retried, or blocked.
 - Start a repo-owned runtime policy channel by reading `WORKFLOW.md` safely and projecting digest/status.
 - Keep `run_enqueue` disabled and visibly blocked for this scope.
-- Reduce new dependency on `P0Service` by extracting automation command logic behind `AutomationCommandService`.
+- Keep the daemon independent from delivery command services by exposing automation command logic through `AutomationCommandService` and signed HTTP routes.
 
 ## Non-Goals
 
 - No automatic `run_enqueue`.
 - No tracker adapters for Linear, GitHub Issues, Jira, or monitoring systems.
-- No full `P0Service` rewrite.
+- No additional delivery service decomposition beyond the daemon boundary.
 - No executor hook runner, resource governor, structured command runner, or behavior-changing runtime policy.
 - No UI redesign. The MVP may expose internal runtime snapshot APIs and smoke scripts, but not a full operator dashboard.
 - No public exposure of daemon internals, raw command output, local paths, raw runtime metadata, or raw action-run payloads.
@@ -68,7 +68,7 @@ Build a pure HTTP automation sidecar with draft-only behavior:
 
 ### Process Boundary
 
-`apps/automation-daemon` is a standalone process. It must not import `P0Service`, Nest control-plane modules, repository implementations, or DB schema modules for product writes.
+`apps/automation-daemon` is a standalone process. It must not import delivery command services, Nest control-plane modules, repository implementations, or DB schema modules for product writes.
 
 The daemon depends on:
 
@@ -89,15 +89,15 @@ Add a shared control-plane provider module before adding the automation module:
 - `apps/control-plane-api/src/modules/core/control-plane-core.module.ts`
 - `apps/control-plane-api/src/modules/core/control-plane-tokens.ts`
 
-The core module owns the existing repository/durability providers that are currently created inside `P0Module`:
+The core module owns the shared repository/durability providers:
 
-- `P0_REPOSITORY`
+- `DELIVERY_REPOSITORY`
 - `RUN_DURABILITY_MODE`
-- `P0_DEMO_ACTOR_ID_FALLBACK`
+- `DELIVERY_DEMO_ACTOR_ID_FALLBACK`
 
-`P0Module` and the new `AutomationModule` both import this core module. Neither module re-provides the repository. `P0Module` continues to own `RUN_WORKER`, because run execution remains outside the daemon MVP. This avoids a Nest provider cycle and avoids split in-memory state in local/tests.
+Delivery/product modules and `AutomationModule` import the core providers directly. Neither module re-provides the repository. Run execution is exposed through `RunControlModule` and `DELIVERY_RUN_WORKER`, because run execution remains outside the daemon MVP. This avoids a Nest provider cycle and avoids split in-memory state in local/tests.
 
-The shared provider tokens move out of `p0.service.ts` into the core token file so the core module does not import `P0Service`. `P0Service`, `P0Module`, and `AutomationModule` import the tokens from the core file.
+The shared provider tokens live in the core token file so the core module does not import delivery command services. Delivery/product modules and `AutomationModule` import the tokens from the core file.
 
 Add `apps/control-plane-api/src/modules/automation/`:
 
@@ -108,13 +108,13 @@ Add `apps/control-plane-api/src/modules/automation/`:
 - `trusted-automation-actor.guard.ts`
 - `automation.dto.ts`
 
-The automation module owns new internal HTTP routes and command-boundary orchestration. Existing `/p0/...` automation routes may remain for compatibility, but they delegate to the new service and are not used by the daemon. The dependency direction is:
+The automation module owns internal HTTP routes and command-boundary orchestration. Public automation settings routes live under `/automation/...`; old public automation route prefixes are not compatibility surfaces. The dependency direction is:
 
-- `AutomationModule` imports only the core provider module and shared DTO/domain packages.
-- `P0Module` imports the core provider module and, where legacy routes need compatibility delegation, `AutomationModule`.
-- `AutomationModule` must not import `P0Module` or `P0Service`.
+- `AutomationModule` imports the core provider module, `RunControlModule`, and shared DTO/domain packages.
+- Delivery/product modules import the core provider module directly.
+- `AutomationModule` must not import delivery command controllers or services only to access shared state.
 
-The module extracts these automation command responsibilities from `P0Service`:
+The module owns these automation command responsibilities:
 
 - `setAutomationCapabilities`
 - `disableAutomation`
@@ -215,7 +215,7 @@ v1
 
 `X-Forgeloop-Actor-Signature` is `v1=<lowercase hex HMAC-SHA256>`. Timestamps must be UTC ISO-8601 strings within a five-minute skew window. This MVP does not add a nonce replay table; replay safety inside the timestamp window comes from command idempotency keys, action-run idempotency keys, and claim tokens on all non-read effects.
 
-The internal automation guard is separate from the existing trusted actor helper used by `/p0/...` routes. Slice 1 must add:
+The internal automation guard is separate from trusted actor handling used by public delivery routes. Slice 1 must add:
 
 - raw-body capture in the Nest HTTP bootstrap and API test setup;
 - a guard that recomputes the body SHA from captured raw bytes and rejects any mismatch with `X-Forgeloop-Actor-Body-SHA256`;
@@ -223,7 +223,7 @@ The internal automation guard is separate from the existing trusted actor helper
 - canonical URL signing from `req.originalUrl` or an equivalent framework value that includes the exact path and query received by the control plane;
 - shared client/test signing helpers used by `packages/automation` and API tests.
 
-Existing `/p0/...` trusted actor signing can remain compatible while internal automation routes require the stronger v1 contract in every environment.
+Public delivery trusted actor signing can remain scoped to public command routes while internal automation routes require the stronger v1 contract in every environment.
 
 ### Runtime Snapshot
 
@@ -673,7 +673,7 @@ Add API tests for:
 - signed daemon actor can call snapshot/action endpoints;
 - draft command endpoints reject missing, expired, or wrong claim tokens;
 - draft command endpoints reject an action run whose action type, target, idempotency key, automation settings version, capability fingerprint, precondition fingerprint, or `action_input_json` does not match the command body;
-- legacy `/p0/...` automation routes still pass existing tests;
+- old public automation routes return 404 while `/automation/...` routes remain the public settings boundary;
 - extracted `AutomationCommandService` preserves existing command behavior.
 
 Focused commands:
@@ -762,13 +762,13 @@ The dogfood script must explicitly assert that no run session was enqueued by th
 ### Slice 1: Automation Module Extraction
 
 - Create `apps/control-plane-api/src/modules/core/control-plane-core.module.ts`.
-- Move shared provider tokens out of `p0.service.ts` into the core module area.
-- Move repository and durability providers from `P0Module` into the core module.
-- Update existing modules and tests that import repository/durability tokens, including Query and Release modules, to import the new core tokens or a deliberate compatibility re-export.
+- Keep shared provider tokens in the core module area.
+- Keep repository and durability providers in the core module.
+- Update existing modules and tests that import repository/durability tokens, including Query and Release modules, to import the core tokens directly.
 - Create `apps/control-plane-api/src/modules/automation`.
 - Move automation command boundary into `AutomationCommandService`.
 - Add signed daemon guard, raw-body capture, and shared signing test helpers.
-- Keep existing `/p0/...` compatibility routes.
+- Keep public automation settings routes under `/automation/...` and assert old public automation routes return 404.
 
 ### Slice 2: Automation Package Skeleton and Action Run HTTP Lifecycle
 
@@ -811,5 +811,5 @@ The dogfood script must explicitly assert that no run session was enqueued by th
 - Runtime snapshot explains action eligibility, skip reasons, active holds, and run enqueue disabled state.
 - `WORKFLOW.md` digest is visible and safe, but does not influence execution.
 - No automatic RunSession enqueue occurs.
-- Existing P0 compatibility tests pass.
+- Delivery and automation route tests pass, including negative assertions for removed old public automation routes.
 - Full test/build/diff verification passes.

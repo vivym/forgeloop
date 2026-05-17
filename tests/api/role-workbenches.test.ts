@@ -8,7 +8,7 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
-import { seedReadyExecutionPackageThroughApi, succeededSelfReview } from '../helpers/p0-runtime-fixtures';
+import { seedReadyExecutionPackageThroughApi, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
 
 const now = '2026-05-05T00:00:00.000Z';
 const actorOwner = 'actor-owner';

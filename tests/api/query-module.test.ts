@@ -10,7 +10,7 @@ import { QueryController } from '../../apps/control-plane-api/src/modules/query/
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
-import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };

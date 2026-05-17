@@ -10,11 +10,11 @@ import {
   type StrictDirtySourceSummary,
 } from '../../scripts/dogfood/strict-local-codex';
 
-const p0DirtyAllowlistSource = (
+const deliveryDirtyAllowlistSource = (
   summary: StrictDirtySourceSummary,
 ): typeof STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE => summary.dirty_allowlist_source;
 
-const p0PreflightDirtyAllowlistSource = (
+const deliveryPreflightDirtyAllowlistSource = (
   preflight: PreflightResult,
 ): typeof STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE | undefined =>
   preflight.ok ? preflight.dirtySource.dirty_allowlist_source : preflight.dirtySource?.dirty_allowlist_source;
@@ -27,8 +27,8 @@ describe('shared strict local Codex dogfood helper', () => {
     ]);
   });
 
-  it('keeps default P0 dirty allowlist source literal typing while supporting alternate sources', () => {
-    const p0Summary: StrictDirtySourceSummary = {
+  it('keeps default delivery dirty allowlist source literal typing while supporting alternate sources', () => {
+    const deliverySummary: StrictDirtySourceSummary = {
       allowed_dirty_entries: [],
       blocked_dirty_entries: [],
       dirty_allowlist_source: STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE,
@@ -39,14 +39,14 @@ describe('shared strict local Codex dogfood helper', () => {
       dirty_allowlist_source: 'RELEASE_STRICT_DIRTY_ALLOWLIST',
     };
 
-    expect(p0DirtyAllowlistSource(p0Summary)).toBe(STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE);
+    expect(deliveryDirtyAllowlistSource(deliverySummary)).toBe(STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE);
     expect(
-      p0PreflightDirtyAllowlistSource({
+      deliveryPreflightDirtyAllowlistSource({
         ok: true,
         blockers: [],
         repoPath: '/repo',
         dirtyFiles: [],
-        dirtySource: p0Summary,
+        dirtySource: deliverySummary,
         worktreeProbePath: '/repo/.worktrees/preflight',
       }),
     ).toBe(STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE);

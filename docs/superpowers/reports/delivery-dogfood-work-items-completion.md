@@ -1,4 +1,4 @@
-# P0 Dogfood Work Items Completion
+# Delivery Dogfood Work Items Completion
 
 Generated: 2026-05-09T05:34:22.103Z
 Durability mode: durable
@@ -18,7 +18,7 @@ Strict local_codex acceptance: passed
 
 ### Strict Dirty Source
 
-- allowed_dirty_entries: docs/superpowers/reports/p0-dogfood-work-items-completion.md
+- allowed_dirty_entries: docs/superpowers/reports/delivery-dogfood-work-items-completion.md
 - blocked_dirty_entries: none
 - dirty_allowlist_source: STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST
 
@@ -41,4 +41,4 @@ Strict local_codex acceptance: passed
 ## P1 Decision Summary
 
 - Decision: prioritize Trace / Evidence Plane for P1.
-- Rationale: the P0 dogfood path showed that reviewers need a faster way to reconstruct cause and effect across runs, reruns, artifacts, and review decisions.
+- Rationale: the Delivery dogfood path showed that reviewers need a faster way to reconstruct cause and effect across runs, reruns, artifacts, and review decisions.

@@ -46,7 +46,7 @@ import {
   unlinkReleaseObjectRequestSchema,
 } from '@forgeloop/contracts';
 
-describe('P0 delivery loop contracts', () => {
+describe('delivery loop contracts', () => {
   it('exports normalized review packet decisions', () => {
     expect(reviewPacketDecisions).toEqual([
       'none',
@@ -168,7 +168,7 @@ describe('P0 delivery loop contracts', () => {
       base_branch: 'main',
       base_commit_sha: '748c32b',
     },
-    objective: 'Implement the P0 contracts package.',
+    objective: 'Implement the delivery contracts package.',
     context: {
       spec_revision_summary: 'Thin delivery loop MVP contracts.',
       plan_revision_summary: 'Add Zod schemas and DTO types.',

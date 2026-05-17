@@ -146,7 +146,7 @@ const unsafeSerializedPatterns = [
 ] as const;
 
 export const requiredReleaseFlowReportMarkers = [
-  'P0 delivery path',
+  'Delivery path',
   'Release create/link/submit',
   'Release approval or override approval',
   'Release observing/close',
@@ -671,7 +671,7 @@ export const seedDurableReleaseReadyPackageEvidence = async (
   return { workItem: completedWorkItem, executionPackage: releaseReadyPackage, runSession, reviewPacket };
 };
 
-const createP0DeliveryPath = async (
+const createDeliveryPath = async (
   app: INestApplication,
   repository: InMemoryDeliveryRepository,
 ): Promise<{ projectId: string; workItem: WorkItem; executionPackage: ExecutionPackage }> => {
@@ -1685,9 +1685,9 @@ export const runDurableReleaseLifecycle = async (input: {
     ...(strictLocalCodex === undefined ? {} : { strictLocalCodex }),
     markers: [
       {
-        marker: 'P0 delivery path',
+        marker: 'Delivery path',
         status: 'PASSED',
-        details: ['Created strict durable WorkItem, Spec, Plan, and ExecutionPackage through public P0 APIs.'],
+        details: ['Created strict durable WorkItem, Spec, Plan, and ExecutionPackage through public delivery APIs.'],
       },
       {
         marker: 'Release create/link/submit',
@@ -2025,11 +2025,11 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
 export const runDeterministicReleaseFlowDogfood = async (): Promise<VerificationMarker[]> => {
   const { app, repository } = await createDogfoodApp();
   try {
-    const { projectId, workItem, executionPackage } = await createP0DeliveryPath(app, repository);
+    const { projectId, workItem, executionPackage } = await createDeliveryPath(app, repository);
     const server = app.getHttpServer();
     const markers: VerificationMarker[] = [
       {
-        marker: 'P0 delivery path',
+        marker: 'Delivery path',
         status: 'PASSED',
         details: [`Created Project ${projectId}, WorkItem ${workItem.id}, Spec, Plan, and ExecutionPackage ${executionPackage.id}.`],
       },

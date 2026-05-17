@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 # P0/P1 Closure Report
 
 Generated: 2026-05-09T05:35:24Z

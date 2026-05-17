@@ -17,7 +17,7 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { transitionRunSession } from '../../packages/domain/src/index';
-import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const viewports = [

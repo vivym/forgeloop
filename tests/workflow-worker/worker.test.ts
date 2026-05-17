@@ -3,15 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { createWorkflowWorkerOptions, startWorkflowWorker } from '../../apps/workflow-worker/src/worker';
 
 describe('workflow worker app wiring', () => {
-  it('builds Temporal worker options with the P0 workflow path, task queue, and activities', async () => {
+  it('builds Temporal worker options with the delivery workflow path, task queue, and activities', async () => {
     const activities = { executePackageRunActivity: vi.fn() };
     const options = await createWorkflowWorkerOptions({
       connection: { kind: 'fake-connection' },
       activities,
-      taskQueue: 'p0-test-queue',
+      taskQueue: 'delivery-test-queue',
     });
 
-    expect(options.taskQueue).toBe('p0-test-queue');
+    expect(options.taskQueue).toBe('delivery-test-queue');
     expect(options.connection).toEqual({ kind: 'fake-connection' });
     expect(options.activities).toBe(activities);
     expect(options.workflowsPath).toContain('packages/workflow/src/package-execution-workflow');
@@ -24,7 +24,7 @@ describe('workflow worker app wiring', () => {
     const closeDb = vi.fn().mockResolvedValue(undefined);
 
     await startWorkflowWorker({
-      taskQueue: 'p0-worker-test',
+      taskQueue: 'delivery-worker-test',
       temporalAddress: 'temporal.test:7233',
       connect,
       createWorker: create,
@@ -40,7 +40,7 @@ describe('workflow worker app wiring', () => {
     expect(connect).toHaveBeenCalledWith({ address: 'temporal.test:7233' });
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
-        taskQueue: 'p0-worker-test',
+        taskQueue: 'delivery-worker-test',
         connection: { kind: 'connection' },
         activities: expect.objectContaining({
           executePackageRunActivity: expect.any(Function),
@@ -61,7 +61,7 @@ describe('workflow worker app wiring', () => {
     let thrown: unknown;
     try {
       await startWorkflowWorker({
-        taskQueue: 'p0-worker-test',
+        taskQueue: 'delivery-worker-test',
         temporalAddress: 'temporal.test:7233',
         connect,
         createWorker: create,
@@ -79,7 +79,7 @@ describe('workflow worker app wiring', () => {
 
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain(
-      'Failed to start Forgeloop workflow worker for task queue p0-worker-test: worker run failed',
+      'Failed to start Forgeloop workflow worker for task queue delivery-worker-test: worker run failed',
     );
     expect((thrown as { cleanupErrors?: unknown[] }).cleanupErrors).toHaveLength(2);
     expect(closeDb).toHaveBeenCalledOnce();
@@ -91,14 +91,14 @@ describe('workflow worker app wiring', () => {
 
     await expect(
       startWorkflowWorker({
-        taskQueue: 'p0-worker-test',
+        taskQueue: 'delivery-worker-test',
         temporalAddress: 'temporal.test:7233',
         connect: vi.fn().mockRejectedValue(new Error('connection refused')),
         createWorker: vi.fn(),
         createActivities: () => ({ executePackageRunActivity: vi.fn() }),
         createRuntimeDependencies,
       }),
-    ).rejects.toThrow('Failed to start Forgeloop workflow worker for task queue p0-worker-test: connection refused');
+    ).rejects.toThrow('Failed to start Forgeloop workflow worker for task queue delivery-worker-test: connection refused');
     expect(createRuntimeDependencies).not.toHaveBeenCalled();
   });
 });

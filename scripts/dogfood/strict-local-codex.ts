@@ -80,7 +80,7 @@ type PreflightLocalCodexDogfoodInput<
 
 export const STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST';
 export const STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST = [
-  'docs/superpowers/reports/p0-dogfood-work-items-completion.md',
+  'docs/superpowers/reports/delivery-dogfood-work-items-completion.md',
   '.superpowers/**',
 ] as const;
 export const releaseStrictDirtyAllowlist = [

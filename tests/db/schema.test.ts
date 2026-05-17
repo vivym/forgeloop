@@ -142,7 +142,7 @@ const hasUniqueIndex = (table: ConfiguredTable, indexName: string, columnNames: 
 };
 
 describe('P1 core schema release flow Drizzle schema', () => {
-  it('exports every required P0 table', () => {
+  it('exports every required delivery table', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
         'automation_action_runs',
@@ -327,7 +327,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
     ]);
   });
 
-  it('uses JSONB for representative structured P0 fields', () => {
+  it('uses JSONB for representative structured delivery fields', () => {
     expect(columnType(spec_revisions, 'structuredDocument')).toBe('PgJsonb');
     expect(columnType(spec_revisions, 'artifactRefs')).toBe('PgJsonb');
     expect(columnType(plan_revisions, 'structuredDocument')).toBe('PgJsonb');

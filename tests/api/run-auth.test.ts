@@ -22,7 +22,7 @@ import {
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
-import { seedAppWithRunSession, seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+import { seedAppWithRunSession, seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
 
 const actorHeaderName = 'X-Forgeloop-Actor-Id';
 const actorOwner = 'actor-owner';

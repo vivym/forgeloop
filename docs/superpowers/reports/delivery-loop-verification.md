@@ -1,4 +1,4 @@
-# P0 Delivery Loop Verification
+# Delivery Loop Verification
 
 Generated: 2026-05-09T05:35:24Z
 Deterministic dogfood status: PASS
@@ -9,10 +9,10 @@ Strict local_codex status: PASS
 - `pnpm test`
 - `pnpm build`
 - `pnpm install --frozen-lockfile`
-- `pnpm smoke:p0`
-- `pnpm dogfood:p0`
+- `pnpm smoke:delivery`
+- `pnpm dogfood:delivery`
 - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm db:push`
-- `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:p0:durable`
+- `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:delivery:durable`
 - `pnpm e2e:run-console`
 
 ## Expected Outcomes
@@ -20,16 +20,16 @@ Strict local_codex status: PASS
 - `pnpm test`: all Vitest suites pass.
 - `pnpm build`: all workspace packages and apps compile.
 - `pnpm install --frozen-lockfile`: the CI dependency install path succeeds without lockfile changes.
-- `pnpm smoke:p0`: P0 smoke suite passes and observes public run events before waiting for terminal evidence.
-- `pnpm dogfood:p0`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.
+- `pnpm smoke:delivery`: Delivery smoke suite passes and observes public run events before waiting for terminal evidence.
+- `pnpm dogfood:delivery`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.
 - `pnpm db:push`: Drizzle schema push applies successfully against the local Postgres durable database.
-- `pnpm dogfood:p0:durable`: durable dogfood exits 0 using the provided Postgres database.
+- `pnpm dogfood:delivery:durable`: durable dogfood exits 0 using the provided Postgres database.
 - `pnpm e2e:run-console`: browser Run Console E2E passes at desktop and mobile widths.
 
 ## Dogfood Preconditions
 
 - API URL: http://127.0.0.1:63100
-- Repo path: /Users/viv/projs/forgeloop/.worktrees/p0-dogfood-readiness
+- Repo path: /Users/viv/projs/forgeloop/.worktrees/delivery-dogfood-readiness
 - Repo id: forgeloop
 - Volatile dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.
 - Durable dogfood uses X-Forgeloop-Actor-Id for public run APIs and stream_token for SSE when `FORGELOOP_DATABASE_URL` is set.
@@ -58,10 +58,10 @@ Strict local_codex status: PASS
 - Volatile public API actor fallback: PASSED
   - Volatile demo public APIs were exercised with legacy body/query actor fallback.
 - Durable repository restart recovery: PASSED
-  - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:p0:durable` exited 0 with: "Durable P0 dogfood passed using provided database forgeloop."
+  - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:delivery:durable` exited 0 with: "Durable Delivery dogfood passed using provided database forgeloop."
 - Strict local_codex dogfood: PASSED
-  - Command: `FORGELOOP_DATABASE_URL=... FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1 FORGELOOP_REPO_PATH="$CLOSURE_REPO_PATH" pnpm dogfood:p0:work-items`
-  - Report: `docs/superpowers/reports/p0-dogfood-work-items-completion.md`
+  - Command: `FORGELOOP_DATABASE_URL=... FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1 FORGELOOP_REPO_PATH="$CLOSURE_REPO_PATH" pnpm dogfood:delivery:work-items`
+  - Report: `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`
   - Evidence: command exited 0 on commit `df6776ee62621969cb5c0b65b2295b30c149d001`; report says `Strict local_codex acceptance: passed` with 2 qualifying local_codex Work Items.
   - Review Packets: `review-packet:run-session-b2b234829e93-28` and `review-packet:run-session-b2b234829e93-56` completed with `approved`.
   - Post-run process probe found no dogfood-owned `codex app-server` or `codex exec` children left behind.

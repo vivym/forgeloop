@@ -9,7 +9,7 @@ import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem } from '@forg
 import { describe, expect, it, vi } from 'vitest';
 
 import { InMemoryDeliveryRepository } from '../../packages/db/src';
-import * as dogfoodWorkItemsScript from '../../scripts/p0-dogfood-work-items';
+import * as dogfoodWorkItemsScript from '../../scripts/delivery-dogfood-work-items';
 
 const execFile = promisify(execFileCallback);
 
@@ -139,7 +139,7 @@ const runSession = (input: {
       executor_type: input.executorType ?? 'local_codex',
       workflow_only: input.workflowOnly ?? false,
     },
-    changed_files: [{ path: 'docs/dogfood/p0-dogfood-work-items.md', status: 'modified' }],
+    changed_files: [{ path: 'docs/dogfood/delivery-dogfood-work-items.md', status: 'modified' }],
     check_results: [{ check_id: 'dogfood-work-item', display_name: 'Dogfood', status: 'succeeded', blocks_review: true }],
     artifacts: (input.artifacts ?? requiredArtifactKinds).map((kind) => ({
       kind,
@@ -219,15 +219,15 @@ const strictInput = (...bundles: ReturnType<typeof qualifyingBundle>[]) => ({
   reviewPackets: bundles.map((bundle) => bundle.packet),
 });
 
-describe('p0 dogfood work items script', () => {
+describe('delivery dogfood work items script', () => {
   it(
-    'creates the three P0 dogfood Work Items and writes a completion report',
+    'creates the three Delivery dogfood Work Items and writes a completion report',
     async () => {
       const outputDir = await mkdtemp(join(tmpdir(), 'forgeloop-work-item-dogfood-'));
       const reportPath = join(outputDir, 'report.md');
 
       try {
-        await execFile('pnpm', ['dogfood:p0:work-items'], {
+        await execFile('pnpm', ['dogfood:delivery:work-items'], {
           cwd: process.cwd(),
           env: defaultDogfoodEnv(reportPath),
           maxBuffer: 1024 * 1024 * 10,
@@ -330,7 +330,7 @@ describe('p0 dogfood work items script', () => {
     expect(candidate).toEqual([
       expect.objectContaining({
         check_id: 'dogfood-work-item',
-        command: 'pnpm install --frozen-lockfile && pnpm smoke:p0',
+        command: 'pnpm install --frozen-lockfile && pnpm smoke:delivery',
         timeout_seconds: 300,
         blocks_review: true,
       }),
@@ -348,8 +348,8 @@ describe('p0 dogfood work items script', () => {
 
     expect(strictLocalCodexItems).toHaveLength(2);
     for (const item of strictLocalCodexItems) {
-      expect(item.objective).toContain('docs/dogfood/p0-dogfood-work-items.md');
-      expect(item.objective).toContain('Do not run `pnpm dogfood:p0:work-items`');
+      expect(item.objective).toContain('docs/dogfood/delivery-dogfood-work-items.md');
+      expect(item.objective).toContain('Do not run `pnpm dogfood:delivery:work-items`');
       expect(item.objective).toContain('Do not run `pnpm test`');
       expect(item.objective).toContain('Do not run `pnpm build`');
       expect(item.objective).toContain('ForgeLoop will run the required checks after your turn');
@@ -523,7 +523,7 @@ describe('p0 dogfood work items script', () => {
             code: 'source_dirty_blocked',
             message: 'Source checkout is dirty',
             details: {
-              allowed_dirty_entries: ['docs/superpowers/reports/p0-dogfood-work-items-completion.md'],
+              allowed_dirty_entries: ['docs/superpowers/reports/delivery-dogfood-work-items-completion.md'],
               blocked_dirty_entries: ['README.md'],
               dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
               error: 'secret failure from /Users/viv/projs/forgeloop/.worktrees/run-1',
@@ -531,7 +531,7 @@ describe('p0 dogfood work items script', () => {
           },
         ],
         dirtySource: {
-          allowed_dirty_entries: ['docs/superpowers/reports/p0-dogfood-work-items-completion.md'],
+          allowed_dirty_entries: ['docs/superpowers/reports/delivery-dogfood-work-items-completion.md'],
           blocked_dirty_entries: ['README.md'],
           dirty_allowlist_source: 'STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST',
         },
@@ -555,10 +555,10 @@ describe('p0 dogfood work items script', () => {
   });
 
   it('documents the strict dirty source allowlist and final P1 decision in the runbook', async () => {
-    const runbook = await readFile('docs/dogfood/p0-dogfood-work-items.md', 'utf8');
+    const runbook = await readFile('docs/dogfood/delivery-dogfood-work-items.md', 'utf8');
 
     expect(runbook).toContain('## Strict Dirty Source Allowlist');
-    expect(runbook).toContain('docs/superpowers/reports/p0-dogfood-work-items-completion.md');
+    expect(runbook).toContain('docs/superpowers/reports/delivery-dogfood-work-items-completion.md');
     expect(runbook).toContain('.superpowers/**');
     expect(runbook).toContain('## Final P1 Decision Summary');
     expect(runbook).toContain('Trace / Evidence Plane');

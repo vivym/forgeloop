@@ -1,14 +1,14 @@
-# P0 Dogfood Work Items
+# Delivery Dogfood Work Items
 
-This runbook defines the first three real ForgeLoop P0 dogfood Work Items. The goal is to validate the product loop, not to maximize feature volume.
+This runbook defines the first three real ForgeLoop Delivery dogfood Work Items. The goal is to validate the product loop, not to maximize feature volume.
 
 Run the batch with:
 
 ```bash
-pnpm dogfood:p0:work-items
+pnpm dogfood:delivery:work-items
 ```
 
-The script writes the latest completion evidence to `docs/superpowers/reports/p0-dogfood-work-items-completion.md`.
+The script writes the latest completion evidence to `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`.
 By default the command stays deterministic and runs all three Work Items with `executor_type: mock` and `workflow_only=true`.
 Set `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` to opt in to strict local Codex acceptance.
 
@@ -46,7 +46,7 @@ Approved Review Packets for `mock` or `workflow_only=true` runs do not count tow
 
 Strict mode refuses unexpected source checkout dirtiness before starting real local Codex. The dogfood-only allowed dirty entries are:
 
-- `docs/superpowers/reports/p0-dogfood-work-items-completion.md`
+- `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`
 - `.superpowers/**`
 
 This allowlist is mirrored by the implementation constant `STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST`, which reuses `STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST`. The report records `allowed_dirty_entries`, `blocked_dirty_entries`, and `dirty_allowlist_source` when strict preflight fails or needs to explain dirty-source handling.
@@ -90,21 +90,21 @@ The allowlist must not include application, package, script, spec, plan, or sour
 **Type:** Bugfix
 **Priority:** P0
 **Recommended executor:** `local_codex`
-**Goal:** Close the documented durable-mode verification gaps in the P0 verification report.
+**Goal:** Close the documented durable-mode verification gaps in the delivery verification report.
 
 **Suggested Spec scope:**
 
 - Start local durable dependencies through Docker Compose.
 - Run Drizzle schema push against Postgres.
-- Run durable dogfood with `pnpm dogfood:p0:durable`.
+- Run durable dogfood with `pnpm dogfood:delivery:durable`.
 - Record durable pass/fail evidence in the verification report.
 
 **Suggested Plan checkpoints:**
 
 - Confirm Docker services are healthy.
 - Run `pnpm db:push`.
-- Run `pnpm dogfood:p0:durable`.
-- Update `docs/superpowers/reports/p0-delivery-loop-verification.md`.
+- Run `pnpm dogfood:delivery:durable`.
+- Update `docs/superpowers/reports/delivery-loop-verification.md`.
 
 **Review focus:**
 
@@ -138,7 +138,7 @@ The allowlist must not include application, package, script, spec, plan, or sour
 - Start API and web services.
 - Run `pnpm e2e:run-console`.
 - Inspect desktop and narrow viewport screenshots or Playwright traces when available.
-- Record browser verification status in the P0 verification report.
+- Record browser verification status in the delivery verification report.
 
 **Review focus:**
 
@@ -160,12 +160,12 @@ After all three Work Items are complete, choose the next product surface by obse
 - Choose **Trace/Evidence Plane** if the main gap is "reviewers cannot reconstruct cause and effect quickly."
 - Choose **Retrospective/Learning Loop** if the main gap is "the same mistakes repeat and are not codified into future execution."
 
-Do not start P1 productization until the three P0 dogfood Work Items have been reviewed.
+Do not start P1 productization until the three Delivery dogfood Work Items have been reviewed.
 
 ## Final P1 Decision Summary
 
 Decision: prioritize **Trace / Evidence Plane** for P1.
 
-Rationale: P0 dogfood made the product loop visible, but the reviewer experience still requires too much manual reconstruction across RunSessions, reruns, artifacts, status history, and Review Packets. The next product surface should make cause and effect readable without exposing raw logs or internal payloads.
+Rationale: Delivery dogfood made the product loop visible, but the reviewer experience still requires too much manual reconstruction across RunSessions, reruns, artifacts, status history, and Review Packets. The next product surface should make cause and effect readable without exposing raw logs or internal payloads.
 
 Release and Retrospective remain important follow-ups, but Trace / Evidence Plane is the smallest next step that strengthens review confidence and gives later Release and Learning workflows a reliable evidence spine.
