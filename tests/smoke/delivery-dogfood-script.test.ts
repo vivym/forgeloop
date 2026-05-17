@@ -9,6 +9,7 @@ import {
   buildRunInputRequest,
   buildRunPackageRequest,
   deliveryDogfoodStatus,
+  dogfoodChildEnv,
   publicApiAuthChecks,
   renderReport,
   requestRunEventStreamToken,
@@ -186,6 +187,16 @@ describe('delivery dogfood script helpers', () => {
         ],
       ),
     ).toBe('FAIL');
+  });
+
+  it('can clear durable database env for browser e2e child commands', () => {
+    const env = dogfoodChildEnv(
+      { FORGELOOP_DATABASE_URL: 'postgresql://example', KEEP_ME: '1' },
+      { FORGELOOP_DATABASE_URL: undefined, EXTRA: '2' },
+    );
+
+    expect(env).not.toHaveProperty('FORGELOOP_DATABASE_URL');
+    expect(env).toMatchObject({ KEEP_ME: '1', EXTRA: '2' });
   });
 
   it('keeps volatile_demo behavior compatible with body and query actor fallback', () => {

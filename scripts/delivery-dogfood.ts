@@ -343,14 +343,29 @@ export const requestRunEventStreamToken = async (
   return payload.token;
 };
 
+export const dogfoodChildEnv = (
+  baseEnv: NodeJS.ProcessEnv,
+  overrides: Record<string, string | undefined> = {},
+): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+  return env;
+};
+
 const runCommand = async (
   command: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  options: { env?: Record<string, string | undefined>; timeoutMs?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> => {
   const { stdout, stderr } = await execFile(command, args, {
     cwd: repoPath,
-    env: { ...process.env, ...options.env },
+    env: dogfoodChildEnv(process.env, options.env),
     timeout: options.timeoutMs ?? 30_000,
   });
   return { stdout: stdout.trim(), stderr: stderr.trim() };
@@ -1472,7 +1487,7 @@ const runDurableRepositoryCheck = async (dbPush: VerificationCheck): Promise<Ver
 
 const runWebWorkbenchVerification = async (): Promise<VerificationCheck[]> => {
   try {
-    await runCommand('pnpm', ['e2e:run-console'], { timeoutMs: 90_000 });
+    await runCommand('pnpm', ['e2e:run-console'], { env: { FORGELOOP_DATABASE_URL: undefined }, timeoutMs: 90_000 });
     return [
       {
         label: 'Web app probe',
