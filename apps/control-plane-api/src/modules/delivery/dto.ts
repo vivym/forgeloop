@@ -1,6 +1,7 @@
 import {
   artifactKindSchema,
   artifactRefSchema,
+  type ExecutorType,
   executorTypeSchema,
   jsonObjectSchema,
   requestedChangeSchema,
@@ -68,17 +69,33 @@ export const actorCommandSchema = z
   .strict();
 export type ActorCommandDto = z.infer<typeof actorCommandSchema>;
 
-export const runPackageSchema = z
-  .object({
-    execution_package_id: nonEmptyString.optional(),
-    executor_type: executorTypeSchema.optional(),
-    workflow_only: z.boolean().optional(),
-    previous_run_session_id: nonEmptyString.optional(),
-    force: z.literal(true).optional(),
-    force_reason: nonEmptyString.optional(),
+const runPackageBaseSchema = z.object({
+  execution_package_id: nonEmptyString.optional(),
+  executor_type: executorTypeSchema.optional(),
+  workflow_only: z.boolean().optional(),
+});
+
+export const runPackageSchema = runPackageBaseSchema.strict();
+export const rerunPackageSchema = runPackageBaseSchema
+  .extend({
+    previous_run_session_id: nonEmptyString,
   })
   .strict();
-export type RunPackageDto = z.infer<typeof runPackageSchema>;
+export const forceRerunPackageSchema = runPackageBaseSchema
+  .extend({
+    previous_run_session_id: nonEmptyString,
+    force: z.literal(true),
+    force_reason: nonEmptyString,
+  })
+  .strict();
+export type RunPackageDto = {
+  execution_package_id?: string;
+  executor_type?: ExecutorType;
+  workflow_only?: boolean;
+  previous_run_session_id?: string;
+  force?: true;
+  force_reason?: string;
+};
 
 export const runInputSchema = z
   .object({

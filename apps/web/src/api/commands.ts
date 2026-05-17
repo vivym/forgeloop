@@ -85,6 +85,9 @@ const releaseListQueryString = (query: ListReleasesQuery) =>
   });
 
 const releaseActorId = (body: { actor_id: string }) => body.actor_id;
+const actorCommandActorId = (body: ActorCommandBody) => body.actor_id;
+const reviewDecisionActorId = (body: ReviewDecisionBody) => body.reviewed_by_actor_id;
+const actorRequest = (actorId: string | undefined) => (actorId === undefined ? {} : { actorId });
 
 export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
   const { baseUrl, request } = createApiContext(options);
@@ -198,11 +201,23 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       request<SpecRevision>(`/specs/${encodeURIComponent(specId)}/revisions`, { method: 'POST', body }),
     generateSpecDraft: (specId: string) => request<SpecRevision>(`/specs/${encodeURIComponent(specId)}/generate-draft`, { method: 'POST' }),
     submitSpecForApproval: (specId: string, body: ActorCommandBody) =>
-      request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/submit-for-approval`, { method: 'POST', body }),
+      request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/submit-for-approval`, {
+        method: 'POST',
+        body,
+        ...actorRequest(actorCommandActorId(body)),
+      }),
     approveSpec: (specId: string, body: ActorCommandBody) =>
-      request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/approve`, { method: 'POST', body }),
+      request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/approve`, {
+        method: 'POST',
+        body,
+        ...actorRequest(actorCommandActorId(body)),
+      }),
     requestSpecChanges: (specId: string, body: ActorCommandBody) =>
-      request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/request-changes`, { method: 'POST', body }),
+      request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/request-changes`, {
+        method: 'POST',
+        body,
+        ...actorRequest(actorCommandActorId(body)),
+      }),
 
     createPlan: (workItemId: string) => request<SpecPlan>(`/work-items/${encodeURIComponent(workItemId)}/plans`, { method: 'POST' }),
     getPlan: (planId: string) => request<SpecPlan>(`/plans/${encodeURIComponent(planId)}`),
@@ -212,11 +227,23 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       request<PlanRevision>(`/plans/${encodeURIComponent(planId)}/revisions`, { method: 'POST', body }),
     generatePlanDraft: (planId: string) => request<PlanRevision>(`/plans/${encodeURIComponent(planId)}/generate-draft`, { method: 'POST' }),
     submitPlanForApproval: (planId: string, body: ActorCommandBody) =>
-      request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/submit-for-approval`, { method: 'POST', body }),
+      request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/submit-for-approval`, {
+        method: 'POST',
+        body,
+        ...actorRequest(actorCommandActorId(body)),
+      }),
     approvePlan: (planId: string, body: ActorCommandBody) =>
-      request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/approve`, { method: 'POST', body }),
+      request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/approve`, {
+        method: 'POST',
+        body,
+        ...actorRequest(actorCommandActorId(body)),
+      }),
     requestPlanChanges: (planId: string, body: ActorCommandBody) =>
-      request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/request-changes`, { method: 'POST', body }),
+      request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/request-changes`, {
+        method: 'POST',
+        body,
+        ...actorRequest(actorCommandActorId(body)),
+      }),
 
     generatePackages: (planRevisionId: string) =>
       request<ExecutionPackage[]>(`/plan-revisions/${encodeURIComponent(planRevisionId)}/generate-packages`, { method: 'POST' }),
@@ -228,7 +255,11 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     patchExecutionPackage: (packageId: string, body: PatchExecutionPackageBody) =>
       request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}`, { method: 'PATCH', body }),
     markPackageReady: (packageId: string, body: MarkPackageReadyBody) =>
-      request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}/mark-ready`, { method: 'POST', body }),
+      request<ExecutionPackage>(`/execution-packages/${encodeURIComponent(packageId)}/mark-ready`, {
+        method: 'POST',
+        body,
+        ...actorRequest(actorCommandActorId(body)),
+      }),
     runPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
       request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/run`, {
         method: 'POST',
@@ -324,9 +355,17 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     },
     getReviewPacket: (reviewPacketId: string) => request<ReviewPacket>(`/review-packets/${encodeURIComponent(reviewPacketId)}`),
     approveReviewPacket: (reviewPacketId: string, body: ReviewDecisionBody) =>
-      request<Record<string, unknown>>(`/review-packets/${encodeURIComponent(reviewPacketId)}/approve`, { method: 'POST', body }),
+      request<Record<string, unknown>>(`/review-packets/${encodeURIComponent(reviewPacketId)}/approve`, {
+        method: 'POST',
+        body,
+        actorId: reviewDecisionActorId(body),
+      }),
     requestReviewChanges: (reviewPacketId: string, body: ReviewDecisionBody) =>
-      request<Record<string, unknown>>(`/review-packets/${encodeURIComponent(reviewPacketId)}/request-changes`, { method: 'POST', body }),
+      request<Record<string, unknown>>(`/review-packets/${encodeURIComponent(reviewPacketId)}/request-changes`, {
+        method: 'POST',
+        body,
+        actorId: reviewDecisionActorId(body),
+      }),
   };
 }
 

@@ -59,7 +59,7 @@ describe('Forgeloop web API client', () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/specs/spec-1/approve', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-reviewer', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ actor_id: 'actor-reviewer' }),
     });
   });
@@ -183,22 +183,22 @@ describe('Forgeloop web API client', () => {
       'http://api.local/run-sessions/run-1/events?after=0000000001',
       {
         method: 'GET',
-        headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner' },
+        headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       },
     );
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/run-sessions/run-1/input', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ message: 'continue', target_turn_id: 'turn-1' }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/run-sessions/run-1/cancel', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ reason: 'operator requested stop' }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/run-sessions/run-1/resume', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ reason: 'operator requested resume' }),
     });
   });
@@ -220,7 +220,7 @@ describe('Forgeloop web API client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/execution-packages/package-1/run', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ workflow_only: true }),
     });
   });
@@ -262,7 +262,7 @@ describe('Forgeloop web API client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events/stream-token', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
     });
     expect(instances[0]?.url).toBe('http://api.local/run-sessions/run-1/events/stream?stream_token=stream-token-1&after=0000000001');
     instances[0]?.onmessage?.({ data: JSON.stringify({ id: 'event-1', sequence: 1 }) } as MessageEvent);
@@ -388,7 +388,7 @@ describe('Forgeloop web API client', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/releases', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({
         actor_id: 'actor-owner',
         project_id: 'project-1',
@@ -401,12 +401,12 @@ describe('Forgeloop web API client', () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/releases/release%2F1/submit-for-approval', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ actor_id: 'actor-owner' }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/releases/release%2F1/test-acceptance/acknowledge', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-qa' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-qa', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({
         actor_id: 'actor-qa',
         summary: 'QA accepts the existing test evidence.',
@@ -414,7 +414,7 @@ describe('Forgeloop web API client', () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://api.local/root/releases/release%2F1/override-approve', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({
         actor_id: 'actor-owner',
         rationale: 'Accept planning blocker.',

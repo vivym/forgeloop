@@ -1,6 +1,6 @@
-# Delivery Boundary And Role Workbench Implementation Plan
-
 > Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
+# Delivery Boundary And Role Workbench Implementation Plan
 
 ## Status
 
@@ -160,7 +160,7 @@ Do not implement executor runtime safety in this plan. Only relocate DI/provider
 - Test: `tests/db/automation-repository.test.ts`
 - Test: `tests/workflow-worker/worker.test.ts`
 
-- [ ] **Step 1: Write the failing repository naming test**
+- [x] **Step 1: Write the failing repository naming test**
 
 Create `tests/db/delivery-repository-naming.test.ts`:
 
@@ -180,13 +180,13 @@ describe('delivery repository public exports', () => {
 });
 ```
 
-- [ ] **Step 2: Run the naming test and verify it fails**
+- [x] **Step 2: Run the naming test and verify it fails**
 
 Run: `pnpm vitest run tests/db/delivery-repository-naming.test.ts`
 
 Expected: FAIL because `InMemoryDeliveryRepository` is not exported yet.
 
-- [ ] **Step 3: Resolve runtime-safety dependency gate before repository rename**
+- [x] **Step 3: Resolve runtime-safety dependency gate before repository rename**
 
 Before moving repository filenames, check the parallel runtime-safety work and update/supersede active references that would break on rename:
 
@@ -198,7 +198,7 @@ Expected: only this delivery-boundary migration plan/spec and explicitly superse
 
 If the runtime-safety owner has an active branch or plan still targeting `p0-repository.ts` or `P0Repository`, update that active plan/spec reference to `delivery-repository.ts` / `DeliveryRepository` first, or pause this task until the owner confirms the rename target. Do not create compatibility re-exports for the old repository names.
 
-- [ ] **Step 4: Rename repository files with git mv**
+- [x] **Step 4: Rename repository files with git mv**
 
 Run:
 
@@ -210,7 +210,7 @@ git mv packages/db/src/repositories/drizzle-p0-repository.ts packages/db/src/rep
 
 Expected: files move with history preserved.
 
-- [ ] **Step 5: Rename repository symbols**
+- [x] **Step 5: Rename repository symbols**
 
 In `packages/db/src/repositories/delivery-repository.ts`:
 
@@ -247,7 +247,7 @@ export const createDrizzleDeliveryRepository = (db: ForgeloopDrizzleDatabase): D
 
 Also rename lock keys containing `p0-transaction` to delivery/product lock keys.
 
-- [ ] **Step 6: Update package exports**
+- [x] **Step 6: Update package exports**
 
 In `packages/db/src/index.ts`:
 
@@ -266,7 +266,7 @@ export * from './queries/public-evidence-serialization';
 export * from './reset';
 ```
 
-- [ ] **Step 7: Update core tokens**
+- [x] **Step 7: Update core tokens**
 
 In `apps/control-plane-api/src/modules/core/control-plane-tokens.ts`:
 
@@ -277,7 +277,7 @@ export const RUN_DURABILITY_MODE = Symbol('RUN_DURABILITY_MODE');
 
 In `apps/control-plane-api/src/modules/core/control-plane-core.module.ts`, import `createDrizzleDeliveryRepository`, `InMemoryDeliveryRepository`, and `DeliveryRepository`, then provide/export `DELIVERY_REPOSITORY` and `RUN_DURABILITY_MODE`. Do not add actor identity fallback tokens; run operator identity must come from authenticated actor headers.
 
-- [ ] **Step 8: Rename durable id and workflow worker strings**
+- [x] **Step 8: Rename durable id and workflow worker strings**
 
 In `apps/control-plane-api/src/modules/core/control-plane-runtime.service.ts`:
 
@@ -303,13 +303,13 @@ export const DEFAULT_TASK_QUEUE = 'forgeloop-delivery-package-execution';
 
 Update dynamic imports to call `createDrizzleDeliveryRepository`.
 
-- [ ] **Step 9: Update imports in tests and packages**
+- [x] **Step 9: Update imports in tests and packages**
 
 Use `rg "P0Repository|InMemoryP0Repository|DrizzleP0Repository|createDrizzleP0Repository|P0_REPOSITORY|withP0Transaction|uuidBackedP0IdPrefixes|forgeloop-p0-package-execution"` to find all call sites.
 
 Replace them with delivery names. Do not change `priority: 'P0'` literals.
 
-- [ ] **Step 10: Run focused repository and worker tests**
+- [x] **Step 10: Run focused repository and worker tests**
 
 Run:
 
@@ -319,7 +319,7 @@ pnpm vitest run tests/db/delivery-repository-naming.test.ts tests/db/repository.
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add packages/db apps/control-plane-api/src/modules/core apps/workflow-worker tests/db tests/workflow-worker
@@ -353,7 +353,7 @@ git commit -m "refactor: rename delivery repository boundary"
 - Test: `tests/api/run-worker-lifecycle.test.ts`
 - Test: `tests/api/automation-internal-auth.test.ts`
 
-- [ ] **Step 1: Write the failing shared import boundary test**
+- [x] **Step 1: Write the failing shared import boundary test**
 
 Create `tests/api/shared-infrastructure-boundary.test.ts`:
 
@@ -372,13 +372,13 @@ describe('shared infrastructure boundary', () => {
 });
 ```
 
-- [ ] **Step 2: Run the shared import test and verify it fails**
+- [x] **Step 2: Run the shared import test and verify it fails**
 
 Run: `pnpm vitest run tests/api/shared-infrastructure-boundary.test.ts`
 
 Expected: FAIL because target modules do not exist.
 
-- [ ] **Step 3: Move shared files with git mv**
+- [x] **Step 3: Move shared files with git mv**
 
 Run:
 
@@ -392,7 +392,7 @@ git mv apps/control-plane-api/src/p0/run-worker-lifecycle.service.ts apps/contro
 git mv apps/control-plane-api/src/p0/automation-command-helpers.ts apps/control-plane-api/src/modules/automation/automation-command-helpers.ts
 ```
 
-- [ ] **Step 4: Create shared modules**
+- [x] **Step 4: Create shared modules**
 
 `apps/control-plane-api/src/modules/auth/auth.module.ts`:
 
@@ -433,7 +433,7 @@ import { PublicRunSessionProjection } from './public-run-session-projection';
 export class ProjectionModule {}
 ```
 
-- [ ] **Step 5: Convert run session serialization to injectable projection**
+- [x] **Step 5: Convert run session serialization to injectable projection**
 
 In `apps/control-plane-api/src/modules/query/public-run-session-projection.ts`, keep the existing serialization function and add:
 
@@ -449,7 +449,7 @@ export class PublicRunSessionProjection {
 }
 ```
 
-- [ ] **Step 6: Create AuditWriterService**
+- [x] **Step 6: Create AuditWriterService**
 
 `apps/control-plane-api/src/modules/audit/audit-writer.service.ts`:
 
@@ -506,7 +506,7 @@ import { AuditWriterService } from './audit-writer.service';
 export class AuditModule {}
 ```
 
-- [ ] **Step 7: Create run worker token and token helper module files**
+- [x] **Step 7: Create run worker token and token helper module files**
 
 `apps/control-plane-api/src/modules/run-control/run-worker.token.ts`:
 
@@ -516,7 +516,7 @@ export const DELIVERY_RUN_WORKER = Symbol('DELIVERY_RUN_WORKER');
 
 Move stream token helper functions out of `actor-context.ts` into `apps/control-plane-api/src/modules/run-control/run-event-stream-token.ts`; keep exported names unchanged unless they include old subsystem names.
 
-- [ ] **Step 8: Update imports**
+- [x] **Step 8: Update imports**
 
 Run:
 
@@ -526,7 +526,7 @@ rg "src/p0|\\.\\./\\.\\./p0|\\.\\./p0|p0/" apps tests packages scripts
 
 Update imports to the new module paths. Keep `apps/control-plane-api/src/p0/p0.service.ts` imports temporarily if the file still exists during staged extraction.
 
-- [ ] **Step 9: Update AppModule**
+- [x] **Step 9: Update AppModule**
 
 In `apps/control-plane-api/src/app.module.ts`, add `HttpSupportModule` to imports and remove the direct `APP_FILTER` provider from `AppModule`:
 
@@ -539,7 +539,7 @@ import { HttpSupportModule } from './modules/http/http-support.module';
 export class AppModule {}
 ```
 
-- [ ] **Step 10: Run focused shared infrastructure tests**
+- [x] **Step 10: Run focused shared infrastructure tests**
 
 Run:
 
@@ -549,7 +549,7 @@ pnpm vitest run tests/api/shared-infrastructure-boundary.test.ts tests/api/query
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add apps/control-plane-api/src/modules apps/control-plane-api/src/app.module.ts tests/api
@@ -576,7 +576,7 @@ git commit -m "refactor: move delivery shared infrastructure"
 - Test: `tests/api/work-items.test.ts`
 - Test: `tests/api/delivery-flow.test.ts`
 
-- [ ] **Step 1: Write failing Work Item type and readiness tests**
+- [x] **Step 1: Write failing Work Item type and readiness tests**
 
 Create `tests/api/work-items.test.ts`:
 
@@ -648,13 +648,13 @@ it('creates and updates initiative readiness fields', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run: `pnpm vitest run tests/api/work-items.test.ts`
 
 Expected: FAIL because `initiative`, `/work-item-types`, and `PATCH /work-items/:id` are missing.
 
-- [ ] **Step 3: Add initiative to domain and DB enum values**
+- [x] **Step 3: Add initiative to domain and DB enum values**
 
 In `packages/domain/src/types.ts`:
 
@@ -672,7 +672,7 @@ Update any schema tests that assert the exact enum list.
 
 For durable Postgres environments, include the enum update in the normal schema update path before running durable dogfood. Use the repository's existing Drizzle migration or schema-push workflow, and verify the durable database accepts `kind: 'initiative'` by running the Work Item API test against durable mode before final smoke.
 
-- [ ] **Step 4: Create work item type metadata**
+- [x] **Step 4: Create work item type metadata**
 
 `apps/control-plane-api/src/modules/work-items/work-item-types.ts`:
 
@@ -708,7 +708,7 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
 ];
 ```
 
-- [ ] **Step 5: Create ProjectService and ProjectsController**
+- [x] **Step 5: Create ProjectService and ProjectsController**
 
 Move `createProject`, `getProject`, `createProjectRepo`, and `listProjectRepos` logic from the old service into `ProjectService`. Use `AuditWriterService` for object events.
 
@@ -728,7 +728,7 @@ getProject(@Param('projectId') projectId: string) {
 
 Also add `POST /projects/:projectId/repos` and `GET /projects/:projectId/repos`.
 
-- [ ] **Step 6: Create WorkItemService and WorkItemsController**
+- [x] **Step 6: Create WorkItemService and WorkItemsController**
 
 Move `createWorkItem`, `getWorkItem`, and `listWorkItems` logic into `WorkItemService`.
 
@@ -755,7 +755,7 @@ async updateWorkItem(workItemId: string, dto: UpdateWorkItemDto): Promise<WorkIt
 
 Use the repository's actual `ObjectEvent` shape when implementing.
 
-- [ ] **Step 7: Add DTO schema for Work Item update**
+- [x] **Step 7: Add DTO schema for Work Item update**
 
 Add:
 
@@ -773,11 +773,11 @@ export const updateWorkItemSchema = z
 export type UpdateWorkItemDto = z.infer<typeof updateWorkItemSchema>;
 ```
 
-- [ ] **Step 8: Wire modules into DeliveryModule and AppModule**
+- [x] **Step 8: Wire modules into DeliveryModule and AppModule**
 
 Create `DeliveryModule` importing `ProjectsModule` and `WorkItemsModule`. For this task, AppModule may still import old modules until later extraction completes, but do not add any new old-prefix route.
 
-- [ ] **Step 9: Run focused tests**
+- [x] **Step 9: Run focused tests**
 
 Run:
 
@@ -787,7 +787,7 @@ pnpm vitest run tests/api/work-items.test.ts tests/api/delivery-flow.test.ts tes
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add packages/domain packages/db apps/control-plane-api/src/modules/projects apps/control-plane-api/src/modules/work-items apps/control-plane-api/src/modules/delivery tests/api tests/domain tests/db
@@ -806,7 +806,7 @@ git commit -m "feat: add delivery project and work item services"
 - Modify: `tests/api/delivery-flow.test.ts`
 - Create: `tests/api/spec-plan-service.test.ts`
 
-- [ ] **Step 1: Write failing Spec/Plan service tests**
+- [x] **Step 1: Write failing Spec/Plan service tests**
 
 Create `tests/api/spec-plan-service.test.ts` with the app setup from `tests/api/delivery-flow.test.ts`. Add tests that create a Work Item and exercise:
 
@@ -821,13 +821,13 @@ await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(2
 
 Assert that Work Item phase/gate state changes after approvals.
 
-- [ ] **Step 2: Run test and verify it fails when controller is pointed away from old service**
+- [x] **Step 2: Run test and verify it fails when controller is pointed away from old service**
 
 Run: `pnpm vitest run tests/api/spec-plan-service.test.ts`
 
 Expected: FAIL until `SpecPlanService` is wired.
 
-- [ ] **Step 3: Move Spec/Plan methods from old service**
+- [x] **Step 3: Move Spec/Plan methods from old service**
 
 Move these methods and helper dependencies from the old service into `SpecPlanService`:
 
@@ -855,7 +855,7 @@ Move these methods and helper dependencies from the old service into `SpecPlanSe
 
 Inject `DeliveryRepository`, `ControlPlaneRuntimeService`, and `AuditWriterService`.
 
-- [ ] **Step 4: Create SpecPlanController**
+- [x] **Step 4: Create SpecPlanController**
 
 Use the exact route table from the spec. Example:
 
@@ -875,11 +875,11 @@ approveSpec(
 }
 ```
 
-- [ ] **Step 5: Use AuditWriterService for object events, status history, and decisions**
+- [x] **Step 5: Use AuditWriterService for object events, status history, and decisions**
 
 Replace local event/history/decision helpers with `AuditWriterService`. Keep best-effort trace semantics unchanged.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run:
 
@@ -889,7 +889,7 @@ pnpm vitest run tests/api/spec-plan-service.test.ts tests/api/delivery-flow.test
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/control-plane-api/src/modules/spec-plan apps/control-plane-api/src/modules/delivery tests/api
@@ -908,7 +908,7 @@ git commit -m "refactor: extract spec and plan service"
 - Modify: `tests/api/delivery-flow.test.ts`
 - Create: `tests/api/execution-package-service.test.ts`
 
-- [ ] **Step 1: Write failing execution package tests**
+- [x] **Step 1: Write failing execution package tests**
 
 Create `tests/api/execution-package-service.test.ts`. Seed approved Spec and Plan using API helpers. Assert:
 
@@ -921,13 +921,13 @@ await request(server).post(`/execution-packages/${packageId}/mark-ready`).set(ow
 
 Also test stale package version and open ReviewPacket edit blocking.
 
-- [ ] **Step 2: Run the test and verify it fails before extraction is wired**
+- [x] **Step 2: Run the test and verify it fails before extraction is wired**
 
 Run: `pnpm vitest run tests/api/execution-package-service.test.ts`
 
 Expected: FAIL until controller/service exists.
 
-- [ ] **Step 3: Move package lifecycle methods**
+- [x] **Step 3: Move package lifecycle methods**
 
 Move these from the old service:
 
@@ -952,15 +952,15 @@ policyDigest: 'delivery-manual-package-policy'
 policySourcePath: 'forgeloop://delivery/manual-package-policy'
 ```
 
-- [ ] **Step 4: Keep runtime safety boundary narrow**
+- [x] **Step 4: Keep runtime safety boundary narrow**
 
 Only validate control-plane package fields already present in the domain model. Do not add path policy parsing, command validation, resource governors, hook behavior, fallback behavior, artifact redaction, or attestation semantics.
 
-- [ ] **Step 5: Update AutomationCommandService to reuse package helpers or duplicate only pure control-plane checks**
+- [x] **Step 5: Update AutomationCommandService to reuse package helpers or duplicate only pure control-plane checks**
 
 Do not call old service or import from old namespace. If shared helper code is needed, move pure helper functions to `apps/control-plane-api/src/modules/execution-packages/package-policy-fields.ts`.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run:
 
@@ -970,7 +970,7 @@ pnpm vitest run tests/api/execution-package-service.test.ts tests/api/automation
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/control-plane-api/src/modules/execution-packages apps/control-plane-api/src/modules/automation tests/api tests/domain
@@ -995,7 +995,7 @@ git commit -m "refactor: extract execution package service"
 - Modify: `tests/api/delivery-flow.test.ts`
 - Modify: `tests/e2e/run-console.e2e.test.ts`
 
-- [ ] **Step 1: Write failing provider token test**
+- [x] **Step 1: Write failing provider token test**
 
 Create `tests/api/run-control-boundary.test.ts`:
 
@@ -1027,13 +1027,13 @@ describe('RunControl boundary', () => {
 });
 ```
 
-- [ ] **Step 2: Run test and verify it fails**
+- [x] **Step 2: Run test and verify it fails**
 
 Run: `pnpm vitest run tests/api/run-control-boundary.test.ts`
 
 Expected: FAIL until the token and module are wired.
 
-- [ ] **Step 3: Move run-worker provider factory into RunControlModule**
+- [x] **Step 3: Move run-worker provider factory into RunControlModule**
 
 Move `createRunWorker`, `mockSelfReview`, `mockEvidence`, `safePathSegment`, and `evidenceChangedFilePath` from the old module to `RunControlModule`. This is a behavior-preserving DI relocation only.
 
@@ -1047,7 +1047,7 @@ Provider:
 }
 ```
 
-- [ ] **Step 4: Move run command and event methods**
+- [x] **Step 4: Move run command and event methods**
 
 Move these from the old service into `RunControlService`:
 
@@ -1070,7 +1070,7 @@ Move these from the old service into `RunControlService`:
 - `enqueueRunWithRepository`
 - `recordRunReplacementTrace`
 
-- [ ] **Step 5: Create package run controller and RunSessionsController**
+- [x] **Step 5: Create package run controller and RunSessionsController**
 
 Create `apps/control-plane-api/src/modules/run-control/execution-package-runs.controller.ts` with exact routes:
 
@@ -1118,7 +1118,7 @@ listRunEvents(@Param('runSessionId') runSessionId: string, @Query('after') after
 
 Include SSE, stream token, input, cancel, and resume routes.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run:
 
@@ -1128,7 +1128,7 @@ pnpm vitest run tests/api/run-control-boundary.test.ts tests/api/run-events.test
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/control-plane-api/src/modules/run-control tests/api tests/e2e
@@ -1150,7 +1150,7 @@ git commit -m "refactor: extract run control service"
 - Modify: `tests/contracts/evidence-chain.test.ts`
 - Modify: `tests/api/delivery-flow.test.ts`
 
-- [ ] **Step 1: Write failing audit service usage test**
+- [x] **Step 1: Write failing audit service usage test**
 
 Create `tests/api/audit-writer-boundary.test.ts`:
 
@@ -1172,13 +1172,13 @@ describe('audit writer boundary', () => {
 });
 ```
 
-- [ ] **Step 2: Run test and verify it fails**
+- [x] **Step 2: Run test and verify it fails**
 
 Run: `pnpm vitest run tests/api/audit-writer-boundary.test.ts`
 
 Expected: FAIL until release uses `AuditWriterService` and the Work Item evidence-chain controller exists.
 
-- [ ] **Step 3: Move review and evidence methods**
+- [x] **Step 3: Move review and evidence methods**
 
 Move these methods to `ReviewEvidenceService`:
 
@@ -1192,7 +1192,7 @@ Move these methods to `ReviewEvidenceService`:
 
 Move `evidence-chain.ts` to `modules/review-evidence/evidence-chain.ts`.
 
-- [ ] **Step 4: Create ReviewPacketsController and WorkItemEvidenceController**
+- [x] **Step 4: Create ReviewPacketsController and WorkItemEvidenceController**
 
 Use exact routes:
 
@@ -1236,11 +1236,11 @@ getWorkItemEvidenceChain(@Param('workItemId') workItemId: string) {
 
 Register both controllers in `ReviewEvidenceModule`.
 
-- [ ] **Step 5: Convert release shared writes to AuditWriterService**
+- [x] **Step 5: Convert release shared writes to AuditWriterService**
 
 In `ReleaseService`, replace private `writeObjectEvent`, `writeStatusHistory`, and `persistDecisionIntent` internals with `AuditWriterService` calls. Keep release-specific transition orchestration in `ReleaseService`.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run:
 
@@ -1250,7 +1250,7 @@ pnpm vitest run tests/api/audit-writer-boundary.test.ts tests/api/evidence-chain
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/control-plane-api/src/modules/review-evidence apps/control-plane-api/src/modules/release tests/api tests/contracts
@@ -1269,7 +1269,7 @@ git commit -m "refactor: extract review evidence service"
 - Modify: `tests/api/automation-daemon.integration.test.ts`
 - Modify: `scripts/automation-dogfood.ts`
 
-- [ ] **Step 1: Write failing public automation route tests**
+- [x] **Step 1: Write failing public automation route tests**
 
 In `tests/api/automation-commands.test.ts`, add:
 
@@ -1288,13 +1288,13 @@ it('serves product automation settings without old public P0 routes', async () =
 });
 ```
 
-- [ ] **Step 2: Run test and verify it fails**
+- [x] **Step 2: Run test and verify it fails**
 
 Run: `pnpm vitest run tests/api/automation-commands.test.ts`
 
 Expected: FAIL because new routes do not exist and old routes still exist.
 
-- [ ] **Step 3: Add AutomationSettingsController**
+- [x] **Step 3: Add AutomationSettingsController**
 
 `apps/control-plane-api/src/modules/automation/automation-settings.controller.ts`:
 
@@ -1362,11 +1362,11 @@ export class AutomationSettingsController {
 
 Move these DTO schemas from the old namespace into `apps/control-plane-api/src/modules/delivery/dto.ts` before wiring this controller: `setAutomationCapabilitiesSchema`, `disableAutomationCapabilitiesSchema`, `requestManualPathHoldSchema`, and `resolveManualPathHoldSchema`, plus their exported DTO types.
 
-- [ ] **Step 4: Remove old public automation methods from old controller path**
+- [x] **Step 4: Remove old public automation methods from old controller path**
 
 Delete old `@Get('p0/projects/:projectId/automation/capabilities')`, `@Post('p0/projects/:projectId/automation/capabilities')`, `@Post('p0/projects/:projectId/automation/capabilities:disable')`, `@Post('p0/manual-path-holds')`, and `@Post('p0/manual-path-holds/:holdId/resolve')` handlers.
 
-- [ ] **Step 5: Preserve repo-scoped behavior**
+- [x] **Step 5: Preserve repo-scoped behavior**
 
 Ensure:
 
@@ -1374,7 +1374,7 @@ Ensure:
 - set/disable DTOs keep optional `repo_id`.
 - responses are scoped settings, not project-only settings.
 
-- [ ] **Step 6: Update scripts and tests**
+- [x] **Step 6: Update scripts and tests**
 
 Replace concrete old public automation paths in code, tests, scripts, and docs:
 
@@ -1383,7 +1383,7 @@ Replace concrete old public automation paths in code, tests, scripts, and docs:
 - `/p0/manual-path-holds` -> `/automation/manual-path-holds`
 - `/p0/manual-path-holds/${holdId}/resolve` -> `/automation/manual-path-holds/${holdId}/resolve`
 
-- [ ] **Step 7: Run focused automation tests**
+- [x] **Step 7: Run focused automation tests**
 
 Run:
 
@@ -1393,7 +1393,7 @@ pnpm vitest run tests/api/automation-commands.test.ts tests/api/automation-daemo
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/control-plane-api/src/modules/automation tests/api tests/smoke scripts/automation-dogfood.ts
@@ -1414,7 +1414,7 @@ git commit -m "feat: add product automation settings routes"
 - Create: `tests/api/test-acceptance-gate.test.ts`
 - Modify: `tests/api/release-module.test.ts`
 
-- [ ] **Step 1: Write failing release gate tests**
+- [x] **Step 1: Write failing release gate tests**
 
 Create `tests/api/test-acceptance-gate.test.ts`:
 
@@ -1465,13 +1465,13 @@ Add focused gate-source tests:
 - a release with active test/readiness/artifact blockers is rejected on submit with `422`;
 - a high-risk linked package without an evidence-chain link is rejected on approve with `422`.
 
-- [ ] **Step 2: Run test and verify it fails**
+- [x] **Step 2: Run test and verify it fails**
 
 Run: `pnpm vitest run tests/api/test-acceptance-gate.test.ts`
 
 Expected: FAIL because acknowledgement route and gate logic are missing.
 
-- [ ] **Step 3: Add contract schema**
+- [x] **Step 3: Add contract schema**
 
 In `packages/contracts/src/release.ts`:
 
@@ -1485,7 +1485,7 @@ export type AcknowledgeReleaseTestAcceptanceRequest = z.infer<typeof acknowledge
 
 Export it from `packages/contracts/src/index.ts`.
 
-- [ ] **Step 4: Add controller route**
+- [x] **Step 4: Add controller route**
 
 In `ReleaseController`:
 
@@ -1500,7 +1500,7 @@ acknowledgeTestAcceptance(
 }
 ```
 
-- [ ] **Step 5: Implement gate computation**
+- [x] **Step 5: Implement gate computation**
 
 Add a private method to `ReleaseService`:
 
@@ -1570,7 +1570,7 @@ private assertRollbackPlanSatisfiedForApproval(release: Release): void {
 
 Call `assertRollbackPlanSatisfiedForApproval(release)` in `approveRelease` before the existing approve transition call. Do not call it from `submitForApproval`. Do not call it from `overrideApproveRelease`; the override route is the explicit bypass and must persist an override decision that names the missing rollback plan.
 
-- [ ] **Step 6: Write acknowledgement decision**
+- [x] **Step 6: Write acknowledgement decision**
 
 In `ReleaseService.acknowledgeTestAcceptance`, write a decision through `AuditWriterService` with outcome `completed` and metadata:
 
@@ -1585,7 +1585,7 @@ In `ReleaseService.acknowledgeTestAcceptance`, write a decision through `AuditWr
 
 Use the exact `Decision` shape from `@forgeloop/domain`.
 
-- [ ] **Step 7: Wire web API client**
+- [x] **Step 7: Wire web API client**
 
 In `apps/web/src/api/commands.ts`:
 
@@ -1598,7 +1598,7 @@ acknowledgeReleaseTestAcceptance: (releaseId: string, body: AcknowledgeReleaseTe
   }),
 ```
 
-- [ ] **Step 8: Run focused tests**
+- [x] **Step 8: Run focused tests**
 
 Run:
 
@@ -1608,7 +1608,7 @@ pnpm vitest run tests/api/test-acceptance-gate.test.ts tests/api/release-module.
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/contracts apps/control-plane-api/src/modules/release apps/web/src/api tests/api tests/web tests/domain
@@ -1631,7 +1631,7 @@ git commit -m "feat: add release test acceptance gate"
 - Create: `tests/api/role-workbenches.test.ts`
 - Modify: `tests/api/query-module.test.ts`
 
-- [ ] **Step 1: Write failing role workbench tests**
+- [x] **Step 1: Write failing role workbench tests**
 
 Create `tests/api/role-workbenches.test.ts`:
 
@@ -1655,7 +1655,7 @@ it('returns typed intake queues with real action descriptors', async () => {
 
 Add one test per workbench route for non-static data and action descriptors.
 
-- [ ] **Step 2: Write failing replay object type test**
+- [x] **Step 2: Write failing replay object type test**
 
 In `tests/api/query-module.test.ts`, assert:
 
@@ -1665,13 +1665,13 @@ await request(app.getHttpServer()).get(`/query/replay/review_packet/${reviewPack
 await request(app.getHttpServer()).get('/query/replay/incident/incident-1').expect(400);
 ```
 
-- [ ] **Step 3: Run tests and verify they fail**
+- [x] **Step 3: Run tests and verify they fail**
 
 Run: `pnpm vitest run tests/api/role-workbenches.test.ts tests/api/query-module.test.ts`
 
 Expected: FAIL because workbench routes and replay object types are missing.
 
-- [ ] **Step 4: Add role workbench contracts**
+- [x] **Step 4: Add role workbench contracts**
 
 In `packages/contracts/src/api.ts`, add:
 
@@ -1693,7 +1693,7 @@ export const roleWorkbenchResponseSchema = z.object({
 
 Prefer precise item schemas if they stay small; otherwise keep the generic envelope and enforce important fields in tests.
 
-- [ ] **Step 5: Implement DB query projection helpers**
+- [x] **Step 5: Implement DB query projection helpers**
 
 Create `packages/db/src/queries/role-workbench-queries.ts` with pure functions:
 
@@ -1707,7 +1707,7 @@ Create `packages/db/src/queries/role-workbench-queries.ts` with pure functions:
 
 Each returns `{ summary, items, next_cursor? }`.
 
-- [ ] **Step 6: Add QueryController routes**
+- [x] **Step 6: Add QueryController routes**
 
 Add:
 
@@ -1750,11 +1750,11 @@ getManagerHealthWorkbench(@Query() query: RoleWorkbenchQuery) {
 
 Define `RoleWorkbenchQuery` next to `QueryController` with supported filters from the spec and tests: `project_id`, `actor_id`, `kind`, `limit`, `cursor`, `phase`, `status`, and `risk`. Keep all fields optional; parse `limit` as an integer with a bounded default in `QueryService` before passing it to DB query helpers.
 
-- [ ] **Step 7: Expand minimal replay**
+- [x] **Step 7: Expand minimal replay**
 
 In `QueryService.getReplay`, support `work_item`, `execution_package`, `review_packet`, and `release`. Update `packages/db/src/queries/replay-queries.ts` if it currently only supports Work Item and Release.
 
-- [ ] **Step 8: Run focused tests**
+- [x] **Step 8: Run focused tests**
 
 Run:
 
@@ -1764,7 +1764,7 @@ pnpm vitest run tests/api/role-workbenches.test.ts tests/api/query-module.test.t
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/contracts packages/db/src/queries apps/control-plane-api/src/modules/query apps/web/src/api tests/api tests/db
@@ -1785,7 +1785,7 @@ git commit -m "feat: add role workbench query projections"
 - Modify: `tests/web/workbench-state.test.ts`
 - Create: `tests/web/role-workbench-state.test.ts`
 
-- [ ] **Step 1: Write failing web API client tests**
+- [x] **Step 1: Write failing web API client tests**
 
 In `tests/web/api.test.ts`, add:
 
@@ -1803,7 +1803,7 @@ it('fetches role workbench projections', async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing workbench state tests**
+- [x] **Step 2: Write failing workbench state tests**
 
 Create `tests/web/role-workbench-state.test.ts`:
 
@@ -1826,13 +1826,13 @@ describe('role workbench tabs', () => {
 });
 ```
 
-- [ ] **Step 3: Run tests and verify they fail**
+- [x] **Step 3: Run tests and verify they fail**
 
 Run: `pnpm vitest run tests/web/api.test.ts tests/web/role-workbench-state.test.ts`
 
 Expected: FAIL until web APIs and state are added.
 
-- [ ] **Step 4: Add web query API**
+- [x] **Step 4: Add web query API**
 
 In `apps/web/src/api/query.ts`:
 
@@ -1843,7 +1843,7 @@ getRoleWorkbench: (workbenchId: RoleWorkbenchId, query: RoleWorkbenchQuery = {})
   request<RoleWorkbenchResponse>(`/query/workbenches/${encodeURIComponent(workbenchId)}${roleWorkbenchQueryString(query)}`),
 ```
 
-- [ ] **Step 5: Add types and tabs**
+- [x] **Step 5: Add types and tabs**
 
 In `apps/web/src/api/types.ts`, add `RoleWorkbenchId`, `RoleWorkbenchQuery`, `RoleWorkbenchAction`, and `RoleWorkbenchResponse`. `RoleWorkbenchQuery` must include optional `project_id`, `actor_id`, `kind`, `limit`, `cursor`, `phase`, `status`, and `risk` so the web client matches the backend query contract.
 
@@ -1861,13 +1861,13 @@ export const roleWorkbenchTabs = [
 ] as const;
 ```
 
-- [ ] **Step 6: Render the role matrix in App.tsx**
+- [x] **Step 6: Render the role matrix in App.tsx**
 
 Keep the interface dense and operational. Do not create a landing page. Add tabs or segmented controls for roles, list queue items, and render action buttons from action descriptors.
 
 Do not show personal scoring or ranked actor lists in Manager Health.
 
-- [ ] **Step 7: Run web tests and build**
+- [x] **Step 7: Run web tests and build**
 
 Run:
 
@@ -1878,7 +1878,7 @@ pnpm --filter @forgeloop/web build
 
 Expected: PASS and build exits 0.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/web tests/web
@@ -1898,7 +1898,7 @@ git commit -m "feat: add role workbench web surface"
 - Modify: `tests/e2e/*.test.ts`
 - Modify: `tests/smoke/*.test.ts`
 
-- [ ] **Step 1: Write failing no-old-namespace route contract test**
+- [x] **Step 1: Write failing no-old-namespace route contract test**
 
 Create `tests/api/delivery-route-contract.test.ts`:
 
@@ -1921,13 +1921,13 @@ describe('delivery route contract', () => {
 });
 ```
 
-- [ ] **Step 2: Run route contract test**
+- [x] **Step 2: Run route contract test**
 
 Run: `pnpm vitest run tests/api/delivery-route-contract.test.ts`
 
 Expected: PASS once old public routes were removed in Task 8. Keep it as a regression test.
 
-- [ ] **Step 3: Replace AppModule imports**
+- [x] **Step 3: Replace AppModule imports**
 
 In `apps/control-plane-api/src/app.module.ts`, remove old module and import product modules:
 
@@ -1946,7 +1946,7 @@ export class AppModule {}
 
 Do not import `APP_FILTER` or `DomainErrorFilter` in `AppModule`; `HttpSupportModule` owns the global filter provider.
 
-- [ ] **Step 4: Remove old controller/module/service**
+- [x] **Step 4: Remove old controller/module/service**
 
 Run:
 
@@ -1956,7 +1956,7 @@ git rm -r apps/control-plane-api/src/p0
 
 If any imports break, move the missing code into the target modules listed in the file structure instead of reintroducing a facade.
 
-- [ ] **Step 5: Update tests to use delivery services and tokens**
+- [x] **Step 5: Update tests to use delivery services and tokens**
 
 Replace `P0Service` access in tests with the new service or repository token. For tests that only need repository access, inject `DELIVERY_REPOSITORY`.
 
@@ -1964,7 +1964,7 @@ Replace `RUN_WORKER` with `DELIVERY_RUN_WORKER`.
 
 Replace helper imports from `tests/helpers/p0-runtime-fixtures.ts` after the helper is renamed in Task 13.
 
-- [ ] **Step 6: Run API and E2E tests**
+- [x] **Step 6: Run API and E2E tests**
 
 Run:
 
@@ -1974,7 +1974,7 @@ pnpm vitest run tests/api tests/e2e/run-console.e2e.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/control-plane-api tests/api tests/e2e
@@ -2002,7 +2002,7 @@ git commit -m "refactor: replace p0 module with delivery modules"
 - Modify or supersede: active docs/specs/plans/reports with old subsystem language
 - Create: `tests/naming/delivery-naming.test.ts`
 
-- [ ] **Step 1: Write final naming gate test**
+- [x] **Step 1: Write final naming gate test**
 
 Create `tests/naming/delivery-naming.test.ts`:
 
@@ -2046,13 +2046,13 @@ describe('delivery naming cleanup', () => {
 
 Keep this allowlist limited to the active migration spec and active migration plan while this plan is being executed. If a historical note must remain after the migration, first add the superseded historical migration note from Step 5 to that file, then add that exact file to the allowlist. Do not allow active runbooks, scripts, tests, package exports, generated report names, or product docs.
 
-- [ ] **Step 2: Run naming gate and verify it fails**
+- [x] **Step 2: Run naming gate and verify it fails**
 
 Run: `pnpm vitest run tests/naming/delivery-naming.test.ts`
 
 Expected: FAIL with current old names.
 
-- [ ] **Step 3: Rename scripts and tests with git mv**
+- [x] **Step 3: Rename scripts and tests with git mv**
 
 Run:
 
@@ -2070,7 +2070,7 @@ git mv scripts/p0-dogfood-work-items.ts scripts/delivery-dogfood-work-items.ts
 git mv docs/dogfood/p0-dogfood-work-items.md docs/dogfood/delivery-dogfood-work-items.md
 ```
 
-- [ ] **Step 4: Update package scripts**
+- [x] **Step 4: Update package scripts**
 
 In `package.json`:
 
@@ -2086,7 +2086,7 @@ In `package.json`:
 
 Remove old script keys.
 
-- [ ] **Step 5: Supersede active compatibility docs**
+- [x] **Step 5: Supersede active compatibility docs**
 
 Update `docs/superpowers/specs/2026-05-15-http-automation-daemon-mvp-design.md` so old public automation compatibility language is marked superseded by this delivery boundary migration and the current route map points only to routes under `/automation/`.
 
@@ -2103,7 +2103,7 @@ Update or supersede active P0-named specs/plans/reports. Historical files that r
 
 Prefer renaming active runbooks and generated report paths to delivery terminology.
 
-- [ ] **Step 6: Update tests and imports**
+- [x] **Step 6: Update tests and imports**
 
 Run:
 
@@ -2113,7 +2113,7 @@ rg "p0|P0|smoke:p0|dogfood:p0|RUN_WORKER|P0_REPOSITORY|P0Service" apps packages 
 
 Resolve every active hit except explicit priority values such as `priority: "P0"` and the two migration documents in `allowedFiles`. The migration documents must either be rewritten or marked superseded before final release acceptance.
 
-- [ ] **Step 7: Run naming and bootstrap tests**
+- [x] **Step 7: Run naming and bootstrap tests**
 
 Run:
 
@@ -2123,7 +2123,7 @@ pnpm vitest run tests/naming/delivery-naming.test.ts tests/bootstrap.test.ts tes
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add package.json scripts tests docs
@@ -2137,7 +2137,7 @@ git commit -m "chore: remove historical p0 names"
 **Files:**
 - No new files unless a failure requires a fix.
 
-- [ ] **Step 1: Run repository-wide naming search**
+- [x] **Step 1: Run repository-wide naming search**
 
 Run:
 
@@ -2147,7 +2147,7 @@ rg -n "P0|p0|p0-|p0_|p0\\.|p0/|/p0|forgeloop:p0|forgeloop://p0" apps packages sc
 
 Expected: only allowed priority-value literals such as `priority: "P0"`, `priority: 'P0'`, `default_priority: "P0"`, and `default_priority: 'P0'`, the active migration spec/plan while still active, and explicitly superseded historical notes.
 
-- [ ] **Step 2: Run focused delivery tests**
+- [x] **Step 2: Run focused delivery tests**
 
 Run:
 
@@ -2157,7 +2157,7 @@ pnpm vitest run tests/api/work-items.test.ts tests/api/spec-plan-service.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 3: Run integration and regression tests**
+- [x] **Step 3: Run integration and regression tests**
 
 Run:
 
@@ -2167,13 +2167,13 @@ pnpm vitest run tests/api tests/db tests/domain tests/contracts tests/web tests/
 
 Expected: PASS.
 
-- [ ] **Step 4: Run build**
+- [x] **Step 4: Run build**
 
 Run: `pnpm build`
 
 Expected: exit 0.
 
-- [ ] **Step 5: Run smoke and dogfood commands under new names**
+- [x] **Step 5: Run smoke and dogfood commands under new names**
 
 Run:
 
@@ -2193,7 +2193,7 @@ FORGELOOP_DATABASE_URL="$FORGELOOP_DATABASE_URL" pnpm dogfood:delivery:durable
 
 Expected: exits 0 using the configured durable database.
 
-- [ ] **Step 6: Run strict local Codex dogfood only when environment is explicitly enabled**
+- [x] **Step 6: Run strict local Codex dogfood only when environment is explicitly enabled**
 
 Run only if the environment is intentionally configured:
 
@@ -2203,7 +2203,7 @@ FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANG
 
 Expected: exits 0. If the environment is not configured, record it as skipped, not failed.
 
-- [ ] **Step 7: Commit final verification fixes**
+- [x] **Step 7: Commit final verification fixes**
 
 If any verification fixes were needed:
 

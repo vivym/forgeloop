@@ -31,6 +31,7 @@ const later = '2026-05-05T00:01:00.000Z';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
+let readyExecutionPackageSeedCounter = 0;
 const ownerHeaders = {
   'x-forgeloop-actor-id': actorOwner,
   'x-forgeloop-actor-class': 'human_admin',
@@ -324,7 +325,56 @@ const saveBaseRecords = async (
 };
 
 export const seedReadyExecutionPackage = async (repository: DeliveryRepository): Promise<ExecutionPackage> => {
+  const suffix = `-${++readyExecutionPackageSeedCounter}`;
   const records = baseRecords();
+  records.project = { ...records.project, id: `project${suffix}`, repo_ids: [...records.project.repo_ids] };
+  records.projectRepo = { ...records.projectRepo, id: `project-repo${suffix}`, project_id: records.project.id };
+  records.workItem = {
+    ...records.workItem,
+    id: `work-item${suffix}`,
+    project_id: records.project.id,
+    current_spec_id: `spec${suffix}`,
+    current_spec_revision_id: `spec-revision${suffix}`,
+    current_plan_id: `plan${suffix}`,
+    current_plan_revision_id: `plan-revision${suffix}`,
+  };
+  records.spec = {
+    ...records.spec,
+    id: `spec${suffix}`,
+    work_item_id: records.workItem.id,
+    current_revision_id: `spec-revision${suffix}`,
+    approved_revision_id: `spec-revision${suffix}`,
+  };
+  records.specRevision = {
+    ...records.specRevision,
+    id: `spec-revision${suffix}`,
+    spec_id: records.spec.id,
+    work_item_id: records.workItem.id,
+  };
+  records.plan = {
+    ...records.plan,
+    id: `plan${suffix}`,
+    work_item_id: records.workItem.id,
+    current_revision_id: `plan-revision${suffix}`,
+    approved_revision_id: `plan-revision${suffix}`,
+  };
+  records.planRevision = {
+    ...records.planRevision,
+    id: `plan-revision${suffix}`,
+    plan_id: records.plan.id,
+    work_item_id: records.workItem.id,
+    based_on_spec_revision_id: records.specRevision.id,
+  };
+  records.executionPackage = {
+    ...records.executionPackage,
+    id: `execution-package${suffix}`,
+    work_item_id: records.workItem.id,
+    spec_id: records.spec.id,
+    spec_revision_id: records.specRevision.id,
+    plan_id: records.plan.id,
+    plan_revision_id: records.planRevision.id,
+    project_id: records.project.id,
+  };
   await saveBaseRecords(repository, records.executionPackage, records);
   return records.executionPackage;
 };
@@ -520,8 +570,8 @@ export const seedAppWithRunSession = async (
   const app = moduleRef.createNestApplication();
   await app.init();
 
-  const executionPackage = await seedReadyExecutionPackageThroughApi(app);
   const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
+  const executionPackage = await seedReadyExecutionPackage(repo);
 
   const run = (
     await request(app.getHttpServer())

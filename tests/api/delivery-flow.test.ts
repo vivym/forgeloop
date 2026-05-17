@@ -705,6 +705,16 @@ describe('delivery control plane API', () => {
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(401);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .set(ownerHeaders)
+      .send({
+        workflow_only: true,
+        previous_run_session_id: 'run-session-not-valid-for-run',
+        force: true,
+        force_reason: 'Plain run must reject rerun-only fields.',
+      })
+      .expect(400);
 
     const run = (
       await request(server)
@@ -734,6 +744,16 @@ describe('delivery control plane API', () => {
       .post(`/execution-packages/${executionPackage.id}/rerun`)
       .set(ownerHeaders)
       .send({ previous_run_session_id: 'run-session-stale', workflow_only: true })
+      .expect(400);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/rerun`)
+      .set(ownerHeaders)
+      .send({
+        previous_run_session_id: run.run_session_id,
+        force: true,
+        force_reason: 'Rerun must reject force-only fields.',
+        workflow_only: true,
+      })
       .expect(400);
 
     const rerun = (

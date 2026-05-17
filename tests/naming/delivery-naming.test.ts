@@ -30,7 +30,6 @@ const historicalFiles = new Set([
   'docs/superpowers/plans/2026-05-13-prd-first-automation-daemon.md',
   'docs/superpowers/plans/2026-05-15-http-automation-daemon-mvp.md',
   'docs/superpowers/reports/codex-unified-run-event-stream-closure-report.md',
-  `docs/superpowers/reports/${oldRoute}-p1-closure-report.md`,
   `docs/superpowers/specs/2026-05-04-${oldRoute}-delivery-loop-mvp-design.md`,
   'docs/superpowers/specs/2026-05-06-codex-long-running-execution-design.md',
   'docs/superpowers/specs/2026-05-08-codex-execution-verification-closure-design.md',
@@ -43,8 +42,6 @@ const historicalFiles = new Set([
   'docs/superpowers/specs/2026-05-11-p1-release-durable-strict-dogfood-closure-design.md',
   'docs/superpowers/specs/2026-05-11-p1-release-risk-radar-product-surface-design.md',
   'docs/superpowers/specs/2026-05-13-prd-first-automation-daemon-design.md',
-]);
-const activeMigrationFiles = new Set([
   'docs/superpowers/specs/2026-05-16-delivery-boundary-and-role-workbench-design.md',
   'docs/superpowers/plans/2026-05-16-delivery-boundary-and-role-workbench.md',
 ]);
@@ -98,7 +95,6 @@ describe('delivery naming cleanup', () => {
         if (!content.startsWith(`${supersededHistoricalNote}\n\n`)) offenders.push(rel);
         continue;
       }
-      if (activeMigrationFiles.has(rel)) continue;
       if (externallyOwnedFiles.has(rel)) continue;
       if (oldSubsystem.test(content) || oldSubsystem.test(rel)) offenders.push(rel);
       oldSubsystem.lastIndex = 0;

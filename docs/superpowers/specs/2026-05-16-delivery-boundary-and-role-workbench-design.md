@@ -1,6 +1,6 @@
-# Delivery Boundary And Role Workbench Design
-
 > Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
+# Delivery Boundary And Role Workbench Design
 
 ## Status
 

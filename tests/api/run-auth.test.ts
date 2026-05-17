@@ -21,7 +21,7 @@ import {
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
-import { seedAppWithRunSession, seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
+import { seedAppWithRunSession, seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
 
 const actorHeaderName = 'X-Forgeloop-Actor-Id';
 const actorOwner = 'actor-owner';
@@ -52,7 +52,8 @@ const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemory
 const startDurableRun = async (
   app: INestApplication,
 ): Promise<{ executionPackageId: string; runSessionId: string }> => {
-  const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+  const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
+  const executionPackage = await seedReadyExecutionPackage(repo);
   const response = await request(app.getHttpServer())
     .post(`/execution-packages/${executionPackage.id}/run`)
     .set(actorHeaderName, actorOwner)
@@ -133,8 +134,8 @@ describe('durable run actor auth', () => {
   });
 
   it('requires authenticated actor context to start durable runs', async () => {
-    const { app } = await track(bootDurableApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const { app, repo } = await track(bootDurableApp());
+    const executionPackage = await seedReadyExecutionPackage(repo);
 
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
