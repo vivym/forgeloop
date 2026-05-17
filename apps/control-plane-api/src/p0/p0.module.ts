@@ -4,6 +4,7 @@ import { AutomationModule } from '../modules/automation/automation.module';
 import { ControlPlaneCoreModule } from '../modules/core/control-plane-core.module';
 import { ExecutionPackagesModule } from '../modules/execution-packages/execution-packages.module';
 import { ProjectsModule } from '../modules/projects/projects.module';
+import { ReviewEvidenceModule } from '../modules/review-evidence/review-evidence.module';
 import { RunControlModule } from '../modules/run-control/run-control.module';
 import { SpecPlanModule } from '../modules/spec-plan/spec-plan.module';
 import { WorkItemsModule } from '../modules/work-items/work-items.module';
@@ -19,6 +20,7 @@ import { P0Service } from './p0.service';
     SpecPlanModule,
     ExecutionPackagesModule,
     RunControlModule,
+    ReviewEvidenceModule,
   ],
   controllers: [P0Controller],
   providers: [P0Service],

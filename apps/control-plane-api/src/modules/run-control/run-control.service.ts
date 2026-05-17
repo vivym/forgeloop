@@ -29,7 +29,6 @@ import {
   type RunRuntimeMetadata,
   type RunSession,
   transitionExecutionPackage,
-  transitionReviewPacket,
   transitionRunSession,
   validateForceRerunAllowed,
 } from '@forgeloop/domain';
@@ -49,6 +48,7 @@ import {
 import type { RunControlDto, RunInputDto, RunPackageDto } from '../delivery/dto';
 import { ExecutionPackageService } from '../execution-packages/execution-package.service';
 import { serializePublicRunSession } from '../query/public-run-session-projection';
+import { ReviewEvidenceService } from '../review-evidence/review-evidence.service';
 import {
   createRunEventStreamToken as signRunEventStreamToken,
   resolveRunEventStreamTokenSecret,
@@ -93,6 +93,7 @@ export class RunControlService {
     @Inject(ControlPlaneRuntimeService) private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Inject(ExecutionPackageService) private readonly executionPackageService: ExecutionPackageService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
+    @Inject(ReviewEvidenceService) private readonly reviewEvidenceService: ReviewEvidenceService,
   ) {}
 
   async runPackage(
@@ -152,7 +153,7 @@ export class RunControlService {
         }
         throw error;
       }
-      await this.archiveReviewPacket(validation.currentOpenReviewPacket, 'force_rerun', repository);
+      await this.reviewEvidenceService.archiveReviewPacket(validation.currentOpenReviewPacket, 'force_rerun', repository);
     }
     const workflowOnly = dto.workflow_only ?? false;
     const executorType: ExecutorType = workflowOnly ? 'mock' : (dto.executor_type ?? 'mock');
@@ -530,7 +531,7 @@ export class RunControlService {
     triggeringReviewPacket?: ReviewPacket;
     at: string;
   }): Promise<void> {
-    await this.bestEffortTraceWrite(async () => {
+    await this.reviewEvidenceService.bestEffortTraceWrite(async () => {
       const repository = input.repository ?? this.repository;
       const traceEventId = `trace-event:run-replacement:${input.newRunSessionId}`;
       const payload: RunReplacementRecordedPayload = {
@@ -754,16 +755,6 @@ export class RunControlService {
     }
   }
 
-  private async archiveReviewPacket(
-    reviewPacket: ReviewPacket,
-    reason: string,
-    repository: DeliveryRepository = this.repository,
-  ): Promise<void> {
-    const updated = transitionReviewPacket(reviewPacket, { type: 'archive_for_newer_run', at: this.now() });
-    await repository.saveReviewPacket(updated);
-    await this.eventWithRepository(repository, 'review_packet', reviewPacket.id, 'review_packet_archived', reviewPacket.reviewer_actor_id, { reason });
-  }
-
   private traceLink(
     traceEventId: string,
     relationship: TraceLinkRecord['relationship'],
@@ -779,18 +770,6 @@ export class RunControlService {
       object_id: objectId,
       created_at: at,
     };
-  }
-
-  private async bestEffortTraceWrite(write: () => Promise<void>): Promise<void> {
-    try {
-      await write();
-    } catch (error) {
-      console.warn('[forgeloop:run-control.trace] best-effort trace write failed', {
-        source: 'control-plane-api',
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Delivery tables are authoritative; trace rows are projected from them when absent.
-    }
   }
 
   private async eventWithRepository(

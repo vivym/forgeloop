@@ -2,6 +2,7 @@ import {
   artifactKindSchema,
   executorTypeSchema,
   jsonObjectSchema,
+  requestedChangeSchema,
   requiredCheckSpecSchema,
   type ArtifactKind,
   type RequiredCheckSpec,
@@ -162,3 +163,13 @@ export const patchExecutionPackageSchema = z
   })
   .strict();
 export type PatchExecutionPackageDto = z.infer<typeof patchExecutionPackageSchema>;
+
+export const reviewDecisionSchema = z
+  .object({
+    summary: nonEmptyString,
+    reviewed_by_actor_id: nonEmptyString,
+    reviewed_at: z.string().datetime(),
+    requested_changes: z.array(requestedChangeSchema).optional(),
+  })
+  .strict();
+export type ReviewDecisionDto = z.infer<typeof reviewDecisionSchema>;

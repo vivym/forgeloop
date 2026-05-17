@@ -67,6 +67,7 @@ import {
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
 import type { ActorContext } from '../auth/actor-context';
+import { AuditWriterService } from '../audit/audit-writer.service';
 import {
   publicReleaseSummaryFor,
   resolveReleaseExecutionPackageLinks,
@@ -151,6 +152,7 @@ export class ReleaseService {
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(DELIVERY_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback: boolean,
+    @Inject(AuditWriterService) private readonly audit: AuditWriterService,
   ) {}
 
   async createRelease(body: CreateReleaseRequest, actorContext?: ActorContext): Promise<ReleaseControlResponse> {
@@ -981,7 +983,7 @@ export class ReleaseService {
       ...(intent.blocker_snapshot !== undefined ? { evidence_refs: { blocker_snapshot: intent.blocker_snapshot } } : {}),
       created_at: this.now(),
     };
-    await repository.saveDecision(decision);
+    await this.audit.decision(decision, repository);
   }
 
   private async writeObjectEvent(
@@ -1011,7 +1013,7 @@ export class ReleaseService {
       payload,
       created_at: this.now(),
     };
-    await repository.appendObjectEvent(event);
+    await this.audit.objectEvent(event, repository);
   }
 
   private async writeStatusHistory(before: Release | undefined, after: Release, actorId: string): Promise<void> {
@@ -1049,7 +1051,7 @@ export class ReleaseService {
       };
       return [entry];
     });
-    await Promise.all(entries.map((entry) => repository.appendStatusHistory(entry)));
+    await Promise.all(entries.map((entry) => this.audit.statusHistory(entry, repository)));
   }
 
   private id(prefix: string): string {

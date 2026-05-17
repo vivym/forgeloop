@@ -12,7 +12,6 @@ import {
 } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
 import {
-  type AutomationActorClass,
   type AutomationActorContext,
   type AutomationPrecondition,
   type AutomationProjectSettings,
@@ -29,21 +28,18 @@ import {
   type RuntimeSafetyAttestation,
   type Spec,
   type SpecRevision,
-  type StatusHistory,
   type WorkItem,
   isWorkItemAutomationTerminal,
-  transitionExecutionPackage,
-  transitionReviewPacket,
   transitionSpecPlan,
 } from '@forgeloop/domain';
 import type { DeliveryRepository } from '@forgeloop/db';
 import type {
   ArtifactRef,
-  EvidenceChainResponse,
   ExecutorType,
   RunAcceptedResponse,
   RunEventListResponse,
   RunOperatorCommandResponse,
+  EvidenceChainResponse,
 } from '@forgeloop/contracts';
 import { Observable } from 'rxjs';
 
@@ -60,6 +56,7 @@ import {
 import type { ActorContext } from '../modules/auth/actor-context';
 import { RunControlService } from '../modules/run-control/run-control.service';
 import { ProjectService } from '../modules/projects/project.service';
+import { ReviewEvidenceService } from '../modules/review-evidence/review-evidence.service';
 import { SpecPlanService } from '../modules/spec-plan/spec-plan.service';
 import { WorkItemService } from '../modules/work-items/work-item.service';
 import type {
@@ -84,18 +81,8 @@ import type {
   ResolveManualPathHoldDto,
   SetAutomationCapabilitiesDto,
 } from './dto';
-import { buildEvidenceChain } from './evidence-chain';
-
-const statusForPackage = (executionPackage: ExecutionPackage): string =>
-  `${executionPackage.phase}/${executionPackage.activity_state}/${executionPackage.gate_state}`;
 
 const commandClaimTtlMs = 5 * 60 * 1000;
-const productGateRejectedActorClasses = new Set<AutomationActorClass>([
-  'automation_daemon',
-  'source_adapter',
-  'external_tracker',
-  'repo_policy',
-]);
 
 type RunEventAccessOptions = {
   after?: string;
@@ -163,6 +150,8 @@ export class P0Service {
     private readonly executionPackageService: ExecutionPackageService,
     @Inject(RunControlService)
     private readonly runControlService: RunControlService,
+    @Inject(ReviewEvidenceService)
+    private readonly reviewEvidenceService: ReviewEvidenceService,
   ) {}
 
   async createProject(dto: CreateProjectDto): Promise<Project> {
@@ -472,49 +461,19 @@ export class P0Service {
   }
 
   async getReviewPacket(reviewPacketId: string): Promise<ReviewPacket> {
-    return this.requireFound(await this.repository.getReviewPacket(reviewPacketId), `ReviewPacket ${reviewPacketId}`);
+    return this.reviewEvidenceService.getReviewPacket(reviewPacketId);
   }
 
   async approveReviewPacket(reviewPacketId: string, dto: ReviewDecisionDto, actorContext?: ActorContext): Promise<Record<string, unknown>> {
-    const actorId = this.actorIdForProductGate(dto.reviewed_by_actor_id, actorContext);
-    const reviewPacket = await this.getReviewPacket(reviewPacketId);
-    const updated = transitionReviewPacket(reviewPacket, {
-      type: 'approve',
-      summary: dto.summary,
-      reviewed_by_actor_id: actorId,
-      reviewed_at: dto.reviewed_at,
-      at: this.now(),
-    });
-    await this.repository.saveReviewPacket(updated);
-    await this.decision('review_packet', reviewPacketId, actorId, 'approved', dto.summary);
-    await this.applyReviewToPackage(updated, 'review_approved');
-    return { review_packet_id: reviewPacketId, status: 'completed', decision: 'approved', recorded_at: updated.updated_at };
+    return this.reviewEvidenceService.approveReviewPacket(reviewPacketId, dto, actorContext);
   }
 
   async requestReviewChanges(reviewPacketId: string, dto: ReviewDecisionDto, actorContext?: ActorContext): Promise<Record<string, unknown>> {
-    const actorId = this.actorIdForProductGate(dto.reviewed_by_actor_id, actorContext);
-    const reviewPacket = await this.getReviewPacket(reviewPacketId);
-    const updated = transitionReviewPacket(reviewPacket, {
-      type: 'request_changes',
-      summary: dto.summary,
-      reviewed_by_actor_id: actorId,
-      reviewed_at: dto.reviewed_at,
-      requested_changes: dto.requested_changes ?? [],
-      at: this.now(),
-    });
-    await this.repository.saveReviewPacket(updated);
-    await this.decision('review_packet', reviewPacketId, actorId, 'changes_requested', dto.summary);
-    await this.applyReviewToPackage(updated, 'review_changes_requested');
-    return { review_packet_id: reviewPacketId, status: 'completed', decision: 'changes_requested', recorded_at: updated.updated_at };
+    return this.reviewEvidenceService.requestReviewChanges(reviewPacketId, dto, actorContext);
   }
 
   async evidenceChain(workItemId: string, reviewPacketId?: string): Promise<EvidenceChainResponse> {
-    const workItem = await this.getWorkItem(workItemId);
-    const response = await buildEvidenceChain(this.repository, workItem, {
-      ...(reviewPacketId === undefined ? {} : { reviewPacketId }),
-      generatedAt: this.now(),
-    });
-    return this.requireFound(response, `ReviewPacket ${reviewPacketId}`);
+    return this.reviewEvidenceService.evidenceChain(workItemId, reviewPacketId);
   }
 
   private async assertAutomationPreconditionForHold(repository: DeliveryRepository, precondition: AutomationPrecondition): Promise<void> {
@@ -786,13 +745,6 @@ export class P0Service {
     };
   }
 
-  private async applyReviewToPackage(reviewPacket: ReviewPacket, type: 'review_approved' | 'review_changes_requested'): Promise<void> {
-    const executionPackage = await this.getExecutionPackage(reviewPacket.execution_package_id);
-    const updated = transitionExecutionPackage(executionPackage, { type, at: this.now() });
-    await this.repository.saveExecutionPackage(updated);
-    await this.history('execution_package', updated.id, statusForPackage(executionPackage), statusForPackage(updated), reviewPacket.reviewed_by_actor_id);
-  }
-
   private async event(
     objectType: string,
     objectId: string,
@@ -823,54 +775,6 @@ export class P0Service {
     await repository.appendObjectEvent(objectEvent);
   }
 
-  private async history(
-    objectType: string,
-    objectId: string,
-    fromStatus: string | undefined,
-    toStatus: string,
-    actorId: string | undefined,
-  ): Promise<void> {
-    await this.historyWithRepository(this.repository, objectType, objectId, fromStatus, toStatus, actorId);
-  }
-
-  private async historyWithRepository(
-    repository: DeliveryRepository,
-    objectType: string,
-    objectId: string,
-    fromStatus: string | undefined,
-    toStatus: string,
-    actorId: string | undefined,
-  ): Promise<void> {
-    const statusHistory: StatusHistory = {
-      id: this.id('status-history'),
-      object_type: objectType,
-      object_id: objectId,
-      ...(fromStatus !== undefined ? { from_status: fromStatus } : {}),
-      to_status: toStatus,
-      ...(actorId !== undefined ? { actor_id: actorId } : {}),
-      created_at: this.now(),
-    };
-    await repository.appendStatusHistory(statusHistory);
-  }
-
-  private async decision(
-    objectType: string,
-    objectId: string,
-    actorId: string,
-    decisionValue: 'approved' | 'changes_requested',
-    summary: string,
-  ): Promise<void> {
-    await this.repository.saveDecision({
-      id: this.id('decision'),
-      object_type: objectType,
-      object_id: objectId,
-      actor_id: actorId,
-      decision: decisionValue,
-      summary,
-      created_at: this.now(),
-    });
-  }
-
   private id(prefix: string): string {
     return this.controlPlaneRuntime.id(prefix);
   }
@@ -881,23 +785,6 @@ export class P0Service {
 
   private lockedUntil(now: string): string {
     return new Date(Date.parse(now) + commandClaimTtlMs).toISOString();
-  }
-
-  private actorIdForProductGate(bodyActorId: string | undefined, actorContext?: ActorContext): string {
-    const authenticatedActorId = actorContext?.authenticatedActorId?.trim();
-    if (authenticatedActorId === undefined || authenticatedActorId.length === 0 || actorContext?.actorClass === undefined) {
-      throw new UnauthorizedException('Trusted actor id and class are required for product gate mutations');
-    }
-    if (bodyActorId !== undefined && bodyActorId !== authenticatedActorId) {
-      throw new ForbiddenException('actor_id must match the trusted actor');
-    }
-    if (productGateRejectedActorClasses.has(actorContext.actorClass)) {
-      throw new ForbiddenException({
-        code: 'automation_actor_not_allowed_for_product_gate',
-        message: `${actorContext.actorClass} actors cannot pass or mutate product gates.`,
-      });
-    }
-    return authenticatedActorId;
   }
 
   private optionalAutomationActorContext(

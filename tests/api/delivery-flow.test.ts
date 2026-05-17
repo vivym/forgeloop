@@ -11,6 +11,8 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { AutomationCommandService } from '../../apps/control-plane-api/src/modules/automation/automation-command.service';
 import { ExecutionPackageService } from '../../apps/control-plane-api/src/modules/execution-packages/execution-package.service';
 import { ProjectService } from '../../apps/control-plane-api/src/modules/projects/project.service';
+import { ReviewEvidenceService } from '../../apps/control-plane-api/src/modules/review-evidence/review-evidence.service';
+import { RunControlService } from '../../apps/control-plane-api/src/modules/run-control/run-control.service';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-items/work-item.service';
@@ -174,6 +176,8 @@ const replaceRuntimeRepository = (app: INestApplication, repository: InMemoryDel
   (app.get(ProjectService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(SpecPlanService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(WorkItemService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(ReviewEvidenceService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(RunControlService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
   (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
 };
 
@@ -772,7 +776,7 @@ describe('P0 control plane API', () => {
       expect(persistedRerun?.run_spec?.review_context.latest_decision).toBe('changes_requested');
       expect(reviewPackets.map((packet) => packet.id)).toEqual(expect.arrayContaining([firstReviewPacketId, rerunReviewPacketId]));
       expect(warnSpy).toHaveBeenCalledWith(
-        '[forgeloop:p0.trace] best-effort trace write failed',
+        '[forgeloop:review-evidence.trace] best-effort trace write failed',
         expect.objectContaining({ source: 'control-plane-api', error: 'trace store unavailable' }),
       );
     } finally {

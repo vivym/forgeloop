@@ -1,17 +1,13 @@
 import { Body, Controller, Get, Headers, Inject, Param, Patch, Post, Query } from '@nestjs/common';
 
 import {
-  actorCommandSchema,
   disableAutomationCapabilitiesSchema,
-  reviewDecisionSchema,
   requestManualPathHoldSchema,
   resolveManualPathHoldSchema,
   setAutomationCapabilitiesSchema,
 } from './dto';
 import type {
-  ActorCommandDto,
   DisableAutomationCapabilitiesDto,
-  ReviewDecisionDto,
   RequestManualPathHoldDto,
   ResolveManualPathHoldDto,
   SetAutomationCapabilitiesDto,
@@ -62,33 +58,5 @@ export class P0Controller {
     @Body(new ZodValidationPipe(resolveManualPathHoldSchema)) body: ResolveManualPathHoldDto,
   ) {
     return this.service.resolveManualPath(holdId, body, actorContextFromHeaders(headers));
-  }
-
-  @Get('work-items/:workItemId/evidence-chain')
-  evidenceChain(@Param('workItemId') workItemId: string, @Query('review_packet_id') reviewPacketId?: string) {
-    return this.service.evidenceChain(workItemId, reviewPacketId);
-  }
-
-  @Get('review-packets/:reviewPacketId')
-  getReviewPacket(@Param('reviewPacketId') reviewPacketId: string) {
-    return this.service.getReviewPacket(reviewPacketId);
-  }
-
-  @Post('review-packets/:reviewPacketId/approve')
-  approveReviewPacket(
-    @Param('reviewPacketId') reviewPacketId: string,
-    @Body(new ZodValidationPipe(reviewDecisionSchema)) body: ReviewDecisionDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-  ) {
-    return this.service.approveReviewPacket(reviewPacketId, body, actorContextFromHeaders(headers));
-  }
-
-  @Post('review-packets/:reviewPacketId/request-changes')
-  requestReviewChanges(
-    @Param('reviewPacketId') reviewPacketId: string,
-    @Body(new ZodValidationPipe(reviewDecisionSchema)) body: ReviewDecisionDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-  ) {
-    return this.service.requestReviewChanges(reviewPacketId, body, actorContextFromHeaders(headers));
   }
 }

@@ -22,4 +22,15 @@ describe('RunControl boundary', () => {
     expect(routes).toContain("@Post('execution-packages/:packageId/force-rerun')");
     expect(routes).not.toContain("@Controller('p0");
   });
+
+  it('delegates review packet archiving and trace best-effort handling to review evidence', () => {
+    const service = readFileSync('apps/control-plane-api/src/modules/run-control/run-control.service.ts', 'utf8');
+
+    expect(service).toContain('ReviewEvidenceService');
+    expect(service).toContain('reviewEvidenceService.archiveReviewPacket');
+    expect(service).toContain('reviewEvidenceService.bestEffortTraceWrite');
+    expect(service).not.toContain('private async archiveReviewPacket');
+    expect(service).not.toContain('private async bestEffortTraceWrite');
+    expect(service).not.toContain('transitionReviewPacket');
+  });
 });

@@ -18,6 +18,7 @@ import { AuditModule } from '../audit/audit.module';
 import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import { ExecutionPackagesModule } from '../execution-packages/execution-packages.module';
+import { ReviewEvidenceModule } from '../review-evidence/review-evidence.module';
 import { ExecutionPackageRunsController } from './execution-package-runs.controller';
 import { RunControlService } from './run-control.service';
 import { RunSessionsController } from './run-sessions.controller';
@@ -112,7 +113,7 @@ const createRunWorker = (repository: DeliveryRepository): RunWorker => {
 };
 
 @Module({
-  imports: [ControlPlaneCoreModule, AuditModule, ExecutionPackagesModule],
+  imports: [ControlPlaneCoreModule, AuditModule, ExecutionPackagesModule, ReviewEvidenceModule],
   controllers: [ExecutionPackageRunsController, RunSessionsController],
   providers: [
     {
