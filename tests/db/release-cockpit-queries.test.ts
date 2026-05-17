@@ -4,11 +4,15 @@ import type {
   Artifact,
   Decision,
   ExecutionPackage,
+  Plan,
+  PlanRevision,
   Project,
   Release,
   ReleaseEvidence,
   ReviewPacket,
   RunSession,
+  Spec,
+  SpecRevision,
   WorkItem,
 } from '@forgeloop/domain';
 
@@ -52,8 +56,83 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   gate_state: 'none',
   resolution: 'completed',
   current_release_id: 'release-1',
+  current_spec_id: 'spec-1',
+  current_plan_id: 'plan-1',
+  current_plan_revision_id: 'plan-revision-1',
   created_at: now,
   updated_at: later,
+  ...overrides,
+});
+
+const spec = (overrides: Partial<Spec> = {}): Spec => ({
+  id: 'spec-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'spec',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'spec-revision-1',
+  approved_revision_id: 'spec-revision-1',
+  approved_at: now,
+  approved_by_actor_id: 'actor-reviewer',
+  created_at: now,
+  updated_at: later,
+  ...overrides,
+});
+
+const specRevision = (overrides: Partial<SpecRevision> = {}): SpecRevision => ({
+  id: 'spec-revision-1',
+  spec_id: 'spec-1',
+  work_item_id: 'work-item-1',
+  revision_number: 1,
+  summary: 'Release radar spec.',
+  content: 'Expose release readiness.',
+  background: 'Release owners need a public-safe cockpit.',
+  goals: ['Show release blockers.'],
+  scope_in: ['Release cockpit'],
+  scope_out: [],
+  acceptance_criteria: ['The cockpit shows release blockers.'],
+  risk_notes: [],
+  test_strategy_summary: 'Run release cockpit query tests.',
+  artifact_refs: [],
+  created_at: now,
+  ...overrides,
+});
+
+const plan = (overrides: Partial<Plan> = {}): Plan => ({
+  id: 'plan-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'plan',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'plan-revision-1',
+  approved_revision_id: 'plan-revision-1',
+  approved_at: now,
+  approved_by_actor_id: 'actor-reviewer',
+  created_at: now,
+  updated_at: later,
+  ...overrides,
+});
+
+const planRevision = (overrides: Partial<PlanRevision> = {}): PlanRevision => ({
+  id: 'plan-revision-1',
+  plan_id: 'plan-1',
+  work_item_id: 'work-item-1',
+  based_on_spec_revision_id: 'spec-revision-1',
+  revision_number: 1,
+  summary: 'Release radar plan.',
+  content: 'Implement release cockpit helper.',
+  implementation_summary: 'Use the release cockpit query.',
+  split_strategy: 'Single package.',
+  dependency_order: [],
+  test_matrix: ['Release cockpit query tests'],
+  risk_mitigations: [],
+  rollback_notes: 'Disable the release flag.',
+  artifact_refs: [],
+  created_at: now,
   ...overrides,
 });
 
@@ -249,6 +328,8 @@ const seedReadyRelease = async (repo: DeliveryRepository, overrides: {
   execution_package?: Partial<ExecutionPackage>;
   run_session?: Partial<RunSession>;
   review_packet?: Partial<ReviewPacket>;
+  spec?: Partial<Spec>;
+  spec_revision?: Partial<SpecRevision>;
   release?: Partial<Release>;
   evidence?: Partial<ReleaseEvidence>;
   artifact?: Partial<Artifact>;
@@ -257,6 +338,10 @@ const seedReadyRelease = async (repo: DeliveryRepository, overrides: {
   } = {}) => {
   await repo.saveProject(project(overrides.project));
   await repo.saveWorkItem(workItem(overrides.work_item));
+  await repo.saveSpec(spec(overrides.spec));
+  await repo.saveSpecRevision(specRevision(overrides.spec_revision));
+  await repo.savePlan(plan());
+  await repo.savePlanRevision(planRevision());
   await repo.saveExecutionPackage(executionPackage(overrides.execution_package));
   await repo.saveRunSession(runSession(overrides.run_session));
   await repo.saveReviewPacket(reviewPacket(overrides.review_packet));
@@ -663,5 +748,28 @@ describe('getReleaseCockpit', () => {
     expect(emptyCockpit?.blockers.map((item) => item.code)).toEqual(
       expect.arrayContaining(['empty_work_item_scope', 'empty_execution_package_scope']),
     );
+  });
+
+  it('includes Test/Acceptance blockers in the cockpit snapshot fingerprint', async () => {
+    const repo = new InMemoryDeliveryRepository();
+    await seedReadyRelease(repo, {
+      work_item: { risk: 'high' },
+      release: { phase: 'candidate', gate_state: 'not_submitted' },
+    });
+
+    const cockpit = await getReleaseCockpit(repo, 'release-1');
+
+    expect(cockpit?.blocker_snapshot.blocker_fingerprint).toBeDefined();
+    expect(cockpit?.blocker_snapshot.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing_required_evidence_backlink',
+          object_type: 'release',
+          object_id: 'release-1',
+          overrideable: true,
+        }),
+      ]),
+    );
+    expect(cockpit?.blockers).toEqual(cockpit?.blocker_snapshot.blockers);
   });
 });

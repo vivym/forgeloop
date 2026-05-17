@@ -139,7 +139,13 @@ export class SpecPlanService {
   async approveSpec(specId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Spec> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const spec = await this.getSpec(specId);
-    const updated = transitionSpecPlan(spec, { type: 'approve', at: this.now() }) as Spec;
+    if (spec.current_revision_id === undefined) {
+      throw new BadRequestException(`Spec ${spec.id} has no current revision to approve`);
+    }
+    const updated = {
+      ...(transitionSpecPlan(spec, { type: 'approve', at: this.now() }) as Spec),
+      approved_revision_id: spec.current_revision_id,
+    };
     await this.repository.saveSpec(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId);
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
@@ -251,7 +257,13 @@ export class SpecPlanService {
   async approvePlan(planId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Plan> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const plan = await this.getPlan(planId);
-    const updated = transitionSpecPlan(plan, { type: 'approve', at: this.now() }) as Plan;
+    if (plan.current_revision_id === undefined) {
+      throw new BadRequestException(`Plan ${plan.id} has no current revision to approve`);
+    }
+    const updated = {
+      ...(transitionSpecPlan(plan, { type: 'approve', at: this.now() }) as Plan),
+      approved_revision_id: plan.current_revision_id,
+    };
     await this.repository.savePlan(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId);
     await this.history('plan', plan.id, plan.status, updated.status, actorId);

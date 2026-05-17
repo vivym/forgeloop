@@ -932,6 +932,81 @@ describe('Release state transitions', () => {
     ]);
   });
 
+  it('rejects candidate override approval for planning-only blockers before submit', () => {
+    const linkedWorkItem = transitionRelease(createRelease(), {
+      type: 'link_work_item',
+      work_item_id: 'work-item-1',
+    }).release;
+    const candidate = {
+      ...releasable(
+        transitionRelease(linkedWorkItem, {
+          type: 'link_execution_package',
+          execution_package_id: 'package-1',
+        }).release,
+      ),
+      rollout_strategy: undefined,
+    };
+    const snapshot = currentSnapshot(candidate);
+
+    expect(() =>
+      transitionRelease(candidate, {
+        type: 'override_approve',
+        approved_by_actor_id: 'actor-reviewer',
+        rationale: 'Release manager accepted the planning risk before approval submission.',
+        blocker_snapshot: snapshot,
+        gate_context: gateContext(candidate),
+      }),
+    ).toThrow(DomainError);
+  });
+
+  it('override-approves a candidate release only for Test/Acceptance external blockers', () => {
+    const linkedWorkItem = transitionRelease(createRelease(), {
+      type: 'link_work_item',
+      work_item_id: 'work-item-1',
+    }).release;
+    const candidate = releasable(
+      transitionRelease(linkedWorkItem, {
+        type: 'link_execution_package',
+        execution_package_id: 'package-1',
+      }).release,
+    );
+    const externalBlocker: ReleaseBlocker = {
+      code: 'missing_required_evidence_backlink',
+      category: 'evidence',
+      overrideable: true,
+      message: 'Release Test/Acceptance evidence chain is missing.',
+      object_type: 'release',
+      object_id: candidate.id,
+    };
+    const context = gateContext(candidate, { external_blockers: [externalBlocker] });
+    const snapshot = blockerSnapshot(candidate.id, deriveReleaseBlockers(context));
+
+    const result = transitionRelease(candidate, {
+      type: 'override_approve',
+      approved_by_actor_id: 'actor-reviewer',
+      rationale: 'Release manager accepted missing Test/Acceptance evidence before approval submission.',
+      blocker_snapshot: snapshot,
+      gate_context: context,
+    });
+
+    expect(releaseState(candidate)).toEqual({
+      phase: 'candidate',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+    });
+    expect(releaseState(result.release)).toEqual({
+      phase: 'rollout',
+      activity_state: 'idle',
+      gate_state: 'approved',
+      resolution: 'none',
+    });
+    expect(result.decision_intents).toEqual([
+      expect.objectContaining({ decision_type: 'manual_override', blocker_snapshot: snapshot }),
+      expect.objectContaining({ decision_type: 'release_approval', blocker_snapshot: snapshot }),
+    ]);
+  });
+
   it('blocks submit when any current blocker is non-overrideable', () => {
     const candidate = releasable(
       transitionRelease(createRelease(), {

@@ -1,6 +1,7 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
 import type {
   ActorCommandBody,
+  AcknowledgeReleaseTestAcceptanceBody,
   ApproveReleaseBody,
   CreateExecutionPackageBody,
   CreateReleaseBody,
@@ -138,6 +139,12 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       }),
     approveRelease: (releaseId: string, body: ApproveReleaseBody) =>
       request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/approve`, {
+        method: 'POST',
+        body,
+        actorId: releaseActorId(body),
+      }),
+    acknowledgeReleaseTestAcceptance: (releaseId: string, body: AcknowledgeReleaseTestAcceptanceBody) =>
+      request<ReleaseControlResponse>(`/releases/${encodeURIComponent(releaseId)}/test-acceptance/acknowledge`, {
         method: 'POST',
         body,
         actorId: releaseActorId(body),

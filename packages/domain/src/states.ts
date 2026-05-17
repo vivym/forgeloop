@@ -836,6 +836,21 @@ const hasNonOverrideableReleaseBlockers = (blockers: readonly ReleaseBlocker[]):
 const canSubmitReleaseForApproval = (blockers: readonly ReleaseBlocker[]): boolean =>
   !hasNonOverrideableReleaseBlockers(blockers);
 
+const candidateOverrideableTestAcceptanceCodes = new Set<ReleaseBlocker['code']>([
+  'failed_required_check',
+  'missing_required_artifact',
+  'missing_required_evidence_backlink',
+]);
+
+const canOverrideApproveCandidateRelease = (blockers: readonly ReleaseBlocker[]): boolean =>
+  blockers.length > 0 &&
+  blockers.every(
+    (blocker) =>
+      blocker.overrideable &&
+      isReleaseBlockerOverrideable(blocker.code) &&
+      candidateOverrideableTestAcceptanceCodes.has(blocker.code),
+  );
+
 const currentReleaseBlockerSnapshot = (
   release: Release,
   gateContext: ReleaseGateContext,
@@ -1052,13 +1067,21 @@ export const transitionRelease = (
       }
       break;
     case 'override_approve':
-      if (release.phase === 'approval' && release.gate_state === 'awaiting_approval') {
+      if (
+        (release.phase === 'approval' && release.gate_state === 'awaiting_approval') ||
+        (release.phase === 'candidate' && release.gate_state === 'not_submitted')
+      ) {
         const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
         assertRequestSnapshotMatchesCurrent(release, event.blocker_snapshot, snapshot);
+        const candidateOverride =
+          release.phase === 'candidate' && release.gate_state === 'not_submitted'
+            ? canOverrideApproveCandidateRelease(snapshot.blockers)
+            : true;
         if (
           !hasText(event.rationale) ||
           snapshot.blockers.length === 0 ||
-          hasNonOverrideableReleaseBlockers(snapshot.blockers)
+          hasNonOverrideableReleaseBlockers(snapshot.blockers) ||
+          !candidateOverride
         ) {
           break;
         }

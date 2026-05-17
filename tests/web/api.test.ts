@@ -366,6 +366,10 @@ describe('Forgeloop web API client', () => {
     });
     await api.getRelease('release/1', 'project with spaces');
     await api.submitReleaseForApproval('release/1', { actor_id: 'actor-owner' });
+    await api.acknowledgeReleaseTestAcceptance('release/1', {
+      actor_id: 'actor-qa',
+      summary: 'QA accepts the existing test evidence.',
+    });
     await api.overrideApproveRelease('release/1', {
       actor_id: 'actor-owner',
       rationale: 'Accept planning blocker.',
@@ -390,7 +394,15 @@ describe('Forgeloop web API client', () => {
       headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
       body: JSON.stringify({ actor_id: 'actor-owner' }),
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/releases/release%2F1/override-approve', {
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/releases/release%2F1/test-acceptance/acknowledge', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-qa' },
+      body: JSON.stringify({
+        actor_id: 'actor-qa',
+        summary: 'QA accepts the existing test evidence.',
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://api.local/root/releases/release%2F1/override-approve', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
       body: JSON.stringify({

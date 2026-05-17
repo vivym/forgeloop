@@ -38,6 +38,7 @@ import {
   releaseBlockerSnapshotForDecision,
 } from './public-evidence-serialization';
 import { buildReleasePublicLinkVisibility, releasePublicVisibilityKey } from './release-public-link-visibility';
+import { deriveReleaseTestAcceptanceGate, withReleaseTestAcceptanceExternalBlockers } from './release-test-acceptance-gate';
 
 const hasText = (value: string | undefined): value is string => value !== undefined && value.trim().length > 0;
 
@@ -416,6 +417,17 @@ export async function getReleaseCockpit(
     return selected === undefined ? [] : [selected];
   });
   const runSessionById = new Map(allRunSessions.map((runSession) => [runSession.id, runSession]));
+  const latestRunSessionByPackageId = new Map(
+    runSessionSelections.map((selection, index) => [executionPackages[index]!.id, selection.latest] as const),
+  );
+  const currentRunSessions = executionPackages.flatMap((executionPackage) => {
+    const selectedReviewPacket = selectedReviewPacketByPackageId.get(executionPackage.id);
+    const selectedReviewPacketRun =
+      selectedReviewPacket === undefined ? undefined : runSessionById.get(selectedReviewPacket.run_session_id);
+    const selectedRunSession =
+      selectedReviewPacket === undefined ? latestRunSessionByPackageId.get(executionPackage.id) : selectedReviewPacketRun;
+    return selectedRunSession === undefined ? [] : [selectedRunSession];
+  });
   const artifactEntries = await Promise.all(
     evidences.map(async (evidence) => [evidence.id, await artifactForEvidence(repository, evidence)] as const),
   );
@@ -430,22 +442,24 @@ export async function getReleaseCockpit(
     release,
     workItems,
     executionPackages,
-    runSessions: latestRunSessions,
+    runSessions: currentRunSessions,
     reviewPackets: currentReviewPackets,
     evidences,
     artifactsByEvidenceId,
   });
-  const context = {
+  const baseContext = {
     release,
     work_items: workItems,
     work_item_links: workItemLinks,
     execution_packages: executionPackages,
     execution_package_links: executionPackageLinks,
-    run_sessions: allRunSessions,
-    review_packets: allReviewPackets,
+    run_sessions: currentRunSessions,
+    review_packets: currentReviewPackets,
     evidence: evidences,
     public_link_visibility: visibility,
   };
+  const gate = await deriveReleaseTestAcceptanceGate(repository, release, baseContext);
+  const context = withReleaseTestAcceptanceExternalBlockers(release, baseContext, gate);
   const blockers = deriveReleaseBlockers(context);
   const serializedEvidences = evidences.map((evidence) =>
     filterUnsafeEvidenceRefs(

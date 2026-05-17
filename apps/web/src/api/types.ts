@@ -2,6 +2,8 @@ import type { input as zInput } from 'zod';
 
 import type {
   ApproveReleaseRequest,
+  AcknowledgeReleaseTestAcceptanceRequest,
+  acknowledgeReleaseTestAcceptanceRequestSchema,
   closeReleaseRequestSchema,
   createReleaseEvidenceRequestSchema,
   createReleaseRequestSchema,
@@ -15,6 +17,7 @@ import type {
 
 export type {
   ApproveReleaseRequest,
+  AcknowledgeReleaseTestAcceptanceRequest,
   CloseReleaseRequest,
   CreateReleaseEvidenceRequest,
   CreateReleaseRequest,
@@ -49,6 +52,7 @@ export type CreateReleaseBody = zInput<typeof createReleaseRequestSchema>;
 export type PatchReleaseBody = PatchReleaseRequest;
 export type ReleaseCommandBody = ReleaseActorCommandRequest;
 export type ApproveReleaseBody = ApproveReleaseRequest;
+export type AcknowledgeReleaseTestAcceptanceBody = zInput<typeof acknowledgeReleaseTestAcceptanceRequestSchema>;
 export type OverrideApproveReleaseBody = OverrideApproveReleaseRequest;
 export type RequestReleaseChangesBody = RequestReleaseChangesRequest;
 export type StartReleaseObservingBody = ReleaseActorCommandRequest;

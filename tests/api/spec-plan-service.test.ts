@@ -104,7 +104,11 @@ describe('SpecPlanService delivery API', () => {
       .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
-    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+    const approvedSpec = (
+      await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)
+    ).body;
+    expect(approvedSpec.approved_revision_id).toBe(specRevision.id);
+    expect((await request(server).get(`/specs/${spec.id}`).expect(200)).body.approved_revision_id).toBe(specRevision.id);
 
     expect((await request(server).get(`/work-items/${workItem.id}`).expect(200)).body).toMatchObject({
       phase: 'plan',
@@ -116,18 +120,71 @@ describe('SpecPlanService delivery API', () => {
     const generatedPlanRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
     expect(generatedPlanRevision.plan_id).toBe(plan.id);
 
-    await request(server).post(`/plans/${plan.id}/revisions`).send(validPlanRevision).expect(201);
+    const planRevision = (await request(server).post(`/plans/${plan.id}/revisions`).send(validPlanRevision).expect(201)).body;
     await request(server)
       .post(`/plans/${plan.id}/submit-for-approval`)
       .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
-    await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+    const approvedPlan = (
+      await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)
+    ).body;
+    expect(approvedPlan.approved_revision_id).toBe(planRevision.id);
+    expect((await request(server).get(`/plans/${plan.id}`).expect(200)).body.approved_revision_id).toBe(planRevision.id);
 
     expect((await request(server).get(`/work-items/${workItem.id}`).expect(200)).body).toMatchObject({
       phase: 'execution',
       gate_state: 'none',
       current_plan_id: plan.id,
     });
+  });
+
+  it('rejects approving a spec without a current revision', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+
+    const response = await request(server)
+      .post(`/specs/${spec.id}/approve`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer })
+      .expect(400);
+
+    expect(response.body.message).toContain('has no current revision');
+  });
+
+  it('rejects approving a plan without a current revision', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+
+    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
+    await request(server)
+      .post(`/plans/${plan.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+
+    const response = await request(server)
+      .post(`/plans/${plan.id}/approve`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer })
+      .expect(400);
+
+    expect(response.body.message).toContain('has no current revision');
   });
 });

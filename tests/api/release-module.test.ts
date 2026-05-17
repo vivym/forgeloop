@@ -6,11 +6,15 @@ import type {
   Artifact,
   Decision,
   ExecutionPackage,
+  Plan,
+  PlanRevision,
   Project,
   Release,
   ReleaseEvidenceType,
   ReviewPacket,
   RunSession,
+  Spec,
+  SpecRevision,
   WorkItem,
 } from '@forgeloop/domain';
 
@@ -57,8 +61,83 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   activity_state: 'idle',
   gate_state: 'none',
   resolution: 'completed',
+  current_spec_id: 'spec-1',
+  current_plan_id: 'plan-1',
+  current_plan_revision_id: 'plan-revision-1',
   created_at: now,
   updated_at: now,
+  ...overrides,
+});
+
+const spec = (overrides: Partial<Spec> = {}): Spec => ({
+  id: 'spec-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'spec',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'spec-revision-1',
+  approved_revision_id: 'spec-revision-1',
+  approved_at: now,
+  approved_by_actor_id: actorReviewer,
+  created_at: now,
+  updated_at: now,
+  ...overrides,
+});
+
+const specRevision = (overrides: Partial<SpecRevision> = {}): SpecRevision => ({
+  id: 'spec-revision-1',
+  spec_id: 'spec-1',
+  work_item_id: 'work-item-1',
+  revision_number: 1,
+  summary: 'Release radar spec.',
+  content: 'Expose release risk controls.',
+  background: 'Release owners need approval controls.',
+  goals: ['Release owner can approve a release.'],
+  scope_in: ['Release gate'],
+  scope_out: [],
+  acceptance_criteria: ['Release owner can approve a release.'],
+  risk_notes: [],
+  test_strategy_summary: 'Run release module API tests.',
+  artifact_refs: [],
+  created_at: now,
+  ...overrides,
+});
+
+const plan = (overrides: Partial<Plan> = {}): Plan => ({
+  id: 'plan-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'plan',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'plan-revision-1',
+  approved_revision_id: 'plan-revision-1',
+  approved_at: now,
+  approved_by_actor_id: actorReviewer,
+  created_at: now,
+  updated_at: now,
+  ...overrides,
+});
+
+const planRevision = (overrides: Partial<PlanRevision> = {}): PlanRevision => ({
+  id: 'plan-revision-1',
+  plan_id: 'plan-1',
+  work_item_id: 'work-item-1',
+  based_on_spec_revision_id: 'spec-revision-1',
+  revision_number: 1,
+  summary: 'Release radar plan.',
+  content: 'Implement release risk controls.',
+  implementation_summary: 'Use the release module API.',
+  split_strategy: 'Single package.',
+  dependency_order: [],
+  test_matrix: ['Release module API tests'],
+  risk_mitigations: [],
+  rollback_notes: 'Disable the release flag.',
+  artifact_refs: [],
+  created_at: now,
   ...overrides,
 });
 
@@ -295,8 +374,20 @@ describe('release module', () => {
     } = {},
   ) => {
     const item = workItem(overrides.work_item);
+    const specRecord = spec({ work_item_id: item.id });
+    const specRevisionRecord = specRevision({ spec_id: specRecord.id, work_item_id: item.id });
+    const planRecord = plan({ work_item_id: item.id });
+    const planRevisionRecord = planRevision({
+      plan_id: planRecord.id,
+      work_item_id: item.id,
+      based_on_spec_revision_id: specRevisionRecord.id,
+    });
     const pkg = executionPackage({
       work_item_id: item.id,
+      spec_id: specRecord.id,
+      spec_revision_id: specRevisionRecord.id,
+      plan_id: planRecord.id,
+      plan_revision_id: planRevisionRecord.id,
       ...overrides.execution_package,
     });
     const run = runSession({
@@ -309,10 +400,23 @@ describe('release module', () => {
       ...overrides.review_packet,
     });
     await repo.saveWorkItem(item);
+    await repo.saveSpec(specRecord);
+    await repo.saveSpecRevision(specRevisionRecord);
+    await repo.savePlan(planRecord);
+    await repo.savePlanRevision(planRevisionRecord);
     await repo.saveExecutionPackage(pkg);
     await repo.saveRunSession(run);
     await repo.saveReviewPacket(packet);
-    return { workItem: item, executionPackage: pkg, runSession: run, reviewPacket: packet };
+    return {
+      workItem: item,
+      spec: specRecord,
+      specRevision: specRevisionRecord,
+      plan: planRecord,
+      planRevision: planRevisionRecord,
+      executionPackage: pkg,
+      runSession: run,
+      reviewPacket: packet,
+    };
   };
 
   const createRelease = async (
@@ -524,9 +628,7 @@ describe('release module', () => {
   it('filters release lists and paginates with next_cursor', async () => {
     const { app, repo } = await track(createTestApp());
     await seedProject(repo);
-    const scope = await seedReadyScope(repo, {
-      execution_package: { gate_state: 'not_submitted', phase: 'ready', resolution: 'none' },
-    });
+    const scope = await seedReadyScope(repo);
     const first = await createRelease(app);
     const second = await createRelease(app, { title: 'Release Radar second' });
     for (const releaseId of [first.id, second.id]) {
@@ -761,10 +863,11 @@ describe('release module', () => {
   it('submits, approves, override-approves, requests changes, and re-submits releases', async () => {
     const { app, repo } = await track(createTestApp());
     await seedProject(repo);
-    const blockingScope = await seedReadyScope(repo, {
-      execution_package: { gate_state: 'not_submitted', phase: 'ready', resolution: 'none' },
+    const blockingScope = await seedReadyScope(repo);
+    const blocked = await createRelease(app, {
+      rollout_strategy: 'Ship behind a feature flag.',
+      rollback_plan: 'Disable the feature flag.',
     });
-    const blocked = await createRelease(app);
     await request(app.getHttpServer()).post(`/releases/${blocked.id}/work-items/${blockingScope.workItem.id}`).send({ actor_id: actorOwner });
     await request(app.getHttpServer())
       .post(`/releases/${blocked.id}/execution-packages/${blockingScope.executionPackage.id}`)
@@ -784,19 +887,19 @@ describe('release module', () => {
       .expect(201);
     expect(overridden.body.release).toMatchObject({ phase: 'rollout', gate_state: 'approved' });
     expect(overridden.body.overridden_blockers).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+      expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
     );
 
     const cockpit = await request(app.getHttpServer()).get(`/query/release-cockpit/${blocked.id}`).expect(200);
     expect(cockpit.body.overridden_blockers).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+      expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
     );
     expect(cockpit.body.decisions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           decision_type: 'manual_override',
           blocker_snapshot: expect.objectContaining({
-            blockers: expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+            blockers: expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
           }),
         }),
       ]),
@@ -810,7 +913,7 @@ describe('release module', () => {
           payload: expect.objectContaining({
             decision_type: 'manual_override',
             blocker_snapshot: expect.objectContaining({
-              blockers: expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+              blockers: expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
             }),
           }),
         }),
@@ -837,7 +940,7 @@ describe('release module', () => {
     );
 
     const staleScope = await seedReadyScope(repo, {
-      execution_package: { id: 'execution-package-stale', gate_state: 'not_submitted', phase: 'ready', resolution: 'none' },
+      execution_package: { id: 'execution-package-stale' },
       run_session: { id: 'run-session-stale', execution_package_id: 'execution-package-stale' },
       review_packet: { id: 'review-packet-stale', execution_package_id: 'execution-package-stale', run_session_id: 'run-session-stale' },
     });
