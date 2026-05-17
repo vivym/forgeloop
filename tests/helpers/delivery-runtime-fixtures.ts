@@ -376,6 +376,26 @@ export const seedReadyExecutionPackage = async (repository: DeliveryRepository):
     project_id: records.project.id,
   };
   await saveBaseRecords(repository, records.executionPackage, records);
+  await repository.appendObjectEvent({
+    id: `work-item-seeded-event${suffix}`,
+    object_type: 'work_item',
+    object_id: records.workItem.id,
+    event_type: 'work_item_seeded',
+    actor_type: 'system',
+    metadata: {},
+    payload: { work_item_id: records.workItem.id },
+    created_at: now,
+  });
+  await repository.appendObjectEvent({
+    id: `execution-package-seeded-event${suffix}`,
+    object_type: 'execution_package',
+    object_id: records.executionPackage.id,
+    event_type: 'execution_package_seeded',
+    actor_type: 'system',
+    metadata: {},
+    payload: { execution_package_id: records.executionPackage.id },
+    created_at: now,
+  });
   return records.executionPackage;
 };
 

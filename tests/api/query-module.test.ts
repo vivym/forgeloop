@@ -10,7 +10,7 @@ import { QueryController } from '../../apps/control-plane-api/src/modules/query/
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
-import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
+import { seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
@@ -76,8 +76,11 @@ describe('query module', () => {
     return { app, repo };
   };
 
+  const seedReadyPackage = async (app: INestApplication) =>
+    await seedReadyExecutionPackage(app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository);
+
   const createLinkedRelease = async (app: INestApplication) => {
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
     const releaseResponse = await request(app.getHttpServer())
       .post('/releases')
       .set(ownerHeaders)
@@ -129,7 +132,7 @@ describe('query module', () => {
 
   it('returns the work item cockpit from the query surface', async () => {
     const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
 
     const response = await request(app.getHttpServer())
       .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
@@ -200,7 +203,7 @@ describe('query module', () => {
 
   it('returns the work item replay from the query surface', async () => {
     const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
 
     const response = await request(app.getHttpServer())
       .get(`/query/replay/work_item/${executionPackage.work_item_id}`)
@@ -223,7 +226,7 @@ describe('query module', () => {
 
   it('returns execution package and review packet replay from the query surface', async () => {
     const { app, repo } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
     const runSession: RunSession = {
       id: 'run-session-for-replay',
       execution_package_id: executionPackage.id,
@@ -352,7 +355,7 @@ describe('query module', () => {
 
   it('serializes replay payloads through the public evidence boundary', async () => {
     const { app, repo } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
     const workItemId = executionPackage.work_item_id;
     const createdAt = '2026-05-10T00:00:00.000Z';
 
@@ -492,7 +495,7 @@ describe('query module', () => {
 
   it('does not expose old work item read routes', async () => {
     const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
 
     await request(app.getHttpServer()).get(`/work-items/${executionPackage.work_item_id}/cockpit`).expect(404);
     await request(app.getHttpServer()).get(`/work-items/${executionPackage.work_item_id}/timeline`).expect(404);
@@ -500,7 +503,7 @@ describe('query module', () => {
 
   it('preserves durable runtime metadata fallback when a leased run has no persisted runtime metadata', async () => {
     const { app, repo } = await track(createTestApp({ durabilityMode: 'durable' }));
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
     const runSession: RunSession = {
       id: 'run-session-with-old-metadata',
       execution_package_id: executionPackage.id,
