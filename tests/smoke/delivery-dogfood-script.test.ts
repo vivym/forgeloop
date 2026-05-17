@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildDurableDogfoodSeed,
   buildRunControlRequest,
   buildRunEventListRequest,
   buildRunEventStreamRequest,
@@ -12,7 +13,65 @@ import {
   requestRunEventStreamToken,
 } from '../../scripts/delivery-dogfood';
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 describe('delivery dogfood script helpers', () => {
+  it('builds durable seed data with UUID-backed actor and delivery ids', () => {
+    const seed = buildDurableDogfoodSeed({
+      prefix: 'durable-test',
+      repoId: 'forgeloop',
+      repoPath: '/repo/forgeloop',
+      now: '2026-05-08T03:00:00.000Z',
+    });
+
+    const uuidValues = [
+      seed.organization.id,
+      seed.actors.owner.id,
+      seed.actors.reviewer.id,
+      seed.actors.qa.id,
+      seed.records.project.id,
+      seed.records.workItem.id,
+      seed.records.spec.id,
+      seed.records.specRevision.id,
+      seed.records.plan.id,
+      seed.records.planRevision.id,
+      seed.records.executionPackage.id,
+      seed.records.runSession.id,
+    ];
+    for (const value of uuidValues) {
+      expect(value).toMatch(uuidPattern);
+    }
+    expect(seed.actors.owner.org_id).toBe(seed.organization.id);
+    expect(seed.actors.reviewer.org_id).toBe(seed.organization.id);
+    expect(seed.actors.qa.org_id).toBe(seed.organization.id);
+    expect(seed.records.project.org_id).toBe(seed.organization.id);
+    expect(seed.records.project.owner_actor_id).toBe(seed.actors.owner.id);
+    expect(seed.records.workItem.project_id).toBe(seed.records.project.id);
+    expect(seed.records.workItem.owner_actor_id).toBe(seed.actors.owner.id);
+    expect(seed.records.workItem.current_spec_id).toBe(seed.records.spec.id);
+    expect(seed.records.workItem.current_plan_id).toBe(seed.records.plan.id);
+    expect(seed.records.spec.work_item_id).toBe(seed.records.workItem.id);
+    expect(seed.records.spec.current_revision_id).toBe(seed.records.specRevision.id);
+    expect(seed.records.specRevision.spec_id).toBe(seed.records.spec.id);
+    expect(seed.records.plan.work_item_id).toBe(seed.records.workItem.id);
+    expect(seed.records.plan.current_revision_id).toBe(seed.records.planRevision.id);
+    expect(seed.records.planRevision.plan_id).toBe(seed.records.plan.id);
+    expect(seed.records.planRevision.dependency_order).toEqual([seed.records.executionPackage.id]);
+    expect(seed.records.executionPackage.work_item_id).toBe(seed.records.workItem.id);
+    expect(seed.records.executionPackage.spec_id).toBe(seed.records.spec.id);
+    expect(seed.records.executionPackage.spec_revision_id).toBe(seed.records.specRevision.id);
+    expect(seed.records.executionPackage.plan_id).toBe(seed.records.plan.id);
+    expect(seed.records.executionPackage.plan_revision_id).toBe(seed.records.planRevision.id);
+    expect(seed.records.executionPackage.project_id).toBe(seed.records.project.id);
+    expect(seed.records.executionPackage.owner_actor_id).toBe(seed.actors.owner.id);
+    expect(seed.records.executionPackage.reviewer_actor_id).toBe(seed.actors.reviewer.id);
+    expect(seed.records.executionPackage.qa_owner_actor_id).toBe(seed.actors.qa.id);
+    expect(seed.records.executionPackage.required_test_gates).toEqual([]);
+    expect(seed.records.executionPackage.last_run_session_id).toBe(seed.records.runSession.id);
+    expect(seed.records.runSession.execution_package_id).toBe(seed.records.executionPackage.id);
+    expect(seed.records.runSession.requested_by_actor_id).toBe(seed.actors.owner.id);
+  });
+
   it('sends durable public run API actor identity as X-Forgeloop-Actor-Id headers', () => {
     expect(buildRunPackageRequest('package-1', { mode: 'durable', actorId: 'actor-owner' })).toMatchObject({
       path: '/execution-packages/package-1/run',

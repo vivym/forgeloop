@@ -1,35 +1,26 @@
 # Delivery Loop Verification
 
-Generated: 2026-05-09T05:35:24Z
-Deterministic dogfood status: PASS
-Strict local_codex status: PASS
+Generated: 2026-05-17T14:40:22.983Z
+Dogfood status: PASS
 
 ## Commands
 
 - `pnpm test`
 - `pnpm build`
-- `pnpm install --frozen-lockfile`
 - `pnpm smoke:delivery`
 - `pnpm dogfood:delivery`
-- `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm db:push`
-- `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:delivery:durable`
-- `pnpm e2e:run-console`
 
 ## Expected Outcomes
 
 - `pnpm test`: all Vitest suites pass.
 - `pnpm build`: all workspace packages and apps compile.
-- `pnpm install --frozen-lockfile`: the CI dependency install path succeeds without lockfile changes.
 - `pnpm smoke:delivery`: Delivery smoke suite passes and observes public run events before waiting for terminal evidence.
 - `pnpm dogfood:delivery`: exits 0 only when fake-driver live events, SSE append, input/cancel/resume commands, event backfill, lease takeover, final evidence, and Review Packet approval pass. Durable public API auth and repository checks run when `FORGELOOP_DATABASE_URL` is set.
-- `pnpm db:push`: Drizzle schema push applies successfully against the local Postgres durable database.
-- `pnpm dogfood:delivery:durable`: durable dogfood exits 0 using the provided Postgres database.
-- `pnpm e2e:run-console`: browser Run Console E2E passes at desktop and mobile widths.
 
 ## Dogfood Preconditions
 
-- API URL: http://127.0.0.1:63100
-- Repo path: /Users/viv/projs/forgeloop/.worktrees/delivery-dogfood-readiness
+- API URL: http://127.0.0.1:61251
+- Repo path: /Users/viv/projs/forgeloop/.worktrees/feature/delivery-boundary-role-workbench
 - Repo id: forgeloop
 - Volatile dogfood uses an in-process volatile_demo API and deterministic fake drivers for repeatable long-running run verification.
 - Durable dogfood uses X-Forgeloop-Actor-Id for public run APIs and stream_token for SSE when `FORGELOOP_DATABASE_URL` is set.
@@ -39,38 +30,35 @@ Strict local_codex status: PASS
 ## Dogfood Results
 
 - live-input-fake-driver: PASSED
-  - Package: execution-package-27
-  - RunSession: run-session-30
-  - ReviewPacket: review-packet:run-session-30
+  - Package: f263ccef-45d0-4f73-b4d7-5a89c8792110
+  - RunSession: 5cf8a3af-7b37-4b36-ac80-05720460334c
+  - ReviewPacket: f6c54bfe-a326-5d54-8774-eb791bd804d2
   - Evidence checks passed.
 - restart-backfill-lease-takeover: PASSED
-  - Package: execution-package-63
-  - RunSession: run-session-66
-  - ReviewPacket: review-packet:run-session-66
+  - Package: b0411bf2-45c8-4841-80b8-519da82c5742
+  - RunSession: 578cb309-1a57-4e48-acc3-d0babe5cb1c5
+  - ReviewPacket: ccb4b9ec-aea3-5a86-a2f0-fbdd787a93ce
   - Evidence checks passed.
 
 ## DB And Manual/Web Verification
 
 - DB schema push: PASSED
-  - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm db:push` applied changes successfully against Docker Postgres.
+  - FORGELOOP_DATABASE_URL is set and `pnpm db:push` completed.
 - Run Console HTTP/SSE command semantics: PASSED
   - Verified event backfill, SSE append, input submission/delivery, resume command, and cancel command through public run APIs.
-- Volatile public API actor fallback: PASSED
-  - Volatile demo public APIs were exercised with legacy body/query actor fallback.
+- Durable public API actor header auth: PASSED
+  - Run, event backfill, input, cancel, and resume public APIs were exercised with X-Forgeloop-Actor-Id.
+- Durable SSE stream-token auth: PASSED
+  - SSE first requested a stream token with X-Forgeloop-Actor-Id and opened the stream with stream_token.
 - Durable repository restart recovery: PASSED
-  - `FORGELOOP_DATABASE_URL=postgresql://forgeloop:forgeloop@localhost:5432/forgeloop pnpm dogfood:delivery:durable` exited 0 with: "Durable Delivery dogfood passed using provided database forgeloop."
-- Strict local_codex dogfood: PASSED
-  - Command: `FORGELOOP_DATABASE_URL=... FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE=1 FORGELOOP_REPO_PATH="$CLOSURE_REPO_PATH" pnpm dogfood:delivery:work-items`
-  - Report: `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`
-  - Evidence: command exited 0 on commit `df6776ee62621969cb5c0b65b2295b30c149d001`; report says `Strict local_codex acceptance: passed` with 2 qualifying local_codex Work Items.
-  - Review Packets: `review-packet:run-session-b2b234829e93-28` and `review-packet:run-session-b2b234829e93-56` completed with `approved`.
-  - Post-run process probe found no dogfood-owned `codex app-server` or `codex exec` children left behind.
-- Web app probe: PASSED
-  - `pnpm e2e:run-console` started the API and Vite web app in-process and exercised the browser workbench.
-- Browser visual/text-overflow verification: PASSED
-  - `pnpm e2e:run-console` asserted Run Console usability at 1280x800 and 390x844 viewports.
+  - Used fresh Drizzle repository instances over the same Postgres database, with the pool closed and reopened across the restart boundary.
+  - RunSession 650a79d2-cc2b-4770-ba83-93886291b714 backfilled events by cursor, reclaimed an expired lease, and completed without duplicate input delivery.
+  - Verified terminal changed files, checks, artifacts, and Review Packet readiness through repository reads.
+- Web app probe: SKIPPED
+  - No web app responded at http://localhost:5173, http://localhost:5174.
+- Browser visual/text-overflow verification: SKIPPED
+  - Run Console visual layout and narrow viewport text overflow remain unverified because no web app/browser target was available to this script.
 
 ## Actual Results
 
-- Deterministic dogfood run finished with status PASS.
-- Strict local_codex dogfood finished with status PASS.
+- Last dogfood run finished with status PASS.

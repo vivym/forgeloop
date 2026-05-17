@@ -115,14 +115,14 @@ export class SpecPlanService {
       risk_notes: [workItem.risk],
       test_strategy_summary: `Validate ${workItem.title} with API and workflow tests.`,
       structured_document: { generated_by: 'mock_spec_draft_adapter', work_item_id: workItem.id },
-      author_actor_id: 'ai-spec-drafter',
+      author_actor_id: workItem.owner_actor_id,
     });
     const updated = transitionSpecPlan({ ...drafting, current_revision_id: revision.id }, {
       type: 'generate_draft_success',
       at: this.now(),
     }) as Spec;
     await this.repository.saveSpec(updated);
-    await this.event('spec_revision', revision.id, 'spec_draft_generated', 'ai-spec-drafter', { spec_id: spec.id });
+    await this.event('spec_revision', revision.id, 'spec_draft_generated', workItem.owner_actor_id, { spec_id: spec.id });
     return revision;
   }
 
@@ -233,14 +233,14 @@ export class SpecPlanService {
       rollback_notes: 'Revert the execution package changes.',
       based_on_spec_revision_id: specRevision.id,
       structured_document: { generated_by: 'mock_plan_draft_adapter', spec_revision_id: specRevision.id },
-      author_actor_id: 'ai-plan-drafter',
+      author_actor_id: workItem.owner_actor_id,
     });
     const updated = transitionSpecPlan({ ...drafting, current_revision_id: revision.id }, {
       type: 'generate_draft_success',
       at: this.now(),
     }) as Plan;
     await this.repository.savePlan(updated);
-    await this.event('plan_revision', revision.id, 'plan_draft_generated', 'ai-plan-drafter', { plan_id: plan.id });
+    await this.event('plan_revision', revision.id, 'plan_draft_generated', workItem.owner_actor_id, { plan_id: plan.id });
     return revision;
   }
 

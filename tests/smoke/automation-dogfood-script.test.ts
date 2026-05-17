@@ -27,7 +27,7 @@ describe('automation dogfood script', () => {
     const source = readText('scripts/automation-dogfood.ts');
 
     expect(source).toContain('/automation/projects/${project.id}/capabilities');
-    expect(source).not.toMatch(new RegExp('/' + 'p' + '0' + String.raw`/projects/[^'"`]+/automation/capabilities`));
+    expect(source).not.toMatch(new RegExp(['/', 'p', '0', String.raw`/projects/[^'"\`]+/automation/capabilities`].join('')));
     expect(source).not.toContain('/' + 'p' + '0' + '/manual-path-holds');
   });
 

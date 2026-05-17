@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { dirname, resolve } from 'node:path';
@@ -10,7 +11,9 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import type {
+  Actor,
   ExecutionPackage,
+  Organization,
   Plan,
   PlanRevision,
   Project,
@@ -86,9 +89,10 @@ const actorHeaderName = 'X-Forgeloop-Actor-Id';
 const reportPath = resolve(process.env.FORGELOOP_REPORT_PATH ?? 'docs/superpowers/reports/delivery-loop-verification.md');
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
-const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
-const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
-const actorQa = process.env.FORGELOOP_ACTOR_QA ?? 'actor-qa';
+const dogfoodOrgId = process.env.FORGELOOP_ORG_ID ?? '00000000-0000-4000-8000-000000000100';
+const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? '00000000-0000-4000-8000-000000000101';
+const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? '00000000-0000-4000-8000-000000000102';
+const actorQa = process.env.FORGELOOP_ACTOR_QA ?? '00000000-0000-4000-8000-000000000103';
 const databaseUrl = process.env.FORGELOOP_DATABASE_URL?.trim();
 const webUrlCandidates = (process.env.FORGELOOP_WEB_URL ?? 'http://localhost:5173,http://localhost:5174')
   .split(',')
@@ -97,6 +101,7 @@ const webUrlCandidates = (process.env.FORGELOOP_WEB_URL ?? 'http://localhost:517
 
 const commandLog = ['pnpm test', 'pnpm build', 'pnpm smoke:delivery', 'pnpm dogfood:delivery'];
 const terminalRunStatuses = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const noopRunWorker = {
   kick: () => undefined,
@@ -565,7 +570,7 @@ const dogfoodEvidence = async (input: Parameters<ConstructorParameters<typeof Ru
     kind,
     name: `${kind}.txt`,
     content_type: 'text/plain',
-    local_ref: `${input.artifactRoot}/${input.runSpec.run_session_id}/${kind}.txt`,
+    storage_uri: `https://example.test/forgeloop/dogfood/${input.runSpec.run_session_id}/${kind}.txt`,
   })),
   raw_metadata: { dogfood: true, workspace_path: `${repoPath}/.worktrees/${input.runSpec.run_session_id}` },
 });
@@ -1041,42 +1046,98 @@ const dogfoodRestartRun = async (
   };
 };
 
-const durableRecordsFor = (prefix: string): {
-  project: Project;
-  projectRepo: ProjectRepo;
-  workItem: WorkItem;
-  spec: Spec;
-  specRevision: SpecRevision;
-  plan: Plan;
-  planRevision: PlanRevision;
-  executionPackage: ExecutionPackage;
-  runSession: RunSession;
-  command: RunCommand;
-} => {
-  const now = '2026-05-08T03:00:00.000Z';
-  const runSessionId = `${prefix}-run-session`;
+const assertUuid = (label: string, value: string): void => {
+  if (!uuidPattern.test(value)) {
+    throw new Error(`${label} must be a UUID when FORGELOOP_DATABASE_URL is set.`);
+  }
+};
+
+type DurableDogfoodSeed = {
+  organization: Organization;
+  actors: { owner: Actor; reviewer: Actor; qa: Actor };
+  records: {
+    project: Project;
+    projectRepo: ProjectRepo;
+    workItem: WorkItem;
+    spec: Spec;
+    specRevision: SpecRevision;
+    plan: Plan;
+    planRevision: PlanRevision;
+    executionPackage: ExecutionPackage;
+    runSession: RunSession;
+    command: RunCommand;
+  };
+};
+
+export const buildDurableDogfoodSeed = (input: {
+  prefix: string;
+  repoId: string;
+  repoPath: string;
+  now: string;
+  organizationId?: string;
+  actorOwner?: string;
+  actorReviewer?: string;
+  actorQa?: string;
+}): DurableDogfoodSeed => {
+  const organizationId = input.organizationId ?? dogfoodOrgId;
+  const ownerActorId = input.actorOwner ?? actorOwner;
+  const reviewerActorId = input.actorReviewer ?? actorReviewer;
+  const qaActorId = input.actorQa ?? actorQa;
+  assertUuid('FORGELOOP_ORG_ID', organizationId);
+  assertUuid('FORGELOOP_ACTOR_OWNER', ownerActorId);
+  assertUuid('FORGELOOP_ACTOR_REVIEWER', reviewerActorId);
+  assertUuid('FORGELOOP_ACTOR_QA', qaActorId);
+
+  const now = input.now;
+  const projectId = randomUUID();
+  const workItemId = randomUUID();
+  const specId = randomUUID();
+  const specRevisionId = randomUUID();
+  const planId = randomUUID();
+  const planRevisionId = randomUUID();
+  const executionPackageId = randomUUID();
+  const runSessionId = randomUUID();
+  const organization: Organization = {
+    id: organizationId,
+    name: 'Delivery Dogfood',
+    created_at: now,
+    updated_at: now,
+  };
+  const actor = (id: string, displayName: string): Actor => ({
+    id,
+    org_id: organization.id,
+    actor_type: 'human',
+    display_name: displayName,
+    created_at: now,
+    updated_at: now,
+  });
+  const owner = actor(ownerActorId, 'Delivery Dogfood Owner');
+  const reviewer = actor(reviewerActorId, 'Delivery Dogfood Reviewer');
+  const qa = actor(qaActorId, 'Delivery Dogfood QA');
   const project: Project = {
-    id: `${prefix}-project`,
-    name: `Forgeloop delivery durable dogfood ${prefix}`,
-    repo_ids: [`${prefix}-repo`],
-    owner_actor_id: actorOwner,
+    id: projectId,
+    org_id: organization.id,
+    name: `Forgeloop delivery durable dogfood ${input.prefix}`,
+    repo_ids: [`${input.prefix}-repo`],
+    owner_actor_id: owner.id,
     created_at: now,
     updated_at: now,
   };
   const projectRepo: ProjectRepo = {
-    id: `${prefix}-project-repo`,
-    repo_id: `${prefix}-repo`,
+    id: `${input.prefix}-project-repo`,
+    org_id: organization.id,
+    repo_id: `${input.prefix}-repo`,
     project_id: project.id,
-    name: repoId,
+    name: input.repoId,
     status: 'active',
-    local_path: repoPath,
+    local_path: input.repoPath,
     default_branch: 'main',
     base_commit_sha: 'dogfood-durable-base',
     created_at: now,
     updated_at: now,
   };
   const workItem: WorkItem = {
-    id: `${prefix}-work-item`,
+    id: workItemId,
     project_id: project.id,
     kind: 'tech_debt',
     title: 'Durable dogfood restart recovery',
@@ -1084,30 +1145,30 @@ const durableRecordsFor = (prefix: string): {
     success_criteria: ['Events backfill after restart.', 'Worker lease takeover completes without duplicate input.'],
     priority: 'P0',
     risk: 'medium',
-    owner_actor_id: actorOwner,
+    owner_actor_id: owner.id,
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'none',
     resolution: 'none',
-    current_spec_id: `${prefix}-spec`,
-    current_plan_id: `${prefix}-plan`,
+    current_spec_id: specId,
+    current_plan_id: planId,
     created_at: now,
     updated_at: now,
   };
   const spec: Spec = {
-    id: `${prefix}-spec`,
+    id: specId,
     work_item_id: workItem.id,
     entity_type: 'spec',
     status: 'approved',
     editing_state: 'idle',
     gate_state: 'approved',
     resolution: 'approved',
-    current_revision_id: `${prefix}-spec-revision`,
+    current_revision_id: specRevisionId,
     created_at: now,
     updated_at: now,
   };
   const specRevision: SpecRevision = {
-    id: `${prefix}-spec-revision`,
+    id: specRevisionId,
     spec_id: spec.id,
     work_item_id: workItem.id,
     revision_number: 1,
@@ -1124,19 +1185,19 @@ const durableRecordsFor = (prefix: string): {
     created_at: now,
   };
   const plan: Plan = {
-    id: `${prefix}-plan`,
+    id: planId,
     work_item_id: workItem.id,
     entity_type: 'plan',
     status: 'approved',
     editing_state: 'idle',
     gate_state: 'approved',
     resolution: 'approved',
-    current_revision_id: `${prefix}-plan-revision`,
+    current_revision_id: planRevisionId,
     created_at: now,
     updated_at: now,
   };
   const planRevision: PlanRevision = {
-    id: `${prefix}-plan-revision`,
+    id: planRevisionId,
     plan_id: plan.id,
     work_item_id: workItem.id,
     revision_number: 1,
@@ -1144,7 +1205,7 @@ const durableRecordsFor = (prefix: string): {
     content: 'Seed a recoverable run, rebuild repository/app instances, then let a worker reclaim it.',
     implementation_summary: 'Use Drizzle/Postgres repository instances over the same database.',
     split_strategy: 'Single durable recovery check.',
-    dependency_order: [`${prefix}-execution-package`],
+    dependency_order: [executionPackageId],
     test_matrix: ['pnpm dogfood:delivery'],
     risk_mitigations: [],
     rollback_notes: 'Remove dogfood records by prefix if needed.',
@@ -1153,7 +1214,7 @@ const durableRecordsFor = (prefix: string): {
   };
   const generatedPackage = transitionExecutionPackage(undefined, {
     type: 'generate_package',
-    id: `${prefix}-execution-package`,
+    id: executionPackageId,
     work_item_id: workItem.id,
     spec_id: spec.id,
     spec_revision_id: specRevision.id,
@@ -1162,9 +1223,9 @@ const durableRecordsFor = (prefix: string): {
     project_id: project.id,
     repo_id: projectRepo.repo_id,
     objective: 'Durable dogfood recovery package.',
-    owner_actor_id: actorOwner,
-    reviewer_actor_id: actorReviewer,
-    qa_owner_actor_id: actorQa,
+    owner_actor_id: owner.id,
+    reviewer_actor_id: reviewer.id,
+    qa_owner_actor_id: qa.id,
     required_checks: [
       {
         check_id: 'dogfood-required',
@@ -1184,6 +1245,7 @@ const durableRecordsFor = (prefix: string): {
     ...transitionExecutionPackage(readyPackage, { type: 'run', run_session_id: runSessionId, at: now }),
     phase: 'execution',
     activity_state: 'ai_running',
+    required_test_gates: [],
     updated_at: now,
   } satisfies ExecutionPackage;
   const runSpec = {
@@ -1195,7 +1257,7 @@ const durableRecordsFor = (prefix: string): {
     executor_type: 'mock' as const,
     repo: {
       repo_id: projectRepo.repo_id,
-      local_path: repoPath,
+      local_path: input.repoPath,
       base_branch: projectRepo.default_branch,
       base_commit_sha: projectRepo.base_commit_sha,
     },
@@ -1220,7 +1282,7 @@ const durableRecordsFor = (prefix: string): {
       type: 'create',
       id: runSessionId,
       execution_package_id: executionPackage.id,
-      requested_by_actor_id: actorOwner,
+      requested_by_actor_id: owner.id,
       executor_type: 'mock',
       at: now,
     }),
@@ -1230,8 +1292,8 @@ const durableRecordsFor = (prefix: string): {
       durability_mode: 'durable',
       driver_kind: 'fake',
       driver_status: 'waiting_for_input',
-      codex_thread_id: `${prefix}-thread`,
-      active_turn_id: `${prefix}-turn`,
+      codex_thread_id: `${input.prefix}-thread`,
+      active_turn_id: `${input.prefix}-turn`,
       recovery_attempt_count: 0,
       effective_dangerous_mode: 'not_requested',
     },
@@ -1239,26 +1301,39 @@ const durableRecordsFor = (prefix: string): {
     updated_at: now,
   };
   const command: RunCommand = {
-    id: `${prefix}-run-command-applied-input`,
+    id: `${input.prefix}-run-command-applied-input`,
     run_session_id: runSessionId,
     command_type: 'input',
     status: 'applied',
-    actor_id: actorOwner,
+    actor_id: owner.id,
     payload: { message: 'This input was applied before durable restart.' },
-    target_turn_id: `${prefix}-turn`,
-    claimed_by_worker_id: `${prefix}-old-worker`,
+    target_turn_id: `${input.prefix}-turn`,
+    claimed_by_worker_id: `${input.prefix}-old-worker`,
     claimed_at: '2026-05-08T03:00:01.000Z',
     applied_at: '2026-05-08T03:00:02.000Z',
-    driver_ack: { continuity: { thread_id: `${prefix}-thread`, turn_id: `${prefix}-turn-after-input` } },
+    driver_ack: { continuity: { thread_id: `${input.prefix}-thread`, turn_id: `${input.prefix}-turn-after-input` } },
     created_at: now,
     updated_at: '2026-05-08T03:00:02.000Z',
   };
 
-  return { project, projectRepo, workItem, spec, specRevision, plan, planRevision, executionPackage, runSession, command };
+  return {
+    organization,
+    actors: { owner, reviewer, qa },
+    records: { project, projectRepo, workItem, spec, specRevision, plan, planRevision, executionPackage, runSession, command },
+  };
+};
+
+const saveDurableDogfoodIdentity = async (repository: DeliveryRepository, seed: Pick<DurableDogfoodSeed, 'organization' | 'actors'>): Promise<void> => {
+  await repository.saveOrganization(seed.organization);
+  await repository.saveActor(seed.actors.owner);
+  await repository.saveActor(seed.actors.reviewer);
+  await repository.saveActor(seed.actors.qa);
 };
 
 const seedDurableRecoverableRun = async (repository: DeliveryRepository, prefix: string): Promise<{ runSessionId: string; queuedCursor: string }> => {
-  const records = durableRecordsFor(prefix);
+  const seed = buildDurableDogfoodSeed({ prefix, repoId, repoPath, now: '2026-05-08T03:00:00.000Z' });
+  await saveDurableDogfoodIdentity(repository, seed);
+  const records = seed.records;
   await repository.saveProject(records.project);
   await repository.saveProjectRepo(records.projectRepo);
   await repository.saveWorkItem(records.workItem);
@@ -1536,6 +1611,10 @@ const main = async (): Promise<number> => {
     checks.push(dbPush);
     if (mode === 'durable' && dbPush.status !== 'passed') {
       throw new Error('FORGELOOP_DATABASE_URL is set but DB schema push did not pass.');
+    }
+    if (mode === 'durable') {
+      const seed = buildDurableDogfoodSeed({ prefix: `dogfood-api-${Date.now()}`, repoId, repoPath, now: new Date().toISOString() });
+      await saveDurableDogfoodIdentity(repository, seed);
     }
 
     const started = await createApiApp(repository, { durabilityMode: mode });

@@ -365,12 +365,25 @@ describe('release flow dogfood script helpers', () => {
           runStrictLocalCodexPackage: async (input) => {
             await input.runWorkerDrain?.();
             input.cleanupActions?.push({ label: 'worktree', run: async () => undefined });
+            const planRevision = await repository.getPlanRevision(input.planRevisionId);
+            if (planRevision === undefined) {
+              throw new Error('expected strict local Codex plan revision fixture');
+            }
+            const workItem = await repository.getWorkItem(planRevision.work_item_id);
+            if (workItem?.current_spec_id === undefined) {
+              throw new Error('expected strict local Codex work item spec fixture');
+            }
+            const spec = await repository.getSpec(workItem.current_spec_id);
+            const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id;
+            if (specRevisionId === undefined) {
+              throw new Error('expected strict local Codex approved spec revision fixture');
+            }
             await repository.saveExecutionPackage({
               id: 'strict-package-1',
-              work_item_id: 'strict-work-item-1',
-              spec_id: 'strict-spec-1',
-              spec_revision_id: 'strict-spec-revision-1',
-              plan_id: 'strict-plan-1',
+              work_item_id: workItem.id,
+              spec_id: workItem.current_spec_id,
+              spec_revision_id: specRevisionId,
+              plan_id: planRevision.plan_id,
               plan_revision_id: input.planRevisionId,
               project_id: input.projectId,
               repo_id: 'forgeloop-source',

@@ -139,6 +139,26 @@ describe('SpecPlanService delivery API', () => {
     });
   });
 
+  it('uses the WorkItem owner as the generated draft actor anchor', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    const generatedSpecRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
+    expect(generatedSpecRevision.author_actor_id).toBe(actorOwner);
+
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+
+    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
+    const generatedPlanRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
+    expect(generatedPlanRevision.author_actor_id).toBe(actorOwner);
+  });
+
   it('rejects approving a spec without a current revision', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
