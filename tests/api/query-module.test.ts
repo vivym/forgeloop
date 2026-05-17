@@ -219,6 +219,74 @@ describe('query module', () => {
     );
   });
 
+  it('returns execution package and review packet replay from the query surface', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const runSession: RunSession = {
+      id: 'run-session-for-replay',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      status: 'succeeded',
+      executor_type: 'mock',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      created_at: later,
+      updated_at: later,
+      finished_at: later,
+    };
+    const reviewPacketId = 'review-packet-for-replay';
+
+    await repo.saveRunSession(runSession);
+    await repo.saveReviewPacket({
+      id: reviewPacketId,
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      reviewer_actor_id: executionPackage.reviewer_actor_id,
+      spec_revision_id: executionPackage.spec_revision_id,
+      plan_revision_id: executionPackage.plan_revision_id,
+      status: 'ready',
+      decision: 'none',
+      changed_files: [],
+      check_result_summary: 'Required checks passed.',
+      self_review: {
+        status: 'succeeded',
+        summary: 'Ready for public replay.',
+        spec_plan_alignment: 'Aligned.',
+        test_assessment: 'Passed.',
+        risk_notes: [],
+        follow_up_questions: [],
+      },
+      risk_notes: [],
+      requested_changes: [],
+      created_at: later,
+      updated_at: later,
+    });
+    await repo.appendObjectEvent({
+      id: 'review-packet-replay-event',
+      object_type: 'review_packet',
+      object_id: reviewPacketId,
+      event_type: 'review_packet_ready',
+      actor_type: 'system',
+      metadata: {},
+      payload: { review_packet_id: reviewPacketId },
+      created_at: later,
+    });
+
+    const packageReplay = await request(app.getHttpServer())
+      .get(`/query/replay/execution_package/${executionPackage.id}`)
+      .expect(200);
+    const reviewReplay = await request(app.getHttpServer()).get(`/query/replay/review_packet/${reviewPacketId}`).expect(200);
+
+    expect(packageReplay.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object_type: 'execution_package', object_id: executionPackage.id })]),
+    );
+    expect(reviewReplay.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object_type: 'review_packet', object_id: reviewPacketId })]),
+    );
+  });
+
   it('returns the release replay from the query surface through the public boundary', async () => {
     const { app } = await track(createTestApp());
     const { releaseId } = await createLinkedRelease(app);
@@ -415,6 +483,7 @@ describe('query module', () => {
     const { app } = await track(createTestApp());
 
     const response = await request(app.getHttpServer()).get('/query/replay/unsupported/missing').expect(400);
+    await request(app.getHttpServer()).get('/query/replay/incident/incident-1').expect(400);
 
     expect(response.body.message).toContain('Unsupported replay object type');
   });

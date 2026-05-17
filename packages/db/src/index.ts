@@ -9,5 +9,6 @@ export * from './queries/release-cockpit-queries';
 export * from './queries/release-test-acceptance-gate';
 export * from './queries/release-public-link-visibility';
 export * from './queries/replay-queries';
+export * from './queries/role-workbench-queries';
 export * from './queries/public-evidence-serialization';
 export * from './reset';

@@ -43,6 +43,8 @@ export type {
   ReleaseListResponse,
   ReleaseResourceResponse,
   RequestReleaseChangesRequest,
+  RoleWorkbenchAction,
+  RoleWorkbenchResponse,
   StartReleaseObservingRequest,
   SubmitReleaseForApprovalRequest,
   UnlinkReleaseObjectRequest,
@@ -61,6 +63,26 @@ export type CreateReleaseEvidenceBody = zInput<typeof createReleaseEvidenceReque
 export type LinkReleaseScopeBody = LinkReleaseObjectRequest;
 export type UnlinkReleaseScopeBody = ReleaseActorCommandRequest;
 export type ListReleasesQuery = zInput<typeof releaseListQuerySchema>;
+
+export type RoleWorkbenchId =
+  | 'intake'
+  | 'spec-approver'
+  | 'execution-owner'
+  | 'reviewer'
+  | 'qa-test-owner'
+  | 'release-owner'
+  | 'manager-health';
+
+export interface RoleWorkbenchQuery {
+  project_id?: string;
+  actor_id?: string;
+  kind?: string;
+  limit?: number;
+  cursor?: string;
+  phase?: string;
+  status?: string;
+  risk?: string;
+}
 
 export type WorkItemKind = 'requirement' | 'bug' | 'tech_debt';
 export type ArtifactKind =

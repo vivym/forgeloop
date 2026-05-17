@@ -518,7 +518,8 @@ export async function runDeliveryRepositoryContract(repository: DeliveryReposito
   }
 
   expect(await repository.getRelease(ids.release)).toEqual(release);
-  expect(await repository.listReleasesForProject(ids.project)).toEqual([release]);
+  expect(await repository.listReleases(ids.project)).toEqual([release]);
+  expect(await repository.listReleases()).toEqual([release]);
   expect(await repository.listReleaseWorkItems(ids.release)).toEqual([releaseWorkItem2, releaseWorkItem]);
   expect(await repository.listReleaseExecutionPackages(ids.release)).toEqual([
     releaseExecutionPackage2,

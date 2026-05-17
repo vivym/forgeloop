@@ -1369,8 +1369,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return release === undefined ? undefined : this.hydrateReleaseLinks(release);
   }
 
-  async listReleasesForProject(projectId: string): Promise<Release[]> {
-    const releaseRows = await this.listWhere<Release>(releases, eq(releases.projectId, projectId), releases.createdAt);
+  async listReleases(projectId?: string): Promise<Release[]> {
+    const releaseRows = await this.listWhere<Release>(
+      releases,
+      projectId === undefined ? undefined : eq(releases.projectId, projectId),
+      releases.createdAt,
+    );
     return Promise.all(releaseRows.map((release) => this.hydrateReleaseLinks(release)));
   }
 

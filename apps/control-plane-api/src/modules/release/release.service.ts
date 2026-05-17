@@ -311,7 +311,7 @@ export class ReleaseService {
   }
 
   async listReleases(query: ReleaseListQuery): Promise<ReleaseListResponse> {
-    const releases = (await this.repository.listReleasesForProject(query.project_id))
+    const releases = (await this.repository.listReleases(query.project_id))
       .filter((release) => release.release_owner_actor_id === (query.release_owner_actor_id ?? release.release_owner_actor_id))
       .filter((release) => release.phase === (query.phase ?? release.phase))
       .filter((release) => release.gate_state === (query.gate_state ?? release.gate_state))

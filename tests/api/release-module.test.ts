@@ -502,7 +502,7 @@ describe('release module', () => {
       })
       .expect(500);
 
-    expect(await repo.listReleasesForProject('project-1')).toEqual([]);
+    expect(await repo.listReleases('project-1')).toEqual([]);
     expect(await repo.listObjectEvents('project-1', 'release')).toEqual([]);
   });
 

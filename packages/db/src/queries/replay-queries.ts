@@ -400,6 +400,52 @@ const getReleaseReplayTimeline = async (
   return entries.sort((left, right) => left.created_at.localeCompare(right.created_at));
 };
 
+const getExecutionPackageReplayTimeline = async (
+  repository: DeliveryRepository,
+  objectId: string,
+): Promise<PublicReplayEntry[] | undefined> => {
+  const executionPackage = await repository.getExecutionPackage(objectId);
+  if (executionPackage === undefined) {
+    return undefined;
+  }
+
+  const objectRefs: ObjectRef[] = [];
+  const seenObjectRefs = new Set<string>();
+  addObjectRef(objectRefs, seenObjectRefs, { objectType: 'execution_package', objectId: executionPackage.id });
+  for (const runSession of await repository.listRunSessionsForPackage(executionPackage.id)) {
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'run_session', objectId: runSession.id });
+  }
+  for (const reviewPacket of await repository.listReviewPacketsForPackage(executionPackage.id)) {
+    addObjectRef(objectRefs, seenObjectRefs, { objectType: 'review_packet', objectId: reviewPacket.id });
+  }
+
+  const entries: PublicReplayEntry[] = [];
+  await appendSerializedReplayEntries(repository, entries, objectRefs);
+
+  return entries.sort((left, right) => left.created_at.localeCompare(right.created_at));
+};
+
+const getReviewPacketReplayTimeline = async (
+  repository: DeliveryRepository,
+  objectId: string,
+): Promise<PublicReplayEntry[] | undefined> => {
+  const reviewPacket = await repository.getReviewPacket(objectId);
+  if (reviewPacket === undefined) {
+    return undefined;
+  }
+
+  const objectRefs: ObjectRef[] = [];
+  const seenObjectRefs = new Set<string>();
+  addObjectRef(objectRefs, seenObjectRefs, { objectType: 'review_packet', objectId: reviewPacket.id });
+  addObjectRef(objectRefs, seenObjectRefs, { objectType: 'run_session', objectId: reviewPacket.run_session_id });
+  addObjectRef(objectRefs, seenObjectRefs, { objectType: 'execution_package', objectId: reviewPacket.execution_package_id });
+
+  const entries: PublicReplayEntry[] = [];
+  await appendSerializedReplayEntries(repository, entries, objectRefs);
+
+  return entries.sort((left, right) => left.created_at.localeCompare(right.created_at));
+};
+
 export async function getObjectReplayTimeline(
   repository: DeliveryRepository,
   objectType: string,
@@ -411,6 +457,14 @@ export async function getObjectReplayTimeline(
 
   if (objectType === 'release') {
     return getReleaseReplayTimeline(repository, objectId);
+  }
+
+  if (objectType === 'execution_package') {
+    return getExecutionPackageReplayTimeline(repository, objectId);
+  }
+
+  if (objectType === 'review_packet') {
+    return getReviewPacketReplayTimeline(repository, objectId);
   }
 
   return undefined;

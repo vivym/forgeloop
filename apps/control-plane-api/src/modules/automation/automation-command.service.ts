@@ -1265,7 +1265,7 @@ export class AutomationCommandService {
         });
       }
     }
-    const linkedReleases = (await repository.listReleasesForProject(executionPackage.project_id)).filter((release) =>
+    const linkedReleases = (await repository.listReleases(executionPackage.project_id)).filter((release) =>
       release.execution_package_ids.includes(executionPackage.id),
     );
     for (const release of linkedReleases) {

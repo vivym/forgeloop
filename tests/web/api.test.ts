@@ -419,6 +419,11 @@ describe('Forgeloop web API client', () => {
 
     await queryApi.getReleaseCockpit('release/1');
     await queryApi.getReleaseReplay('release/1');
+    await queryApi.getRoleWorkbench('execution-owner', {
+      project_id: 'project 1',
+      actor_id: 'actor-owner',
+      limit: 25,
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/release-cockpit/release%2F1', {
       method: 'GET',
@@ -428,6 +433,14 @@ describe('Forgeloop web API client', () => {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'http://api.local/root/query/workbenches/execution-owner?project_id=project+1&actor_id=actor-owner&limit=25',
+      {
+        method: 'GET',
+        headers: { 'content-type': 'application/json' },
+      },
+    );
   });
 
   it('keeps command and query client method surfaces separate', () => {
@@ -442,6 +455,12 @@ describe('Forgeloop web API client', () => {
     }
     expect(commandMethods).not.toContain('getWorkItemCockpit');
     expect(commandMethods).not.toContain('getWorkItemReplay');
-    expect(Object.keys(queryApi).sort()).toEqual(['getReleaseCockpit', 'getReleaseReplay', 'getWorkItemCockpit', 'getWorkItemReplay']);
+    expect(Object.keys(queryApi).sort()).toEqual([
+      'getReleaseCockpit',
+      'getReleaseReplay',
+      'getRoleWorkbench',
+      'getWorkItemCockpit',
+      'getWorkItemReplay',
+    ]);
   });
 });

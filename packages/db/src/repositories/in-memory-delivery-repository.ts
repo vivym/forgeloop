@@ -1230,8 +1230,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return release === undefined ? undefined : this.hydrateReleaseLinks(release);
   }
 
-  async listReleasesForProject(projectId: string): Promise<Release[]> {
-    const releases = valuesFor(this.releases).filter((release) => release.project_id === projectId).sort(byCreatedAt);
+  async listReleases(projectId?: string): Promise<Release[]> {
+    const releases = valuesFor(this.releases)
+      .filter((release) => projectId === undefined || release.project_id === projectId)
+      .sort(byCreatedAt);
     return Promise.all(releases.map((release) => this.hydrateReleaseLinks(release)));
   }
 

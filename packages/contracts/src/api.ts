@@ -82,6 +82,26 @@ export const commandInventoryResponseSchema = z
   });
 export type CommandInventoryResponse = z.infer<typeof commandInventoryResponseSchema>;
 
+export const roleWorkbenchActionSchema = z
+  .object({
+    label: z.string().min(1),
+    method: z.enum(['GET', 'POST', 'PATCH', 'DELETE']),
+    path: z.string().min(1),
+    enabled: z.boolean().default(true),
+    reason: z.string().min(1).optional(),
+  })
+  .strict();
+export type RoleWorkbenchAction = z.infer<typeof roleWorkbenchActionSchema>;
+
+export const roleWorkbenchResponseSchema = z
+  .object({
+    summary: z.record(z.string(), z.unknown()),
+    items: z.array(z.record(z.string(), z.unknown())),
+    next_cursor: z.string().min(1).optional(),
+  })
+  .strict();
+export type RoleWorkbenchResponse = z.infer<typeof roleWorkbenchResponseSchema>;
+
 export const runPackageRequestSchema = z.object({
   execution_package_id: z.string().min(1),
   requested_by_actor_id: z.string().min(1),

@@ -815,7 +815,7 @@ describe('DeliveryRepository in-memory adapter', () => {
     expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([firstArtifactRef, secondArtifactRef]);
   });
 
-  it('round-trips release canonical fields and filters releases by project', async () => {
+  it('round-trips release canonical fields and lists releases with optional project filtering', async () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const otherProjectRelease: Release = {
       ...release,
@@ -829,7 +829,8 @@ describe('DeliveryRepository in-memory adapter', () => {
     await repository.saveRelease(otherProjectRelease);
 
     expect(await repository.getRelease(release.id)).toEqual(release);
-    expect(await repository.listReleasesForProject(project.id)).toEqual([release]);
+    expect(await repository.listReleases(project.id)).toEqual([release]);
+    expect(await repository.listReleases()).toEqual([release, otherProjectRelease]);
   });
 });
 

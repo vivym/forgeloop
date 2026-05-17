@@ -493,7 +493,7 @@ export interface DeliveryRepository {
 
   saveRelease(release: Release): Promise<void>;
   getRelease(releaseId: string): Promise<Release | undefined>;
-  listReleasesForProject(projectId: string): Promise<Release[]>;
+  listReleases(projectId?: string): Promise<Release[]>;
   saveReleaseWorkItem(releaseWorkItem: ReleaseWorkItemRecord): Promise<void>;
   listReleaseWorkItems(releaseId: string): Promise<ReleaseWorkItemRecord[]>;
   saveReleaseExecutionPackage(releaseExecutionPackage: ReleaseExecutionPackageRecord): Promise<void>;
