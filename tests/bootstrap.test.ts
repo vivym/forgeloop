@@ -12,7 +12,7 @@ describe('workspace bootstrap contract', () => {
 
     expect(rootPackage.scripts).toMatchObject({
       build: 'pnpm -r build',
-      test: 'vitest run',
+      test: 'vitest run --pool=forks',
       'test:watch': 'vitest',
       'dev:api': 'pnpm --filter @forgeloop/control-plane-api start:dev',
       'dev:automation-daemon': 'pnpm --filter @forgeloop/automation-daemon start',
