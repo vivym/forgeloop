@@ -1,20 +1,31 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 
 import {
+  useCreateExecutionPackageMutation,
   useExecutionPackageReplayQuery,
   useForceRerunPackageMutation,
+  useGeneratePackagesMutation,
   useMarkPackageReadyMutation,
   usePackageQuery,
   usePackagesQuery,
+  usePatchExecutionPackageMutation,
   useRerunPackageMutation,
   useRunPackageMutation,
 } from '../../shared/api/hooks';
-import type { ExecutionPackage, ProductListItem, TimelineEntry } from '../../shared/api/types';
+import type {
+  ArtifactKind,
+  CreateExecutionPackageBody,
+  ExecutionPackage,
+  PatchExecutionPackageBody,
+  ProductListItem,
+  RequiredCheck,
+  TimelineEntry,
+} from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, DataTable, StatusPill, Tabs, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
+import { Badge, Button, Checkbox, DataTable, Input, StatusPill, Tabs, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
 
 const supportedPackageFilters = [
   'work_item_id',
@@ -29,11 +40,33 @@ const supportedPackageFilters = [
   'blocked',
 ] as const;
 
+type PackageFilters = Record<string, string | boolean | number>;
+
+interface PackageFormState {
+  repoId: string;
+  objective: string;
+  ownerActorId: string;
+  reviewerActorId: string;
+  qaOwnerActorId: string;
+  checkId: string;
+  checkName: string;
+  checkCommand: string;
+  checkTimeoutSeconds: string;
+  checkBlocksReview: boolean;
+  requiredArtifactKinds: string;
+  allowedPaths: string;
+  forbiddenPaths: string;
+}
+
 export function PackagesRegistry() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const filters = packageFiltersFromSearch(searchParams);
-  const query = usePackagesQuery({ project_id: projectId, ...filters, limit: 100 });
+  const query = usePackagesQuery({
+    project_id: projectId,
+    ...filters,
+    limit: typeof filters.limit === 'number' ? filters.limit : 100,
+  });
   const items = query.data?.items ?? [];
   const unsupportedFilters = unsupportedPackageFilters(searchParams);
   const planRevisionId = searchParams.get('plan_revision_id')?.trim() || undefined;
@@ -41,38 +74,19 @@ export function PackagesRegistry() {
   return (
     <>
       <PageHeader
-        actions={
-          planRevisionId ? (
-            <div className="fl-inline-actions">
-              <Button disabled variant="primary">
-                Generate packages
-              </Button>
-              <Button disabled variant="secondary">
-                Create package
-              </Button>
-            </div>
-          ) : null
-        }
         subtitle="Track execution packages by Work Item, ownership, lifecycle state, and blocking state."
         title="Packages"
       />
       {planRevisionId ? (
         <Section
-          description="Package generation and creation start from the selected PlanRevision context when enabled for this workspace."
-          title="PlanRevision package actions"
+          description="Create execution-ready packages from the selected plan version."
+          title="Plan package actions"
         >
-          <div className="fl-inline-actions">
-            <Button disabled variant="primary">
-              Generate packages from this PlanRevision
-            </Button>
-            <Button disabled variant="secondary">
-              Create package
-            </Button>
-          </div>
+          <PlanRevisionPackageActions planRevisionId={planRevisionId} />
         </Section>
       ) : null}
       <Section
-        description="Server-side filters are sent for project, Work Item, PlanRevision, owner, reviewer, QA owner, phase, status, gate state, resolution, and blocked status."
+        description="Server-side filters are sent for project, work item, plan version, owner, reviewer, QA owner, phase, status, gate state, resolution, and blocked status."
         title="Execution package registry"
       >
         <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="packages" />
@@ -108,6 +122,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
   const rerunPackage = useRerunPackageMutation(packageId);
   const forceRerunPackage = useForceRerunPackageMutation(packageId);
   const [forceReason, setForceReason] = useState('');
+  const [showEditPackage, setShowEditPackage] = useState(false);
   const planRevisionId = searchParams.get('plan_revision_id')?.trim() || detailQuery.data?.plan_revision_id;
 
   if (detailQuery.status === 'pending') {
@@ -120,6 +135,8 @@ function PackageDetailView({ packageId }: { packageId: string }) {
 
   const executionPackage = detailQuery.data;
   const actionPending = markReady.isPending || runPackage.isPending || rerunPackage.isPending || forceRerunPackage.isPending;
+  const previousRunSessionId = executionPackage.last_run_session_id;
+  const canForceRerun = previousRunSessionId !== undefined && forceReason.trim().length > 0;
 
   return (
     <DetailLayout
@@ -142,7 +159,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
             <Button
               disabled={actionPending}
               loading={runPackage.isPending}
-              onClick={() => runPackage.mutate({ actorId, workflowOnly: true })}
+              onClick={() => runPackage.mutate({ actorId })}
               variant="primary"
             >
               Run
@@ -172,37 +189,34 @@ function PackageDetailView({ packageId }: { packageId: string }) {
               />
             </label>
             <p className="empty">
-              Force rerun bypasses normal freshness checks and must include a reason for the evidence trail.
+              {previousRunSessionId === undefined
+                ? 'Force rerun is available after this package has a previous run.'
+                : 'Force rerun bypasses normal freshness checks and must include a reason for the evidence trail.'}
             </p>
             <Button
-              disabled={actionPending || forceReason.trim().length === 0}
+              disabled={actionPending || !canForceRerun}
               loading={forceRerunPackage.isPending}
-              onClick={() =>
+              onClick={() => {
+                if (previousRunSessionId === undefined) return;
                 forceRerunPackage.mutate({
                   actorId,
                   reason: forceReason.trim(),
-                  ...(executionPackage.last_run_session_id === undefined
-                    ? {}
-                    : { previousRunSessionId: executionPackage.last_run_session_id }),
-                })
-              }
+                  previousRunSessionId,
+                });
+              }}
               variant="danger"
             >
               Force rerun
             </Button>
-            <Button disabled title="Package editing opens in a governed edit dialog." variant="secondary">
+            <Button onClick={() => setShowEditPackage((current) => !current)} variant="secondary">
               Edit package details
             </Button>
+            {showEditPackage ? <PackageEditForm executionPackage={executionPackage} onSaved={() => setShowEditPackage(false)} /> : null}
           </div>
           {planRevisionId ? (
             <div className="stack-form compact">
-              <h3>PlanRevision context</h3>
-              <Button disabled variant="secondary">
-                Generate packages from this PlanRevision
-              </Button>
-              <Button disabled variant="secondary">
-                Create package
-              </Button>
+              <h3>Plan package actions</h3>
+              <PlanRevisionPackageActions planRevisionId={planRevisionId} />
             </div>
           ) : null}
         </ActionRail>
@@ -244,7 +258,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
                 timeline={replayQuery.data ?? []}
               />
             ),
-            label: 'Timeline / Replay',
+            label: 'Timeline',
             value: 'timeline',
           },
           {
@@ -255,6 +269,176 @@ function PackageDetailView({ packageId }: { packageId: string }) {
         ]}
       />
     </DetailLayout>
+  );
+}
+
+function PlanRevisionPackageActions({ planRevisionId }: { planRevisionId: string }) {
+  const generatePackages = useGeneratePackagesMutation(planRevisionId);
+  const [showCreatePackage, setShowCreatePackage] = useState(false);
+
+  return (
+    <div className="stack-form compact">
+      <div className="fl-inline-actions">
+        <Button
+          disabled={generatePackages.isPending}
+          loading={generatePackages.isPending}
+          onClick={() => generatePackages.mutate()}
+          variant="primary"
+        >
+          Generate packages
+        </Button>
+        <Button onClick={() => setShowCreatePackage((current) => !current)} variant="secondary">
+          Create package
+        </Button>
+      </div>
+      {generatePackages.isError ? <p className="empty">Package generation is temporarily unavailable.</p> : null}
+      {showCreatePackage ? <PackageCreateForm onCreated={() => setShowCreatePackage(false)} planRevisionId={planRevisionId} /> : null}
+    </div>
+  );
+}
+
+function PackageCreateForm({ onCreated, planRevisionId }: { onCreated: () => void; planRevisionId: string }) {
+  const createPackage = useCreateExecutionPackageMutation(planRevisionId);
+  const [form, setForm] = useState<PackageFormState>(() => emptyPackageForm());
+  const canSubmit = isPackageFormReady(form, true);
+
+  function update<K extends keyof PackageFormState>(key: K, value: PackageFormState[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!canSubmit) return;
+    createPackage.mutate(createExecutionPackageBodyFromForm(form), {
+      onSuccess: () => {
+        setForm(emptyPackageForm());
+        onCreated();
+      },
+    });
+  }
+
+  return (
+    <form className="stack-form compact" onSubmit={onSubmit}>
+      <label className="field">
+        Repository
+        <Input onChange={(event) => update('repoId', event.currentTarget.value)} value={form.repoId} />
+      </label>
+      <PackageEditableFields form={form} onUpdate={update} />
+      {createPackage.isError ? <p className="empty">Package creation is temporarily unavailable.</p> : null}
+      <Button disabled={!canSubmit} loading={createPackage.isPending} type="submit" variant="primary">
+        Create execution package
+      </Button>
+    </form>
+  );
+}
+
+function PackageEditForm({ executionPackage, onSaved }: { executionPackage: ExecutionPackage; onSaved: () => void }) {
+  const patchPackage = usePatchExecutionPackageMutation(executionPackage.id);
+  const [form, setForm] = useState<PackageFormState>(() => packageFormFromPackage(executionPackage));
+  const canSubmit = isPackageFormReady(form, false);
+
+  function update<K extends keyof PackageFormState>(key: K, value: PackageFormState[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!canSubmit) return;
+    patchPackage.mutate(patchExecutionPackageBodyFromForm(form), {
+      onSuccess: onSaved,
+    });
+  }
+
+  return (
+    <form className="stack-form compact" onSubmit={onSubmit}>
+      <PackageEditableFields form={form} onUpdate={update} />
+      {patchPackage.isError ? <p className="empty">Package details are temporarily unavailable for editing.</p> : null}
+      <Button disabled={!canSubmit} loading={patchPackage.isPending} type="submit" variant="primary">
+        Save package details
+      </Button>
+    </form>
+  );
+}
+
+function PackageEditableFields({
+  form,
+  onUpdate,
+}: {
+  form: PackageFormState;
+  onUpdate: <K extends keyof PackageFormState>(key: K, value: PackageFormState[K]) => void;
+}) {
+  return (
+    <>
+      <label className="field">
+        Objective
+        <Textarea onChange={(event) => onUpdate('objective', event.currentTarget.value)} rows={3} value={form.objective} />
+      </label>
+      <label className="field">
+        Owner
+        <Input onChange={(event) => onUpdate('ownerActorId', event.currentTarget.value)} value={form.ownerActorId} />
+      </label>
+      <label className="field">
+        Reviewer
+        <Input onChange={(event) => onUpdate('reviewerActorId', event.currentTarget.value)} value={form.reviewerActorId} />
+      </label>
+      <label className="field">
+        QA owner
+        <Input onChange={(event) => onUpdate('qaOwnerActorId', event.currentTarget.value)} value={form.qaOwnerActorId} />
+      </label>
+      <label className="field">
+        Check id
+        <Input onChange={(event) => onUpdate('checkId', event.currentTarget.value)} value={form.checkId} />
+      </label>
+      <label className="field">
+        Check name
+        <Input onChange={(event) => onUpdate('checkName', event.currentTarget.value)} value={form.checkName} />
+      </label>
+      <label className="field">
+        Check command
+        <Input onChange={(event) => onUpdate('checkCommand', event.currentTarget.value)} value={form.checkCommand} />
+      </label>
+      <label className="field">
+        Timeout seconds
+        <Input
+          min={1}
+          onChange={(event) => onUpdate('checkTimeoutSeconds', event.currentTarget.value)}
+          type="number"
+          value={form.checkTimeoutSeconds}
+        />
+      </label>
+      <Checkbox
+        checked={form.checkBlocksReview}
+        label="Required before review"
+        onChange={(event) => onUpdate('checkBlocksReview', event.currentTarget.checked)}
+      />
+      <label className="field">
+        Required artifacts
+        <Textarea
+          onChange={(event) => onUpdate('requiredArtifactKinds', event.currentTarget.value)}
+          placeholder="One artifact kind per line"
+          rows={3}
+          value={form.requiredArtifactKinds}
+        />
+      </label>
+      <label className="field">
+        Allowed paths
+        <Textarea
+          onChange={(event) => onUpdate('allowedPaths', event.currentTarget.value)}
+          placeholder="One path pattern per line"
+          rows={3}
+          value={form.allowedPaths}
+        />
+      </label>
+      <label className="field">
+        Forbidden paths
+        <Textarea
+          onChange={(event) => onUpdate('forbiddenPaths', event.currentTarget.value)}
+          placeholder="One path pattern per line"
+          rows={3}
+          value={form.forbiddenPaths}
+        />
+      </label>
+    </>
   );
 }
 
@@ -359,11 +543,11 @@ function PackageTimeline({
   timeline: TimelineEntry[];
 }) {
   if (isPending) {
-    return <Section title="Timeline / Replay"><p className="empty">Loading package history...</p></Section>;
+    return <Section title="Timeline"><p className="empty">Loading package history...</p></Section>;
   }
 
   if (isError) {
-    return <Section title="Timeline / Replay"><p className="empty">Package history is temporarily unavailable.</p></Section>;
+    return <Section title="Timeline"><p className="empty">Package history is temporarily unavailable.</p></Section>;
   }
 
   const items: TimelineItem[] = timeline.map((entry) => ({
@@ -374,7 +558,7 @@ function PackageTimeline({
   }));
 
   return (
-    <Section title="Timeline / Replay" description="Product history assembled from the replay endpoint.">
+    <Section title="Timeline" description="Product history for this package.">
       {items.length ? <Timeline items={items} /> : <p className="empty">No package timeline events are available yet.</p>}
     </Section>
   );
@@ -403,7 +587,7 @@ function FilterSummary({
   filters,
   unsupportedFilters,
 }: {
-  filters: Record<string, string | boolean>;
+  filters: PackageFilters;
   unsupportedFilters: string[];
 }) {
   const entries = Object.entries(filters);
@@ -453,7 +637,7 @@ function Metadata({ label, value }: { label: string; value: string | number | bo
 
 function LoadingDetail({ title }: { title: string }) {
   return (
-    <DetailLayout header={<PageHeader subtitle="Loading route-backed data." title={title} />}>
+    <DetailLayout header={<PageHeader subtitle="Loading data." title={title} />}>
       <Section title="Loading">
         <p className="empty">Loading {title.toLowerCase()}...</p>
       </Section>
@@ -471,8 +655,106 @@ function InvalidDetail({ title, message }: { title: string; message: string }) {
   );
 }
 
+function emptyPackageForm(): PackageFormState {
+  return {
+    repoId: '',
+    objective: '',
+    ownerActorId: '',
+    reviewerActorId: '',
+    qaOwnerActorId: '',
+    checkId: '',
+    checkName: '',
+    checkCommand: '',
+    checkTimeoutSeconds: '600',
+    checkBlocksReview: true,
+    requiredArtifactKinds: '',
+    allowedPaths: '',
+    forbiddenPaths: '',
+  };
+}
+
+function packageFormFromPackage(executionPackage: ExecutionPackage): PackageFormState {
+  const firstCheck = executionPackage.required_checks[0];
+  return {
+    repoId: executionPackage.repo_id,
+    objective: executionPackage.objective,
+    ownerActorId: executionPackage.owner_actor_id,
+    reviewerActorId: executionPackage.reviewer_actor_id,
+    qaOwnerActorId: executionPackage.qa_owner_actor_id,
+    checkId: firstCheck?.check_id ?? '',
+    checkName: firstCheck?.display_name ?? '',
+    checkCommand: firstCheck?.command ?? '',
+    checkTimeoutSeconds: String(firstCheck?.timeout_seconds ?? 600),
+    checkBlocksReview: firstCheck?.blocks_review ?? true,
+    requiredArtifactKinds: executionPackage.required_artifact_kinds.join('\n'),
+    allowedPaths: executionPackage.allowed_paths.join('\n'),
+    forbiddenPaths: executionPackage.forbidden_paths.join('\n'),
+  };
+}
+
+function createExecutionPackageBodyFromForm(form: PackageFormState): CreateExecutionPackageBody {
+  return {
+    repo_id: form.repoId.trim(),
+    objective: form.objective.trim(),
+    owner_actor_id: form.ownerActorId.trim(),
+    reviewer_actor_id: form.reviewerActorId.trim(),
+    qa_owner_actor_id: form.qaOwnerActorId.trim(),
+    required_checks: [requiredCheckFromForm(form)],
+    required_artifact_kinds: splitLines(form.requiredArtifactKinds) as ArtifactKind[],
+    allowed_paths: splitLines(form.allowedPaths),
+    forbidden_paths: splitLines(form.forbiddenPaths),
+  };
+}
+
+function patchExecutionPackageBodyFromForm(form: PackageFormState): PatchExecutionPackageBody {
+  return {
+    objective: form.objective.trim(),
+    owner_actor_id: form.ownerActorId.trim(),
+    reviewer_actor_id: form.reviewerActorId.trim(),
+    qa_owner_actor_id: form.qaOwnerActorId.trim(),
+    required_checks: [requiredCheckFromForm(form)],
+    required_artifact_kinds: splitLines(form.requiredArtifactKinds) as ArtifactKind[],
+    allowed_paths: splitLines(form.allowedPaths),
+    forbidden_paths: splitLines(form.forbiddenPaths),
+  };
+}
+
+function requiredCheckFromForm(form: PackageFormState): RequiredCheck {
+  return {
+    check_id: form.checkId.trim(),
+    display_name: form.checkName.trim(),
+    command: form.checkCommand.trim(),
+    timeout_seconds: Number.parseInt(form.checkTimeoutSeconds, 10),
+    blocks_review: form.checkBlocksReview,
+  };
+}
+
+function isPackageFormReady(form: PackageFormState, includeRepo: boolean) {
+  const timeoutSeconds = Number.parseInt(form.checkTimeoutSeconds, 10);
+  return (
+    (!includeRepo || form.repoId.trim().length > 0) &&
+    form.objective.trim().length > 0 &&
+    form.ownerActorId.trim().length > 0 &&
+    form.reviewerActorId.trim().length > 0 &&
+    form.qaOwnerActorId.trim().length > 0 &&
+    form.checkId.trim().length > 0 &&
+    form.checkName.trim().length > 0 &&
+    form.checkCommand.trim().length > 0 &&
+    Number.isInteger(timeoutSeconds) &&
+    timeoutSeconds > 0 &&
+    splitLines(form.requiredArtifactKinds).length > 0
+  );
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function packageFiltersFromSearch(searchParams: URLSearchParams) {
-  const filters: Record<string, string | boolean> = {};
+  const filters: PackageFilters = {};
   for (const key of supportedPackageFilters) {
     const value = searchParams.get(key)?.trim();
     if (!value) continue;
@@ -484,6 +766,14 @@ function packageFiltersFromSearch(searchParams: URLSearchParams) {
     }
     filters[key] = value;
   }
+  const cursor = searchParams.get('cursor')?.trim();
+  if (cursor) {
+    filters.cursor = cursor;
+  }
+  const limit = searchParams.get('limit')?.trim();
+  if (limit && isSupportedLimitFilter(limit)) {
+    filters.limit = Number.parseInt(limit, 10);
+  }
   return filters;
 }
 
@@ -494,11 +784,21 @@ function unsupportedPackageFilters(searchParams: URLSearchParams) {
   if (blocked && !isStrictBooleanFilter(blocked)) {
     unsupported.add('blocked');
   }
+  const limit = searchParams.get('limit')?.trim();
+  if (limit && !isSupportedLimitFilter(limit)) {
+    unsupported.add('limit');
+  }
   return [...unsupported];
 }
 
 function isStrictBooleanFilter(value: string) {
   return value === 'true' || value === 'false';
+}
+
+function isSupportedLimitFilter(value: string) {
+  if (!/^\d+$/.test(value)) return false;
+  const parsed = Number.parseInt(value, 10);
+  return parsed > 0 && parsed <= 100;
 }
 
 function formatUnsupportedFilters(filters: string[]) {

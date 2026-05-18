@@ -6,8 +6,10 @@ import { createForgeloopQueryApi } from './query';
 import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from './query-keys';
 import type {
   CockpitResponse,
+  CreateExecutionPackageBody,
   ExecutionPackage,
   ListProductQuery,
+  PatchExecutionPackageBody,
   PlanRevision,
   RoleWorkbenchId,
   RoleWorkbenchQuery,
@@ -203,7 +205,10 @@ export function useMarkPackageReadyMutation(packageId: string) {
   return useMutation({
     mutationFn: (body: { actor_id?: string; expected_package_version: number }) =>
       createCommandApi().markPackageReady(packageId, body),
-    onSuccess: (executionPackage) => setPackageDetail(queryClient, packageId, executionPackage),
+    onSuccess: (executionPackage) => {
+      setPackageDetail(queryClient, packageId, executionPackage);
+      return invalidatePackages(queryClient);
+    },
   });
 }
 
@@ -217,7 +222,7 @@ export function useRunPackageMutation(packageId: string) {
         ...(input.executorType === undefined ? {} : { executor_type: input.executorType }),
         ...(input.workflowOnly === undefined ? {} : { workflow_only: input.workflowOnly }),
       }),
-    onSuccess: () => invalidatePackageDetail(queryClient, packageId),
+    onSuccess: () => invalidatePackageResources(queryClient, packageId),
   });
 }
 
@@ -230,7 +235,7 @@ export function useRerunPackageMutation(packageId: string) {
         execution_package_id: packageId,
         ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
       }),
-    onSuccess: () => invalidatePackageDetail(queryClient, packageId),
+    onSuccess: () => invalidatePackageResources(queryClient, packageId),
   });
 }
 
@@ -245,7 +250,7 @@ export function useForceRerunPackageMutation(packageId: string) {
         force_reason: input.reason,
         ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
       }),
-    onSuccess: () => invalidatePackageDetail(queryClient, packageId),
+    onSuccess: () => invalidatePackageResources(queryClient, packageId),
   });
 }
 
@@ -306,6 +311,40 @@ export function useExecutionPackageReplayQuery(executionPackageId: string) {
   return useQuery({
     queryKey: queryKeys.executionPackageReplay(executionPackageId),
     queryFn: () => createQueryApi().getExecutionPackageReplay(executionPackageId),
+  });
+}
+
+export function useGeneratePackagesMutation(planRevisionId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => createCommandApi().generatePackages(requiredId(planRevisionId, 'planRevisionId')),
+    onSuccess: () => invalidatePackages(queryClient),
+  });
+}
+
+export function useCreateExecutionPackageMutation(planRevisionId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: CreateExecutionPackageBody) =>
+      createCommandApi().createExecutionPackage(requiredId(planRevisionId, 'planRevisionId'), body),
+    onSuccess: (executionPackage) => {
+      setPackageDetail(queryClient, executionPackage.id, executionPackage);
+      return invalidatePackages(queryClient);
+    },
+  });
+}
+
+export function usePatchExecutionPackageMutation(packageId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: PatchExecutionPackageBody) => createCommandApi().patchExecutionPackage(packageId, body),
+    onSuccess: (executionPackage) => {
+      setPackageDetail(queryClient, packageId, executionPackage);
+      return invalidatePackages(queryClient);
+    },
   });
 }
 
@@ -388,6 +427,14 @@ function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string 
 
 function invalidatePackageDetail(queryClient: QueryClient, packageId: string) {
   return queryClient.invalidateQueries({ queryKey: queryKeys.package(packageId) });
+}
+
+function invalidatePackageResources(queryClient: QueryClient, packageId: string) {
+  return Promise.all([invalidatePackageDetail(queryClient, packageId), invalidatePackages(queryClient)]);
+}
+
+function invalidatePackages(queryClient: QueryClient) {
+  return queryClient.invalidateQueries({ queryKey: ['packages'] });
 }
 
 function setPackageDetail(queryClient: QueryClient, packageId: string, executionPackage: ExecutionPackage) {

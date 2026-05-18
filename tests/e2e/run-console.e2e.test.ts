@@ -73,7 +73,7 @@ describe('run console browser e2e', () => {
       await page.goto(runUrl);
 
       const console = page.getByTestId('run-console');
-      await expectVisibleText(console, 'run_queued');
+      await expectVisibleText(console, 'Run queued');
 
       const backfillCursor = await latestBackfillCursor(app, runSessionId);
       const initialCursor = await latestRenderedCursor(page);
@@ -100,15 +100,15 @@ describe('run console browser e2e', () => {
 
       await page.getByTestId('run-console-input').fill('Browser input from the run console.');
       await page.getByTestId('run-console-send').click();
-      await expectVisibleText(console, 'user_input');
+      await expectVisibleText(console, 'Operator input');
 
       await page.getByTestId('run-console-resume').click();
-      await expectVisibleText(console, 'resuming');
+      await expectVisibleText(console, 'Resume requested');
 
       const runSession = await repo.getRunSession(runSessionId);
       await repo.saveRunSession({ ...runSession!, status: 'stalled' });
       await page.getByTestId('run-console-cancel').click();
-      await expectVisibleText(console, 'cancel_requested');
+      await expectVisibleText(console, 'Cancellation requested');
 
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
@@ -119,6 +119,10 @@ describe('run console browser e2e', () => {
       expectValue(consoleText).not.toContain('raw_ref');
       expectValue(consoleText).not.toContain('local_ref');
       expectValue(consoleText).not.toContain('raw-codex');
+      expectValue(consoleText).not.toContain('run_queued');
+      expectValue(consoleText).not.toContain('user_input');
+      expectValue(consoleText).not.toContain('resuming');
+      expectValue(consoleText).not.toContain('cancel_requested');
     },
     60_000,
   );
@@ -140,18 +144,30 @@ async function reloadSentinelIsPresent(page: Page, sentinel: string): Promise<bo
 
 async function stopProcess(childProcess: ChildProcess): Promise<void> {
   if (childProcess.exitCode !== null || childProcess.signalCode !== null) return;
-  childProcess.kill();
-  await waitForProcessExit(childProcess);
+  childProcess.kill('SIGTERM');
+  try {
+    await waitForProcessExit(childProcess, 1000);
+  } catch {
+    childProcess.kill('SIGKILL');
+    await waitForProcessExit(childProcess, 2000);
+  }
+  if (childProcess.exitCode === null && childProcess.signalCode === null) {
+    throw new Error(`Process ${childProcess.pid ?? 'unknown'} did not exit after termination`);
+  }
 }
 
-async function waitForProcessExit(childProcess: ChildProcess): Promise<void> {
+async function waitForProcessExit(childProcess: ChildProcess, timeoutMs: number): Promise<void> {
   if (childProcess.exitCode !== null || childProcess.signalCode !== null) return;
-  await new Promise<void>((resolveExit) => {
-    const timeout = setTimeout(resolveExit, 1000);
-    childProcess.once('exit', () => {
+  await new Promise<void>((resolveExit, rejectExit) => {
+    const timeout = setTimeout(() => {
+      childProcess.off('exit', onExit);
+      rejectExit(new Error(`Process ${childProcess.pid ?? 'unknown'} did not exit within ${timeoutMs}ms`));
+    }, timeoutMs);
+    const onExit = () => {
       clearTimeout(timeout);
       resolveExit();
-    });
+    };
+    childProcess.once('exit', onExit);
   });
 }
 

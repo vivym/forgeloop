@@ -33,12 +33,9 @@ export function RunsRegistry() {
 
   return (
     <>
-      <PageHeader
-        subtitle="Active and recent run sessions from the product run read model."
-        title="Runs"
-      />
+      <PageHeader subtitle="Active and recent run sessions from the run inventory." title="Runs" />
       <Section
-        description="Rows link to the route-backed Run Console. If the read model is partial, use direct run links from Packages and Reviews."
+        description="Rows link to the Run Console. If the inventory is partial, use direct run links from Packages and Reviews."
         title="Run registry"
       >
         <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="runs" />
@@ -128,7 +125,7 @@ function RunTable({ items }: { items: ProductListItem[] }) {
         { key: 'executor', header: 'Executor', cell: (item) => item.run_state?.executor_type ?? 'unknown' },
         { key: 'updated', header: 'Updated', cell: (item) => formatAge(item.updated_at) },
       ]}
-      emptyMessage="No Run Sessions are available from the global run read model. Open a run from a package detail page when needed."
+      emptyMessage="No runs are available in the inventory. Open a run from a package detail page when needed."
       getRowKey={(item) => item.id}
       rows={items}
     />
@@ -153,7 +150,7 @@ function RunConsole({
   const resumeRun = useResumeRunMutation(run.id);
   const [input, setInput] = useState('');
   const latestTurnId = latestActiveTurnId(run, events);
-  const visibleEvents = renderableRunEvents(events);
+  const visibleEvents = productRunEvents(events);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -170,7 +167,7 @@ function RunConsole({
   return (
     <Section
       actions={<Badge tone={streamTone(streamStatus)}>{streamStatus}</Badge>}
-      description="Visible run events, operator input, cancel, and resume controls."
+      description="Run history, operator input, cancel, and resume controls."
       title="Run Console"
     >
       <div className="fl-run-console" data-testid="run-console">
@@ -268,7 +265,8 @@ function RunEvidencePanel({ run }: { run: RunSession }) {
 }
 
 function RunEventRow({ event }: { event: RunEvent }) {
-  const type = event.event_type ?? 'event';
+  const type = event.event_type;
+  const label = runEventLabel(type);
   const payload = event.payload ?? {};
   const message =
     payloadText(payload, ['message', 'text', 'content', 'status', 'reason']) ??
@@ -277,8 +275,8 @@ function RunEventRow({ event }: { event: RunEvent }) {
     'Run event';
 
   return (
-    <article className="fl-run-console__event" data-event-cursor={event.cursor} data-event-type={type}>
-      <strong>{type}</strong>
+    <article className="fl-run-console__event" data-event-cursor={event.cursor} data-event-label={label}>
+      <strong>{label}</strong>
       <p>{message}</p>
       <span>{formatDate(event.created_at)}</span>
     </article>
@@ -434,7 +432,7 @@ function RegistryState({ isError, isPending, kind }: { isError: boolean; isPendi
 
 function DegradedNotice({ degradedSources }: { degradedSources: string[] }) {
   if (degradedSources.length === 0) return null;
-  return <p className="empty">The global run list is degraded: {degradedSources.join(', ')}.</p>;
+  return <p className="empty">The run list is degraded: {degradedSources.join(', ')}.</p>;
 }
 
 function FilterSummary({
@@ -477,7 +475,7 @@ function InvalidDetail({ title, message }: { title: string; message: string }) {
 
 function LoadingDetail({ title }: { title: string }) {
   return (
-    <DetailLayout header={<PageHeader subtitle="Loading route-backed data." title={title} />}>
+    <DetailLayout header={<PageHeader subtitle="Loading data." title={title} />}>
       <Section title="Loading">
         <p className="empty">Loading {title.toLowerCase()}...</p>
       </Section>
@@ -502,6 +500,40 @@ function PillList({ empty, values }: { empty: string; values: string[] }) {
   ) : (
     <p className="empty">{empty}</p>
   );
+}
+
+const productRunEventLabels = new Map<string, string>([
+  ['agent_message', 'Run update'],
+  ['agent_message_delta', 'Run update'],
+  ['agent_message_completed', 'Run update'],
+  ['user_input', 'Operator input'],
+  ['run_queued', 'Run queued'],
+  ['worker_started', 'Run started'],
+  ['waiting_for_input', 'Waiting for input'],
+  ['plan_updated', 'Plan updated'],
+  ['command_started', 'Check started'],
+  ['command_completed', 'Check completed'],
+  ['command_failed', 'Check failed'],
+  ['resuming', 'Resume requested'],
+  ['cancel_requested', 'Cancellation requested'],
+  ['run_completed', 'Run completed'],
+  ['run_failed', 'Run failed'],
+]);
+
+function productRunEvents(events: RunEvent[]) {
+  return renderableRunEvents(events).filter((event) => {
+    const type = event.event_type;
+    return type === undefined || !isInternalRunEventType(type);
+  });
+}
+
+function runEventLabel(eventType: string | undefined): string {
+  if (eventType === undefined) return 'Run event';
+  return productRunEventLabels.get(eventType) ?? 'Run event';
+}
+
+function isInternalRunEventType(eventType: string) {
+  return eventType.startsWith('thread_') || eventType.startsWith('turn_');
 }
 
 function visibleRunArtifacts<T extends { kind?: string; raw_ref?: unknown }>(artifacts: T[]): T[] {
