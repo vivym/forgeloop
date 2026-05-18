@@ -1,5 +1,5 @@
 import * as RadixDialog from '@radix-ui/react-dialog';
-import type { ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 import { cn } from '../../utils/cn';
 
@@ -35,4 +35,16 @@ export function Dialog({ children, content, description, open, title, onOpenChan
 
 export function DialogPanel({ className, children }: { className?: string; children: ReactNode }) {
   return <div className={cn('fl-dialog__panel', className)}>{children}</div>;
+}
+
+export interface DialogCloseProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label'> {
+  label: string;
+}
+
+export function DialogClose({ children = 'Close', className, label, type = 'button', ...props }: DialogCloseProps) {
+  return (
+    <RadixDialog.Close {...props} aria-label={label} className={cn('fl-dialog__close', className)} type={type}>
+      {children}
+    </RadixDialog.Close>
+  );
 }

@@ -24,9 +24,12 @@ Replace legacy `.workbench-grid` usage with `DetailLayout`, `SplitPane`, or rout
 
 ## Accessibility Rules
 
+- Import shared primitives from the public barrels: `shared/ui`, `shared/layout`, and `shared/design-system`.
 - `IconButton` always requires a stable accessible `label`.
 - Buttons must keep semantic button markup and clear accessible names.
-- Dialogs and drawers need visible titles. Use descriptions when the action has consequences.
+- Loading buttons must preserve the action context in their accessible name.
+- Dialogs and drawers need visible titles. Use `DialogClose` or `DrawerClose` with an accessible `label` for dismissible flows.
+- Toast actions must use `ToastAction`; toast dismissal must use `ToastClose` with an accessible `label`.
 - Status colors must be paired with visible text. Do not rely on color alone; use `StatusPill` copy that names the state.
 
 ## Token Rules

@@ -12,7 +12,7 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
 
 export function IconButton({ label, variant = 'secondary', className, children, type = 'button', ...props }: IconButtonProps) {
   return (
-    <button aria-label={label} className={cn('fl-icon-button', `fl-icon-button--${variant}`, className)} type={type} {...props}>
+    <button {...props} aria-label={label} className={cn('fl-icon-button', `fl-icon-button--${variant}`, className)} type={type}>
       {children}
     </button>
   );

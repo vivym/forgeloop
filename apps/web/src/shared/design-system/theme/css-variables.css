@@ -160,6 +160,9 @@ a {
 }
 
 .fl-button__label {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
   min-width: 0;
 }
 
@@ -448,6 +451,31 @@ a {
   margin-top: var(--fl-space-5);
 }
 
+.fl-dialog__close,
+.fl-drawer__close,
+.fl-toast__action,
+.fl-toast__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2rem;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-md);
+  background: var(--fl-color-surface);
+  color: var(--fl-color-text-secondary);
+  font-size: var(--fl-text-sm);
+  font-weight: var(--fl-weight-semibold);
+  padding: 0 var(--fl-space-3);
+}
+
+.fl-dialog__close:hover:not(:disabled),
+.fl-drawer__close:hover:not(:disabled),
+.fl-toast__action:hover:not(:disabled),
+.fl-toast__close:hover:not(:disabled) {
+  border-color: var(--fl-color-border-strong);
+  color: var(--fl-color-text-primary);
+}
+
 .fl-drawer {
   top: 0;
   bottom: 0;
@@ -536,6 +564,12 @@ a {
   margin-top: var(--fl-space-1);
   color: var(--fl-color-text-secondary);
   font-size: var(--fl-text-sm);
+}
+
+.fl-toast__action,
+.fl-toast__close {
+  margin-top: var(--fl-space-3);
+  margin-right: var(--fl-space-2);
 }
 
 .fl-app-shell {

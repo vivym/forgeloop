@@ -1,5 +1,5 @@
 import * as RadixDialog from '@radix-ui/react-dialog';
-import type { ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 import { cn } from '../../utils/cn';
 
@@ -31,5 +31,17 @@ export function Drawer({ children, content, description, open, side = 'right', t
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>
+  );
+}
+
+export interface DrawerCloseProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label'> {
+  label: string;
+}
+
+export function DrawerClose({ children = 'Close', className, label, type = 'button', ...props }: DrawerCloseProps) {
+  return (
+    <RadixDialog.Close {...props} aria-label={label} className={cn('fl-drawer__close', className)} type={type}>
+      {children}
+    </RadixDialog.Close>
   );
 }
