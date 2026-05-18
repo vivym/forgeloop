@@ -68,6 +68,14 @@ export function useSpecHistoryQuery(specId: string) {
   });
 }
 
+export function useSpecRevisionQuery(revisionId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.specRevision(revisionId),
+    queryFn: () => createCommandApi().getSpecRevision(requiredId(revisionId, 'revisionId')),
+    enabled: revisionId !== undefined,
+  });
+}
+
 export function usePlansQuery(projectId: string) {
   return useQuery({
     queryKey: queryKeys.plans(projectId),
@@ -86,6 +94,14 @@ export function usePlanHistoryQuery(planId: string) {
   return useQuery({
     queryKey: queryKeys.planHistory(planId),
     queryFn: () => createQueryApi().getPlanHistory(planId),
+  });
+}
+
+export function usePlanRevisionQuery(revisionId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.planRevision(revisionId),
+    queryFn: () => createCommandApi().getPlanRevision(requiredId(revisionId, 'revisionId')),
+    enabled: revisionId !== undefined,
   });
 }
 

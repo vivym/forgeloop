@@ -1,12 +1,5 @@
-import { PageHeader, Section } from '../../../shared/layout';
+import { SpecsRegistry } from '../../../features/spec-plan/spec-plan-direct-routes';
 
 export default function SpecsRoute() {
-  return (
-    <>
-      <PageHeader title="Specs & Plans" subtitle="Specification records and planning links will be listed here." />
-      <Section title="Specs" description="This skeleton reserves the specs index route.">
-        <p>No specs are loaded in this skeleton.</p>
-      </Section>
-    </>
-  );
+  return <SpecsRegistry />;
 }
