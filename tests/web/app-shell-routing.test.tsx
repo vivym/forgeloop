@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { renderRoute } from './router-test-utils';
 
@@ -27,6 +28,28 @@ describe('React Router product shell', () => {
     expect(screen.getByRole('link', { name: 'Workbench' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Specs & Plans' })).toBeTruthy();
     expect(screen.queryByText('Intake')).toBeNull();
+  });
+
+  it('routes sidebar clicks through React Router without document navigation', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute('/workbench');
+
+    await user.click(screen.getByRole('link', { name: 'Pipeline' }));
+
+    expect(screen.getByRole('heading', { name: 'Pipeline' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Workbench' })).toBeNull();
+  });
+
+  it('marks the Workbench nav item active on the index route', async () => {
+    const screen = await renderRoute('/');
+
+    expect(screen.getByRole('link', { name: 'Workbench' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('marks Specs & Plans active for plan routes', async () => {
+    const screen = await renderRoute('/plans');
+
+    expect(screen.getByRole('link', { name: 'Specs & Plans' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('respects the requested route path', async () => {

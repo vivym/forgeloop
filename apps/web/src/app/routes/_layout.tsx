@@ -4,15 +4,20 @@ import { useRuntimeFlags } from '../../shared/context/runtime-flags';
 import { AppShell, SidebarNav, Topbar } from '../../shared/layout';
 
 const navItems = [
-  { label: 'Workbench', to: '/workbench' },
+  { label: 'Workbench', to: '/workbench', activeOn: ['/', '/workbench'] },
   { label: 'Pipeline', to: '/pipeline' },
   { label: 'Work Items', to: '/work-items' },
-  { label: 'Specs & Plans', to: '/specs' },
+  { label: 'Specs & Plans', to: '/specs', activeOn: ['/specs', '/plans'] },
   { label: 'Packages', to: '/packages' },
   { label: 'Runs', to: '/runs' },
   { label: 'Reviews', to: '/reviews' },
   { label: 'Releases', to: '/releases' },
 ];
+
+function isNavItemActive(pathname: string, item: { to: string; activeOn?: string[] }) {
+  const activeTargets = item.activeOn ?? [item.to];
+  return activeTargets.some((target) => pathname === target || pathname.startsWith(`${target}/`));
+}
 
 export default function ProductLayoutRoute() {
   const location = useLocation();
@@ -25,9 +30,9 @@ export default function ProductLayoutRoute() {
         <SidebarNav
           title="ForgeLoop"
           items={items.map((item) => ({
-            href: item.to,
+            to: item.to,
             label: item.label,
-            active: location.pathname === item.to || (item.to !== '/workbench' && location.pathname.startsWith(`${item.to}/`)),
+            active: isNavItemActive(location.pathname, item),
           }))}
         />
       }

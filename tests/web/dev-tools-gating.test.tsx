@@ -17,4 +17,19 @@ describe('Dev Tools gate', () => {
     expect(screen.getByRole('button', { name: 'Load raw replay' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Send API smoke request' })).toBeTruthy();
   });
+
+  it('does not show Dev Tools navigation or raw controls when disabled', async () => {
+    const screen = await renderRoute('/workbench');
+
+    expect(screen.queryByRole('link', { name: 'Dev Tools' })).toBeNull();
+    expect(screen.queryByLabelText('Object ID')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Load raw replay' })).toBeNull();
+  });
+
+  it('shows Dev Tools navigation and raw controls when enabled by override', async () => {
+    const screen = await renderRoute('/dev-tools', { devToolsEnabled: true });
+
+    expect(screen.getByRole('link', { name: 'Dev Tools' })).toBeTruthy();
+    expect(screen.getByLabelText('Object ID')).toBeTruthy();
+  });
 });

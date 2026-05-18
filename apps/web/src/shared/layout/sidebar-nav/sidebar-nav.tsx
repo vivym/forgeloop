@@ -1,10 +1,12 @@
-import type { AnchorHTMLAttributes, ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { Link, type LinkProps } from 'react-router';
 
 import { cn } from '../../utils/cn';
 
-export interface SidebarNavItem extends AnchorHTMLAttributes<HTMLAnchorElement> {
+export interface SidebarNavItem extends Omit<LinkProps, 'children' | 'className'> {
   label: ReactNode;
   active?: boolean;
+  className?: string;
 }
 
 export interface SidebarNavProps {
@@ -18,10 +20,10 @@ export function SidebarNav({ items, title, className }: SidebarNavProps) {
     <nav aria-label="Primary" className={cn('fl-sidebar-nav', className)}>
       {title ? <div className="fl-sidebar-nav__title">{title}</div> : null}
       <div className="fl-sidebar-nav__items">
-        {items.map(({ active = false, className: itemClassName, label, ...item }) => (
-          <a aria-current={active ? 'page' : undefined} className={cn('fl-sidebar-nav__item', active && 'is-active', itemClassName)} key={`${item.href}-${String(label)}`} {...item}>
+        {items.map(({ active = false, className: itemClassName, label, to, ...item }) => (
+          <Link aria-current={active ? 'page' : undefined} className={cn('fl-sidebar-nav__item', active && 'is-active', itemClassName)} key={`${String(to)}-${String(label)}`} to={to} {...item}>
             {label}
-          </a>
+          </Link>
         ))}
       </div>
     </nav>
