@@ -9,6 +9,7 @@ export const productObjectRefSchema = z
     title: z.string().min(1).optional(),
   })
   .strict();
+export type ProductObjectRef = z.infer<typeof productObjectRefSchema>;
 
 export const productListQuerySchema = z
   .object({
@@ -110,6 +111,7 @@ export const productListItemSchema = z
     updated_at: isoDateTimeSchema,
   })
   .strict();
+export type ProductListItem = z.infer<typeof productListItemSchema>;
 
 export const productListResponseSchema = z
   .object({
@@ -130,6 +132,7 @@ export const pipelineStageIdSchema = z.enum([
   'release',
   'observation',
 ]);
+export type PipelineStageId = z.infer<typeof pipelineStageIdSchema>;
 
 export const pipelineStageSchema = z
   .object({
@@ -143,6 +146,7 @@ export const pipelineStageSchema = z
     degraded: z.boolean().default(false),
   })
   .strict();
+export type PipelineStage = z.infer<typeof pipelineStageSchema>;
 
 export const pipelineResponseSchema = z
   .object({

@@ -27,6 +27,7 @@ const pipelineStages: { id: StageId; label: string }[] = [
 ];
 
 const supportedFiltersByList = {
+  pipeline: new Set<keyof ProductListQuery>(['project_id', 'limit']),
   specs: new Set<keyof ProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'spec_id', 'cursor', 'limit']),
   plans: new Set<keyof ProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'plan_id', 'cursor', 'limit']),
   packages: new Set<keyof ProductListQuery>([
@@ -345,6 +346,10 @@ export async function getProductPipeline(
   repository: DeliveryRepository,
   query: ProductListQuery,
 ): Promise<PipelineResponse> {
+  const degradedSources = [
+    ...degradedForUnsupportedFilters('pipeline', query),
+    'pipeline:stale_filter_not_available',
+  ];
   const workItems = (await repository.listWorkItems(query.project_id)).filter(visible);
   const packages = (await repository.listExecutionPackages(query.project_id)).filter(visible);
   const releases = await repository.listReleases(query.project_id);
@@ -378,7 +383,7 @@ export async function getProductPipeline(
         degraded: false,
       };
     }),
-    degraded_sources: ['pipeline:stale_filter_not_available'],
+    degraded_sources: degradedSources,
   };
 }
 

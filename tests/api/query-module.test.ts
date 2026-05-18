@@ -189,6 +189,25 @@ describe('query module', () => {
     expect(response.body.degraded_sources).toEqual(expect.any(Array));
   });
 
+  it('reports unsupported product pipeline filters as degraded sources', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const response = await request(app.getHttpServer())
+      .get('/query/pipeline')
+      .query({ project_id: projectId, status: 'idle', risk: 'high', phase: 'execution' })
+      .expect(200);
+
+    expect(response.body.degraded_sources).toEqual(
+      expect.arrayContaining([
+        'pipeline:unsupported_filter:status',
+        'pipeline:unsupported_filter:risk',
+        'pipeline:unsupported_filter:phase',
+      ]),
+    );
+  });
+
   it('serves product list read models for specs, plans, packages, runs, and reviews', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
