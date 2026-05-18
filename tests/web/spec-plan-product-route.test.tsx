@@ -228,7 +228,8 @@ describe('Work Item scoped Spec & Plan route', () => {
     expect((screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Request changes' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Available after planning artifacts are ready.')).toBeTruthy();
+    expect(screen.getByText('Approval controls will be available in the dedicated approval flow.')).toBeTruthy();
+    expect(screen.queryByText('Available after planning artifacts are ready.')).toBeNull();
     expect(screen.queryByText(new RegExp(`Pending command ${'wir'}${'ing'}`, 'i'))).toBeNull();
     expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
 

@@ -27,7 +27,7 @@ export function SpecPlanWorkItemFlow() {
   const generatePlanDraft = useGeneratePlanDraftMutation({ workItemId, planId: viewModel.plan?.id });
   const workItemTitle = viewModel.workItem?.title ?? 'Work item planning';
   const cockpitRefreshing = cockpit.isFetching && cockpit.status !== 'pending';
-  const approvalUnavailableReason = 'Available after planning artifacts are ready.';
+  const approvalUnavailableReason = 'Approval controls will be available in the dedicated approval flow.';
   const hasPlanningContext = cockpit.status === 'success' && !cockpit.isError && viewModel.workItem !== null;
   const revisionHistoryPendingReason = 'Revision history is available after work item planning data loads.';
   const handleHistoryOpenChange = (open: boolean) => {
