@@ -528,13 +528,13 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
   return (
     <Section title="Downstream package">
       <div className="artifact-list">
-        <span>Ready for package generation</span>
+        <span>Package generation starts from the Packages workspace.</span>
         <Link to={`/packages?plan=${encodeURIComponent(plan.id)}`}>View package readiness</Link>
-        <Button disabled title="Package generation mutation is owned by the package workflow." variant="secondary">
+        <Button disabled title="Open package readiness to continue from the Packages workspace." variant="secondary">
           Generate packages
         </Button>
       </div>
-      <p className="status-line">Package generation is ready for this approved Plan; mutation wiring remains in the package workflow.</p>
+      <p className="status-line">Package generation is ready for this approved Plan. Open package readiness to continue.</p>
     </Section>
   );
 }

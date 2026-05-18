@@ -212,10 +212,15 @@ describe('Spec and Plan direct routes', () => {
     expect(await screen.findByText('Plan approved for package preparation.')).toBeTruthy();
     expect(screen.getByText('2026-05-18T00:35:00.000Z')).toBeTruthy();
     expect(screen.getByText('Parent: Work Item')).toBeTruthy();
+    expect(screen.getByText('Package generation starts from the Packages workspace.')).toBeTruthy();
+    expect(screen.getByText('Package generation is ready for this approved Plan. Open package readiness to continue.')).toBeTruthy();
     expect((screen.getByRole('link', { name: 'View package readiness' }) as HTMLAnchorElement).getAttribute('href')).toBe(
       '/packages?plan=plan-1',
     );
-    expect((screen.getByRole('button', { name: 'Generate packages' }) as HTMLButtonElement).disabled).toBe(true);
+    const generatePackagesAction = screen.getByRole('button', { name: 'Generate packages' }) as HTMLButtonElement;
+    expect(generatePackagesAction.disabled).toBe(true);
+    expect(generatePackagesAction.getAttribute('title')).not.toMatch(/mutation|wiring/i);
+    expect(document.body.textContent).not.toMatch(/mutation|wiring/i);
     expect(screen.queryByText('Revision 1 created')).toBeNull();
   });
 
