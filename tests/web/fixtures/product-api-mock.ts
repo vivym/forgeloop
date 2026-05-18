@@ -57,7 +57,11 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         ...routeWorkItem,
         object: { type: 'work_item', id: routeWorkItem.id, title: routeWorkItem.title },
         package_state: { work_item_id: routeWorkItem.id, surface_type: 'release_cockpit' },
-        actions: [{ label: 'Open work item', method: 'GET', path: `/work-items/${routeWorkItem.id}`, enabled: true }],
+        actions: [
+          { label: 'Open cockpit', method: 'GET', path: `/query/work-item-cockpit/${routeWorkItem.id}`, enabled: true },
+          { label: 'Edit work item', method: 'PATCH', path: `/work-items/${routeWorkItem.id}`, enabled: false },
+          { label: 'Create spec', method: 'POST', path: `/work-items/${routeWorkItem.id}/specs`, enabled: true },
+        ],
       },
     ],
   },

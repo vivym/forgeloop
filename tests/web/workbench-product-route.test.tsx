@@ -9,6 +9,11 @@ describe('Workbench product route', () => {
     expect(screen.getByText('Work Item Owner')).toBeTruthy();
     expect((await screen.findAllByText('Requirement')).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/release cockpit/i).length).toBeGreaterThan(0);
+    const openWorkItem = screen.getByRole('link', { name: 'Open work item' });
+    expect(openWorkItem.getAttribute('href')).toBe('/work-items/wi-1');
+    expect(screen.queryByRole('link', { name: 'Open cockpit' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit work item' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Create spec' })).toBeNull();
     expect(screen.queryByText('Intake')).toBeNull();
     expect(screen.queryByText('Load role queue')).toBeNull();
   });

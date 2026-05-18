@@ -21,8 +21,20 @@ export function RoleQueuePreview({ item }: { item: RoleQueueItemViewModel | unde
         <Badge tone="warning">{item.risk} risk</Badge>
       </div>
       <Link className="fl-button fl-button--primary" to={`/work-items/${encodeURIComponent(item.objectId)}`}>
-        {item.nextAction}
+        Open work item
       </Link>
+      {item.backendActions.length ? (
+        <div className="detail-block">
+          <strong>Queue signals</strong>
+          <div className="pill-list">
+            {item.backendActions.map((action) => (
+              <span className="pill" key={`${action.label}:${action.state}`}>
+                {action.label} / {action.state}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

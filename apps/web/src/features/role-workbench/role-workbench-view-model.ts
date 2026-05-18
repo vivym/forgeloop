@@ -10,7 +10,12 @@ export interface RoleQueueItemViewModel {
   surface: string;
   state: string;
   risk: string;
-  nextAction: string;
+  backendActions: RoleQueueActionViewModel[];
+}
+
+export interface RoleQueueActionViewModel {
+  label: string;
+  state: string;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -27,12 +32,25 @@ const titleCase = (value: string | undefined, fallback: string) =>
         .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
         .join(' ');
 
-const firstActionLabel = (value: unknown) => {
+const toBackendActions = (value: unknown): RoleQueueActionViewModel[] => {
   if (!Array.isArray(value)) {
-    return undefined;
+    return [];
   }
-  const action = value.map(asRecord).find((candidate) => asString(candidate.label) !== undefined);
-  return asString(action?.label);
+
+  return value
+    .map(asRecord)
+    .map((action) => {
+      const label = asString(action.label);
+      if (label === undefined) {
+        return undefined;
+      }
+
+      const method = asString(action.method)?.toUpperCase();
+      const enabled = action.enabled === false ? false : true;
+      const state = enabled ? (method === 'GET' ? 'Read signal' : 'Command pending wiring') : 'Unavailable';
+      return { label, state };
+    })
+    .filter((action): action is RoleQueueActionViewModel => action !== undefined);
 };
 
 const toRoleQueueItem = (item: unknown): RoleQueueItemViewModel => {
@@ -52,7 +70,7 @@ const toRoleQueueItem = (item: unknown): RoleQueueItemViewModel => {
     surface: titleCase(asString(packageState.surface_type) ?? asString(record.surface_type), 'Product surface'),
     state: titleCase(asString(record.status) ?? asString(record.phase) ?? asString(record.gate_state), 'Ready for owner'),
     risk: titleCase(asString(record.risk), 'Unspecified'),
-    nextAction: firstActionLabel(record.actions) ?? 'Review next step',
+    backendActions: toBackendActions(record.actions),
   };
 };
 
