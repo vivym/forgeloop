@@ -28,6 +28,18 @@ const pipelineStages: { id: StageId; label: string }[] = [
 
 const supportedFiltersByList = {
   pipeline: new Set<keyof ProductListQuery>(['project_id', 'limit']),
+  workItems: new Set<keyof ProductListQuery>([
+    'project_id',
+    'status',
+    'phase',
+    'gate_state',
+    'resolution',
+    'risk',
+    'owner_actor_id',
+    'work_item_id',
+    'cursor',
+    'limit',
+  ]),
   specs: new Set<keyof ProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'spec_id', 'cursor', 'limit']),
   plans: new Set<keyof ProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'plan_id', 'cursor', 'limit']),
   packages: new Set<keyof ProductListQuery>([
@@ -175,6 +187,24 @@ export async function listProductSpecs(
   );
 
   return applyResponseDegradation(paginateItems(items.filter((item): item is ProductListItem => item !== undefined), query), degradedSources);
+}
+
+export async function listProductWorkItems(
+  repository: DeliveryRepository,
+  query: ProductListQuery,
+): Promise<ProductListResponse> {
+  const degradedSources = degradedForUnsupportedFilters('workItems', query);
+  const workItems = (await repository.listWorkItems(query.project_id))
+    .filter(visible)
+    .filter((workItem) => query.status === undefined || workItem.activity_state === query.status)
+    .filter((workItem) => query.phase === undefined || workItem.phase === query.phase)
+    .filter((workItem) => query.gate_state === undefined || workItem.gate_state === query.gate_state)
+    .filter((workItem) => query.resolution === undefined || workItem.resolution === query.resolution)
+    .filter((workItem) => query.risk === undefined || workItem.risk === query.risk)
+    .filter((workItem) => query.owner_actor_id === undefined || workItem.owner_actor_id === query.owner_actor_id)
+    .filter((workItem) => query.work_item_id === undefined || workItem.id === query.work_item_id);
+
+  return applyResponseDegradation(paginateItems(workItems.map(workItemListItem), query), degradedSources);
 }
 
 export async function listProductPlans(

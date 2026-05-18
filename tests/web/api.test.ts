@@ -326,12 +326,14 @@ describe('Forgeloop web API client', () => {
   });
 
   it('routes work item cockpit and replay reads through the query client', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [], degraded_sources: [] }), { status: 200 }));
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
     await queryApi.getWorkItemCockpit('work item/1');
     await queryApi.getWorkItemReplay('work item/1');
+    await queryApi.listWorkItems({ project_id: 'project 1', limit: 25 });
     await queryApi.getExecutionPackageReplay('package/1');
+    await queryApi.getReview('review/1');
     await queryApi.getReviewPacketReplay('review/1');
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/work-item-cockpit/work%20item%2F1', {
@@ -342,11 +344,19 @@ describe('Forgeloop web API client', () => {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/query/replay/execution_package/package%2F1', {
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/query/work-items?project_id=project+1&limit=25', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/query/replay/review_packet/review%2F1', {
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/query/replay/execution_package/package%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://api.local/root/query/reviews/review%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://api.local/root/query/replay/review_packet/review%2F1', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
@@ -488,10 +498,12 @@ describe('Forgeloop web API client', () => {
     expect(commandMethods).not.toContain('getWorkItemReplay');
     expect(Object.keys(queryApi).sort()).toEqual([
       'getExecutionPackageReplay',
+      'getPlanReplay',
       'getReleaseCockpit',
       'getReleaseReplay',
       'getReviewPacketReplay',
       'getRoleWorkbench',
+      'getSpecReplay',
       'getWorkItemCockpit',
       'getWorkItemReplay',
     ]);

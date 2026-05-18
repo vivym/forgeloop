@@ -23,6 +23,11 @@ export class QueryController {
     return this.service.getPipeline(query);
   }
 
+  @Get('work-items')
+  listWorkItems(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listWorkItems(query);
+  }
+
   @Get('specs')
   listSpecs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listSpecs(query);
@@ -46,6 +51,11 @@ export class QueryController {
   @Get('review-packets')
   listReviewPackets(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listReviewPackets(query);
+  }
+
+  @Get('reviews/:reviewPacketId')
+  getReview(@Param('reviewPacketId') reviewPacketId: string) {
+    return this.service.getReview(reviewPacketId);
   }
 
   @Get('workbenches/intake')

@@ -16,6 +16,7 @@ import type {
   LinkReleaseScopeBody,
   ListProductQuery,
   OverrideApproveReleaseBody,
+  PatchReleaseBody,
   PatchExecutionPackageBody,
   PlanRevision,
   ReleaseCommandBody,
@@ -77,6 +78,23 @@ export function useWorkItemsQuery(projectId: string) {
   return useQuery({
     queryKey: queryKeys.workItems(projectId),
     queryFn: () => createCommandApi().listWorkItems(projectId),
+  });
+}
+
+export function useProductWorkItemsQuery(query: Pick<ListProductQuery, 'project_id' | 'phase' | 'status' | 'risk' | 'owner_actor_id' | 'cursor' | 'limit'>) {
+  const normalizedQuery = {
+    project_id: query.project_id,
+    ...(query.phase === undefined ? {} : { phase: query.phase }),
+    ...(query.status === undefined ? {} : { status: query.status }),
+    ...(query.risk === undefined ? {} : { risk: query.risk }),
+    ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+  };
+
+  return useQuery({
+    queryKey: queryKeys.productWorkItems(normalizedQuery),
+    queryFn: () => createQueryApi().listWorkItems(normalizedQuery),
   });
 }
 
@@ -226,7 +244,7 @@ export function useReviewPacketsQuery(query: ListProductQuery) {
 export function useReviewQuery(reviewPacketId: string) {
   return useQuery({
     queryKey: queryKeys.review(reviewPacketId),
-    queryFn: () => createCommandApi().getReviewPacket(reviewPacketId),
+    queryFn: () => createQueryApi().getReview(reviewPacketId),
   });
 }
 
@@ -428,6 +446,10 @@ export function useCreateReleaseMutation(projectId: string) {
     mutationFn: (body: CreateReleaseBody) => createCommandApi().createRelease(body),
     onSuccess: () => invalidateReleases(queryClient, projectId),
   });
+}
+
+export function usePatchReleaseMutation(releaseId: string) {
+  return useReleaseCommandMutation<PatchReleaseBody>(releaseId, (body) => createCommandApi().patchRelease(releaseId, body));
 }
 
 export function useLinkReleaseWorkItemMutation(releaseId: string) {

@@ -141,6 +141,25 @@ const runListItem = {
 export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/pipeline?project_id=${projectId}`]: [workItem],
   [`GET /work-items?project_id=${projectId}`]: [workItem],
+  [`GET /query/work-items?project_id=${projectId}&limit=100`]: {
+    items: [
+      {
+        id: workItem.id,
+        object: { type: 'work_item', id: workItem.id, title: workItem.title },
+        title: workItem.title,
+        status: workItem.activity_state,
+        phase: workItem.phase,
+        gate_state: workItem.gate_state,
+        resolution: workItem.resolution,
+        risk: workItem.risk,
+        owner_actor_id: workItem.owner_actor_id,
+        related: [],
+        counts: {},
+        updated_at: workItem.updated_at ?? '2026-05-18T00:00:00.000Z',
+      },
+    ],
+    degraded_sources: [],
+  },
   [`GET /query/workbenches/intake?project_id=${projectId}`]: {
     summary: { role: 'intake', project_id: projectId, actor_id: actorId, total: 1 },
     items: [
@@ -234,7 +253,6 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   },
   [`GET /query/reviews?project_id=${projectId}`]: [reviewPacket],
   [`GET /query/reviews/${reviewPacket.id}`]: reviewPacket,
-  [`GET /review-packets/${reviewPacket.id}`]: reviewPacket,
   [`POST /review-packets/${reviewPacket.id}/approve`]: {
     review_packet_id: reviewPacket.id,
     status: 'completed',

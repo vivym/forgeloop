@@ -36,6 +36,8 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
 
   const productMethods = {
     getPipeline: (query: ProjectQuery) => request<WorkItem[]>(`/query/pipeline${queryString(query)}`),
+    listWorkItems: async (query: ProductRegistryQuery) =>
+      productListResponseSchema.parse(await request<unknown>(`/query/work-items${queryString(query)}`)) as ProductListResponse,
     listSpecs: async (query: ProductRegistryQuery) =>
       productListResponseSchema.parse(await request<unknown>(`/query/specs${queryString(query)}`)) as ProductListResponse,
     listPlans: async (query: ProductRegistryQuery) =>

@@ -221,7 +221,7 @@ describe('review and release product routes', () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/reviews/${reviewPacket.id}`, {
       apiOverrides: {
-        [`GET /review-packets/${reviewPacket.id}`]: reviewWithRequestedChanges,
+        [`GET /query/reviews/${reviewPacket.id}`]: reviewWithRequestedChanges,
         [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
         [`POST /review-packets/${reviewPacket.id}/approve`]: { review_packet_id: reviewPacket.id, status: 'completed', decision: 'approved' },
       },
@@ -239,6 +239,14 @@ describe('review and release product routes', () => {
     expect(screen.getByText('Timeline / Replay')).toBeTruthy();
     expect(screen.getByText(timeline[0].summary)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Request changes' })).toBeTruthy();
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+      `http://localhost:3000/query/reviews/${reviewPacket.id}`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
+      expect.stringContaining(`/review-packets/${reviewPacket.id}`),
+      expect.objectContaining({ method: 'GET' }),
+    );
 
     await user.click(screen.getByRole('button', { name: 'Approve' }));
 
@@ -316,6 +324,7 @@ describe('review and release product routes', () => {
     });
 
     await user.click(await screen.findByRole('button', { name: 'Create release' }));
+    expect(screen.getByRole('dialog', { name: 'Create release' })).toBeTruthy();
     await user.type(screen.getByLabelText('Release title'), 'Release cockpit rollout');
     await user.type(screen.getByLabelText('Scope summary'), 'Route-backed release cockpit rollout.');
     await user.type(screen.getByLabelText('Release owner'), release.release_owner_actor_id);
@@ -344,6 +353,14 @@ describe('review and release product routes', () => {
       apiOverrides: {
         [`GET /query/release-cockpit/${release.id}`]: releaseCockpitResponse,
         [`GET /query/replay/release/${release.id}`]: timeline,
+        [`PATCH /releases/${release.id}`]: {
+          release: { ...releaseWithKey, title: 'Edited release cockpit' },
+          blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
+          blockers: [],
+          overridden_blockers: [],
+          decision_intents: [],
+          next_actions: [],
+        },
         [`POST /releases/${release.id}/test-acceptance/acknowledge`]: {
           release: releaseWithKey,
           blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
@@ -370,6 +387,7 @@ describe('review and release product routes', () => {
     expect(screen.getByText(timeline[0].summary)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Submit' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit release' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Acknowledge test acceptance' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Override approve' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Request changes' })).toBeTruthy();
@@ -381,6 +399,25 @@ describe('review and release product routes', () => {
     expect(screen.queryByText('Load cockpit')).toBeNull();
     expect(screen.queryByText('Load replay')).toBeNull();
     expect(screen.queryByText(/raw JSON/i)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Edit release' }));
+    const editDialog = screen.getByRole('dialog', { name: 'Edit release details' });
+    const titleInput = within(editDialog).getByLabelText('Release title');
+    await user.clear(titleInput);
+    await user.type(titleInput, 'Edited release cockpit');
+    await user.click(within(editDialog).getByRole('button', { name: 'Save release' }));
+
+    await waitFor(() => {
+      const [, init] =
+        vi.mocked(globalThis.fetch).mock.calls.find(
+          ([input, requestInit]) => String(input).includes(`/releases/${release.id}`) && requestInit?.method === 'PATCH',
+        ) ??
+        [];
+      expect(init).toBeDefined();
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual(expect.objectContaining({ actor_id: actorId, title: 'Edited release cockpit' }));
+      expect(body).not.toHaveProperty('release_id');
+    });
 
     await user.type(screen.getByLabelText('Test acceptance summary'), 'QA accepted route-backed release controls.');
     await user.type(screen.getByLabelText('Acceptance evidence reference'), 'artifacts/test-acceptance.md');
@@ -410,20 +447,137 @@ describe('review and release product routes', () => {
     });
   });
 
-  it('keeps scoped release link controls product-labeled', async () => {
+  it('links release scope through project-scoped object pickers instead of raw ids', async () => {
+    const user = userEvent.setup();
+    const candidateWorkItem = {
+      ...workItem,
+      id: 'work-item-release-candidate',
+      title: 'Release picker candidate work item',
+    };
+    const candidatePackage = {
+      ...executionPackage,
+      id: 'package-release-candidate',
+      objective: 'Release picker candidate package',
+      work_item_id: candidateWorkItem.id,
+    };
     const screen = await renderRoute(`/releases/${release.id}`, {
       apiOverrides: {
         [`GET /query/release-cockpit/${release.id}`]: releaseCockpitResponse,
+        [`GET /query/work-items?project_id=${projectId}&limit=100`]: {
+          items: [workItem, candidateWorkItem].map((item) => ({
+            id: item.id,
+            object: {
+              type: 'work_item',
+              id: item.id,
+              title: item.title,
+            },
+            title: item.title,
+            status: item.activity_state,
+            phase: item.phase,
+            gate_state: item.gate_state,
+            resolution: item.resolution,
+            risk: item.risk,
+            owner_actor_id: item.owner_actor_id,
+            related: [],
+            counts: {},
+            updated_at: item.updated_at,
+          })),
+          degraded_sources: [],
+        },
+        [`GET /query/execution-packages?project_id=${projectId}&limit=100`]: {
+          items: [
+            {
+              id: candidatePackage.id,
+              object: {
+                type: 'execution_package',
+                id: candidatePackage.id,
+                title: candidatePackage.objective,
+              },
+              title: candidatePackage.objective,
+              phase: candidatePackage.phase,
+              risk: workItem.risk,
+              owner_actor_id: candidatePackage.owner_actor_id,
+              reviewer_actor_id: candidatePackage.reviewer_actor_id,
+              qa_owner_actor_id: candidatePackage.qa_owner_actor_id,
+              parent: {
+                type: 'work_item',
+                id: candidateWorkItem.id,
+                title: candidateWorkItem.title,
+              },
+              related: [],
+              revision_state: {
+                current_revision_id: candidatePackage.plan_revision_id,
+              },
+              package_state: {
+                work_item_id: candidatePackage.work_item_id,
+                spec_revision_id: candidatePackage.spec_revision_id,
+                plan_revision_id: candidatePackage.plan_revision_id,
+                surface_type: 'web',
+                last_run_session_id: candidatePackage.last_run_session_id,
+              },
+              counts: {},
+              updated_at: candidatePackage.updated_at,
+            },
+          ],
+          degraded_sources: [],
+        },
+        [`POST /releases/${release.id}/work-items/${candidateWorkItem.id}`]: {
+          release_id: release.id,
+          object_type: 'work_item',
+          object_id: candidateWorkItem.id,
+          linked: true,
+        },
+        [`POST /releases/${release.id}/execution-packages/${candidatePackage.id}`]: {
+          release_id: release.id,
+          object_type: 'execution_package',
+          object_id: candidatePackage.id,
+          linked: true,
+        },
       },
     });
 
-    expect(await screen.findByText('Add Work Item')).toBeTruthy();
+    expect(await screen.findByRole('combobox', { name: 'Work Item' })).toBeTruthy();
+    expect(await screen.findByRole('option', { name: candidateWorkItem.title })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Execution Package' })).toBeTruthy();
+    expect(await screen.findByRole('option', { name: candidatePackage.objective })).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/id from scoped search/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/work item id/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/package id/i)).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Work Item' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Execution Package' })).toBeNull();
+    expect(screen.getByText('Add Work Item')).toBeTruthy();
     expect(screen.getByText('Add Execution Package')).toBeTruthy();
     expect(screen.queryByText('Link WorkItem')).toBeNull();
     expect(screen.queryByText('Unlink WorkItem')).toBeNull();
     expect(screen.queryByText('Link ExecutionPackage')).toBeNull();
     expect(screen.queryByText('Unlink ExecutionPackage')).toBeNull();
-    expect(within(screen.getByLabelText('Work Item')).queryByText('work_item_id')).toBeNull();
-    expect(within(screen.getByLabelText('Execution Package')).queryByText('execution_package_id')).toBeNull();
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work Item' }), candidateWorkItem.id);
+    await user.click(screen.getByRole('button', { name: 'Add Work Item' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Execution Package' }), candidatePackage.id);
+    await user.click(screen.getByRole('button', { name: 'Add Execution Package' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/query/work-items?project_id=${projectId}&limit=100`,
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
+        `http://localhost:3000/work-items?project_id=${projectId}`,
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/query/execution-packages?project_id=${projectId}&limit=100`,
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/releases/${release.id}/work-items/${candidateWorkItem.id}`,
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/releases/${release.id}/execution-packages/${candidatePackage.id}`,
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
   });
 });

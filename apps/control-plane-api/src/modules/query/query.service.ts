@@ -18,6 +18,7 @@ import {
   listProductReviewPackets,
   listProductRuns,
   listProductSpecs,
+  listProductWorkItems,
   getSpecApproverWorkbench,
   getWorkItemCockpit,
   type RoleWorkbenchFilters,
@@ -26,6 +27,7 @@ import type { ProductListQuery } from '@forgeloop/contracts';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
+import { ReviewEvidenceService } from '../review-evidence/review-evidence.service';
 import { PublicRunSessionProjection } from './public-run-session-projection';
 
 type RoleWorkbenchId =
@@ -48,6 +50,8 @@ export class QueryService {
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(PublicRunSessionProjection)
     private readonly publicRunSessionProjection: PublicRunSessionProjection,
+    @Inject(ReviewEvidenceService)
+    private readonly reviewEvidenceService: ReviewEvidenceService,
   ) {}
 
   async getWorkItemCockpit(workItemId: string) {
@@ -108,6 +112,10 @@ export class QueryService {
     return getProductPipeline(this.repository, query);
   }
 
+  listWorkItems(query: ProductListQuery) {
+    return listProductWorkItems(this.repository, query);
+  }
+
   listSpecs(query: ProductListQuery) {
     return listProductSpecs(this.repository, query);
   }
@@ -126,6 +134,10 @@ export class QueryService {
 
   listReviewPackets(query: ProductListQuery) {
     return listProductReviewPackets(this.repository, query);
+  }
+
+  getReview(reviewPacketId: string) {
+    return this.reviewEvidenceService.getReviewPacket(reviewPacketId);
   }
 
   async getRoleWorkbench(workbenchId: RoleWorkbenchId, query: QueryParams) {

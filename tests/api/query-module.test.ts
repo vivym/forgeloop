@@ -230,6 +230,7 @@ describe('query module', () => {
     const executionPackage = await seedReadyPackage(app);
     const projectId = executionPackage.project_id;
 
+    await request(app.getHttpServer()).get('/query/work-items').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/specs').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/plans').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/execution-packages').query({ project_id: projectId }).expect(200);
@@ -396,11 +397,13 @@ describe('query module', () => {
     const packageReplay = await request(app.getHttpServer())
       .get(`/query/replay/execution_package/${executionPackage.id}`)
       .expect(200);
+    const reviewDetail = await request(app.getHttpServer()).get(`/query/reviews/${reviewPacketId}`).expect(200);
     const reviewReplay = await request(app.getHttpServer()).get(`/query/replay/review_packet/${reviewPacketId}`).expect(200);
 
     expect(packageReplay.body).toEqual(
       expect.arrayContaining([expect.objectContaining({ object_type: 'execution_package', object_id: executionPackage.id })]),
     );
+    expect(reviewDetail.body).toEqual(expect.objectContaining({ id: reviewPacketId, execution_package_id: executionPackage.id }));
     expect(reviewReplay.body).toEqual(
       expect.arrayContaining([expect.objectContaining({ object_type: 'review_packet', object_id: reviewPacketId })]),
     );

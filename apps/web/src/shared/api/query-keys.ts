@@ -68,6 +68,7 @@ export const queryKeys = {
   ],
   pipeline: (projectId: string) => ['pipeline', { projectId }],
   workItems: (projectId: string) => ['work-items', { projectId }],
+  productWorkItems: (query: ListProductQuery) => ['product-work-items', normalizeProductRegistryQuery(query)],
   workItem: (workItemId: string) => ['work-item', workItemId],
   workItemCockpit: (workItemId: string | undefined) => ['work-item-cockpit', workItemId],
   workItemReplay: (workItemId: string | undefined) => ['work-item-replay', workItemId],

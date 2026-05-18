@@ -9,7 +9,10 @@ import {
   useCreateReleaseMutation,
   useLinkReleaseExecutionPackageMutation,
   useLinkReleaseWorkItemMutation,
+  usePackagesQuery,
   useOverrideApproveReleaseMutation,
+  usePatchReleaseMutation,
+  useProductWorkItemsQuery,
   useReleaseCockpitQuery,
   useReleaseReplayQuery,
   useReleasesQuery,
@@ -21,6 +24,8 @@ import {
 } from '../../shared/api/hooks';
 import type {
   AcknowledgeReleaseTestAcceptanceBody,
+  PatchReleaseBody,
+  ProductListItem,
   ReleaseBlockerSnapshot,
   ReleaseCockpitResponse,
   ReleaseListResponse,
@@ -29,7 +34,7 @@ import type {
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Button, DataTable, Input, Select, StatusPill, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
+import { Button, DataTable, Drawer, Input, Select, StatusPill, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
 
 const supportedReleaseFilters = ['release_owner_actor_id', 'phase', 'gate_state', 'resolution', 'cursor', 'limit'];
 type ReleaseFilters = {
@@ -60,18 +65,19 @@ export function ReleasesRegistry() {
     <>
       <PageHeader
         actions={
-          <Button onClick={() => setShowCreateRelease((current) => !current)} variant="primary">
-            Create release
-          </Button>
+          <Drawer
+            content={<CreateReleaseForm actorId={actorId} onCreated={() => setShowCreateRelease(false)} projectId={projectId} />}
+            description="Create a governed release for this project."
+            onOpenChange={setShowCreateRelease}
+            open={showCreateRelease}
+            title="Create release"
+          >
+            <Button variant="primary">Create release</Button>
+          </Drawer>
         }
         subtitle="Release readiness, scope, ownership, and gate state."
         title="Releases"
       />
-      {showCreateRelease ? (
-        <Section title="Create release" description="Create a governed release for this project.">
-          <CreateReleaseForm actorId={actorId} onCreated={() => setShowCreateRelease(false)} projectId={projectId} />
-        </Section>
-      ) : null}
       <Section
         description="Server-side filters are sent only for project, release owner, phase, gate state, resolution, cursor, and limit."
         title="Release inventory"
@@ -131,10 +137,10 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
         </dl>
       </Section>
       <Section title="Linked Work Items" description="Work Items in this release scope.">
-        <ReleaseWorkItems releaseId={release.id} actorId={actorId} workItems={cockpit.work_items} />
+        <ReleaseWorkItems releaseId={release.id} actorId={actorId} projectId={release.project_id} workItems={cockpit.work_items} />
       </Section>
       <Section title="Linked Execution Packages" description="Execution Packages included in this release.">
-        <ReleaseExecutionPackages actorId={actorId} packages={cockpit.execution_packages} releaseId={release.id} />
+        <ReleaseExecutionPackages actorId={actorId} packages={cockpit.execution_packages} projectId={release.project_id} releaseId={release.id} />
       </Section>
       <Section title="Blockers" description="Current release blockers and override state.">
         <BlockerPanel cockpit={cockpit} />
@@ -285,10 +291,25 @@ function ReleaseTable({ response }: { response: ReleaseListResponse | undefined 
   );
 }
 
-function ReleaseWorkItems({ actorId, releaseId, workItems }: { actorId: string; releaseId: string; workItems: CockpitWorkItem[] }) {
+function ReleaseWorkItems({
+  actorId,
+  projectId,
+  releaseId,
+  workItems,
+}: {
+  actorId: string;
+  projectId: string;
+  releaseId: string;
+  workItems: CockpitWorkItem[];
+}) {
+  const workItemsQuery = useProductWorkItemsQuery({ project_id: projectId, limit: 100 });
   const linkWorkItem = useLinkReleaseWorkItemMutation(releaseId);
   const unlinkWorkItem = useUnlinkReleaseWorkItemMutation(releaseId);
-  const [workItemId, setWorkItemId] = useState('');
+  const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
+  const linkedWorkItemIds = new Set(workItems.map((item) => item.id));
+  const workItemOptions = (workItemsQuery.data?.items ?? [])
+    .filter((item) => !linkedWorkItemIds.has(item.object.id))
+    .map((item) => ({ label: workItemPickerLabel(item), value: item.object.id }));
 
   return (
     <div className="stack-form compact">
@@ -296,15 +317,32 @@ function ReleaseWorkItems({ actorId, releaseId, workItems }: { actorId: string; 
         className="fl-inline-actions"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!workItemId.trim()) return;
-          linkWorkItem.mutate({ workItemId: workItemId.trim(), body: { actor_id: actorId } });
+          if (!selectedWorkItemId) return;
+          linkWorkItem.mutate(
+            { workItemId: selectedWorkItemId, body: { actor_id: actorId } },
+            { onSuccess: () => setSelectedWorkItemId('') },
+          );
         }}
       >
         <label className="field">
           Work Item
-          <Input onChange={(event) => setWorkItemId(event.currentTarget.value)} placeholder="Work Item id from scoped search" value={workItemId} />
+          <Select
+            disabled={workItemsQuery.status === 'pending' || workItemsQuery.isError || workItemOptions.length === 0}
+            onChange={(event) => setSelectedWorkItemId(event.currentTarget.value)}
+            options={workItemOptions}
+            placeholder={pickerPlaceholder({
+              empty: 'No available Work Items',
+              isError: workItemsQuery.isError,
+              isPending: workItemsQuery.status === 'pending',
+              ready: 'Select a Work Item',
+              unavailable: 'Work Item picker unavailable',
+              valueCount: workItemOptions.length,
+            })}
+            required
+            value={selectedWorkItemId}
+          />
         </label>
-        <Button disabled={!workItemId.trim()} loading={linkWorkItem.isPending} type="submit" variant="secondary">
+        <Button disabled={!selectedWorkItemId} loading={linkWorkItem.isPending} type="submit" variant="secondary">
           Add Work Item
         </Button>
       </form>
@@ -338,15 +376,22 @@ function ReleaseWorkItems({ actorId, releaseId, workItems }: { actorId: string; 
 function ReleaseExecutionPackages({
   actorId,
   packages,
+  projectId,
   releaseId,
 }: {
   actorId: string;
   packages: CockpitPackage[];
+  projectId: string;
   releaseId: string;
 }) {
+  const packagesQuery = usePackagesQuery({ project_id: projectId, limit: 100 });
   const linkPackage = useLinkReleaseExecutionPackageMutation(releaseId);
   const unlinkPackage = useUnlinkReleaseExecutionPackageMutation(releaseId);
-  const [packageId, setPackageId] = useState('');
+  const [selectedPackageId, setSelectedPackageId] = useState('');
+  const linkedPackageIds = new Set(packages.map((item) => item.id));
+  const packageOptions = (packagesQuery.data?.items ?? [])
+    .filter((item) => !linkedPackageIds.has(item.object.id))
+    .map((item) => ({ label: packagePickerLabel(item), value: item.object.id }));
 
   return (
     <div className="stack-form compact">
@@ -354,15 +399,32 @@ function ReleaseExecutionPackages({
         className="fl-inline-actions"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!packageId.trim()) return;
-          linkPackage.mutate({ packageId: packageId.trim(), body: { actor_id: actorId } });
+          if (!selectedPackageId) return;
+          linkPackage.mutate(
+            { packageId: selectedPackageId, body: { actor_id: actorId } },
+            { onSuccess: () => setSelectedPackageId('') },
+          );
         }}
       >
         <label className="field">
           Execution Package
-          <Input onChange={(event) => setPackageId(event.currentTarget.value)} placeholder="Package id from scoped search" value={packageId} />
+          <Select
+            disabled={packagesQuery.status === 'pending' || packagesQuery.isError || packageOptions.length === 0}
+            onChange={(event) => setSelectedPackageId(event.currentTarget.value)}
+            options={packageOptions}
+            placeholder={pickerPlaceholder({
+              empty: 'No available Execution Packages',
+              isError: packagesQuery.isError,
+              isPending: packagesQuery.status === 'pending',
+              ready: 'Select an Execution Package',
+              unavailable: 'Execution Package picker unavailable',
+              valueCount: packageOptions.length,
+            })}
+            required
+            value={selectedPackageId}
+          />
         </label>
-        <Button disabled={!packageId.trim()} loading={linkPackage.isPending} type="submit" variant="secondary">
+        <Button disabled={!selectedPackageId} loading={linkPackage.isPending} type="submit" variant="secondary">
           Add Execution Package
         </Button>
       </form>
@@ -401,6 +463,7 @@ function ReleaseActionRail({ actorId, cockpit }: { actorId: string; cockpit: Rel
   const requestChanges = useRequestReleaseChangesMutation(releaseId);
   const startObserving = useStartReleaseObservingMutation(releaseId);
   const closeRelease = useCloseReleaseMutation(releaseId);
+  const [showEditRelease, setShowEditRelease] = useState(false);
   const [approveRationale, setApproveRationale] = useState('');
   const [overrideRationale, setOverrideRationale] = useState('');
   const [changesRationale, setChangesRationale] = useState('');
@@ -411,6 +474,21 @@ function ReleaseActionRail({ actorId, cockpit }: { actorId: string; cockpit: Rel
   return (
     <ActionRail title="Release actions">
       <div className="stack-form compact">
+        <Drawer
+          content={
+            <EditReleaseForm
+              actorId={actorId}
+              onSaved={() => setShowEditRelease(false)}
+              release={cockpit.release}
+            />
+          }
+          description="Update release title and planning details."
+          onOpenChange={setShowEditRelease}
+          open={showEditRelease}
+          title="Edit release details"
+        >
+          <Button variant="secondary">Edit release</Button>
+        </Drawer>
         <Button loading={submit.isPending} onClick={() => submit.mutate({ actor_id: actorId })} variant="primary">
           Submit
         </Button>
@@ -495,6 +573,66 @@ function ReleaseActionRail({ actorId, cockpit }: { actorId: string; cockpit: Rel
         </Button>
       </div>
     </ActionRail>
+  );
+}
+
+function EditReleaseForm({
+  actorId,
+  onSaved,
+  release,
+}: {
+  actorId: string;
+  onSaved: () => void;
+  release: ReleaseCockpitResponse['release'];
+}) {
+  const patchRelease = usePatchReleaseMutation(release.id);
+  const [title, setTitle] = useState(release.title);
+  const [scopeSummary, setScopeSummary] = useState(release.scope_summary ?? '');
+  const [rolloutStrategy, setRolloutStrategy] = useState(release.rollout_strategy ?? '');
+  const [rollbackPlan, setRollbackPlan] = useState(release.rollback_plan ?? '');
+  const [observationPlan, setObservationPlan] = useState(release.observation_plan ?? '');
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    const body = releasePatchBody({
+      actorId,
+      title,
+      scopeSummary,
+      rolloutStrategy,
+      rollbackPlan,
+      observationPlan,
+    });
+    if (body === undefined) return;
+    patchRelease.mutate(body, { onSuccess: onSaved });
+  }
+
+  return (
+    <form className="stack-form compact" onSubmit={onSubmit}>
+      <label className="field">
+        Release title
+        <Input onChange={(event) => setTitle(event.currentTarget.value)} value={title} />
+      </label>
+      <label className="field">
+        Scope summary
+        <Textarea onChange={(event) => setScopeSummary(event.currentTarget.value)} rows={3} value={scopeSummary} />
+      </label>
+      <label className="field">
+        Rollout strategy
+        <Textarea onChange={(event) => setRolloutStrategy(event.currentTarget.value)} rows={2} value={rolloutStrategy} />
+      </label>
+      <label className="field">
+        Rollback plan
+        <Textarea onChange={(event) => setRollbackPlan(event.currentTarget.value)} rows={2} value={rollbackPlan} />
+      </label>
+      <label className="field">
+        Observation plan
+        <Textarea onChange={(event) => setObservationPlan(event.currentTarget.value)} rows={2} value={observationPlan} />
+      </label>
+      {patchRelease.isError ? <p className="empty">Release update is temporarily unavailable.</p> : null}
+      <Button disabled={releasePatchBody({ actorId, title, scopeSummary, rolloutStrategy, rollbackPlan, observationPlan }) === undefined} loading={patchRelease.isPending} type="submit" variant="primary">
+        Save release
+      </Button>
+    </form>
   );
 }
 
@@ -728,6 +866,55 @@ function artifactRefsFromInput(value: string): AcknowledgeReleaseTestAcceptanceB
       local_ref: trimmed,
     },
   ];
+}
+
+function releasePatchBody(input: {
+  actorId: string;
+  title: string;
+  scopeSummary: string;
+  rolloutStrategy: string;
+  rollbackPlan: string;
+  observationPlan: string;
+}): PatchReleaseBody | undefined {
+  const body = {
+    actor_id: input.actorId,
+    ...(input.title.trim() ? { title: input.title.trim() } : {}),
+    ...(input.scopeSummary.trim() ? { scope_summary: input.scopeSummary.trim() } : {}),
+    ...(input.rolloutStrategy.trim() ? { rollout_strategy: input.rolloutStrategy.trim() } : {}),
+    ...(input.rollbackPlan.trim() ? { rollback_plan: input.rollbackPlan.trim() } : {}),
+    ...(input.observationPlan.trim() ? { observation_plan: input.observationPlan.trim() } : {}),
+  };
+
+  return Object.keys(body).length > 1 ? body : undefined;
+}
+
+function workItemPickerLabel(item: ProductListItem) {
+  return item.title;
+}
+
+function packagePickerLabel(item: ProductListItem) {
+  return item.title;
+}
+
+function pickerPlaceholder({
+  empty,
+  isError,
+  isPending,
+  ready,
+  unavailable,
+  valueCount,
+}: {
+  empty: string;
+  isError: boolean;
+  isPending: boolean;
+  ready: string;
+  unavailable: string;
+  valueCount: number;
+}) {
+  if (isPending) return 'Loading options';
+  if (isError) return unavailable;
+  if (valueCount === 0) return empty;
+  return ready;
 }
 
 function timelineItem(entry: TimelineEntry): TimelineItem {
