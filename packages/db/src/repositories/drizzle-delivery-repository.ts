@@ -322,14 +322,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async listSpecs(projectId?: string): Promise<Spec[]> {
-    const rows = await this.listWhere<Spec>(specs, undefined, specs.createdAt);
     if (projectId === undefined) {
-      return rows;
+      return this.listWhere<Spec>(specs, undefined, specs.createdAt);
     }
 
-    const workItems = await this.listWorkItems(projectId);
-    const workItemIds = new Set(workItems.map((workItem) => workItem.id));
-    return rows.filter((spec) => workItemIds.has(spec.work_item_id));
+    const rows = await this.db
+      .select(getTableColumns(specs))
+      .from(specs)
+      .innerJoin(work_items, eq(specs.workItemId, work_items.id))
+      .where(eq(work_items.projectId, projectId))
+      .orderBy(asc(specs.createdAt));
+    return rows.map((row) => fromDbRecord<Spec>(row));
   }
 
   async saveSpecRevision(specRevision: SpecRevision): Promise<void> {
@@ -353,14 +356,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async listPlans(projectId?: string): Promise<Plan[]> {
-    const rows = await this.listWhere<Plan>(plans, undefined, plans.createdAt);
     if (projectId === undefined) {
-      return rows;
+      return this.listWhere<Plan>(plans, undefined, plans.createdAt);
     }
 
-    const workItems = await this.listWorkItems(projectId);
-    const workItemIds = new Set(workItems.map((workItem) => workItem.id));
-    return rows.filter((plan) => workItemIds.has(plan.work_item_id));
+    const rows = await this.db
+      .select(getTableColumns(plans))
+      .from(plans)
+      .innerJoin(work_items, eq(plans.workItemId, work_items.id))
+      .where(eq(work_items.projectId, projectId))
+      .orderBy(asc(plans.createdAt));
+    return rows.map((row) => fromDbRecord<Plan>(row));
   }
 
   async savePlanRevision(planRevision: PlanRevision): Promise<void> {
@@ -433,14 +439,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async listRunSessions(projectId?: string): Promise<RunSession[]> {
-    const rows = await this.listWhere<RunSession>(run_sessions, undefined, run_sessions.createdAt);
     if (projectId === undefined) {
-      return rows;
+      return this.listWhere<RunSession>(run_sessions, undefined, run_sessions.createdAt);
     }
 
-    const executionPackages = await this.listExecutionPackages(projectId);
-    const executionPackageIds = new Set(executionPackages.map((executionPackage) => executionPackage.id));
-    return rows.filter((runSession) => executionPackageIds.has(runSession.execution_package_id));
+    const rows = await this.db
+      .select(getTableColumns(run_sessions))
+      .from(run_sessions)
+      .innerJoin(execution_packages, eq(run_sessions.executionPackageId, execution_packages.id))
+      .where(eq(execution_packages.projectId, projectId))
+      .orderBy(asc(run_sessions.createdAt));
+    return rows.map((row) => fromDbRecord<RunSession>(row));
   }
 
   async listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]> {
@@ -811,14 +820,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async listReviewPackets(projectId?: string): Promise<ReviewPacket[]> {
-    const rows = await this.listWhere<ReviewPacket>(review_packets, undefined, review_packets.createdAt);
     if (projectId === undefined) {
-      return rows;
+      return this.listWhere<ReviewPacket>(review_packets, undefined, review_packets.createdAt);
     }
 
-    const executionPackages = await this.listExecutionPackages(projectId);
-    const executionPackageIds = new Set(executionPackages.map((executionPackage) => executionPackage.id));
-    return rows.filter((reviewPacket) => executionPackageIds.has(reviewPacket.execution_package_id));
+    const rows = await this.db
+      .select(getTableColumns(review_packets))
+      .from(review_packets)
+      .innerJoin(execution_packages, eq(review_packets.executionPackageId, execution_packages.id))
+      .where(eq(execution_packages.projectId, projectId))
+      .orderBy(asc(review_packets.createdAt));
+    return rows.map((row) => fromDbRecord<ReviewPacket>(row));
   }
 
   async listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]> {

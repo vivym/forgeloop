@@ -208,6 +208,23 @@ describe('query module', () => {
     );
   });
 
+  it('applies the product pipeline limit to representative items', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const response = await request(app.getHttpServer())
+      .get('/query/pipeline')
+      .query({ project_id: projectId, limit: 1 })
+      .expect(200);
+    const executionStage = response.body.stages.find((stage: { id: string }) => stage.id === 'execution');
+
+    expect(executionStage.representative_items).toHaveLength(1);
+    for (const stage of response.body.stages as { representative_items: unknown[] }[]) {
+      expect(stage.representative_items.length).toBeLessThanOrEqual(1);
+    }
+  });
+
   it('serves product list read models for specs, plans, packages, runs, and reviews', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
@@ -218,6 +235,42 @@ describe('query module', () => {
     await request(app.getHttpServer()).get('/query/execution-packages').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/runs').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/review-packets').query({ project_id: projectId }).expect(200);
+  });
+
+  it('parses product list boolean query filters from strings', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const unblockedResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId, blocked: 'false' })
+      .expect(200);
+    expect(unblockedResponse.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
+    );
+
+    await repo.saveExecutionPackage({
+      ...executionPackage,
+      blocked_reason: 'Waiting for manual unblock.',
+      updated_at: later,
+    });
+
+    const blockedResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId, blocked: 'true' })
+      .expect(200);
+    expect(blockedResponse.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
+    );
+
+    const blockedFalseResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId, blocked: 'false' })
+      .expect(200);
+    expect(blockedFalseResponse.body.items).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
+    );
   });
 
   it('serves Spec and Plan history through replay-compatible endpoints', async () => {

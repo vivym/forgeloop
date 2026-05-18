@@ -379,7 +379,7 @@ export async function getProductPipeline(
         blocked_count: items.filter((item) => item.package_state?.blocked_reason !== undefined).length,
         high_risk_count: items.filter((item) => item.risk === 'high').length,
         stale_count: 0,
-        representative_items: items.sort(byUpdatedAtDesc).slice(0, 5),
+        representative_items: items.sort(byUpdatedAtDesc).slice(0, query.limit),
         degraded: false,
       };
     }),

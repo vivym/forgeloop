@@ -1,6 +1,23 @@
 import { z } from 'zod';
 
 const isoDateTimeSchema = z.string().datetime();
+const queryBooleanSchema = z.preprocess((value) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0') {
+    return false;
+  }
+  return value;
+}, z.boolean());
 
 export const productObjectRefSchema = z
   .object({
@@ -36,8 +53,8 @@ export const productListQuerySchema = z
     surface_type: z.string().min(1).optional(),
     executor_type: z.string().min(1).optional(),
     decision: z.string().min(1).optional(),
-    blocked: z.coerce.boolean().optional(),
-    stale: z.coerce.boolean().optional(),
+    blocked: queryBooleanSchema.optional(),
+    stale: queryBooleanSchema.optional(),
     cursor: z.string().min(1).optional(),
     limit: z.coerce.number().int().positive().max(100).default(50),
   })
