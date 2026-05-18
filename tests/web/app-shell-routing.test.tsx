@@ -22,6 +22,13 @@ describe('React Router product shell', () => {
     expect(screen.queryByText('Load role queue')).toBeNull();
   });
 
+  it('shows product nav labels and does not show Intake as user-facing role copy', async () => {
+    const screen = await renderRoute('/workbench');
+    expect(screen.getByRole('link', { name: 'Workbench' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Specs & Plans' })).toBeTruthy();
+    expect(screen.queryByText('Intake')).toBeNull();
+  });
+
   it('respects the requested route path', async () => {
     const screen = await renderRoute('/not-a-product-route');
     expect(screen.queryByRole('heading', { name: /workbench/i })).toBeNull();
