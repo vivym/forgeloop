@@ -89,4 +89,23 @@ describe('Work Item scoped Spec & Plan route', () => {
     expect(screen.queryByText('current_revision_id')).toBeNull();
     expect(screen.queryByText('approved_revision_id')).toBeNull();
   });
+
+  it('does not open revision history when work item planning data is unavailable', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': {},
+      },
+    });
+
+    expect(await screen.findByText('No work item planning context is available.')).toBeTruthy();
+    const historyButton = screen.getByRole('button', { name: 'Open revision history' }) as HTMLButtonElement;
+    expect(historyButton.disabled).toBe(true);
+
+    await user.click(historyButton);
+
+    expect(screen.queryByRole('heading', { name: 'Revision history' })).toBeNull();
+    expect(screen.queryByText('No revision yet')).toBeNull();
+    expect(screen.getByText('Revision history is available after work item planning data loads.')).toBeTruthy();
+  });
 });

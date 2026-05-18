@@ -17,6 +17,11 @@ export function SpecPlanWorkItemFlow() {
   const hasPlan = viewModel.plan !== null;
   const workItemTitle = viewModel.workItem?.title ?? 'Work item planning';
   const commandPendingReason = 'Pending command wiring';
+  const hasPlanningContext = cockpit.status === 'success' && !cockpit.isError && viewModel.workItem !== null;
+  const revisionHistoryPendingReason = 'Revision history is available after work item planning data loads.';
+  const handleHistoryOpenChange = (open: boolean) => {
+    setHistoryOpen(hasPlanningContext ? open : false);
+  };
 
   return (
     <DetailLayout
@@ -63,12 +68,23 @@ export function SpecPlanWorkItemFlow() {
                   </div>
                 }
                 description="Revision availability and approval state for this work item."
-                onOpenChange={setHistoryOpen}
-                open={historyOpen}
+                onOpenChange={handleHistoryOpenChange}
+                open={hasPlanningContext && historyOpen}
                 title="Revision history"
               >
-                <Button onClick={() => setHistoryOpen(true)}>Open revision history</Button>
+                <Button
+                  disabled={!hasPlanningContext}
+                  onClick={() => {
+                    if (hasPlanningContext) {
+                      setHistoryOpen(true);
+                    }
+                  }}
+                  title={hasPlanningContext ? undefined : revisionHistoryPendingReason}
+                >
+                  Open revision history
+                </Button>
               </Drawer>
+              {!hasPlanningContext ? <p className="status-line">{revisionHistoryPendingReason}</p> : null}
             </div>
           }
           eyebrow={workItemTitle}
