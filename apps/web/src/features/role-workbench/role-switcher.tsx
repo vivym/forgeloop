@@ -9,7 +9,9 @@ export function RoleSwitcher({ activeRole }: { activeRole: ProductRole }) {
           aria-label={`${role} role filter`}
           aria-pressed={role === activeRole}
           className={role === activeRole ? 'active' : undefined}
+          disabled
           key={role}
+          title="Role switching pending wiring"
           variant="ghost"
         >
           {role === activeRole ? 'Owner queue' : role}

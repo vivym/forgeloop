@@ -13,20 +13,6 @@ export interface RoleQueueItemViewModel {
   nextAction: string;
 }
 
-const fallbackRoleQueueItems: RoleQueueItemViewModel[] = [
-  {
-    id: 'wi-1',
-    title: 'Improve release cockpit',
-    objectId: 'wi-1',
-    objectType: 'Work item',
-    kind: 'Requirement',
-    surface: 'Release cockpit',
-    state: 'Needs brief review',
-    risk: 'Medium',
-    nextAction: 'Open work item',
-  },
-];
-
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
 
@@ -74,7 +60,7 @@ export const workItemOwnerRole: ProductRole = 'Work Item Owner';
 export const workItemOwnerWorkbenchId = productRoleToWorkbenchId(workItemOwnerRole);
 
 export const createRoleWorkbenchViewModel = (response: RoleWorkbenchResponse | undefined) => {
-  const items = response?.items?.length ? response.items.map(toRoleQueueItem) : fallbackRoleQueueItems;
+  const items = response?.items?.map(toRoleQueueItem) ?? [];
 
   return {
     activeRole: workItemOwnerRole,

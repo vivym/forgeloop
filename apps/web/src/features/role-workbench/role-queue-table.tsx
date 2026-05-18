@@ -11,7 +11,9 @@ export function RoleQueueTable({ items }: { items: RoleQueueItemViewModel[] }) {
           cell: (item) => (
             <div className="entity-summary">
               <strong>{item.title}</strong>
-              <span>{item.objectId}</span>
+              <span>
+                {item.objectType} / {item.kind} / {item.surface}
+              </span>
             </div>
           ),
         },

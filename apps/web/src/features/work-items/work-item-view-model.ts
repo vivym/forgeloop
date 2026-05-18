@@ -1,7 +1,7 @@
 import type { CockpitResponse, ExecutionPackage, ReviewPacket, RunSession, SpecPlan, TimelineEntry, WorkItem } from '../../shared/api/types';
 
 export interface WorkItemDetailViewModel {
-  workItem: WorkItem;
+  workItem: WorkItem | null;
   spec: SpecPlan | null;
   plan: SpecPlan | null;
   packages: ExecutionPackage[];
@@ -9,22 +9,6 @@ export interface WorkItemDetailViewModel {
   reviews: ReviewPacket[];
   timeline: TimelineEntry[];
 }
-
-export const fallbackWorkItem = (workItemId: string): WorkItem => ({
-  id: workItemId,
-  project_id: 'project-web-product',
-  kind: 'requirement',
-  title: workItemId === 'wi-1' ? 'Improve release cockpit' : 'Work item',
-  goal: 'Clarify the product outcome and move the work item through planning.',
-  success_criteria: ['Brief is captured', 'Validation path is visible', 'Evidence is attached before release'],
-  priority: 'P0',
-  risk: 'medium',
-  owner_actor_id: 'actor-owner',
-  phase: 'briefing',
-  activity_state: 'active',
-  gate_state: 'open',
-  resolution: 'unresolved',
-});
 
 export const formatValue = (value: string | undefined, fallback = 'Not set') =>
   value === undefined || value.trim().length === 0
@@ -35,12 +19,8 @@ export const formatValue = (value: string | undefined, fallback = 'Not set') =>
         .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
         .join(' ');
 
-export const createWorkItemDetailViewModel = (
-  workItemId: string,
-  cockpit: CockpitResponse | undefined,
-  timeline: TimelineEntry[] | undefined,
-): WorkItemDetailViewModel => ({
-  workItem: cockpit?.work_item ?? fallbackWorkItem(workItemId),
+export const createWorkItemDetailViewModel = (cockpit: CockpitResponse | undefined, timeline: TimelineEntry[] | undefined): WorkItemDetailViewModel => ({
+  workItem: cockpit?.work_item ?? null,
   spec: cockpit?.current_spec ?? null,
   plan: cockpit?.current_plan ?? null,
   packages: cockpit?.packages ?? [],

@@ -11,19 +11,28 @@ export function SpecPlanWorkItemFlow() {
   const params = useParams();
   const workItemId = params.workItemId ?? 'wi-1';
   const cockpit = useWorkItemCockpitQuery(workItemId);
-  const viewModel = createWorkItemDetailViewModel(workItemId, cockpit.data, undefined);
+  const viewModel = createWorkItemDetailViewModel(cockpit.data, undefined);
   const [historyOpen, setHistoryOpen] = useState(false);
   const hasSpec = viewModel.spec !== null;
   const hasPlan = viewModel.plan !== null;
+  const workItemTitle = viewModel.workItem?.title ?? 'Work item planning';
+  const commandPendingReason = 'Pending command wiring';
 
   return (
     <DetailLayout
       actionRail={
         <ActionRail title="Approval actions">
           <div className="stack-form compact">
-            <Button disabled={!hasSpec && !hasPlan}>Submit for approval</Button>
-            <Button disabled={!hasSpec && !hasPlan}>Approve</Button>
-            <Button disabled={!hasSpec && !hasPlan}>Request changes</Button>
+            <Button disabled title={commandPendingReason}>
+              Submit for approval
+            </Button>
+            <Button disabled title={commandPendingReason}>
+              Approve
+            </Button>
+            <Button disabled title={commandPendingReason}>
+              Request changes
+            </Button>
+            <p className="status-line">{commandPendingReason}</p>
           </div>
         </ActionRail>
       }
@@ -31,10 +40,10 @@ export function SpecPlanWorkItemFlow() {
         <PageHeader
           actions={
             <div className="button-row">
-              <Button disabled={hasSpec} variant="primary">
+              <Button disabled title={commandPendingReason} variant="primary">
                 Create Spec
               </Button>
-              <Button disabled={!hasSpec || hasPlan} variant="primary">
+              <Button disabled title={commandPendingReason} variant="primary">
                 Create Plan
               </Button>
               <Drawer
@@ -62,45 +71,76 @@ export function SpecPlanWorkItemFlow() {
               </Drawer>
             </div>
           }
-          eyebrow={viewModel.workItem.title}
+          eyebrow={workItemTitle}
           subtitle="Create, draft, and approve product planning artifacts from the work item context."
           title="Spec & Plan"
         />
       }
     >
-      <Section title="Work item context">
-        <div className="state-grid">
-          <Metric label="Kind" value={formatValue(viewModel.workItem.kind)} />
-          <Metric label="Risk" value={formatValue(viewModel.workItem.risk)} />
-          <Metric label="Owner" value="Work Item Owner" />
-          <Metric label="Phase" value={formatValue(viewModel.workItem.phase)} />
-        </div>
-      </Section>
-      <Section title="Spec">
-        <ArtifactState
-          action={hasSpec ? <Button>Generate spec draft</Button> : null}
-          created={hasSpec}
-          gate={viewModel.spec?.gate_state}
-          status={viewModel.spec?.status}
-        />
-      </Section>
-      <Section title="Plan">
-        <ArtifactState
-          action={hasPlan ? <Button>Generate plan draft</Button> : null}
-          created={hasPlan}
-          gate={viewModel.plan?.gate_state}
-          status={viewModel.plan?.status}
-        />
-      </Section>
-      <Section title="Planning readiness">
-        <div className="pill-list">
-          <Badge tone={hasSpec ? 'success' : 'warning'}>{hasSpec ? 'Spec exists' : 'Spec needed'}</Badge>
-          <Badge tone={hasPlan ? 'success' : 'warning'}>{hasPlan ? 'Plan exists' : 'Plan needed'}</Badge>
-          <StatusPill tone={hasSpec && hasPlan ? 'success' : 'warning'}>
-            {hasSpec && hasPlan ? 'Ready for packages' : 'Planning in progress'}
-          </StatusPill>
-        </div>
-      </Section>
+      {cockpit.status === 'pending' ? (
+        <Section title="Loading">
+          <p className="empty">Loading Spec & Plan context.</p>
+        </Section>
+      ) : null}
+      {cockpit.isError ? (
+        <Section title="Unavailable">
+          <p className="empty">Spec & Plan data is temporarily unavailable.</p>
+        </Section>
+      ) : null}
+      {cockpit.status !== 'pending' && !cockpit.isError && viewModel.workItem === null ? (
+        <Section title="Empty">
+          <p className="empty">No work item planning context is available.</p>
+        </Section>
+      ) : null}
+      {cockpit.status !== 'pending' && !cockpit.isError && viewModel.workItem !== null ? (
+        <>
+          <Section title="Work item context">
+            <div className="state-grid">
+              <Metric label="Kind" value={formatValue(viewModel.workItem.kind)} />
+              <Metric label="Risk" value={formatValue(viewModel.workItem.risk)} />
+              <Metric label="Owner" value="Work Item Owner" />
+              <Metric label="Phase" value={formatValue(viewModel.workItem.phase)} />
+            </div>
+          </Section>
+          <Section title="Spec">
+            <ArtifactState
+              action={
+                hasSpec ? (
+                  <Button disabled title={commandPendingReason}>
+                    Generate spec draft
+                  </Button>
+                ) : null
+              }
+              created={hasSpec}
+              gate={viewModel.spec?.gate_state}
+              status={viewModel.spec?.status}
+            />
+          </Section>
+          <Section title="Plan">
+            <ArtifactState
+              action={
+                hasPlan ? (
+                  <Button disabled title={commandPendingReason}>
+                    Generate plan draft
+                  </Button>
+                ) : null
+              }
+              created={hasPlan}
+              gate={viewModel.plan?.gate_state}
+              status={viewModel.plan?.status}
+            />
+          </Section>
+          <Section title="Planning readiness">
+            <div className="pill-list">
+              <Badge tone={hasSpec ? 'success' : 'warning'}>{hasSpec ? 'Spec exists' : 'Spec needed'}</Badge>
+              <Badge tone={hasPlan ? 'success' : 'warning'}>{hasPlan ? 'Plan exists' : 'Plan needed'}</Badge>
+              <StatusPill tone={hasSpec && hasPlan ? 'success' : 'warning'}>
+                {hasSpec && hasPlan ? 'Ready for packages' : 'Planning in progress'}
+              </StatusPill>
+            </div>
+          </Section>
+        </>
+      ) : null}
     </DetailLayout>
   );
 }

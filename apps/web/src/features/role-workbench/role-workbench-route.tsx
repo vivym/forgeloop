@@ -15,6 +15,7 @@ export function RoleWorkbenchRoute() {
   const projectId = searchParams.get('project_id') ?? contextProjectId;
   const query = useWorkbenchQuery({ role: workItemOwnerWorkbenchId, projectId });
   const viewModel = createRoleWorkbenchViewModel(query.data);
+  const isLoading = query.status === 'pending';
 
   return (
     <DetailLayout
@@ -32,11 +33,21 @@ export function RoleWorkbenchRoute() {
       }
     >
       <Section
-        description={`${viewModel.total} product object${viewModel.total === 1 ? '' : 's'} queued for ${workItemOwnerRole}.`}
+        description={
+          isLoading
+            ? `Loading product queue for ${workItemOwnerRole}.`
+            : `${viewModel.total} product object${viewModel.total === 1 ? '' : 's'} queued for ${workItemOwnerRole}.`
+        }
         title={workItemOwnerRole}
       >
-        <RoleSwitcher activeRole={viewModel.activeRole} />
-        <RoleQueueTable items={viewModel.items} />
+        {isLoading ? <p className="empty">Loading workbench queue.</p> : null}
+        {query.isError ? <p className="empty">Workbench data is temporarily unavailable.</p> : null}
+        {!isLoading && !query.isError ? (
+          <>
+            <RoleSwitcher activeRole={viewModel.activeRole} />
+            <RoleQueueTable items={viewModel.items} />
+          </>
+        ) : null}
       </Section>
     </DetailLayout>
   );

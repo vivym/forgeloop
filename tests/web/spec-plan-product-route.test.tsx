@@ -10,10 +10,23 @@ describe('Work Item scoped Spec & Plan route', () => {
     expect(screen.getByRole('button', { name: 'Create Spec' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Create Plan' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open revision history' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Create Spec' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Create Plan' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByLabelText('spec_id')).toBeNull();
     expect(screen.queryByLabelText('plan_id')).toBeNull();
     expect(screen.queryByText('raw JSON')).toBeNull();
     expect(screen.queryByText('actor-owner')).toBeNull();
+  });
+
+  it('disables deferred spec and plan commands when artifacts exist', async () => {
+    const screen = await renderRoute('/work-items/wi-1/spec-plan');
+
+    expect((await screen.findByRole('button', { name: 'Generate spec draft' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Generate plan draft' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Request changes' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText('Pending command wiring').length).toBeGreaterThan(0);
   });
 
   it('shows revision history without raw revision ids', async () => {

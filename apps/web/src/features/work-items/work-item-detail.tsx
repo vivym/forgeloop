@@ -10,8 +10,38 @@ export function WorkItemDetail() {
   const workItemId = params.workItemId ?? 'wi-1';
   const cockpit = useWorkItemCockpitQuery(workItemId);
   const replay = useWorkItemReplayQuery(workItemId);
-  const viewModel = createWorkItemDetailViewModel(workItemId, cockpit.data, replay.data);
+  const viewModel = createWorkItemDetailViewModel(cockpit.data, replay.data);
   const { workItem } = viewModel;
+
+  if (cockpit.status === 'pending') {
+    return (
+      <DetailLayout header={<PageHeader subtitle="Loading work item context." title="Work Item" />}>
+        <Section title="Loading">
+          <p className="empty">Loading work item.</p>
+        </Section>
+      </DetailLayout>
+    );
+  }
+
+  if (cockpit.isError) {
+    return (
+      <DetailLayout header={<PageHeader subtitle="The work item could not be loaded." title="Work Item" />}>
+        <Section title="Unavailable">
+          <p className="empty">Work item data is temporarily unavailable.</p>
+        </Section>
+      </DetailLayout>
+    );
+  }
+
+  if (workItem === null) {
+    return (
+      <DetailLayout header={<PageHeader subtitle="No work item was found for this route." title="Work Item" />}>
+        <Section title="Empty">
+          <p className="empty">No work item data is available.</p>
+        </Section>
+      </DetailLayout>
+    );
+  }
 
   return (
     <DetailLayout
@@ -21,8 +51,13 @@ export function WorkItemDetail() {
             <Link className="fl-button fl-button--primary" to={`/work-items/${encodeURIComponent(workItem.id)}/spec-plan`}>
               Open Spec & Plan
             </Link>
-            <Button variant="secondary">Update brief</Button>
-            <Button variant="secondary">Attach evidence</Button>
+            <Button disabled title="Pending command wiring" variant="secondary">
+              Update brief
+            </Button>
+            <Button disabled title="Pending command wiring" variant="secondary">
+              Attach evidence
+            </Button>
+            <p className="status-line">Pending command wiring</p>
           </div>
         </ActionRail>
       }
@@ -77,7 +112,9 @@ export function WorkItemDetail() {
         </div>
       </Section>
       <Section title="Timeline">
-        {viewModel.timeline.length ? (
+        {replay.isError ? (
+          <p className="empty">Timeline is temporarily unavailable.</p>
+        ) : viewModel.timeline.length ? (
           <div className="timeline-list">
             {viewModel.timeline.map((entry) => (
               <div className="timeline-entry" key={entry.id}>

@@ -17,11 +17,49 @@ import {
 
 export type ProductApiResponseMap = Record<string, unknown>;
 
+const routeWorkItem = {
+  ...workItem,
+  id: 'wi-1',
+  title: 'Improve release cockpit',
+  goal: 'Improve release readiness visibility.',
+  success_criteria: ['Planning artifacts are visible', 'Validation path is visible'],
+  phase: 'planning',
+};
+
+const routeSpec = {
+  ...spec,
+  work_item_id: routeWorkItem.id,
+};
+
+const routePlan = {
+  ...plan,
+  work_item_id: routeWorkItem.id,
+};
+
+const routeExecutionPackage = {
+  ...executionPackage,
+  work_item_id: routeWorkItem.id,
+  objective: 'Improve release cockpit planning flow',
+};
+
+const routeTimeline = timeline.map((entry) => ({
+  ...entry,
+  object_id: routeWorkItem.id,
+  summary: 'Created release cockpit improvement work item.',
+}));
+
 export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/pipeline?project_id=${projectId}`]: [workItem],
   [`GET /query/workbenches/intake?project_id=${projectId}`]: {
     summary: { role: 'intake', project_id: projectId, actor_id: actorId, total: 1 },
-    items: [{ ...workItem, actions: [{ id: 'open-work-item', label: 'Open work item', enabled: true }] }],
+    items: [
+      {
+        ...routeWorkItem,
+        object: { type: 'work_item', id: routeWorkItem.id, title: routeWorkItem.title },
+        package_state: { work_item_id: routeWorkItem.id, surface_type: 'release_cockpit' },
+        actions: [{ label: 'Open work item', method: 'GET', path: `/work-items/${routeWorkItem.id}`, enabled: true }],
+      },
+    ],
   },
   [`GET /query/specs?project_id=${projectId}`]: [spec],
   [`GET /query/specs/${spec.id}`]: spec,
@@ -41,6 +79,16 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     current_spec: spec,
     current_plan: plan,
     packages: [executionPackage],
+    run_sessions: [runSession],
+    review_packets: [reviewPacket],
+    next_actions: ['open_work_item'],
+    completion_state: { fixture: true },
+  },
+  [`GET /query/work-item-cockpit/${routeWorkItem.id}`]: {
+    work_item: routeWorkItem,
+    current_spec: routeSpec,
+    current_plan: routePlan,
+    packages: [routeExecutionPackage],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     next_actions: ['open_work_item'],
@@ -79,6 +127,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     next_actions: ['submit_for_approval'],
   },
   [`GET /query/replay/work_item/${workItem.id}`]: timeline,
+  [`GET /query/replay/work_item/${routeWorkItem.id}`]: routeTimeline,
   [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
   [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
   [`GET /query/replay/release/${release.id}`]: timeline,

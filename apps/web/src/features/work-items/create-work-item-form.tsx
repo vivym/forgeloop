@@ -20,7 +20,6 @@ const createWorkItemFormSchema = z.object({
   priority: z.string().min(1),
   risk: z.string().min(1),
   owner_actor_id: z.string().min(1),
-  raw_request: z.string().optional(),
 });
 
 type CreateWorkItemFormValues = z.infer<typeof createWorkItemFormSchema>;
@@ -52,7 +51,6 @@ export function CreateWorkItemForm() {
       success_criteria: [''],
       priority: 'P1',
       risk: 'medium',
-      raw_request: '',
     },
   });
 
@@ -105,10 +103,12 @@ export function CreateWorkItemForm() {
           <label>
             Title
             <Input {...form.register('title')} invalid={Boolean(form.formState.errors.title)} />
+            <FieldError message={form.formState.errors.title?.message} />
           </label>
           <label>
             Goal
             <Textarea {...form.register('goal')} invalid={Boolean(form.formState.errors.goal)} />
+            <FieldError message={form.formState.errors.goal?.message} />
           </label>
           <label>
             Success criteria
@@ -126,10 +126,7 @@ export function CreateWorkItemForm() {
               }
               placeholder="One criterion per line"
             />
-          </label>
-          <label>
-            Source request
-            <Textarea {...form.register('raw_request')} placeholder="Optional context from the request, email, or ticket." />
+            <FieldError message={form.formState.errors.success_criteria?.message} />
           </label>
           {submitError ? <p className="danger-text">{submitError}</p> : null}
           <div className="button-row">
@@ -144,6 +141,10 @@ export function CreateWorkItemForm() {
       </Section>
     </>
   );
+}
+
+function FieldError({ message }: { message: string | undefined }) {
+  return message ? <span className="danger-text">{message}</span> : null;
 }
 
 function ContextMetric({ label, value }: { label: string; value: string }) {

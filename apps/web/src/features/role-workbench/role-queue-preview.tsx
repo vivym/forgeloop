@@ -1,4 +1,6 @@
-import { Badge, Button } from '../../shared/ui';
+import { Link } from 'react-router';
+
+import { Badge } from '../../shared/ui';
 import type { RoleQueueItemViewModel } from './role-workbench-view-model';
 
 export function RoleQueuePreview({ item }: { item: RoleQueueItemViewModel | undefined }) {
@@ -18,7 +20,9 @@ export function RoleQueuePreview({ item }: { item: RoleQueueItemViewModel | unde
         <Badge tone="primary">{item.state}</Badge>
         <Badge tone="warning">{item.risk} risk</Badge>
       </div>
-      <Button variant="primary">{item.nextAction}</Button>
+      <Link className="fl-button fl-button--primary" to={`/work-items/${encodeURIComponent(item.objectId)}`}>
+        {item.nextAction}
+      </Link>
     </div>
   );
 }
