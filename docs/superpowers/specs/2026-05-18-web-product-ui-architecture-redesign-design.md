@@ -147,6 +147,10 @@ Object detail pages are first-class routes:
 - `/work-items/new`
 - `/work-items/:workItemId`
 - `/work-items/:workItemId/spec-plan`
+- `/specs/:specId`
+- `/specs/:specId/revisions/:revisionId`
+- `/plans/:planId`
+- `/plans/:planId/revisions/:revisionId`
 - `/packages/:packageId`
 - `/runs`
 - `/runs/:runSessionId`
@@ -213,6 +217,13 @@ Each stage shows:
 
 Pipeline is primarily for Manager, Release Owner, and cross-role coordination. It does not replace object detail pages.
 
+Pipeline needs an explicit read model. It must not fake a global board by scraping only the currently selected Work Item. The implementation has two acceptable paths:
+
+- preferred: add a first-class `/query/pipeline` API that returns stage counts, representative objects, blocker summaries, high-risk counts, and stale/SLA hints;
+- temporary within the same final PR only: compose the initial Pipeline from existing role workbench projections, clearly document the degraded data coverage in code, and still expose a route-level empty/degraded state.
+
+If the preferred API is not implemented in this UI slice, the plan must include a concrete limitation and the Pipeline page must not claim global completeness.
+
 ### `/work-items`
 
 Work Items list page.
@@ -266,9 +277,28 @@ Structure:
 - split view for current Spec and current Plan status;
 - revision list with current revision clearly marked;
 - structured document view in the center;
-- Action Rail for generate draft, submit, approve, request changes, and create revision.
+- Action Rail for create Spec, create Plan, generate draft, submit, approve, request changes, and create revision.
 
 Revision forms use drawer/dialog flows. Large textareas do not live permanently on the first screen.
+
+The page must preserve the current new-item path where a Work Item has no Spec or Plan yet:
+
+- if no Spec exists, show a primary "Create Spec" action;
+- if a Spec exists but no Plan exists, show a primary "Create Plan" action;
+- draft generation remains unavailable until the corresponding object exists;
+- revision creation remains unavailable until the corresponding object exists.
+
+### `/specs/:specId`, `/plans/:planId`, and Revision Routes
+
+Spec and Plan are primary delivery objects and need direct URLs in addition to the Work Item-scoped Spec & Plan page.
+
+These routes are detail shortcuts:
+
+- `/specs/:specId` loads the Spec status, current revision, parent Work Item link, and allowed Spec commands;
+- `/plans/:planId` loads the Plan status, current revision, parent Work Item link, and allowed Plan commands;
+- `/specs/:specId/revisions/:revisionId` and `/plans/:planId/revisions/:revisionId` show a read-only revision detail with structured document content and parent links.
+
+If the current API cannot directly resolve a Spec or Plan by id in a way the route needs, the implementation plan must add or expose the missing read endpoint. Do not implement these routes as broken shells.
 
 ### `/packages/:packageId`
 
@@ -296,6 +326,8 @@ Content:
 
 Actions:
 
+- generate packages from the approved PlanRevision;
+- create manual package;
 - mark ready
 - run
 - rerun
@@ -304,9 +336,21 @@ Actions:
 
 Force rerun is advanced but productized; it belongs here with clear reason capture and risk wording.
 
+Package creation and generation are part of the main flow, not Dev Tools. They can be launched from the Work Item Packages tab, the Spec & Plan page after Plan approval, or a package list page, but the new UI must preserve both:
+
+- generate Execution Packages from a PlanRevision;
+- create a manual Execution Package with repo, objective, owners, required checks, artifact kinds, allowed paths, and forbidden paths.
+
 ### `/runs` and `/runs/:runSessionId`
 
 Runs list shows active and recent Run Sessions.
+
+Runs list also needs an explicit data source. The current Web API client can load individual Run Sessions and events, but it does not expose a global run list. The implementation has two acceptable paths:
+
+- preferred: add a `/query/runs` or equivalent read model for active/recent Run Sessions with project, package, status, executor, updated age, and review link data;
+- temporary within the same final PR only: provide `/runs` as a search/deep-link page driven by URL params and role-workbench links, while clearly showing that it is not a global run inventory.
+
+The `/runs/:runSessionId` detail page is required regardless; it can use the existing individual run/session event APIs.
 
 Run detail is the Execution Command Center:
 
@@ -344,6 +388,12 @@ The page must optimize for judgment. It should show decision material, not inter
 
 Releases list shows candidate and active releases.
 
+Release creation and edit are productized flows:
+
+- `/releases` provides a create-release action;
+- `/releases/:releaseId` provides edit release details through a drawer/dialog;
+- create/edit fields include actor, project, title, scope summary, rollout strategy, rollback plan, and observation plan.
+
 Release detail is the Release Cockpit:
 
 - header with title, phase, gate state, resolution, release owner, blocker fingerprint;
@@ -359,6 +409,8 @@ Release detail is the Release Cockpit:
 
 Actions:
 
+- create release from the release list;
+- edit release details;
 - submit
 - approve
 - override approve
@@ -391,13 +443,16 @@ Target directory structure:
 ```text
 apps/web/src/
   app/
-    router.tsx
     root.tsx
     providers.tsx
+    routes.ts
   routes/
+    _layout.tsx
     workbench/
     pipeline/
     work-items/
+    specs/
+    plans/
     packages/
     runs/
     reviews/
@@ -420,6 +475,23 @@ apps/web/src/
     hooks/
     utils/
 ```
+
+### React Router Framework Mode Requirements
+
+This project must use React Router Framework Mode, not a hand-rolled BrowserRouter tab shell.
+
+Implementation requirements:
+
+- add `@react-router/dev` and the React Router runtime packages required by Framework Mode;
+- configure the React Router Vite plugin in the Web Vite config;
+- add a route config or file-route convention under `apps/web/src/routes`;
+- generate and use route types for params/search params where supported;
+- replace the current `main.tsx` direct `createRoot(<App />)` entry with the Framework Mode entry pattern;
+- move app-wide providers into `app/providers.tsx` or the root route component;
+- make route-level error and loading boundaries part of the root/layout design;
+- keep Vite as the build tool.
+
+`app/routes.ts` names the route tree when a config file is used. It must not be a custom router competing with React Router Framework Mode.
 
 Rules:
 
@@ -542,8 +614,13 @@ Feature query hooks:
 - `useWorkItemsQuery`
 - `useWorkItemQuery`
 - `useWorkItemCockpitQuery`
+- `useSpecQuery`
+- `useSpecRevisionQuery`
+- `usePlanQuery`
+- `usePlanRevisionQuery`
 - `useRoleWorkbenchQuery`
 - `usePipelineQuery`
+- `useRunsQuery`
 - `usePackageQuery`
 - `useRunSessionQuery`
 - `useRunEventsQuery`
@@ -553,15 +630,24 @@ Feature query hooks:
 Feature mutation hooks:
 
 - `useCreateWorkItemMutation`
+- `useCreateSpecMutation`
+- `useCreatePlanMutation`
 - `useCreateSpecRevisionMutation`
+- `useCreatePlanRevisionMutation`
 - `useSpecCommandMutation`
 - `usePlanCommandMutation`
+- `useGeneratePackagesMutation`
+- `useCreateExecutionPackageMutation`
 - `usePackageCommandMutation`
 - `useRunPackageMutation`
 - `useRunControlMutation`
 - `useReviewDecisionMutation`
+- `useCreateReleaseMutation`
+- `usePatchReleaseMutation`
 - `useReleaseCommandMutation`
 - `useReleaseEvidenceMutation`
+
+Backend/read-model gaps discovered during implementation must be made explicit in the plan. The UI must either add the needed query endpoint in the same feature branch or render a truthful degraded state. It must not invent complete pipeline/run list data on the client.
 
 Mutation success invalidates specific query keys only. Do not use global "reload all" behavior as the main data model.
 
@@ -662,10 +748,13 @@ Cover:
 - Workbench queue;
 - Work Item detail tabs;
 - Spec & Plan revision drawer;
+- direct Spec/Plan detail routes;
 - Execution Package overview;
+- package generation/manual creation flows;
 - Run Console;
 - Review Packet detail;
 - Release Cockpit;
+- create/edit release flows;
 - Dev Tools visibility flag.
 
 ### API / Query Tests
@@ -687,9 +776,14 @@ Use Playwright to verify:
 - Workbench can navigate to a Work Item detail page;
 - Work Item detail shows lifecycle tabs;
 - Spec & Plan page opens revision actions in a drawer/dialog;
+- a Work Item with no Spec can create a Spec, then create a Plan when appropriate;
+- Spec and Plan detail/revision routes load directly;
 - Package page exposes run/rerun/force rerun in a productized action area;
+- package generation and manual package creation are reachable outside Dev Tools;
 - Run Console renders events and input controls without overlap;
+- `/runs/:runSessionId` deep links to an individual run;
 - Release Cockpit blockers/checklist/evidence are readable;
+- release creation and edit details are productized outside Dev Tools;
 - Dev Tools are hidden by default and visible when explicitly enabled;
 - no blank screens after route navigation;
 - no primary text overflow in buttons, tabs, tables, or action rails.
@@ -701,6 +795,9 @@ Use Playwright to verify:
 - The app has a product AppShell, Sidebar, Topbar, PageHeader, DetailLayout, and ActionRail.
 - The default route is a Work Item Owner-oriented Workbench.
 - Every current main-flow capability has a new page or drawer/dialog location.
+- Spec, Plan, SpecRevision, PlanRevision, ExecutionPackage, RunSession, ReviewPacket, Release, and Work Item have direct route coverage or an explicitly documented API-backed route limitation resolved in the implementation plan.
+- Create Spec, Create Plan, generate packages, create manual package, create release, and edit release details remain productized flows.
+- Pipeline and Runs list use explicit backend/query read models or truthful degraded states documented in the plan.
 - The current monolithic `App.tsx` workbench shape is removed.
 - The old debug-panel CSS system is removed as active page styling.
 - No `/legacy` route exists.
