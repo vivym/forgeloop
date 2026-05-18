@@ -412,6 +412,8 @@ function normalizePackageRunQuery(query: ListProductQuery): ListProductQuery {
     ...(query.surface_type === undefined ? {} : { surface_type: query.surface_type }),
     ...(query.phase === undefined ? {} : { phase: query.phase }),
     ...(query.status === undefined ? {} : { status: query.status }),
+    ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
+    ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
     ...(query.risk === undefined ? {} : { risk: query.risk }),
     ...(query.blocked === undefined ? {} : { blocked: query.blocked }),
     ...(query.executor_type === undefined ? {} : { executor_type: query.executor_type }),

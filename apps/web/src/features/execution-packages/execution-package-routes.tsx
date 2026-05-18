@@ -22,9 +22,10 @@ const supportedPackageFilters = [
   'owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',
-  'surface_type',
   'phase',
-  'risk',
+  'status',
+  'gate_state',
+  'resolution',
   'blocked',
 ] as const;
 
@@ -52,7 +53,7 @@ export function PackagesRegistry() {
             </div>
           ) : null
         }
-        subtitle="Track execution packages by Work Item, surface, ownership, lifecycle state, and blocking risk."
+        subtitle="Track execution packages by Work Item, ownership, lifecycle state, and blocking state."
         title="Packages"
       />
       {planRevisionId ? (
@@ -71,7 +72,7 @@ export function PackagesRegistry() {
         </Section>
       ) : null}
       <Section
-        description="Server-side filters are sent for project, Work Item, PlanRevision, owner, reviewer, QA owner, surface type, phase, risk, and blocked status."
+        description="Server-side filters are sent for project, Work Item, PlanRevision, owner, reviewer, QA owner, phase, status, gate state, resolution, and blocked status."
         title="Execution package registry"
       >
         <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="packages" />
@@ -419,7 +420,7 @@ function FilterSummary({
       ) : null}
       {unsupportedFilters.length ? (
         <p className="empty">
-          Unsupported filters are not sent to the package read model yet: {unsupportedFilters.join(', ')}.
+          {formatUnsupportedFilters(unsupportedFilters)} are not applied to the package inventory yet.
         </p>
       ) : null}
     </div>
@@ -483,6 +484,12 @@ function packageFiltersFromSearch(searchParams: URLSearchParams) {
 function unsupportedPackageFilters(searchParams: URLSearchParams) {
   const allowed = new Set<string>([...supportedPackageFilters, 'project_id', 'cursor', 'limit']);
   return [...searchParams.keys()].filter((key) => !allowed.has(key));
+}
+
+function formatUnsupportedFilters(filters: string[]) {
+  if (filters.length <= 1) return filters[0] ?? 'Unsupported filters';
+  if (filters.length === 2) return `${filters[0]} and ${filters[1]}`;
+  return `${filters.slice(0, -1).join(', ')}, and ${filters[filters.length - 1]}`;
 }
 
 function formatAge(value?: string) {

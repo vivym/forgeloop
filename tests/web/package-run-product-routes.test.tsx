@@ -109,10 +109,10 @@ const runSessionWithDebugMetadata = {
 describe('package and run product routes', () => {
   it('uses the product Execution Package list endpoint with supported filters', async () => {
     const screen = await renderRoute(
-      `/packages?work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&surface_type=web&blocked=true`,
+      `/packages?work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true`,
       {
         apiOverrides: {
-          [`GET /query/execution-packages?project_id=${projectId}&work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&surface_type=web&blocked=true&limit=100`]:
+          [`GET /query/execution-packages?project_id=${projectId}&work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true&limit=100`]:
             packageListResponse,
         },
       },
@@ -121,7 +121,31 @@ describe('package and run product routes', () => {
     await waitFor(() => expect(screen.getByText(executionPackage.objective)).toBeTruthy());
 
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
-      `http://localhost:3000/query/execution-packages?project_id=${projectId}&work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&surface_type=web&blocked=true&limit=100`,
+      `http://localhost:3000/query/execution-packages?project_id=${projectId}&work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true&limit=100`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('reports unsupported package filters without sending them to the product endpoint', async () => {
+    const screen = await renderRoute('/packages?surface_type=web&risk=high', {
+      apiOverrides: {
+        [`GET /query/execution-packages?project_id=${projectId}&limit=100`]: packageListResponse,
+      },
+    });
+
+    await waitFor(() => expect(screen.getByText(executionPackage.objective)).toBeTruthy());
+
+    expect(screen.getByText(/surface_type and risk are not applied to the package inventory yet/i)).toBeTruthy();
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+      `http://localhost:3000/query/execution-packages?project_id=${projectId}&limit=100`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
+      expect.stringContaining('surface_type=web'),
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
+      expect.stringContaining('risk=high'),
       expect.objectContaining({ method: 'GET' }),
     );
   });
