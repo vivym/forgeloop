@@ -11,6 +11,7 @@ import {
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { InMemoryDeliveryRepository } from '../../packages/db/src';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -77,7 +78,7 @@ describe('durable delivery object IDs', () => {
       .send({
         repo_id: 'forgeloop-source',
         name: 'forgeloop',
-        local_path: '/workspace/forgeloop',
+        local_path: await createWorkflowPolicyRepoRoot({ allowedPaths: ['README.md'], forbiddenPaths: ['.git'] }),
         base_commit_sha: 'base',
       })
       .expect(201);
@@ -162,7 +163,7 @@ describe('durable delivery object IDs', () => {
             {
               check_id: 'unit',
               display_name: 'Unit',
-              command: 'node -e "process.exit(0)"',
+              command: 'node --version',
               timeout_seconds: 30,
               blocks_review: true,
             },

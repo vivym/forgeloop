@@ -24,7 +24,7 @@ import {
   type RunSpec,
   type SelfReviewResult,
 } from '@forgeloop/contracts';
-import type { PackageRuntimePolicySnapshot, ValidationStrategy } from './automation.js';
+import type { PackageRuntimePolicySnapshot, SourceMutationPolicy, ValidationStrategy } from './automation.js';
 
 export type DomainErrorCode =
   | 'INVALID_TRANSITION'
@@ -274,6 +274,7 @@ export interface ExecutionPackage {
   required_artifact_kinds: ArtifactKind[];
   allowed_paths: string[];
   forbidden_paths: string[];
+  source_mutation_policy: SourceMutationPolicy;
   version: number;
   execution_package_set_id?: string;
   execution_package_version?: number;

@@ -22,6 +22,7 @@ import {
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import type { AutomationActionRun } from '../../packages/domain/src/automation';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../../packages/domain/src/index';
+import { testRuntimePolicyMarkdown } from '../helpers/runtime-policy-repo';
 
 const automationSecret = 'test-secret';
 const automationActorId = 'daemon-actor';
@@ -256,7 +257,7 @@ beforeEach(async () => {
   tempRoot = await mkdtemp(path.join(tmpdir(), 'forgeloop-automation-daemon-e2e-'));
   repoRoot = path.join(tempRoot, 'repo');
   await mkdir(repoRoot, { recursive: true });
-  await writeFile(path.join(repoRoot, 'WORKFLOW.md'), '# Runtime policy\n\nRead-only daemon observability.\n', 'utf8');
+  await writeFile(path.join(repoRoot, 'WORKFLOW.md'), testRuntimePolicyMarkdown(), 'utf8');
 });
 
 afterEach(async () => {
@@ -397,7 +398,7 @@ describe('HTTP automation daemon integration', () => {
     const server = app.getHttpServer();
     const repoTwoRoot = path.join(tempRoot, 'repo-2');
     await mkdir(repoTwoRoot, { recursive: true });
-    await writeFile(path.join(repoTwoRoot, 'WORKFLOW.md'), '# Runtime policy\n\nSecond active repo.\n', 'utf8');
+    await writeFile(path.join(repoTwoRoot, 'WORKFLOW.md'), testRuntimePolicyMarkdown(), 'utf8');
 
     await request(server)
       .post(`/projects/${seeded.project.id}/repos`)

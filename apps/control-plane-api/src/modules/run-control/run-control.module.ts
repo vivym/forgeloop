@@ -1,16 +1,22 @@
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Module } from '@nestjs/common';
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
+import type { RunRuntimeMetadata, RunSession } from '@forgeloop/domain';
 import {
   captureLocalCodexEvidence,
-  CodexAppServerDriver,
-  CodexAppServerProcessTransport,
   CodexExecFallbackDriver,
+  createLocalCodexRuntimeSafety,
   LocalCodexRawLogStore,
+  parseExecutorRuntimeSafetyConfigFromEnv,
+  type CodexDriverStartInput,
+  type CodexDriverStreamItem,
+  type CodexSessionDriver,
   type LocalCodexEvidenceInput,
+  type LocalCodexRuntimeSafety,
 } from '@forgeloop/executor';
 import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
 
@@ -81,8 +87,146 @@ const mockEvidence = (input: LocalCodexEvidenceInput): ExecutorResult => ({
   raw_metadata: { workflow_only: input.runSpec.workflow_only },
 });
 
+class AppServerGovernorUnavailableDriver implements CodexSessionDriver {
+  readonly kind = 'app_server' as const;
+
+  async *startRun(): AsyncIterable<CodexDriverStreamItem> {
+    yield this.fallbackEvent('Codex app-server direct process transport is disabled until it can run under the runtime governor.');
+  }
+
+  async *resumeRun(): AsyncIterable<CodexDriverStreamItem> {
+    yield this.fallbackEvent('Codex app-server resume is disabled until it can run under the runtime governor.');
+  }
+
+  async sendInput(): Promise<Record<string, unknown>> {
+    return { acknowledged: false, reason: 'app_server_governor_unavailable' };
+  }
+
+  async cancelRun(): Promise<Record<string, unknown>> {
+    return { acknowledged: false, reason: 'app_server_governor_unavailable' };
+  }
+
+  private fallbackEvent(summary: string): CodexDriverStreamItem {
+    return {
+      kind: 'event',
+      event: {
+        event_type: 'driver_fallback_used',
+        source: 'executor',
+        visibility: 'public',
+        summary,
+        payload: { reason: 'primary_executor_governor_unavailable' },
+      },
+      runtimeMetadata: {
+        driver_kind: 'exec_fallback',
+        driver_status: 'starting',
+      },
+    };
+  }
+}
+
+const runtimeSafetyForRun = async (
+  repository: DeliveryRepository,
+  input: {
+    runSpec: CodexDriverStartInput['runSpec'];
+    workspacePath: string;
+    artifactRoot: string;
+  },
+): Promise<LocalCodexRuntimeSafety> => {
+  const runSpec = input.runSpec;
+  const executionPackage = await repository.getExecutionPackage(runSpec.execution_package_id);
+  if (executionPackage?.package_policy_snapshot === undefined) {
+    throw new Error('policy_snapshot_missing: local_codex requires a captured package policy snapshot.');
+  }
+  const parseResult = parseExecutorRuntimeSafetyConfigFromEnv(process.env, {
+    workspaceRoot: input.workspacePath,
+    tempRoot: tmpdir(),
+    packageControlledPaths: [runSpec.repo.local_path],
+  });
+  if (parseResult.status !== 'available') {
+    const details =
+      parseResult.status === 'unavailable'
+        ? parseResult.missing_keys.join(',')
+        : parseResult.diagnostics.map((diagnostic) => diagnostic.message).join('; ');
+    throw new Error(`${parseResult.reason_code}: ${details}`);
+  }
+  return createLocalCodexRuntimeSafety({
+    runSpec,
+    runtimeConfig: parseResult.config,
+    frozenSnapshot: executionPackage.package_policy_snapshot,
+    workspaceRoot: input.workspacePath,
+    artifactRoot: join(input.artifactRoot, safePathSegment(runSpec.run_session_id)),
+  });
+};
+
+class GovernedCodexDriver implements CodexSessionDriver {
+  readonly kind: 'app_server' | 'exec_fallback';
+  #inner: CodexSessionDriver | undefined;
+
+  constructor(
+    private readonly input: {
+      kind: 'app_server' | 'exec_fallback';
+      repository: DeliveryRepository;
+      runSession: RunSession;
+      rawLogStore: LocalCodexRawLogStore;
+      artifactRoot: string;
+      workerId: string;
+    },
+  ) {
+    this.kind = input.kind;
+  }
+
+  async *startRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
+    const driver = await this.innerDriver(input);
+    yield* driver.startRun(input);
+  }
+
+  async *resumeRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
+    const driver = await this.innerDriver(input);
+    yield* driver.resumeRun(input);
+  }
+
+  async sendInput(input: {
+    message: string;
+    runtimeMetadata: RunRuntimeMetadata;
+    targetTurnId?: string;
+  }): Promise<Record<string, unknown>> {
+    if (this.#inner === undefined) {
+      throw new Error('Cannot send input before the governed Codex driver has started.');
+    }
+    return this.#inner.sendInput(input);
+  }
+
+  async cancelRun(input: { runtimeMetadata: RunRuntimeMetadata }): Promise<Record<string, unknown>> {
+    if (this.#inner === undefined) {
+      return { acknowledged: false, reason: 'driver_not_started' };
+    }
+    return this.#inner.cancelRun(input);
+  }
+
+  async close(): Promise<void> {
+    await this.#inner?.close?.();
+  }
+
+  private async innerDriver(input: CodexDriverStartInput): Promise<CodexSessionDriver> {
+    if (this.#inner !== undefined) {
+      return this.#inner;
+    }
+    const runtimeSafety = await runtimeSafetyForRun(this.input.repository, {
+      runSpec: input.runSpec,
+      workspacePath: input.workspacePath,
+      artifactRoot: this.input.artifactRoot,
+    });
+    this.#inner =
+      this.kind === 'app_server'
+        ? new AppServerGovernorUnavailableDriver()
+        : new CodexExecFallbackDriver({ runtimeSafety });
+    return this.#inner;
+  }
+}
+
 const createRunWorker = (repository: DeliveryRepository): RunWorker => {
   const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
+  mkdirSync(artifactRoot, { recursive: true });
   const rawLogStore = new LocalCodexRawLogStore({ artifactRoot: join(artifactRoot, 'raw-logs') });
 
   return new RunWorker({
@@ -91,9 +235,13 @@ const createRunWorker = (repository: DeliveryRepository): RunWorker => {
     driverFactory: ({ runSession }) => {
       const runSpec = runSession.run_spec;
       if (runSpec?.executor_type === 'local_codex' && runSpec.workflow_only !== true) {
-        return new CodexAppServerDriver({
-          transport: new CodexAppServerProcessTransport(),
+        return new GovernedCodexDriver({
+          kind: 'app_server',
+          repository,
           rawLogStore,
+          artifactRoot,
+          runSession,
+          workerId: process.env.FORGELOOP_RUN_WORKER_ID ?? 'control-plane-api-worker',
         });
       }
 
@@ -102,10 +250,22 @@ const createRunWorker = (repository: DeliveryRepository): RunWorker => {
         script: [{ kind: 'terminal', status: 'succeeded', summary: 'Fake run completed.' }],
       });
     },
-    execFallbackDriverFactory: () => new CodexExecFallbackDriver({ rawLogStore }),
+    execFallbackDriverFactory: ({ runSession }) =>
+      new GovernedCodexDriver({
+        kind: 'exec_fallback',
+        repository,
+        rawLogStore,
+        artifactRoot,
+        runSession,
+        workerId: process.env.FORGELOOP_RUN_WORKER_ID ?? 'control-plane-api-worker',
+      }),
     evidenceCollector: (input) =>
       input.runSpec.executor_type === 'local_codex' && input.runSpec.workflow_only !== true
-        ? captureLocalCodexEvidence(input)
+        ? runtimeSafetyForRun(repository, {
+            runSpec: input.runSpec,
+            workspacePath: input.workspacePath,
+            artifactRoot,
+          }).then((runtimeSafety) => captureLocalCodexEvidence({ ...input, runtimeSafety }))
         : Promise.resolve(mockEvidence(input)),
     selfReview: (input) => Promise.resolve(mockSelfReview(input)),
     artifactRoot,

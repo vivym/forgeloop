@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -11,6 +12,8 @@ import type {
   CodexDriverStreamItem,
   CodexSessionDriver,
 } from './codex-session-driver.js';
+import type { LocalCodexRuntimeSafety } from './local-codex-preflight.js';
+import { ResourceGovernorError, type RunGovernorBindings, type SandboxLease } from './resource-governor.js';
 
 type SandboxConfig = { type: string } | string | null | undefined;
 
@@ -29,17 +32,93 @@ export interface CodexAppServerTransport {
 export interface CodexAppServerDriverOptions {
   transport: CodexAppServerTransport;
   rawLogStore?: CodexRawLogStore;
+  runtimeSafety?: LocalCodexRuntimeSafety;
+  workerIdentity?: string;
+  nonceFactory?: () => string;
+  now?: () => string;
 }
 
 export interface CodexAppServerProcessTransportOptions {
   codexBinary?: string;
   args?: string[];
+  allowUnsafeDirectSpawn?: boolean;
 }
 
 const textInput = (message: string): Array<Record<string, unknown>> => [{ type: 'text', text: message, text_elements: [] }];
 
+type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[] | { [key: string]: CanonicalJsonValue };
+
+interface AppServerLeaseState {
+  lease: SandboxLease;
+  expectedBase: Omit<RunGovernorBindings, 'commandId' | 'commandDigest'>;
+  promptDigest: string;
+  runSpecDigest: string;
+  nextCommandSequence: number;
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const primaryGovernorUnavailableError = (): Error =>
+  new Error('primary_executor_governor_unavailable: Codex app-server execution requires a runtime safety lease.');
+
+const appServerFallbackReason = (error: unknown): string => {
+  if (error instanceof ResourceGovernorError) {
+    switch (error.code) {
+      case 'runtime_hard_limits_unavailable':
+        return 'runtime_hard_limits_unavailable';
+      case 'resource_governor_digest_mismatch':
+      case 'resource_governor_lease_invalid':
+      case 'resource_governor_nonce_replay':
+        return 'runtime_attestation_invalid';
+      case 'runtime_test_only_mock_forbidden':
+      case 'resource_governor_protocol_error':
+        return 'sandbox_isolation_unavailable';
+    }
+  }
+  if (error instanceof Error && error.message.includes('primary_executor_governor_unavailable')) {
+    return 'primary_executor_governor_unavailable';
+  }
+  if (isRecord(error) && typeof error.code === 'string') {
+    switch (error.code) {
+      case 'runtime_hard_limits_unavailable':
+        return 'runtime_hard_limits_unavailable';
+      case 'resource_governor_digest_mismatch':
+      case 'resource_governor_lease_invalid':
+      case 'resource_governor_nonce_replay':
+        return 'runtime_attestation_invalid';
+      case 'runtime_test_only_mock_forbidden':
+      case 'resource_governor_protocol_error':
+        return 'sandbox_isolation_unavailable';
+    }
+  }
+  if (error instanceof Error && error.message.includes('resource_governor_nonce_replay')) {
+    return 'runtime_attestation_invalid';
+  }
+  return 'app_server_preflight_failed';
+};
+
+const canonicalize = (value: unknown): CanonicalJsonValue => {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (isRecord(value)) {
+    return Object.entries(value)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .reduce<Record<string, CanonicalJsonValue>>((accumulator, [key, entry]) => {
+        accumulator[key] = canonicalize(entry);
+        return accumulator;
+      }, {});
+  }
+  return null;
+};
+
+const digest = (value: unknown): string =>
+  `sha256:${createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex')}`;
 
 const stringField = (record: Record<string, unknown>, keys: string[]): string | undefined => {
   for (const key of keys) {
@@ -242,15 +321,26 @@ export class CodexAppServerDriver implements CodexSessionDriver {
   readonly kind = 'app_server' as const;
   readonly #transport: CodexAppServerTransport;
   readonly #rawLogStore: CodexRawLogStore | undefined;
+  readonly #runtimeSafety: LocalCodexRuntimeSafety | undefined;
+  readonly #workerIdentity: string;
+  readonly #nonceFactory: () => string;
+  readonly #now: () => string;
+  #leaseState: AppServerLeaseState | undefined;
 
   constructor(options: CodexAppServerDriverOptions) {
     this.#transport = options.transport;
     this.#rawLogStore = options.rawLogStore;
+    this.#runtimeSafety = options.runtimeSafety;
+    this.#workerIdentity = options.workerIdentity ?? 'forgeloop-codex-app-server';
+    this.#nonceFactory = options.nonceFactory ?? (() => randomUUID());
+    this.#now = options.now ?? (() => new Date().toISOString());
   }
 
   async *startRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
     try {
       await this.#transport.initialize?.();
+      const leaseState = await this.#createLease(input, input.runSpec.objective);
+      await this.#consumeLeaseCommand(leaseState, 'thread/start', input.runSpec.objective);
 
       const threadResponse = await this.#transport.request('thread/start', {
         cwd: input.workspacePath,
@@ -281,6 +371,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
         },
       };
 
+      await this.#consumeLeaseCommand(leaseState, 'turn/start', input.runSpec.objective);
       const turnResponse = await this.#transport.request('turn/start', {
         threadId,
         input: textInput(input.runSpec.objective),
@@ -320,7 +411,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
           visibility: 'public',
           summary: 'Codex app-server failed preflight; fallback is required.',
           payload: {
-            reason: error instanceof Error ? error.message : 'Unknown app-server error.',
+            reason: appServerFallbackReason(error),
           },
         },
         runtimeMetadata: {
@@ -353,6 +444,8 @@ export class CodexAppServerDriver implements CodexSessionDriver {
 
     try {
       await this.#transport.initialize?.();
+      const leaseState = await this.#createLease(input, input.runSpec.objective);
+      await this.#consumeLeaseCommand(leaseState, 'thread/resume', input.runSpec.objective);
 
       const response = await this.#transport.request('thread/resume', {
         threadId,
@@ -389,7 +482,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
           visibility: 'public',
           summary: 'Codex app-server resume failed; fallback is required.',
           payload: {
-            reason: error instanceof Error ? error.message : 'Unknown app-server error.',
+            reason: appServerFallbackReason(error),
           },
         },
         runtimeMetadata: {
@@ -412,6 +505,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
 
     const activeTurnId = input.targetTurnId ?? input.runtimeMetadata.active_turn_id;
     if (activeTurnId !== undefined) {
+      await this.#consumeLeaseCommand(this.#requireExistingLease(), 'turn/steer', input.message);
       const response = await this.#transport.request('turn/steer', {
         threadId,
         input: textInput(input.message),
@@ -425,6 +519,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       };
     }
 
+    await this.#consumeLeaseCommand(this.#requireExistingLease(), 'turn/start', input.message);
     const response = await this.#transport.request('turn/start', {
       threadId,
       input: textInput(input.message),
@@ -455,6 +550,85 @@ export class CodexAppServerDriver implements CodexSessionDriver {
 
   async close(): Promise<void> {
     await this.#transport.close?.();
+  }
+
+  async #createLease(input: CodexDriverStartInput, prompt: string): Promise<AppServerLeaseState> {
+    const runtimeSafety = this.#runtimeSafety;
+    if (runtimeSafety?.runGovernor.createRunLease === undefined) {
+      throw primaryGovernorUnavailableError();
+    }
+
+    const now = this.#now();
+    const expiresAt = new Date(Date.parse(now) + 5 * 60 * 1000).toISOString();
+    const promptDigest = digest(prompt);
+    const runSpecDigest = digest(input.runSpec);
+    const expectedBase = {
+      ...runtimeSafety.hookCommandContext,
+      workspaceRoot: input.workspacePath,
+    };
+    const lease = await runtimeSafety.runGovernor.createRunLease({
+      ...expectedBase,
+      commandId: 'app_server:create_lease',
+      commandDigest: digest({
+        driver: 'codex_app_server',
+        action: 'create_lease',
+        prompt_digest: promptDigest,
+        run_spec_digest: runSpecDigest,
+        workspace_root: input.workspacePath,
+      }),
+      executorType: input.runSpec.executor_type,
+      workflowOnly: input.runSpec.workflow_only,
+      environment: runtimeSafety.runtimeEnvironment ?? 'test',
+      projectId: input.runSpec.project_id,
+      repoId: input.runSpec.repo.repo_id,
+      executionPackageId: input.runSpec.execution_package_id,
+      expectedPackageVersion: input.runSpec.expected_package_version,
+      now,
+      expiresAt,
+      workerIdentity: this.#workerIdentity,
+      promptDigest,
+      runSpecDigest,
+    });
+    const leaseState = { lease, expectedBase, promptDigest, runSpecDigest, nextCommandSequence: 1 };
+    this.#leaseState = leaseState;
+    return leaseState;
+  }
+
+  #requireExistingLease(): AppServerLeaseState {
+    if (this.#leaseState === undefined) {
+      throw primaryGovernorUnavailableError();
+    }
+    return this.#leaseState;
+  }
+
+  async #consumeLeaseCommand(leaseState: AppServerLeaseState, method: string, prompt: string): Promise<void> {
+    const runtimeSafety = this.#runtimeSafety;
+    if (runtimeSafety === undefined) {
+      throw primaryGovernorUnavailableError();
+    }
+    const commandSequence = leaseState.nextCommandSequence;
+    leaseState.nextCommandSequence += 1;
+    const commandDigest = digest({
+      driver: 'codex_app_server',
+      method,
+      command_sequence: commandSequence,
+      prompt_digest: digest(prompt),
+      run_spec_digest: leaseState.runSpecDigest,
+      workspace_root: leaseState.expectedBase.workspaceRoot,
+    });
+    await runtimeSafety.runGovernor.consumeLeaseCommandInvocation({
+      lease: leaseState.lease,
+      commandDigest,
+      commandInvocationNonce: this.#nonceFactory(),
+      now: this.#now(),
+      expected: {
+        ...leaseState.expectedBase,
+        commandId: `app_server:${method}`,
+        commandDigest,
+        promptDigest: leaseState.promptDigest,
+        runSpecDigest: leaseState.runSpecDigest,
+      },
+    });
   }
 
   async *#streamNotifications(runSessionId: string): AsyncIterable<CodexDriverStreamItem> {
@@ -513,6 +687,9 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   readonly #closedPromise: Promise<void>;
 
   constructor(options: CodexAppServerProcessTransportOptions = {}) {
+    if (options.allowUnsafeDirectSpawn !== true) {
+      throw new Error('codex_app_server_direct_spawn_disabled: use a governed transport or explicit test-only unsafe spawn opt-in.');
+    }
     this.#closedPromise = new Promise((resolve) => {
       this.#resolveClosed = resolve;
     });
@@ -671,5 +848,8 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   }
 }
 
-export const createCodexAppServerDriverForTest = (transport: CodexAppServerTransport): CodexSessionDriver =>
-  new CodexAppServerDriver({ transport });
+export const createCodexAppServerDriverForTest = (
+  transport: CodexAppServerTransport,
+  options: Omit<CodexAppServerDriverOptions, 'transport'> = {},
+): CodexSessionDriver =>
+  new CodexAppServerDriver({ transport, ...options });

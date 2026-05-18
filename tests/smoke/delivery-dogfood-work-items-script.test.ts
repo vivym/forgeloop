@@ -333,8 +333,8 @@ describe('delivery dogfood work items script', () => {
     expect(candidate).toEqual([
       expect.objectContaining({
         check_id: 'dogfood-work-item',
-        command: 'pnpm install --frozen-lockfile && pnpm smoke:delivery',
-        timeout_seconds: 300,
+        command: 'pnpm smoke:delivery',
+        timeout_seconds: 120,
         blocks_review: true,
       }),
     ]);

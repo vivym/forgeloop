@@ -70,7 +70,7 @@ export const buildBoundedLocalCodexRunPackage = (input: {
     {
       check_id: 'dogfood-required',
       display_name: 'Local Codex dogfood required check',
-      command: 'node -e "process.exit(0)"',
+      command: 'node --version',
       timeout_seconds: 30,
       blocks_review: true,
     },
@@ -292,7 +292,7 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
       implementation_summary: 'Bound writes to README.md and collect evidence.',
       split_strategy: 'Single package.',
       dependency_order: [],
-      test_matrix: ['node -e "process.exit(0)"'],
+      test_matrix: ['node --version'],
       risk_mitigations: ['Run in persistent worktree, not source checkout.'],
       rollback_notes: 'Remove the marker from the worktree if needed.',
       author_actor_id: actor,

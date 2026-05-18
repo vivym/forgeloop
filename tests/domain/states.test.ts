@@ -589,6 +589,7 @@ describe('domain state transitions', () => {
       expect(created.required_artifact_kinds).toEqual(requiredArtifactKinds);
       expect(created.allowed_paths).toEqual(allowedPaths);
       expect(created.forbidden_paths).toEqual(forbiddenPaths);
+      expect(created.source_mutation_policy).toBe('path_policy_scoped');
       expect(created.required_checks).not.toBe(requiredChecks);
       expect(created.required_artifact_kinds).not.toBe(requiredArtifactKinds);
       expect(created.allowed_paths).not.toBe(allowedPaths);
@@ -634,6 +635,36 @@ describe('domain state transitions', () => {
         timeout_seconds: 120,
         blocks_review: true,
       });
+    });
+
+    it('preserves source mutation policy across package creation and updates', () => {
+      const created = transitionExecutionPackage(undefined, {
+        type: 'generate_package',
+        id: 'package-no-source-change',
+        work_item_id: 'work-item-1',
+        spec_id: 'spec-1',
+        spec_revision_id: 'spec-revision-1',
+        plan_id: 'plan-1',
+        plan_revision_id: 'plan-revision-1',
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        objective: 'Inspect one package without source changes.',
+        owner_actor_id: 'actor-owner',
+        reviewer_actor_id: 'actor-reviewer',
+        qa_owner_actor_id: 'actor-qa',
+        required_checks: requiredChecks,
+        required_artifact_kinds: requiredArtifactKinds,
+        allowed_paths: [],
+        forbidden_paths: forbiddenPaths,
+        source_mutation_policy: 'no_source_changes',
+      });
+
+      expect(created.source_mutation_policy).toBe('no_source_changes');
+      const ready = transitionExecutionPackage(created, { type: 'mark_ready' });
+      const queued = transitionExecutionPackage(ready, { type: 'run', run_session_id: 'run-session-1' });
+
+      expect(ready.source_mutation_policy).toBe('no_source_changes');
+      expect(queued.source_mutation_policy).toBe('no_source_changes');
     });
 
     it('handles retryable, blocking, and blocking-check execution failures', () => {
@@ -827,6 +858,7 @@ describe('domain state transitions', () => {
         requested_changes: [],
       },
       workflow_only: false,
+      source_mutation_policy: 'no_source_changes',
       allowed_paths: ['packages/domain/**', 'tests/domain/**'],
       forbidden_paths: ['apps/**'],
       required_checks: [
@@ -922,6 +954,7 @@ describe('domain state transitions', () => {
         failure_kind: 'required_check_failed',
         failure_reason: 'Required checks not run yet.',
       });
+      expect(queued.run_spec?.source_mutation_policy).toBe('no_source_changes');
 
       const running = transitionRunSession(queued, { type: 'workflow_start' });
       expect(running.status).toBe('running');
@@ -1461,6 +1494,7 @@ describe('domain state transitions', () => {
         },
       ]);
       expect(session.run_spec?.allowed_paths).toEqual(['packages/domain/**', 'tests/domain/**']);
+      expect(session.run_spec?.source_mutation_policy).toBe('no_source_changes');
       expect(session.run_spec?.artifact_policy.requested_artifacts).toEqual(['execution_summary', 'diff']);
       expect(session.changed_files).not.toBe(changedFilesInput);
       expect(session.log_refs).not.toBe(logRefsInput);

@@ -122,6 +122,28 @@ const targetFromAction = (action: NextAction) => ({
   action_input_json: action.actionInputJson,
 });
 
+const blockersFromWire = (value: unknown): RuntimeSnapshotTarget['blockers'] => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const blockers = value.map((entry) => {
+    const row = entry as Record<string, unknown>;
+    return {
+      targetObjectType: String(row.target_object_type),
+      targetObjectId: String(row.target_object_id),
+      ...(typeof row.target_revision_id === 'string' ? { targetRevisionId: row.target_revision_id } : {}),
+      ...(typeof row.repo_id === 'string' ? { repoId: row.repo_id } : {}),
+      blockedReasonCode: String(row.blocked_reason_code),
+      blockedSummary: String(row.blocked_summary),
+      retryable: row.retryable === true,
+      ...(typeof row.policy_digest === 'string' ? { policyDigest: row.policy_digest } : {}),
+      ...(typeof row.policy_snapshot_version === 'number' ? { policySnapshotVersion: row.policy_snapshot_version } : {}),
+      ...(typeof row.diagnostic_ref === 'string' ? { diagnosticRef: row.diagnostic_ref } : {}),
+    };
+  });
+  return blockers.length === 0 ? undefined : blockers;
+};
+
 const runtimeSnapshotFromWire = (wire: unknown): RuntimeSnapshot => {
   const snapshot = wire as Record<string, unknown>;
   const repos = Array.isArray(snapshot.repos) ? snapshot.repos : [];
@@ -129,6 +151,7 @@ const runtimeSnapshotFromWire = (wire: unknown): RuntimeSnapshot => {
   const targets = (value: unknown): RuntimeSnapshotTarget[] =>
     (Array.isArray(value) ? value : []).map((entry) => {
       const row = entry as Record<string, unknown>;
+      const blockers = blockersFromWire(row.blockers);
       return {
         targetObjectType: String(row.target_object_type),
         targetObjectId: String(row.target_object_id),
@@ -145,6 +168,7 @@ const runtimeSnapshotFromWire = (wire: unknown): RuntimeSnapshot => {
         ...(typeof row.latest_matching_action_status === 'string' ? { latestMatchingActionStatus: row.latest_matching_action_status } : {}),
         ...(typeof row.blocked_reason_code === 'string' ? { blockedReasonCode: row.blocked_reason_code } : {}),
         ...(typeof row.blocked_summary === 'string' ? { blockedSummary: row.blocked_summary } : {}),
+        ...(blockers === undefined ? {} : { blockers }),
         ...(typeof row.generation_key === 'string' ? { generationKey: row.generation_key } : {}),
         ...(row.disabled_reason === 'run_enqueue_disabled_by_scope'
           ? { disabledReason: 'run_enqueue_disabled_by_scope' as const }

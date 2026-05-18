@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AutomationHttpClient,
   planNextActions,
   projectRuntimeSnapshotIdempotencyKey,
   type RuntimeSnapshot,
@@ -254,6 +255,17 @@ describe('automation planner', () => {
             repoId: 'repo-1',
             automationScope: repoScope,
             disabledReason: 'run_enqueue_disabled_by_scope',
+            blockers: [
+              {
+                targetObjectType: 'execution_package',
+                targetObjectId: 'execution-package-1',
+                targetRevisionId: 'plan-revision-1',
+                repoId: 'repo-1',
+                blockedReasonCode: 'runtime_hard_limits_unavailable',
+                blockedSummary: 'Runtime hard limits are unavailable.',
+                retryable: true,
+              },
+            ],
           },
         ],
       }),
@@ -261,6 +273,102 @@ describe('automation planner', () => {
 
     expect(actions.map((action) => action.actionType)).not.toContain('enqueue_run');
     expect(actions).toEqual([]);
+  });
+
+  it('does not emit enqueue actions even when ready packages have no runtime blockers', () => {
+    const actions = planNextActions(
+      baseSnapshot({
+        runEnqueueDisabledPackages: [
+          {
+            targetObjectType: 'execution_package',
+            targetObjectId: 'execution-package-runtime-satisfied',
+            targetRevisionId: 'plan-revision-1',
+            targetStatus: 'ready',
+            projectId: 'project-1',
+            repoId: 'repo-1',
+            automationScope: repoScope,
+            disabledReason: 'run_enqueue_disabled_by_scope',
+          },
+        ],
+      }),
+    );
+
+    expect(actions).not.toContainEqual(expect.objectContaining({ actionType: expect.stringMatching(/enqueue/i) }));
+    expect(actions).toEqual([]);
+  });
+
+  it('parses runtime blockers and singular aliases from HTTP snapshots', async () => {
+    const client = new AutomationHttpClient({
+      baseUrl: 'http://control-plane.test',
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+      secret: 'test-secret',
+      now: () => generatedAt,
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          generated_at: generatedAt,
+          projects: [],
+          repos: [],
+          work_items_requiring_plan: [
+            {
+              target_object_type: 'work_item',
+              target_object_id: 'work-item-1',
+              target_revision_id: 'spec-revision-1',
+              target_status: 'approved',
+              project_id: 'project-1',
+              repo_id: 'repo-1',
+              automation_scope: repoScope,
+              blocked_reason_code: 'runtime_policy_invalid',
+              blocked_summary: 'Runtime policy is invalid.',
+              blockers: [
+                {
+                  target_object_type: 'work_item',
+                  target_object_id: 'work-item-1',
+                  target_revision_id: 'spec-revision-1',
+                  repo_id: 'repo-1',
+                  blocked_reason_code: 'runtime_policy_invalid',
+                  blocked_summary: 'Runtime policy is invalid.',
+                  retryable: false,
+                  policy_digest: 'sha256:policy',
+                  policy_snapshot_version: 2,
+                  diagnostic_ref: 'diag:runtime-policy',
+                },
+              ],
+            },
+          ],
+          plan_revisions_requiring_packages: [],
+          run_enqueue_disabled_packages: [],
+          active_holds: [],
+          recent_action_runs: [],
+          run_enqueue_disabled_reason: 'run_enqueue_disabled_by_scope',
+        }),
+        text: async () => '',
+      }),
+    });
+
+    const snapshot = await client.runtimeSnapshot();
+
+    expect(snapshot.workItemsRequiringPlan[0]).toMatchObject({
+      blockedReasonCode: 'runtime_policy_invalid',
+      blockedSummary: 'Runtime policy is invalid.',
+      blockers: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetRevisionId: 'spec-revision-1',
+          repoId: 'repo-1',
+          blockedReasonCode: 'runtime_policy_invalid',
+          blockedSummary: 'Runtime policy is invalid.',
+          retryable: false,
+          policyDigest: 'sha256:policy',
+          policySnapshotVersion: 2,
+          diagnosticRef: 'diag:runtime-policy',
+        },
+      ],
+    });
   });
 
   it('emits project_runtime_snapshot for a new WORKFLOW.md observation', () => {

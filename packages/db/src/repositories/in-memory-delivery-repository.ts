@@ -71,6 +71,11 @@ import type {
   TraceEventRecord,
   TraceLinkRecord,
 } from './delivery-repository';
+import {
+  runtimeSnapshotBlockerFieldsFor,
+  runtimeSnapshotBlockersForActionRun,
+  runtimeSnapshotBlockersForExecutionPackage,
+} from './delivery-repository';
 import { ObjectLockManager } from './object-lock';
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -323,7 +328,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveExecutionPackage(executionPackage: ExecutionPackage): Promise<void> {
-    this.executionPackages.set(executionPackage.id, clone(executionPackage));
+    this.executionPackages.set(
+      executionPackage.id,
+      clone({
+        ...executionPackage,
+        source_mutation_policy: executionPackage.source_mutation_policy ?? 'path_policy_scoped',
+      }),
+    );
   }
 
   async getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined> {
@@ -1867,6 +1878,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         repo_id: executionPackage.repo_id,
         automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}` as const,
         disabled_reason: 'run_enqueue_disabled_by_scope',
+        ...runtimeSnapshotBlockerFieldsFor(
+          runtimeSnapshotBlockersForExecutionPackage(
+            executionPackage,
+            valuesFor(this.runSessions).filter((runSession) => runSession.execution_package_id === executionPackage.id),
+          ),
+        ),
       }));
   }
 
@@ -1901,7 +1918,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     actionType: string,
     targetObjectId: string,
     targetRevisionId: string,
-  ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'> {
+  ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary' | 'blockers'> {
     const actionRun = valuesFor(this.automationActionRuns)
       .filter(
         (candidate) =>
@@ -1915,12 +1932,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
     return {
       latest_matching_action_status: actionRun.status,
-      ...(actionRun.status !== 'blocked'
-        ? {}
-        : {
-            ...(actionRun.reason === undefined ? {} : { blocked_reason_code: actionRun.reason }),
-            ...(actionRun.error_code === undefined ? {} : { blocked_summary: actionRun.error_code }),
-          }),
+      ...runtimeSnapshotBlockerFieldsFor(runtimeSnapshotBlockersForActionRun(actionRun)),
     };
   }
 

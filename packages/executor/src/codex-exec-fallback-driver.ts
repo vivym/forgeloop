@@ -1,115 +1,62 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { createInterface } from 'node:readline';
-
 import type { ExecutorFailure } from '@forgeloop/contracts';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
-import { normalizeCodexExecJsonLine } from './codex-event-normalizer.js';
-import type { CodexRawLogStore } from './codex-raw-log-store.js';
 import type {
   CodexDriverStartInput,
   CodexDriverStreamItem,
   CodexSessionDriver,
 } from './codex-session-driver.js';
+import type { LocalCodexRuntimeSafety } from './local-codex-preflight.js';
+import {
+  materializeTrustedToolchainCommand,
+  structuredCommandDigest,
+  type StructuredCommandSpec,
+} from './structured-command.js';
 
-export const buildCodexExecArgs = (input: { prompt: string; threadId?: string }): string[] =>
+export const buildCodexExecArgs = (input: { promptRef: string; threadId?: string }): string[] =>
   input.threadId === undefined
-    ? ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', input.prompt]
-    : ['exec', 'resume', input.threadId, '--json', '--dangerously-bypass-approvals-and-sandbox', input.prompt];
+    ? ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '--prompt-artifact', input.promptRef]
+    : ['exec', 'resume', input.threadId, '--json', '--dangerously-bypass-approvals-and-sandbox', '--prompt-artifact', input.promptRef];
 
 export interface CodexExecFallbackDriverOptions {
-  codexBinary?: string;
-  rawLogStore?: CodexRawLogStore;
+  runtimeSafety?: LocalCodexRuntimeSafety;
 }
 
-const failureFromExit = (code: number | null, signal: NodeJS.Signals | null): ExecutorFailure => ({
+interface FrozenFallbackPolicy {
+  mode?: string;
+  command?: StructuredCommandSpec;
+}
+
+const fallbackDeniedFailure = (): ExecutorFailure => ({
+  kind: 'executor_error',
+  message: 'fallback_denied_by_policy: codex_exec fallback is not allowed by the frozen runtime policy.',
+  retryable: false,
+});
+
+const fallbackProcessFailure = (summary: string): ExecutorFailure => ({
   kind: 'executor_process_failed',
-  message: signal === null ? `Codex exec exited with code ${code ?? 'unknown'}` : `Codex exec exited on signal ${signal}`,
+  message: summary,
   retryable: true,
 });
 
-const failureFromSpawnError = (error: Error): ExecutorFailure => ({
-  kind: 'executor_process_failed',
-  message: `Failed to spawn Codex exec process: ${error.message}`,
-  retryable: true,
-});
-
-const parseJsonRecord = (line: string): Record<string, unknown> | undefined => {
-  try {
-    const parsed = JSON.parse(line) as unknown;
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
+const artifactRefString = (artifact: { storage_uri?: string | undefined; local_ref?: string | undefined; name: string }): string => {
+  const ref = artifact.storage_uri ?? artifact.local_ref;
+  if (ref === undefined) {
+    throw new Error(`Artifact ${artifact.name} does not have a storage_uri or local_ref.`);
   }
+  return ref;
 };
-
-const stringField = (record: Record<string, unknown>, keys: readonly string[]): string | undefined => {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === 'string') {
-      return value;
-    }
-  }
-
-  return undefined;
-};
-
-const terminalFromExecJsonLine = (line: string): CodexDriverStreamItem | undefined => {
-  const parsed = parseJsonRecord(line);
-  if (parsed === undefined) {
-    return undefined;
-  }
-
-  const type = stringField(parsed, ['type', 'event_type', 'eventType', 'kind']);
-  const method = stringField(parsed, ['method']);
-  if (type !== 'turn.completed' && type !== 'turn_completed' && method !== 'turn/completed') {
-    return undefined;
-  }
-
-  return {
-    kind: 'terminal',
-    status: 'succeeded',
-    summary: 'Codex exec fallback turn completed.',
-    runtimeMetadata: {
-      driver_status: 'terminal',
-    },
-  };
-};
-
-const waitForChildSpawn = async (child: ChildProcess): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const cleanup = () => {
-      child.off('error', onError);
-      child.off('spawn', onSpawn);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onSpawn = () => {
-      cleanup();
-      child.on('error', () => undefined);
-      resolve();
-    };
-
-    child.once('error', onError);
-    child.once('spawn', onSpawn);
-  });
 
 export class CodexExecFallbackDriver implements CodexSessionDriver {
   readonly kind = 'exec_fallback' as const;
-  readonly #codexBinary: string;
-  readonly #rawLogStore: CodexRawLogStore | undefined;
+  readonly #runtimeSafety: LocalCodexRuntimeSafety | undefined;
 
   constructor(options: CodexExecFallbackDriverOptions = {}) {
-    this.#codexBinary = options.codexBinary ?? 'codex';
-    this.#rawLogStore = options.rawLogStore;
+    this.#runtimeSafety = options.runtimeSafety;
   }
 
   async *startRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
-    yield* this.#runCodexExec(input, buildCodexExecArgs({ prompt: input.runSpec.objective }));
+    yield* this.#runCodexExec(input, input.runSpec.objective);
   }
 
   async *resumeRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
@@ -128,7 +75,7 @@ export class CodexExecFallbackDriver implements CodexSessionDriver {
       return;
     }
 
-    yield* this.#runCodexExec(input, buildCodexExecArgs({ prompt: input.runSpec.objective, threadId }));
+    yield* this.#runCodexExec(input, input.runSpec.objective, threadId);
   }
 
   async sendInput(input: {
@@ -141,18 +88,7 @@ export class CodexExecFallbackDriver implements CodexSessionDriver {
       throw new Error('Cannot continue Codex exec fallback without runtimeMetadata.codex_thread_id.');
     }
 
-    const args = buildCodexExecArgs({ prompt: input.message, threadId });
-    const child = spawn(this.#codexBinary, args, {
-      stdio: ['ignore', 'ignore', 'ignore'],
-    });
-    await waitForChildSpawn(child);
-
-    return {
-      continuity: 'resume_fallback',
-      threadId,
-      pid: child.pid,
-      args,
-    };
+    throw new Error(`fallback_denied_by_policy: governed exec fallback continuation is not available for thread ${threadId}.`);
   }
 
   async cancelRun(input: { runtimeMetadata: RunRuntimeMetadata }): Promise<Record<string, unknown>> {
@@ -163,88 +99,96 @@ export class CodexExecFallbackDriver implements CodexSessionDriver {
     };
   }
 
-  async *#runCodexExec(input: CodexDriverStartInput, args: string[]): AsyncIterable<CodexDriverStreamItem> {
-    const child = spawn(this.#codexBinary, args, {
-      cwd: input.workspacePath,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const lines = createInterface({ input: child.stdout });
-    const stderrLines = createInterface({ input: child.stderr });
-    let stderr = '';
-    let completed = false;
-    let spawnError: Error | undefined;
-
-    stderrLines.on('line', (line) => {
-      stderr = stderr.length === 0 ? line : `${stderr}\n${line}`;
-    });
-
-    const terminal = new Promise<CodexDriverStreamItem>((resolve) => {
-      child.once('error', (error) => {
-        spawnError = error;
-        completed = true;
-        resolve({
-          kind: 'terminal',
-          status: 'failed',
-          summary: 'Codex exec fallback failed to start.',
-          failure: failureFromSpawnError(error),
-        });
-      });
-      child.once('close', (code, signal) => {
-        completed = true;
-        if (spawnError !== undefined) {
-          return;
-        }
-
-        if (code === 0 && signal === null) {
-          resolve({
-            kind: 'terminal',
-            status: 'succeeded',
-            summary: 'Codex exec fallback completed.',
-          });
-          return;
-        }
-
-        resolve({
-          kind: 'terminal',
-          status: 'failed',
-          summary: 'Codex exec fallback failed.',
-          failure: {
-            ...failureFromExit(code, signal),
-            message: stderr.length > 0 ? stderr : failureFromExit(code, signal).message,
-          },
-        });
-      });
-    });
+  async *#runCodexExec(input: CodexDriverStartInput, prompt: string, threadId?: string): AsyncIterable<CodexDriverStreamItem> {
+    const runtimeSafety = this.#runtimeSafety;
+    const fallbackPolicy = runtimeSafety?.frozenSnapshot?.fallback_policy as FrozenFallbackPolicy | undefined;
+    if (runtimeSafety === undefined || fallbackPolicy?.mode !== 'codex_exec' || fallbackPolicy.command === undefined) {
+      const failure = fallbackDeniedFailure();
+      yield {
+        kind: 'terminal',
+        status: 'failed',
+        summary: failure.message,
+        failure,
+      };
+      return;
+    }
 
     try {
-      for await (const line of lines) {
-        const rawRef = await this.#rawLogStore?.appendRawNotification({
-          runSessionId: input.runSpec.run_session_id,
-          source: 'exec_fallback',
-          payload: line,
-        });
+      const promptArtifact = await runtimeSafety.artifactWriter.writeText({
+        kind: 'raw_metadata',
+        name: 'codex-exec-fallback-prompt.txt',
+        contentType: 'text/plain',
+        content: prompt,
+        visibility: 'internal',
+      });
+      const promptRef = artifactRefString(promptArtifact);
+      const commandContext = {
+        ...runtimeSafety.hookCommandContext,
+        workspaceRoot: input.workspacePath,
+      };
+      const command = materializeTrustedToolchainCommand({
+        command: {
+          ...fallbackPolicy.command,
+          args: buildCodexExecArgs({ promptRef, ...(threadId === undefined ? {} : { threadId }) }),
+          visibility: 'internal',
+        },
+        toolchain: commandContext.trustedToolchains,
+        workspaceRoot: input.workspacePath,
+        artifactRoot: commandContext.artifactRoot,
+        hardCaps: {
+          hardMaxTimeoutMs: commandContext.resourceLimits.timeout_ms,
+          hardMaxOutputLimitBytes: commandContext.resourceLimits.run_output_limit_bytes,
+        },
+      });
+      const commandDigest = structuredCommandDigest({
+        command,
+        resource_limit_digest: commandContext.resourceLimitDigest,
+        run_id: commandContext.runId,
+        workspace_root: commandContext.workspaceRoot,
+        artifact_root: commandContext.artifactRoot,
+        sandbox_output_root_policy: commandContext.sandboxOutputRootPolicy,
+        artifact_quota_policy: commandContext.artifactQuotaPolicy,
+      });
+      const result = await runtimeSafety.runGovernor.run({
+        scope: 'run',
+        command,
+        bindings: {
+          ...commandContext,
+          commandId: 'fallback:codex_exec',
+          commandDigest,
+        },
+        outputImporter: runtimeSafety.artifactWriter,
+        sandboxOutputArtifacts: {
+          stdout: { kind: 'logs', name: 'codex-exec-fallback-stdout.txt', visibility: 'internal' },
+          stderr: { kind: 'logs', name: 'codex-exec-fallback-stderr.txt', visibility: 'internal' },
+        },
+        ...(runtimeSafety.mockRunContext === undefined ? {} : { mockRunContext: runtimeSafety.mockRunContext }),
+      });
 
-        const terminalItem = terminalFromExecJsonLine(line);
-        if (terminalItem !== undefined) {
-          yield terminalItem;
-          return;
-        }
-
-        for (const event of normalizeCodexExecJsonLine(line)) {
-          if (rawRef !== undefined) {
-            event.raw_ref = rawRef.raw_ref;
-          }
-          yield { kind: 'event', event };
-        }
+      if (result.timed_out || result.exit_code !== 0) {
+        const failure = fallbackProcessFailure(result.public_summary);
+        yield {
+          kind: 'terminal',
+          status: result.timed_out ? 'cancelled' : 'failed',
+          summary: result.public_summary,
+          failure,
+        };
+        return;
       }
 
-      yield await terminal;
-    } finally {
-      lines.close();
-      stderrLines.close();
-      if (!completed && !child.killed && child.exitCode === null) {
-        child.kill('SIGTERM');
-      }
+      yield {
+        kind: 'terminal',
+        status: 'succeeded',
+        summary: result.public_summary,
+      };
+    } catch {
+      const failure = fallbackProcessFailure('Codex exec fallback failed.');
+      yield {
+        kind: 'terminal',
+        status: 'failed',
+        summary: 'Codex exec fallback failed.',
+        failure,
+      };
     }
   }
 }

@@ -1,20 +1,33 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { executorResultSchema } from '@forgeloop/contracts';
+import { executorResultSchema, type ArtifactRef } from '@forgeloop/contracts';
 import {
   createDefaultLocalCodexEnvironment,
   createLocalCodexCheckEnv,
+  resourceLimitDigest,
   runLocalCodexExecutor,
   runLocalCodexPreflight,
+  type ArtifactWriter,
   type CommandChecker,
   type CommandRunner,
   type CodexRunner,
+  type HookRunner,
+  type LocalCodexRuntimeSafety,
   type LocalCodexEnvironment,
+  type PathSafety,
+  type ResourceGovernor,
+  type ResourceGovernorReadiness,
+  type ResourceGovernorRunInput,
+  type RuntimeSafetyAttestation,
+  type SandboxLeaseInput,
+  type StructuredCommandResult,
 } from '../../packages/executor/src/index';
+import type { PackageRuntimePolicySnapshot, RuntimeGovernorProvenance } from '../../packages/domain/src/index';
 
 import { blockingCheck, createRunSpec } from './test-fixtures';
 
@@ -34,7 +47,33 @@ const execGit = async (cwd: string, args: readonly string[]) => {
   return execFileAsync('git', [...args], { cwd });
 };
 
+const addCommittedCheckScript = async (
+  repo: string,
+  relativePath: string,
+  source: string,
+): Promise<{ command: string; head: string }> => {
+  await mkdir(join(repo, dirname(relativePath)), { recursive: true });
+  await writeFile(join(repo, relativePath), source);
+  await execGit(repo, ['add', relativePath]);
+  await execGit(repo, ['commit', '-m', `add ${relativePath}`]);
+  const { stdout } = await execGit(repo, ['rev-parse', 'HEAD']);
+  return { command: `node ${relativePath}`, head: stdout.trim() };
+};
+
 const okCommandChecker: CommandChecker = async () => true;
+const sha = 'sha256:0000000000000000000000000000000000000000000000000000000000000000';
+
+const resourceLimits = {
+  cpu_ms: 1_000,
+  memory_mb: 512,
+  pids: 32,
+  fds: 64,
+  workspace_bytes: 1_048_576,
+  artifact_bytes: 1_048_576,
+  timeout_ms: 30_000,
+  output_limit_bytes: 100_000,
+  run_output_limit_bytes: 500_000,
+};
 
 const missingCommandChecker =
   (...missing: string[]): CommandChecker =>
@@ -53,6 +92,143 @@ const createPassingEnvironment = (overrides: Partial<LocalCodexEnvironment> = {}
   runCommand: async () => ({ stdout: '', stderr: '' }),
   ...overrides,
 });
+
+class ReadyGovernor implements ResourceGovernor {
+  readonly governorId = 'ready-governor';
+  readonly provenance: RuntimeGovernorProvenance = 'test_only_mock';
+  readonly calls: ResourceGovernorRunInput[] = [];
+
+  constructor(private readonly readiness: ResourceGovernorReadiness = { status: 'ready', governor_id: 'ready-governor', provenance: 'test_only_mock' }) {}
+
+  async checkReadiness(): Promise<ResourceGovernorReadiness> {
+    return this.readiness;
+  }
+
+  async createRunExecutionAttestation(): Promise<RuntimeSafetyAttestation> {
+    throw new Error('not used');
+  }
+
+  async createRunLease(_input: SandboxLeaseInput) {
+    throw new Error('not used');
+  }
+
+  async consumeLeaseCommandInvocation(): Promise<{ ok: true }> {
+    return { ok: true };
+  }
+
+  async run(input: ResourceGovernorRunInput): Promise<StructuredCommandResult> {
+    this.calls.push(input);
+    return {
+      exit_code: 0,
+      timed_out: false,
+      stdout_truncated: false,
+      stderr_truncated: false,
+      visibility: 'internal',
+      public_summary: 'ok',
+    };
+  }
+}
+
+type ArtifactWriteTextInput = Parameters<ArtifactWriter['writeText']>[0];
+
+const digestText = (value: string): string => `sha256:${createHash('sha256').update(value).digest('hex')}`;
+
+class RecordingArtifactWriter {
+  readonly writes: ArtifactWriteTextInput[] = [];
+
+  async writeText(input: ArtifactWriteTextInput): Promise<ArtifactRef> {
+    this.writes.push(input);
+    return {
+      kind: input.kind,
+      name: input.name,
+      content_type: input.contentType,
+      digest: digestText(input.content),
+      local_ref: join('/artifacts', input.name),
+    };
+  }
+}
+
+const frozenSnapshot = (overrides: Partial<PackageRuntimePolicySnapshot> = {}): PackageRuntimePolicySnapshot => ({
+  policy_snapshot_version: 1,
+  policy_digest: sha,
+  policy_source_path: 'WORKFLOW.md',
+  policy_loaded_at: '2026-05-05T00:00:00.000Z',
+  policy_last_known_good: true,
+  hooks: { before_run: [], after_run: [] },
+  frozen_hook_specs: { before_run: [], after_run: [] },
+  command_policy: { trusted_toolchain: 'default', safe_git_profile: 'forgeloop_default' },
+  check_policy: { required: [] },
+  env_policy: { allow: [] },
+  workspace_policy: { worktree_dir: '.worktrees', cleanup: 'run_workspace_only', source_snapshot: 'required' },
+  path_policy: { allowed_paths: ['packages/executor/src/**', 'tests/executor/**'], forbidden_paths: ['packages/contracts/**'] },
+  codex_runtime_mode: { primary_executor: 'mock', network_mode: 'disabled' },
+  prompt_policy: { include_workflow_body: true, body_visibility: 'internal' },
+  artifact_visibility_policy: { default_visibility: 'internal' },
+  fallback_policy: { mode: 'disabled' },
+  env_policy_digest: sha,
+  command_policy_digest: sha,
+  mount_policy_digest: sha,
+  network_policy_digest: 'network-disabled',
+  safe_git_profile: 'forgeloop_default',
+  source_mutation_policy: 'path_policy_scoped',
+  validation_strategy: 'checks_required',
+  validation_public_summary: 'frozen',
+  frozen_command_check_policy: { required_checks: [] },
+  ...overrides,
+});
+
+const runtimeSafety = (overrides: Partial<LocalCodexRuntimeSafety> = {}): LocalCodexRuntimeSafety => {
+  const limitsDigest = resourceLimitDigest(resourceLimits);
+  return {
+    config: {
+      sandbox: {
+        executable_path: '/bin/sh',
+        config_digest: sha,
+        default_cpu_ms: 1_000,
+        default_memory_mb: 512,
+        default_pids: 32,
+        default_fds: 64,
+        default_workspace_bytes: 1_048_576,
+        default_artifact_bytes: 1_048_576,
+      },
+      trusted_toolchains: {},
+      artifact_root: '/artifacts',
+    },
+    frozenSnapshot: frozenSnapshot(),
+    pathSafety: {} as PathSafety,
+    artifactWriter: new RecordingArtifactWriter() as unknown as ArtifactWriter,
+    bootstrapGovernor: new ReadyGovernor(),
+    runGovernor: new ReadyGovernor(),
+    hookRunner: {
+      runBeforeRun: async () => ({ ok: true, diagnostics: [] }),
+      runAfterRun: async (input) => ({
+        terminalStatus: input.terminalStatus,
+        reviewFinalizationEligible: input.reviewFinalizationEligible,
+        diagnostics: [],
+      }),
+    } satisfies HookRunner,
+    hookCommandContext: {
+      runId: 'run-1',
+      workspaceRoot: '/workspace/repo',
+      artifactRoot: '/artifacts/run-1',
+      sandboxOutputRoot: '/sandbox-output/run-1',
+      policyDigest: sha,
+      policySnapshotVersion: 1,
+      envPolicyDigest: sha,
+      commandPolicyDigest: sha,
+      mountPolicyDigest: sha,
+      networkPolicyDigest: 'network-disabled',
+      resourceLimitDigest: limitsDigest,
+      sandboxOutputRootPolicy: 'ephemeral_sandbox_output_only',
+      artifactQuotaPolicy: 'sha256:artifact-quota',
+      networkMode: 'disabled',
+      resourceLimits,
+      trustedToolchains: { root_paths: ['/bin'], executable_paths: { codex: '/bin/sh', git: '/bin/sh' }, path_entries: ['/bin'], writable: false },
+    },
+    maxHookTimeoutMs: 5_000,
+    ...overrides,
+  };
+};
 
 const createGitBackedTestEnvironment = (
   workspaceRoot: string | undefined,
@@ -318,6 +494,118 @@ describe('runLocalCodexPreflight', () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it('fails runtime-safety preflight when a required check command cannot render safely', async () => {
+    const repo = await makeTempDir();
+    const unsafeCheck = blockingCheck({
+      check_id: 'legacy-shell',
+      command: 'node -e "process.exit(0)"',
+    });
+
+    const result = await runLocalCodexPreflight(
+      createRunSpec({
+        repo: { local_path: repo },
+        required_checks: [unsafeCheck],
+        context: { required_checks: [unsafeCheck] },
+      }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createPassingEnvironment(),
+        runtimeSafety: runtimeSafety(),
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      blockers: [{ code: 'required_check_command_invalid' }],
+    });
+  });
+
+  it('fails runtime-safety preflight when the frozen snapshot is missing or invalid', async () => {
+    const repo = await makeTempDir();
+
+    for (const [snapshot, code] of [
+      [undefined, 'policy_snapshot_missing'],
+      [frozenSnapshot({ policy_snapshot_status: 'stale' }), 'policy_snapshot_invalid'],
+      [frozenSnapshot({ frozen_command_check_policy: {} }), 'policy_snapshot_invalid'],
+    ] as const) {
+      const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
+        artifactRoot: await makeTempDir(),
+        environment: createPassingEnvironment(),
+        runtimeSafety: runtimeSafety({ frozenSnapshot: snapshot as PackageRuntimePolicySnapshot }),
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        blockers: [{ code }],
+      });
+    }
+  });
+
+  it('fails runtime-safety preflight when declared package paths exceed the frozen PathPolicy', async () => {
+    const repo = await makeTempDir();
+    const result = await runLocalCodexPreflight(
+      createRunSpec({ repo: { local_path: repo }, allowed_paths: ['packages/api/src/**'] }),
+      {
+        artifactRoot: await makeTempDir(),
+        environment: createPassingEnvironment(),
+        runtimeSafety: runtimeSafety(),
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      blockers: [{ code: 'path_policy_declared_scope_rejected' }],
+    });
+  });
+
+  it('fails runtime-safety preflight when hard-limit governor readiness is unavailable', async () => {
+    const repo = await makeTempDir();
+    const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
+      artifactRoot: await makeTempDir(),
+      environment: createPassingEnvironment(),
+      runtimeSafety: runtimeSafety({
+        runGovernor: new ReadyGovernor({
+          status: 'unavailable',
+          governor_id: 'unavailable',
+          provenance: 'unavailable',
+          reason_code: 'runtime_hard_limits_unavailable',
+        }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      blockers: [{ code: 'runtime_hard_limits_unavailable' }],
+    });
+  });
+
+  it('fails runtime-safety preflight when before_run hooks block startup', async () => {
+    const repo = await makeTempDir();
+    const result = await runLocalCodexPreflight(createRunSpec({ repo: { local_path: repo } }), {
+      artifactRoot: await makeTempDir(),
+      environment: createPassingEnvironment(),
+      runtimeSafety: runtimeSafety({
+        hookRunner: {
+          runBeforeRun: async () => ({
+            ok: false,
+            blocker: { code: 'before_run_hook_failed', summary: 'before_run hook exited non-zero.', retryable: true },
+            diagnostics: [],
+          }),
+          runAfterRun: async (input) => ({
+            terminalStatus: input.terminalStatus,
+            reviewFinalizationEligible: input.reviewFinalizationEligible,
+            diagnostics: [],
+          }),
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      blockers: [{ code: 'before_run_hook_failed' }],
+    });
+  });
 });
 
 describe('runLocalCodexExecutor', () => {
@@ -356,9 +644,30 @@ describe('runLocalCodexExecutor', () => {
     });
   });
 
-  it('captures fake runner changes, patch artifact, and successful checks in a persistent workspace', async () => {
+  it('blocks default local Codex execution without a runtime safety governor', async () => {
     const { repo, head } = await createGitRepo();
+    const result = await runLocalCodexExecutor(createRunSpec({ repo: { local_path: repo, base_commit_sha: head } }), {
+      artifactRoot: await makeTempDir(),
+      environment: createGitBackedTestEnvironment(await makeTempDir()),
+      codexHome: await makeTempDir(),
+    });
+
+    expect(executorResultSchema.parse(result)).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'preflight_failed',
+      },
+    });
+    expect(result.summary).toContain('primary_executor_governor_unavailable');
+  });
+
+  it('captures fake runner changes, patch artifact, and successful checks in a persistent workspace', async () => {
+    const { repo } = await createGitRepo();
     const artifactRoot = await makeTempDir();
+    const okCheckScript = await addCommittedCheckScript(repo, 'packages/executor/src/check-ok.js', 'process.exit(0);\n');
+    const okCheck = blockingCheck({
+      command: okCheckScript.command,
+    });
     const runner: CodexRunner = {
       run: async ({ workspacePath, runSpec }) => {
         await mkdir(join(workspacePath, 'packages/executor/src'), { recursive: true });
@@ -373,9 +682,9 @@ describe('runLocalCodexExecutor', () => {
 
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+        repo: { local_path: repo, base_commit_sha: okCheckScript.head },
+        required_checks: [okCheck],
+        context: { required_checks: [okCheck] },
       }),
       {
         artifactRoot,
@@ -410,12 +719,20 @@ describe('runLocalCodexExecutor', () => {
   }, 15_000);
 
   it('applies blocking check failure semantics after a successful runner invocation', async () => {
-    const { repo, head } = await createGitRepo();
+    const { repo } = await createGitRepo();
+    const failedCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-fails.js',
+      'process.exit(7);\n',
+    );
+    const failedCheck = blockingCheck({
+      command: failedCheckScript.command,
+    });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(7)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(7)"' })] },
+        repo: { local_path: repo, base_commit_sha: failedCheckScript.head },
+        required_checks: [failedCheck],
+        context: { required_checks: [failedCheck] },
       }),
       {
         artifactRoot: await makeTempDir(),
@@ -442,14 +759,19 @@ describe('runLocalCodexExecutor', () => {
   });
 
   it('records blocking required-check timeouts as required_check_failed', async () => {
-    const { repo, head } = await createGitRepo();
+    const { repo } = await createGitRepo();
+    const timeoutCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-timeout.js',
+      'setTimeout(() => {}, 5000);\n',
+    );
     const timeoutCheck = blockingCheck({
-      command: 'node -e "setTimeout(() => {}, 5000)"',
+      command: timeoutCheckScript.command,
       timeout_seconds: 1,
     });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
+        repo: { local_path: repo, base_commit_sha: timeoutCheckScript.head },
         required_checks: [timeoutCheck],
       }),
       {
@@ -477,13 +799,21 @@ describe('runLocalCodexExecutor', () => {
   });
 
   it('returns executor_error when required check execution throws', async () => {
-    const { repo, head } = await createGitRepo();
+    const { repo } = await createGitRepo();
     const artifactRoot = await makeTempDir();
+    const okCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-artifact-error.js',
+      'process.exit(0);\n',
+    );
+    const okCheck = blockingCheck({
+      command: okCheckScript.command,
+    });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+        repo: { local_path: repo, base_commit_sha: okCheckScript.head },
+        required_checks: [okCheck],
+        context: { required_checks: [okCheck] },
       }),
       {
         artifactRoot,
@@ -542,25 +872,28 @@ describe('runLocalCodexExecutor', () => {
         {
           check_id: 'optional-tool',
           status: 'failed',
-          exit_code: 127,
+          exit_code: 1,
           blocks_review: false,
         },
       ],
     });
   });
 
-  it('uses executor_error for generic default Codex process failures after preflight', async () => {
+  it('uses executor_error for generic governed default Codex process failures after preflight', async () => {
     const { repo, head } = await createGitRepo();
+    class FailingGovernor extends ReadyGovernor {
+      override async run(input: ResourceGovernorRunInput): Promise<StructuredCommandResult> {
+        this.calls.push(input);
+        throw new Error('governor rejected primary command');
+      }
+    }
     const result = await runLocalCodexExecutor(
       createRunSpec({ repo: { local_path: repo, base_commit_sha: head } }),
       {
         artifactRoot: await makeTempDir(),
         codexHome: join(await makeTempDir(), '.codex'),
-        environment: createGitBackedTestEnvironment(await makeTempDir(), {
-          runCodex: async () => {
-            throw new Error('prompt rejected');
-          },
-        }),
+        runtimeSafety: runtimeSafety({ runGovernor: new FailingGovernor() }),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
       },
     );
 
@@ -568,14 +901,14 @@ describe('runLocalCodexExecutor', () => {
       status: 'failed',
       failure: {
         kind: 'executor_error',
-        message: expect.stringContaining('prompt rejected'),
+        message: expect.stringContaining('governor rejected primary command'),
       },
     });
   });
 
-  it('passes required checks in the frozen default Codex prompt', async () => {
+  it('writes the default Codex prompt as an internal artifact', async () => {
     const { repo, head } = await createGitRepo();
-    let prompt = '';
+    const artifactWriter = new RecordingArtifactWriter();
 
     await runLocalCodexExecutor(
       createRunSpec({
@@ -586,23 +919,27 @@ describe('runLocalCodexExecutor', () => {
       {
         artifactRoot: await makeTempDir(),
         codexHome: join(await makeTempDir(), '.codex'),
-        environment: createGitBackedTestEnvironment(await makeTempDir(), {
-          runCodex: async (input) => {
-            prompt = input.prompt;
-          },
-        }),
+        runtimeSafety: runtimeSafety({ artifactWriter: artifactWriter as unknown as ArtifactWriter }),
+        environment: createGitBackedTestEnvironment(await makeTempDir()),
       },
     );
 
+    const prompt = artifactWriter.writes.find((write) => write.name === 'codex-prompt.txt')?.content ?? '';
+    expect(artifactWriter.writes.find((write) => write.name === 'codex-prompt.txt')).toMatchObject({
+      kind: 'raw_metadata',
+      contentType: 'text/plain',
+      visibility: 'internal',
+    });
     expect(prompt).toContain('Required checks:');
     expect(prompt).toContain('prompt-check');
     expect(prompt).toContain('pnpm test tests/executor');
   });
 
-  it('uses dangerous JSON exec without a main-run timeout and sanitized environment for the default Codex invocation', async () => {
+  it('routes the default Codex invocation through a governed structured command', async () => {
     const { repo, head } = await createGitRepo();
     const workspaceRoot = await makeTempDir();
     const codexHome = join(await makeTempDir(), '.codex');
+    const runGovernor = new ReadyGovernor();
     const commandCalls: Array<{
       command: string;
       args: readonly string[];
@@ -635,20 +972,32 @@ describe('runLocalCodexExecutor', () => {
         {
           artifactRoot: await makeTempDir(),
           codexHome,
+          runtimeSafety: runtimeSafety({ runGovernor }),
           environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
         },
       );
 
       expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
-      const codexExecCall = commandCalls.find(
-        (call) => call.command === 'codex' && call.args[0] === 'exec',
+      expect(commandCalls.find((call) => call.command === 'codex' && call.args[0] === 'exec')).toBeUndefined();
+      const primaryCall = runGovernor.calls.find(
+        (call) => call.scope === 'run' && call.bindings.commandId === 'primary_codex:run',
       );
-      expect(codexExecCall?.args).toEqual(
+      expect(primaryCall?.scope).toBe('run');
+      expect(primaryCall?.command.args).toEqual(
         expect.arrayContaining(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox']),
       );
-      expect(codexExecCall?.args).not.toContain('workspace-write');
-      expect(codexExecCall?.timeout).toBeUndefined();
-      expect(codexExecCall?.env).not.toHaveProperty('GITHUB_TOKEN');
+      expect(primaryCall?.command.args).toEqual(expect.arrayContaining(['--prompt-artifact']));
+      expect(primaryCall?.command.args.join('\n')).not.toContain('Implement the executor adapter');
+      expect(primaryCall?.command.visibility).toBe('internal');
+      expect(primaryCall?.command.source_write_policy).toBe('path_policy_scoped');
+      expect(primaryCall?.command.timeout_ms).toBe(resourceLimits.timeout_ms);
+      expect(primaryCall?.command.env).toMatchObject({ CODEX_HOME: codexHome });
+      expect(primaryCall?.command.env).not.toHaveProperty('GITHUB_TOKEN');
+      expect(primaryCall?.scope === 'run' ? primaryCall.bindings.primaryExecutor : undefined).toMatchObject({
+        executor_type: 'local_codex',
+        prompt_digest: expect.stringMatching(/^sha256:/),
+        run_spec_digest: expect.stringMatching(/^sha256:/),
+      });
     } finally {
       if (originalGithubToken === undefined) {
         delete process.env.GITHUB_TOKEN;
@@ -658,10 +1007,11 @@ describe('runLocalCodexExecutor', () => {
     }
   });
 
-  it('uses the same explicit Codex auth env for readiness and default invocation', async () => {
+  it('uses explicit Codex home for readiness and governed default invocation', async () => {
     const { repo, head } = await createGitRepo();
     const workspaceRoot = await makeTempDir();
     const codexHome = join(await makeTempDir(), '.codex');
+    const runGovernor = new ReadyGovernor();
     const codexEnvs: Array<{ args: readonly string[]; env: NodeJS.ProcessEnv }> = [];
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
@@ -685,17 +1035,20 @@ describe('runLocalCodexExecutor', () => {
       {
         artifactRoot: await makeTempDir(),
         codexHome,
+        runtimeSafety: runtimeSafety({ runGovernor }),
         environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
       },
     );
 
     expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
     const readinessEnv = codexEnvs.find((call) => call.args.join(' ') === 'login status')?.env;
-    const invocationEnv = codexEnvs.find((call) => call.args[0] === 'exec')?.env;
+    const invocationEnv = runGovernor.calls.find(
+      (call) => call.scope === 'run' && call.bindings.commandId === 'primary_codex:run',
+    )?.command.env;
     expect(readinessEnv?.CODEX_HOME).toBe(codexHome);
     expect(invocationEnv?.CODEX_HOME).toBe(codexHome);
-    expect(readinessEnv?.HOME).toBe(invocationEnv?.HOME);
-    expect(readinessEnv?.XDG_CONFIG_HOME).toBe(invocationEnv?.XDG_CONFIG_HOME);
+    expect(invocationEnv).not.toHaveProperty('HOME');
+    expect(invocationEnv).not.toHaveProperty('XDG_CONFIG_HOME');
   });
 
   it('fails preflight before default Codex invocation when no explicit Codex home is configured', async () => {
@@ -715,6 +1068,7 @@ describe('runLocalCodexExecutor', () => {
         }),
         {
           artifactRoot: await makeTempDir(),
+          runtimeSafety: runtimeSafety(),
           environment: createGitBackedTestEnvironment(await makeTempDir(), {
             runCodex: async () => {
               codexInvoked = true;
@@ -762,6 +1116,7 @@ describe('runLocalCodexExecutor', () => {
       {
         artifactRoot: artifactRootFile,
         codexHome,
+        runtimeSafety: runtimeSafety(),
         environment: createGitBackedTestEnvironment(await makeTempDir(), {
           runCodex: async () => {
             codexInvoked = true;
@@ -781,16 +1136,27 @@ describe('runLocalCodexExecutor', () => {
   });
 
   it('disables git remote pushes through process env without mutating shared repo config', async () => {
-    const { repo, head } = await createGitRepo();
+    const { repo } = await createGitRepo();
     await execGit(repo, ['remote', 'add', 'origin', 'https://example.com/repo.git']);
+    const remoteCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/remote-push-check.js',
+      [
+        "const { execFileSync } = require('node:child_process');",
+        "const { mkdirSync, writeFileSync } = require('node:fs');",
+        "mkdirSync('packages/executor/src', { recursive: true });",
+        "writeFileSync('packages/executor/src/push-url.txt', execFileSync('git', ['remote', 'get-url', '--push', 'origin'], { encoding: 'utf8' }));",
+        '',
+      ].join('\n'),
+    );
     const remoteCheck = blockingCheck({
       check_id: 'remote-push',
-      command: 'git remote get-url --push origin > packages/executor/src/push-url.txt',
+      command: remoteCheckScript.command,
     });
 
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
+        repo: { local_path: repo, base_commit_sha: remoteCheckScript.head },
         required_checks: [remoteCheck],
         context: { required_checks: [remoteCheck] },
       }),
@@ -845,16 +1211,33 @@ describe('runLocalCodexExecutor', () => {
     process.env.GITHUB_TOKEN = 'github-secret';
     process.env.OPENAI_API_KEY = 'openai-secret';
     process.env.SSH_AUTH_SOCK = '/tmp/ssh-agent.sock';
+    const envCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/env-check.js',
+      [
+        "const fs = require('node:fs');",
+        "fs.mkdirSync('packages/executor/src', { recursive: true });",
+        "fs.writeFileSync('packages/executor/src/env.json', JSON.stringify({",
+        '  HOME: process.env.HOME,',
+        '  GH_TOKEN: process.env.GH_TOKEN,',
+        '  GITHUB_TOKEN: process.env.GITHUB_TOKEN,',
+        '  OPENAI_API_KEY: process.env.OPENAI_API_KEY,',
+        '  SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK,',
+        '  GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,',
+        '  GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT,',
+        '}));',
+        '',
+      ].join('\n'),
+    );
     const check = blockingCheck({
       check_id: 'env-check',
-      command:
-        'node -e "const fs=require(\'fs\'); fs.mkdirSync(\'packages/executor/src\', {recursive:true}); fs.writeFileSync(\'packages/executor/src/env.json\', JSON.stringify({HOME:process.env.HOME,GH_TOKEN:process.env.GH_TOKEN,GITHUB_TOKEN:process.env.GITHUB_TOKEN,OPENAI_API_KEY:process.env.OPENAI_API_KEY,SSH_AUTH_SOCK:process.env.SSH_AUTH_SOCK,GIT_CONFIG_GLOBAL:process.env.GIT_CONFIG_GLOBAL,GIT_TERMINAL_PROMPT:process.env.GIT_TERMINAL_PROMPT}))"',
+      command: envCheckScript.command,
     });
 
     try {
       const result = await runLocalCodexExecutor(
         createRunSpec({
-          repo: { local_path: repo, base_commit_sha: head },
+          repo: { local_path: repo, base_commit_sha: envCheckScript.head },
           required_checks: [check],
           context: { required_checks: [check] },
         }),
@@ -892,37 +1275,82 @@ describe('runLocalCodexExecutor', () => {
   it('does not expose Codex home to required checks while default Codex receives it', async () => {
     const { repo, head } = await createGitRepo();
     const codexHome = join(await makeTempDir(), '.codex');
-    let codexInvocationEnv: NodeJS.ProcessEnv | undefined;
+    const runGovernor = new ReadyGovernor();
+    const checkScriptPath = join(repo, 'packages/executor/src/codex-env-check.js');
+    await writeFile(
+      checkScriptPath,
+      [
+        "const fs = require('fs');",
+        "fs.writeFileSync('packages/executor/src/codex-env.json', JSON.stringify({",
+        '  CODEX_HOME: process.env.CODEX_HOME,',
+        '  HOME: process.env.HOME,',
+        '}));',
+        '',
+      ].join('\n'),
+    );
+    await execGit(repo, ['add', 'packages/executor/src/codex-env-check.js']);
+    await execGit(repo, ['commit', '-m', 'add env check']);
+    const { stdout: updatedHead } = await execGit(repo, ['rev-parse', 'HEAD']);
     const check = blockingCheck({
       check_id: 'codex-env-check',
-      command:
-        'node -e "const fs=require(\'fs\'); fs.mkdirSync(\'packages/executor/src\', {recursive:true}); fs.writeFileSync(\'packages/executor/src/codex-env.json\', JSON.stringify({CODEX_HOME:process.env.CODEX_HOME,HOME:process.env.HOME}))"',
+      command: 'node packages/executor/src/codex-env-check.js',
     });
+    const safety = runtimeSafety({
+      runGovernor,
+      frozenSnapshot: frozenSnapshot({
+        frozen_command_check_policy: {
+          required_checks: [
+            {
+              check_id: check.check_id,
+              display_name: check.display_name,
+              source: 'execution_package',
+              blocks_review: check.blocks_review,
+              timeout_ms: resourceLimits.timeout_ms,
+              visibility: 'internal',
+              command: {
+                executable: 'node',
+                args: ['packages/executor/src/codex-env-check.js'],
+                cwd: 'workspace_root',
+                source_write_policy: 'read_only',
+              },
+            },
+          ],
+        },
+      }),
+    });
+    safety.hookCommandContext.trustedToolchains = {
+      root_paths: ['/bin'],
+      executable_paths: { codex: '/bin/sh', git: '/bin/sh', node: '/bin/sh' },
+      path_entries: ['/bin'],
+      writable: false,
+    };
 
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
+        repo: { local_path: repo, base_commit_sha: updatedHead.trim() || head },
         required_checks: [check],
         context: { required_checks: [check] },
       }),
       {
         artifactRoot: await makeTempDir(),
         codexHome,
+        runtimeSafety: safety,
         environment: createGitBackedTestEnvironment(await makeTempDir(), {
           isCodexRuntimeReady: async () => true,
-          runCodex: async (input) => {
-            codexInvocationEnv = input.env;
-          },
         }),
       },
     );
 
     expect(executorResultSchema.parse(result)).toMatchObject({ status: 'succeeded' });
+    const codexInvocationEnv = runGovernor.calls.find(
+      (call) => call.scope === 'run' && call.bindings.commandId === 'primary_codex:run',
+    )?.command.env;
+    const checkInvocationEnv = runGovernor.calls.find(
+      (call) => call.scope === 'run' && call.bindings.commandId === 'required_check:codex-env-check',
+    )?.command.env;
     expect(codexInvocationEnv?.CODEX_HOME).toBe(codexHome);
-    const envJsonPath = join(result.raw_metadata.workspace_path as string, 'packages/executor/src/codex-env.json');
-    const checkEnv = JSON.parse(await readFile(envJsonPath, 'utf8'));
-    expect(checkEnv.CODEX_HOME).toBeUndefined();
-    expect(checkEnv.HOME).not.toBe(codexInvocationEnv?.HOME);
+    expect(checkInvocationEnv).not.toHaveProperty('CODEX_HOME');
+    expect(checkInvocationEnv).not.toHaveProperty('HOME');
   });
 
   it('creates a local Codex check env that preserves PATH for required checks', async () => {
@@ -978,12 +1406,20 @@ describe('runLocalCodexExecutor', () => {
 
   it('returns path_violation before running checks for runner changes outside allowed paths', async () => {
     const { repo, head } = await createGitRepo();
+    const okCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-not-run.js',
+      'process.exit(0);\n',
+    );
+    const okCheck = blockingCheck({
+      command: okCheckScript.command,
+    });
     let checkRan = false;
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+        repo: { local_path: repo, base_commit_sha: okCheckScript.head },
+        required_checks: [okCheck],
+        context: { required_checks: [okCheck] },
       }),
       {
         artifactRoot: await makeTempDir(),
@@ -1044,11 +1480,19 @@ describe('runLocalCodexExecutor', () => {
 
   it('returns schema-valid path_violation when source repo mutates and a blocking check fails', async () => {
     const { repo, head } = await createGitRepo();
+    const failedCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-source-mutation-fails.js',
+      'process.exit(1);\n',
+    );
+    const failedCheck = blockingCheck({
+      command: failedCheckScript.command,
+    });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(1)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(1)"' })] },
+        repo: { local_path: repo, base_commit_sha: failedCheckScript.head },
+        required_checks: [failedCheck],
+        context: { required_checks: [failedCheck] },
       }),
       {
         artifactRoot: await makeTempDir(),
@@ -1090,12 +1534,23 @@ describe('runLocalCodexExecutor', () => {
 
   it('returns schema-valid path_violation when a failed blocking check mutates a forbidden path', async () => {
     const { repo, head } = await createGitRepo();
+    const forbiddenMutationCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-mutates-forbidden.js',
+      [
+        "const fs = require('node:fs');",
+        "fs.mkdirSync('packages/contracts/src', { recursive: true });",
+        "fs.writeFileSync('packages/contracts/src/check.ts', 'export const bad = true;\\n');",
+        'process.exit(1);',
+        '',
+      ].join('\n'),
+    );
     const forbiddenMutationCheck = blockingCheck({
-      command: `node -e "const fs=require('node:fs');fs.mkdirSync('packages/contracts/src',{recursive:true});fs.writeFileSync('packages/contracts/src/check.ts','export const bad = true;\\n');process.exit(1)"`,
+      command: forbiddenMutationCheckScript.command,
     });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
+        repo: { local_path: repo, base_commit_sha: forbiddenMutationCheckScript.head },
         required_checks: [forbiddenMutationCheck],
       }),
       {
@@ -1232,11 +1687,19 @@ describe('runLocalCodexExecutor', () => {
 
   it('returns path_violation from evidence capture when a failed runner mutates the source repo', async () => {
     const { repo, head } = await createGitRepo();
+    const okCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-failed-source-mutation.js',
+      'process.exit(0);\n',
+    );
+    const okCheck = blockingCheck({
+      command: okCheckScript.command,
+    });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+        repo: { local_path: repo, base_commit_sha: okCheckScript.head },
+        required_checks: [okCheck],
+        context: { required_checks: [okCheck] },
       }),
       {
         artifactRoot: await makeTempDir(),
@@ -1276,11 +1739,19 @@ describe('runLocalCodexExecutor', () => {
 
   it('captures failed runner forbidden workspace changes as path_violation evidence', async () => {
     const { repo, head } = await createGitRepo();
+    const okCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-failed-forbidden.js',
+      'process.exit(0);\n',
+    );
+    const okCheck = blockingCheck({
+      command: okCheckScript.command,
+    });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+        repo: { local_path: repo, base_commit_sha: okCheckScript.head },
+        required_checks: [okCheck],
+        context: { required_checks: [okCheck] },
       }),
       {
         artifactRoot: await makeTempDir(),
@@ -1331,11 +1802,19 @@ describe('runLocalCodexExecutor', () => {
 
   it('captures failed runner allowed workspace changes with the original runner failure', async () => {
     const { repo, head } = await createGitRepo();
+    const okCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-failed-allowed.js',
+      'process.exit(0);\n',
+    );
+    const okCheck = blockingCheck({
+      command: okCheckScript.command,
+    });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })],
-        context: { required_checks: [blockingCheck({ command: 'node -e "process.exit(0)"' })] },
+        repo: { local_path: repo, base_commit_sha: okCheckScript.head },
+        required_checks: [okCheck],
+        context: { required_checks: [okCheck] },
       }),
       {
         artifactRoot: await makeTempDir(),
@@ -1387,12 +1866,25 @@ describe('runLocalCodexExecutor', () => {
 
   it('returns final path_violation when checks mutate forbidden files and captures the final diff', async () => {
     const { repo, head } = await createGitRepo();
+    const forbiddenMutationCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-mutates-final.js',
+      [
+        "const fs = require('node:fs');",
+        "fs.mkdirSync('packages/contracts/src', { recursive: true });",
+        "fs.writeFileSync('packages/contracts/src/mutate.ts', 'bad\\n');",
+        '',
+      ].join('\n'),
+    );
+    const forbiddenMutationCheck = blockingCheck({
+      command: forbiddenMutationCheckScript.command,
+    });
     const result = await runLocalCodexExecutor(
       createRunSpec({
-        repo: { local_path: repo, base_commit_sha: head },
-        required_checks: [blockingCheck({ command: 'mkdir -p packages/contracts/src && echo bad > packages/contracts/src/mutate.ts' })],
+        repo: { local_path: repo, base_commit_sha: forbiddenMutationCheckScript.head },
+        required_checks: [forbiddenMutationCheck],
         context: {
-          required_checks: [blockingCheck({ command: 'mkdir -p packages/contracts/src && echo bad > packages/contracts/src/mutate.ts' })],
+          required_checks: [forbiddenMutationCheck],
         },
       }),
       {
@@ -1458,14 +1950,19 @@ describe('runLocalCodexExecutor', () => {
   it('keeps artifact paths under artifact root for malicious run and check ids', async () => {
     const { repo, head } = await createGitRepo();
     const artifactRoot = await makeTempDir();
+    const maliciousCheckScript = await addCommittedCheckScript(
+      repo,
+      'packages/executor/src/check-malicious-id.js',
+      'process.exit(0);\n',
+    );
     const maliciousCheck = blockingCheck({
       check_id: '../check/escape',
-      command: 'node -e "process.exit(0)"',
+      command: maliciousCheckScript.command,
     });
     const result = await runLocalCodexExecutor(
       createRunSpec({
         run_session_id: '../session/escape',
-        repo: { local_path: repo, base_commit_sha: head },
+        repo: { local_path: repo, base_commit_sha: maliciousCheckScript.head },
         required_checks: [maliciousCheck],
         context: { required_checks: [maliciousCheck] },
       }),
@@ -1491,20 +1988,15 @@ describe('runLocalCodexExecutor', () => {
   it('returns executor_error with logs artifact when diff capture fails', async () => {
     const { repo, head } = await createGitRepo();
     const workspaceRoot = await makeTempDir();
-    const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    const execFileAsync = promisify(execFile);
-    const commandRunner: CommandRunner = async (command, args, options) => {
-      if (command === 'git' && args[0] === 'diff' && options?.cwd !== repo) {
-        throw new Error('stdout maxBuffer length exceeded');
-      }
-      if (command === 'codex') {
-        return { stdout: '', stderr: '' };
-      }
+    class DiffFailingGovernor extends ReadyGovernor {
+      override async run(input: ResourceGovernorRunInput): Promise<StructuredCommandResult> {
+        if (input.scope === 'run' && input.bindings.commandId === 'authoritative-patch-diff') {
+          throw new Error('stdout maxBuffer length exceeded');
+        }
 
-      const { stdout, stderr } = await execFileAsync(command, [...args], options);
-      return { stdout: String(stdout), stderr: String(stderr) };
-    };
+        return super.run(input);
+      }
+    }
 
     const result = await runLocalCodexExecutor(
       createRunSpec({
@@ -1513,7 +2005,8 @@ describe('runLocalCodexExecutor', () => {
       {
         artifactRoot: await makeTempDir(),
         codexHome: join(await makeTempDir(), '.codex'),
-        environment: createDefaultLocalCodexEnvironment({ workspaceRoot, commandRunner }),
+        runtimeSafety: runtimeSafety({ runGovernor: new DiffFailingGovernor() }),
+        environment: createGitBackedTestEnvironment(workspaceRoot),
       },
     );
 

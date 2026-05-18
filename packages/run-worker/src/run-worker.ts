@@ -9,7 +9,14 @@ import type {
   SourceRepoSnapshot,
 } from '../../executor/src/index.js';
 import { createDefaultLocalCodexEnvironment, createLocalCodexCheckEnv, snapshotSourceRepoStatus } from '../../executor/src/index.js';
-import { buildAndStartPackageRun, finalizePackageRunWithExecutorResult } from '../../workflow/src/index.js';
+import {
+  buildAndStartPackageRun,
+  completePackageRunReviewFinalization,
+  finalizePackageRunWithExecutorResult,
+  terminalizePackageRunWithRuntimeEvidence,
+  type RuntimeFinalizationEvidence,
+  type TerminalizedRunResult,
+} from '../../workflow/src/index.js';
 
 import { applyPendingRunCommands } from './command-inbox.js';
 import { acquireLeaseForRun, heartbeatLease, releaseLease } from './lease.js';
@@ -140,6 +147,22 @@ const terminalExecutorResult = (input: {
   raw_metadata: {},
 });
 
+const runtimeEvidenceFromExecutorResult = (executorResult: ExecutorResult): RuntimeFinalizationEvidence => ({
+  executorResult,
+  authoritativeChangedFiles: executorResult.changed_files,
+  requiredCheckResults: executorResult.checks,
+  primaryArtifactRefs: executorResult.artifacts,
+  runtimeBlockers: [],
+  pathPolicy:
+    executorResult.failure?.kind === 'path_violation'
+      ? {
+          ok: false,
+          blockerCode: 'path_policy_actual_changes_rejected',
+          publicSummary: executorResult.failure.message,
+        }
+      : { ok: true },
+});
+
 const fakeEnvironment = (): LocalCodexEnvironment => ({
   commandExists: async () => false,
   isCodexRuntimeReady: async () => false,
@@ -170,6 +193,11 @@ const isRealLocalCodexDriverRun = (runSession: RunSession, driver: CodexSessionD
   runSession.run_spec?.executor_type === 'local_codex' &&
   runSession.run_spec.workflow_only !== true &&
   (driver.kind === 'app_server' || driver.kind === 'exec_fallback');
+
+const isRealLocalCodexRuntime = (runSession: RunSession): boolean =>
+  runSession.run_spec?.executor_type === 'local_codex' &&
+  runSession.run_spec.workflow_only !== true &&
+  (runSession.runtime_metadata?.driver_kind === 'app_server' || runSession.runtime_metadata?.driver_kind === 'exec_fallback');
 
 const runtimeMetadataSourceSnapshot = (runtimeMetadata: RunRuntimeMetadata | undefined): SourceRepoSnapshot | undefined => {
   if (
@@ -924,6 +952,27 @@ export class RunWorker {
       });
     }
 
+    if (isRealLocalCodexRuntime(latest)) {
+      const terminalized = await terminalizePackageRunWithRuntimeEvidence({
+        repository: this.repository,
+        runSessionId: latest.id,
+        evidence: runtimeEvidenceFromExecutorResult(executorResult),
+        workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
+        now: () => at,
+      });
+      await this.recordAfterRunDiagnosticsBestEffort(latest, terminalized, lease);
+      if (terminalized.reviewEligible) {
+        await completePackageRunReviewFinalization({
+          repository: this.repository,
+          runSessionId: latest.id,
+          selfReview: this.selfReview,
+          workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
+          now: () => this.now(),
+        });
+      }
+      return;
+    }
+
     await finalizePackageRunWithExecutorResult({
       repository: this.repository,
       runSessionId: latest.id,
@@ -932,6 +981,53 @@ export class RunWorker {
       workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
       now: () => at,
     });
+  }
+
+  private async recordAfterRunDiagnosticsBestEffort(
+    runSession: RunSession,
+    terminalized: TerminalizedRunResult,
+    lease: OwnedRun,
+  ): Promise<void> {
+    try {
+      await this.recordAfterRunDiagnostics(runSession, terminalized, lease);
+    } catch (error) {
+      console.warn('[forgeloop:run-worker] after_run diagnostics persistence failed', {
+        run_session_id: runSession.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async recordAfterRunDiagnostics(
+    runSession: RunSession,
+    terminalized: TerminalizedRunResult,
+    lease: OwnedRun,
+  ): Promise<void> {
+    const at = this.now();
+    await this.repository.appendWorkerRunEvent(
+      {
+        id: `run-event:${runSession.id}:after-run-diagnostics:${at}`,
+        run_session_id: runSession.id,
+        event_type: 'after_run_diagnostics_recorded',
+        source: 'worker',
+        visibility: 'internal',
+        summary: 'after_run hooks skipped because read-only source enforcement is unavailable.',
+        payload: {
+          terminal_status: terminalized.status,
+          review_finalization_eligible: terminalized.reviewEligible,
+          diagnostics: [
+            {
+              phase: 'after_run',
+              status: 'skipped',
+              reason_code: 'after_run_read_only_unavailable',
+              summary: 'after_run hook skipped because read-only source enforcement is unavailable.',
+            },
+          ],
+        },
+        created_at: at,
+      },
+      { workerId: lease.workerId, leaseToken: lease.leaseToken },
+    );
   }
 
   private startHeartbeat(lease: OwnedRun, control: RunControl): { done: Promise<void> } {
