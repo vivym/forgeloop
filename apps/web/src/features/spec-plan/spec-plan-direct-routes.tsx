@@ -525,14 +525,23 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
     );
   }
 
+  if (plan.current_revision_id === undefined) {
+    return (
+      <Section title="Downstream package">
+        <div className="artifact-list">
+          <span>This approved Plan does not have a current approved revision recorded yet.</span>
+          <Link to="/packages">View package inventory</Link>
+        </div>
+        <p className="status-line">Open the package inventory to find packages that may already exist for this work.</p>
+      </Section>
+    );
+  }
+
   return (
     <Section title="Downstream package">
       <div className="artifact-list">
         <span>Package generation starts from the Packages workspace.</span>
-        <Link to={`/packages?plan=${encodeURIComponent(plan.id)}`}>View package readiness</Link>
-        <Button disabled title="Open package readiness to continue from the Packages workspace." variant="secondary">
-          Generate packages
-        </Button>
+        <Link to={`/packages?plan_revision_id=${encodeURIComponent(plan.current_revision_id)}`}>View package readiness</Link>
       </div>
       <p className="status-line">Package generation is ready for this approved Plan. Open package readiness to continue.</p>
     </Section>

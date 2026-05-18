@@ -344,7 +344,7 @@ describe('package and run product routes', () => {
     expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
   });
 
-  it('runs a package without sending workflow-only mode from the product route', async () => {
+  it('runs a package with local Codex execution and without workflow-only mode from the product route', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/packages/${executionPackage.id}`, {
       apiOverrides: {
@@ -361,7 +361,10 @@ describe('package and run product routes', () => {
         `http://localhost:3000/execution-packages/${executionPackage.id}/run`,
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ execution_package_id: executionPackage.id }),
+          body: JSON.stringify({
+            execution_package_id: executionPackage.id,
+            executor_type: 'local_codex',
+          }),
         }),
       ),
     );
@@ -369,6 +372,39 @@ describe('package and run product routes', () => {
       String(input).endsWith(`/execution-packages/${executionPackage.id}/run`),
     );
     expect(String((runRequest?.[1] as RequestInit | undefined)?.body)).not.toContain('workflow_only');
+    expect(String((runRequest?.[1] as RequestInit | undefined)?.body)).not.toContain('"mock"');
+  });
+
+  it('reruns a package with local Codex execution and previous run context', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+        [`POST /execution-packages/${executionPackage.id}/rerun`]: { run_session_id: 'run-rerun' },
+      },
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Rerun' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/execution-packages/${executionPackage.id}/rerun`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            execution_package_id: executionPackage.id,
+            executor_type: 'local_codex',
+            previous_run_session_id: executionPackage.last_run_session_id,
+          }),
+        }),
+      ),
+    );
+    const rerunRequest = vi.mocked(globalThis.fetch).mock.calls.find(([input]) =>
+      String(input).endsWith(`/execution-packages/${executionPackage.id}/rerun`),
+    );
+    expect(String((rerunRequest?.[1] as RequestInit | undefined)?.body)).not.toContain('workflow_only');
+    expect(String((rerunRequest?.[1] as RequestInit | undefined)?.body)).not.toContain('"mock"');
   });
 
   it('requires a previous run before force rerun is available', async () => {
@@ -413,6 +449,7 @@ describe('package and run product routes', () => {
           method: 'POST',
           body: JSON.stringify({
             execution_package_id: executionPackage.id,
+            executor_type: 'local_codex',
             force: true,
             force_reason: 'Retry after dependency recovery',
             previous_run_session_id: executionPackage.last_run_session_id,
@@ -420,6 +457,11 @@ describe('package and run product routes', () => {
         }),
       ),
     );
+    const forceRerunRequest = vi.mocked(globalThis.fetch).mock.calls.find(([input]) =>
+      String(input).endsWith(`/execution-packages/${executionPackage.id}/force-rerun`),
+    );
+    expect(String((forceRerunRequest?.[1] as RequestInit | undefined)?.body)).not.toContain('workflow_only');
+    expect(String((forceRerunRequest?.[1] as RequestInit | undefined)?.body)).not.toContain('"mock"');
   });
 
   it('edits package details through the package patch action', async () => {
@@ -451,6 +493,120 @@ describe('package and run product routes', () => {
         }),
       ),
     );
+  });
+
+  it('preserves additional required checks when editing the first check', async () => {
+    const user = userEvent.setup();
+    const packageWithTwoChecks = {
+      ...executionPackage,
+      required_checks: [
+        executionPackage.required_checks[0],
+        {
+          check_id: 'web-vitest',
+          display_name: 'Web route tests',
+          command: 'pnpm vitest run tests/web/package-run-product-routes.test.tsx',
+          timeout_seconds: 900,
+          blocks_review: true,
+        },
+      ],
+    };
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: packageWithTwoChecks,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+        [`PATCH /execution-packages/${executionPackage.id}`]: packageWithTwoChecks,
+      },
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Edit package details' }));
+    await user.clear(screen.getByLabelText('Check command'));
+    await user.type(screen.getByLabelText('Check command'), 'pnpm --filter @forgeloop/web typecheck --strict');
+    await user.click(screen.getByRole('button', { name: 'Save package details' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/execution-packages/${executionPackage.id}`,
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({
+            objective: executionPackage.objective,
+            owner_actor_id: executionPackage.owner_actor_id,
+            reviewer_actor_id: executionPackage.reviewer_actor_id,
+            qa_owner_actor_id: executionPackage.qa_owner_actor_id,
+            required_checks: [
+              {
+                ...executionPackage.required_checks[0],
+                command: 'pnpm --filter @forgeloop/web typecheck --strict',
+              },
+              packageWithTwoChecks.required_checks[1],
+            ],
+            required_artifact_kinds: executionPackage.required_artifact_kinds,
+            allowed_paths: executionPackage.allowed_paths,
+            forbidden_paths: executionPackage.forbidden_paths,
+          }),
+        }),
+      ),
+    );
+  });
+
+  it('maps package timeline replay metadata to product-safe labels', async () => {
+    const user = userEvent.setup();
+    const productTimeline = [
+      {
+        id: 'timeline-package',
+        source: 'event_store',
+        object_type: 'execution_package',
+        object_id: executionPackage.id,
+        summary: 'Package moved to ready.',
+        created_at: '2026-05-18T00:22:00.000Z',
+        payload: {},
+      },
+      {
+        id: 'timeline-run',
+        source: 'event_store',
+        object_type: 'run_session',
+        object_id: runSession.id,
+        summary: 'Run completed.',
+        created_at: '2026-05-18T00:25:00.000Z',
+        payload: {},
+      },
+      {
+        id: 'timeline-review',
+        source: 'event_store',
+        object_type: 'review_packet',
+        object_id: 'review-web-product',
+        summary: 'Review approved.',
+        created_at: '2026-05-18T00:30:00.000Z',
+        payload: {},
+      },
+      {
+        id: 'timeline-history',
+        source: 'fixture',
+        object_type: 'work_item',
+        object_id: workItem.id,
+        summary: 'Work Item linked.',
+        created_at: '2026-05-18T00:20:00.000Z',
+        payload: {},
+      },
+    ];
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: productTimeline,
+      },
+    });
+
+    await user.click(await screen.findByRole('tab', { name: 'Timeline' }));
+
+    expect(await screen.findByText('Package moved to ready.')).toBeTruthy();
+    expect(screen.getByText('Package update')).toBeTruthy();
+    expect(screen.getByText('Run update')).toBeTruthy();
+    expect(screen.getByText('Review update')).toBeTruthy();
+    expect(screen.getByText('History update')).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/event_store \/ execution_package/);
+    expect(document.body.textContent).not.toMatch(/event_store \/ run_session/);
+    expect(document.body.textContent).not.toMatch(/event_store \/ review_packet/);
+    expect(document.body.textContent).not.toMatch(/fixture \/ work_item/);
   });
 
   it('sends supported run filters and reports unsupported run filters', async () => {

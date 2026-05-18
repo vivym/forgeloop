@@ -292,7 +292,7 @@ describe('Spec and Plan direct routes', () => {
     expect(screen.queryByText('No Specs match the current product filters.')).toBeNull();
   });
 
-  it('renders Plan replay events and approved package action placeholder', async () => {
+  it('links approved Plan package readiness by current revision without placeholder actions', async () => {
     const screen = await renderRoute('/plans/plan-1', {
       apiOverrides: {
         'GET /plans/plan-1': {
@@ -342,13 +342,37 @@ describe('Spec and Plan direct routes', () => {
     expect(screen.getByText('Package generation starts from the Packages workspace.')).toBeTruthy();
     expect(screen.getByText('Package generation is ready for this approved Plan. Open package readiness to continue.')).toBeTruthy();
     expect((screen.getByRole('link', { name: 'View package readiness' }) as HTMLAnchorElement).getAttribute('href')).toBe(
-      '/packages?plan=plan-1',
+      '/packages?plan_revision_id=plan-rev-1',
     );
-    const generatePackagesAction = screen.getByRole('button', { name: 'Generate packages' }) as HTMLButtonElement;
-    expect(generatePackagesAction.disabled).toBe(true);
-    expect(generatePackagesAction.getAttribute('title')).not.toMatch(/mutation|wiring/i);
+    expect(screen.queryByRole('button', { name: 'Generate packages' })).toBeNull();
     expect(document.body.textContent).not.toMatch(/mutation|wiring/i);
     expect(screen.queryByText('Revision 1 created')).toBeNull();
+  });
+
+  it('shows package inventory fallback when an approved Plan has no current revision id', async () => {
+    const screen = await renderRoute('/plans/plan-no-current-revision', {
+      apiOverrides: {
+        'GET /plans/plan-no-current-revision': {
+          id: 'plan-no-current-revision',
+          work_item_id: 'wi-1',
+          entity_type: 'plan',
+          status: 'approved',
+          editing_state: 'locked',
+          gate_state: 'passed',
+          resolution: 'approved',
+        },
+        'GET /plans/plan-no-current-revision/revisions': [],
+        'GET /query/replay/plan/plan-no-current-revision': [],
+      },
+    });
+
+    expect(await screen.findByText('This approved Plan does not have a current approved revision recorded yet.')).toBeTruthy();
+    expect(screen.getByText('Open the package inventory to find packages that may already exist for this work.')).toBeTruthy();
+    expect((screen.getByRole('link', { name: 'View package inventory' }) as HTMLAnchorElement).getAttribute('href')).toBe(
+      '/packages',
+    );
+    expect(screen.queryByRole('link', { name: 'View package readiness' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Generate packages' })).toBeNull();
   });
 
   it('renders degraded parent context when replay event omits Work Item linkage', async () => {

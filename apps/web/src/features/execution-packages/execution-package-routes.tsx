@@ -344,7 +344,7 @@ function PackageEditForm({ executionPackage, onSaved }: { executionPackage: Exec
   function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (!canSubmit) return;
-    patchPackage.mutate(patchExecutionPackageBodyFromForm(form), {
+    patchPackage.mutate(patchExecutionPackageBodyFromForm(form, executionPackage.required_checks), {
       onSuccess: onSaved,
     });
   }
@@ -553,7 +553,7 @@ function PackageTimeline({
   const items: TimelineItem[] = timeline.map((entry) => ({
     id: entry.id,
     title: entry.summary,
-    description: `${entry.source} / ${entry.object_type}`,
+    description: packageTimelineLabel(entry),
     meta: formatDate(entry.created_at),
   }));
 
@@ -562,6 +562,13 @@ function PackageTimeline({
       {items.length ? <Timeline items={items} /> : <p className="empty">No package timeline events are available yet.</p>}
     </Section>
   );
+}
+
+function packageTimelineLabel(entry: TimelineEntry) {
+  if (entry.object_type === 'execution_package') return 'Package update';
+  if (entry.object_type === 'run_session') return 'Run update';
+  if (entry.object_type === 'review_packet') return 'Review update';
+  return 'History update';
 }
 
 function PackagePolicy({ executionPackage }: { executionPackage: ExecutionPackage }) {
@@ -706,13 +713,18 @@ function createExecutionPackageBodyFromForm(form: PackageFormState): CreateExecu
   };
 }
 
-function patchExecutionPackageBodyFromForm(form: PackageFormState): PatchExecutionPackageBody {
+function patchExecutionPackageBodyFromForm(
+  form: PackageFormState,
+  existingRequiredChecks: RequiredCheck[],
+): PatchExecutionPackageBody {
+  const [, ...remainingRequiredChecks] = existingRequiredChecks;
+
   return {
     objective: form.objective.trim(),
     owner_actor_id: form.ownerActorId.trim(),
     reviewer_actor_id: form.reviewerActorId.trim(),
     qa_owner_actor_id: form.qaOwnerActorId.trim(),
-    required_checks: [requiredCheckFromForm(form)],
+    required_checks: [requiredCheckFromForm(form), ...remainingRequiredChecks],
     required_artifact_kinds: splitLines(form.requiredArtifactKinds) as ArtifactKind[],
     allowed_paths: splitLines(form.allowedPaths),
     forbidden_paths: splitLines(form.forbiddenPaths),

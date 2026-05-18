@@ -216,11 +216,10 @@ export function useRunPackageMutation(packageId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: { actorId: string; executorType?: 'mock' | 'local_codex'; workflowOnly?: boolean }) =>
+    mutationFn: (input: { actorId: string }) =>
       createCommandApi().runPackage(packageId, input.actorId, {
         execution_package_id: packageId,
-        ...(input.executorType === undefined ? {} : { executor_type: input.executorType }),
-        ...(input.workflowOnly === undefined ? {} : { workflow_only: input.workflowOnly }),
+        executor_type: 'local_codex',
       }),
     onSuccess: () => invalidatePackageResources(queryClient, packageId),
   });
@@ -233,6 +232,7 @@ export function useRerunPackageMutation(packageId: string) {
     mutationFn: (input: { actorId: string; previousRunSessionId?: string }) =>
       createCommandApi().rerunPackage(packageId, input.actorId, {
         execution_package_id: packageId,
+        executor_type: 'local_codex',
         ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
       }),
     onSuccess: () => invalidatePackageResources(queryClient, packageId),
@@ -246,6 +246,7 @@ export function useForceRerunPackageMutation(packageId: string) {
     mutationFn: (input: { actorId: string; reason: string; previousRunSessionId?: string }) =>
       createCommandApi().forceRerunPackage(packageId, input.actorId, {
         execution_package_id: packageId,
+        executor_type: 'local_codex',
         force: true,
         force_reason: input.reason,
         ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
