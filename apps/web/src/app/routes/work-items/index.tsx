@@ -1,12 +1,5 @@
-import { PageHeader, Section } from '../../../shared/layout';
+import { WorkItemsList } from '../../../features/work-items/work-items-list';
 
 export default function WorkItemsRoute() {
-  return (
-    <>
-      <PageHeader title="Work Items" subtitle="Product work item lists and ownership filters will be implemented here." />
-      <Section title="Work item list" description="This route is a placeholder for searchable product work items.">
-        <p>No work items are loaded in this skeleton.</p>
-      </Section>
-    </>
-  );
+  return <WorkItemsList />;
 }

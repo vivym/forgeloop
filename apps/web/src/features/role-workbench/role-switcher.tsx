@@ -1,0 +1,20 @@
+import { Button } from '../../shared/ui';
+import { productRoles, type ProductRole } from './role-labels';
+
+export function RoleSwitcher({ activeRole }: { activeRole: ProductRole }) {
+  return (
+    <div className="role-tabs" aria-label="Workbench role">
+      {productRoles.map((role) => (
+        <Button
+          aria-label={`${role} role filter`}
+          aria-pressed={role === activeRole}
+          className={role === activeRole ? 'active' : undefined}
+          key={role}
+          variant="ghost"
+        >
+          {role === activeRole ? 'Owner queue' : role}
+        </Button>
+      ))}
+    </div>
+  );
+}
