@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 
 import { createForgeloopCommandApi } from './commands';
 import { createForgeloopQueryApi } from './query';
 import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from './query-keys';
-import type { RoleWorkbenchId, RoleWorkbenchQuery } from './types';
+import type { CockpitResponse, PlanRevision, RoleWorkbenchId, RoleWorkbenchQuery, SpecPlan, SpecRevision } from './types';
 
 const workbenchIdForRole = (role: 'work-item-owner' | RoleWorkbenchId | string): RoleWorkbenchId =>
   workbenchIdForProductRole(role) as RoleWorkbenchId;
@@ -186,10 +187,9 @@ export function useCreateSpecMutation(workItemId: string | undefined) {
 
   return useMutation({
     mutationFn: () => createCommandApi().createSpec(requiredId(workItemId, 'workItemId')),
-    onSuccess: () => {
-      if (workItemId !== undefined) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
-      }
+    onSuccess: (spec) => {
+      setCockpitSpec(queryClient, workItemId, spec);
+      return invalidateWorkItemCockpit(queryClient, workItemId);
     },
   });
 }
@@ -199,10 +199,9 @@ export function useCreatePlanMutation(workItemId: string | undefined) {
 
   return useMutation({
     mutationFn: () => createCommandApi().createPlan(requiredId(workItemId, 'workItemId')),
-    onSuccess: () => {
-      if (workItemId !== undefined) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
-      }
+    onSuccess: (plan) => {
+      setCockpitPlan(queryClient, workItemId, plan);
+      return invalidateWorkItemCockpit(queryClient, workItemId);
     },
   });
 }
@@ -212,10 +211,9 @@ export function useGenerateSpecDraftMutation(input: { workItemId: string | undef
 
   return useMutation({
     mutationFn: () => createCommandApi().generateSpecDraft(requiredId(input.specId, 'specId')),
-    onSuccess: () => {
-      if (input.workItemId !== undefined) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) });
-      }
+    onSuccess: (revision) => {
+      setCockpitSpecRevision(queryClient, input.workItemId, revision);
+      return invalidateWorkItemCockpit(queryClient, input.workItemId);
     },
   });
 }
@@ -225,11 +223,100 @@ export function useGeneratePlanDraftMutation(input: { workItemId: string | undef
 
   return useMutation({
     mutationFn: () => createCommandApi().generatePlanDraft(requiredId(input.planId, 'planId')),
-    onSuccess: () => {
-      if (input.workItemId !== undefined) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) });
-      }
+    onSuccess: (revision) => {
+      setCockpitPlanRevision(queryClient, input.workItemId, revision);
+      return invalidateWorkItemCockpit(queryClient, input.workItemId);
     },
+  });
+}
+
+function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string | undefined) {
+  if (workItemId === undefined) {
+    return Promise.resolve();
+  }
+
+  return queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
+}
+
+function updateWorkItemCockpit(
+  queryClient: QueryClient,
+  workItemId: string | undefined,
+  updater: (current: CockpitResponse) => CockpitResponse,
+) {
+  if (workItemId === undefined) {
+    return;
+  }
+
+  queryClient.setQueryData<CockpitResponse>(queryKeys.workItemCockpit(workItemId), (current) =>
+    current === undefined ? current : updater(current),
+  );
+}
+
+function setCockpitSpec(queryClient: QueryClient, workItemId: string | undefined, spec: SpecPlan) {
+  updateWorkItemCockpit(queryClient, workItemId, (current) =>
+    current.work_item === undefined
+      ? {
+          ...current,
+          current_spec: spec,
+        }
+      : {
+          ...current,
+          current_spec: spec,
+          work_item: {
+            ...current.work_item,
+            current_spec_id: spec.id,
+          },
+        },
+  );
+}
+
+function setCockpitPlan(queryClient: QueryClient, workItemId: string | undefined, plan: SpecPlan) {
+  updateWorkItemCockpit(queryClient, workItemId, (current) =>
+    current.work_item === undefined
+      ? {
+          ...current,
+          current_plan: plan,
+        }
+      : {
+          ...current,
+          current_plan: plan,
+          work_item: {
+            ...current.work_item,
+            current_plan_id: plan.id,
+          },
+        },
+  );
+}
+
+function setCockpitSpecRevision(queryClient: QueryClient, workItemId: string | undefined, revision: SpecRevision) {
+  updateWorkItemCockpit(queryClient, workItemId, (current) => {
+    if (current.current_spec === undefined || current.current_spec === null || current.current_spec.id !== revision.spec_id) {
+      return current;
+    }
+
+    return {
+      ...current,
+      current_spec: {
+        ...current.current_spec,
+        current_revision_id: revision.id,
+      },
+    };
+  });
+}
+
+function setCockpitPlanRevision(queryClient: QueryClient, workItemId: string | undefined, revision: PlanRevision) {
+  updateWorkItemCockpit(queryClient, workItemId, (current) => {
+    if (current.current_plan === undefined || current.current_plan === null || current.current_plan.id !== revision.plan_id) {
+      return current;
+    }
+
+    return {
+      ...current,
+      current_plan: {
+        ...current.current_plan,
+        current_revision_id: revision.id,
+      },
+    };
   });
 }
 

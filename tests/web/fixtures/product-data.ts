@@ -178,7 +178,7 @@ export const release = {
   resolution: 'unresolved',
   work_item_ids: [workItem.id],
   execution_package_ids: [executionPackage.id],
-  rollout_strategy: 'Use in route tests before wiring production pages.',
+  rollout_strategy: 'Use in route tests before production pages are ready.',
   rollback_plan: 'Remove route test fixture usage and restore direct mocks.',
   observation_plan: 'Watch route tests for missing API fixture coverage.',
   created_by_actor_id: actorId,

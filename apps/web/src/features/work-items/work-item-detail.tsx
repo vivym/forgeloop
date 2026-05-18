@@ -61,13 +61,13 @@ export function WorkItemDetail() {
             <Link className="fl-button fl-button--primary" to={`/work-items/${encodeURIComponent(workItem.id)}/spec-plan`}>
               Open Spec & Plan
             </Link>
-            <Button disabled title="Pending command wiring" variant="secondary">
+            <Button disabled title="Available after a draft exists." variant="secondary">
               Update brief
             </Button>
-            <Button disabled title="Pending command wiring" variant="secondary">
+            <Button disabled title="Evidence attachment is not available for this work item yet." variant="secondary">
               Attach evidence
             </Button>
-            <p className="status-line">Pending command wiring</p>
+            <p className="status-line">Available after a draft exists.</p>
           </div>
         </ActionRail>
       }

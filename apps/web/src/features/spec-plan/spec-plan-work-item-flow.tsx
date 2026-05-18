@@ -26,7 +26,8 @@ export function SpecPlanWorkItemFlow() {
   const generateSpecDraft = useGenerateSpecDraftMutation({ workItemId, specId: viewModel.spec?.id });
   const generatePlanDraft = useGeneratePlanDraftMutation({ workItemId, planId: viewModel.plan?.id });
   const workItemTitle = viewModel.workItem?.title ?? 'Work item planning';
-  const commandPendingReason = 'Pending command wiring';
+  const cockpitRefreshing = cockpit.isFetching && cockpit.status !== 'pending';
+  const approvalUnavailableReason = 'Available after planning artifacts are ready.';
   const hasPlanningContext = cockpit.status === 'success' && !cockpit.isError && viewModel.workItem !== null;
   const revisionHistoryPendingReason = 'Revision history is available after work item planning data loads.';
   const handleHistoryOpenChange = (open: boolean) => {
@@ -48,16 +49,16 @@ export function SpecPlanWorkItemFlow() {
       actionRail={
         <ActionRail title="Approval actions">
           <div className="stack-form compact">
-            <Button disabled title={commandPendingReason}>
+            <Button disabled title={approvalUnavailableReason}>
               Submit for approval
             </Button>
-            <Button disabled title={commandPendingReason}>
+            <Button disabled title={approvalUnavailableReason}>
               Approve
             </Button>
-            <Button disabled title={commandPendingReason}>
+            <Button disabled title={approvalUnavailableReason}>
               Request changes
             </Button>
-            <p className="status-line">{commandPendingReason}</p>
+            <p className="status-line">{approvalUnavailableReason}</p>
           </div>
         </ActionRail>
       }
@@ -66,17 +67,17 @@ export function SpecPlanWorkItemFlow() {
           actions={
             <div className="button-row">
               <Button
-                disabled={!hasPlanningContext || hasSpec || createSpec.isPending}
+                disabled={!hasPlanningContext || cockpitRefreshing || hasSpec || createSpec.isPending}
                 onClick={() => createSpec.mutate()}
-                title={createSpecTitle({ hasPlanningContext, hasSpec })}
+                title={createSpecTitle({ hasPlanningContext, cockpitRefreshing, hasSpec })}
                 variant="primary"
               >
                 {createSpec.isPending ? 'Creating spec...' : 'Create Spec'}
               </Button>
               <Button
-                disabled={!hasPlanningContext || !hasSpec || hasPlan || createPlan.isPending}
+                disabled={!hasPlanningContext || cockpitRefreshing || !hasSpec || hasPlan || createPlan.isPending}
                 onClick={() => createPlan.mutate()}
-                title={createPlanTitle({ hasPlanningContext, hasSpec, hasPlan })}
+                title={createPlanTitle({ hasPlanningContext, cockpitRefreshing, hasSpec, hasPlan })}
                 variant="primary"
               >
                 {createPlan.isPending ? 'Creating plan...' : 'Create Plan'}
@@ -160,9 +161,13 @@ export function SpecPlanWorkItemFlow() {
                 hasSpec ? (
                   <div className="stack-form compact">
                     <Button
-                      disabled={generateSpecDraft.isPending}
+                      disabled={cockpitRefreshing || generateSpecDraft.isPending}
                       onClick={() => generateSpecDraft.mutate()}
-                      title="Generate a draft revision for this spec."
+                      title={
+                        cockpitRefreshing
+                          ? 'Available after planning artifacts refresh.'
+                          : 'Generate a draft revision for this spec.'
+                      }
                     >
                       {generateSpecDraft.isPending ? 'Generating spec draft...' : 'Generate spec draft'}
                     </Button>
@@ -189,9 +194,13 @@ export function SpecPlanWorkItemFlow() {
                 hasPlan ? (
                   <div className="stack-form compact">
                     <Button
-                      disabled={generatePlanDraft.isPending}
+                      disabled={cockpitRefreshing || generatePlanDraft.isPending}
                       onClick={() => generatePlanDraft.mutate()}
-                      title="Generate a draft revision for this plan."
+                      title={
+                        cockpitRefreshing
+                          ? 'Available after planning artifacts refresh.'
+                          : 'Generate a draft revision for this plan.'
+                      }
                     >
                       {generatePlanDraft.isPending ? 'Generating plan draft...' : 'Generate plan draft'}
                     </Button>
@@ -232,14 +241,16 @@ interface MutationState {
   isPending: boolean;
 }
 
-function createSpecTitle(input: { hasPlanningContext: boolean; hasSpec: boolean }) {
+function createSpecTitle(input: { hasPlanningContext: boolean; cockpitRefreshing: boolean; hasSpec: boolean }) {
   if (!input.hasPlanningContext) return 'Create Spec after work item planning data loads.';
+  if (input.cockpitRefreshing) return 'Available after planning artifacts refresh.';
   if (input.hasSpec) return 'A spec already exists for this work item.';
   return 'Create a spec for this work item.';
 }
 
-function createPlanTitle(input: { hasPlanningContext: boolean; hasSpec: boolean; hasPlan: boolean }) {
+function createPlanTitle(input: { hasPlanningContext: boolean; cockpitRefreshing: boolean; hasSpec: boolean; hasPlan: boolean }) {
   if (!input.hasPlanningContext) return 'Create Plan after work item planning data loads.';
+  if (input.cockpitRefreshing) return 'Available after planning artifacts refresh.';
   if (!input.hasSpec) return 'Create a spec before creating a plan.';
   if (input.hasPlan) return 'A plan already exists for this work item.';
   return 'Create a plan for this work item.';

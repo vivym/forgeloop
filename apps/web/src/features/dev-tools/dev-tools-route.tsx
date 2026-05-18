@@ -11,7 +11,7 @@ export function DevToolsRoute() {
           <button type="button">Load raw replay</button>
         </form>
       </Section>
-      <Section title="API smoke request" description="Send a lightweight request while debugging local API wiring.">
+      <Section title="API smoke request" description="Send a lightweight request while debugging local API behavior.">
         <button type="button">Send API smoke request</button>
       </Section>
       <Section title="Raw JSON output" description="Debug payloads will be rendered here after a raw operation.">

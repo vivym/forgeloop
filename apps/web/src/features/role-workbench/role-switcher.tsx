@@ -11,7 +11,7 @@ export function RoleSwitcher({ activeRole }: { activeRole: ProductRole }) {
           className={role === activeRole ? 'active' : undefined}
           disabled
           key={role}
-          title="Role switching pending wiring"
+          title="Available after role queues are ready"
           variant="ghost"
         >
           {role === activeRole ? 'Work Item Owner' : role}

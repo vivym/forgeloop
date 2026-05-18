@@ -15,7 +15,8 @@ import {
   workItem,
 } from './product-data';
 
-export type ProductApiResponseMap = Record<string, unknown>;
+export type ProductApiMockHandler = (request: { input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
+export type ProductApiResponseMap = Record<string, unknown | ProductApiMockHandler>;
 
 const routeWorkItem = {
   ...workItem,
@@ -162,7 +163,9 @@ export function installProductApiMock(overrides: ProductApiResponseMap = {}) {
     const key = `${method} ${url.pathname}${url.search}`;
 
     if (Object.prototype.hasOwnProperty.call(responses, key)) {
-      return jsonResponse(responses[key], 200);
+      const response = responses[key];
+      const body = typeof response === 'function' ? await response({ input, init, key }) : response;
+      return jsonResponse(body, 200);
     }
 
     return jsonResponse({ message: `Unhandled product API request: ${key}` }, 404);

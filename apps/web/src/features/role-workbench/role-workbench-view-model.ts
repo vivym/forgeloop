@@ -47,7 +47,7 @@ const toBackendActions = (value: unknown): RoleQueueActionViewModel[] => {
 
       const method = asString(action.method)?.toUpperCase();
       const enabled = action.enabled === false ? false : true;
-      const state = enabled ? (method === 'GET' ? 'Read signal' : 'Command pending wiring') : 'Unavailable';
+      const state = enabled ? (method === 'GET' ? 'Read signal' : 'Available from the object page') : 'Unavailable';
       return { label, state };
     })
     .filter((action): action is RoleQueueActionViewModel => action !== undefined);

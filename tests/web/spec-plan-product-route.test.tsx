@@ -79,6 +79,81 @@ describe('Work Item scoped Spec & Plan route', () => {
     });
   });
 
+  it('keeps create spec disabled until stale cockpit data has refetched', async () => {
+    const user = userEvent.setup();
+    let cockpitRequests = 0;
+    let resolveCockpitRefetch: (() => void) | undefined;
+    const staleCockpit = {
+      work_item: {
+        id: 'wi-1',
+        project_id: 'project-web-product',
+        kind: 'requirement',
+        title: 'Improve release cockpit',
+        goal: 'Improve release readiness visibility.',
+        success_criteria: ['Planning artifacts are visible'],
+        priority: 'P0',
+        risk: 'medium',
+        owner_actor_id: 'actor-owner',
+        phase: 'planning',
+        activity_state: 'active',
+        gate_state: 'open',
+        resolution: 'unresolved',
+      },
+      current_spec: null,
+      current_plan: null,
+      packages: [],
+      run_sessions: [],
+      review_packets: [],
+      next_actions: [],
+      completion_state: {},
+    };
+    const refreshedCockpit = {
+      ...staleCockpit,
+      work_item: {
+        ...staleCockpit.work_item,
+        current_spec_id: 'spec-created',
+      },
+      current_spec: {
+        id: 'spec-created',
+        work_item_id: 'wi-1',
+        entity_type: 'spec',
+        status: 'draft',
+        editing_state: 'editable',
+        gate_state: 'open',
+        resolution: 'unresolved',
+      },
+    };
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': async () => {
+          cockpitRequests += 1;
+          if (cockpitRequests === 1) {
+            return staleCockpit;
+          }
+
+          await new Promise<void>((resolve) => {
+            resolveCockpitRefetch = resolve;
+          });
+          return refreshedCockpit;
+        },
+        'POST /work-items/wi-1/specs': refreshedCockpit.current_spec,
+      },
+    });
+
+    const createSpec = (await screen.findByRole('button', { name: 'Create Spec' })) as HTMLButtonElement;
+    await waitFor(() => expect(createSpec.disabled).toBe(false));
+
+    await user.click(createSpec);
+
+    await waitFor(() => expect(cockpitRequests).toBe(2));
+    await waitFor(() => expect(createSpec.disabled).toBe(true));
+
+    resolveCockpitRefetch?.();
+
+    await waitFor(() => expect(createSpec.disabled).toBe(true));
+    expect(await screen.findByRole('button', { name: 'Generate spec draft' })).toBeTruthy();
+  });
+
   it('runs create plan only after a spec exists', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
@@ -153,6 +228,9 @@ describe('Work Item scoped Spec & Plan route', () => {
     expect((screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Request changes' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Available after planning artifacts are ready.')).toBeTruthy();
+    expect(screen.queryByText(new RegExp(`Pending command ${'wir'}${'ing'}`, 'i'))).toBeNull();
+    expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
 
     await user.click(generateSpec);
     await user.click(generatePlan);

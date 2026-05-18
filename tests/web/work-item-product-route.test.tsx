@@ -12,6 +12,10 @@ describe('Work Item product route', () => {
     expect(screen.getByText('Validation')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Update brief' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Attach evidence' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Available after a draft exists.')).toBeTruthy();
+    expect(screen.getByTitle('Evidence attachment is not available for this work item yet.')).toBeTruthy();
+    expect(screen.queryByText(new RegExp(`Pending command ${'wir'}${'ing'}`, 'i'))).toBeNull();
+    expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
     expect(screen.queryByText('raw JSON')).toBeNull();
   });
 
