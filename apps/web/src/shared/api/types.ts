@@ -10,6 +10,7 @@ import type {
   LinkReleaseObjectRequest,
   OverrideApproveReleaseRequest,
   PatchReleaseRequest,
+  productListQuerySchema,
   ReleaseActorCommandRequest,
   releaseListQuerySchema,
   RequestReleaseChangesRequest,
@@ -46,6 +47,7 @@ export type {
   RoleWorkbenchAction,
   RoleWorkbenchResponse,
   ProductListItem,
+  ProductListQuery,
   ProductListResponse,
   StartReleaseObservingRequest,
   SubmitReleaseForApprovalRequest,
@@ -65,6 +67,7 @@ export type CreateReleaseEvidenceBody = zInput<typeof createReleaseEvidenceReque
 export type LinkReleaseScopeBody = LinkReleaseObjectRequest;
 export type UnlinkReleaseScopeBody = ReleaseActorCommandRequest;
 export type ListReleasesQuery = zInput<typeof releaseListQuerySchema>;
+export type ListProductQuery = zInput<typeof productListQuerySchema>;
 
 export type RoleWorkbenchId =
   | 'intake'

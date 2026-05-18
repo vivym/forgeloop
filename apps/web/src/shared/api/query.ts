@@ -1,7 +1,9 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
+import { productListResponseSchema } from '@forgeloop/contracts';
 import type {
   CockpitResponse,
   ExecutionPackage,
+  ListProductQuery,
   ProductListResponse,
   ReleaseCockpitResponse,
   ReleaseListResponse,
@@ -17,6 +19,8 @@ import type {
 export interface ProjectQuery {
   project_id: string;
 }
+
+export type ProductRegistryQuery = Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>;
 
 const queryString = (params: object = {}) => {
   const searchParams = new URLSearchParams();
@@ -34,8 +38,10 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
 
   const productMethods = {
     getPipeline: (query: ProjectQuery) => request<WorkItem[]>(`/query/pipeline${queryString(query)}`),
-    listSpecs: (query: ProjectQuery) => request<ProductListResponse>(`/query/specs${queryString(query)}`),
-    listPlans: (query: ProjectQuery) => request<ProductListResponse>(`/query/plans${queryString(query)}`),
+    listSpecs: async (query: ProductRegistryQuery) =>
+      productListResponseSchema.parse(await request<unknown>(`/query/specs${queryString(query)}`)) as ProductListResponse,
+    listPlans: async (query: ProductRegistryQuery) =>
+      productListResponseSchema.parse(await request<unknown>(`/query/plans${queryString(query)}`)) as ProductListResponse,
     listPackages: (query: ProjectQuery) => request<ExecutionPackage[]>(`/query/packages${queryString(query)}`),
     getPackage: (packageId: string) => request<ExecutionPackage>(`/query/packages/${encodeURIComponent(packageId)}`),
     listRuns: (query: ProjectQuery) => request<RunSession[]>(`/query/runs${queryString(query)}`),

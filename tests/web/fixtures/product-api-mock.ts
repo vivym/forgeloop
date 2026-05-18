@@ -100,9 +100,17 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     items: [productListItem(spec, workItem, 'spec')],
     degraded_sources: [],
   },
+  [`GET /query/specs?project_id=${projectId}&limit=100`]: {
+    items: [productListItem(spec, workItem, 'spec')],
+    degraded_sources: [],
+  },
   [`GET /specs/${spec.id}`]: spec,
   [`GET /specs/${spec.id}/revisions`]: [specRevision],
   [`GET /query/plans?project_id=${projectId}`]: {
+    items: [productListItem(plan, workItem, 'plan')],
+    degraded_sources: [],
+  },
+  [`GET /query/plans?project_id=${projectId}&limit=100`]: {
     items: [productListItem(plan, workItem, 'plan')],
     degraded_sources: [],
   },

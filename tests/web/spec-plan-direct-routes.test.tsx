@@ -74,6 +74,42 @@ describe('Spec and Plan direct routes', () => {
     );
   });
 
+  it('renders direct Spec revision as read-only structured content', async () => {
+    const screen = await renderRoute('/specs/spec-1/revisions/spec-rev-1', {
+      apiOverrides: {
+        'GET /specs/spec-1': {
+          id: 'spec-1',
+          work_item_id: 'wi-1',
+          entity_type: 'spec',
+          status: 'approved',
+          editing_state: 'locked',
+          gate_state: 'passed',
+          resolution: 'approved',
+          current_revision_id: 'spec-rev-1',
+        },
+        'GET /spec-revisions/spec-rev-1': {
+          id: 'spec-rev-1',
+          spec_id: 'spec-1',
+          work_item_id: 'wi-1',
+          revision_number: 1,
+          summary: 'Release cockpit scope approved',
+          content: 'Clarify release cockpit planning scope.',
+          background: 'Release readiness needs visible planning context.',
+          goals: ['Show planning state'],
+          scope_in: ['Direct Spec route'],
+          scope_out: ['Package execution'],
+          acceptance_criteria: ['Parent Work Item is visible'],
+          test_strategy_summary: 'Route tests cover direct navigation.',
+          created_at: '2026-05-18T00:00:00.000Z',
+        },
+      },
+    });
+
+    expect(await screen.findByText('Read-only revision')).toBeTruthy();
+    expect(screen.getByText('Release cockpit scope approved')).toBeTruthy();
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
   it('renders direct Plan revision as read-only structured content', async () => {
     const screen = await renderRoute('/plans/plan-1/revisions/plan-rev-1', {
       apiOverrides: {
@@ -117,10 +153,78 @@ describe('Spec and Plan direct routes', () => {
     );
   });
 
+  it('rejects Spec revision routes when the revision belongs to a different Spec', async () => {
+    const screen = await renderRoute('/specs/spec-1/revisions/spec-rev-other', {
+      apiOverrides: {
+        'GET /specs/spec-1': {
+          id: 'spec-1',
+          work_item_id: 'wi-1',
+          entity_type: 'spec',
+          status: 'approved',
+          editing_state: 'locked',
+          gate_state: 'passed',
+          resolution: 'approved',
+          current_revision_id: 'spec-rev-1',
+        },
+        'GET /spec-revisions/spec-rev-other': {
+          id: 'spec-rev-other',
+          spec_id: 'spec-other',
+          work_item_id: 'wi-2',
+          revision_number: 1,
+          summary: 'Wrong Spec revision',
+          content: 'This revision belongs to another Spec.',
+          background: 'Mismatched route fixture.',
+          goals: ['Do not render wrong content'],
+          scope_in: ['Mismatch handling'],
+          scope_out: [],
+          acceptance_criteria: ['Unavailable state renders'],
+          test_strategy_summary: 'Route mismatch test.',
+        },
+      },
+    });
+
+    expect(await screen.findByText('Revision data is temporarily unavailable.')).toBeTruthy();
+    expect(screen.queryByText('This revision belongs to another Spec.')).toBeNull();
+  });
+
+  it('rejects Plan revision routes when the revision belongs to a different Plan', async () => {
+    const screen = await renderRoute('/plans/plan-1/revisions/plan-rev-other', {
+      apiOverrides: {
+        'GET /plans/plan-1': {
+          id: 'plan-1',
+          work_item_id: 'wi-1',
+          entity_type: 'plan',
+          status: 'approved',
+          editing_state: 'locked',
+          gate_state: 'passed',
+          resolution: 'approved',
+          current_revision_id: 'plan-rev-1',
+        },
+        'GET /plan-revisions/plan-rev-other': {
+          id: 'plan-rev-other',
+          plan_id: 'plan-other',
+          work_item_id: 'wi-2',
+          revision_number: 1,
+          summary: 'Wrong Plan revision',
+          content: 'This revision belongs to another Plan.',
+          implementation_summary: 'Mismatch fixture.',
+          split_strategy: 'Do not render wrong content.',
+          dependency_order: [],
+          test_matrix: ['Route mismatch test'],
+          risk_mitigations: [],
+          rollback_notes: 'Unavailable state renders.',
+        },
+      },
+    });
+
+    expect(await screen.findByText('Revision data is temporarily unavailable.')).toBeTruthy();
+    expect(screen.queryByText('This revision belongs to another Plan.')).toBeNull();
+  });
+
   it('filters Specs registry by status through search params', async () => {
     const screen = await renderRoute('/specs?status=approved', {
       apiOverrides: {
-        'GET /query/specs?project_id=project-web-product': {
+        'GET /query/specs?project_id=project-web-product&status=approved&limit=100': {
           items: [
             {
               id: 'spec-approved',
@@ -164,6 +268,28 @@ describe('Spec and Plan direct routes', () => {
     const workItemLink = screen.getByRole('link', { name: 'Release cockpit work item' }) as HTMLAnchorElement;
     expect(workItemLink.getAttribute('href')).toBe('/work-items/wi-1');
     expect(screen.queryByRole('link', { name: 'Current revision' })).toBeNull();
+    await waitFor(() => {
+      const specRegistryRequest = vi
+        .mocked(fetch)
+        .mock.calls.map(([input]) => new URL(input.toString()))
+        .find((url) => url.pathname === '/query/specs');
+
+      expect(specRegistryRequest?.searchParams.get('project_id')).toBe('project-web-product');
+      expect(specRegistryRequest?.searchParams.get('status')).toBe('approved');
+      expect(specRegistryRequest?.searchParams.get('limit')).toBe('100');
+    });
+  });
+
+  it('shows registry unavailable copy when Specs list response has the old array shape', async () => {
+    const screen = await renderRoute('/specs', {
+      apiOverrides: {
+        'GET /query/specs?project_id=project-web-product': [],
+        'GET /query/specs?project_id=project-web-product&limit=100': [],
+      },
+    });
+
+    expect(await screen.findByText('Spec registry data is temporarily unavailable.')).toBeTruthy();
+    expect(screen.queryByText('No Specs match the current product filters.')).toBeNull();
   });
 
   it('renders Plan replay events and approved package action placeholder', async () => {
@@ -275,6 +401,57 @@ describe('Spec and Plan direct routes', () => {
       screen.getByText('Parent context: Work Item linkage not recorded on this event | Actor: actor-reviewer'),
     ).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/work_item_id|actor_id/);
+  });
+
+  it('recognizes Work Item replay events as parent context by object identity', async () => {
+    const screen = await renderRoute('/specs/spec-1', {
+      apiOverrides: {
+        'GET /specs/spec-1': {
+          id: 'spec-1',
+          work_item_id: 'wi-1',
+          entity_type: 'spec',
+          status: 'approved',
+          editing_state: 'locked',
+          gate_state: 'passed',
+          resolution: 'approved',
+          current_revision_id: 'spec-rev-1',
+        },
+        'GET /specs/spec-1/revisions': [
+          {
+            id: 'spec-rev-1',
+            spec_id: 'spec-1',
+            work_item_id: 'wi-1',
+            revision_number: 1,
+            summary: 'Release cockpit scope approved',
+            content: 'Clarify release cockpit planning scope.',
+            background: 'Release readiness needs visible planning context.',
+            goals: ['Show planning state'],
+            scope_in: ['Direct Spec route'],
+            scope_out: ['Package execution'],
+            acceptance_criteria: ['Parent Work Item is visible'],
+            test_strategy_summary: 'Route tests cover direct navigation.',
+            created_at: '2026-05-18T00:00:00.000Z',
+          },
+        ],
+        'GET /query/replay/spec/spec-1': [
+          {
+            id: 'work-item-event',
+            source: 'fixture',
+            object_type: 'work_item',
+            object_id: 'wi-1',
+            summary: 'Parent Work Item updated.',
+            created_at: '2026-05-18T01:15:00.000Z',
+            payload: { actor_id: 'actor-owner' },
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByText('Parent Work Item updated.')).toBeTruthy();
+    expect(screen.getByText('Parent: Work Item | Actor: actor-owner')).toBeTruthy();
+    expect(
+      screen.queryByText('Parent context: Work Item linkage not recorded on this event | Actor: actor-owner'),
+    ).toBeNull();
   });
 
   it('shows explicit timeline unavailable copy when replay is unavailable', async () => {

@@ -1,4 +1,4 @@
-import type { RoleWorkbenchQuery } from './types';
+import type { ListProductQuery, RoleWorkbenchQuery } from './types';
 
 export interface WorkbenchQueryKeyInput {
   role: 'work-item-owner' | string;
@@ -30,6 +30,13 @@ export const normalizeWorkbenchQuery = (input: Omit<WorkbenchQueryKeyInput, 'rol
   };
 };
 
+export const normalizeProductRegistryQuery = (query: ListProductQuery): Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'> => ({
+  project_id: query.project_id,
+  ...(query.status === undefined ? {} : { status: query.status }),
+  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
+
 export const queryKeys = {
   workbench: (input: WorkbenchQueryKeyInput) => [
     'workbench',
@@ -41,12 +48,12 @@ export const queryKeys = {
   workItem: (workItemId: string) => ['work-item', workItemId],
   workItemCockpit: (workItemId: string | undefined) => ['work-item-cockpit', workItemId],
   workItemReplay: (workItemId: string | undefined) => ['work-item-replay', workItemId],
-  specs: (projectId: string) => ['specs', { projectId }],
+  specs: (query: ListProductQuery) => ['specs', normalizeProductRegistryQuery(query)],
   spec: (specId: string) => ['spec', specId],
   specRevisions: (specId: string) => ['spec-revisions', specId],
   specReplay: (specId: string | undefined) => ['spec-replay', specId],
   specRevision: (revisionId: string | undefined) => ['spec-revision', revisionId],
-  plans: (projectId: string) => ['plans', { projectId }],
+  plans: (query: ListProductQuery) => ['plans', normalizeProductRegistryQuery(query)],
   plan: (planId: string) => ['plan', planId],
   planRevisions: (planId: string) => ['plan-revisions', planId],
   planReplay: (planId: string | undefined) => ['plan-replay', planId],

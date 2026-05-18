@@ -4,7 +4,15 @@ import type { QueryClient } from '@tanstack/react-query';
 import { createForgeloopCommandApi } from './commands';
 import { createForgeloopQueryApi } from './query';
 import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from './query-keys';
-import type { CockpitResponse, PlanRevision, RoleWorkbenchId, RoleWorkbenchQuery, SpecPlan, SpecRevision } from './types';
+import type {
+  CockpitResponse,
+  ListProductQuery,
+  PlanRevision,
+  RoleWorkbenchId,
+  RoleWorkbenchQuery,
+  SpecPlan,
+  SpecRevision,
+} from './types';
 
 const workbenchIdForRole = (role: 'work-item-owner' | RoleWorkbenchId | string): RoleWorkbenchId =>
   workbenchIdForProductRole(role) as RoleWorkbenchId;
@@ -47,10 +55,17 @@ export function useWorkItemsQuery(projectId: string) {
   });
 }
 
-export function useSpecsQuery(projectId: string) {
+export function useSpecsQuery(query: Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>) {
+  const normalizedQuery = {
+    project_id: query.project_id,
+    ...(query.status === undefined ? {} : { status: query.status }),
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+  };
+
   return useQuery({
-    queryKey: queryKeys.specs(projectId),
-    queryFn: () => createQueryApi().listSpecs({ project_id: projectId }),
+    queryKey: queryKeys.specs(normalizedQuery),
+    queryFn: () => createQueryApi().listSpecs(normalizedQuery),
   });
 }
 
@@ -84,10 +99,17 @@ export function useSpecRevisionQuery(revisionId: string | undefined) {
   });
 }
 
-export function usePlansQuery(projectId: string) {
+export function usePlansQuery(query: Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>) {
+  const normalizedQuery = {
+    project_id: query.project_id,
+    ...(query.status === undefined ? {} : { status: query.status }),
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+  };
+
   return useQuery({
-    queryKey: queryKeys.plans(projectId),
-    queryFn: () => createQueryApi().listPlans({ project_id: projectId }),
+    queryKey: queryKeys.plans(normalizedQuery),
+    queryFn: () => createQueryApi().listPlans(normalizedQuery),
   });
 }
 

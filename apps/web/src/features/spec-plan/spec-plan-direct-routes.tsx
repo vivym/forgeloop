@@ -16,7 +16,7 @@ import {
 import type { PlanRevision, ProductListItem, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, DataTable, EmptyState, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
+import { Badge, Button, DataTable, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
 
 type ArtifactKind = 'spec' | 'plan';
 
@@ -27,8 +27,8 @@ interface RegistryFilters {
 export function SpecsRegistry() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
-  const query = useSpecsQuery(projectId);
   const filters = parseRegistryFilters(searchParams);
+  const query = useSpecsQuery({ project_id: projectId, ...filters, limit: 100 });
   const list = normalizeProductList(query.data);
   const specs = filterArtifacts(list.items, filters);
 
@@ -63,8 +63,8 @@ export function SpecsRegistry() {
 export function PlansRegistry() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
-  const query = usePlansQuery(projectId);
   const filters = parseRegistryFilters(searchParams);
+  const query = usePlansQuery({ project_id: projectId, ...filters, limit: 100 });
   const list = normalizeProductList(query.data);
   const plans = filterArtifacts(list.items, filters);
 
@@ -322,7 +322,7 @@ function SpecRevisionReadOnly({ revisionId, specId }: { revisionId: string; spec
     return <LoadingDetail title="Spec Revision" />;
   }
 
-  if (revisionQuery.isError || revision === undefined) {
+  if (revisionQuery.isError || revision === undefined || revision.spec_id !== specId) {
     return <RevisionUnavailable title="Spec Revision" />;
   }
 
@@ -364,7 +364,7 @@ function PlanRevisionReadOnly({ planId, revisionId }: { planId: string; revision
     return <LoadingDetail title="Plan Revision" />;
   }
 
-  if (revisionQuery.isError || revision === undefined) {
+  if (revisionQuery.isError || revision === undefined || revision.plan_id !== planId) {
     return <RevisionUnavailable title="Plan Revision" />;
   }
 
@@ -667,7 +667,7 @@ function RevisionSummaryList({ revisions }: { revisions: Array<SpecRevision | Pl
 function eventParentContext(event: TimelineEntry, workItemId: string) {
   const payloadWorkItemId = typeof event.payload?.work_item_id === 'string' ? event.payload.work_item_id : undefined;
 
-  if (payloadWorkItemId === workItemId) {
+  if ((event.object_type === 'work_item' && event.object_id === workItemId) || payloadWorkItemId === workItemId) {
     return 'Parent: Work Item';
   }
 

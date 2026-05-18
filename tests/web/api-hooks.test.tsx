@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
 import { productRoleToWorkbenchId } from '../../apps/web/src/features/role-workbench/role-labels';
-import { usePipelineQuery, useWorkItemsQuery } from '../../apps/web/src/shared/api/hooks';
+import { usePipelineQuery, useSpecsQuery, useWorkItemsQuery } from '../../apps/web/src/shared/api/hooks';
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { projectId, workItem } from './fixtures/product-data';
@@ -25,6 +25,17 @@ describe('Web product API hooks', () => {
     ]);
     expect(queryKeys.specReplay('spec-1')).toEqual(['spec-replay', 'spec-1']);
     expect(queryKeys.planReplay('plan-1')).toEqual(['plan-replay', 'plan-1']);
+  });
+
+  it('includes response-affecting Spec registry filters in stable cache keys', () => {
+    expect(
+      queryKeys.specs({
+        project_id: 'proj',
+        status: 'approved',
+        limit: 100,
+        cursor: 'cursor-1',
+      }),
+    ).toEqual(['specs', { project_id: 'proj', status: 'approved', limit: 100, cursor: 'cursor-1' }]);
   });
 
   it('includes response-affecting workbench query inputs in stable cache keys', () => {
@@ -131,6 +142,34 @@ describe('Web product API hooks', () => {
     expect(result.current.data?.[0]?.id).toBe(workItem.id);
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/work-items?project_id=${projectId}`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+
+    unmount();
+    queryClient.clear();
+  });
+
+  it('passes Spec registry filters through the product query endpoint', async () => {
+    const fetchMock = installProductApiMock({
+      [`GET /query/specs?project_id=${projectId}&status=approved&limit=100`]: {
+        items: [],
+        degraded_sources: [],
+      },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result, unmount } = renderHook(
+      () => useSpecsQuery({ project_id: projectId, status: 'approved', limit: 100 }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/query/specs?project_id=${projectId}&status=approved&limit=100`,
       expect.objectContaining({ method: 'GET' }),
     );
 
