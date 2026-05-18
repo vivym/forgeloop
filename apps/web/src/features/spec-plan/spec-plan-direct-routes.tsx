@@ -671,7 +671,7 @@ function eventParentContext(event: TimelineEntry, workItemId: string) {
     return 'Parent: Work Item';
   }
 
-  return undefined;
+  return 'Parent context: Work Item linkage not recorded on this event';
 }
 
 function eventTimelineDescription(event: TimelineEntry, workItemId: string) {

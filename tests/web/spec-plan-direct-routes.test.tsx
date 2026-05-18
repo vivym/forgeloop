@@ -225,6 +225,58 @@ describe('Spec and Plan direct routes', () => {
     expect(screen.queryByText('Revision 1 created')).toBeNull();
   });
 
+  it('renders degraded parent context when replay event omits Work Item linkage', async () => {
+    const screen = await renderRoute('/specs/spec-1', {
+      apiOverrides: {
+        'GET /specs/spec-1': {
+          id: 'spec-1',
+          work_item_id: 'wi-1',
+          entity_type: 'spec',
+          status: 'approved',
+          editing_state: 'locked',
+          gate_state: 'passed',
+          resolution: 'approved',
+          current_revision_id: 'spec-rev-1',
+        },
+        'GET /specs/spec-1/revisions': [
+          {
+            id: 'spec-rev-1',
+            spec_id: 'spec-1',
+            work_item_id: 'wi-1',
+            revision_number: 1,
+            summary: 'Release cockpit scope approved',
+            content: 'Clarify release cockpit planning scope.',
+            background: 'Release readiness needs visible planning context.',
+            goals: ['Show planning state'],
+            scope_in: ['Direct Spec route'],
+            scope_out: ['Package execution'],
+            acceptance_criteria: ['Parent Work Item is visible'],
+            test_strategy_summary: 'Route tests cover direct navigation.',
+            created_at: '2026-05-18T00:00:00.000Z',
+          },
+        ],
+        'GET /query/replay/spec/spec-1': [
+          {
+            id: 'spec-event-no-parent-link',
+            source: 'fixture',
+            object_type: 'spec',
+            object_id: 'spec-1',
+            summary: 'Spec replay loaded from historical event.',
+            created_at: '2026-05-18T01:00:00.000Z',
+            payload: { actor_id: 'actor-reviewer' },
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByText('Spec replay loaded from historical event.')).toBeTruthy();
+    expect(screen.getByText('2026-05-18T01:00:00.000Z')).toBeTruthy();
+    expect(
+      screen.getByText('Parent context: Work Item linkage not recorded on this event | Actor: actor-reviewer'),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/work_item_id|actor_id/);
+  });
+
   it('shows explicit timeline unavailable copy when replay is unavailable', async () => {
     const screen = await renderRoute('/specs/spec-1', {
       apiOverrides: {
