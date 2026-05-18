@@ -62,6 +62,8 @@ This is one product slice: replace the Web product architecture and UI. It touch
   - Include `.react-router/types/**/*`; set `rootDirs`.
 - Modify `.gitignore`
   - Ignore `.react-router/`.
+- Delete or replace `apps/web/index.html`
+  - Remove the direct Vite SPA `/src/main.tsx` script entry.
 - Delete or replace `apps/web/src/main.tsx`
   - Remove direct `createRoot(<App />)` path.
 - Delete `apps/web/src/App.tsx` by the final cleanup task
@@ -107,6 +109,7 @@ This is one product slice: replace the Web product architecture and UI. It touch
 - Use @superpowers:test-driven-development for each task: write failing tests first, run them, implement, rerun.
 - Use @superpowers:verification-before-completion before every commit.
 - Use @superpowers:requesting-code-review after each task if implementing with subagents.
+- Every DOM-rendering `tests/web/**/*.test.tsx` file starts with `// @vitest-environment jsdom`; keep API/node tests on the repo default node environment.
 - Do not keep a `/legacy` route, feature flag to old UI, old `App` fallback, or active/dead `.panel` / `.workbench-grid` styling.
 - Do not productize raw manual ID loaders. Put raw loaders and direct low-level link/unlink in `/dev-tools` only.
 - Product pages use route params, search params, and TanStack Query. Avoid app-root reload orchestration.
@@ -134,6 +137,10 @@ Add tests in `tests/api/query-module.test.ts`:
 
 ```ts
 it('serves the product pipeline read model with all PRD stages', async () => {
+  const { app } = await track(createTestApp());
+  const executionPackage = await seedReadyPackage(app);
+  const projectId = executionPackage.project_id;
+
   const response = await request(app.getHttpServer())
     .get('/query/pipeline')
     .query({ project_id: projectId })
@@ -153,6 +160,10 @@ it('serves the product pipeline read model with all PRD stages', async () => {
 });
 
 it('serves product list read models for specs, plans, packages, runs, and reviews', async () => {
+  const { app } = await track(createTestApp());
+  const executionPackage = await seedReadyPackage(app);
+  const projectId = executionPackage.project_id;
+
   await request(app.getHttpServer()).get('/query/specs').query({ project_id: projectId }).expect(200);
   await request(app.getHttpServer()).get('/query/plans').query({ project_id: projectId }).expect(200);
   await request(app.getHttpServer()).get('/query/execution-packages').query({ project_id: projectId }).expect(200);
@@ -161,6 +172,11 @@ it('serves product list read models for specs, plans, packages, runs, and review
 });
 
 it('serves Spec and Plan history through replay-compatible endpoints', async () => {
+  const { app } = await track(createTestApp());
+  const executionPackage = await seedReadyPackage(app);
+  const specId = executionPackage.spec_id;
+  const planId = executionPackage.plan_id;
+
   await request(app.getHttpServer()).get(`/query/replay/spec/${specId}`).expect(200);
   await request(app.getHttpServer()).get(`/query/replay/plan/${planId}`).expect(200);
 });
@@ -467,10 +483,13 @@ git commit -m "feat: add web product query read models"
 
 **Files:**
 - Modify: `apps/web/package.json`
+- Modify: `package.json`
 - Create: `apps/web/react-router.config.ts`
 - Modify: `apps/web/vite.config.ts`
 - Modify: `apps/web/tsconfig.json`
 - Modify: `.gitignore`
+- Delete: `apps/web/index.html`
+- Delete: `apps/web/src/main.tsx`
 - Create: `apps/web/src/app/root.tsx`
 - Create: `apps/web/src/app/providers.tsx`
 - Create: `apps/web/src/app/routes.ts`
@@ -485,6 +504,8 @@ git commit -m "feat: add web product query read models"
 Create `tests/web/app-shell-routing.test.tsx`:
 
 ```tsx
+// @vitest-environment jsdom
+
 import { describe, expect, it } from 'vitest';
 import { renderRoute } from './router-test-utils';
 
@@ -493,6 +514,12 @@ describe('React Router product shell', () => {
     const screen = await renderRoute('/workbench');
     expect(screen.getByRole('heading', { name: /workbench/i })).toBeTruthy();
     expect(screen.queryByText('Load role queue')).toBeNull();
+  });
+
+  it('exports root route loading and error boundaries', async () => {
+    const rootModule = await import('../../apps/web/src/app/root');
+    expect(rootModule.HydrateFallback).toEqual(expect.any(Function));
+    expect(rootModule.ErrorBoundary).toEqual(expect.any(Function));
   });
 });
 ```
@@ -524,6 +551,7 @@ Install Web dev dependencies:
 pnpm --filter @forgeloop/web add -D \
   @react-router/dev @testing-library/dom @testing-library/react @testing-library/user-event \
   @tailwindcss/vite tailwindcss
+pnpm add -D -w jsdom
 ```
 
 Then modify `apps/web/package.json` scripts:
@@ -587,7 +615,7 @@ Add to `.gitignore`:
 .react-router/
 ```
 
-- [ ] **Step 6: Add root route, providers, and placeholder workbench route**
+- [ ] **Step 6: Add root route, providers, route config, and placeholder workbench route**
 
 Create the minimal stylesheet imported by `root.tsx` now; Task 3 will expand it into the full token set:
 
@@ -611,7 +639,7 @@ Create `apps/web/src/app/root.tsx`:
 
 ```tsx
 import type { LinksFunction } from 'react-router';
-import { Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router';
+import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration, useRouteError } from 'react-router';
 import { AppProviders } from './providers';
 import '../shared/design-system/theme/css-variables.css';
 
@@ -640,6 +668,21 @@ export default function Root() {
     </AppProviders>
   );
 }
+
+export function HydrateFallback() {
+  return <div role="status" aria-label="Loading ForgeLoop">Loading ForgeLoop</div>;
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  const message = isRouteErrorResponse(error) ? error.statusText : error instanceof Error ? error.message : 'Unexpected error';
+  return (
+    <main id="main-content">
+      <h1>Something went wrong</h1>
+      <p>{message}</p>
+    </main>
+  );
+}
 ```
 
 Create `apps/web/src/app/providers.tsx`:
@@ -661,6 +704,33 @@ export default function WorkbenchRoute() {
   return <h1>Workbench</h1>;
 }
 ```
+
+Create the minimal layout route needed for React Router typegen/build:
+
+```tsx
+// apps/web/src/app/routes/_layout.tsx
+import { Outlet } from 'react-router';
+
+export default function ProductLayoutRoute() {
+  return <Outlet />;
+}
+```
+
+Create the initial Framework Mode route tree before running `react-router typegen`:
+
+```ts
+// apps/web/src/app/routes.ts
+import { index, layout, route, type RouteConfig } from '@react-router/dev/routes';
+
+export default [
+  layout('./routes/_layout.tsx', [
+    index('./routes/workbench/index.tsx'),
+    route('workbench', './routes/workbench/index.tsx'),
+  ]),
+] satisfies RouteConfig;
+```
+
+Delete `apps/web/index.html` and `apps/web/src/main.tsx` in this task. Framework Mode owns the runtime entry through `root.tsx`; do not leave the direct `/src/main.tsx` script tag, `createRoot(<App />)` entry, or a replacement BrowserRouter entry.
 
 - [ ] **Step 7: Add router test utility**
 
@@ -685,7 +755,6 @@ Replace this helper with React Router's route stub in Task 5 after route modules
 Run:
 
 ```bash
-pnpm install
 pnpm --filter @forgeloop/web typecheck
 pnpm --filter @forgeloop/web build
 pnpm vitest run tests/web/app-shell-routing.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
@@ -696,7 +765,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add .gitignore pnpm-lock.yaml apps/web/package.json apps/web/react-router.config.ts apps/web/vite.config.ts apps/web/tsconfig.json apps/web/src/app apps/web/src/shared/design-system/theme/css-variables.css tests/web/router-test-utils.tsx tests/web/app-shell-routing.test.tsx
+git add -A .gitignore package.json pnpm-lock.yaml apps/web/package.json apps/web/index.html apps/web/react-router.config.ts apps/web/vite.config.ts apps/web/tsconfig.json apps/web/src/main.tsx apps/web/src/app apps/web/src/shared/design-system/theme/css-variables.css tests/web/router-test-utils.tsx tests/web/app-shell-routing.test.tsx
 git commit -m "feat: migrate web to react router framework mode"
 ```
 
@@ -724,6 +793,8 @@ git commit -m "feat: migrate web to react router framework mode"
 Create `tests/web/design-system.test.tsx`:
 
 ```tsx
+// @vitest-environment jsdom
+
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Button } from '../../apps/web/src/shared/ui/button/button';
@@ -880,6 +951,7 @@ git commit -m "feat: add web design system primitives"
 - Create: `apps/web/src/shared/context/project-context.tsx`
 - Create: `apps/web/src/shared/context/runtime-flags.tsx`
 - Create: `tests/web/fixtures/product-data.ts`
+- Create: `tests/web/fixtures/product-api-mock.ts`
 - Test: `tests/web/api-hooks.test.tsx`
 
 - [ ] **Step 1: Write failing query hook tests**
@@ -1028,7 +1100,23 @@ export function useRuntimeFlags() {
 }
 ```
 
-Also add actor/project context providers here and wrap them from `apps/web/src/app/providers.tsx`. `AppProviders` may accept optional test overrides, but production defaults must read from route/search params and environment, not hard-coded fixtures.
+Also create `apps/web/src/shared/context/actor-context.tsx` and `apps/web/src/shared/context/project-context.tsx` with explicit providers and hooks:
+
+```tsx
+import { createContext, useContext } from 'react';
+
+const ActorContext = createContext<{ actorId: string }>({ actorId: 'actor-owner' });
+
+export function ActorProvider({ actorId = 'actor-owner', children }: { actorId?: string; children: React.ReactNode }) {
+  return <ActorContext.Provider value={{ actorId }}>{children}</ActorContext.Provider>;
+}
+
+export function useActorContext() {
+  return useContext(ActorContext);
+}
+```
+
+Mirror this shape for `ProjectProvider` / `useProjectContext` with default `projectId: 'project-web-product'`. Wrap these providers from `apps/web/src/app/providers.tsx`. `AppProviders` may accept optional test overrides, but production defaults must read from route/search params and environment where available, not hard-coded fixtures.
 
 - [ ] **Step 7: Add fixtures**
 
@@ -1052,6 +1140,198 @@ export const workItem = {
   resolution: 'none',
   updated_at: '2026-05-18T00:00:00.000Z',
 };
+
+export const spec = {
+  id: 'spec-1',
+  work_item_id: workItem.id,
+  status: 'approved',
+  gate_state: 'approved',
+  current_revision_id: 'spec-rev-1',
+  updated_at: workItem.updated_at,
+};
+
+export const plan = {
+  id: 'plan-1',
+  work_item_id: workItem.id,
+  status: 'approved',
+  gate_state: 'approved',
+  current_revision_id: 'plan-rev-1',
+  updated_at: workItem.updated_at,
+};
+
+export const executionPackage = {
+  id: 'pkg-1',
+  work_item_id: workItem.id,
+  spec_id: spec.id,
+  spec_revision_id: 'spec-rev-1',
+  plan_id: plan.id,
+  plan_revision_id: 'plan-rev-1',
+  project_id: projectId,
+  objective: 'Improve release cockpit',
+  owner_actor_id: actorId,
+  reviewer_actor_id: 'actor-reviewer',
+  qa_owner_actor_id: 'actor-qa',
+  phase: 'ready',
+  gate_state: 'ready',
+  resolution: 'none',
+  updated_at: workItem.updated_at,
+};
+
+export const runSession = {
+  id: 'run-1',
+  execution_package_id: executionPackage.id,
+  status: 'waiting_for_input',
+  executor_type: 'mock',
+  started_at: workItem.updated_at,
+  updated_at: workItem.updated_at,
+};
+
+export const reviewPacket = {
+  id: 'review-1',
+  execution_package_id: executionPackage.id,
+  run_session_id: runSession.id,
+  status: 'pending',
+  decision: 'pending',
+  reviewer_actor_id: 'actor-reviewer',
+  updated_at: workItem.updated_at,
+};
+
+export const release = {
+  id: 'rel-1',
+  project_id: projectId,
+  title: 'Release Radar',
+  phase: 'approval',
+  gate_state: 'pending',
+  resolution: 'none',
+  owner_actor_id: actorId,
+  updated_at: workItem.updated_at,
+};
+```
+
+Create `tests/web/fixtures/product-api-mock.ts` so route tests exercise data-backed UI without a live API:
+
+```ts
+import { vi } from 'vitest';
+import { actorId, executionPackage, plan, projectId, release, reviewPacket, runSession, spec, workItem } from './product-data';
+
+export type ProductApiOverrides = Record<string, unknown>;
+
+const productListItem = (object: { id: string }, type: string, title: string, extra: Record<string, unknown> = {}) => ({
+  id: object.id,
+  object: { type, id: object.id, title },
+  title,
+  status: 'active',
+  phase: 'ready',
+  gate_state: 'ready',
+  resolution: 'none',
+  risk: 'medium',
+  owner_actor_id: actorId,
+  related: [],
+  counts: {},
+  updated_at: workItem.updated_at,
+  ...extra,
+});
+
+export const defaultProductApiResponses: ProductApiOverrides = {
+  'GET /query/pipeline': {
+    stages: [
+      'intake',
+      'spec_plan',
+      'execution',
+      'review',
+      'integration_validation',
+      'test_acceptance',
+      'release',
+      'observation',
+    ].map((id) => ({ id, label: id, item_count: 1, blocked_count: 0, high_risk_count: 0, stale_count: 0, representative_items: [] })),
+    degraded_sources: [],
+  },
+  'GET /query/specs': { items: [productListItem(spec, 'spec', 'Spec for release cockpit')], degraded_sources: [] },
+  'GET /query/plans': { items: [productListItem(plan, 'plan', 'Plan for release cockpit')], degraded_sources: [] },
+  'GET /query/execution-packages': {
+    items: [productListItem(executionPackage, 'execution_package', executionPackage.objective, { package_state: executionPackage })],
+    degraded_sources: [],
+  },
+  'GET /query/runs': {
+    items: [productListItem(runSession, 'run_session', 'Run Console', { run_state: runSession })],
+    degraded_sources: [],
+  },
+  'GET /query/review-packets': {
+    items: [productListItem(reviewPacket, 'review_packet', 'Review packet', { review_state: reviewPacket })],
+    degraded_sources: [],
+  },
+  'GET /releases': { releases: [release], next_cursor: undefined },
+  'GET /query/release-cockpit/rel-1': {
+    release,
+    work_items: [workItem],
+    execution_packages: [executionPackage],
+    checklist: [],
+    blockers: [],
+    evidences: [],
+    observations: [],
+    decisions: [],
+  },
+  'GET /query/work-item-cockpit/wi-1': {
+    work_item: workItem,
+    current_spec: spec,
+    current_plan: plan,
+    packages: [executionPackage],
+    run_sessions: [runSession],
+    review_packets: [reviewPacket],
+    next_actions: [],
+    completion_state: {},
+  },
+  'GET /work-items/wi-1': workItem,
+  'GET /specs/spec-1': spec,
+  'GET /plans/plan-1': plan,
+  'GET /execution-packages/pkg-1': executionPackage,
+  'GET /run-sessions/run-1': runSession,
+  'GET /run-sessions/run-1/events': {
+    events: [
+      {
+        id: 'event-1',
+        run_session_id: runSession.id,
+        sequence: 1,
+        cursor: '0000000001',
+        event_type: 'run_queued',
+        source: 'api',
+        visibility: 'public',
+        summary: 'Run queued',
+        payload: {},
+        created_at: workItem.updated_at,
+      },
+    ],
+    next_cursor: '0000000001',
+    has_more: false,
+  },
+  'GET /review-packets/review-1': reviewPacket,
+  'GET /releases/rel-1': { release },
+  'GET /specs/spec-1/revisions': [{ id: 'spec-rev-1', spec_id: spec.id, summary: 'Approved spec', created_at: workItem.updated_at }],
+  'GET /plans/plan-1/revisions': [{ id: 'plan-rev-1', plan_id: plan.id, summary: 'Approved plan', created_at: workItem.updated_at }],
+  'GET /spec-revisions/spec-rev-1': { id: 'spec-rev-1', spec_id: spec.id, summary: 'Approved spec' },
+  'GET /plan-revisions/plan-rev-1': { id: 'plan-rev-1', plan_id: plan.id, summary: 'Approved plan' },
+  'GET /query/replay/spec/spec-1': [],
+  'GET /query/replay/plan/plan-1': [],
+  'GET /query/replay/execution_package/pkg-1': [],
+  'GET /query/replay/review_packet/review-1': [],
+  'GET /query/replay/release/rel-1': [],
+};
+
+export function installProductApiMock(overrides: ProductApiOverrides = {}) {
+  const responses = { ...defaultProductApiResponses, ...overrides };
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const rawUrl = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
+    const url = new URL(rawUrl, 'http://127.0.0.1');
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const key = `${method} ${url.pathname}`;
+    if (!(key in responses)) {
+      return new Response(JSON.stringify({ message: `Unhandled Web product test request: ${key}` }), { status: 404 });
+    }
+    return new Response(JSON.stringify(responses[key]), { headers: { 'content-type': 'application/json' }, status: 200 });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
 ```
 
 - [ ] **Step 8: Run tests**
@@ -1104,6 +1384,8 @@ it('shows product nav labels and does not show Intake as user-facing role copy',
 Create `tests/web/dev-tools-gating.test.tsx`:
 
 ```tsx
+// @vitest-environment jsdom
+
 import { describe, expect, it } from 'vitest';
 import { isDevToolsEnabled } from '../../apps/web/src/features/dev-tools/dev-tools-gate';
 
@@ -1221,10 +1503,14 @@ Update `tests/web/router-test-utils.tsx` to use React Router route stubs with a 
 
 ```tsx
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { createRoutesStub } from 'react-router';
 import type { RouteObject } from 'react-router';
+import { afterEach, vi } from 'vitest';
+import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
+import { ProjectProvider } from '../../apps/web/src/shared/context/project-context';
 import { RuntimeFlagsProvider } from '../../apps/web/src/shared/context/runtime-flags';
+import { installProductApiMock, type ProductApiOverrides } from './fixtures/product-api-mock';
 import ProductLayoutRoute from '../../apps/web/src/app/routes/_layout';
 import DevToolsRoute from '../../apps/web/src/app/routes/dev-tools';
 import PackageDetailRoute from '../../apps/web/src/app/routes/packages/$packageId';
@@ -1279,14 +1565,30 @@ const productRoutes: RouteObject[] = [
   },
 ];
 
-export async function renderRoute(path: string, options: { routes?: RouteObject[]; devToolsEnabled?: boolean } = {}) {
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+export async function renderRoute(path: string, options: {
+  routes?: RouteObject[];
+  devToolsEnabled?: boolean;
+  actorId?: string;
+  projectId?: string;
+  apiOverrides?: ProductApiOverrides;
+} = {}) {
+  installProductApiMock(options.apiOverrides);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const RoutesStub = createRoutesStub(options.routes ?? productRoutes);
   render(
     <QueryClientProvider client={queryClient}>
-      <RuntimeFlagsProvider value={{ devToolsEnabled: options.devToolsEnabled ?? false }}>
-        <RoutesStub initialEntries={[path]} />
-      </RuntimeFlagsProvider>
+      <ActorProvider actorId={options.actorId}>
+        <ProjectProvider projectId={options.projectId}>
+          <RuntimeFlagsProvider value={{ devToolsEnabled: options.devToolsEnabled ?? false }}>
+            <RoutesStub initialEntries={[path]} />
+          </RuntimeFlagsProvider>
+        </ProjectProvider>
+      </ActorProvider>
     </QueryClientProvider>,
   );
   return screen;
@@ -1294,6 +1596,8 @@ export async function renderRoute(path: string, options: { routes?: RouteObject[
 ```
 
 If a later task replaces a route skeleton with a new route file path, update this default route stub in the same task before relying on `renderRoute('/path')`.
+
+Route tests must use this helper rather than hardcoded route-only shells. The default API mock returns deterministic Work Item, Spec, Plan, Package, Run, Review, and Release data so assertions such as `Improve release cockpit`, `pkg-1`, `run-1`, and `rel-1` validate data-backed rendering.
 
 - [ ] **Step 7: Implement Dev Tools gate**
 
@@ -1354,6 +1658,14 @@ git commit -m "feat: add product app shell and route skeletons"
 - Test: `tests/web/spec-plan-product-route.test.tsx`
 
 - [ ] **Step 1: Write failing route tests**
+
+Start each new route test file in this task with:
+
+```tsx
+// @vitest-environment jsdom
+import { describe, expect, it } from 'vitest';
+import { renderRoute } from './router-test-utils';
+```
 
 Create `tests/web/workbench-product-route.test.tsx`:
 
@@ -1493,6 +1805,8 @@ git commit -m "feat: add workbench and work item product flows"
 
 - [ ] **Step 1: Write failing direct route tests**
 
+Start this test file with the jsdom directive and `renderRoute` import described in Task 6.
+
 Create `tests/web/spec-plan-direct-routes.test.tsx`:
 
 ```tsx
@@ -1568,6 +1882,8 @@ git commit -m "feat: add spec and plan direct routes"
 - Modify: `tests/e2e/run-console.e2e.test.ts`
 
 - [ ] **Step 1: Write failing package/run route tests**
+
+Start this test file with the jsdom directive and `renderRoute` import described in Task 6.
 
 Create `tests/web/package-run-product-routes.test.tsx`:
 
@@ -1672,6 +1988,8 @@ git commit -m "feat: add package and run product surfaces"
 - Replace: `tests/web/release-owner-surface.test.tsx`
 
 - [ ] **Step 1: Write failing review/release route tests**
+
+Start this test file with the jsdom directive and `renderRoute` import described in Task 6.
 
 Create `tests/web/review-release-product-routes.test.tsx`:
 
@@ -1780,6 +2098,8 @@ git commit -m "feat: add review and release product surfaces"
 - Create: `tests/e2e/web-product-routes.e2e.test.ts`
 
 - [ ] **Step 1: Write failing pipeline/responsive/a11y tests**
+
+Start `tests/web/a11y-gates.test.tsx` and `tests/web/responsive-layout.test.tsx` with the jsdom directive and `renderRoute` import described in Task 6.
 
 Create `tests/web/a11y-gates.test.tsx`:
 
@@ -2036,18 +2356,18 @@ const textFiles = (dir: string): string[] =>
     const path = join(dir, entry);
     if (path.includes('.react-router')) return [];
     if (statSync(path).isDirectory()) return textFiles(path);
-    return /\.(ts|tsx|css)$/.test(path) ? [path] : [];
+    return /\.(ts|tsx|css|html)$/.test(path) ? [path] : [];
   });
 
 const sourceText = () =>
-  textFiles('apps/web/src')
+  textFiles('apps/web')
     .concat(textFiles('tests/web').filter((file) => !file.endsWith('no-legacy-web-ui.test.ts')))
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
 describe('no legacy Web UI baggage', () => {
   it('does not keep old workbench classes or legacy routes', () => {
-    expect(sourceText()).not.toMatch(/workbench-grid|className="panel"|\\.panel\\b|\\/legacy/);
+    expect(sourceText()).not.toMatch(/workbench-grid|className="panel"|\\.panel\\b|\\/legacy|src\\/main\\.tsx/);
   });
 
   it('does not import the old monolithic App', () => {
@@ -2147,9 +2467,9 @@ Expected: PASS.
 Run:
 
 ```bash
-rg -n "workbench-grid|className=\"panel\"|\\.panel\\b|/legacy|Load role queue|Load cockpit|Load replay" apps/web/src tests/web -g '!no-legacy-web-ui.test.ts'
-rg -n "label=\"release_id\"|aria-label=\"release_id\"|placeholder=\"release_id\"|>release_id<" apps/web/src tests/web -g '!no-legacy-web-ui.test.ts'
-rg -n "from ['\"].*src/App['\"]|<App\\b" apps/web/src tests -g '!no-legacy-web-ui.test.ts'
+rg -n "workbench-grid|className=\"panel\"|\\.panel\\b|/legacy|Load role queue|Load cockpit|Load replay|src/main\\.tsx" apps/web tests/web -g '!no-legacy-web-ui.test.ts'
+rg -n "label=\"release_id\"|aria-label=\"release_id\"|placeholder=\"release_id\"|>release_id<" apps/web tests/web -g '!no-legacy-web-ui.test.ts'
+rg -n "from ['\"].*src/App['\"]|<App\\b" apps/web tests -g '!no-legacy-web-ui.test.ts'
 ```
 
 Expected: no matches, except deliberate Dev Tools labels if scoped under `apps/web/src/app/routes/dev-tools` or `apps/web/src/features/dev-tools`.
@@ -2199,6 +2519,7 @@ Skip this commit if no report is created.
 ## Completion Criteria
 
 - React Router Framework Mode is the only Web route/runtime entry.
+- The old Vite SPA `index.html` plus `src/main.tsx` path is removed; no direct `createRoot(<App />)` entry remains.
 - No old `App.tsx` workbench, old debug CSS, `/legacy`, old/new UI switch, or manual raw product controls remain.
 - Product route coverage exists for Workbench, Pipeline, Work Items, Specs, Plans, Packages, Runs, Reviews, Releases, and gated Dev Tools.
 - Pipeline includes Intake, Spec / Plan, Execution, Review, Integration / Cross-end Validation, Test / Acceptance, Release, and Observation.
