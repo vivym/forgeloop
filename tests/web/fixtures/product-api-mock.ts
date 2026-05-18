@@ -49,6 +49,35 @@ const routeTimeline = timeline.map((entry) => ({
   summary: 'Created release cockpit improvement work item.',
 }));
 
+const productListItem = (
+  artifact: typeof spec | typeof plan,
+  parent = workItem,
+  objectType: 'spec' | 'plan' = artifact.entity_type,
+) => ({
+  id: artifact.id,
+  object: {
+    type: objectType,
+    id: artifact.id,
+    title: `${parent.title} ${objectType === 'spec' ? 'Spec' : 'Plan'}`,
+  },
+  title: `${parent.title} ${objectType === 'spec' ? 'Spec' : 'Plan'}`,
+  status: artifact.status,
+  gate_state: artifact.gate_state,
+  resolution: artifact.resolution,
+  parent: {
+    type: 'work_item',
+    id: parent.id,
+    title: parent.title,
+  },
+  related: [],
+  revision_state: {
+    current_revision_id: artifact.current_revision_id,
+    revision_number: 1,
+  },
+  counts: {},
+  updated_at: artifact.updated_at ?? '2026-05-18T00:00:00.000Z',
+});
+
 export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/pipeline?project_id=${projectId}`]: [workItem],
   [`GET /work-items?project_id=${projectId}`]: [workItem],
@@ -67,12 +96,18 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       },
     ],
   },
-  [`GET /query/specs?project_id=${projectId}`]: [spec],
-  [`GET /query/specs/${spec.id}`]: spec,
-  [`GET /query/specs/${spec.id}/history`]: [specRevision],
-  [`GET /query/plans?project_id=${projectId}`]: [plan],
-  [`GET /query/plans/${plan.id}`]: plan,
-  [`GET /query/plans/${plan.id}/history`]: [planRevision],
+  [`GET /query/specs?project_id=${projectId}`]: {
+    items: [productListItem(spec, workItem, 'spec')],
+    degraded_sources: [],
+  },
+  [`GET /specs/${spec.id}`]: spec,
+  [`GET /specs/${spec.id}/revisions`]: [specRevision],
+  [`GET /query/plans?project_id=${projectId}`]: {
+    items: [productListItem(plan, workItem, 'plan')],
+    degraded_sources: [],
+  },
+  [`GET /plans/${plan.id}`]: plan,
+  [`GET /plans/${plan.id}/revisions`]: [planRevision],
   [`GET /query/packages?project_id=${projectId}`]: [executionPackage],
   [`GET /query/packages/${executionPackage.id}`]: executionPackage,
   [`GET /query/runs?project_id=${projectId}`]: [runSession],
@@ -150,6 +185,20 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   },
   [`GET /query/replay/work_item/${workItem.id}`]: timeline,
   [`GET /query/replay/work_item/${routeWorkItem.id}`]: routeTimeline,
+  [`GET /query/replay/spec/${spec.id}`]: timeline.map((entry) => ({
+    ...entry,
+    object_type: 'spec',
+    object_id: spec.id,
+    summary: 'Spec planning state updated.',
+    payload: { work_item_id: workItem.id },
+  })),
+  [`GET /query/replay/plan/${plan.id}`]: timeline.map((entry) => ({
+    ...entry,
+    object_type: 'plan',
+    object_id: plan.id,
+    summary: 'Plan planning state updated.',
+    payload: { work_item_id: workItem.id },
+  })),
   [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
   [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
   [`GET /query/replay/release/${release.id}`]: timeline,

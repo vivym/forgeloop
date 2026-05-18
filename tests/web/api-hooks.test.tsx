@@ -23,6 +23,8 @@ describe('Web product API hooks', () => {
       'intake',
       { project_id: 'proj' },
     ]);
+    expect(queryKeys.specReplay('spec-1')).toEqual(['spec-replay', 'spec-1']);
+    expect(queryKeys.planReplay('plan-1')).toEqual(['plan-replay', 'plan-1']);
   });
 
   it('includes response-affecting workbench query inputs in stable cache keys', () => {

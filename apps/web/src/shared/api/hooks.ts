@@ -57,14 +57,22 @@ export function useSpecsQuery(projectId: string) {
 export function useSpecQuery(specId: string) {
   return useQuery({
     queryKey: queryKeys.spec(specId),
-    queryFn: () => createQueryApi().getSpec(specId),
+    queryFn: () => createCommandApi().getSpec(specId),
   });
 }
 
-export function useSpecHistoryQuery(specId: string) {
+export function useSpecRevisionsQuery(specId: string) {
   return useQuery({
-    queryKey: queryKeys.specHistory(specId),
-    queryFn: () => createQueryApi().getSpecHistory(specId),
+    queryKey: queryKeys.specRevisions(specId),
+    queryFn: () => createCommandApi().listSpecRevisions(specId),
+  });
+}
+
+export function useSpecReplayQuery(specId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.specReplay(specId),
+    queryFn: () => createQueryApi().getSpecReplay(requiredId(specId, 'specId')),
+    enabled: specId !== undefined,
   });
 }
 
@@ -86,14 +94,22 @@ export function usePlansQuery(projectId: string) {
 export function usePlanQuery(planId: string) {
   return useQuery({
     queryKey: queryKeys.plan(planId),
-    queryFn: () => createQueryApi().getPlan(planId),
+    queryFn: () => createCommandApi().getPlan(planId),
   });
 }
 
-export function usePlanHistoryQuery(planId: string) {
+export function usePlanRevisionsQuery(planId: string) {
   return useQuery({
-    queryKey: queryKeys.planHistory(planId),
-    queryFn: () => createQueryApi().getPlanHistory(planId),
+    queryKey: queryKeys.planRevisions(planId),
+    queryFn: () => createCommandApi().listPlanRevisions(planId),
+  });
+}
+
+export function usePlanReplayQuery(planId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.planReplay(planId),
+    queryFn: () => createQueryApi().getPlanReplay(requiredId(planId, 'planId')),
+    enabled: planId !== undefined,
   });
 }
 

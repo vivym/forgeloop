@@ -2,7 +2,7 @@ import { createApiContext, type ForgeloopApiOptions } from './common';
 import type {
   CockpitResponse,
   ExecutionPackage,
-  PlanRevision,
+  ProductListResponse,
   ReleaseCockpitResponse,
   ReleaseListResponse,
   ReviewPacket,
@@ -10,8 +10,6 @@ import type {
   RoleWorkbenchQuery,
   RoleWorkbenchResponse,
   RunSession,
-  SpecPlan,
-  SpecRevision,
   TimelineEntry,
   WorkItem,
 } from './types';
@@ -36,12 +34,8 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
 
   const productMethods = {
     getPipeline: (query: ProjectQuery) => request<WorkItem[]>(`/query/pipeline${queryString(query)}`),
-    listSpecs: (query: ProjectQuery) => request<SpecPlan[]>(`/query/specs${queryString(query)}`),
-    getSpec: (specId: string) => request<SpecPlan>(`/query/specs/${encodeURIComponent(specId)}`),
-    getSpecHistory: (specId: string) => request<SpecRevision[]>(`/query/specs/${encodeURIComponent(specId)}/history`),
-    listPlans: (query: ProjectQuery) => request<SpecPlan[]>(`/query/plans${queryString(query)}`),
-    getPlan: (planId: string) => request<SpecPlan>(`/query/plans/${encodeURIComponent(planId)}`),
-    getPlanHistory: (planId: string) => request<PlanRevision[]>(`/query/plans/${encodeURIComponent(planId)}/history`),
+    listSpecs: (query: ProjectQuery) => request<ProductListResponse>(`/query/specs${queryString(query)}`),
+    listPlans: (query: ProjectQuery) => request<ProductListResponse>(`/query/plans${queryString(query)}`),
     listPackages: (query: ProjectQuery) => request<ExecutionPackage[]>(`/query/packages${queryString(query)}`),
     getPackage: (packageId: string) => request<ExecutionPackage>(`/query/packages/${encodeURIComponent(packageId)}`),
     listRuns: (query: ProjectQuery) => request<RunSession[]>(`/query/runs${queryString(query)}`),
@@ -58,6 +52,8 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       request<CockpitResponse>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
     getWorkItemReplay: (workItemId: string) =>
       request<TimelineEntry[]>(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
+    getSpecReplay: (specId: string) => request<TimelineEntry[]>(`/query/replay/spec/${encodeURIComponent(specId)}`),
+    getPlanReplay: (planId: string) => request<TimelineEntry[]>(`/query/replay/plan/${encodeURIComponent(planId)}`),
     getExecutionPackageReplay: (executionPackageId: string) =>
       request<TimelineEntry[]>(`/query/replay/execution_package/${encodeURIComponent(executionPackageId)}`),
     getReviewPacketReplay: (reviewPacketId: string) =>

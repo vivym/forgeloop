@@ -2,44 +2,34 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import type { ReactNode } from 'react';
 
 import {
-  usePlanHistoryQuery,
   usePlanQuery,
+  usePlanReplayQuery,
   usePlanRevisionQuery,
+  usePlanRevisionsQuery,
   usePlansQuery,
-  useSpecHistoryQuery,
   useSpecQuery,
+  useSpecReplayQuery,
   useSpecRevisionQuery,
+  useSpecRevisionsQuery,
   useSpecsQuery,
 } from '../../shared/api/hooks';
-import type { PlanRevision, SpecPlan, SpecRevision } from '../../shared/api/types';
+import type { PlanRevision, ProductListItem, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Badge, Button, DataTable, EmptyState, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
 
 type ArtifactKind = 'spec' | 'plan';
 
-interface ProductListResponse<T> {
-  items?: T[];
-  degraded_sources?: unknown[];
-}
-
 interface RegistryFilters {
   status?: string;
 }
-
-type RevisionBearingArtifact = SpecPlan & {
-  revision_number?: number;
-  revision_state?: {
-    revision_number?: number;
-  };
-};
 
 export function SpecsRegistry() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const query = useSpecsQuery(projectId);
   const filters = parseRegistryFilters(searchParams);
-  const list = normalizeList(query.data);
+  const list = normalizeProductList(query.data);
   const specs = filterArtifacts(list.items, filters);
 
   return (
@@ -75,7 +65,7 @@ export function PlansRegistry() {
   const [searchParams] = useSearchParams();
   const query = usePlansQuery(projectId);
   const filters = parseRegistryFilters(searchParams);
-  const list = normalizeList(query.data);
+  const list = normalizeProductList(query.data);
   const plans = filterArtifacts(list.items, filters);
 
   return (
@@ -148,7 +138,8 @@ export function PlanRevisionDetail() {
 
 function SpecArtifactDetail({ artifactId }: { artifactId: string }) {
   const detailQuery = useSpecQuery(artifactId);
-  const historyQuery = useSpecHistoryQuery(artifactId);
+  const revisionsQuery = useSpecRevisionsQuery(artifactId);
+  const replayQuery = useSpecReplayQuery(artifactId);
 
   return (
     <ArtifactDetailView
@@ -156,17 +147,21 @@ function SpecArtifactDetail({ artifactId }: { artifactId: string }) {
       artifactId={artifactId}
       detailIsError={detailQuery.isError}
       detailStatus={detailQuery.status}
-      historyIsError={historyQuery.isError}
-      history={historyQuery.data}
-      historyStatus={historyQuery.status}
       kind="spec"
+      replay={replayQuery.data}
+      replayIsError={replayQuery.isError}
+      replayStatus={replayQuery.status}
+      revisions={revisionsQuery.data}
+      revisionsIsError={revisionsQuery.isError}
+      revisionsStatus={revisionsQuery.status}
     />
   );
 }
 
 function PlanArtifactDetail({ artifactId }: { artifactId: string }) {
   const detailQuery = usePlanQuery(artifactId);
-  const historyQuery = usePlanHistoryQuery(artifactId);
+  const revisionsQuery = usePlanRevisionsQuery(artifactId);
+  const replayQuery = usePlanReplayQuery(artifactId);
 
   return (
     <ArtifactDetailView
@@ -174,10 +169,13 @@ function PlanArtifactDetail({ artifactId }: { artifactId: string }) {
       artifactId={artifactId}
       detailIsError={detailQuery.isError}
       detailStatus={detailQuery.status}
-      historyIsError={historyQuery.isError}
-      history={historyQuery.data}
-      historyStatus={historyQuery.status}
       kind="plan"
+      replay={replayQuery.data}
+      replayIsError={replayQuery.isError}
+      replayStatus={replayQuery.status}
+      revisions={revisionsQuery.data}
+      revisionsIsError={revisionsQuery.isError}
+      revisionsStatus={revisionsQuery.status}
     />
   );
 }
@@ -187,19 +185,25 @@ function ArtifactDetailView({
   artifactId,
   detailIsError,
   detailStatus,
-  history,
-  historyIsError,
-  historyStatus,
   kind,
+  replay,
+  replayIsError,
+  replayStatus,
+  revisions,
+  revisionsIsError,
+  revisionsStatus,
 }: {
   artifact: SpecPlan | undefined;
   artifactId: string;
   detailIsError: boolean;
   detailStatus: 'pending' | 'error' | 'success';
-  history: Array<SpecRevision | PlanRevision> | undefined;
-  historyIsError: boolean;
-  historyStatus: 'pending' | 'error' | 'success';
   kind: ArtifactKind;
+  replay: TimelineEntry[] | undefined;
+  replayIsError: boolean;
+  replayStatus: 'pending' | 'error' | 'success';
+  revisions: Array<SpecRevision | PlanRevision> | undefined;
+  revisionsIsError: boolean;
+  revisionsStatus: 'pending' | 'error' | 'success';
 }) {
   const artifactName = kind === 'spec' ? 'Spec' : 'Plan';
   const revisionBasePath = kind === 'spec' ? `/specs/${encodeURIComponent(artifactId)}` : `/plans/${encodeURIComponent(artifactId)}`;
@@ -228,8 +232,8 @@ function ArtifactDetailView({
     );
   }
 
-  const revisions = history ?? [];
-  const currentRevision = findCurrentRevision(revisions, artifact.current_revision_id);
+  const revisionList = revisions ?? [];
+  const currentRevision = findCurrentRevision(revisionList, artifact.current_revision_id);
 
   return (
     <DetailLayout
@@ -284,20 +288,26 @@ function ArtifactDetailView({
       </Section>
       {kind === 'plan' ? <PlanPackageState plan={artifact} /> : null}
       <Section
-        description="Direct route history is built from revision data. Parent Work Item replay may add more timeline detail when available."
+        description="Direct route history uses product replay events. Revision state remains available separately when replay cannot be loaded."
         title="History / Timeline"
       >
-        {historyStatus === 'pending' ? <p className="empty">Loading revision history.</p> : null}
-        {historyIsError ? (
-          <p className="empty">History / Timeline is temporarily unavailable. Detail may be incomplete until parent Work Item replay is available.</p>
+        {replayStatus === 'pending' ? <p className="empty">Loading event timeline.</p> : null}
+        {replayIsError ? (
+          <>
+            <p className="empty">History / Timeline replay is temporarily unavailable.</p>
+            <p className="status-line">Revision list remains available, but the full event timeline could not be loaded.</p>
+          </>
         ) : null}
-        {historyStatus !== 'pending' && !historyIsError ? (
-          revisions.length ? (
-            <Timeline items={revisionTimelineItems(revisions)} />
+        {replayStatus !== 'pending' && !replayIsError ? (
+          replay?.length ? (
+            <Timeline items={replayTimelineItems(replay, artifact.work_item_id)} />
           ) : (
-            <p className="empty">No revision events are available for this direct route yet.</p>
+            <p className="empty">No replay events are available for this direct route yet.</p>
           )
         ) : null}
+        {revisionsStatus === 'pending' ? <p className="empty">Loading revision list.</p> : null}
+        {revisionsIsError ? <p className="status-line">Revision list is temporarily unavailable.</p> : null}
+        {revisionsStatus !== 'pending' && !revisionsIsError && revisionList.length ? <RevisionSummaryList revisions={revisionList} /> : null}
       </Section>
     </DetailLayout>
   );
@@ -427,7 +437,7 @@ function ReadOnlyRevisionLayout({
   );
 }
 
-function ArtifactTable({ artifacts, basePath, emptyMessage }: { artifacts: SpecPlan[]; basePath: '/specs' | '/plans'; emptyMessage: string }) {
+function ArtifactTable({ artifacts, basePath, emptyMessage }: { artifacts: ProductListItem[]; basePath: '/specs' | '/plans'; emptyMessage: string }) {
   return (
     <DataTable
       columns={[
@@ -444,7 +454,12 @@ function ArtifactTable({ artifacts, basePath, emptyMessage }: { artifacts: SpecP
         {
           key: 'work-item',
           header: 'Parent',
-          cell: (artifact) => <Link to={`/work-items/${encodeURIComponent(artifact.work_item_id)}`}>Work Item</Link>,
+          cell: (artifact) =>
+            artifact.parent ? (
+              <Link to={`/work-items/${encodeURIComponent(artifact.parent.id)}`}>{artifact.parent.title ?? 'Work Item'}</Link>
+            ) : (
+              'Not linked'
+            ),
         },
       ]}
       emptyMessage={emptyMessage}
@@ -515,7 +530,11 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
       <div className="artifact-list">
         <span>Ready for package generation</span>
         <Link to={`/packages?plan=${encodeURIComponent(plan.id)}`}>View package readiness</Link>
+        <Button disabled title="Package generation mutation is owned by the package workflow." variant="secondary">
+          Generate packages
+        </Button>
       </div>
+      <p className="status-line">Package generation is ready for this approved Plan; mutation wiring remains in the package workflow.</p>
     </Section>
   );
 }
@@ -598,15 +617,11 @@ function parseRegistryFilters(searchParams: URLSearchParams): RegistryFilters {
   return status ? { status } : {};
 }
 
-function filterArtifacts(artifacts: SpecPlan[], filters: RegistryFilters) {
+function filterArtifacts(artifacts: ProductListItem[], filters: RegistryFilters) {
   return artifacts.filter((artifact) => filters.status === undefined || artifact.status === filters.status);
 }
 
-function normalizeList(data: SpecPlan[] | ProductListResponse<SpecPlan> | undefined) {
-  if (Array.isArray(data)) {
-    return { degradedSources: [], items: data };
-  }
-
+function normalizeProductList(data: { items?: ProductListItem[]; degraded_sources?: unknown[] } | undefined) {
   return {
     degradedSources: data?.degraded_sources ?? [],
     items: data?.items ?? [],
@@ -621,12 +636,12 @@ function findCurrentRevision<T extends SpecRevision | PlanRevision>(revisions: T
   return revisions.find((revision) => revision.id === revisionId);
 }
 
-function revisionTimelineItems(revisions: Array<SpecRevision | PlanRevision>): TimelineItem[] {
-  return revisions.map((revision) => ({
-    id: revision.id,
-    title: `${revisionLabel(revision)} created`,
-    description: revision.summary,
-    meta: formatDate(revision.created_at),
+function replayTimelineItems(events: TimelineEntry[], workItemId: string): TimelineItem[] {
+  return events.map((event) => ({
+    id: event.id,
+    title: event.summary,
+    description: eventParentContext(event, workItemId),
+    meta: formatDate(event.created_at),
   }));
 }
 
@@ -634,14 +649,39 @@ function revisionLabel(revision: SpecRevision | PlanRevision) {
   return `Revision ${revision.revision_number}`;
 }
 
-function revisionLabelFromArtifact(artifact: SpecPlan) {
-  const revisionNumber = (artifact as RevisionBearingArtifact).revision_state?.revision_number ?? (artifact as RevisionBearingArtifact).revision_number;
+function RevisionSummaryList({ revisions }: { revisions: Array<SpecRevision | PlanRevision> }) {
+  return (
+    <div className="detail-block">
+      <strong>Revision list</strong>
+      <ul>
+        {revisions.map((revision) => (
+          <li key={revision.id}>
+            {revisionLabel(revision)}: {revision.summary}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function eventParentContext(event: TimelineEntry, workItemId: string) {
+  const payloadWorkItemId = typeof event.payload?.work_item_id === 'string' ? event.payload.work_item_id : undefined;
+
+  if (payloadWorkItemId === workItemId) {
+    return 'Parent: Work Item';
+  }
+
+  return undefined;
+}
+
+function revisionLabelFromArtifact(artifact: ProductListItem) {
+  const revisionNumber = artifact.revision_state?.revision_number;
 
   if (revisionNumber !== undefined) {
     return `Revision ${revisionNumber}`;
   }
 
-  return artifact.current_revision_id ? 'Current revision' : 'No revision yet';
+  return artifact.revision_state?.current_revision_id ? 'Current revision' : 'No revision yet';
 }
 
 function statusTone(status: string | undefined) {

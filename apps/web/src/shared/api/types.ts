@@ -45,6 +45,8 @@ export type {
   RequestReleaseChangesRequest,
   RoleWorkbenchAction,
   RoleWorkbenchResponse,
+  ProductListItem,
+  ProductListResponse,
   StartReleaseObservingRequest,
   SubmitReleaseForApprovalRequest,
   UnlinkReleaseObjectRequest,
