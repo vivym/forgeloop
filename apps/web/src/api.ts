@@ -1,13 +1,13 @@
-import { createForgeloopCommandApi } from './api/commands';
-import { createForgeloopQueryApi } from './api/query';
+import { createForgeloopCommandApi } from './shared/api/commands';
+import { createForgeloopQueryApi } from './shared/api/query';
 
-export type * from './api/types';
-export { ForgeloopApiError } from './api/common';
-export type { ForgeloopApiOptions } from './api/common';
-export { createForgeloopCommandApi } from './api/commands';
-export type { ForgeloopCommandApi } from './api/commands';
-export { createForgeloopQueryApi } from './api/query';
-export type { ForgeloopQueryApi } from './api/query';
+export type * from './shared/api/types';
+export { ForgeloopApiError } from './shared/api/common';
+export type { ForgeloopApiOptions } from './shared/api/common';
+export { createForgeloopCommandApi } from './shared/api/commands';
+export type { ForgeloopCommandApi } from './shared/api/commands';
+export { createForgeloopQueryApi } from './shared/api/query';
+export type { ForgeloopQueryApi } from './shared/api/query';
 
 export const api = createForgeloopCommandApi();
 export const queryApi = createForgeloopQueryApi();
