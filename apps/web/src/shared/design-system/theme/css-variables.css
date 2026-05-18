@@ -386,6 +386,112 @@ a {
   gap: var(--fl-space-3);
 }
 
+.fl-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fl-space-2);
+  align-items: center;
+}
+
+.stack-form {
+  display: grid;
+  gap: var(--fl-space-3);
+}
+
+.stack-form.compact {
+  gap: var(--fl-space-2);
+}
+
+.field {
+  display: grid;
+  gap: var(--fl-space-2);
+  color: var(--fl-color-text-secondary);
+  font-size: var(--fl-text-sm);
+  font-weight: var(--fl-weight-semibold);
+}
+
+.empty {
+  margin: 0;
+  color: var(--fl-color-text-secondary);
+}
+
+.fl-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--fl-space-4);
+  margin: 0;
+}
+
+.fl-metadata-grid div {
+  display: grid;
+  gap: var(--fl-space-1);
+  min-width: 0;
+}
+
+.fl-metadata-grid dt {
+  color: var(--fl-color-text-muted);
+  font-size: var(--fl-text-xs);
+  font-weight: var(--fl-weight-semibold);
+  text-transform: uppercase;
+}
+
+.fl-metadata-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--fl-color-text-primary);
+}
+
+.fl-run-console {
+  display: grid;
+  gap: var(--fl-space-4);
+}
+
+.fl-run-console__events {
+  display: grid;
+  gap: var(--fl-space-3);
+  min-height: 14rem;
+  max-height: 32rem;
+  overflow: auto;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-card);
+  background: var(--fl-color-surface);
+  padding: var(--fl-space-4);
+}
+
+.fl-run-console__event {
+  display: grid;
+  gap: var(--fl-space-1);
+  border-bottom: 1px solid var(--fl-color-border);
+  padding-bottom: var(--fl-space-3);
+}
+
+.fl-run-console__event:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.fl-run-console__event p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.fl-run-console__event span {
+  color: var(--fl-color-text-muted);
+  font-size: var(--fl-text-xs);
+}
+
+.fl-run-console__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(10rem, 14rem);
+  gap: var(--fl-space-4);
+  align-items: end;
+}
+
+.fl-run-console__actions {
+  display: grid;
+  gap: var(--fl-space-2);
+}
+
 .fl-timeline__marker {
   width: 0.625rem;
   height: 0.625rem;
@@ -741,7 +847,8 @@ a {
   .fl-app-shell,
   .fl-detail-layout__body,
   .fl-split-pane,
-  .fl-split-pane--left {
+  .fl-split-pane--left,
+  .fl-run-console__controls {
     grid-template-columns: 1fr;
   }
 

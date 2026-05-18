@@ -78,6 +78,66 @@ const productListItem = (
   updated_at: artifact.updated_at ?? '2026-05-18T00:00:00.000Z',
 });
 
+const packageListItem = {
+  id: executionPackage.id,
+  object: {
+    type: 'execution_package',
+    id: executionPackage.id,
+    title: executionPackage.objective,
+  },
+  title: executionPackage.objective,
+  phase: executionPackage.phase,
+  risk: workItem.risk,
+  owner_actor_id: executionPackage.owner_actor_id,
+  reviewer_actor_id: executionPackage.reviewer_actor_id,
+  qa_owner_actor_id: executionPackage.qa_owner_actor_id,
+  parent: {
+    type: 'work_item',
+    id: workItem.id,
+    title: workItem.title,
+  },
+  related: [{ type: 'run_session', id: runSession.id, title: runSession.summary }],
+  revision_state: {
+    current_revision_id: executionPackage.plan_revision_id,
+  },
+  package_state: {
+    work_item_id: executionPackage.work_item_id,
+    spec_revision_id: executionPackage.spec_revision_id,
+    plan_revision_id: executionPackage.plan_revision_id,
+    surface_type: 'web',
+    last_run_session_id: executionPackage.last_run_session_id,
+  },
+  counts: {},
+  updated_at: executionPackage.updated_at ?? '2026-05-18T00:00:00.000Z',
+};
+
+const runListItem = {
+  id: runSession.id,
+  object: {
+    type: 'run_session',
+    id: runSession.id,
+    title: runSession.summary,
+  },
+  title: runSession.summary ?? runSession.id,
+  status: runSession.status,
+  owner_actor_id: runSession.requested_by_actor_id,
+  parent: {
+    type: 'execution_package',
+    id: executionPackage.id,
+    title: executionPackage.objective,
+  },
+  related: [],
+  revision_state: {},
+  run_state: {
+    execution_package_id: runSession.execution_package_id,
+    executor_type: runSession.executor_type,
+    started_at: runSession.started_at,
+    finished_at: runSession.finished_at,
+  },
+  counts: {},
+  updated_at: runSession.updated_at ?? '2026-05-18T00:00:00.000Z',
+};
+
 export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/pipeline?project_id=${projectId}`]: [workItem],
   [`GET /work-items?project_id=${projectId}`]: [workItem],
@@ -116,10 +176,38 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   },
   [`GET /plans/${plan.id}`]: plan,
   [`GET /plans/${plan.id}/revisions`]: [planRevision],
-  [`GET /query/packages?project_id=${projectId}`]: [executionPackage],
-  [`GET /query/packages/${executionPackage.id}`]: executionPackage,
-  [`GET /query/runs?project_id=${projectId}`]: [runSession],
-  [`GET /query/runs/${runSession.id}`]: runSession,
+  [`GET /query/execution-packages?project_id=${projectId}&limit=100`]: {
+    items: [packageListItem],
+    degraded_sources: [],
+  },
+  [`GET /query/runs?project_id=${projectId}&limit=100`]: {
+    items: [runListItem],
+    degraded_sources: [],
+  },
+  [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+  [`GET /run-sessions/${runSession.id}`]: runSession,
+  [`GET /run-sessions/${runSession.id}/events`]: {
+    events: [
+      {
+        id: 'event-web-product-1',
+        run_session_id: runSession.id,
+        sequence: 1,
+        cursor: '0000000001',
+        event_type: 'agent_message',
+        source: 'fixture',
+        visibility: 'public',
+        summary: 'Shared product API foundation passed deterministic checks.',
+        payload: { message: 'Shared product API foundation passed deterministic checks.' },
+        created_at: '2026-05-18T00:24:30.000Z',
+      },
+    ],
+    next_cursor: '0000000001',
+    has_more: false,
+  },
+  [`POST /run-sessions/${runSession.id}/events/stream-token`]: {
+    token: 'stream-token-web-product',
+    expires_at: '2026-05-18T00:30:00.000Z',
+  },
   [`GET /query/reviews?project_id=${projectId}`]: [reviewPacket],
   [`GET /query/reviews/${reviewPacket.id}`]: reviewPacket,
   [`GET /query/releases?project_id=${projectId}`]: { releases: [release] },

@@ -6,6 +6,7 @@ import { createForgeloopQueryApi } from './query';
 import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from './query-keys';
 import type {
   CockpitResponse,
+  ExecutionPackage,
   ListProductQuery,
   PlanRevision,
   RoleWorkbenchId,
@@ -143,31 +144,42 @@ export function usePlanRevisionQuery(revisionId: string | undefined) {
   });
 }
 
-export function usePackagesQuery(projectId: string) {
+export function usePackagesQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizePackageRunQuery(query);
+
   return useQuery({
-    queryKey: queryKeys.packages(projectId),
-    queryFn: () => createQueryApi().listPackages({ project_id: projectId }),
+    queryKey: queryKeys.packages(normalizedQuery),
+    queryFn: () => createQueryApi().listPackages(normalizedQuery),
   });
 }
 
 export function usePackageQuery(packageId: string) {
   return useQuery({
     queryKey: queryKeys.package(packageId),
-    queryFn: () => createQueryApi().getPackage(packageId),
+    queryFn: () => createCommandApi().getExecutionPackage(packageId),
   });
 }
 
-export function useRunsQuery(projectId: string) {
+export function useRunsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizePackageRunQuery(query);
+
   return useQuery({
-    queryKey: queryKeys.runs(projectId),
-    queryFn: () => createQueryApi().listRuns({ project_id: projectId }),
+    queryKey: queryKeys.runs(normalizedQuery),
+    queryFn: () => createQueryApi().listRuns(normalizedQuery),
   });
 }
 
 export function useRunQuery(runSessionId: string) {
   return useQuery({
     queryKey: queryKeys.run(runSessionId),
-    queryFn: () => createQueryApi().getRun(runSessionId),
+    queryFn: () => createCommandApi().getRunSession(runSessionId),
+  });
+}
+
+export function useRunEventsQuery(input: { runSessionId: string; actorId: string }) {
+  return useQuery({
+    queryKey: queryKeys.runEvents(input.runSessionId, input.actorId),
+    queryFn: () => createCommandApi().listRunEvents(input.runSessionId, { actorId: input.actorId }),
   });
 }
 
@@ -182,6 +194,88 @@ export function useReviewQuery(reviewPacketId: string) {
   return useQuery({
     queryKey: queryKeys.review(reviewPacketId),
     queryFn: () => createQueryApi().getReview(reviewPacketId),
+  });
+}
+
+export function useMarkPackageReadyMutation(packageId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: { actor_id?: string; expected_package_version: number }) =>
+      createCommandApi().markPackageReady(packageId, body),
+    onSuccess: (executionPackage) => setPackageDetail(queryClient, packageId, executionPackage),
+  });
+}
+
+export function useRunPackageMutation(packageId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { actorId: string; executorType?: 'mock' | 'local_codex'; workflowOnly?: boolean }) =>
+      createCommandApi().runPackage(packageId, input.actorId, {
+        execution_package_id: packageId,
+        ...(input.executorType === undefined ? {} : { executor_type: input.executorType }),
+        ...(input.workflowOnly === undefined ? {} : { workflow_only: input.workflowOnly }),
+      }),
+    onSuccess: () => invalidatePackageDetail(queryClient, packageId),
+  });
+}
+
+export function useRerunPackageMutation(packageId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { actorId: string; previousRunSessionId?: string }) =>
+      createCommandApi().rerunPackage(packageId, input.actorId, {
+        execution_package_id: packageId,
+        ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
+      }),
+    onSuccess: () => invalidatePackageDetail(queryClient, packageId),
+  });
+}
+
+export function useForceRerunPackageMutation(packageId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { actorId: string; reason: string; previousRunSessionId?: string }) =>
+      createCommandApi().forceRerunPackage(packageId, input.actorId, {
+        execution_package_id: packageId,
+        force: true,
+        force_reason: input.reason,
+        ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
+      }),
+    onSuccess: () => invalidatePackageDetail(queryClient, packageId),
+  });
+}
+
+export function useSendRunInputMutation(runSessionId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { actorId: string; message: string; targetTurnId?: string }) =>
+      createCommandApi().sendRunInput(runSessionId, input.actorId, input.message, input.targetTurnId),
+    onSuccess: () => invalidateRunDetail(queryClient, runSessionId),
+  });
+}
+
+export function useCancelRunMutation(runSessionId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { actorId: string; reason?: string }) =>
+      createCommandApi().cancelRun(runSessionId, input.actorId, input.reason),
+    onSuccess: () => invalidateRunDetail(queryClient, runSessionId),
+  });
+}
+
+export function useResumeRunMutation(runSessionId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { actorId: string; reason?: string }) =>
+      createCommandApi().resumeRun(runSessionId, input.actorId, input.reason),
+    onSuccess: () => invalidateRunDetail(queryClient, runSessionId),
   });
 }
 
@@ -290,6 +384,42 @@ function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string 
   }
 
   return queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
+}
+
+function invalidatePackageDetail(queryClient: QueryClient, packageId: string) {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.package(packageId) });
+}
+
+function setPackageDetail(queryClient: QueryClient, packageId: string, executionPackage: ExecutionPackage) {
+  queryClient.setQueryData<ExecutionPackage>(queryKeys.package(packageId), executionPackage);
+}
+
+function invalidateRunDetail(queryClient: QueryClient, runSessionId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.run(runSessionId) }),
+    queryClient.invalidateQueries({ queryKey: ['run-events', runSessionId] }),
+  ]);
+}
+
+function normalizePackageRunQuery(query: ListProductQuery): ListProductQuery {
+  return {
+    project_id: query.project_id,
+    ...(query.work_item_id === undefined ? {} : { work_item_id: query.work_item_id }),
+    ...(query.plan_revision_id === undefined ? {} : { plan_revision_id: query.plan_revision_id }),
+    ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
+    ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
+    ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
+    ...(query.surface_type === undefined ? {} : { surface_type: query.surface_type }),
+    ...(query.phase === undefined ? {} : { phase: query.phase }),
+    ...(query.status === undefined ? {} : { status: query.status }),
+    ...(query.risk === undefined ? {} : { risk: query.risk }),
+    ...(query.blocked === undefined ? {} : { blocked: query.blocked }),
+    ...(query.executor_type === undefined ? {} : { executor_type: query.executor_type }),
+    ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
+    ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+  };
 }
 
 function updateWorkItemCockpit(

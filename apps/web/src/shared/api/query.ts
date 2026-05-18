@@ -2,7 +2,6 @@ import { createApiContext, type ForgeloopApiOptions } from './common';
 import { productListResponseSchema } from '@forgeloop/contracts';
 import type {
   CockpitResponse,
-  ExecutionPackage,
   ListProductQuery,
   ProductListResponse,
   ReleaseCockpitResponse,
@@ -11,7 +10,6 @@ import type {
   RoleWorkbenchId,
   RoleWorkbenchQuery,
   RoleWorkbenchResponse,
-  RunSession,
   TimelineEntry,
   WorkItem,
 } from './types';
@@ -20,12 +18,12 @@ export interface ProjectQuery {
   project_id: string;
 }
 
-export type ProductRegistryQuery = Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>;
+export type ProductRegistryQuery = ListProductQuery;
 
 const queryString = (params: object = {}) => {
   const searchParams = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (typeof value === 'string' || typeof value === 'number') {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       searchParams.set(key, String(value));
     }
   }
@@ -42,10 +40,12 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       productListResponseSchema.parse(await request<unknown>(`/query/specs${queryString(query)}`)) as ProductListResponse,
     listPlans: async (query: ProductRegistryQuery) =>
       productListResponseSchema.parse(await request<unknown>(`/query/plans${queryString(query)}`)) as ProductListResponse,
-    listPackages: (query: ProjectQuery) => request<ExecutionPackage[]>(`/query/packages${queryString(query)}`),
-    getPackage: (packageId: string) => request<ExecutionPackage>(`/query/packages/${encodeURIComponent(packageId)}`),
-    listRuns: (query: ProjectQuery) => request<RunSession[]>(`/query/runs${queryString(query)}`),
-    getRun: (runSessionId: string) => request<RunSession>(`/query/runs/${encodeURIComponent(runSessionId)}`),
+    listPackages: async (query: ProductRegistryQuery) =>
+      productListResponseSchema.parse(
+        await request<unknown>(`/query/execution-packages${queryString(query)}`),
+      ) as ProductListResponse,
+    listRuns: async (query: ProductRegistryQuery) =>
+      productListResponseSchema.parse(await request<unknown>(`/query/runs${queryString(query)}`)) as ProductListResponse,
     listReviews: (query: ProjectQuery) => request<ReviewPacket[]>(`/query/reviews${queryString(query)}`),
     getReview: (reviewPacketId: string) => request<ReviewPacket>(`/query/reviews/${encodeURIComponent(reviewPacketId)}`),
     listReleases: (query: ProjectQuery) => request<ReleaseListResponse>(`/query/releases${queryString(query)}`),
