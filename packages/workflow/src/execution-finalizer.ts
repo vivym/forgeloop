@@ -5,6 +5,7 @@ import {
   runSpecSchema,
   selfReviewResultSchema,
   type ArtifactRef,
+  type ChangedFile,
   type CheckResult,
   type ExecutorResult,
   type RequestedChange,
@@ -62,6 +63,50 @@ export interface FinalizePackageRunWithExecutorResultInput {
 export type FinalizePackageRunWithExecutorResult = (
   input: FinalizePackageRunWithExecutorResultInput,
 ) => Promise<ExecutePackageRunResult>;
+
+export interface RuntimeSafetyBlocker {
+  code: string;
+  summary: string;
+  retryable?: boolean;
+}
+
+export interface RuntimeFinalizationEvidence {
+  executorResult: ExecutorResult;
+  authoritativeChangedFiles: ChangedFile[];
+  changedFileEvidenceRef?: ArtifactRef;
+  pathPolicy: {
+    ok: boolean;
+    blockerCode?: 'path_policy_actual_changes_rejected' | 'changed_files_unavailable';
+    publicSummary?: string;
+    diagnosticRef?: ArtifactRef;
+  };
+  requiredCheckResults: CheckResult[];
+  primaryArtifactRefs: ArtifactRef[];
+  runtimeBlockers: RuntimeSafetyBlocker[];
+}
+
+export interface TerminalizePackageRunWithRuntimeEvidenceInput {
+  repository: PackageExecutionRepository;
+  runSessionId: string;
+  evidence: RuntimeFinalizationEvidence;
+  workerLease?: { workerId: string; leaseToken: string };
+  now?: () => IsoDateTime;
+}
+
+export interface TerminalizedRunResult {
+  runSessionId: string;
+  status: RunSessionStatus;
+  reviewEligible: boolean;
+  reviewPacketId?: string;
+}
+
+export interface CompletePackageRunReviewFinalizationInput {
+  repository: PackageExecutionRepository;
+  runSessionId: string;
+  selfReview: PackageRunSelfReview;
+  workerLease?: { workerId: string; leaseToken: string };
+  now?: () => IsoDateTime;
+}
 
 const terminalStatuses = new Set<RunSessionStatus>(['succeeded', 'failed', 'timed_out', 'cancelled']);
 
@@ -126,6 +171,94 @@ const terminalStatusFor = (result: ExecutorResult): RunSessionStatus => {
     return 'cancelled';
   }
   return 'failed';
+};
+
+const runtimeEvidenceArtifacts = (evidence: RuntimeFinalizationEvidence): ArtifactRef[] => {
+  const artifacts: ArtifactRef[] = [
+    ...evidence.executorResult.artifacts,
+    ...evidence.primaryArtifactRefs,
+    ...(evidence.changedFileEvidenceRef === undefined ? [] : [evidence.changedFileEvidenceRef]),
+    ...(evidence.pathPolicy.diagnosticRef === undefined ? [] : [evidence.pathPolicy.diagnosticRef]),
+  ];
+  const seen = new Set<string>();
+  const deduped: ArtifactRef[] = [];
+
+  for (const artifact of artifacts) {
+    const key = JSON.stringify(canonicalJsonValue(artifact));
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(clone(artifact));
+    }
+  }
+
+  return deduped;
+};
+
+const runtimePathPolicyBlocker = (evidence: RuntimeFinalizationEvidence): RuntimeSafetyBlocker | undefined => {
+  if (evidence.pathPolicy.ok) {
+    return undefined;
+  }
+
+  return {
+    code: evidence.pathPolicy.blockerCode ?? 'path_policy_actual_changes_rejected',
+    summary: evidence.pathPolicy.publicSummary ?? 'Runtime path policy rejected the actual source changes.',
+    retryable: true,
+  };
+};
+
+const failedBlockingCheckMessage = (checks: CheckResult[]): string | undefined => {
+  const failed = checks.find((check) => check.blocks_review && check.status !== 'succeeded');
+  return failed === undefined ? undefined : `Required check ${failed.check_id} did not pass.`;
+};
+
+const executorResultFromRuntimeEvidence = (evidence: RuntimeFinalizationEvidence): ExecutorResult => {
+  const base = evidence.executorResult;
+  const pathPolicyBlocker = runtimePathPolicyBlocker(evidence);
+  const blockers = [...evidence.runtimeBlockers, ...(pathPolicyBlocker === undefined ? [] : [pathPolicyBlocker])];
+  const blockingCheckMessage = failedBlockingCheckMessage(evidence.requiredCheckResults);
+  const failure =
+    blockers.length > 0
+      ? {
+          kind: 'path_violation' as const,
+          message: blockers.map((blocker) => blocker.summary).join(' '),
+          retryable: blockers.some((blocker) => blocker.retryable !== false),
+        }
+      : blockingCheckMessage !== undefined && base.status === 'succeeded'
+        ? {
+            kind: 'required_check_failed' as const,
+            message: blockingCheckMessage,
+            retryable: true,
+          }
+        : base.failure;
+  const status = blockers.length > 0 || (blockingCheckMessage !== undefined && base.status === 'succeeded') ? 'failed' : base.status;
+  const result: ExecutorResult = {
+    ...base,
+    status,
+    changed_files: evidence.authoritativeChangedFiles.map(clone),
+    checks: evidence.requiredCheckResults.map(clone),
+    artifacts: runtimeEvidenceArtifacts(evidence),
+    raw_metadata: {
+      ...base.raw_metadata,
+      runtime_finalization: canonicalJsonValue({
+        path_policy: {
+          ok: evidence.pathPolicy.ok,
+          blocker_code: evidence.pathPolicy.blockerCode,
+          public_summary: evidence.pathPolicy.publicSummary,
+          diagnostic_ref: evidence.pathPolicy.diagnosticRef,
+        },
+        changed_file_evidence_ref: evidence.changedFileEvidenceRef,
+        runtime_blockers: evidence.runtimeBlockers,
+        primary_artifact_count: evidence.primaryArtifactRefs.length,
+      }),
+    },
+    ...(failure === undefined ? {} : { failure }),
+  };
+
+  if (status === 'succeeded') {
+    delete result.failure;
+  }
+
+  return executorResultSchema.parse(result);
 };
 
 const terminalEventTypeFor = (status: RunSessionStatus): string => {
@@ -608,6 +741,7 @@ interface FinalizationState {
 
 interface PendingSuccessFinalization {
   kind: 'pending_success';
+  context: LoadedRunContext;
   runSession: RunSessionRecord;
   executionPackage: ExecutionPackageRecord;
   runSpec: RunSpec;
@@ -713,6 +847,7 @@ const prepareFinalization = async (
 
   return {
     kind: 'pending_success',
+    context: state.context,
     runSession: terminalRunSession,
     executionPackage: state.context.executionPackage,
     runSpec: state.runSpec,
@@ -764,15 +899,7 @@ const completeSucceededFinalization = async (
 export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecutorResult = async (input) => {
   const at = input.now?.() ?? new Date().toISOString();
   const parsedExecutorResult = executorResultSchema.parse(input.executorResult);
-  const withLeaseFence = <T>(write: (repository: PackageExecutionRepository) => Promise<T>): Promise<T> =>
-    input.workerLease === undefined
-      ? write(input.repository)
-      : input.repository.withActiveRunWorkerLease(input.runSessionId, {
-          ...input.workerLease,
-          now: input.now?.() ?? new Date().toISOString(),
-        }, write);
-
-  const prepared = await withLeaseFence((repository) =>
+  const prepared = await withWorkerLeaseFence(input, (repository) =>
     prepareFinalization(repository, input.runSessionId, parsedExecutorResult, at),
   );
 
@@ -785,10 +912,102 @@ export const finalizePackageRunWithExecutorResult: FinalizePackageRunWithExecuto
     ? await runSelfReview(prepared.runSession, prepared.executionPackage, prepared.runSpec, input.selfReview)
     : undefined;
 
-  const completed = await withLeaseFence((repository) =>
+  const completed = await withWorkerLeaseFence(input, (repository) =>
     completeSucceededFinalization(repository, input.runSessionId, parsedExecutorResult, prepared.runSpec, selfReviewResult, at),
   );
   await flushTraceWrites(input.repository, [...prepared.traceWrites, ...completed.traceWrites]);
+
+  return completed.result;
+};
+
+const withWorkerLeaseFence = <T>(
+  input: {
+    repository: PackageExecutionRepository;
+    runSessionId: string;
+    workerLease?: { workerId: string; leaseToken: string };
+    now?: () => IsoDateTime;
+  },
+  write: (repository: PackageExecutionRepository) => Promise<T>,
+): Promise<T> =>
+  input.workerLease === undefined
+    ? write(input.repository)
+    : input.repository.withActiveRunWorkerLease(input.runSessionId, {
+        ...input.workerLease,
+        now: input.now?.() ?? new Date().toISOString(),
+      }, write);
+
+const reviewEligibleFor = (status: RunSessionStatus, evidence: RuntimeFinalizationEvidence): boolean =>
+  status === 'succeeded' && evidence.pathPolicy.ok && evidence.runtimeBlockers.length === 0;
+
+export const terminalizePackageRunWithRuntimeEvidence = async (
+  input: TerminalizePackageRunWithRuntimeEvidenceInput,
+): Promise<TerminalizedRunResult> => {
+  const at = input.now?.() ?? new Date().toISOString();
+  const parsedExecutorResult = executorResultFromRuntimeEvidence(input.evidence);
+  const prepared = await withWorkerLeaseFence(input, (repository) =>
+    prepareFinalization(repository, input.runSessionId, parsedExecutorResult, at),
+  );
+
+  if (prepared.kind === 'completed') {
+    await flushTraceWrites(input.repository, prepared.traceWrites);
+    return {
+      ...prepared.result,
+      reviewEligible: reviewEligibleFor(prepared.result.status, input.evidence),
+    };
+  }
+
+  await flushTraceWrites(input.repository, [
+    (traceRepository) =>
+      recordTerminalEvidenceTrace(
+        traceRepository,
+        prepared.context,
+        prepared.runSession,
+        parsedExecutorResult,
+        undefined,
+        terminalTraceTimeFor(prepared.runSession, at),
+      ),
+  ]);
+
+  return {
+    runSessionId: prepared.runSession.id,
+    status: prepared.runSession.status,
+    reviewEligible: reviewEligibleFor(prepared.runSession.status, input.evidence),
+  };
+};
+
+export const completePackageRunReviewFinalization = async (
+  input: CompletePackageRunReviewFinalizationInput,
+): Promise<ExecutePackageRunResult> => {
+  const at = input.now?.() ?? new Date().toISOString();
+  const prepared = await withWorkerLeaseFence(input, async (repository) => {
+    const runSession = assertFound(await repository.getRunSession(input.runSessionId), `RunSession ${input.runSessionId}`);
+    if (!terminalStatuses.has(runSession.status)) {
+      throw new Error(`Run session ${input.runSessionId} must be terminalized before review finalization`);
+    }
+    if (runSession.status !== 'succeeded') {
+      throw new Error(`Run session ${input.runSessionId} is not review-eligible`);
+    }
+
+    const parsedExecutorResult = executorResultSchema.parse(
+      assertFound(runSession.executor_result, `ExecutorResult ${input.runSessionId}`),
+    );
+    const preparedFinalization = await prepareFinalization(repository, input.runSessionId, parsedExecutorResult, at);
+    return { parsedExecutorResult, preparedFinalization };
+  });
+
+  if (prepared.preparedFinalization.kind === 'completed') {
+    await flushTraceWrites(input.repository, prepared.preparedFinalization.traceWrites);
+    return prepared.preparedFinalization.result;
+  }
+
+  const pending = prepared.preparedFinalization;
+  const selfReviewResult = pending.needsSelfReview
+    ? await runSelfReview(pending.runSession, pending.executionPackage, pending.runSpec, input.selfReview)
+    : undefined;
+  const completed = await withWorkerLeaseFence(input, (repository) =>
+    completeSucceededFinalization(repository, input.runSessionId, prepared.parsedExecutorResult, pending.runSpec, selfReviewResult, at),
+  );
+  await flushTraceWrites(input.repository, [...pending.traceWrites, ...completed.traceWrites]);
 
   return completed.result;
 };

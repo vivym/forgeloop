@@ -15,6 +15,7 @@ import {
   type RunSession,
   type WorkItem,
 } from '../../packages/domain/src/index';
+import { buildPackageRuntimePolicySnapshot, RUNTIME_POLICY_SOURCE_PATH, runtimePolicyFromDocument } from '../../packages/executor/src/index';
 
 const timestamp = '2026-05-05T00:00:00.000Z';
 
@@ -25,6 +26,28 @@ const requiredCheck = {
   timeout_seconds: 120,
   blocks_review: true,
 };
+
+const workflowPolicySnapshot = (input: {
+  allowedPaths: string[];
+  forbiddenPaths: string[];
+  requiredChecks: ExecutionPackage['required_checks'];
+  sourceMutationPolicy: ExecutionPackage['source_mutation_policy'];
+}): NonNullable<ExecutionPackage['package_policy_snapshot']> =>
+  buildPackageRuntimePolicySnapshot({
+    loadedPolicy: runtimePolicyFromDocument({
+      document: {
+        codex: { primary_executor: 'mock', network_mode: 'disabled' },
+        path_policy: { allowed_paths: input.allowedPaths, forbidden_paths: input.forbiddenPaths },
+        observability: { public_summary: 'Domain tests are required before review.' },
+      },
+      markdownBody: '',
+      loadedAt: timestamp,
+    }),
+    executionPackageChecks: input.requiredChecks,
+    executionPackagePathPolicy: { allowed_paths: input.allowedPaths, forbidden_paths: input.forbiddenPaths },
+    validationStrategy: 'checks_required',
+    sourceMutationPolicy: input.sourceMutationPolicy,
+  });
 
 const executionSummaryArtifact = {
   kind: 'execution_summary',
@@ -76,30 +99,63 @@ const packageBase = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackag
   required_artifact_kinds: ['execution_summary', 'diff'],
   allowed_paths: ['packages/domain/**', 'tests/domain/**'],
   forbidden_paths: ['apps/**'],
+  source_mutation_policy: 'path_policy_scoped',
   version: 0,
   policy_snapshot_status: 'captured',
   policy_snapshot_version: 1,
-  package_policy_snapshot: {
-    policy_snapshot_version: 1,
-    policy_digest: 'policy-digest-1',
-    policy_source_path: 'policies/runtime-policy.json',
-    policy_loaded_at: timestamp,
-    policy_last_known_good: true,
-    hooks: [],
-    command_policy: { default_timeout_ms: 120_000 },
-    check_policy: { required_checks: ['domain-tests'] },
-    env_policy: { allowed: ['CI'] },
-    path_policy: { allowed_paths: ['packages/domain/**', 'tests/domain/**'] },
-    codex_runtime_mode: 'mock',
-    fallback_policy: { allow_exec_fallback: false },
-    validation_strategy_version: 1,
-    validation_strategy: 'checks_required',
-    validation_public_summary: 'Domain tests are required before review.',
-  },
+  package_policy_snapshot: workflowPolicySnapshot({
+    allowedPaths: ['packages/domain/**', 'tests/domain/**'],
+    forbiddenPaths: ['apps/**'],
+    requiredChecks: [requiredCheck],
+    sourceMutationPolicy: 'path_policy_scoped',
+  }),
   created_at: timestamp,
   updated_at: timestamp,
   ...overrides,
 });
+
+const safeDefaultPolicySnapshot = (
+  overrides: Partial<NonNullable<ExecutionPackage['package_policy_snapshot']>> = {},
+): NonNullable<ExecutionPackage['package_policy_snapshot']> => {
+  const safeDefaultApprovalEvidence = {
+    evidence_type: 'decision' as const,
+    ref_id: 'decision-1',
+    approved_by_actor_id: 'actor-reviewer',
+    approved_by_actor_class: 'human' as const,
+    approved_at: timestamp,
+    summary: 'Reviewed safe default after missing WORKFLOW.md.',
+  };
+  return {
+    ...buildPackageRuntimePolicySnapshot({
+      loadedPolicy: {
+        status: 'missing',
+        policy_source_path: RUNTIME_POLICY_SOURCE_PATH,
+        policy_loaded_at: timestamp,
+        policy_last_known_good: false,
+        blocker_code: 'runtime_policy_missing',
+        diagnostics: [{ code: 'runtime_policy_missing', message: 'WORKFLOW.md is missing.', retryable: false }],
+      },
+      executionPackageChecks: [],
+      executionPackagePathPolicy: { allowed_paths: [], forbidden_paths: [] },
+      validationStrategy: 'checks_required',
+      sourceMutationPolicy: 'no_source_changes',
+      safeDefaultApprovalEvidence,
+    }),
+    ...overrides,
+  };
+};
+
+const safeDefaultPackage = (
+  snapshotOverrides: Partial<NonNullable<ExecutionPackage['package_policy_snapshot']>> = {},
+  packageOverrides: Partial<ExecutionPackage> = {},
+): ExecutionPackage =>
+  packageBase({
+    allowed_paths: [],
+    forbidden_paths: [],
+    source_mutation_policy: 'no_source_changes',
+    package_policy_snapshot: safeDefaultPolicySnapshot(snapshotOverrides),
+    ...packageOverrides,
+  });
 
 const workItem: WorkItem = {
   id: 'work-item-1',
@@ -332,6 +388,19 @@ describe('domain validators', () => {
   );
 
   it('requires policy snapshot metadata to match the package snapshot payload', () => {
+    const { source_mutation_policy: _sourceMutationPolicy, ...snapshotWithoutSourceMutationPolicy } = packageBase().package_policy_snapshot!;
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: snapshotWithoutSourceMutationPolicy as ExecutionPackage['package_policy_snapshot'],
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
     expectDomainError(
       () =>
         validateExecutionPackage(
@@ -378,6 +447,327 @@ describe('domain validators', () => {
             package_policy_snapshot: {
               ...packageBase().package_policy_snapshot!,
               validation_strategy: 'custom',
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+  });
+
+  it('rejects ready source-mutating packages with empty allowed paths', () => {
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            allowed_paths: [],
+            source_mutation_policy: undefined as unknown as ExecutionPackage['source_mutation_policy'],
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            allowed_paths: [],
+            source_mutation_policy: 'path_policy_scoped',
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+  });
+
+  it('rejects malformed source mutation policies from persisted package data', () => {
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            allowed_paths: [],
+            source_mutation_policy: 'no-source-changes' as ExecutionPackage['source_mutation_policy'],
+            package_policy_snapshot: {
+              ...packageBase().package_policy_snapshot!,
+              source_mutation_policy: 'no-source-changes' as ExecutionPackage['source_mutation_policy'],
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...packageBase().package_policy_snapshot!,
+              source_mutation_policy: 'path-policy-scoped' as ExecutionPackage['source_mutation_policy'],
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+  });
+
+  it('rejects ready packages with partial or digest-mismatched frozen runtime policy snapshots', () => {
+    const validSnapshot = packageBase().package_policy_snapshot!;
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...validSnapshot,
+              normalized_policy_payload: undefined,
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...validSnapshot,
+              policy_digest: 'sha256:wrong-policy-digest',
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...validSnapshot,
+              normalized_policy_payload: {
+                parser_version: validSnapshot.normalized_policy_payload!.parser_version,
+                policy_source_path: validSnapshot.normalized_policy_payload!.policy_source_path,
+                normalized_payload_digest: validSnapshot.policy_digest,
+              },
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...validSnapshot,
+              normalized_policy_payload: {
+                ...validSnapshot.normalized_policy_payload!,
+                normalized_markdown_body: 'tampered runtime instructions',
+              },
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            package_policy_snapshot: {
+              ...validSnapshot,
+              env_policy: { allow: ['CI'] },
+            },
+          }),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+  });
+
+  it('allows reviewed safe-default packages that cannot mutate source', () => {
+    expect(() => validateExecutionPackage(project, safeDefaultPackage())).not.toThrow();
+  });
+
+  it('allows reviewed safe-default snapshots built from a missing repo-root WORKFLOW.md policy', () => {
+    const snapshot = buildPackageRuntimePolicySnapshot({
+      loadedPolicy: {
+        status: 'missing',
+        policy_source_path: RUNTIME_POLICY_SOURCE_PATH,
+        policy_loaded_at: timestamp,
+        policy_last_known_good: false,
+        blocker_code: 'runtime_policy_missing',
+        diagnostics: [{ code: 'runtime_policy_missing', message: 'WORKFLOW.md is missing.', retryable: false }],
+      },
+      executionPackageChecks: [],
+      executionPackagePathPolicy: { allowed_paths: [], forbidden_paths: [] },
+      validationStrategy: 'checks_required',
+      sourceMutationPolicy: 'no_source_changes',
+      safeDefaultApprovalEvidence: safeDefaultPolicySnapshot().safe_default_approval_evidence!,
+    });
+
+    expect(() => validateExecutionPackage(project, safeDefaultPackage({}, { package_policy_snapshot: snapshot }))).not.toThrow();
+  });
+
+  it.each([
+    [
+      'non-empty normalized front matter',
+      {
+        normalized_policy_payload: {
+          ...safeDefaultPolicySnapshot().normalized_policy_payload!,
+          normalized_front_matter: { hooks: {} },
+        },
+      },
+    ],
+    [
+      'non-empty normalized markdown body',
+      {
+        normalized_policy_payload: {
+          ...safeDefaultPolicySnapshot().normalized_policy_payload!,
+          normalized_markdown_body: 'policy docs',
+        },
+      },
+    ],
+    [
+      'extra normalized payload keys',
+      {
+        normalized_policy_payload: {
+          ...safeDefaultPolicySnapshot().normalized_policy_payload!,
+          extra_non_empty_policy: { commands: ['should-not-pass'] },
+        },
+      },
+    ],
+    ['array hook policy', { hooks: [] }],
+    ['hooks', { hooks: { before_run: [{ hook_id: 'before' }], after_run: [] } }],
+    ['hook policy extra keys', { hooks: { before_run: [], after_run: [], post_run: [] } }],
+    ['frozen hook policy extra keys', { frozen_hook_specs: { before_run: [], after_run: [], post_run: [] } }],
+    ['source-mutating path policy', { path_policy: { allowed_paths: ['src/**'], forbidden_paths: [] } }],
+    ['non-string forbidden path', { path_policy: { allowed_paths: [], forbidden_paths: [123] } }],
+    ['object forbidden path policy', { path_policy: { allowed_paths: [], forbidden_paths: { glob: 'src/**' } } }],
+    ['path policy extra keys', { path_policy: { allowed_paths: [], forbidden_paths: [], allow_all_repo: true } }],
+    [
+      'source-mutating frozen check',
+      {
+        frozen_command_check_policy: {
+          required_checks: [{ check_id: 'unit', source_write_policy: 'path_policy_scoped' }],
+        },
+      },
+    ],
+    [
+      'invalid frozen check source write policy',
+      {
+        frozen_command_check_policy: {
+          required_checks: [{ check_id: 'unit', source_write_policy: 'workspace_write' }],
+        },
+      },
+    ],
+    [
+      'source-mutating nested frozen check command',
+      {
+        frozen_command_check_policy: {
+          required_checks: [
+            {
+              check_id: 'unit',
+              command: {
+                executable: 'pnpm',
+                args: ['test'],
+                cwd: 'workspace_root',
+                source_write_policy: 'path_policy_scoped',
+              },
+            },
+          ],
+        },
+      },
+    ],
+    ['enabled fallback', { fallback_policy: { mode: 'enabled' } }],
+    ['alternate fallback disabled key', { fallback_policy: { allow_exec_fallback: false } }],
+    ['alternate fallback enabled key', { fallback_policy: { enabled: false } }],
+    ['fallback policy extra keys', { fallback_policy: { mode: 'disabled', allow_exec_fallback: true } }],
+    ['environment allowlist', { env_policy: { allow: ['CI'] } }],
+    ['alternate empty environment allowlist', { env_policy: { allowed: [] } }],
+    ['environment policy extra keys', { env_policy: { allow: [], secret_allow: ['TOKEN'] } }],
+    ['public artifact visibility', { artifact_visibility_policy: { default_visibility: 'public' } }],
+    ['alternate artifact visibility key', { artifact_visibility_policy: { visibility: 'internal' } }],
+    ['artifact visibility extra keys', { artifact_visibility_policy: { default_visibility: 'internal', public_paths: ['logs/**'] } }],
+    ['missing approval evidence', { safe_default_approval_evidence: undefined }],
+    [
+      'invalid approval evidence type',
+      { safe_default_approval_evidence: { ...safeDefaultPolicySnapshot().safe_default_approval_evidence!, evidence_type: 'automation' } },
+    ],
+    [
+      'invalid approval actor class',
+      {
+        safe_default_approval_evidence: {
+          ...safeDefaultPolicySnapshot().safe_default_approval_evidence!,
+          approved_by_actor_role: 'reviewer',
+        },
+      },
+    ],
+    ['null approval evidence', { safe_default_approval_evidence: null }],
+    [
+      'approval evidence extra keys',
+      {
+        safe_default_approval_evidence: {
+          ...safeDefaultPolicySnapshot().safe_default_approval_evidence!,
+          approved_by_actor_class: 'automation_daemon',
+        },
+      },
+    ],
+    ['network digest mismatch', { network_policy_digest: 'egress-allowlist-digest' }],
+    ['network mode mismatch', { codex_runtime_mode: { primary_executor: 'mock', network_mode: 'egress_allowlist' } }],
+    ['network mode extra keys', { codex_runtime_mode: { primary_executor: 'mock', network_mode: 'disabled', egress_allowlist_digest: 'digest' } }],
+    ['null primary executor', { codex_runtime_mode: { primary_executor: null, network_mode: 'disabled' } }],
+    ['missing primary executor', { codex_runtime_mode: { primary_executor: undefined, network_mode: 'disabled' } }],
+    ['unknown primary executor', { codex_runtime_mode: { primary_executor: 'sidecar', network_mode: 'disabled' } }],
+    ['validation evidence refs', { validation_evidence_refs: [executionSummaryArtifact] }],
+    ['object validation evidence refs', { validation_evidence_refs: { length: 0 } }],
+    ['string validation evidence refs', { validation_evidence_refs: '' }],
+  ] as const)('rejects reviewed safe-default packages with %s', (_label, snapshotOverrides) => {
+    expectDomainError(
+      () => validateExecutionPackage(project, safeDefaultPackage(snapshotOverrides)),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+  });
+
+  it('rejects reviewed safe-default packages unless validation strategy is checks_required', () => {
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          safeDefaultPackage(
+            { validation_strategy: 'custom' },
+            {
+              validation_strategy: 'custom',
+              validation_strategy_version: 1,
+              validation_public_summary: 'Manual custom validation is not a safe default.',
+            },
+          ),
+        ),
+      'EXECUTION_PACKAGE_POLICY_INVALID',
+    );
+  });
+
+  it('rejects source mutation policy mismatches between package and snapshot', () => {
+    expectDomainError(
+      () =>
+        validateExecutionPackage(
+          project,
+          packageBase({
+            source_mutation_policy: 'no_source_changes',
+            allowed_paths: [],
+            package_policy_snapshot: {
+              ...packageBase().package_policy_snapshot!,
+              source_mutation_policy: 'path_policy_scoped',
             },
           }),
         ),

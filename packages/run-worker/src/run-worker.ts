@@ -1,4 +1,4 @@
-import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
+import type { ExecutorFailure, ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '../../db/src/index.js';
 import type { RunRuntimeMetadata, RunSession } from '../../domain/src/index.js';
 import type {
@@ -9,7 +9,15 @@ import type {
   SourceRepoSnapshot,
 } from '../../executor/src/index.js';
 import { createDefaultLocalCodexEnvironment, createLocalCodexCheckEnv, snapshotSourceRepoStatus } from '../../executor/src/index.js';
-import { buildAndStartPackageRun, finalizePackageRunWithExecutorResult } from '../../workflow/src/index.js';
+import {
+  buildAndStartPackageRun,
+  completePackageRunReviewFinalization,
+  finalizePackageRunWithExecutorResult,
+  terminalizePackageRunWithRuntimeEvidence,
+  type RuntimeFinalizationEvidence,
+  type RuntimeSafetyBlocker,
+  type TerminalizedRunResult,
+} from '../../workflow/src/index.js';
 
 import { applyPendingRunCommands } from './command-inbox.js';
 import { acquireLeaseForRun, heartbeatLease, releaseLease } from './lease.js';
@@ -98,6 +106,22 @@ const fallbackReason = (reason: unknown): string => {
 const fallbackReasonFromEvent = (item: Extract<CodexDriverStreamItem, { kind: 'event' }>): string =>
   typeof item.event.payload?.reason === 'string' ? item.event.payload.reason : item.event.summary;
 
+const runtimeSafetyFailureSummaries = {
+  runtime_policy_invalid: 'Runtime policy is invalid.',
+  runtime_hard_limits_unavailable: 'Runtime hard limits are unavailable.',
+  sandbox_isolation_unavailable: 'Sandbox isolation is unavailable.',
+  runtime_attestation_invalid: 'Runtime safety attestation is invalid.',
+  primary_executor_governor_unavailable: 'Primary executor governor is unavailable.',
+  fallback_denied_by_policy: 'Executor fallback is denied by policy.',
+  artifact_visibility_denied: 'Artifact visibility policy denied public projection.',
+} as const;
+
+type RuntimeSafetyFailureCode = keyof typeof runtimeSafetyFailureSummaries;
+
+const runtimeSafetyFailureCodePatterns: Array<[RuntimeSafetyFailureCode, RegExp]> = Object.keys(runtimeSafetyFailureSummaries).map(
+  (code) => [code as RuntimeSafetyFailureCode, new RegExp(`(?:^|[^A-Za-z0-9_])${code}(?:$|[^A-Za-z0-9_])`)],
+);
+
 const baseRuntimeMetadata = (runSession: RunSession, workerId: string): RunRuntimeMetadata => ({
   durability_mode: runSession.runtime_metadata?.durability_mode ?? 'durable',
   recovery_attempt_count: runSession.runtime_metadata?.recovery_attempt_count ?? 0,
@@ -120,6 +144,7 @@ const terminalExecutorResult = (input: {
   runSession: RunSession;
   status: 'failed' | 'cancelled';
   summary: string;
+  failure?: ExecutorFailure;
   at: string;
 }): ExecutorResult => ({
   run_session_id: input.runSession.id,
@@ -132,12 +157,57 @@ const terminalExecutorResult = (input: {
   changed_files: [],
   checks: [],
   artifacts: [],
-  failure: {
-    kind: input.status === 'cancelled' ? 'cancelled' : 'executor_error',
-    message: input.summary,
-    retryable: input.status !== 'cancelled',
-  },
+  failure:
+    input.status === 'failed' && input.failure !== undefined
+      ? input.failure
+      : {
+          kind: input.status === 'cancelled' ? 'cancelled' : 'executor_error',
+          message: input.summary,
+          retryable: input.status !== 'cancelled',
+        },
   raw_metadata: {},
+});
+
+const runtimeSafetyBlockersFromExecutorResult = (executorResult: ExecutorResult): RuntimeSafetyBlocker[] => {
+  if (executorResult.status === 'succeeded' || executorResult.failure === undefined) {
+    return [];
+  }
+
+  const evidenceText = [executorResult.failure?.message, executorResult.summary]
+    .filter((value): value is string => value !== undefined && value.length > 0)
+    .join('\n');
+  if (evidenceText.length === 0) {
+    return [];
+  }
+
+  const retryable = executorResult.failure?.retryable;
+  return runtimeSafetyFailureCodePatterns.flatMap(([code, pattern]) =>
+    pattern.test(evidenceText)
+      ? [
+          {
+            code,
+            summary: runtimeSafetyFailureSummaries[code],
+            retryable: retryable ?? code !== 'fallback_denied_by_policy',
+          },
+        ]
+      : [],
+  );
+};
+
+const runtimeEvidenceFromExecutorResult = (executorResult: ExecutorResult): RuntimeFinalizationEvidence => ({
+  executorResult,
+  authoritativeChangedFiles: executorResult.changed_files,
+  requiredCheckResults: executorResult.checks,
+  primaryArtifactRefs: executorResult.artifacts,
+  runtimeBlockers: runtimeSafetyBlockersFromExecutorResult(executorResult),
+  pathPolicy:
+    executorResult.failure?.kind === 'path_violation'
+      ? {
+          ok: false,
+          blockerCode: 'path_policy_actual_changes_rejected',
+          publicSummary: executorResult.failure.message,
+        }
+      : { ok: true },
 });
 
 const fakeEnvironment = (): LocalCodexEnvironment => ({
@@ -170,6 +240,11 @@ const isRealLocalCodexDriverRun = (runSession: RunSession, driver: CodexSessionD
   runSession.run_spec?.executor_type === 'local_codex' &&
   runSession.run_spec.workflow_only !== true &&
   (driver.kind === 'app_server' || driver.kind === 'exec_fallback');
+
+const isRealLocalCodexRuntime = (runSession: RunSession): boolean =>
+  runSession.run_spec?.executor_type === 'local_codex' &&
+  runSession.run_spec.workflow_only !== true &&
+  (runSession.runtime_metadata?.driver_kind === 'app_server' || runSession.runtime_metadata?.driver_kind === 'exec_fallback');
 
 const runtimeMetadataSourceSnapshot = (runtimeMetadata: RunRuntimeMetadata | undefined): SourceRepoSnapshot | undefined => {
   if (
@@ -920,8 +995,30 @@ export class RunWorker {
         runSession: latest,
         status: terminal.status,
         summary: terminal.summary,
+        ...(terminal.failure === undefined ? {} : { failure: terminal.failure }),
         at,
       });
+    }
+
+    if (isRealLocalCodexRuntime(latest)) {
+      const terminalized = await terminalizePackageRunWithRuntimeEvidence({
+        repository: this.repository,
+        runSessionId: latest.id,
+        evidence: runtimeEvidenceFromExecutorResult(executorResult),
+        workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
+        now: () => at,
+      });
+      await this.recordAfterRunDiagnosticsBestEffort(latest, terminalized, lease);
+      if (terminalized.reviewEligible) {
+        await completePackageRunReviewFinalization({
+          repository: this.repository,
+          runSessionId: latest.id,
+          selfReview: this.selfReview,
+          workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
+          now: () => this.now(),
+        });
+      }
+      return;
     }
 
     await finalizePackageRunWithExecutorResult({
@@ -932,6 +1029,53 @@ export class RunWorker {
       workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
       now: () => at,
     });
+  }
+
+  private async recordAfterRunDiagnosticsBestEffort(
+    runSession: RunSession,
+    terminalized: TerminalizedRunResult,
+    lease: OwnedRun,
+  ): Promise<void> {
+    try {
+      await this.recordAfterRunDiagnostics(runSession, terminalized, lease);
+    } catch (error) {
+      console.warn('[forgeloop:run-worker] after_run diagnostics persistence failed', {
+        run_session_id: runSession.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async recordAfterRunDiagnostics(
+    runSession: RunSession,
+    terminalized: TerminalizedRunResult,
+    lease: OwnedRun,
+  ): Promise<void> {
+    const at = this.now();
+    await this.repository.appendWorkerRunEvent(
+      {
+        id: `run-event:${runSession.id}:after-run-diagnostics:${at}`,
+        run_session_id: runSession.id,
+        event_type: 'after_run_diagnostics_recorded',
+        source: 'worker',
+        visibility: 'internal',
+        summary: 'after_run hooks skipped because read-only source enforcement is unavailable.',
+        payload: {
+          terminal_status: terminalized.status,
+          review_finalization_eligible: terminalized.reviewEligible,
+          diagnostics: [
+            {
+              phase: 'after_run',
+              status: 'skipped',
+              reason_code: 'after_run_read_only_unavailable',
+              summary: 'after_run hook skipped because read-only source enforcement is unavailable.',
+            },
+          ],
+        },
+        created_at: at,
+      },
+      { workerId: lease.workerId, leaseToken: lease.leaseToken },
+    );
   }
 
   private startHeartbeat(lease: OwnedRun, control: RunControl): { done: Promise<void> } {

@@ -67,6 +67,19 @@ export interface RuntimeSnapshotRepo {
   policyProjection?: RuntimePolicyProjection;
 }
 
+export interface RuntimeSnapshotBlocker {
+  targetObjectType: string;
+  targetObjectId: string;
+  targetRevisionId?: string;
+  repoId?: string;
+  blockedReasonCode: string;
+  blockedSummary: string;
+  retryable: boolean;
+  policyDigest?: string;
+  policySnapshotVersion?: number;
+  diagnosticRef?: string;
+}
+
 export interface RuntimeSnapshotTarget {
   targetObjectType: string;
   targetObjectId: string;
@@ -81,6 +94,7 @@ export interface RuntimeSnapshotTarget {
   latestMatchingActionStatus?: string;
   blockedReasonCode?: string;
   blockedSummary?: string;
+  blockers?: RuntimeSnapshotBlocker[];
   generationKey?: string;
   disabledReason?: 'run_enqueue_disabled_by_scope';
 }

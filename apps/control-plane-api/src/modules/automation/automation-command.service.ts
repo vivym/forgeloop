@@ -70,8 +70,7 @@ import type {
   RequestManualPathCommandDto,
 } from './automation.dto';
 import {
-  DEFAULT_PACKAGE_POLICY_DIGEST,
-  DEFAULT_PACKAGE_POLICY_SOURCE_PATH,
+  DEFAULT_SOURCE_MUTATION_POLICY,
   defaultPackagePolicyFields,
 } from '../execution-packages/package-policy-fields';
 
@@ -590,11 +589,6 @@ export class AutomationCommandService {
       }
 
       try {
-        assertRuntimeSafetyAttestation(input.runtimeSafetyAttestation, {
-          executorType: input.executorType,
-          workflowOnly: input.workflowOnly,
-          now: this.now(),
-        });
         const settings = await repository.resolveAutomationProjectSettings({
           project_id: precondition.project_id,
           ...(precondition.repo_id === undefined ? {} : { repo_id: precondition.repo_id }),
@@ -609,6 +603,23 @@ export class AutomationCommandService {
         ) {
           throw new ConflictException('Execution package scope no longer matches automation precondition');
         }
+        assertRuntimeSafetyAttestation(input.runtimeSafetyAttestation, {
+          executorType: input.executorType,
+          workflowOnly: input.workflowOnly,
+          now: this.now(),
+          expected: {
+            executionPackageId: executionPackage.id,
+            expectedPackageVersion: input.expectedPackageVersion,
+            projectId: executionPackage.project_id,
+            repoId: executionPackage.repo_id,
+            ...(executionPackage.package_policy_snapshot === undefined
+              ? {}
+              : { policySnapshot: executionPackage.package_policy_snapshot }),
+            ...(executionPackage.policy_snapshot_version === undefined
+              ? {}
+              : { policySnapshotVersion: executionPackage.policy_snapshot_version }),
+          },
+        });
         await this.assertExecutionPackageGraphStillCurrent(repository, executionPackage);
         const activeHolds = await repository.listActiveManualPathHolds({
           object_type: 'execution_package',
@@ -1097,12 +1108,32 @@ export class AutomationCommandService {
       regenerationApproval: input.regenerationApproval,
     });
     const packageRepoId = this.packageDraftRepoIdFor(context.project, input.precondition.repo_id);
+    const generatedRequiredChecks = [
+      {
+        check_id: 'unit',
+        display_name: 'Unit tests',
+        command: 'pnpm test tests/api',
+        timeout_seconds: 120,
+        blocks_review: true,
+      },
+    ];
+    const generatedAllowedPaths = ['apps/control-plane-api/**', 'tests/api/**'];
+    const generatedForbiddenPaths = ['packages/db/**'];
+    const generatedPolicyFields = await defaultPackagePolicyFields(repository, {
+      projectId: context.project.id,
+      repoId: packageRepoId,
+      loadedAt: this.now(),
+      requiredChecks: generatedRequiredChecks,
+      allowedPaths: generatedAllowedPaths,
+      forbiddenPaths: generatedForbiddenPaths,
+      sourceMutationPolicy: DEFAULT_SOURCE_MUTATION_POLICY,
+    });
 
     const generationRun = await repository.claimExecutionPackageGenerationRun({
       plan_revision_id: input.planRevisionId,
       generation_key: input.generationKey,
       generator_version: 'mock-package-drafter@1',
-      policy_digest: DEFAULT_PACKAGE_POLICY_DIGEST,
+      policy_digest: generatedPolicyFields.package_policy_snapshot!.policy_digest,
       manifest_digest: 'api-package-v1',
       expected_package_count: 1,
       expected_package_keys: ['api-package'],
@@ -1138,36 +1169,14 @@ export class AutomationCommandService {
           owner_actor_id: context.workItem.owner_actor_id,
           reviewer_actor_id: context.workItem.owner_actor_id,
           qa_owner_actor_id: context.workItem.owner_actor_id,
-          required_checks: [
-            {
-              check_id: 'unit',
-              display_name: 'Unit tests',
-              command: 'pnpm test tests/api',
-              timeout_seconds: 120,
-              blocks_review: true,
-            },
-          ],
+          required_checks: generatedRequiredChecks,
           required_artifact_kinds: ['execution_summary'],
-          allowed_paths: ['apps/control-plane-api/**', 'tests/api/**'],
-          forbidden_paths: ['packages/db/**'],
+          allowed_paths: generatedAllowedPaths,
+          forbidden_paths: generatedForbiddenPaths,
+          source_mutation_policy: DEFAULT_SOURCE_MUTATION_POLICY,
           at: this.now(),
         }),
-        ...defaultPackagePolicyFields({
-          policyDigest: DEFAULT_PACKAGE_POLICY_DIGEST,
-          policySourcePath: DEFAULT_PACKAGE_POLICY_SOURCE_PATH,
-          loadedAt: this.now(),
-          requiredChecks: [
-            {
-              check_id: 'unit',
-              display_name: 'Unit tests',
-              command: 'pnpm test tests/api',
-              timeout_seconds: 120,
-              blocks_review: true,
-            },
-          ],
-          allowedPaths: ['apps/control-plane-api/**', 'tests/api/**'],
-          forbiddenPaths: ['packages/db/**'],
-        }),
+        ...generatedPolicyFields,
         execution_package_set_id: generationRun.execution_package_set_id,
         generation_key: input.generationKey,
         package_key: 'api-package',

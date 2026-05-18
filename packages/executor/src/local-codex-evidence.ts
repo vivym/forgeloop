@@ -1,8 +1,7 @@
-import { exec } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
-import { promisify } from 'node:util';
 
+import { resourceLimitDigest } from '@forgeloop/domain';
 import type {
   ArtifactRef,
   ChangedFile,
@@ -11,13 +10,22 @@ import type {
   ExecutorResult,
   RunSpec,
 } from '../../contracts/src/executor.js';
+import {
+  deriveAuthoritativeChangedFiles,
+  runAuthoritativeGitForStdout,
+} from './authoritative-changed-files.js';
 import type { LocalCodexEnvironment } from './local-codex-preflight.js';
+import type { LocalCodexRuntimeSafety } from './local-codex-preflight.js';
+import { compileEffectivePathPolicy, type RawPathPolicy } from './path-policy.js';
+import {
+  runRequiredChecks,
+  type FrozenStructuredCheckPolicy,
+} from './required-check-runner.js';
 import {
   verifySourceRepoUnchanged,
   type SourceRepoSnapshot,
 } from './source-repo-guard.js';
-
-const execAsync = promisify(exec);
+import { legacyRequiredCheckToStructuredCommand, StructuredCommandError } from './structured-command.js';
 
 const EXECUTOR_VERSION = '0.1.0';
 const GIT_OUTPUT_MAX_BUFFER = 1024 * 1024 * 50;
@@ -28,6 +36,11 @@ interface CommandExecutionResult {
   stdout: string;
   stderr: string;
   durationSeconds: number;
+}
+
+interface ChangedFileCapture {
+  changedFiles: ChangedFile[];
+  artifacts: ArtifactRef[];
 }
 
 export interface LocalCodexEvidenceInput {
@@ -41,6 +54,7 @@ export interface LocalCodexEvidenceInput {
   checkEnv: NodeJS.ProcessEnv;
   sourceRepoSnapshot: SourceRepoSnapshot;
   effectiveDangerousMode: 'confirmed' | 'unconfirmed' | 'not_requested';
+  runtimeSafety?: LocalCodexRuntimeSafety;
 }
 
 export type CaptureLocalCodexEvidence = (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
@@ -73,6 +87,26 @@ const assertInside = (root: string, candidate: string): string => {
   }
 
   return resolvedCandidate;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const rawPathPolicyFrom = (value: unknown): RawPathPolicy => {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const allowedPaths = Array.isArray(value.allowed_paths)
+    ? value.allowed_paths.filter((entry): entry is string => typeof entry === 'string')
+    : undefined;
+  const forbiddenPaths = Array.isArray(value.forbidden_paths)
+    ? value.forbidden_paths.filter((entry): entry is string => typeof entry === 'string')
+    : undefined;
+  return {
+    ...(allowedPaths === undefined ? {} : { allowed_paths: allowedPaths }),
+    ...(forbiddenPaths === undefined ? {} : { forbidden_paths: forbiddenPaths }),
+    ...(value.allow_all_repo === true ? { allow_all_repo: true } : {}),
+  };
 };
 
 const rawMetadataFor = (
@@ -172,7 +206,48 @@ const pathIsAllowed = (path: string, allowedPatterns: readonly string[]) =>
 const pathIsForbidden = (path: string, forbiddenPatterns: readonly string[]) =>
   forbiddenPatterns.some((pattern) => path.startsWith(globPrefix(pattern)));
 
-const pathViolation = (runSpec: RunSpec, changedFiles: readonly ChangedFile[]): ExecutorFailure | undefined => {
+const pathViolation = (
+  runSpec: RunSpec,
+  changedFiles: readonly ChangedFile[],
+  runtimeSafety?: LocalCodexRuntimeSafety,
+): ExecutorFailure | undefined => {
+  if (runtimeSafety?.frozenSnapshot !== undefined) {
+    try {
+      const snapshot = runtimeSafety.frozenSnapshot;
+      const policy = compileEffectivePathPolicy({
+        packagePolicy: {
+          allowed_paths: runSpec.allowed_paths,
+          forbidden_paths: runSpec.forbidden_paths,
+        },
+        snapshotPolicy: rawPathPolicyFrom(snapshot.path_policy),
+        packageValidationStrategy: snapshot.validation_strategy,
+        snapshotValidationStrategy: snapshot.validation_strategy,
+        sourceMutationPolicy: runSpec.source_mutation_policy,
+      });
+      for (const changedFile of changedFiles) {
+        const result = policy.evaluateChangedFile({
+          path: changedFile.path,
+          ...(changedFile.previous_path === undefined ? {} : { previous_path: changedFile.previous_path }),
+          ...(changedFile.change_kind === undefined ? {} : { change_kind: changedFile.change_kind }),
+        });
+        if (!result.allowed) {
+          return {
+            kind: 'path_violation',
+            message: `Changed file is outside allowed paths or inside forbidden paths: ${result.path ?? changedFile.path}`,
+            retryable: false,
+          };
+        }
+      }
+      return undefined;
+    } catch (error) {
+      return {
+        kind: 'path_violation',
+        message: `Changed file path policy could not be evaluated: ${error instanceof Error ? error.message : 'unknown path policy error'}`,
+        retryable: false,
+      };
+    }
+  }
+
   const violatingFile = changedFiles.find(
     (file) =>
       !pathIsAllowed(file.path, runSpec.allowed_paths) ||
@@ -213,16 +288,68 @@ const writeArtifact = async (
   };
 };
 
+const writeEvidenceArtifact = async (
+  input: {
+    artifactRoot: string;
+    runSessionId: string;
+    runtimeSafety?: LocalCodexRuntimeSafety;
+  },
+  artifact: Omit<ArtifactRef, 'local_ref'>,
+  content: string,
+): Promise<ArtifactRef> => {
+  if (input.runtimeSafety !== undefined) {
+    return input.runtimeSafety.artifactWriter.writeText({
+      kind: artifact.kind,
+      name: artifact.name,
+      contentType: artifact.content_type,
+      content,
+      visibility: 'internal',
+    });
+  }
+
+  return writeArtifact(input.artifactRoot, input.runSessionId, artifact, content);
+};
+
+const evidenceArtifactWriteInput = (
+  artifactRoot: string,
+  runSessionId: string,
+  runtimeSafety: LocalCodexRuntimeSafety | undefined,
+): {
+  artifactRoot: string;
+  runSessionId: string;
+  runtimeSafety?: LocalCodexRuntimeSafety;
+} => ({
+  artifactRoot,
+  runSessionId,
+  ...(runtimeSafety === undefined ? {} : { runtimeSafety }),
+});
+
 const runCheckCommand = async (
+  environment: LocalCodexEnvironment,
   command: string,
   cwd: string,
   timeoutSeconds: number,
   env: NodeJS.ProcessEnv,
 ): Promise<CommandExecutionResult> => {
   const started = performance.now();
+  let commandSpec: ReturnType<typeof legacyRequiredCheckToStructuredCommand>;
+  try {
+    commandSpec = legacyRequiredCheckToStructuredCommand(command);
+  } catch (error) {
+    return {
+      status: 'failed',
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        error instanceof StructuredCommandError
+          ? `Invalid required-check command: ${error.message}`
+          : 'Invalid required-check command.',
+      durationSeconds: (performance.now() - started) / 1000,
+    };
+  }
 
   try {
-    const { stdout, stderr } = await execAsync(command, {
+    const { stdout, stderr } = await environment.runCommand(commandSpec.executable, commandSpec.args ?? [], {
       cwd,
       timeout: timeoutSeconds * 1000,
       maxBuffer: 1024 * 1024 * 10,
@@ -271,8 +398,35 @@ const runChecks = async (
   runSpec: RunSpec,
   workspacePath: string,
   artifactRoot: string,
+  environment: LocalCodexEnvironment,
   env: NodeJS.ProcessEnv,
+  runtimeSafety?: LocalCodexRuntimeSafety,
 ): Promise<{ checks: CheckResult[]; artifacts: ArtifactRef[] }> => {
+  if (runtimeSafety !== undefined) {
+    const commandContext = {
+      ...runtimeSafety.hookCommandContext,
+      workspaceRoot: workspacePath,
+    };
+    const checkRun = await runRequiredChecks({
+      frozenCheckPolicy: runtimeSafety.frozenSnapshot?.frozen_command_check_policy as unknown as FrozenStructuredCheckPolicy,
+      runGovernor: runtimeSafety.runGovernor,
+      artifactWriter: runtimeSafety.artifactWriter,
+      commandContext,
+      primaryExecutionCompleted: true,
+      ...(runtimeSafety.mockRunContext === undefined ? {} : { mockRunContext: runtimeSafety.mockRunContext }),
+    });
+
+    if (!checkRun.ok && checkRun.checks.length === 0) {
+      const blocker = checkRun.blockers[0];
+      throw new Error(blocker?.summary ?? 'Required check execution failed.');
+    }
+
+    return {
+      checks: checkRun.checks,
+      artifacts: checkRun.artifactRefs,
+    };
+  }
+
   const checks: CheckResult[] = [];
   const artifacts: ArtifactRef[] = [];
 
@@ -285,7 +439,7 @@ const runChecks = async (
           stderr: `Blocked forbidden required-check command: ${check.command}`,
           durationSeconds: 0,
         }
-      : await runCheckCommand(check.command, workspacePath, check.timeout_seconds, env);
+      : await runCheckCommand(environment, check.command, workspacePath, check.timeout_seconds, env);
     const stdoutArtifact = await writeArtifact(
       artifactRoot,
       runSpec.run_session_id,
@@ -328,11 +482,79 @@ const collectChangedFiles = async (
   runSpec: RunSpec,
   workspacePath: string,
   env: NodeJS.ProcessEnv,
-): Promise<ChangedFile[]> => {
+  runtimeSafety?: LocalCodexRuntimeSafety,
+  captureLabel = 'changed-files',
+): Promise<ChangedFileCapture> => {
+  if (runtimeSafety !== undefined) {
+    const commandContext = {
+      ...runtimeSafety.hookCommandContext,
+      workspaceRoot: workspacePath,
+      safeGitProfile: 'forgeloop_default' as const,
+    };
+    const result = await deriveAuthoritativeChangedFiles({
+      runSpec,
+      workspaceRoot: workspacePath,
+      baseCommit: runSpec.repo.base_commit_sha,
+      runGovernor: runtimeSafety.runGovernor,
+      commandContext,
+      pathSafety: runtimeSafety.pathSafety,
+      readCommandOutputRef: (ref) => readFile(ref, 'utf8'),
+      outputImporter: runtimeSafety.artifactWriter,
+      outputArtifactNamePrefix: captureLabel,
+      ...(runtimeSafety.mockRunContext === undefined ? {} : { mockRunContext: runtimeSafety.mockRunContext }),
+    });
+
+    if (!result.ok) {
+      throw new Error(result.summary);
+    }
+
+    return {
+      changedFiles: result.changedFiles,
+      artifacts: result.diagnosticRefs,
+    };
+  }
+
   await prepareDiffIndex(environment, workspacePath, env);
   const nameStatus = await statusOutput(environment, workspacePath, ['diff', '--name-status', 'HEAD'], env);
 
-  return parseChangedFiles(runSpec.repo.repo_id, nameStatus);
+  return {
+    changedFiles: parseChangedFiles(runSpec.repo.repo_id, nameStatus),
+    artifacts: [],
+  };
+};
+
+const collectPatchDiff = async (
+  environment: LocalCodexEnvironment,
+  runSpec: RunSpec,
+  workspacePath: string,
+  env: NodeJS.ProcessEnv,
+  runtimeSafety?: LocalCodexRuntimeSafety,
+  captureLabel = 'diff',
+): Promise<string> => {
+  if (runtimeSafety !== undefined) {
+    const commandContext = {
+      ...runtimeSafety.hookCommandContext,
+      workspaceRoot: workspacePath,
+      safeGitProfile: 'forgeloop_default' as const,
+    };
+    if (resourceLimitDigest(commandContext.resourceLimits) !== commandContext.resourceLimitDigest) {
+      throw new Error('Resource limit digest does not match diff capture context.');
+    }
+    const result = await runAuthoritativeGitForStdout({
+      workspaceRoot: workspacePath,
+      commandId: 'authoritative-patch-diff',
+      args: ['diff', '--binary', '--no-ext-diff', '--no-textconv', runSpec.repo.base_commit_sha, '--'],
+      runGovernor: runtimeSafety.runGovernor,
+      commandContext,
+      readCommandOutputRef: (ref) => readFile(ref, 'utf8'),
+      outputImporter: runtimeSafety.artifactWriter,
+      outputArtifactNamePrefix: captureLabel,
+      ...(runtimeSafety.mockRunContext === undefined ? {} : { mockRunContext: runtimeSafety.mockRunContext }),
+    });
+    return result.stdout;
+  }
+
+  return statusOutput(environment, workspacePath, ['diff', 'HEAD'], env);
 };
 
 const captureDiffArtifacts = async (
@@ -342,12 +564,13 @@ const captureDiffArtifacts = async (
   artifactRoot: string,
   summary: string,
   env: NodeJS.ProcessEnv,
+  runtimeSafety?: LocalCodexRuntimeSafety,
+  captureLabel = 'final',
 ): Promise<{ changedFiles: ChangedFile[]; artifacts: ArtifactRef[] }> => {
-  const changedFiles = await collectChangedFiles(environment, runSpec, workspacePath, env);
-  const diff = await statusOutput(environment, workspacePath, ['diff', 'HEAD'], env);
-  const diffArtifact = await writeArtifact(
-    artifactRoot,
-    runSpec.run_session_id,
+  const changedFileCapture = await collectChangedFiles(environment, runSpec, workspacePath, env, runtimeSafety, `${captureLabel}-changed-files`);
+  const diff = await collectPatchDiff(environment, runSpec, workspacePath, env, runtimeSafety, `${captureLabel}-diff`);
+  const diffArtifact = await writeEvidenceArtifact(
+    evidenceArtifactWriteInput(artifactRoot, runSpec.run_session_id, runtimeSafety),
     {
       kind: 'diff',
       name: 'patch.diff',
@@ -355,19 +578,17 @@ const captureDiffArtifacts = async (
     },
     diff,
   );
-  const changedFilesArtifact = await writeArtifact(
-    artifactRoot,
-    runSpec.run_session_id,
+  const changedFilesArtifact = await writeEvidenceArtifact(
+    evidenceArtifactWriteInput(artifactRoot, runSpec.run_session_id, runtimeSafety),
     {
       kind: 'changed_files',
       name: 'changed-files.json',
       content_type: 'application/json',
     },
-    JSON.stringify(changedFiles, null, 2),
+    JSON.stringify(changedFileCapture.changedFiles, null, 2),
   );
-  const summaryArtifact = await writeArtifact(
-    artifactRoot,
-    runSpec.run_session_id,
+  const summaryArtifact = await writeEvidenceArtifact(
+    evidenceArtifactWriteInput(artifactRoot, runSpec.run_session_id, runtimeSafety),
     {
       kind: 'execution_summary',
       name: 'execution-summary.md',
@@ -377,8 +598,8 @@ const captureDiffArtifacts = async (
   );
 
   return {
-    changedFiles,
-    artifacts: [diffArtifact, changedFilesArtifact, summaryArtifact],
+    changedFiles: changedFileCapture.changedFiles,
+    artifacts: [...changedFileCapture.artifacts, diffArtifact, changedFilesArtifact, summaryArtifact],
   };
 };
 
@@ -391,9 +612,8 @@ const diffCaptureFailure = async (
 
   try {
     artifacts = [
-      await writeArtifact(
-        input.artifactRoot,
-        input.runSpec.run_session_id,
+      await writeEvidenceArtifact(
+        evidenceArtifactWriteInput(input.artifactRoot, input.runSpec.run_session_id, input.runtimeSafety),
         {
           kind: 'logs',
           name: 'diff-capture-error.txt',
@@ -510,12 +730,14 @@ export const captureFailedLocalCodexEvidence: CaptureFailedLocalCodexEvidence = 
       input.artifactRoot,
       input.summary,
       input.checkEnv,
+      input.runtimeSafety,
+      'failed-runner',
     );
   } catch (error) {
     return diffCaptureFailure(input, error);
   }
 
-  const pathFailure = pathViolation(input.runSpec, capture.changedFiles);
+  const pathFailure = pathViolation(input.runSpec, capture.changedFiles, input.runtimeSafety);
   const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
     changedFiles: capture.changedFiles,
     checks: [],
@@ -542,14 +764,22 @@ export const captureFailedLocalCodexEvidence: CaptureFailedLocalCodexEvidence = 
 };
 
 export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input) => {
-  let initialChangedFiles: ChangedFile[];
+  let initialCapture: ChangedFileCapture;
   try {
-    initialChangedFiles = await collectChangedFiles(input.environment, input.runSpec, input.workspacePath, input.checkEnv);
+    initialCapture = await collectChangedFiles(
+      input.environment,
+      input.runSpec,
+      input.workspacePath,
+      input.checkEnv,
+      input.runtimeSafety,
+      'initial',
+    );
   } catch (error) {
     return diffCaptureFailure(input, error);
   }
 
-  const initialPathFailure = pathViolation(input.runSpec, initialChangedFiles);
+  const initialChangedFiles = initialCapture.changedFiles;
+  const initialPathFailure = pathViolation(input.runSpec, initialChangedFiles, input.runtimeSafety);
 
   if (initialPathFailure !== undefined) {
     let capture: { changedFiles: ChangedFile[]; artifacts: ArtifactRef[] };
@@ -561,6 +791,8 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
         input.artifactRoot,
         input.summary,
         input.checkEnv,
+        input.runtimeSafety,
+        'initial-path-violation',
       );
     } catch (error) {
       return diffCaptureFailure(input, error);
@@ -568,7 +800,7 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
     const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
       changedFiles: capture.changedFiles,
       checks: [],
-      artifacts: capture.artifacts,
+      artifacts: [...initialCapture.artifacts, ...capture.artifacts],
     });
     if (!sourceRepoVerification.ok) {
       return sourceRepoVerification.result;
@@ -584,26 +816,40 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
         : sourceRepoMutationFailure(),
       changedFiles: capture.changedFiles,
       checks: [],
-      artifacts: capture.artifacts,
+      artifacts: [...initialCapture.artifacts, ...capture.artifacts],
       rawMetadata: rawMetadataFor(input, sourceRepoGuard.afterPorcelain),
     });
   }
 
   let checkRun: { checks: CheckResult[]; artifacts: ArtifactRef[] };
   try {
-    checkRun = await runChecks(input.runSpec, input.workspacePath, input.artifactRoot, input.checkEnv);
+    checkRun = await runChecks(
+      input.runSpec,
+      input.workspacePath,
+      input.artifactRoot,
+      input.environment,
+      input.checkEnv,
+      input.runtimeSafety,
+    );
   } catch (error) {
-    let changedFiles = initialChangedFiles;
+    let changedFileCapture = initialCapture;
     try {
-      changedFiles = await collectChangedFiles(input.environment, input.runSpec, input.workspacePath, input.checkEnv);
+      changedFileCapture = await collectChangedFiles(
+        input.environment,
+        input.runSpec,
+        input.workspacePath,
+        input.checkEnv,
+        input.runtimeSafety,
+        'check-failure',
+      );
     } catch {
-      changedFiles = initialChangedFiles;
+      changedFileCapture = initialCapture;
     }
 
     const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
-      changedFiles,
+      changedFiles: changedFileCapture.changedFiles,
       checks: [],
-      artifacts: [],
+      artifacts: changedFileCapture.artifacts,
     });
     if (!sourceRepoVerification.ok) {
       return sourceRepoVerification.result;
@@ -616,9 +862,9 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
       startedAt: input.startedAt,
       summary: failure.message,
       failure,
-      changedFiles,
+      changedFiles: changedFileCapture.changedFiles,
       checks: [],
-      artifacts: [],
+      artifacts: changedFileCapture.artifacts,
       rawMetadata: rawMetadataFor(input, sourceRepoGuard.afterPorcelain),
     });
   }
@@ -631,12 +877,14 @@ export const captureLocalCodexEvidence: CaptureLocalCodexEvidence = async (input
       input.artifactRoot,
       input.summary,
       input.checkEnv,
+      input.runtimeSafety,
+      'final',
     );
   } catch (error) {
     return diffCaptureFailure(input, error);
   }
-  const artifacts = [...finalCapture.artifacts, ...checkRun.artifacts];
-  const finalPathFailure = pathViolation(input.runSpec, finalCapture.changedFiles);
+  const artifacts = [...initialCapture.artifacts, ...finalCapture.artifacts, ...checkRun.artifacts];
+  const finalPathFailure = pathViolation(input.runSpec, finalCapture.changedFiles, input.runtimeSafety);
   const sourceRepoVerification = await verifySourceRepoForEvidence(input, {
     changedFiles: finalCapture.changedFiles,
     checks: checkRun.checks,

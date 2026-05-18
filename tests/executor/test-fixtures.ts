@@ -24,6 +24,8 @@ export const createRunSpec = (
   return {
     run_session_id: 'run-session-1',
     execution_package_id: 'execution-package-1',
+    project_id: 'project-1',
+    expected_package_version: 1,
     work_item_id: 'work-item-1',
     spec_revision_id: 'spec-revision-1',
     plan_revision_id: 'plan-revision-1',

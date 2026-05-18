@@ -22,6 +22,7 @@ import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-i
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -136,7 +137,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
       .send({
         repo_id: 'repo-1',
         name: 'forgeloop',
-        local_path: '/workspace/forgeloop',
+        local_path: await createWorkflowPolicyRepoRoot(),
         default_branch: 'main',
         base_commit_sha: 'abc123',
       })

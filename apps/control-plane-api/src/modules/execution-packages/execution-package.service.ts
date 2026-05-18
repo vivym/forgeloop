@@ -31,10 +31,8 @@ import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.servic
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type { CreateExecutionPackageDto, MarkPackageReadyDto, PatchExecutionPackageDto } from '../delivery/dto';
 import {
-  DEFAULT_PACKAGE_POLICY_DIGEST,
-  DEFAULT_PACKAGE_POLICY_SOURCE_PATH,
-  MANUAL_PACKAGE_POLICY_DIGEST,
-  MANUAL_PACKAGE_POLICY_SOURCE_PATH,
+  DEFAULT_SOURCE_MUTATION_POLICY,
+  assertAllowedPathsForSourceMutation,
   defaultPackagePolicyFields,
 } from './package-policy-fields';
 
@@ -165,9 +163,34 @@ export class ExecutionPackageService {
             }
           : executionPackage;
       const patch = Object.fromEntries(Object.entries(dto).filter(([, value]) => value !== undefined)) as Partial<ExecutionPackage>;
+      const sourceMutationPolicy = patch.source_mutation_policy ?? editablePackage.source_mutation_policy ?? DEFAULT_SOURCE_MUTATION_POLICY;
+      const allowedPaths = patch.allowed_paths ?? editablePackage.allowed_paths;
+      const forbiddenPaths = patch.forbidden_paths ?? editablePackage.forbidden_paths;
+      const requiredChecks = patch.required_checks ?? editablePackage.required_checks;
+      assertAllowedPathsForSourceMutation(sourceMutationPolicy, allowedPaths);
+      const policySnapshotAffectingPatch =
+        patch.allowed_paths !== undefined ||
+        patch.forbidden_paths !== undefined ||
+        patch.required_checks !== undefined ||
+        patch.source_mutation_policy !== undefined;
+      const policySnapshotVersion = (editablePackage.policy_snapshot_version ?? 1) + (policySnapshotAffectingPatch ? 1 : 0);
+      const packagePolicyFields = policySnapshotAffectingPatch
+        ? await defaultPackagePolicyFields(repository, {
+            projectId: editablePackage.project_id,
+            repoId: editablePackage.repo_id,
+            loadedAt: this.now(),
+            requiredChecks,
+            allowedPaths,
+            forbiddenPaths,
+            sourceMutationPolicy,
+            policySnapshotVersion,
+          })
+        : {};
       const updated: ExecutionPackage = {
         ...editablePackage,
         ...patch,
+        source_mutation_policy: sourceMutationPolicy,
+        ...packagePolicyFields,
         version: editablePackage.version + 1,
         updated_at: this.now(),
       };
@@ -331,6 +354,18 @@ export class ExecutionPackageService {
     source: 'manual' | 'generated' = 'manual',
   ): Promise<ExecutionPackage> {
     const requiredChecks = dto.required_checks;
+    const sourceMutationPolicy = dto.source_mutation_policy ?? DEFAULT_SOURCE_MUTATION_POLICY;
+    assertAllowedPathsForSourceMutation(sourceMutationPolicy, dto.allowed_paths);
+    const createdAt = this.now();
+    const packagePolicyFields = await defaultPackagePolicyFields(repository, {
+      projectId: context.project.id,
+      repoId: dto.repo_id,
+      loadedAt: createdAt,
+      requiredChecks,
+      allowedPaths: dto.allowed_paths,
+      forbiddenPaths: dto.forbidden_paths,
+      sourceMutationPolicy,
+    });
     const executionPackage = {
       ...transitionExecutionPackage(undefined, {
         type: 'generate_package',
@@ -350,7 +385,8 @@ export class ExecutionPackageService {
         required_artifact_kinds: dto.required_artifact_kinds,
         allowed_paths: dto.allowed_paths,
         forbidden_paths: dto.forbidden_paths,
-        at: this.now(),
+        source_mutation_policy: sourceMutationPolicy,
+        at: createdAt,
       }),
       ...(generation === undefined
         ? {}
@@ -362,14 +398,7 @@ export class ExecutionPackageService {
             manifest_digest: generation.manifest_digest,
           }),
       required_test_gates: [],
-      ...defaultPackagePolicyFields({
-        policyDigest: source === 'generated' ? DEFAULT_PACKAGE_POLICY_DIGEST : MANUAL_PACKAGE_POLICY_DIGEST,
-        policySourcePath: source === 'generated' ? DEFAULT_PACKAGE_POLICY_SOURCE_PATH : MANUAL_PACKAGE_POLICY_SOURCE_PATH,
-        loadedAt: this.now(),
-        requiredChecks,
-        allowedPaths: dto.allowed_paths,
-        forbiddenPaths: dto.forbidden_paths,
-      }),
+      ...packagePolicyFields,
     };
     validateExecutionPackage(context.project, executionPackage);
     await repository.saveExecutionPackage(executionPackage);

@@ -105,6 +105,7 @@ export type RoleWorkbenchResponse = z.infer<typeof roleWorkbenchResponseSchema>;
 export const runPackageRequestSchema = z
   .object({
     execution_package_id: z.string().min(1),
+    requested_by_actor_id: z.string().min(1),
     executor_type: executorTypeSchema.optional(),
     workflow_only: z.boolean().default(false),
     idempotency_key: z.string().min(1).optional(),
@@ -118,6 +119,7 @@ export const rerunPackageRequestSchema = z
     previous_run_session_id: z.string().min(1),
     review_packet_id: z.string().min(1).optional(),
     requested_changes_context: z.array(requestedChangeSchema).default([]),
+    requested_by_actor_id: z.string().min(1),
     executor_type: executorTypeSchema.optional(),
     workflow_only: z.boolean().default(false),
     idempotency_key: z.string().min(1).optional(),
@@ -163,6 +165,7 @@ export const runEventTypeSchema = z.enum([
   'executor_result_started',
   'required_check_started',
   'required_check_completed',
+  'after_run_diagnostics_recorded',
   'artifact_captured',
   'run_succeeded',
   'run_failed',

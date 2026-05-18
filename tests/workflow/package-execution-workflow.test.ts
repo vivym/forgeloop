@@ -90,6 +90,8 @@ const executorResult = (runSpec: RunSpec, overrides: Partial<ExecutorResult> = {
 const runSpecFor = (executionPackage: ExecutionPackage, runSessionId: string): RunSpec => ({
   run_session_id: runSessionId,
   execution_package_id: executionPackage.id,
+  project_id: executionPackage.project_id,
+  expected_package_version: executionPackage.version,
   work_item_id: executionPackage.work_item_id,
   spec_revision_id: executionPackage.spec_revision_id,
   plan_revision_id: executionPackage.plan_revision_id,
@@ -153,7 +155,7 @@ const createFixture = async (options: FixtureOptions = {}) => {
     title: 'Ship package workflow',
     goal: 'Execute generated packages.',
     success_criteria: ['A review packet is produced for successful runs.'],
-    priority: 'P0',
+    priority: 'p1',
     risk: 'medium',
     owner_actor_id: 'actor-owner',
     phase: 'execution',
@@ -417,6 +419,27 @@ describe('executePackageRun', () => {
     });
     expect(reviewPackets).toEqual([]);
     expect(selfReviewCalls).toBe(0);
+  });
+
+  it('rejects production local Codex activity execution because run-worker owns the runtime safety boundary', async () => {
+    const { repository, runSessionId } = await createFixture();
+    const runSession = await repository.getRunSession(runSessionId);
+    await repository.saveRunSession({
+      ...runSession!,
+      executor_type: 'local_codex',
+    });
+
+    await expect(
+      executePackageRun({
+        repository,
+        runSessionId,
+        executor: async (runSpec) => executorResult(runSpec),
+        selfReview: async () => successfulSelfReview(),
+        now: () => now,
+        workflowOnly: false,
+      }),
+    ).rejects.toThrow('Production local Codex execution must be handled by run-worker');
+    expect(await repository.getRunSession(runSessionId)).toMatchObject({ status: 'queued' });
   });
 
   it('still creates a ReviewPacket when self-review fails', async () => {

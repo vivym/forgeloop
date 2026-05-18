@@ -122,6 +122,8 @@ export interface ExecutionPackageRecord {
   required_artifact_kinds: ArtifactKind[];
   allowed_paths: string[];
   forbidden_paths: string[];
+  source_mutation_policy?: RunSpec['source_mutation_policy'];
+  version: number;
   last_run_session_id?: string;
   last_failure_summary?: string;
   blocked_reason?: string;
@@ -479,6 +481,8 @@ export const buildRunSpec = (
   const runSpec: RunSpec = {
     run_session_id: context.runSession.id,
     execution_package_id: context.executionPackage.id,
+    project_id: context.executionPackage.project_id,
+    expected_package_version: context.executionPackage.version,
     work_item_id: context.workItem.id,
     spec_revision_id: context.specRevision.id,
     plan_revision_id: context.planRevision.id,
@@ -498,6 +502,7 @@ export const buildRunSpec = (
     },
     review_context: clone(context.reviewContext),
     workflow_only: workflowOnly,
+    source_mutation_policy: context.executionPackage.source_mutation_policy ?? 'path_policy_scoped',
     allowed_paths: [...context.executionPackage.allowed_paths],
     forbidden_paths: [...context.executionPackage.forbidden_paths],
     required_checks: context.executionPackage.required_checks.map(clone),
@@ -770,6 +775,12 @@ const validateExecutorResultForRunSpec = (runSpec: RunSpec, result: ExecutorResu
   return result;
 };
 
+const assertWorkflowActivityCanExecuteRunSpec = (runSpec: RunSpec): void => {
+  if (runSpec.executor_type === 'local_codex' && runSpec.workflow_only !== true) {
+    throw new Error('Production local Codex execution must be handled by run-worker runtime safety boundary.');
+  }
+};
+
 export const executePackageRun = async (input: ExecutePackageRunInput): Promise<ExecutePackageRunResult> => {
   const at = input.now?.() ?? new Date().toISOString();
   const context = await loadRunContext(input.repository, input.runSessionId);
@@ -798,6 +809,13 @@ export const executePackageRun = async (input: ExecutePackageRunInput): Promise<
   if (input.forceRerun !== undefined) {
     buildInput.forceRerun = input.forceRerun;
   }
+  assertWorkflowActivityCanExecuteRunSpec(
+    buildRunSpec(context, {
+      ...(input.defaultExecutorType === undefined ? {} : { defaultExecutorType: input.defaultExecutorType }),
+      ...(input.workflowOnly === undefined ? {} : { workflowOnly: input.workflowOnly }),
+      ...(input.timeoutSeconds === undefined ? {} : { timeoutSeconds: input.timeoutSeconds }),
+    }),
+  );
 
   const started = await buildAndStartPackageRun(buildInput);
   const executorResult = await runExecutorAndNormalize(input.executor, started.runSpec, started.runSession, at);

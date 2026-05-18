@@ -14,6 +14,8 @@ import {
   type PackageRuntimePolicySnapshot,
   type RuntimeHardLimitMode,
   type RuntimeSafetyAttestation,
+  type RuntimeSafetyAttestationScope,
+  type SourceMutationPolicy,
   type WorkItem,
 } from '../../packages/domain/src/index';
 
@@ -47,7 +49,18 @@ describe('domain automation contracts', () => {
     'enforcing',
   ] as const satisfies readonly RuntimeHardLimitMode[];
 
+  const runtimeSafetyAttestationScopes = [
+    'enqueue_preflight',
+    'run_execution',
+  ] as const satisfies readonly RuntimeSafetyAttestationScope[];
+
+  const sourceMutationPolicies = [
+    'path_policy_scoped',
+    'no_source_changes',
+  ] as const satisfies readonly SourceMutationPolicy[];
+
   const runtimeSafetyAttestation = {
+    attestation_scope: 'enqueue_preflight',
     hard_limit_mode: 'test_only_mock',
     environment: 'test',
     executor_type: 'mock',
@@ -65,10 +78,27 @@ describe('domain automation contracts', () => {
     supports_fd_limit: false,
     supports_workspace_disk_limit: false,
     supports_artifact_size_limit: false,
+    network_mode: 'disabled',
+    execution_package_id: 'package-1',
+    expected_package_version: 1,
+    resource_limit_digest: 'resource-limit-digest-1',
+    resource_limits: {
+      cpu_ms: 1_000,
+      memory_mb: 512,
+      pids: 32,
+      fds: 64,
+      workspace_bytes: 1_048_576,
+      artifact_bytes: 1_048_576,
+      timeout_ms: 30_000,
+      output_limit_bytes: 100_000,
+      run_output_limit_bytes: 500_000,
+    },
+    expires_at: '2026-05-05T00:05:00.000Z',
     reason_code: 'test_fixture',
   } satisfies RuntimeSafetyAttestation;
 
   const packageRuntimePolicySnapshot = {
+    snapshot_origin: 'workflow_md',
     policy_snapshot_version: 1,
     policy_digest: 'policy-digest-1',
     policy_source_path: 'policies/runtime-policy.json',
@@ -78,9 +108,18 @@ describe('domain automation contracts', () => {
     command_policy: { default_timeout_ms: 120_000 },
     check_policy: { required_checks: ['domain-tests'] },
     env_policy: { allowed: ['CI'] },
+    workspace_policy: {},
     path_policy: { allowed_paths: ['packages/domain/**'] },
     codex_runtime_mode: 'mock',
+    prompt_policy: {},
+    artifact_visibility_policy: { default_visibility: 'internal' },
     fallback_policy: { allow_exec_fallback: false },
+    env_policy_digest: 'env-digest-1',
+    command_policy_digest: 'command-digest-1',
+    mount_policy_digest: 'mount-digest-1',
+    network_policy_digest: 'network-disabled',
+    safe_git_profile: 'forgeloop_default',
+    source_mutation_policy: 'path_policy_scoped',
     validation_strategy: 'checks_required',
     validation_public_summary: 'Domain tests are required.',
   } satisfies PackageRuntimePolicySnapshot;
@@ -97,7 +136,10 @@ describe('domain automation contracts', () => {
       'repo_policy',
     ]);
     expect(runtimeHardLimitModes).toEqual(['unavailable', 'test_only_mock', 'enforcing']);
+    expect(runtimeSafetyAttestationScopes).toEqual(['enqueue_preflight', 'run_execution']);
+    expect(sourceMutationPolicies).toEqual(['path_policy_scoped', 'no_source_changes']);
     expect(runtimeSafetyAttestation).toMatchObject({
+      attestation_scope: 'enqueue_preflight',
       hard_limit_mode: 'test_only_mock',
       governor_provenance: 'test_only_mock',
       workflow_only: true,
@@ -106,6 +148,7 @@ describe('domain automation contracts', () => {
       policy_snapshot_version: 1,
       validation_strategy: 'checks_required',
       policy_last_known_good: true,
+      source_mutation_policy: 'path_policy_scoped',
     });
   });
 
@@ -153,7 +196,7 @@ describe('domain automation contracts', () => {
     },
   );
 
-  it.each(['daemon', 'system'] as const)('rejects obsolete %s actor class strings', (actorClass) => {
+  it.each(['daemon', 'system'] as const)('rejects legacy %s actor class strings', (actorClass) => {
     expectDomainError(
       () =>
         assertAutomationCapabilityActor({

@@ -7,11 +7,13 @@ import {
   type AutomationPreconditionCapability,
   type AutomationProjectSettings,
   type AutomationScope,
+  type EnqueuePreflightAttestationBinding,
   type ExecutionPackage,
   type ManualPathHold,
   type ReviewPacket,
   type RunSession,
   type RuntimeSafetyAttestation,
+  validateEnqueuePreflightAttestation as validateDomainEnqueuePreflightAttestation,
 } from '@forgeloop/domain';
 import type { ExecutorType } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
@@ -112,38 +114,35 @@ export const assertPackageRunEligible = (input: {
 
 export const assertRuntimeSafetyAttestation = (
   attestation: RuntimeSafetyAttestation | undefined,
-  input: { executorType: ExecutorType; workflowOnly: boolean; now?: string; maxAgeMs?: number },
+  input: {
+    executorType: ExecutorType;
+    workflowOnly: boolean;
+    now: string;
+    maxAgeMs?: number;
+    expected?: Omit<EnqueuePreflightAttestationBinding, 'executorType' | 'workflowOnly' | 'maxAgeMs'>;
+  },
 ): void => {
-  if (attestation === undefined || attestation.hard_limit_mode === 'unavailable') {
-    throw publicAutomationError('runtime_hard_limits_unavailable', 'Runtime hard limits are unavailable.');
-  }
-  if (attestation.executor_type !== input.executorType || attestation.workflow_only !== input.workflowOnly) {
+  if (input.expected === undefined) {
     throw new BadRequestException({
-      code: 'runtime_safety_attestation_mismatch',
-      message: 'Runtime safety attestation does not match the enqueue request.',
+      code: 'runtime_policy_snapshot_missing',
+      message: 'Run enqueue requires a captured package policy snapshot.',
     });
   }
-  if ((attestation.environment === 'production' || input.executorType === 'local_codex') && attestation.hard_limit_mode !== 'enforcing') {
-    throw new BadRequestException({
-      code: 'runtime_hard_limits_not_enforcing',
-      message: 'Production and local Codex run enqueue require enforcing runtime hard limits.',
-    });
-  }
-  if (
-    attestation.hard_limit_mode === 'test_only_mock' &&
-    !(input.executorType === 'mock' && input.workflowOnly === true && attestation.environment !== 'production')
-  ) {
-    throw new BadRequestException({
-      code: 'runtime_test_only_mock_forbidden',
-      message: 'test_only_mock runtime safety attestation is only valid for mock workflow-only local/test runs.',
-    });
-  }
-  const checkedAt = Date.parse(attestation.checked_at);
-  const now = input.now === undefined ? undefined : Date.parse(input.now);
-  if (Number.isNaN(checkedAt) || (now !== undefined && checkedAt + (input.maxAgeMs ?? 5 * 60 * 1000) < now)) {
-    throw new BadRequestException({
-      code: 'runtime_safety_attestation_stale',
-      message: 'Runtime safety attestation is stale.',
-    });
+  const result = validateDomainEnqueuePreflightAttestation({
+    attestation,
+    expected: {
+      executorType: input.executorType,
+      workflowOnly: input.workflowOnly,
+      ...input.expected,
+      ...(input.maxAgeMs === undefined ? {} : { maxAgeMs: input.maxAgeMs }),
+    },
+    now: input.now,
+  });
+  if (!result.ok) {
+    const payload = { code: result.code, message: result.message, ...(result.details ?? {}) };
+    if (result.httpStatus === 422) {
+      throw new UnprocessableEntityException(payload);
+    }
+    throw new BadRequestException(payload);
   }
 };
