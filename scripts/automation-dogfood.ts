@@ -15,7 +15,7 @@ import {
   type ClaimNextActionInput,
   type NextAction,
 } from '../packages/automation/src/index';
-import { InMemoryP0Repository, type P0Repository } from '../packages/db/src/index';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../packages/db/src/index';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
 import {
   automationDogfoodExitCode,
@@ -45,23 +45,23 @@ const reviewerHeaders = {
   'x-forgeloop-actor-class': 'human',
 };
 
-const bootControlPlane = async (): Promise<{ app: INestApplication; repository: P0Repository; baseUrl: string }> => {
-  const [{ AppModule }, { P0_REPOSITORY }, { RUN_WORKER }] = await Promise.all([
+const bootControlPlane = async (): Promise<{ app: INestApplication; repository: DeliveryRepository; baseUrl: string }> => {
+  const [{ AppModule }, { DELIVERY_REPOSITORY }, { DELIVERY_RUN_WORKER }] = await Promise.all([
     import('../apps/control-plane-api/src/app.module'),
     import('../apps/control-plane-api/src/modules/core/control-plane-tokens'),
-    import('../apps/control-plane-api/src/p0/p0.service'),
+    import('../apps/control-plane-api/src/modules/run-control/run-worker.token'),
   ]);
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(P0_REPOSITORY)
-    .useValue(new InMemoryP0Repository())
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_REPOSITORY)
+    .useValue(new InMemoryDeliveryRepository())
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
   const app = moduleRef.createNestApplication({ logger: false, rawBody: true });
   app.useLogger(false);
   await app.listen(0, '127.0.0.1');
   const address = app.getHttpServer().address() as { port: number };
-  return { app, repository: app.get(P0_REPOSITORY) as P0Repository, baseUrl: `http://127.0.0.1:${address.port}` };
+  return { app, repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository, baseUrl: `http://127.0.0.1:${address.port}` };
 };
 
 const createAutomationClient = (baseUrl: string): AutomationHttpClient =>
@@ -101,7 +101,7 @@ const seedDraftOnlyApprovedSpec = async (
     })
     .expect(201);
   await request(server)
-    .post(`/p0/projects/${project.id}/automation/capabilities`)
+    .post(`/automation/projects/${project.id}/capabilities`)
     .set(humanAdminHeaders)
     .send({
       repo_id: repoId,
@@ -140,7 +140,7 @@ const seedDraftOnlyApprovedSpec = async (
 
 const approveCurrentPlan = async (
   app: INestApplication,
-  repository: P0Repository,
+  repository: DeliveryRepository,
   workItemId: string,
 ): Promise<{ plan: Plan; revision: PlanRevision }> => {
   const workItem = await repository.getWorkItem(workItemId);

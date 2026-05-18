@@ -22,7 +22,7 @@ describe('Forgeloop web API client', () => {
       project_id: 'project-1',
       kind: 'requirement',
       title: 'Ship workbench',
-      goal: 'Operate P0 from the browser',
+      goal: 'Operate delivery from the browser',
       success_criteria: ['Create and run a package'],
       priority: 'P0',
       risk: 'medium',
@@ -37,7 +37,7 @@ describe('Forgeloop web API client', () => {
         project_id: 'project-1',
         kind: 'requirement',
         title: 'Ship workbench',
-        goal: 'Operate P0 from the browser',
+        goal: 'Operate delivery from the browser',
         success_criteria: ['Create and run a package'],
         priority: 'P0',
         risk: 'medium',
@@ -59,7 +59,7 @@ describe('Forgeloop web API client', () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/specs/spec-1/approve', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-reviewer', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ actor_id: 'actor-reviewer' }),
     });
   });
@@ -183,22 +183,22 @@ describe('Forgeloop web API client', () => {
       'http://api.local/run-sessions/run-1/events?after=0000000001',
       {
         method: 'GET',
-        headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner' },
+        headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       },
     );
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/run-sessions/run-1/input', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ message: 'continue', target_turn_id: 'turn-1' }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/run-sessions/run-1/cancel', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ reason: 'operator requested stop' }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/run-sessions/run-1/resume', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ reason: 'operator requested resume' }),
     });
   });
@@ -212,16 +212,16 @@ describe('Forgeloop web API client', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events?after=0000000000', expect.any(Object));
   });
 
-  it('propagates actor ids as headers to package run commands while preserving required body actor fields', async () => {
+  it('propagates actor ids as headers to package run commands without body actor fields', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
-    await api.runPackage('package-1', { requested_by_actor_id: 'actor-owner', workflow_only: true });
+    await api.runPackage('package-1', 'actor-owner', { workflow_only: true });
 
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/execution-packages/package-1/run', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
-      body: JSON.stringify({ requested_by_actor_id: 'actor-owner', workflow_only: true }),
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
+      body: JSON.stringify({ workflow_only: true }),
     });
   });
 
@@ -262,7 +262,7 @@ describe('Forgeloop web API client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events/stream-token', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
     });
     expect(instances[0]?.url).toBe('http://api.local/run-sessions/run-1/events/stream?stream_token=stream-token-1&after=0000000001');
     instances[0]?.onmessage?.({ data: JSON.stringify({ id: 'event-1', sequence: 1 }) } as MessageEvent);
@@ -331,12 +331,22 @@ describe('Forgeloop web API client', () => {
 
     await queryApi.getWorkItemCockpit('work item/1');
     await queryApi.getWorkItemReplay('work item/1');
+    await queryApi.getExecutionPackageReplay('package/1');
+    await queryApi.getReviewPacketReplay('review/1');
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/work-item-cockpit/work%20item%2F1', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/root/query/replay/work_item/work%20item%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/query/replay/execution_package/package%2F1', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/query/replay/review_packet/review%2F1', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
@@ -366,6 +376,10 @@ describe('Forgeloop web API client', () => {
     });
     await api.getRelease('release/1', 'project with spaces');
     await api.submitReleaseForApproval('release/1', { actor_id: 'actor-owner' });
+    await api.acknowledgeReleaseTestAcceptance('release/1', {
+      actor_id: 'actor-qa',
+      summary: 'QA accepts the existing test evidence.',
+    });
     await api.overrideApproveRelease('release/1', {
       actor_id: 'actor-owner',
       rationale: 'Accept planning blocker.',
@@ -374,7 +388,7 @@ describe('Forgeloop web API client', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/releases', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({
         actor_id: 'actor-owner',
         project_id: 'project-1',
@@ -387,12 +401,20 @@ describe('Forgeloop web API client', () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/releases/release%2F1/submit-for-approval', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ actor_id: 'actor-owner' }),
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/releases/release%2F1/override-approve', {
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/releases/release%2F1/test-acceptance/acknowledge', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner' },
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-qa', 'X-Forgeloop-Actor-Class': 'human_admin' },
+      body: JSON.stringify({
+        actor_id: 'actor-qa',
+        summary: 'QA accepts the existing test evidence.',
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://api.local/root/releases/release%2F1/override-approve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({
         actor_id: 'actor-owner',
         rationale: 'Accept planning blocker.',
@@ -407,6 +429,11 @@ describe('Forgeloop web API client', () => {
 
     await queryApi.getReleaseCockpit('release/1');
     await queryApi.getReleaseReplay('release/1');
+    await queryApi.getRoleWorkbench('execution-owner', {
+      project_id: 'project 1',
+      actor_id: 'actor-owner',
+      limit: 25,
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/release-cockpit/release%2F1', {
       method: 'GET',
@@ -416,6 +443,35 @@ describe('Forgeloop web API client', () => {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'http://api.local/root/query/workbenches/execution-owner?project_id=project+1&actor_id=actor-owner&limit=25',
+      {
+        method: 'GET',
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  });
+
+  it('fetches role workbench projections with all supported filters', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ summary: {}, items: [] }), { status: 200 }));
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await queryApi.getRoleWorkbench('intake', {
+      project_id: 'project 1',
+      actor_id: 'actor/owner',
+      kind: 'initiative',
+      limit: 25,
+      cursor: 'item 1',
+      phase: 'triage',
+      status: 'needs_review',
+      risk: 'high risk',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/query/workbenches/intake?project_id=project+1&actor_id=actor%2Fowner&kind=initiative&limit=25&cursor=item+1&phase=triage&status=needs_review&risk=high+risk',
+      expect.objectContaining({ method: 'GET' }),
+    );
   });
 
   it('keeps command and query client method surfaces separate', () => {
@@ -430,6 +486,14 @@ describe('Forgeloop web API client', () => {
     }
     expect(commandMethods).not.toContain('getWorkItemCockpit');
     expect(commandMethods).not.toContain('getWorkItemReplay');
-    expect(Object.keys(queryApi).sort()).toEqual(['getReleaseCockpit', 'getReleaseReplay', 'getWorkItemCockpit', 'getWorkItemReplay']);
+    expect(Object.keys(queryApi).sort()).toEqual([
+      'getExecutionPackageReplay',
+      'getReleaseCockpit',
+      'getReleaseReplay',
+      'getReviewPacketReplay',
+      'getRoleWorkbench',
+      'getWorkItemCockpit',
+      'getWorkItemReplay',
+    ]);
   });
 });

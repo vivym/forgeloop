@@ -1,0 +1,129 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { Module } from '@nestjs/common';
+import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
+import type { DeliveryRepository } from '@forgeloop/db';
+import {
+  captureLocalCodexEvidence,
+  CodexAppServerDriver,
+  CodexAppServerProcessTransport,
+  CodexExecFallbackDriver,
+  LocalCodexRawLogStore,
+  type LocalCodexEvidenceInput,
+} from '@forgeloop/executor';
+import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
+
+import { AuditModule } from '../audit/audit.module';
+import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
+import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
+import { ExecutionPackagesModule } from '../execution-packages/execution-packages.module';
+import { ReviewEvidenceModule } from '../review-evidence/review-evidence.module';
+import { ExecutionPackageRunsController } from './execution-package-runs.controller';
+import { RunControlService } from './run-control.service';
+import { RunSessionsController } from './run-sessions.controller';
+import { RunWorkerLifecycleService } from './run-worker-lifecycle.service';
+import { DELIVERY_RUN_WORKER } from './run-worker.token';
+
+const safePathSegment = (value: string): string => {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/^-+|-+$/g, '');
+
+  return sanitized.length > 0 ? sanitized : 'artifact';
+};
+
+const evidenceChangedFilePath = (allowedPaths: string[]): string => {
+  const firstAllowedPath = allowedPaths[0] ?? 'forgeloop-generated.txt';
+  return firstAllowedPath.replace(/\/\*\*$/, '/forgeloop-generated.txt').replace(/\*+$/, 'forgeloop-generated.txt');
+};
+
+const mockSelfReview = (input: SelfReviewInput): SelfReviewResult => ({
+  status: 'succeeded',
+  summary: `Mock self-review completed for run ${input.run_session_id}.`,
+  spec_plan_alignment: 'The mock run uses the approved spec and plan revision ids.',
+  test_assessment: `${input.check_results.length} required checks were reported.`,
+  risk_notes: [],
+  follow_up_questions: [],
+});
+
+const mockEvidence = (input: LocalCodexEvidenceInput): ExecutorResult => ({
+  run_session_id: input.runSpec.run_session_id,
+  executor_type: input.runSpec.executor_type,
+  executor_version: 'control-plane-fake-driver',
+  status: 'succeeded',
+  started_at: input.startedAt,
+  finished_at: new Date().toISOString(),
+  summary: input.summary,
+  changed_files: [
+    {
+      repo_id: input.runSpec.repo.repo_id,
+      path: evidenceChangedFilePath(input.runSpec.allowed_paths),
+      change_kind: 'modified',
+    },
+  ],
+  checks: input.runSpec.required_checks.map((check) => ({
+    check_id: check.check_id,
+    command: check.command,
+    status: 'succeeded',
+    exit_code: 0,
+    duration_seconds: 0,
+    blocks_review: check.blocks_review,
+  })),
+  artifacts: [...new Set(input.runSpec.artifact_policy.requested_artifacts)].map((kind) => ({
+    kind,
+    name: `${kind}.txt`,
+    content_type: 'text/plain',
+    local_ref: join(input.artifactRoot, safePathSegment(input.runSpec.run_session_id), `${kind}.txt`),
+  })),
+  raw_metadata: { workflow_only: input.runSpec.workflow_only },
+});
+
+const createRunWorker = (repository: DeliveryRepository): RunWorker => {
+  const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
+  const rawLogStore = new LocalCodexRawLogStore({ artifactRoot: join(artifactRoot, 'raw-logs') });
+
+  return new RunWorker({
+    repository,
+    workerId: process.env.FORGELOOP_RUN_WORKER_ID ?? 'control-plane-api-worker',
+    driverFactory: ({ runSession }) => {
+      const runSpec = runSession.run_spec;
+      if (runSpec?.executor_type === 'local_codex' && runSpec.workflow_only !== true) {
+        return new CodexAppServerDriver({
+          transport: new CodexAppServerProcessTransport(),
+          rawLogStore,
+        });
+      }
+
+      return new FakeCodexSessionDriver({
+        kind: 'fake',
+        script: [{ kind: 'terminal', status: 'succeeded', summary: 'Fake run completed.' }],
+      });
+    },
+    execFallbackDriverFactory: () => new CodexExecFallbackDriver({ rawLogStore }),
+    evidenceCollector: (input) =>
+      input.runSpec.executor_type === 'local_codex' && input.runSpec.workflow_only !== true
+        ? captureLocalCodexEvidence(input)
+        : Promise.resolve(mockEvidence(input)),
+    selfReview: (input) => Promise.resolve(mockSelfReview(input)),
+    artifactRoot,
+  });
+};
+
+@Module({
+  imports: [ControlPlaneCoreModule, AuditModule, ExecutionPackagesModule, ReviewEvidenceModule],
+  controllers: [ExecutionPackageRunsController, RunSessionsController],
+  providers: [
+    {
+      provide: DELIVERY_RUN_WORKER,
+      useFactory: createRunWorker,
+      inject: [DELIVERY_REPOSITORY],
+    },
+    RunControlService,
+    RunWorkerLifecycleService,
+  ],
+  exports: [DELIVERY_RUN_WORKER, RunControlService, RunWorkerLifecycleService],
+})
+export class RunControlModule {}

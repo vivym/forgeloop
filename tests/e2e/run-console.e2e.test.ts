@@ -13,11 +13,11 @@ import { createServer as createViteServer, type ViteDevServer } from 'vite';
 import { afterEach, describe, expect as expectValue, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import type { InMemoryP0Repository } from '../../packages/db/src';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { transitionRunSession } from '../../packages/domain/src/index';
-import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const viewports = [
@@ -349,11 +349,11 @@ async function waitForProcessExit(process: ChildProcess): Promise<void> {
 async function startApi(): Promise<{
   app: INestApplication;
   apiUrl: string;
-  repo: InMemoryP0Repository;
+  repo: InMemoryDeliveryRepository;
   runSessionId: string;
 }> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
   const app = moduleRef.createNestApplication();
@@ -365,11 +365,11 @@ async function startApi(): Promise<{
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set('X-Forgeloop-Actor-Id', actorOwner)
-      .send({ requested_by_actor_id: actorOwner, executor_type: 'mock', workflow_only: true })
+      .send({ executor_type: 'mock', workflow_only: true })
       .expect(201)
   ).body as { run_session_id: string };
 
-  const repo = app.get(P0_REPOSITORY) as InMemoryP0Repository;
+  const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
   const runSession = await repo.getRunSession(runResponse.run_session_id);
   const running = transitionRunSession(runSession, { type: 'worker_started', at: '2026-05-07T00:00:01.000Z' });
   const waiting = transitionRunSession(running, { type: 'waiting_for_input', at: '2026-05-07T00:00:02.000Z' });

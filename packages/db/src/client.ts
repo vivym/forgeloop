@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type { PoolConfig } from 'pg';
 import { Pool } from 'pg';
 
-import { DrizzleP0Repository, type ForgeloopDrizzleDatabase } from './repositories/drizzle-p0-repository';
+import { DrizzleDeliveryRepository, type ForgeloopDrizzleDatabase } from './repositories/drizzle-delivery-repository';
 import * as schema from './schema';
 
 export type ForgeloopDb = ForgeloopDrizzleDatabase;
@@ -19,4 +19,4 @@ export const createDbClient = (config: PoolConfig = {}): DbClient => {
   return { db, pool };
 };
 
-export const createDrizzleP0Repository = (db: ForgeloopDb) => new DrizzleP0Repository(db);
+export const createDrizzleDeliveryRepository = (db: ForgeloopDb) => new DrizzleDeliveryRepository(db);

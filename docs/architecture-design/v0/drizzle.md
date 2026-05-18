@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 可以。下面给你一版**适合你这个系统的 Drizzle 组织方案**。
 核心思路是：
 

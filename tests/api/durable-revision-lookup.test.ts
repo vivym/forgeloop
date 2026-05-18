@@ -7,12 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { createDbClient, DrizzleP0Repository, type ForgeloopDb, plan_revisions, plans, specs } from '../../packages/db/src';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { createDbClient, DrizzleDeliveryRepository, type ForgeloopDb, plan_revisions, plans, specs } from '../../packages/db/src';
 
 const connectionString =
   process.env.FORGELOOP_TEST_DATABASE_URL?.trim() || process.env.FORGELOOP_DATABASE_URL?.trim() || undefined;
@@ -22,7 +21,7 @@ const assertSafeTestDatabaseUrl = (url: string): void => {
   const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
   if (!databaseName.toLowerCase().includes('test')) {
     throw new Error(
-      `durable revision lookup tests truncate P0 tables; refusing database "${databaseName}". ` +
+      `durable revision lookup tests truncate delivery tables; refusing database "${databaseName}". ` +
         'Set FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL to a disposable database whose name contains "test".',
     );
   }
@@ -58,20 +57,18 @@ describeIfDb('durable revision lookup', () => {
 
   const createDurableApp = async (): Promise<INestApplication> => {
     const { db } = createTrackedClient();
-    const repository = new DrizzleP0Repository(db);
+    const repository = new DrizzleDeliveryRepository(db);
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(false)
       .compile();
     const app = moduleRef.createNestApplication();
     await app.init();
-    expect(app.get(P0_REPOSITORY)).toBe(repository);
+    expect(app.get(DELIVERY_REPOSITORY)).toBe(repository);
     apps.push(app);
     return app;
   };
@@ -137,7 +134,7 @@ describeIfDb('durable revision lookup', () => {
         .send({
           project_id: project.id,
           kind: 'requirement',
-          title: 'Ship P0 control plane API',
+          title: 'Ship delivery control plane API',
           goal: 'Expose the delivery loop commands over REST.',
           success_criteria: ['Spec, plan, package, run, and review commands are available.'],
           priority: 'P0',
@@ -159,12 +156,12 @@ describeIfDb('durable revision lookup', () => {
         .send({
           summary: 'Manual API spec',
           content: 'Manual control plane API spec.',
-          background: 'P0 needs command coverage.',
-          goals: ['Expose P0 commands'],
+          background: 'Delivery needs command coverage.',
+          goals: ['Expose delivery commands'],
           scope_in: ['Control plane API'],
           scope_out: ['Web UI'],
           acceptance_criteria: ['API tests cover the delivery flow'],
-          risk_notes: ['Keep P0 durable for restart tests'],
+          risk_notes: ['Keep delivery durable for restart tests'],
           test_strategy_summary: 'Nest + Supertest API tests',
           author_actor_id: actorOwner,
         })

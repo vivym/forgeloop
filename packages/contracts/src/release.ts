@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { jsonObjectSchema } from './executor.js';
+import { artifactRefSchema, jsonObjectSchema } from './executor.js';
 import { publicArtifactRefSchema } from './public-artifacts.js';
 import { publicMetricsSchema } from './public-evidence-safety.js';
 
@@ -352,6 +352,14 @@ export const approveReleaseRequestSchema = releaseActorCommandRequestSchema.exte
 });
 export type ApproveReleaseRequest = z.infer<typeof approveReleaseRequestSchema>;
 
+export const acknowledgeReleaseTestAcceptanceRequestSchema = releaseActorCommandRequestSchema.extend({
+  summary: z.string().trim().min(1),
+  evidence_refs: z.array(artifactRefSchema).default([]),
+});
+export type AcknowledgeReleaseTestAcceptanceRequest = z.infer<
+  typeof acknowledgeReleaseTestAcceptanceRequestSchema
+>;
+
 export const overrideApproveReleaseRequestSchema = releaseActorCommandRequestSchema.extend({
   rationale: z.string().trim().min(1),
   blocker_snapshot: releaseBlockerSnapshotSchema,
@@ -611,7 +619,9 @@ export const publicReleaseDecisionSchema = z
     object_id: z.string().min(1),
     actor_id: z.string().min(1),
     decided_by_actor_id: z.string().min(1).optional(),
-    decision_type: z.enum(['manual_override', 'release_approval', 'release_changes_requested', 'release_close']).optional(),
+    decision_type: z
+      .enum(['manual_override', 'release_approval', 'release_changes_requested', 'release_close', 'test_acceptance_acknowledged'])
+      .optional(),
     outcome: z
       .enum(['approved', 'changes_requested', 'rejected', 'override_approved', 'rolled_back', 'cancelled', 'completed'])
       .optional(),

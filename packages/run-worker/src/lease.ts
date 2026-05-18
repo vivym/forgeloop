@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import type { P0Repository } from '../../db/src/index.js';
+import type { DeliveryRepository } from '../../db/src/index.js';
 import type { RunWorkerLease } from '../../domain/src/index.js';
 
 const expiresAt = (now: string, leaseDurationMs: number): string =>
   new Date(Date.parse(now) + leaseDurationMs).toISOString();
 
 export const acquireLeaseForRun = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   runSessionId: string,
   workerId: string,
   now: string,
@@ -26,7 +26,7 @@ export const acquireLeaseForRun = async (
 };
 
 export const heartbeatLease = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   runSessionId: string,
   workerId: string,
   leaseToken: string,
@@ -37,7 +37,7 @@ export const heartbeatLease = async (
 };
 
 export const releaseLease = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   runSessionId: string,
   workerId: string,
   leaseToken: string,
@@ -47,7 +47,7 @@ export const releaseLease = async (
 };
 
 export const assertLeaseStillOwned = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   runSessionId: string,
   workerId: string,
   leaseToken: string,

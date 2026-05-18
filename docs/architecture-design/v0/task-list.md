@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 可以。下面我给你一版 **P0/P1 的详细任务拆分清单**，按 **模块 + 人天 + 里程碑** 来排，目标只做一件事：
 
 **8 周内打通最短闭环：Work Item → Spec → Plan → Execution Package → Codex 执行 → Review Packet → Human Review → Merge / Evidence**。这条链路和你 PRD 里的主流程、对象模型与 Execution Package 定位是一致的。

@@ -5,33 +5,30 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { InMemoryP0Repository } from '../../packages/db/src';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { InMemoryDeliveryRepository } from '../../packages/db/src';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-describe('durable P0 object IDs', () => {
+describe('durable delivery object IDs', () => {
   const apps: INestApplication[] = [];
 
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  const createDurableApp = async (repository: InMemoryP0Repository): Promise<INestApplication> => {
+  const createDurableApp = async (repository: InMemoryDeliveryRepository): Promise<INestApplication> => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue('durable')
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(false)
       .compile();
     const app = moduleRef.createNestApplication();
     await app.init();
@@ -40,7 +37,7 @@ describe('durable P0 object IDs', () => {
   };
 
   it('does not reuse deterministic IDs after a durable app restart', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const firstApp = await createDurableApp(repository);
     const firstProject = (
       await request(firstApp.getHttpServer())
@@ -63,8 +60,8 @@ describe('durable P0 object IDs', () => {
     expect(secondProject.id).not.toBe(firstProject.id);
   });
 
-  it('uses UUID ids for durable public P0 API-created aggregates', async () => {
-    const repository = new InMemoryP0Repository();
+  it('uses UUID ids for durable public delivery API-created aggregates', async () => {
+    const repository = new InMemoryDeliveryRepository();
     const app = await createDurableApp(repository);
     const server = app.getHttpServer();
     const ownerActorId = '11111111-1111-4111-8111-111111111111';
@@ -186,7 +183,6 @@ describe('durable P0 object IDs', () => {
         .post(`/execution-packages/${executionPackage.id}/run`)
         .set(ownerHeaders)
         .send({
-          requested_by_actor_id: ownerActorId,
           executor_type: 'mock',
           workflow_only: true,
         })

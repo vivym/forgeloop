@@ -246,7 +246,7 @@ const reviewPacketTraceTimeFor = (reviewPacket: ReviewPacketRecord, fallback: Is
   reviewPacket.created_at ?? fallback;
 
 const warnTraceWriteFailure = (error: unknown): void => {
-  (globalThis as { console?: TraceWarningSink }).console?.warn('[forgeloop:p0.trace] best-effort trace write failed', {
+  (globalThis as { console?: TraceWarningSink }).console?.warn('[forgeloop:delivery.trace] best-effort trace write failed', {
     source: 'workflow-finalizer',
     error: error instanceof Error ? error.message : String(error),
   });
@@ -257,7 +257,7 @@ const bestEffortTraceWrite = async (write: () => Promise<void>): Promise<void> =
     await write();
   } catch (error) {
     warnTraceWriteFailure(error);
-    // Primary P0 records are authoritative; trace rows can be reconstructed when absent.
+    // Primary delivery records are authoritative; trace rows can be reconstructed when absent.
   }
 };
 

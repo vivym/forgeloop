@@ -5,12 +5,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository } from '../../packages/db/src/index';
-import { seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
+import { seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
@@ -39,34 +39,33 @@ describe('query module', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('allows AppModule to override core query providers without QueryModule owning P0Module wiring', async () => {
-    const repository = new InMemoryP0Repository();
+  it('allows AppModule to override core query providers without QueryModule owning delivery wiring', async () => {
+    const repository = new InMemoryDeliveryRepository();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
       .compile();
 
     try {
-      expect(moduleRef.get(P0_REPOSITORY)).toBe(repository);
+      expect(moduleRef.get(DELIVERY_REPOSITORY)).toBe(repository);
     } finally {
       await moduleRef.close();
     }
   });
 
-  it('does not re-export shared core tokens from the P0 service boundary', async () => {
-    const p0ServiceModule = await import('../../apps/control-plane-api/src/p0/p0.service');
+  it('exposes shared core tokens from the semantic core boundary', async () => {
+    const coreTokensModule = await import('../../apps/control-plane-api/src/modules/core/control-plane-tokens');
 
-    expect(p0ServiceModule).not.toHaveProperty('P0_REPOSITORY');
-    expect(p0ServiceModule).not.toHaveProperty('RUN_DURABILITY_MODE');
-    expect(p0ServiceModule).not.toHaveProperty('P0_DEMO_ACTOR_ID_FALLBACK');
+    expect(coreTokensModule).toHaveProperty('DELIVERY_REPOSITORY');
+    expect(coreTokensModule).toHaveProperty('RUN_DURABILITY_MODE');
   });
 
   const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined });
     if (options.durabilityMode !== undefined) {
       moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);
@@ -77,10 +76,14 @@ describe('query module', () => {
     return { app, repo };
   };
 
+  const seedReadyPackage = async (app: INestApplication) =>
+    await seedReadyExecutionPackage(app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository);
+
   const createLinkedRelease = async (app: INestApplication) => {
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
     const releaseResponse = await request(app.getHttpServer())
       .post('/releases')
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         project_id: executionPackage.project_id,
@@ -94,10 +97,12 @@ describe('query module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${releaseId}/work-items/${executionPackage.work_item_id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${releaseId}/execution-packages/${executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
     await request(app.getHttpServer())
@@ -127,7 +132,7 @@ describe('query module', () => {
 
   it('returns the work item cockpit from the query surface', async () => {
     const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
 
     const response = await request(app.getHttpServer())
       .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
@@ -198,7 +203,7 @@ describe('query module', () => {
 
   it('returns the work item replay from the query surface', async () => {
     const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
 
     const response = await request(app.getHttpServer())
       .get(`/query/replay/work_item/${executionPackage.work_item_id}`)
@@ -216,6 +221,74 @@ describe('query module', () => {
           object_id: executionPackage.id,
         }),
       ]),
+    );
+  });
+
+  it('returns execution package and review packet replay from the query surface', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const runSession: RunSession = {
+      id: 'run-session-for-replay',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      status: 'succeeded',
+      executor_type: 'mock',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      created_at: later,
+      updated_at: later,
+      finished_at: later,
+    };
+    const reviewPacketId = 'review-packet-for-replay';
+
+    await repo.saveRunSession(runSession);
+    await repo.saveReviewPacket({
+      id: reviewPacketId,
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      reviewer_actor_id: executionPackage.reviewer_actor_id,
+      spec_revision_id: executionPackage.spec_revision_id,
+      plan_revision_id: executionPackage.plan_revision_id,
+      status: 'ready',
+      decision: 'none',
+      changed_files: [],
+      check_result_summary: 'Required checks passed.',
+      self_review: {
+        status: 'succeeded',
+        summary: 'Ready for public replay.',
+        spec_plan_alignment: 'Aligned.',
+        test_assessment: 'Passed.',
+        risk_notes: [],
+        follow_up_questions: [],
+      },
+      risk_notes: [],
+      requested_changes: [],
+      created_at: later,
+      updated_at: later,
+    });
+    await repo.appendObjectEvent({
+      id: 'review-packet-replay-event',
+      object_type: 'review_packet',
+      object_id: reviewPacketId,
+      event_type: 'review_packet_ready',
+      actor_type: 'system',
+      metadata: {},
+      payload: { review_packet_id: reviewPacketId },
+      created_at: later,
+    });
+
+    const packageReplay = await request(app.getHttpServer())
+      .get(`/query/replay/execution_package/${executionPackage.id}`)
+      .expect(200);
+    const reviewReplay = await request(app.getHttpServer()).get(`/query/replay/review_packet/${reviewPacketId}`).expect(200);
+
+    expect(packageReplay.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object_type: 'execution_package', object_id: executionPackage.id })]),
+    );
+    expect(reviewReplay.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object_type: 'review_packet', object_id: reviewPacketId })]),
     );
   });
 
@@ -282,7 +355,7 @@ describe('query module', () => {
 
   it('serializes replay payloads through the public evidence boundary', async () => {
     const { app, repo } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
     const workItemId = executionPackage.work_item_id;
     const createdAt = '2026-05-10T00:00:00.000Z';
 
@@ -415,13 +488,14 @@ describe('query module', () => {
     const { app } = await track(createTestApp());
 
     const response = await request(app.getHttpServer()).get('/query/replay/unsupported/missing').expect(400);
+    await request(app.getHttpServer()).get('/query/replay/incident/incident-1').expect(400);
 
     expect(response.body.message).toContain('Unsupported replay object type');
   });
 
-  it('does not expose legacy work item read routes', async () => {
+  it('does not expose old work item read routes', async () => {
     const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
 
     await request(app.getHttpServer()).get(`/work-items/${executionPackage.work_item_id}/cockpit`).expect(404);
     await request(app.getHttpServer()).get(`/work-items/${executionPackage.work_item_id}/timeline`).expect(404);
@@ -429,9 +503,9 @@ describe('query module', () => {
 
   it('preserves durable runtime metadata fallback when a leased run has no persisted runtime metadata', async () => {
     const { app, repo } = await track(createTestApp({ durabilityMode: 'durable' }));
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await seedReadyPackage(app);
     const runSession: RunSession = {
-      id: 'run-session-with-legacy-metadata',
+      id: 'run-session-with-old-metadata',
       execution_package_id: executionPackage.id,
       requested_by_actor_id: 'actor-owner',
       status: 'running',

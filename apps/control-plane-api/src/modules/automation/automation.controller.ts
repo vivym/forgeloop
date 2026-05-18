@@ -5,8 +5,8 @@ import {
   automationDaemonIdentityHeaderName,
 } from '@forgeloop/automation';
 
-import { ZodValidationPipe } from '../../p0/zod-validation.pipe';
-import type { ActorContext } from '../../p0/actor-context';
+import type { ActorContext } from '../auth/actor-context';
+import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import { AutomationActionService } from './automation-action.service';
 import { AutomationCommandService } from './automation-command.service';
 import {

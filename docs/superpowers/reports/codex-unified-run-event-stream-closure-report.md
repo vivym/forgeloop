@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 # Codex Unified Run Event Stream Closure Report
 
 Generated: 2026-05-09T06:15:22Z
@@ -32,7 +34,7 @@ Phase 1 is implemented:
 ## Evidence
 
 - Contract: `packages/contracts/src/api.ts` requires `next_cursor`; `packages/contracts/src/run-event-rendering.ts` exports the shared default timeline classifier.
-- API: `apps/control-plane-api/src/p0/p0.service.ts` returns a high-watermark cursor from the same raw event query and resolves SSE live-tail baselines from the latest durable event cursor.
+- API: `apps/control-plane-api/src/modules/run-control/run-control.service.ts` returns a high-watermark cursor from the same raw event query and resolves SSE live-tail baselines from the latest durable event cursor.
 - Web: `apps/web/src/App.tsx` performs backfill first, records `response.next_cursor`, and opens SSE with that cursor; `apps/web/src/workbenchState.ts` merges run events by cursor.
 - CLI: `scripts/tail-run-events.ts` builds the same backfill, stream-token, and SSE URL flow and formats only classifier-visible events.
 - Tests: `tests/contracts/run-event-rendering.test.ts`, `tests/api/run-events.test.ts`, `tests/web/api.test.ts`, `tests/web/run-console-state.test.ts`, `tests/smoke/tail-run-events-script.test.ts`, and `tests/e2e/run-console.e2e.test.ts` cover the stream contract and consumer behavior.

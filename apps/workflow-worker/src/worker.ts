@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { executorResultSchema, type ExecutorResult, type RunSpec } from '../../../packages/contracts/src/executor.js';
 import { NativeConnection, Worker, type NativeConnectionOptions, type WorkerOptions } from '@temporalio/worker';
 
-export const DEFAULT_TASK_QUEUE = 'forgeloop-p0-package-execution';
+export const DEFAULT_TASK_QUEUE = 'forgeloop-delivery-package-execution';
 export const DEFAULT_TEMPORAL_ADDRESS = 'localhost:7233';
 export const DEFAULT_EXECUTOR_GATEWAY_URL = 'http://127.0.0.1:3001';
 
@@ -107,7 +107,7 @@ export const createRuntimeDependencies = async (options: { executorGatewayUrl: s
       db: unknown;
       pool: { end(): Promise<void> };
     };
-    createDrizzleP0Repository(db: unknown): PackageExecutionRepository;
+    createDrizzleDeliveryRepository(db: unknown): PackageExecutionRepository;
   }>(new URL('../../../packages/db/src/client.ts', import.meta.url).href);
   const selfReviewModule = await dynamicImport<{
     runMockSelfReview: PackageRunSelfReview;
@@ -117,7 +117,7 @@ export const createRuntimeDependencies = async (options: { executorGatewayUrl: s
   );
 
   return {
-    repository: dbModule.createDrizzleP0Repository(dbClient.db),
+    repository: dbModule.createDrizzleDeliveryRepository(dbClient.db),
     executor: createExecutorGatewayAdapter({ baseUrl: options.executorGatewayUrl }),
     selfReview: selfReviewModule.runMockSelfReview,
     close: () => dbClient.pool.end(),

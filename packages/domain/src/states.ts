@@ -135,7 +135,7 @@ type RunSessionTerminalExecutorResultTransition = Timestamped & {
   executor_result: ExecutorResult;
 };
 
-type RunSessionTerminalLegacyTransition =
+type RunSessionTerminalInlineEvidenceTransition =
   | (Timestamped & {
       type: 'executor_success';
       executor_result?: undefined;
@@ -187,7 +187,7 @@ export type RunSessionTransition =
       runtime_metadata?: RunRuntimeMetadataUpdate;
     })
   | RunSessionTerminalExecutorResultTransition
-  | RunSessionTerminalLegacyTransition;
+  | RunSessionTerminalInlineEvidenceTransition;
 
 export type ReviewPacketTransition =
   | (Timestamped & {
@@ -836,6 +836,21 @@ const hasNonOverrideableReleaseBlockers = (blockers: readonly ReleaseBlocker[]):
 const canSubmitReleaseForApproval = (blockers: readonly ReleaseBlocker[]): boolean =>
   !hasNonOverrideableReleaseBlockers(blockers);
 
+const candidateOverrideableTestAcceptanceCodes = new Set<ReleaseBlocker['code']>([
+  'failed_required_check',
+  'missing_required_artifact',
+  'missing_required_evidence_backlink',
+]);
+
+const canOverrideApproveCandidateRelease = (blockers: readonly ReleaseBlocker[]): boolean =>
+  blockers.length > 0 &&
+  blockers.every(
+    (blocker) =>
+      blocker.overrideable &&
+      isReleaseBlockerOverrideable(blocker.code) &&
+      candidateOverrideableTestAcceptanceCodes.has(blocker.code),
+  );
+
 const currentReleaseBlockerSnapshot = (
   release: Release,
   gateContext: ReleaseGateContext,
@@ -1052,13 +1067,21 @@ export const transitionRelease = (
       }
       break;
     case 'override_approve':
-      if (release.phase === 'approval' && release.gate_state === 'awaiting_approval') {
+      if (
+        (release.phase === 'approval' && release.gate_state === 'awaiting_approval') ||
+        (release.phase === 'candidate' && release.gate_state === 'not_submitted')
+      ) {
         const snapshot = currentReleaseBlockerSnapshot(release, event.gate_context, at);
         assertRequestSnapshotMatchesCurrent(release, event.blocker_snapshot, snapshot);
+        const candidateOverride =
+          release.phase === 'candidate' && release.gate_state === 'not_submitted'
+            ? canOverrideApproveCandidateRelease(snapshot.blockers)
+            : true;
         if (
           !hasText(event.rationale) ||
           snapshot.blockers.length === 0 ||
-          hasNonOverrideableReleaseBlockers(snapshot.blockers)
+          hasNonOverrideableReleaseBlockers(snapshot.blockers) ||
+          !candidateOverride
         ) {
           break;
         }
@@ -1340,10 +1363,10 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
     case 'executor_failure':
       if (runSession.status === 'running') {
         const terminalEvidence = cloneRunSessionTerminalEvidence(runSession.id, event);
-        const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
-        const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
-        const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
-        const failureReason = terminalEvidence.failure_reason ?? legacyFailureReason;
+        const eventFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
+        const eventFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
+        const failureKind = terminalEvidence.failure_kind ?? eventFailureKind;
+        const failureReason = terminalEvidence.failure_reason ?? eventFailureReason;
 
         if (failureKind === undefined || failureReason === undefined) {
           return invalidTransition('RunSession', 'invalid_terminal_payload', event.type);
@@ -1363,10 +1386,10 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
     case 'executor_timeout':
       if (runSession.status === 'running') {
         const terminalEvidence = cloneRunSessionTerminalEvidence(runSession.id, event);
-        const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
-        const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
-        const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
-        const failureReason = terminalEvidence.failure_reason ?? legacyFailureReason;
+        const eventFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
+        const eventFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
+        const failureKind = terminalEvidence.failure_kind ?? eventFailureKind;
+        const failureReason = terminalEvidence.failure_reason ?? eventFailureReason;
 
         if (failureKind === undefined || failureReason === undefined) {
           return invalidTransition('RunSession', 'invalid_terminal_payload', event.type);

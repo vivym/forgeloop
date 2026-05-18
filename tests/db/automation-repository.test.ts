@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
-  InMemoryP0Repository,
+  InMemoryDeliveryRepository,
   type ClaimAutomationActionRunInput,
   type CreateOrReplayAutomationActionRunInput,
-  type P0Repository,
+  type DeliveryRepository,
 } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
@@ -38,7 +38,7 @@ const createActionInput = (
   ...overrides,
 });
 
-const claimSeedAction = async (repository: P0Repository, id: string, overrides: ActionInputOverrides = {}) =>
+const claimSeedAction = async (repository: DeliveryRepository, id: string, overrides: ActionInputOverrides = {}) =>
   repository.claimAutomationActionRun({
     ...createActionInput(id, overrides),
     claim_token: `${id}-claim-1`,
@@ -46,7 +46,7 @@ const claimSeedAction = async (repository: P0Repository, id: string, overrides: 
     ...overrides,
   });
 
-const expectDefaultOff = async (repository: P0Repository) => {
+const expectDefaultOff = async (repository: DeliveryRepository) => {
   await expect(
     repository.resolveAutomationProjectSettings({ project_id: 'project-automation', repo_id: 'repo-1' }),
   ).resolves.toMatchObject({
@@ -66,7 +66,7 @@ const expectDefaultOff = async (repository: P0Repository) => {
 
 describe('automation repository primitives', () => {
   it('resolves default-off settings and enforces version CAS', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
 
     await expectDefaultOff(repository);
 
@@ -99,7 +99,7 @@ describe('automation repository primitives', () => {
   });
 
   it('replays manual hold idempotency after resolution and propagates ancestor holds', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     await seedPackageGraph(repository);
 
     const hold = await repository.requestManualPathHold({
@@ -141,7 +141,7 @@ describe('automation repository primitives', () => {
   });
 
   it('suppresses runtime package draft eligibility for active work item ancestor holds', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     await seedPackageEligibilityGraph(repository);
 
     await expect(repository.getRuntimeSnapshotData()).resolves.toMatchObject({
@@ -173,7 +173,7 @@ describe('automation repository primitives', () => {
   });
 
   it('suppresses runtime package draft eligibility for active spec revision ancestor holds', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     await seedPackageEligibilityGraph(repository);
 
     await expect(repository.getRuntimeSnapshotData()).resolves.toMatchObject({
@@ -205,7 +205,7 @@ describe('automation repository primitives', () => {
   });
 
   it('replays terminal idempotency records and rejects precondition drift', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
 
     const claim = await repository.claimCommandIdempotency({
       id: 'command-record',
@@ -252,7 +252,7 @@ describe('automation repository primitives', () => {
   });
 
   it('resumes deterministic package generation runs and rejects manifest drift', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
 
     const first = await repository.claimExecutionPackageGenerationRun({
       plan_revision_id: 'plan-revision-automation',
@@ -285,7 +285,7 @@ describe('automation repository primitives', () => {
   });
 
   it('claims action runs and lists due gate-pending work', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
 
     const claimed = await repository.claimAutomationActionRun({
       id: 'action-run-1',
@@ -320,7 +320,7 @@ describe('automation repository primitives', () => {
   });
 
   it('creates pending action runs and claims the next eligible run', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
     const pending = await repository.createOrReplayAutomationActionRun(createActionInput('action-pending'));
 
@@ -354,7 +354,7 @@ describe('automation repository primitives', () => {
   });
 
   it('rejects idempotency replay when mutating preconditions or action input drift', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const input = createActionInput('action-conflict');
 
     await repository.createOrReplayAutomationActionRun(input);
@@ -370,7 +370,7 @@ describe('automation repository primitives', () => {
   });
 
   it('treats action input replay as stable across JSON key order', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const input = createActionInput('action-canonical-json', {
       action_input_json: {
         work_item_id: 'work-item-automation',
@@ -395,7 +395,7 @@ describe('automation repository primitives', () => {
   });
 
   it('rejects a different idempotency key for an existing durable action id', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const input = createActionInput('action-duplicate-id');
 
     await repository.createOrReplayAutomationActionRun(input);
@@ -408,7 +408,7 @@ describe('automation repository primitives', () => {
   });
 
   it('claims only eligible statuses and skips gated, terminal, and live running actions', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
     await repository.createOrReplayAutomationActionRun(createActionInput('claim-pending'));
 
@@ -495,7 +495,7 @@ describe('automation repository primitives', () => {
   });
 
   it('starts reclaimed actions with fresh result and retry state', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const retryableFailed = await claimSeedAction(repository, 'claim-fresh-state');
     await repository.completeAutomationActionRun({
       id: retryableFailed.id,
@@ -538,7 +538,7 @@ describe('automation repository primitives', () => {
   });
 
   it('compares action lease timestamps chronologically instead of lexically', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     await claimSeedAction(repository, 'claim-iso-variant-expired', {
       locked_until: '2026-05-05T00:00:00Z',
       now,
@@ -561,7 +561,7 @@ describe('automation repository primitives', () => {
   });
 
   it('uses project runtime snapshot stable observation identity for replay and latest projection lookup', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const snapshotInput = createActionInput('snapshot-action', {
       action_type: 'project_runtime_snapshot',
       target_object_type: 'repo',
@@ -705,7 +705,7 @@ describe('automation repository primitives', () => {
   });
 
   it('pushes latest completed projection action lookup filters into Drizzle SQL', () => {
-    const source = readFileSync('packages/db/src/repositories/drizzle-p0-repository.ts', 'utf8');
+    const source = readFileSync('packages/db/src/repositories/drizzle-delivery-repository.ts', 'utf8');
     const methodStart = source.indexOf('async latestCompletedProjectionActionRun(');
     const methodEnd = source.indexOf('\n  async claimAutomationActionRun', methodStart);
     expect(methodStart).toBeGreaterThanOrEqual(0);
@@ -724,7 +724,7 @@ describe('automation repository primitives', () => {
   });
 
   it('keeps runtime snapshot action-run queries bounded in the Drizzle repository', () => {
-    const source = readFileSync('packages/db/src/repositories/drizzle-p0-repository.ts', 'utf8');
+    const source = readFileSync('packages/db/src/repositories/drizzle-delivery-repository.ts', 'utf8');
     const methodStart = source.indexOf('async getRuntimeSnapshotData(): Promise<RuntimeSnapshotRepositoryData>');
     const methodEnd = source.indexOf('\n  async saveRelease', methodStart);
     expect(methodStart).toBeGreaterThanOrEqual(0);
@@ -749,7 +749,7 @@ describe('automation repository primitives', () => {
   });
 
   it('honors claim-next project, repo, and scope filters', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
     await repository.createOrReplayAutomationActionRun(
       createActionInput('filter-repo-1', {
@@ -798,7 +798,7 @@ describe('automation repository primitives', () => {
   });
 
   it('allows only one concurrent claimant to win a pending action', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
     const pending = await repository.createOrReplayAutomationActionRun(createActionInput('concurrent-action'));
     const results = await Promise.all(
@@ -816,7 +816,7 @@ describe('automation repository primitives', () => {
   });
 });
 
-async function seedPackageGraph(repository: P0Repository): Promise<void> {
+async function seedPackageGraph(repository: DeliveryRepository): Promise<void> {
   await repository.saveWorkItem({
     id: 'work-item-automation',
     project_id: 'project-automation',
@@ -883,7 +883,7 @@ async function seedPackageGraph(repository: P0Repository): Promise<void> {
   });
 }
 
-async function seedPackageEligibilityGraph(repository: P0Repository): Promise<void> {
+async function seedPackageEligibilityGraph(repository: DeliveryRepository): Promise<void> {
   await repository.saveProject({
     id: 'project-automation',
     name: 'Automation project',

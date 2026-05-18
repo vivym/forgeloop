@@ -7,7 +7,7 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 import { publicReleaseSummarySchema } from '@forgeloop/contracts';
-import type { P0Repository } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 
 const releaseTypes = new Set(['normal', 'hotfix', 'emergency', 'gray']);
 
@@ -17,7 +17,7 @@ const isVisible = (object: { archived_at?: string; deleted_at?: string }): boole
   object.archived_at === undefined && object.deleted_at === undefined;
 
 export const resolveReleaseWorkItemLinks = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   release: Release,
 ): Promise<ReleaseResolvedWorkItemLink[]> =>
   Promise.all(
@@ -40,7 +40,7 @@ export const resolveReleaseWorkItemLinks = async (
   );
 
 export const resolveReleaseExecutionPackageLinks = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   release: Release,
 ): Promise<ReleaseResolvedExecutionPackageLink[]> =>
   Promise.all(
@@ -112,7 +112,7 @@ export const serializePublicReleaseSummary = (
   });
 
 export const publicReleaseSummaryFor = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   release: Release,
 ): Promise<PublicReleaseSummary> => {
   const [workItemLinks, executionPackageLinks] = await Promise.all([

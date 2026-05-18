@@ -8,7 +8,7 @@ import {
   seedEvidenceChainBase,
   seedEvidenceChainScenario,
   succeededSelfReview,
-} from '../helpers/p0-runtime-fixtures';
+} from '../helpers/delivery-runtime-fixtures';
 
 describe('evidence chain API', () => {
   const apps: INestApplication[] = [];

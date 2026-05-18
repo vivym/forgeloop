@@ -41,6 +41,7 @@ export interface ReleaseGateContext {
   review_packets?: readonly ReviewPacket[];
   evidence?: readonly ReleaseEvidence[];
   public_link_visibility?: readonly ReleasePublicLinkVisibility[];
+  external_blockers?: readonly ReleaseBlocker[];
 }
 
 export interface ReleasePublicLinkVisibility {
@@ -138,6 +139,20 @@ const stableBlockerValue = (blocker: ReleaseBlocker) => ({
   object_type: blocker.object_type ?? '',
   overrideable: blocker.overrideable,
 });
+
+const mergeReleaseBlockers = (...groups: readonly (readonly ReleaseBlocker[])[]): ReleaseBlocker[] => {
+  const seen = new Set<string>();
+  const merged: ReleaseBlocker[] = [];
+  for (const item of groups.flat()) {
+    const key = JSON.stringify(stableBlockerValue(item));
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+};
 
 const sha256Constants = [
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -539,10 +554,11 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
   const runSessions = context.run_sessions ?? [];
   const reviewPackets = context.review_packets ?? [];
   const evidence = context.evidence ?? [];
+  const externalBlockers = context.external_blockers ?? [];
   const blockers: ReleaseBlocker[] = [];
 
   if (release === undefined) {
-    return blockers;
+    return mergeReleaseBlockers(externalBlockers);
   }
 
   const validWorkItems = resolveWorkItemLinks(release, workItems, context.work_item_links)
@@ -711,7 +727,7 @@ export const deriveReleaseBlockers = (context: ReleaseGateContext): ReleaseBlock
     blockers.push(blocker('missing_observation_plan', 'Release is missing an observation plan.'));
   }
 
-  return blockers;
+  return mergeReleaseBlockers(blockers, externalBlockers);
 };
 
 export interface ReleaseRiskSummary {

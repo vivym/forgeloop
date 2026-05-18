@@ -153,7 +153,7 @@ describe('domain automation contracts', () => {
     },
   );
 
-  it.each(['daemon', 'system'] as const)('rejects legacy %s actor class strings', (actorClass) => {
+  it.each(['daemon', 'system'] as const)('rejects obsolete %s actor class strings', (actorClass) => {
     expectDomainError(
       () =>
         assertAutomationCapabilityActor({

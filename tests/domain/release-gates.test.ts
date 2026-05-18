@@ -258,6 +258,38 @@ describe('Release gate derivation', () => {
     });
   });
 
+  it('includes external release blockers in derived blocker snapshots', () => {
+    const blockers = deriveReleaseBlockers({
+      release: release(),
+      work_items: [workItem()],
+      execution_packages: [executionPackage()],
+      run_sessions: [runSession()],
+      review_packets: [reviewPacket()],
+      evidence: [evidence()],
+      external_blockers: [
+        {
+          code: 'missing_required_evidence_backlink',
+          category: 'evidence',
+          overrideable: true,
+          message: 'Release is missing high-risk QA acknowledgement.',
+          object_type: 'release',
+          object_id: 'release-1',
+        },
+      ],
+    });
+
+    expect(blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing_required_evidence_backlink',
+          message: 'Release is missing high-risk QA acknowledgement.',
+          object_type: 'release',
+          object_id: 'release-1',
+        }),
+      ]),
+    );
+  });
+
   it.each([
     ['absent', undefined],
     ['archived', 'archived'],

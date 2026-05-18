@@ -9,7 +9,7 @@ import {
   type WorkItem,
 } from '@forgeloop/domain';
 
-import type { P0Repository } from '../repositories/p0-repository';
+import type { DeliveryRepository } from '../repositories/delivery-repository';
 
 export interface WorkItemCockpitResponse {
   work_item: WorkItem;
@@ -41,7 +41,7 @@ const nextActions = (packages: ExecutionPackage[], reviewPackets: ReviewPacket[]
 };
 
 const withWorkerLeaseMetadata = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   runSession: RunSession,
   fallbackRuntimeMetadata: RunRuntimeMetadata,
 ): Promise<RunSession> => {
@@ -63,7 +63,7 @@ const withWorkerLeaseMetadata = async (
 };
 
 export async function getWorkItemCockpit(
-  repository: P0Repository,
+  repository: DeliveryRepository,
   workItemId: string,
   options: WorkItemCockpitOptions,
 ): Promise<WorkItemCockpitResponse | undefined> {

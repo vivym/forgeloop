@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { AutomationActionRun } from '@forgeloop/domain';
-import type { P0Repository } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 
-import { P0_REPOSITORY } from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type { AutomationRuntimeSnapshotDto } from './automation.dto';
 import { toPolicyProjectionDto, toRuntimeSnapshotDto } from './automation.dto';
 
@@ -57,7 +57,7 @@ const isPriorTo = (candidate: AutomationActionRun, current: AutomationActionRun)
 
 @Injectable()
 export class RuntimeSnapshotService {
-  constructor(@Inject(P0_REPOSITORY) private readonly repository: P0Repository) {}
+  constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
 
   async getRuntimeSnapshot(): Promise<AutomationRuntimeSnapshotDto> {
     const data = await this.repository.getRuntimeSnapshotData();

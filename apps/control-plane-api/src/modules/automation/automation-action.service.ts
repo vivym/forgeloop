@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 
 import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { DomainError } from '@forgeloop/domain';
-import type { P0Repository } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 
-import { P0_REPOSITORY } from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type {
   AutomationActionResponseDto,
   BlockAutomationActionRunDto,
@@ -52,7 +52,7 @@ const lockedUntilFor = (input: ClaimNextAutomationActionRunDto, now: string): st
 
 @Injectable()
 export class AutomationActionService {
-  constructor(@Inject(P0_REPOSITORY) private readonly repository: P0Repository) {}
+  constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
 
   async createOrReplayAction(input: CreateAutomationActionRunDto): Promise<AutomationActionResponseDto> {
     try {

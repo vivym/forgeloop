@@ -10,7 +10,7 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
-import type { P0Repository } from '../repositories/p0-repository';
+import type { DeliveryRepository } from '../repositories/delivery-repository';
 import { serializePublicArtifactRef, serializePublicDecision } from './public-evidence-serialization';
 
 type ObservationLink = {
@@ -25,7 +25,7 @@ type VisibleObjectRef = {
 };
 
 export type ReleasePublicLinkVisibilityInput = {
-  repository: P0Repository;
+  repository: DeliveryRepository;
   release: Release;
   workItems: readonly WorkItem[];
   executionPackages: readonly ExecutionPackage[];
@@ -80,7 +80,7 @@ const visibleObjectRefsFor = (
 ];
 
 const collectPublicDecisionIds = async (
-  repository: P0Repository,
+  repository: DeliveryRepository,
   objectRefs: readonly VisibleObjectRef[],
 ): Promise<Set<string>> => {
   const seenObjects = new Set<string>();

@@ -12,14 +12,14 @@ describe('workspace bootstrap contract', () => {
 
     expect(rootPackage.scripts).toMatchObject({
       build: 'pnpm -r build',
-      test: 'vitest run',
+      test: 'vitest run --pool=forks --no-file-parallelism --maxWorkers=1',
       'test:watch': 'vitest',
       'dev:api': 'pnpm --filter @forgeloop/control-plane-api start:dev',
       'dev:automation-daemon': 'pnpm --filter @forgeloop/automation-daemon start',
       'dev:executor': 'pnpm --filter @forgeloop/executor-gateway start:dev',
       'dev:worker': 'pnpm --filter @forgeloop/workflow-worker start:dev',
       'dev:web': 'pnpm --filter @forgeloop/web dev',
-      'smoke:p0': 'vitest run tests/smoke',
+      'smoke:delivery': 'vitest run tests/smoke',
     });
 
     expect(readText('pnpm-workspace.yaml')).toBe("packages:\n  - 'apps/*'\n  - 'packages/*'\n");

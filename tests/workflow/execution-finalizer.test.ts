@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ExecutorResult } from '@forgeloop/contracts';
-import { InMemoryP0Repository, type TraceEventRecord } from '../../packages/db/src';
+import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src';
 import type { Artifact, Decision, ReviewPacket } from '../../packages/domain/src/index';
 import { finalizePackageRunWithExecutorResult, reviewPacketIdForRunSession, stableWorkflowUuidFor } from '../../packages/workflow/src';
 import {
   seedReadyStartedPackageRun,
   succeededExecutorResult,
   succeededSelfReview,
-} from '../helpers/p0-runtime-fixtures';
+} from '../helpers/delivery-runtime-fixtures';
 
-class LeasingRepository extends InMemoryP0Repository {
+class LeasingRepository extends InMemoryDeliveryRepository {
   calls = 0;
   insideLease = false;
   leaseReadCount = 0;
@@ -41,7 +41,7 @@ class LeasingRepository extends InMemoryP0Repository {
   }
 }
 
-class ArtifactConcurrencyDetectingRepository extends InMemoryP0Repository {
+class ArtifactConcurrencyDetectingRepository extends InMemoryDeliveryRepository {
   inFlightArtifactWrites = 0;
   maxConcurrentArtifactWrites = 0;
 
@@ -57,7 +57,7 @@ class ArtifactConcurrencyDetectingRepository extends InMemoryP0Repository {
   }
 }
 
-class TraceFailingRepository extends InMemoryP0Repository {
+class TraceFailingRepository extends InMemoryDeliveryRepository {
   override async saveTraceEvent(_event: TraceEventRecord): Promise<void> {
     throw new Error('trace store unavailable');
   }
@@ -156,7 +156,7 @@ describe('execution finalizer', () => {
   });
 
   it('writes terminal evidence trace events, links, and artifact refs', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const context = await seedReadyStartedPackageRun(repo);
     const result = succeededExecutorResult(context.runSession.id);
 
@@ -251,7 +251,7 @@ describe('execution finalizer', () => {
       ]);
       expect(await repo.listTraceEventsForSubject('run_session', context.runSession.id)).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(
-        '[forgeloop:p0.trace] best-effort trace write failed',
+        '[forgeloop:delivery.trace] best-effort trace write failed',
         expect.objectContaining({ source: 'workflow-finalizer', error: 'trace store unavailable' }),
       );
     } finally {
@@ -292,7 +292,7 @@ describe('execution finalizer', () => {
       expect(await repo.listReviewPacketsForPackage(context.executionPackage.id)).toHaveLength(1);
       expect(await repo.listArtifactsForObject('run_session', context.runSession.id)).toHaveLength(result.artifacts.length);
       expect(warnSpy).toHaveBeenCalledWith(
-        '[forgeloop:p0.trace] best-effort trace write failed',
+        '[forgeloop:delivery.trace] best-effort trace write failed',
         expect.objectContaining({ source: 'workflow-finalizer', error: 'trace store unavailable' }),
       );
     } finally {
@@ -301,7 +301,7 @@ describe('execution finalizer', () => {
   });
 
   it('is idempotent when retrying a succeeded executor result after partial persistence', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const context = await seedReadyStartedPackageRun(repo);
     const result = succeededExecutorResult(context.runSession.id);
 
@@ -332,7 +332,7 @@ describe('execution finalizer', () => {
   });
 
   it('does not replay terminal side effects when retrying a matching succeeded terminal run', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const context = await seedReadyStartedPackageRun(repo);
     const result = succeededExecutorResult(context.runSession.id);
     const runSessionId = context.runSession.id;
@@ -422,7 +422,7 @@ describe('execution finalizer', () => {
   });
 
   it('reconciles a matching terminal failed retry without replaying terminal side effects', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const context = await seedReadyStartedPackageRun(repo);
     const runSessionId = context.runSession.id;
     const terminalAt = '2026-05-07T00:00:00.000Z';
@@ -493,7 +493,7 @@ describe('execution finalizer', () => {
   });
 
   it('reconciles a matching terminal nonretryable failure to blocked without review packet', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const context = await seedReadyStartedPackageRun(repo);
     const runSessionId = context.runSession.id;
     const terminalAt = '2026-05-07T00:00:00.000Z';

@@ -58,7 +58,7 @@ describe('long-running run event contracts', () => {
     expect(
       publicRunEventSchema.safeParse({
         ...publicEvent,
-        event_id: 'legacy-event-1',
+        event_id: 'old-event-1',
         execution_package_id: 'exec-package-1',
         occurred_at: '2026-05-07T01:00:00.000Z',
       }).success,

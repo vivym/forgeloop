@@ -2,6 +2,8 @@ import type { input as zInput } from 'zod';
 
 import type {
   ApproveReleaseRequest,
+  AcknowledgeReleaseTestAcceptanceRequest,
+  acknowledgeReleaseTestAcceptanceRequestSchema,
   closeReleaseRequestSchema,
   createReleaseEvidenceRequestSchema,
   createReleaseRequestSchema,
@@ -15,6 +17,7 @@ import type {
 
 export type {
   ApproveReleaseRequest,
+  AcknowledgeReleaseTestAcceptanceRequest,
   CloseReleaseRequest,
   CreateReleaseEvidenceRequest,
   CreateReleaseRequest,
@@ -40,6 +43,8 @@ export type {
   ReleaseListResponse,
   ReleaseResourceResponse,
   RequestReleaseChangesRequest,
+  RoleWorkbenchAction,
+  RoleWorkbenchResponse,
   StartReleaseObservingRequest,
   SubmitReleaseForApprovalRequest,
   UnlinkReleaseObjectRequest,
@@ -49,6 +54,7 @@ export type CreateReleaseBody = zInput<typeof createReleaseRequestSchema>;
 export type PatchReleaseBody = PatchReleaseRequest;
 export type ReleaseCommandBody = ReleaseActorCommandRequest;
 export type ApproveReleaseBody = ApproveReleaseRequest;
+export type AcknowledgeReleaseTestAcceptanceBody = zInput<typeof acknowledgeReleaseTestAcceptanceRequestSchema>;
 export type OverrideApproveReleaseBody = OverrideApproveReleaseRequest;
 export type RequestReleaseChangesBody = RequestReleaseChangesRequest;
 export type StartReleaseObservingBody = ReleaseActorCommandRequest;
@@ -58,7 +64,27 @@ export type LinkReleaseScopeBody = LinkReleaseObjectRequest;
 export type UnlinkReleaseScopeBody = ReleaseActorCommandRequest;
 export type ListReleasesQuery = zInput<typeof releaseListQuerySchema>;
 
-export type WorkItemKind = 'requirement' | 'bug' | 'tech_debt';
+export type RoleWorkbenchId =
+  | 'intake'
+  | 'spec-approver'
+  | 'execution-owner'
+  | 'reviewer'
+  | 'qa-test-owner'
+  | 'release-owner'
+  | 'manager-health';
+
+export interface RoleWorkbenchQuery {
+  project_id?: string;
+  actor_id?: string;
+  kind?: string;
+  limit?: number;
+  cursor?: string;
+  phase?: string;
+  status?: string;
+  risk?: string;
+}
+
+export type WorkItemKind = 'initiative' | 'requirement' | 'bug' | 'tech_debt';
 export type ArtifactKind =
   | 'diff'
   | 'changed_files'
@@ -381,7 +407,6 @@ export interface MarkPackageReadyBody extends ActorCommandBody {
 
 export interface RunPackageBody {
   execution_package_id?: string;
-  requested_by_actor_id: string;
   executor_type?: ExecutorType;
   workflow_only?: boolean;
   previous_run_session_id?: string;

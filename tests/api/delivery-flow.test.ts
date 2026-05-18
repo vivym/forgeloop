@@ -4,14 +4,24 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { P0Service, RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { InMemoryP0Repository, type TraceEventRecord } from '../../packages/db/src/index';
+import { AutomationCommandService } from '../../apps/control-plane-api/src/modules/automation/automation-command.service';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { ExecutionPackageService } from '../../apps/control-plane-api/src/modules/execution-packages/execution-package.service';
+import { ProjectService } from '../../apps/control-plane-api/src/modules/projects/project.service';
+import { ReviewEvidenceService } from '../../apps/control-plane-api/src/modules/review-evidence/review-evidence.service';
+import { RunControlService } from '../../apps/control-plane-api/src/modules/run-control/run-control.service';
+import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/modules/run-control/run-worker-lifecycle.service';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
+import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-items/work-item.service';
+import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
-import type { RunWorker } from '../../packages/run-worker/src';
+import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -34,6 +44,86 @@ const requiredChecks = [
     blocks_review: true,
   },
 ];
+
+const safePathSegment = (value: string): string => {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.\.+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/^-+|-+$/g, '');
+
+  return sanitized.length > 0 ? sanitized : 'artifact';
+};
+
+const evidenceChangedFilePath = (allowedPaths: string[]): string => {
+  const firstAllowedPath = allowedPaths[0] ?? 'forgeloop-generated.txt';
+  return firstAllowedPath.replace(/\/\*\*$/, '/forgeloop-generated.txt').replace(/\*+$/, 'forgeloop-generated.txt');
+};
+
+const mockSelfReview = (input: SelfReviewInput): SelfReviewResult => ({
+  status: 'succeeded',
+  summary: `Mock self-review completed for run ${input.run_session_id}.`,
+  spec_plan_alignment: 'The mock run uses the approved spec and plan revision ids.',
+  test_assessment: `${input.check_results.length} required checks were reported.`,
+  risk_notes: [],
+  follow_up_questions: [],
+});
+
+const mockEvidence = (input: Parameters<ConstructorParameters<typeof RunWorker>[0]['evidenceCollector']>[0]): ExecutorResult => ({
+  run_session_id: input.runSpec.run_session_id,
+  executor_type: input.runSpec.executor_type,
+  executor_version: 'delivery-flow-test-driver',
+  status: 'succeeded',
+  started_at: input.startedAt,
+  finished_at: input.startedAt,
+  summary: input.summary,
+  changed_files: [
+    {
+      repo_id: input.runSpec.repo.repo_id,
+      path: evidenceChangedFilePath(input.runSpec.allowed_paths),
+      change_kind: 'modified',
+    },
+  ],
+  checks: input.runSpec.required_checks.map((check) => ({
+    check_id: check.check_id,
+    command: check.command,
+    status: 'succeeded',
+    exit_code: 0,
+    duration_seconds: 0,
+    blocks_review: check.blocks_review,
+  })),
+  artifacts: [...new Set(input.runSpec.artifact_policy.requested_artifacts)].map((kind) => ({
+    kind,
+    name: `${kind}.txt`,
+    content_type: 'text/plain',
+    local_ref: `/tmp/forgeloop-delivery-flow/${safePathSegment(input.runSpec.run_session_id)}/${kind}.txt`,
+  })),
+  raw_metadata: { workflow_only: input.runSpec.workflow_only },
+});
+
+class ManualDrainRunWorker extends RunWorker {
+  override kick(): void {
+    return undefined;
+  }
+}
+
+const createTestRunWorker = (repository: InMemoryDeliveryRepository): RunWorker =>
+  new ManualDrainRunWorker({
+    repository,
+    workerId: 'delivery-flow-test-worker',
+    driverFactory: () =>
+      new FakeCodexSessionDriver({
+        kind: 'fake',
+        script: [{ kind: 'terminal', status: 'succeeded', summary: 'Test fake driver completed.' }],
+      }),
+    evidenceCollector: (input) => Promise.resolve(mockEvidence(input)),
+    selfReview: (input) => Promise.resolve(mockSelfReview(input)),
+    heartbeatIntervalMs: 1,
+    commandPollIntervalMs: 1,
+    leaseDurationMs: 1_000,
+    idleThresholdMs: 1_000,
+    artifactRoot: '/tmp/forgeloop-delivery-flow',
+  });
 
 const createProjectRepoWorkItem = async (app: INestApplication) => {
   const server = app.getHttpServer();
@@ -58,7 +148,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
       .send({
         project_id: project.id,
         kind: 'requirement',
-        title: 'Ship P0 control plane API',
+        title: 'Ship delivery control plane API',
         goal: 'Expose the delivery loop commands over REST.',
         success_criteria: ['Spec, plan, package, run, and review commands are available.'],
         priority: 'P0',
@@ -80,12 +170,12 @@ const approveSpec = async (app: INestApplication, workItemId: string) => {
       .send({
         summary: 'Manual API spec',
         content: 'Manual control plane API spec.',
-        background: 'P0 needs command coverage.',
-        goals: ['Expose P0 commands'],
+        background: 'Delivery needs command coverage.',
+        goals: ['Expose delivery commands'],
         scope_in: ['Control plane API'],
         scope_out: ['Web UI'],
         acceptance_criteria: ['API tests cover the delivery flow'],
-        risk_notes: ['Keep P0 in-memory for tests'],
+        risk_notes: ['Keep delivery in-memory for tests'],
         test_strategy_summary: 'Nest + Supertest API tests',
         author_actor_id: actorOwner,
       })
@@ -143,7 +233,7 @@ const createManualPackage = async (
 ) => {
   const body = {
     repo_id: 'repo-1',
-    objective: 'Implement the P0 API package.',
+    objective: 'Implement the delivery API package.',
     owner_actor_id: actorOwner,
     reviewer_actor_id: actorReviewer,
     qa_owner_actor_id: actorQa,
@@ -158,13 +248,24 @@ const createManualPackage = async (
     .body;
 };
 
-const repositoryFor = (app: INestApplication): InMemoryP0Repository =>
-  (app.get(P0Service) as unknown as { repository: InMemoryP0Repository }).repository;
+const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
+  (app.get(ExecutionPackageService) as unknown as { repository: InMemoryDeliveryRepository }).repository;
+
+const replaceRuntimeRepository = (app: INestApplication, repository: InMemoryDeliveryRepository): void => {
+  (app.get(ExecutionPackageService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(AutomationCommandService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(ProjectService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(SpecPlanService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(WorkItemService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(ReviewEvidenceService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(RunControlService) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+  (app.get(DELIVERY_RUN_WORKER) as unknown as { repository: InMemoryDeliveryRepository }).repository = repository;
+};
 
 const waitForReviewPacket = async (app: INestApplication, runSessionId: string): Promise<ReviewPacket> => {
   const repository = repositoryFor(app);
-  const worker = app.get(RUN_WORKER) as RunWorker;
-  void worker.drainOnce();
+  const worker = app.get(DELIVERY_RUN_WORKER) as RunWorker;
+  await worker.drainOnce();
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const runSession = await repository.getRunSession(runSessionId);
@@ -179,7 +280,17 @@ const waitForReviewPacket = async (app: INestApplication, runSessionId: string):
     await delay(10);
   }
 
-  throw new Error(`Timed out waiting for ReviewPacket for ${runSessionId}`);
+  const runSession = await repository.getRunSession(runSessionId);
+  const runEvents = await repository.listRunEvents(runSessionId);
+  const eventSummaries = runEvents
+    .map((event) => `${event.event_type}:${event.summary}:${JSON.stringify(event.payload)}`)
+    .join(' | ');
+  const runtimeMetadata = JSON.stringify(runSession?.runtime_metadata ?? {});
+  throw new Error(
+    `Timed out waiting for ReviewPacket for ${runSessionId}; status=${
+      runSession?.status ?? 'missing'
+    }; runtimeMetadata=${runtimeMetadata}; events=${eventSummaries}`,
+  );
 };
 
 const getAvailablePort = async (): Promise<number> =>
@@ -244,7 +355,7 @@ const waitForRuntimeCreateProject = async (
   throw lastError instanceof Error ? lastError : new Error('Timed out waiting for runtime API');
 };
 
-class SequencingRepository extends InMemoryP0Repository {
+class SequencingRepository extends InMemoryDeliveryRepository {
   readonly operations: string[] = [];
 
   override async saveRunSession(runSession: RunSession): Promise<void> {
@@ -260,17 +371,25 @@ class SequencingRepository extends InMemoryP0Repository {
   }
 }
 
-class FailingTraceRepository extends InMemoryP0Repository {
+class FailingTraceRepository extends InMemoryDeliveryRepository {
   override async saveTraceEvent(_event: TraceEventRecord): Promise<void> {
     throw new Error('trace store unavailable');
   }
 }
 
-describe('P0 control plane API', () => {
+describe('delivery control plane API', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(RunWorkerLifecycleService)
+      .useValue({ onModuleInit: () => undefined, onModuleDestroy: () => undefined })
+      .overrideProvider(DELIVERY_RUN_WORKER)
+      .useFactory({
+        inject: [DELIVERY_REPOSITORY],
+        factory: (repository: InMemoryDeliveryRepository) => createTestRunWorker(repository),
+      })
+      .compile();
     app = moduleRef.createNestApplication();
     await app.init();
   });
@@ -279,7 +398,7 @@ describe('P0 control plane API', () => {
     await app.close();
   });
 
-  it('runs the P0 delivery flow through the command inventory and read APIs', async () => {
+  it('runs the delivery flow through the command inventory and read APIs', async () => {
     const server = app.getHttpServer();
     const { project, workItem } = await createProjectRepoWorkItem(app);
 
@@ -317,7 +436,8 @@ describe('P0 control plane API', () => {
     const firstRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     expect(firstRun).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
@@ -348,7 +468,8 @@ describe('P0 control plane API', () => {
     const rerun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
     const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
@@ -417,7 +538,8 @@ describe('P0 control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -492,7 +614,8 @@ describe('P0 control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -512,7 +635,7 @@ describe('P0 control plane API', () => {
     });
   });
 
-  it('archives an open ReviewPacket on package edit while preserving old RunSessions and completed packets', async () => {
+  it('blocks package edits while an open ReviewPacket exists', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
@@ -527,54 +650,37 @@ describe('P0 control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
-    const patchedPackage = (await request(server)
-      .patch(`/execution-packages/${executionPackage.id}`)
-      .send({ objective: 'Edited package creates a fresh run spec.' })
-      .expect(200)).body;
-
-    const oldRun = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
-    const archivedPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
-    expect(oldRun.status).toBe('succeeded');
-    expect(archivedPacket.status).toBe('archived');
 
     await request(server)
-      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
-      .set(ownerHeaders)
-      .send({ actor_id: actorOwner, expected_package_version: patchedPackage.version })
-      .expect(201);
-    const newRun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
-        .expect(201)
-    ).body;
-    const newRunSession = (await request(server).get(`/run-sessions/${newRun.run_session_id}`).expect(200)).body;
+      .patch(`/execution-packages/${executionPackage.id}`)
+      .send({ objective: 'Edited package creates a fresh run spec.' })
+      .expect(422);
 
-    expect(newRun.run_session_id).not.toBe(run.run_session_id);
-    expect(newRunSession).not.toHaveProperty('run_spec');
-    expect((await repositoryFor(app).getRunSession(newRun.run_session_id))?.run_spec?.objective).toBe(
-      'Edited package creates a fresh run spec.',
-    );
+    const oldRun = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
+    const openPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
+    expect(oldRun.status).toBe('succeeded');
+    expect(openPacket.status).toBe('ready');
   });
 
-  it('archives an in-review ReviewPacket on package edit and preserves the previous RunSession', async () => {
+  it('blocks package edits while a ReviewPacket is in review', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
-    const service = app.get(P0Service);
-    const repository = (service as unknown as { repository: InMemoryP0Repository }).repository;
+    const repository = repositoryFor(app);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -584,10 +690,10 @@ describe('P0 control plane API', () => {
     await request(server)
       .patch(`/execution-packages/${executionPackage.id}`)
       .send({ objective: 'Edit while human review has started.' })
-      .expect(200);
+      .expect(422);
 
     expect((await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body.status).toBe('succeeded');
-    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('archived');
+    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('in_review');
   });
 
   it('validates run, rerun, and force-rerun request bodies and previous run ids', async () => {
@@ -598,12 +704,23 @@ describe('P0 control plane API', () => {
     const executionPackage = await createManualPackage(app, planRevisionId);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(400);
+    await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(401);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .set(ownerHeaders)
+      .send({
+        workflow_only: true,
+        previous_run_session_id: 'run-session-not-valid-for-run',
+        force: true,
+        force_reason: 'Plain run must reject rerun-only fields.',
+      })
+      .expect(400);
 
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -620,29 +737,43 @@ describe('P0 control plane API', () => {
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
-      .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+      .set(ownerHeaders)
+      .send({ workflow_only: true })
       .expect(400);
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
-      .send({ requested_by_actor_id: actorOwner, previous_run_session_id: 'run-session-stale', workflow_only: true })
+      .set(ownerHeaders)
+      .send({ previous_run_session_id: 'run-session-stale', workflow_only: true })
+      .expect(400);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/rerun`)
+      .set(ownerHeaders)
+      .send({
+        previous_run_session_id: run.run_session_id,
+        force: true,
+        force_reason: 'Rerun must reject force-only fields.',
+        workflow_only: true,
+      })
       .expect(400);
 
     const rerun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: run.run_session_id, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ previous_run_session_id: run.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
     await waitForReviewPacket(app, rerun.run_session_id);
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
-      .send({ requested_by_actor_id: actorOwner, previous_run_session_id: rerun.run_session_id, workflow_only: true })
+      .set(ownerHeaders)
+      .send({ previous_run_session_id: rerun.run_session_id, workflow_only: true })
       .expect(400);
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .set(ownerHeaders)
       .send({
-        requested_by_actor_id: actorOwner,
         previous_run_session_id: 'run-session-stale',
         force: true,
         force_reason: 'Stale run id.',
@@ -662,7 +793,8 @@ describe('P0 control plane API', () => {
     const firstRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
@@ -680,7 +812,8 @@ describe('P0 control plane API', () => {
     const rerun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
         .expect(201)
     ).body;
     const repository = repositoryFor(app);
@@ -732,10 +865,8 @@ describe('P0 control plane API', () => {
   it('commits rerun primary records when replacement trace writes fail', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
-      const service = app.get(P0Service);
       const repository = new FailingTraceRepository();
-      (service as unknown as { repository: FailingTraceRepository }).repository = repository;
-      (app.get(RUN_WORKER) as unknown as { repository: FailingTraceRepository }).repository = repository;
+      replaceRuntimeRepository(app, repository);
       const server = app.getHttpServer();
       const { workItem } = await createProjectRepoWorkItem(app);
       await approveSpec(app, workItem.id);
@@ -746,7 +877,8 @@ describe('P0 control plane API', () => {
       const firstRun = (
         await request(server)
           .post(`/execution-packages/${executionPackage.id}/run`)
-          .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+          .set(ownerHeaders)
+          .send({ workflow_only: true })
           .expect(201)
       ).body;
       const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
@@ -765,7 +897,8 @@ describe('P0 control plane API', () => {
       const rerun = (
         await request(server)
           .post(`/execution-packages/${executionPackage.id}/rerun`)
-          .send({ requested_by_actor_id: actorOwner, previous_run_session_id: firstRun.run_session_id, workflow_only: true })
+          .set(ownerHeaders)
+          .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
           .expect(201)
       ).body;
       const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
@@ -777,7 +910,7 @@ describe('P0 control plane API', () => {
       expect(persistedRerun?.run_spec?.review_context.latest_decision).toBe('changes_requested');
       expect(reviewPackets.map((packet) => packet.id)).toEqual(expect.arrayContaining([firstReviewPacketId, rerunReviewPacketId]));
       expect(warnSpy).toHaveBeenCalledWith(
-        '[forgeloop:p0.trace] best-effort trace write failed',
+        '[forgeloop:review-evidence.trace] best-effort trace write failed',
         expect.objectContaining({ source: 'control-plane-api', error: 'trace store unavailable' }),
       );
     } finally {
@@ -796,14 +929,15 @@ describe('P0 control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .set(reviewerHeaders)
       .send({
-        requested_by_actor_id: actorReviewer,
         previous_run_session_id: run.run_session_id,
         force: true,
         force_reason: 'Reviewer is not the owner.',
@@ -814,8 +948,8 @@ describe('P0 control plane API', () => {
     const forceRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+        .set(ownerHeaders)
         .send({
-          requested_by_actor_id: actorOwner,
           previous_run_session_id: run.run_session_id,
           force: true,
           force_reason: 'Owner wants a fresh run before review.',
@@ -840,7 +974,8 @@ describe('P0 control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -856,8 +991,8 @@ describe('P0 control plane API', () => {
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .set(ownerHeaders)
       .send({
-        requested_by_actor_id: actorOwner,
         previous_run_session_id: run.run_session_id,
         force: true,
         force_reason: 'Cannot force-rerun after completed review.',
@@ -873,10 +1008,8 @@ describe('P0 control plane API', () => {
   });
 
   it('archives the current open ReviewPacket before saving the force-rerun RunSession', async () => {
-    const service = app.get(P0Service);
     const repository = new SequencingRepository();
-    (service as unknown as { repository: SequencingRepository }).repository = repository;
-    (app.get(RUN_WORKER) as unknown as { repository: SequencingRepository }).repository = repository;
+    replaceRuntimeRepository(app, repository);
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
@@ -887,7 +1020,8 @@ describe('P0 control plane API', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/run`)
-        .send({ requested_by_actor_id: actorOwner, workflow_only: true })
+        .set(ownerHeaders)
+        .send({ workflow_only: true })
         .expect(201)
     ).body;
     const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
@@ -896,8 +1030,8 @@ describe('P0 control plane API', () => {
     const forceRun = (
       await request(server)
         .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+        .set(ownerHeaders)
         .send({
-          requested_by_actor_id: actorOwner,
           previous_run_session_id: run.run_session_id,
           force: true,
           force_reason: 'Owner wants a fresh run before review.',

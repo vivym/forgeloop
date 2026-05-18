@@ -485,14 +485,14 @@ describe('public evidence serialization', () => {
     expect(serialized.extra.observation?.links).toEqual(links);
   });
 
-  it('drops legacy related object refs while the public extra schema rejects them', () => {
+  it('drops old related object refs while the public extra schema rejects them', () => {
     const serialized = serializePublicReleaseEvidence({
       evidence: releaseEvidence({
         extra: {
           observation: {
             source: 'human',
             severity: 'warning',
-            summary: 'Legacy backlinks should not leak.',
+            summary: 'Old backlinks should not leak.',
             observed_at: timestamp,
             links: [{ object_type: 'release', object_id: 'release-1', relationship: 'observed' }],
             related_object_refs: [
@@ -506,7 +506,7 @@ describe('public evidence serialization', () => {
     expect(serialized.extra.observation).toEqual({
       source: 'human',
       severity: 'warning',
-      summary: 'Legacy backlinks should not leak.',
+      summary: 'Old backlinks should not leak.',
       observed_at: timestamp,
       links: [{ object_type: 'release', object_id: 'release-1', relationship: 'observed' }],
     });
@@ -516,7 +516,7 @@ describe('public evidence serialization', () => {
         observation: {
           source: 'human',
           severity: 'warning',
-          summary: 'Legacy backlinks should not leak.',
+          summary: 'Old backlinks should not leak.',
           observed_at: timestamp,
           related_object_refs: [
             { object_type: 'decision', object_id: 'decision-1', relationship: 'rollback_of' },

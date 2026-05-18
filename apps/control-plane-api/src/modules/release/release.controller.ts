@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   approveReleaseRequestSchema,
+  acknowledgeReleaseTestAcceptanceRequestSchema,
   closeReleaseRequestSchema,
   createReleaseEvidenceRequestSchema,
   createReleaseRequestSchema,
@@ -14,6 +15,7 @@ import {
   submitReleaseForApprovalRequestSchema,
   unlinkReleaseObjectRequestSchema,
   type ApproveReleaseRequest,
+  type AcknowledgeReleaseTestAcceptanceRequest,
   type CloseReleaseRequest,
   type CreateReleaseEvidenceRequest,
   type CreateReleaseRequest,
@@ -28,13 +30,13 @@ import {
   type UnlinkReleaseObjectRequest,
 } from '@forgeloop/contracts';
 
-import { ZodValidationPipe } from '../../p0/zod-validation.pipe';
-import { actorContextFromHeaders } from '../../p0/actor-context';
+import { actorContextFromHeaders } from '../auth/actor-context';
+import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import { ReleaseService } from './release.service';
 
 @Controller('releases')
 export class ReleaseController {
-  constructor(private readonly releaseService: ReleaseService) {}
+  constructor(@Inject(ReleaseService) private readonly releaseService: ReleaseService) {}
 
   @Post()
   createRelease(
@@ -119,6 +121,15 @@ export class ReleaseController {
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.releaseService.approveRelease(releaseId, body, actorContextFromHeaders(headers));
+  }
+
+  @Post(':releaseId/test-acceptance/acknowledge')
+  acknowledgeTestAcceptance(
+    @Param('releaseId') releaseId: string,
+    @Body(new ZodValidationPipe(acknowledgeReleaseTestAcceptanceRequestSchema)) body: AcknowledgeReleaseTestAcceptanceRequest,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.releaseService.acknowledgeTestAcceptance(releaseId, body, actorContextFromHeaders(headers));
   }
 
   @Post(':releaseId/override-approve')

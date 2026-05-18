@@ -1,5 +1,5 @@
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
-import type { P0Repository } from '../../db/src/index.js';
+import type { DeliveryRepository } from '../../db/src/index.js';
 import type { RunRuntimeMetadata, RunSession } from '../../domain/src/index.js';
 import type {
   CodexDriverStreamItem,
@@ -18,7 +18,7 @@ import { evaluateRunProgress } from './watchdog.js';
 type IsoDateTime = string;
 
 export interface RunWorkerInput {
-  repository: P0Repository;
+  repository: DeliveryRepository;
   workerId: string;
   driverFactory: (input: { runSession: RunSession; runtimeMetadata: RunRuntimeMetadata }) => CodexSessionDriver;
   execFallbackDriverFactory?: (input: { runSession: RunSession; runtimeMetadata: RunRuntimeMetadata }) => CodexSessionDriver;
@@ -188,7 +188,7 @@ const runtimeMetadataSourceSnapshot = (runtimeMetadata: RunRuntimeMetadata | und
 };
 
 export class RunWorker {
-  private readonly repository: P0Repository;
+  private readonly repository: DeliveryRepository;
   private readonly workerId: string;
   private readonly driverFactory: RunWorkerInput['driverFactory'];
   private readonly execFallbackDriverFactory: NonNullable<RunWorkerInput['execFallbackDriverFactory']>;

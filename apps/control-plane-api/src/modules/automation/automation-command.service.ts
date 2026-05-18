@@ -11,8 +11,8 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import type { ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
-import type { P0Repository } from '@forgeloop/db';
+import type { ArtifactRef, ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
+import type { DeliveryRepository } from '@forgeloop/db';
 import {
   DomainError,
   isWorkItemAutomationTerminal,
@@ -39,20 +39,20 @@ import {
 import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
 
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
-import type { ActorContext } from '../../p0/actor-context';
+import type { ActorContext } from '../auth/actor-context';
+import { DELIVERY_RUN_WORKER, type DeliveryRunWorker } from '../run-control/run-worker.token';
 import type {
   AutomationActorContextDto,
   DisableAutomationCapabilitiesDto,
   RequestManualPathHoldDto,
   ResolveManualPathHoldDto,
   SetAutomationCapabilitiesDto,
-} from '../../p0/dto';
+} from '../delivery/dto';
 import {
   assertAutomationPreconditionStillCurrent,
   assertCommandCapabilityStillEnabled,
@@ -62,13 +62,18 @@ import {
   automationPreconditionFingerprint,
   commandIdempotencyTarget,
   normalizeAutomationPrecondition,
-} from '../../p0/automation-command-helpers';
+} from './automation-command-helpers';
 import type {
   AutomationActionType,
   EnsurePackageDraftsCommandDto,
   EnsurePlanDraftCommandDto,
   RequestManualPathCommandDto,
 } from './automation.dto';
+import {
+  DEFAULT_PACKAGE_POLICY_DIGEST,
+  DEFAULT_PACKAGE_POLICY_SOURCE_PATH,
+  defaultPackagePolicyFields,
+} from '../execution-packages/package-policy-fields';
 
 const commandClaimTtlMs = 5 * 60 * 1000;
 type EnsurePlanDraftResult = { plan_id: string; plan_revision_id: string; status: 'created' | 'existing' };
@@ -96,6 +101,21 @@ type EnqueueRunInput = {
   workflowOnly: boolean;
   runtimeSafetyAttestation?: RuntimeSafetyAttestation;
   onRunQueued?: () => void;
+};
+type SupersedeExecutionPackageGenerationRunCommandInput = {
+  planRevisionId: string;
+  generationKey: string;
+  expectedGenerationRunVersion: number;
+  reason: string;
+  evidenceRefs: ArtifactRef[];
+  approvedBy: AutomationActorContext;
+  idempotencyKey: string;
+};
+type SupersedeExecutionPackageGenerationRunResult = {
+  execution_package_set_id: string;
+  status: 'superseded';
+  next_generation_key: string;
+  supersede_command_id: string;
 };
 
 const claimConflictBody = {
@@ -134,11 +154,11 @@ const stableJson = (value: unknown): string => {
 @Injectable()
 export class AutomationCommandService {
   constructor(
-    @Inject(P0_REPOSITORY) private readonly repository: P0Repository,
+    @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
-    @Optional() @Inject(P0_DEMO_ACTOR_ID_FALLBACK) private readonly allowDemoActorIdFallback = false,
+    @Optional() @Inject(DELIVERY_RUN_WORKER) private readonly runWorker?: DeliveryRunWorker,
   ) {}
 
   async getAutomationCapabilities(projectId: string, repoId?: string): Promise<AutomationProjectSettings> {
@@ -650,6 +670,80 @@ export class AutomationCommandService {
     return outcome.value;
   }
 
+  async supersedeExecutionPackageGenerationRun(
+    input: SupersedeExecutionPackageGenerationRunCommandInput,
+  ): Promise<SupersedeExecutionPackageGenerationRunResult> {
+    if (input.approvedBy.actor_class !== 'human' && input.approvedBy.actor_class !== 'human_admin') {
+      throw new ForbiddenException('package generation supersede requires a human approver');
+    }
+    const claimToken = randomUUID();
+    const claimedAt = this.now();
+    const supersedeCommandId = this.id('command-idempotency');
+    const outcome = await this.repository.withObjectLock(`automation-command:supersede-package-generation:${input.planRevisionId}`, async (
+      repository,
+    ): Promise<CommandBoundaryOutcome<SupersedeExecutionPackageGenerationRunResult>> => {
+      const claim = await repository.claimCommandIdempotency({
+        id: supersedeCommandId,
+        command_name: 'supersede_execution_package_generation_run',
+        idempotency_key: input.idempotencyKey,
+        ...commandIdempotencyTarget({
+          objectType: 'plan_revision',
+          objectId: input.planRevisionId,
+          revisionId: input.generationKey,
+          version: input.expectedGenerationRunVersion,
+        }),
+        actor_scope: `${input.approvedBy.actor_class}:${input.approvedBy.actor_id}`,
+        claim_token: claimToken,
+        locked_until: this.lockedUntil(claimedAt),
+        now: claimedAt,
+      });
+      const replayed = this.replayedSupersedeGenerationResult(claim.result_json);
+      const replayable = this.replayableCommandResultOrThrow(claim, replayed);
+      if (replayable !== undefined) {
+        return { ok: true, value: replayable };
+      }
+      try {
+        const superseded = await repository.supersedeExecutionPackageGenerationRun({
+          plan_revision_id: input.planRevisionId,
+          execution_package_set_id: `generation:${input.planRevisionId}:${input.generationKey}`,
+          expected_version: input.expectedGenerationRunVersion,
+          supersede_command_id: supersedeCommandId,
+          superseded_by: input.approvedBy.actor_id,
+          superseded_at: this.now(),
+          reason: input.reason,
+          evidence_refs: input.evidenceRefs,
+        });
+        if (superseded.next_generation_key === undefined) {
+          throw new ConflictException('Superseded generation did not produce a next generation key');
+        }
+        const result: SupersedeExecutionPackageGenerationRunResult = {
+          execution_package_set_id: superseded.execution_package_set_id,
+          status: 'superseded',
+          next_generation_key: superseded.next_generation_key,
+          supersede_command_id: supersedeCommandId,
+        };
+        await repository.completeCommandIdempotency({
+          idempotency_key: input.idempotencyKey,
+          claim_token: claimToken,
+          result_json: result,
+          finished_at: this.now(),
+        });
+        return { ok: true, value: result };
+      } catch (error) {
+        await this.blockCommandIdempotencyAfterError(repository, {
+          idempotency_key: input.idempotencyKey,
+          claim_token: claimToken,
+          error,
+        });
+        return { ok: false, error };
+      }
+    });
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  }
+
   private async assertActiveActionClaim(input: {
     actionRunId: string;
     claimToken: string;
@@ -692,7 +786,7 @@ export class AutomationCommandService {
     }
   }
 
-  private async assertAutomationPreconditionForHold(repository: P0Repository, precondition: AutomationPrecondition): Promise<void> {
+  private async assertAutomationPreconditionForHold(repository: DeliveryRepository, precondition: AutomationPrecondition): Promise<void> {
     const settings = await repository.resolveAutomationProjectSettings({
       project_id: precondition.project_id,
       ...(precondition.repo_id === undefined ? {} : { repo_id: precondition.repo_id }),
@@ -703,7 +797,7 @@ export class AutomationCommandService {
   }
 
   private async assertRepoScopeCurrent(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     projectId: string,
     repoId: string | undefined,
   ): Promise<void> {
@@ -739,7 +833,7 @@ export class AutomationCommandService {
   }
 
   private async writePlanDraftForApprovedSpec(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     workItemId: string,
     specRevisionId: string,
     precondition: AutomationPrecondition,
@@ -841,7 +935,7 @@ export class AutomationCommandService {
       revision_number: (await repository.listPlanRevisions(drafting.id)).length + 1,
       summary: `Draft plan for ${workItem.title}`,
       content: `Implement the approved spec revision ${specRevision.id} with a bounded package and required checks.`,
-      implementation_summary: `Deliver ${workItem.title} through the P0 control plane.`,
+      implementation_summary: `Deliver ${workItem.title} through the delivery control plane.`,
       split_strategy: 'Create one repo-bound execution package for the approved plan.',
       dependency_order: ['api-package'],
       test_matrix: ['pnpm test tests/api'],
@@ -899,7 +993,7 @@ export class AutomationCommandService {
   }
 
   private async blockCommandIdempotencyAfterError(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: { idempotency_key: string; claim_token: string; error: unknown },
   ): Promise<void> {
     await repository.blockCommandIdempotency({
@@ -911,7 +1005,7 @@ export class AutomationCommandService {
   }
 
   private async assertPackageRegenerationApproval(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: {
       planRevisionId: string;
       generationKey: string;
@@ -941,8 +1035,28 @@ export class AutomationCommandService {
     }
   }
 
+  private replayedSupersedeGenerationResult(
+    result: Record<string, unknown> | undefined,
+  ): SupersedeExecutionPackageGenerationRunResult | undefined {
+    if (
+      result === undefined ||
+      result.status !== 'superseded' ||
+      typeof result.execution_package_set_id !== 'string' ||
+      typeof result.next_generation_key !== 'string' ||
+      typeof result.supersede_command_id !== 'string'
+    ) {
+      return undefined;
+    }
+    return {
+      execution_package_set_id: result.execution_package_set_id,
+      status: 'superseded',
+      next_generation_key: result.next_generation_key,
+      supersede_command_id: result.supersede_command_id,
+    };
+  }
+
   private async writeExecutionPackageDraftsForPlanRevision(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     input: {
       planRevisionId: string;
       generationKey: string;
@@ -988,7 +1102,7 @@ export class AutomationCommandService {
       plan_revision_id: input.planRevisionId,
       generation_key: input.generationKey,
       generator_version: 'mock-package-drafter@1',
-      policy_digest: 'p0-default-policy',
+      policy_digest: DEFAULT_PACKAGE_POLICY_DIGEST,
       manifest_digest: 'api-package-v1',
       expected_package_count: 1,
       expected_package_keys: ['api-package'],
@@ -1038,9 +1152,9 @@ export class AutomationCommandService {
           forbidden_paths: ['packages/db/**'],
           at: this.now(),
         }),
-        ...this.defaultPackagePolicyFields({
-          policyDigest: 'p0-default-policy',
-          policySourcePath: 'forgeloop://p0/default-package-policy',
+        ...defaultPackagePolicyFields({
+          policyDigest: DEFAULT_PACKAGE_POLICY_DIGEST,
+          policySourcePath: DEFAULT_PACKAGE_POLICY_SOURCE_PATH,
           loadedAt: this.now(),
           requiredChecks: [
             {
@@ -1101,7 +1215,7 @@ export class AutomationCommandService {
   }
 
   private async packageContextFromRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     planRevisionId: string,
   ): Promise<{
     project: Project;
@@ -1151,7 +1265,7 @@ export class AutomationCommandService {
     });
   }
 
-  private async requireApprovedCurrentSpecFromRepository(repository: P0Repository, workItem: WorkItem): Promise<Spec> {
+  private async requireApprovedCurrentSpecFromRepository(repository: DeliveryRepository, workItem: WorkItem): Promise<Spec> {
     if (workItem.current_spec_id === undefined) {
       throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
     }
@@ -1196,7 +1310,7 @@ export class AutomationCommandService {
   }
 
   private async assertExecutionPackageGraphStillCurrent(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     executionPackage: ExecutionPackage,
   ): Promise<void> {
     const stale = (message: string): never => {
@@ -1260,7 +1374,7 @@ export class AutomationCommandService {
         });
       }
     }
-    const linkedReleases = (await repository.listReleasesForProject(executionPackage.project_id)).filter((release) =>
+    const linkedReleases = (await repository.listReleases(executionPackage.project_id)).filter((release) =>
       release.execution_package_ids.includes(executionPackage.id),
     );
     for (const release of linkedReleases) {
@@ -1285,14 +1399,16 @@ export class AutomationCommandService {
   }
 
   private async enqueueRunWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     executionPackage: ExecutionPackage,
     input: EnqueueRunInput,
   ): Promise<RunAcceptedResponse> {
     const packageId = executionPackage.id;
     const requestedByActorId = this.resolveRunActor({
       ...(input.actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
-      demoActorId: input.actorContext.authenticatedActorId ?? input.automationPrecondition.daemon_identity ?? 'automation-daemon',
+      ...(input.actorContext.daemonIdentity === undefined && input.automationPrecondition.daemon_identity === undefined
+        ? {}
+        : { systemActorId: input.actorContext.daemonIdentity ?? input.automationPrecondition.daemon_identity }),
     });
     const executorType: ExecutorType = input.workflowOnly ? 'mock' : input.executorType;
     const runSessionId = this.id('run-session');
@@ -1337,7 +1453,7 @@ export class AutomationCommandService {
       run_session_id: runSessionId,
     });
 
-    input.onRunQueued?.();
+    this.notifyRunQueued(input);
     return {
       status: 'accepted',
       run_session_id: runSessionId,
@@ -1345,46 +1461,16 @@ export class AutomationCommandService {
     };
   }
 
-  private defaultPackagePolicyFields(input: {
-    policyDigest: string;
-    policySourcePath: string;
-    loadedAt: string;
-    requiredChecks: ExecutionPackage['required_checks'];
-    allowedPaths: string[];
-    forbiddenPaths: string[];
-  }): Pick<
-    ExecutionPackage,
-    | 'validation_strategy'
-    | 'validation_strategy_version'
-    | 'validation_public_summary'
-    | 'policy_snapshot_status'
-    | 'policy_snapshot_version'
-    | 'package_policy_snapshot'
-  > {
-    return {
-      validation_strategy: 'checks_required',
-      validation_strategy_version: 1,
-      validation_public_summary: 'Required checks and package path policy are frozen for this package.',
-      policy_snapshot_status: 'captured',
-      policy_snapshot_version: 1,
-      package_policy_snapshot: {
-        policy_snapshot_version: 1,
-        policy_digest: input.policyDigest,
-        policy_source_path: input.policySourcePath,
-        policy_loaded_at: input.loadedAt,
-        policy_last_known_good: true,
-        hooks: [],
-        command_policy: { required_checks: input.requiredChecks.map((check) => check.check_id) },
-        check_policy: { required_checks: input.requiredChecks.map((check) => check.check_id) },
-        env_policy: {},
-        path_policy: { allowed_paths: input.allowedPaths, forbidden_paths: input.forbiddenPaths },
-        codex_runtime_mode: 'mock',
-        fallback_policy: { allow_exec_fallback: false },
-        validation_strategy_version: 1,
-        validation_strategy: 'checks_required',
-        validation_public_summary: 'Required checks and package path policy are frozen for this package.',
-      },
-    };
+  private notifyRunQueued(input: Pick<EnqueueRunInput, 'onRunQueued'>): void {
+    if (input.onRunQueued !== undefined) {
+      input.onRunQueued();
+      return;
+    }
+    try {
+      this.runWorker?.kick();
+    } catch {
+      // The durable repository state is authoritative; kick is only an in-process wake-up.
+    }
   }
 
   private initialRuntimeMetadata(): RunRuntimeMetadata {
@@ -1395,13 +1481,13 @@ export class AutomationCommandService {
     };
   }
 
-  private resolveRunActor(input: { authenticatedActorId?: string; demoActorId?: string }): string {
+  private resolveRunActor(input: { authenticatedActorId?: string; systemActorId?: string }): string {
     if (input.authenticatedActorId !== undefined && input.authenticatedActorId.trim().length > 0) {
       return input.authenticatedActorId;
     }
 
-    if (this.allowDemoActorIdFallback && this.durabilityMode === 'volatile_demo') {
-      return this.required(input.demoActorId, 'actor_id');
+    if (input.systemActorId !== undefined && input.systemActorId.trim().length > 0) {
+      return input.systemActorId;
     }
 
     throw new UnauthorizedException('Authenticated actor is required');
@@ -1412,7 +1498,7 @@ export class AutomationCommandService {
   }
 
   private async eventWithRepository(
-    repository: P0Repository,
+    repository: DeliveryRepository,
     objectType: string,
     objectId: string,
     eventType: string,

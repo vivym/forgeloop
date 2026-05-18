@@ -39,7 +39,12 @@ const requiredActorId = (actorId: string) => {
 };
 
 export const actorHeader = (actorId?: string) =>
-  actorId === undefined ? {} : { 'X-Forgeloop-Actor-Id': requiredActorId(actorId) };
+  actorId === undefined
+    ? {}
+    : {
+        'X-Forgeloop-Actor-Id': requiredActorId(actorId),
+        'X-Forgeloop-Actor-Class': 'human_admin',
+      };
 
 export function createApiContext(options: ForgeloopApiOptions = {}): ApiContext {
   const baseUrl = normalizeBaseUrl(options.baseUrl ?? defaultBaseUrl());

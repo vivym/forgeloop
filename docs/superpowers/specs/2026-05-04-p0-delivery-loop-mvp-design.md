@@ -1,3 +1,5 @@
+> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.
+
 # Forgeloop P0 Delivery Loop MVP Design
 
 ## 1. Purpose

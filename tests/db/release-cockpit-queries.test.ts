@@ -4,15 +4,19 @@ import type {
   Artifact,
   Decision,
   ExecutionPackage,
+  Plan,
+  PlanRevision,
   Project,
   Release,
   ReleaseEvidence,
   ReviewPacket,
   RunSession,
+  Spec,
+  SpecRevision,
   WorkItem,
 } from '@forgeloop/domain';
 
-import { getReleaseCockpit, InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { getReleaseCockpit, InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const now = '2026-05-11T00:00:00.000Z';
 const later = '2026-05-11T00:01:00.000Z';
@@ -52,8 +56,83 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   gate_state: 'none',
   resolution: 'completed',
   current_release_id: 'release-1',
+  current_spec_id: 'spec-1',
+  current_plan_id: 'plan-1',
+  current_plan_revision_id: 'plan-revision-1',
   created_at: now,
   updated_at: later,
+  ...overrides,
+});
+
+const spec = (overrides: Partial<Spec> = {}): Spec => ({
+  id: 'spec-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'spec',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'spec-revision-1',
+  approved_revision_id: 'spec-revision-1',
+  approved_at: now,
+  approved_by_actor_id: 'actor-reviewer',
+  created_at: now,
+  updated_at: later,
+  ...overrides,
+});
+
+const specRevision = (overrides: Partial<SpecRevision> = {}): SpecRevision => ({
+  id: 'spec-revision-1',
+  spec_id: 'spec-1',
+  work_item_id: 'work-item-1',
+  revision_number: 1,
+  summary: 'Release radar spec.',
+  content: 'Expose release readiness.',
+  background: 'Release owners need a public-safe cockpit.',
+  goals: ['Show release blockers.'],
+  scope_in: ['Release cockpit'],
+  scope_out: [],
+  acceptance_criteria: ['The cockpit shows release blockers.'],
+  risk_notes: [],
+  test_strategy_summary: 'Run release cockpit query tests.',
+  artifact_refs: [],
+  created_at: now,
+  ...overrides,
+});
+
+const plan = (overrides: Partial<Plan> = {}): Plan => ({
+  id: 'plan-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'plan',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'plan-revision-1',
+  approved_revision_id: 'plan-revision-1',
+  approved_at: now,
+  approved_by_actor_id: 'actor-reviewer',
+  created_at: now,
+  updated_at: later,
+  ...overrides,
+});
+
+const planRevision = (overrides: Partial<PlanRevision> = {}): PlanRevision => ({
+  id: 'plan-revision-1',
+  plan_id: 'plan-1',
+  work_item_id: 'work-item-1',
+  based_on_spec_revision_id: 'spec-revision-1',
+  revision_number: 1,
+  summary: 'Release radar plan.',
+  content: 'Implement release cockpit helper.',
+  implementation_summary: 'Use the release cockpit query.',
+  split_strategy: 'Single package.',
+  dependency_order: [],
+  test_matrix: ['Release cockpit query tests'],
+  risk_mitigations: [],
+  rollback_notes: 'Disable the release flag.',
+  artifact_refs: [],
+  created_at: now,
   ...overrides,
 });
 
@@ -243,12 +322,14 @@ const decision = (overrides: Partial<Decision> = {}): Decision => ({
   ...overrides,
 });
 
-const seedReadyRelease = async (repo: P0Repository, overrides: {
+const seedReadyRelease = async (repo: DeliveryRepository, overrides: {
   project?: Partial<Project>;
   work_item?: Partial<WorkItem>;
   execution_package?: Partial<ExecutionPackage>;
   run_session?: Partial<RunSession>;
   review_packet?: Partial<ReviewPacket>;
+  spec?: Partial<Spec>;
+  spec_revision?: Partial<SpecRevision>;
   release?: Partial<Release>;
   evidence?: Partial<ReleaseEvidence>;
   artifact?: Partial<Artifact>;
@@ -257,6 +338,10 @@ const seedReadyRelease = async (repo: P0Repository, overrides: {
   } = {}) => {
   await repo.saveProject(project(overrides.project));
   await repo.saveWorkItem(workItem(overrides.work_item));
+  await repo.saveSpec(spec(overrides.spec));
+  await repo.saveSpecRevision(specRevision(overrides.spec_revision));
+  await repo.savePlan(plan());
+  await repo.savePlanRevision(planRevision());
   await repo.saveExecutionPackage(executionPackage(overrides.execution_package));
   await repo.saveRunSession(runSession(overrides.run_session));
   await repo.saveReviewPacket(reviewPacket(overrides.review_packet));
@@ -272,7 +357,7 @@ const unsafeJson = (value: unknown): string => JSON.stringify(value);
 
 describe('getReleaseCockpit', () => {
   it('returns a public-safe release cockpit for a release-ready scope', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo);
 
     const cockpit = await getReleaseCockpit(repo, 'release-1');
@@ -321,7 +406,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('summarizes readiness from the selected review packet run and honors log refs', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       execution_package: {
         required_artifact_kinds: ['execution_summary', 'logs'],
@@ -379,7 +464,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('reports overrideable planning and evidence blockers when plans and evidence are missing', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       save_evidence: false,
       release: {
@@ -406,7 +491,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('keeps unsafe observation evidence facts but omits unsafe public backlinks and reports a blocker', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       evidence: {
         extra: {
@@ -456,7 +541,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('omits non-public exact artifact ids and unsafe top-level object refs', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       evidence: {
         object_ref: { object_type: 'run_session', object_id: 'run-private', relationship: 'generated_by' },
@@ -496,7 +581,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('treats decisions on selected release graph objects as public backlinks', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await seedReadyRelease(repo, {
       evidence: {
         extra: {
@@ -541,7 +626,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('selects fallback run sessions by creation time and requires exact public artifact refs', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const packageWithoutRunPointers = executionPackage();
     delete packageWithoutRunPointers.current_run_session_id;
     delete packageWithoutRunPointers.last_run_session_id;
@@ -601,7 +686,7 @@ describe('getReleaseCockpit', () => {
   });
 
   it('resolves stale stored scope links to valid same-project public ids and reports invalid links', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     await repo.saveProject(project());
     await repo.saveProject(project({ id: 'project-2', key: 'P2', name: 'Other Project' }));
 
@@ -663,5 +748,28 @@ describe('getReleaseCockpit', () => {
     expect(emptyCockpit?.blockers.map((item) => item.code)).toEqual(
       expect.arrayContaining(['empty_work_item_scope', 'empty_execution_package_scope']),
     );
+  });
+
+  it('includes Test/Acceptance blockers in the cockpit snapshot fingerprint', async () => {
+    const repo = new InMemoryDeliveryRepository();
+    await seedReadyRelease(repo, {
+      work_item: { risk: 'high' },
+      release: { phase: 'candidate', gate_state: 'not_submitted' },
+    });
+
+    const cockpit = await getReleaseCockpit(repo, 'release-1');
+
+    expect(cockpit?.blocker_snapshot.blocker_fingerprint).toBeDefined();
+    expect(cockpit?.blocker_snapshot.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing_required_evidence_backlink',
+          object_type: 'release',
+          object_id: 'release-1',
+          overrideable: true,
+        }),
+      ]),
+    );
+    expect(cockpit?.blockers).toEqual(cockpit?.blocker_snapshot.blockers);
   });
 });

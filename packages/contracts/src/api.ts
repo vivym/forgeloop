@@ -82,31 +82,55 @@ export const commandInventoryResponseSchema = z
   });
 export type CommandInventoryResponse = z.infer<typeof commandInventoryResponseSchema>;
 
-export const runPackageRequestSchema = z.object({
-  execution_package_id: z.string().min(1),
-  requested_by_actor_id: z.string().min(1),
-  executor_type: executorTypeSchema.optional(),
-  workflow_only: z.boolean().default(false),
-  idempotency_key: z.string().min(1).optional(),
-});
+export const roleWorkbenchActionSchema = z
+  .object({
+    label: z.string().min(1),
+    method: z.enum(['GET', 'POST', 'PATCH', 'DELETE']),
+    path: z.string().min(1),
+    enabled: z.boolean().default(true),
+    reason: z.string().min(1).optional(),
+  })
+  .strict();
+export type RoleWorkbenchAction = z.infer<typeof roleWorkbenchActionSchema>;
+
+export const roleWorkbenchResponseSchema = z
+  .object({
+    summary: z.record(z.string(), z.unknown()),
+    items: z.array(z.record(z.string(), z.unknown())),
+    next_cursor: z.string().min(1).optional(),
+  })
+  .strict();
+export type RoleWorkbenchResponse = z.infer<typeof roleWorkbenchResponseSchema>;
+
+export const runPackageRequestSchema = z
+  .object({
+    execution_package_id: z.string().min(1),
+    executor_type: executorTypeSchema.optional(),
+    workflow_only: z.boolean().default(false),
+    idempotency_key: z.string().min(1).optional(),
+  })
+  .strict();
 export type RunPackageRequest = z.infer<typeof runPackageRequestSchema>;
 
-export const rerunPackageRequestSchema = z.object({
-  execution_package_id: z.string().min(1),
-  previous_run_session_id: z.string().min(1),
-  review_packet_id: z.string().min(1).optional(),
-  requested_changes_context: z.array(requestedChangeSchema).default([]),
-  requested_by_actor_id: z.string().min(1),
-  executor_type: executorTypeSchema.optional(),
-  workflow_only: z.boolean().default(false),
-  idempotency_key: z.string().min(1).optional(),
-});
+export const rerunPackageRequestSchema = z
+  .object({
+    execution_package_id: z.string().min(1),
+    previous_run_session_id: z.string().min(1),
+    review_packet_id: z.string().min(1).optional(),
+    requested_changes_context: z.array(requestedChangeSchema).default([]),
+    executor_type: executorTypeSchema.optional(),
+    workflow_only: z.boolean().default(false),
+    idempotency_key: z.string().min(1).optional(),
+  })
+  .strict();
 export type RerunPackageRequest = z.infer<typeof rerunPackageRequestSchema>;
 
-export const forceRerunPackageRequestSchema = rerunPackageRequestSchema.extend({
-  force: z.literal(true).default(true),
-  force_reason: z.string().min(1),
-});
+export const forceRerunPackageRequestSchema = rerunPackageRequestSchema
+  .extend({
+    force: z.literal(true).default(true),
+    force_reason: z.string().min(1),
+  })
+  .strict();
 export type ForceRerunPackageRequest = z.infer<typeof forceRerunPackageRequestSchema>;
 
 export const runEventTypeSchema = z.enum([

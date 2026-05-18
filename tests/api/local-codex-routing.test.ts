@@ -7,10 +7,10 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { P0_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import type { P0Repository } from '../../packages/db/src';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import type { DeliveryRepository } from '../../packages/db/src';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 
 const actorOwner = 'actor-owner';
@@ -146,7 +146,7 @@ const createReadyPackage = async (app: INestApplication, planRevisionId: string)
 };
 
 const waitForTerminalRunSession = async (app: INestApplication, runSessionId: string): Promise<Record<string, unknown>> => {
-  const worker = app.get(RUN_WORKER) as RunWorker;
+  const worker = app.get(DELIVERY_RUN_WORKER) as RunWorker;
   void worker.drainOnce();
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -160,7 +160,7 @@ const waitForTerminalRunSession = async (app: INestApplication, runSessionId: st
   throw new Error(`Timed out waiting for terminal RunSession ${runSessionId}`);
 };
 
-const repositoryFor = (app: INestApplication): P0Repository => app.get(P0_REPOSITORY) as P0Repository;
+const repositoryFor = (app: INestApplication): DeliveryRepository => app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
 describe('control-plane local_codex routing', () => {
   let app: INestApplication;
@@ -172,10 +172,10 @@ describe('control-plane local_codex routing', () => {
     localCodexAdapter.mockClear();
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useFactory({
-        inject: [P0_REPOSITORY],
-        factory: (repository: P0Repository) =>
+        inject: [DELIVERY_REPOSITORY],
+        factory: (repository: DeliveryRepository) =>
           new RunWorker({
             repository,
             workerId: 'local-codex-routing-test-worker',
@@ -217,7 +217,8 @@ describe('control-plane local_codex routing', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${packageId}/run`)
-        .send({ requested_by_actor_id: actorOwner, executor_type: 'local_codex', workflow_only: false })
+        .set(ownerHeaders)
+        .send({ executor_type: 'local_codex', workflow_only: false })
         .expect(201)
     ).body;
     expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
@@ -264,7 +265,8 @@ describe('control-plane local_codex routing', () => {
     const run = (
       await request(server)
         .post(`/execution-packages/${packageId}/run`)
-        .send({ requested_by_actor_id: actorOwner, executor_type: 'local_codex', workflow_only: true })
+        .set(ownerHeaders)
+        .send({ executor_type: 'local_codex', workflow_only: true })
         .expect(201)
     ).body;
     expect(run).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });

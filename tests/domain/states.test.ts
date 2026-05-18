@@ -43,7 +43,7 @@ const expectDomainError = (fn: () => unknown, code: string) => {
 
 describe('domain state transitions', () => {
   it('exports normalized work item and execution package state values', () => {
-    expect(workItemKinds).toEqual(['requirement', 'bug', 'tech_debt']);
+    expect(workItemKinds).toEqual(['initiative', 'requirement', 'bug', 'tech_debt']);
     expect(workItemPhases).toEqual([
       'draft',
       'triage',
@@ -188,7 +188,7 @@ describe('domain state transitions', () => {
       check_result_summary: 'pnpm test tests/domain passed.',
       self_review: {
         status: 'succeeded',
-        summary: 'Changes match the P0 domain spec.',
+        summary: 'Changes match the delivery domain spec.',
         spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
         test_assessment: 'Domain transition tests cover the new review packet context.',
         risk_notes: [],
@@ -209,7 +209,7 @@ describe('domain state transitions', () => {
         project_id: 'project-1',
         kind: 'requirement',
         title: 'Ship domain rules',
-        goal: 'Ship the P0 domain state machine.',
+        goal: 'Ship the delivery domain state machine.',
         success_criteria: ['Spec, plan, execution, and review gates are enforced.'],
         priority: 'P0',
         risk: 'medium',
@@ -803,14 +803,14 @@ describe('domain state transitions', () => {
       executor_type: 'local_codex',
       repo: {
         repo_id: 'repo-1',
-        local_path: '/Users/viv/projs/forgeloop/.worktrees/p0-delivery-loop-mvp',
-        base_branch: 'codex/p0-delivery-loop-mvp',
+        local_path: '/Users/viv/projs/forgeloop/.worktrees/delivery-loop-mvp',
+        base_branch: 'codex/delivery-loop-mvp',
         base_commit_sha: '3d1b01c8aa45c67764c462ad0defe9c6822da141',
       },
-      objective: 'Implement missing P0 fields.',
+      objective: 'Implement missing delivery fields.',
       context: {
-        spec_revision_summary: 'P0 delivery loop spec.',
-        plan_revision_summary: 'P0 delivery loop plan.',
+        spec_revision_summary: 'delivery loop spec.',
+        plan_revision_summary: 'delivery loop plan.',
         package_instructions: 'Keep domain changes scoped.',
         required_checks: [
           {
@@ -1451,7 +1451,7 @@ describe('domain state transitions', () => {
           local_ref: 'artifacts/run-session/executor.log',
         },
       ]);
-      expect(session.run_spec?.repo.local_path).toBe('/Users/viv/projs/forgeloop/.worktrees/p0-delivery-loop-mvp');
+      expect(session.run_spec?.repo.local_path).toBe('/Users/viv/projs/forgeloop/.worktrees/delivery-loop-mvp');
       expect(session.run_spec?.context.required_checks[0].command).toBe('pnpm test tests/domain');
       expect(session.run_spec?.review_context.requested_changes).toEqual([
         {
@@ -1501,7 +1501,7 @@ describe('domain state transitions', () => {
     ];
     const selfReview: SelfReviewResult = {
       status: 'succeeded',
-      summary: 'Changes match the P0 domain spec.',
+      summary: 'Changes match the delivery domain spec.',
       spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
       test_assessment: 'Domain transition tests cover the new review packet context.',
       risk_notes: ['Domain persistence adapters must map the new fields.'],
@@ -1569,7 +1569,7 @@ describe('domain state transitions', () => {
       ];
       const selfReviewInput: SelfReviewResult = {
         status: 'succeeded',
-        summary: 'Changes match the P0 domain spec.',
+        summary: 'Changes match the delivery domain spec.',
         spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
         test_assessment: 'Domain transition tests cover the new review packet context.',
         risk_notes: ['Domain persistence adapters must map the new fields.'],
@@ -1612,7 +1612,7 @@ describe('domain state transitions', () => {
       ]);
       expect(packet.self_review).toEqual({
         status: 'succeeded',
-        summary: 'Changes match the P0 domain spec.',
+        summary: 'Changes match the delivery domain spec.',
         spec_plan_alignment: 'Fields are frozen from approved spec and plan revisions.',
         test_assessment: 'Domain transition tests cover the new review packet context.',
         risk_notes: ['Domain persistence adapters must map the new fields.'],

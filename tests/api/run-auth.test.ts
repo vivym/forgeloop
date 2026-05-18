@@ -14,15 +14,14 @@ import {
   actorTimestampHeaderName,
   trustedActorHeaderSignature,
   actorHeaderName as trustedActorHeaderName,
-} from '../../apps/control-plane-api/src/p0/actor-context';
+} from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import type { InMemoryP0Repository } from '../../packages/db/src';
-import { seedAppWithRunSession, seedReadyExecutionPackageThroughApi } from '../helpers/p0-runtime-fixtures';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import type { InMemoryDeliveryRepository } from '../../packages/db/src';
+import { seedAppWithRunSession, seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
 
 const actorHeaderName = 'X-Forgeloop-Actor-Id';
 const actorOwner = 'actor-owner';
@@ -38,28 +37,27 @@ const track = async <T extends { app: INestApplication }>(value: Promise<T>): Pr
   return resolved;
 };
 
-const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemoryP0Repository }> => {
+const bootDurableApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(RUN_WORKER)
+    .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .overrideProvider(RUN_DURABILITY_MODE)
     .useValue('durable')
-    .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
-    .useValue(false)
     .compile();
   const app = moduleRef.createNestApplication();
   await app.init();
-  return { app, repo: app.get(P0_REPOSITORY) as InMemoryP0Repository };
+  return { app, repo: app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository };
 };
 
 const startDurableRun = async (
   app: INestApplication,
 ): Promise<{ executionPackageId: string; runSessionId: string }> => {
-  const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+  const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
+  const executionPackage = await seedReadyExecutionPackage(repo);
   const response = await request(app.getHttpServer())
     .post(`/execution-packages/${executionPackage.id}/run`)
     .set(actorHeaderName, actorOwner)
-    .send({ requested_by_actor_id: actorStranger, workflow_only: true })
+    .send({ workflow_only: true })
     .expect(201);
 
   return { executionPackageId: executionPackage.id, runSessionId: response.body.run_session_id as string };
@@ -136,18 +134,18 @@ describe('durable run actor auth', () => {
   });
 
   it('requires authenticated actor context to start durable runs', async () => {
-    const { app } = await track(bootDurableApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const { app, repo } = await track(bootDurableApp());
+    const executionPackage = await seedReadyExecutionPackage(repo);
 
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .send({ requested_by_actor_id: actorOwner, workflow_only: true })
-      .expect(401);
+      .expect(400);
 
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(actorHeaderName, actorOwner)
-      .send({ requested_by_actor_id: actorStranger, workflow_only: true })
+      .send({ workflow_only: true })
       .expect(201);
   });
 
@@ -175,15 +173,15 @@ describe('durable run actor auth', () => {
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
       .send({ actor_id: actorOwner, message: 'continue' })
-      .expect(401);
+      .expect(400);
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/cancel`)
       .send({ actor_id: actorOwner, reason: 'stop' })
-      .expect(401);
+      .expect(400);
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/resume`)
       .send({ actor_id: actorOwner, reason: 'resume' })
-      .expect(401);
+      .expect(400);
 
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
@@ -205,6 +203,33 @@ describe('durable run actor auth', () => {
       .set(actorHeaderName, actorOwner)
       .send({ reason: 'resume' })
       .expect(201);
+  });
+
+  it('rejects body actor identity on authenticated durable operator commands', async () => {
+    const { app, repo } = await track(bootDurableApp());
+    const { runSessionId: inputRunSessionId } = await startDurableRun(app);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${inputRunSessionId}/input`)
+      .set(actorHeaderName, actorOwner)
+      .send({ actor_id: actorOwner, message: 'continue' })
+      .expect(400);
+
+    const { runSessionId: cancelRunSessionId } = await startDurableRun(app);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${cancelRunSessionId}/cancel`)
+      .set(actorHeaderName, actorOwner)
+      .send({ actor_id: actorOwner, reason: 'stop' })
+      .expect(400);
+
+    const { runSessionId: resumeRunSessionId } = await startDurableRun(app);
+    const resumeRunSession = await repo.getRunSession(resumeRunSessionId);
+    expect(resumeRunSession).toBeDefined();
+    await repo.saveRunSession({ ...resumeRunSession!, status: 'waiting_for_input' });
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${resumeRunSessionId}/resume`)
+      .set(actorHeaderName, actorOwner)
+      .send({ actor_id: actorOwner, reason: 'resume' })
+      .expect(400);
   });
 
   it('allows authenticated durable viewers but restricts operator-only commands', async () => {
@@ -476,18 +501,25 @@ describe('durable run actor auth', () => {
   });
 });
 
-describe('volatile demo actor fallback', () => {
+describe('run actor authentication', () => {
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('still accepts body and query actor identity', async () => {
+  it('requires trusted actor headers instead of body and query actor identity', async () => {
     const { app, runSessionId } = await track(seedAppWithRunSession());
 
-    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(200);
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).query({ actor_id: actorOwner }).expect(401);
     await request(app.getHttpServer())
       .post(`/run-sessions/${runSessionId}/input`)
       .send({ actor_id: actorOwner, message: 'continue' })
+      .expect(400);
+
+    await request(app.getHttpServer()).get(`/run-sessions/${runSessionId}/events`).set(actorHeaderName, actorOwner).expect(200);
+    await request(app.getHttpServer())
+      .post(`/run-sessions/${runSessionId}/input`)
+      .set(actorHeaderName, actorOwner)
+      .send({ message: 'continue' })
       .expect(201);
   });
 });

@@ -6,24 +6,27 @@ import type {
   Artifact,
   Decision,
   ExecutionPackage,
+  Plan,
+  PlanRevision,
   Project,
   Release,
   ReleaseEvidenceType,
   ReviewPacket,
   RunSession,
+  Spec,
+  SpecRevision,
   WorkItem,
 } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
-  P0_DEMO_ACTOR_ID_FALLBACK,
-  P0_REPOSITORY,
+  DELIVERY_REPOSITORY,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { RUN_WORKER } from '../../apps/control-plane-api/src/p0/p0.service';
-import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/p0/actor-context';
-import { InMemoryP0Repository, type P0Repository } from '../../packages/db/src/index';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
@@ -57,8 +60,83 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   activity_state: 'idle',
   gate_state: 'none',
   resolution: 'completed',
+  current_spec_id: 'spec-1',
+  current_plan_id: 'plan-1',
+  current_plan_revision_id: 'plan-revision-1',
   created_at: now,
   updated_at: now,
+  ...overrides,
+});
+
+const spec = (overrides: Partial<Spec> = {}): Spec => ({
+  id: 'spec-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'spec',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'spec-revision-1',
+  approved_revision_id: 'spec-revision-1',
+  approved_at: now,
+  approved_by_actor_id: actorReviewer,
+  created_at: now,
+  updated_at: now,
+  ...overrides,
+});
+
+const specRevision = (overrides: Partial<SpecRevision> = {}): SpecRevision => ({
+  id: 'spec-revision-1',
+  spec_id: 'spec-1',
+  work_item_id: 'work-item-1',
+  revision_number: 1,
+  summary: 'Release radar spec.',
+  content: 'Expose release risk controls.',
+  background: 'Release owners need approval controls.',
+  goals: ['Release owner can approve a release.'],
+  scope_in: ['Release gate'],
+  scope_out: [],
+  acceptance_criteria: ['Release owner can approve a release.'],
+  risk_notes: [],
+  test_strategy_summary: 'Run release module API tests.',
+  artifact_refs: [],
+  created_at: now,
+  ...overrides,
+});
+
+const plan = (overrides: Partial<Plan> = {}): Plan => ({
+  id: 'plan-1',
+  work_item_id: 'work-item-1',
+  entity_type: 'plan',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: 'plan-revision-1',
+  approved_revision_id: 'plan-revision-1',
+  approved_at: now,
+  approved_by_actor_id: actorReviewer,
+  created_at: now,
+  updated_at: now,
+  ...overrides,
+});
+
+const planRevision = (overrides: Partial<PlanRevision> = {}): PlanRevision => ({
+  id: 'plan-revision-1',
+  plan_id: 'plan-1',
+  work_item_id: 'work-item-1',
+  based_on_spec_revision_id: 'spec-revision-1',
+  revision_number: 1,
+  summary: 'Release radar plan.',
+  content: 'Implement release risk controls.',
+  implementation_summary: 'Use the release module API.',
+  split_strategy: 'Single package.',
+  dependency_order: [],
+  test_matrix: ['Release module API tests'],
+  risk_mitigations: [],
+  rollback_notes: 'Disable the release flag.',
+  artifact_refs: [],
+  created_at: now,
   ...overrides,
 });
 
@@ -175,23 +253,19 @@ describe('release module', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('allows AppModule to override core release providers without ReleaseModule owning P0Module wiring', async () => {
-    const repository = new InMemoryP0Repository();
+  it('allows AppModule to override core release providers without ReleaseModule owning delivery wiring', async () => {
+    const repository = new InMemoryDeliveryRepository();
     const durabilityMode: RunDurabilityMode = 'durable';
-    const allowDemoActorIdFallback = false;
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repository)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue(durabilityMode)
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(allowDemoActorIdFallback)
       .compile();
 
     try {
-      expect(moduleRef.get(P0_REPOSITORY)).toBe(repository);
+      expect(moduleRef.get(DELIVERY_REPOSITORY)).toBe(repository);
       expect(moduleRef.get(RUN_DURABILITY_MODE)).toBe(durabilityMode);
-      expect(moduleRef.get(P0_DEMO_ACTOR_ID_FALLBACK)).toBe(allowDemoActorIdFallback);
     } finally {
       await moduleRef.close();
     }
@@ -199,33 +273,31 @@ describe('release module', () => {
 
   const createTestApp = async (
     durabilityMode: RunDurabilityMode = 'volatile_demo',
-    repositoryOverride?: P0Repository,
+    repositoryOverride?: DeliveryRepository,
   ) => {
-    const repo = repositoryOverride ?? new InMemoryP0Repository();
+    const repo = repositoryOverride ?? new InMemoryDeliveryRepository();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(P0_REPOSITORY)
+      .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
       .overrideProvider(RUN_DURABILITY_MODE)
       .useValue(durabilityMode)
-      .overrideProvider(P0_DEMO_ACTOR_ID_FALLBACK)
-      .useValue(durabilityMode === 'volatile_demo')
-      .overrideProvider(RUN_WORKER)
+      .overrideProvider(DELIVERY_RUN_WORKER)
       .useValue({ kick: () => undefined, drainOnce: async () => undefined })
       .compile();
     const app = moduleRef.createNestApplication();
     await app.init();
-    return { app, repo: repo as InMemoryP0Repository };
+    return { app, repo: repo as InMemoryDeliveryRepository };
   };
 
   const repositoryFailingNextTransactionDecision = (
-    repo: InMemoryP0Repository,
+    repo: InMemoryDeliveryRepository,
     failure: { enabled: boolean },
-  ): P0Repository =>
+  ): DeliveryRepository =>
     new Proxy(repo, {
       get(target, property, receiver) {
-        if (property === 'withP0Transaction') {
-          return async (write: (repository: P0Repository) => Promise<unknown>) =>
-            target.withP0Transaction((transaction) => {
+        if (property === 'withDeliveryTransaction') {
+          return async (write: (repository: DeliveryRepository) => Promise<unknown>) =>
+            target.withDeliveryTransaction((transaction) => {
               const transactionProxy = new Proxy(transaction, {
                 get(transactionTarget, transactionProperty, transactionReceiver) {
                   if (transactionProperty === 'saveDecision') {
@@ -240,28 +312,28 @@ describe('release module', () => {
                   const value = Reflect.get(transactionTarget, transactionProperty, transactionReceiver);
                   return typeof value === 'function' ? value.bind(transactionTarget) : value;
                 },
-              }) as P0Repository;
+              }) as DeliveryRepository;
               return write(transactionProxy);
             });
         }
         const value = Reflect.get(target, property, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
       },
-    }) as P0Repository;
+    }) as DeliveryRepository;
 
   const repositoryFailingNextTransactionObjectEvent = (
-    repo: InMemoryP0Repository,
+    repo: InMemoryDeliveryRepository,
     failure: { enabled: boolean },
-  ): P0Repository =>
+  ): DeliveryRepository =>
     new Proxy(repo, {
       get(target, property, receiver) {
-        if (property === 'withP0Transaction') {
-          return async (write: (repository: P0Repository) => Promise<unknown>) =>
-            target.withP0Transaction((transaction) => {
+        if (property === 'withDeliveryTransaction') {
+          return async (write: (repository: DeliveryRepository) => Promise<unknown>) =>
+            target.withDeliveryTransaction((transaction) => {
               const transactionProxy = new Proxy(transaction, {
                 get(transactionTarget, transactionProperty, transactionReceiver) {
                   if (transactionProperty === 'appendObjectEvent') {
-                    return async (...args: Parameters<P0Repository['appendObjectEvent']>) => {
+                    return async (...args: Parameters<DeliveryRepository['appendObjectEvent']>) => {
                       if (failure.enabled) {
                         failure.enabled = false;
                         throw new Error('object event store unavailable');
@@ -272,21 +344,21 @@ describe('release module', () => {
                   const value = Reflect.get(transactionTarget, transactionProperty, transactionReceiver);
                   return typeof value === 'function' ? value.bind(transactionTarget) : value;
                 },
-              }) as P0Repository;
+              }) as DeliveryRepository;
               return write(transactionProxy);
             });
         }
         const value = Reflect.get(target, property, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
       },
-    }) as P0Repository;
+    }) as DeliveryRepository;
 
-  const seedProject = async (repo: InMemoryP0Repository, id = 'project-1') => {
+  const seedProject = async (repo: InMemoryDeliveryRepository, id = 'project-1') => {
     await repo.saveProject(project({ id, repo_ids: [`repo-${id}`] }));
   };
 
   const seedReadyScope = async (
-    repo: InMemoryP0Repository,
+    repo: InMemoryDeliveryRepository,
     overrides: {
       work_item?: Partial<WorkItem>;
       execution_package?: Partial<ExecutionPackage>;
@@ -295,8 +367,20 @@ describe('release module', () => {
     } = {},
   ) => {
     const item = workItem(overrides.work_item);
+    const specRecord = spec({ work_item_id: item.id });
+    const specRevisionRecord = specRevision({ spec_id: specRecord.id, work_item_id: item.id });
+    const planRecord = plan({ work_item_id: item.id });
+    const planRevisionRecord = planRevision({
+      plan_id: planRecord.id,
+      work_item_id: item.id,
+      based_on_spec_revision_id: specRevisionRecord.id,
+    });
     const pkg = executionPackage({
       work_item_id: item.id,
+      spec_id: specRecord.id,
+      spec_revision_id: specRevisionRecord.id,
+      plan_id: planRecord.id,
+      plan_revision_id: planRevisionRecord.id,
       ...overrides.execution_package,
     });
     const run = runSession({
@@ -309,16 +393,29 @@ describe('release module', () => {
       ...overrides.review_packet,
     });
     await repo.saveWorkItem(item);
+    await repo.saveSpec(specRecord);
+    await repo.saveSpecRevision(specRevisionRecord);
+    await repo.savePlan(planRecord);
+    await repo.savePlanRevision(planRevisionRecord);
     await repo.saveExecutionPackage(pkg);
     await repo.saveRunSession(run);
     await repo.saveReviewPacket(packet);
-    return { workItem: item, executionPackage: pkg, runSession: run, reviewPacket: packet };
+    return {
+      workItem: item,
+      spec: specRecord,
+      specRevision: specRevisionRecord,
+      plan: planRecord,
+      planRevision: planRevisionRecord,
+      executionPackage: pkg,
+      runSession: run,
+      reviewPacket: packet,
+    };
   };
 
   const createRelease = async (
     app: INestApplication,
     body: Record<string, unknown> = {},
-    headers: Record<string, string> = {},
+    headers: Record<string, string> = ownerHeaders,
   ): Promise<{ id: string; body: Record<string, any> }> => {
     const requestBuilder = request(app.getHttpServer()).post('/releases');
     for (const [name, value] of Object.entries(headers)) {
@@ -335,8 +432,8 @@ describe('release module', () => {
 
   const createReadyRelease = async (
     app: INestApplication,
-    repo: InMemoryP0Repository,
-    headers: Record<string, string> = {},
+    repo: InMemoryDeliveryRepository,
+    headers: Record<string, string> = ownerHeaders,
   ) => {
     const scope = await seedReadyScope(repo);
     const { id } = await createRelease(app, {
@@ -383,7 +480,7 @@ describe('release module', () => {
   });
 
   it('does not commit release creation when audit event persistence fails', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const eventFailure = { enabled: false };
     const { app } = await track(createTestApp('volatile_demo', repositoryFailingNextTransactionObjectEvent(repo, eventFailure)));
     await seedProject(repo);
@@ -391,6 +488,7 @@ describe('release module', () => {
     eventFailure.enabled = true;
     await request(app.getHttpServer())
       .post('/releases')
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         project_id: 'project-1',
@@ -398,7 +496,7 @@ describe('release module', () => {
       })
       .expect(500);
 
-    expect(await repo.listReleasesForProject('project-1')).toEqual([]);
+    expect(await repo.listReleases('project-1')).toEqual([]);
     expect(await repo.listObjectEvents('project-1', 'release')).toEqual([]);
   });
 
@@ -524,15 +622,18 @@ describe('release module', () => {
   it('filters release lists and paginates with next_cursor', async () => {
     const { app, repo } = await track(createTestApp());
     await seedProject(repo);
-    const scope = await seedReadyScope(repo, {
-      execution_package: { gate_state: 'not_submitted', phase: 'ready', resolution: 'none' },
-    });
+    const scope = await seedReadyScope(repo);
     const first = await createRelease(app);
     const second = await createRelease(app, { title: 'Release Radar second' });
     for (const releaseId of [first.id, second.id]) {
-      await request(app.getHttpServer()).post(`/releases/${releaseId}/work-items/${scope.workItem.id}`).send({ actor_id: actorOwner }).expect(201);
+      await request(app.getHttpServer())
+        .post(`/releases/${releaseId}/work-items/${scope.workItem.id}`)
+        .set(ownerHeaders)
+        .send({ actor_id: actorOwner })
+        .expect(201);
       await request(app.getHttpServer())
         .post(`/releases/${releaseId}/execution-packages/${scope.executionPackage.id}`)
+        .set(ownerHeaders)
         .send({ actor_id: actorOwner })
         .expect(201);
       await request(app.getHttpServer()).post(`/releases/${releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
@@ -669,8 +770,8 @@ describe('release module', () => {
         });
       });
 
-    await request(app.getHttpServer()).patch(`/releases/${id}`).send({ actor_id: actorOwner }).expect(400);
-    await request(app.getHttpServer()).patch('/releases/missing-release').send({ actor_id: actorOwner, title: 'No such release' }).expect(404);
+    await request(app.getHttpServer()).patch(`/releases/${id}`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(400);
+    await request(app.getHttpServer()).patch('/releases/missing-release').set(ownerHeaders).send({ actor_id: actorOwner, title: 'No such release' }).expect(404);
 
     const events = await repo.listObjectEvents(id, 'release');
     const history = await repo.listStatusHistory(id, 'release');
@@ -686,6 +787,7 @@ describe('release module', () => {
 
     await request(app.getHttpServer())
       .post(`/releases/${id}/work-items/${scope.workItem.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201)
       .expect(({ body }) => {
@@ -693,6 +795,7 @@ describe('release module', () => {
       });
     await request(app.getHttpServer())
       .delete(`/releases/${id}/work-items/${scope.workItem.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(200)
       .expect(({ body }) => {
@@ -700,6 +803,7 @@ describe('release module', () => {
       });
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/${scope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201)
       .expect(({ body }) => {
@@ -712,6 +816,7 @@ describe('release module', () => {
       });
     await request(app.getHttpServer())
       .delete(`/releases/${id}/execution-packages/${scope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(200)
       .expect(({ body }) => {
@@ -736,24 +841,28 @@ describe('release module', () => {
     await repo.saveExecutionPackage(executionPackage({ id: 'package-deleted', deleted_at: later }));
     await repo.saveExecutionPackage(executionPackage({ id: 'package-cross-project', project_id: 'project-2' }));
 
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/missing-work-item`).send({ actor_id: actorOwner }).expect(404);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-archived`).send({ actor_id: actorOwner }).expect(422);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-deleted`).send({ actor_id: actorOwner }).expect(422);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-cross-project`).send({ actor_id: actorOwner }).expect(422);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/missing-work-item`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(404);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-archived`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(422);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-deleted`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(422);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/work-item-cross-project`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(422);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/missing-package`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(404);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/package-archived`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(422);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/package-deleted`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(422);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/package-cross-project`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(422);
   });
@@ -761,13 +870,15 @@ describe('release module', () => {
   it('submits, approves, override-approves, requests changes, and re-submits releases', async () => {
     const { app, repo } = await track(createTestApp());
     await seedProject(repo);
-    const blockingScope = await seedReadyScope(repo, {
-      execution_package: { gate_state: 'not_submitted', phase: 'ready', resolution: 'none' },
+    const blockingScope = await seedReadyScope(repo);
+    const blocked = await createRelease(app, {
+      rollout_strategy: 'Ship behind a feature flag.',
+      rollback_plan: 'Disable the feature flag.',
     });
-    const blocked = await createRelease(app);
-    await request(app.getHttpServer()).post(`/releases/${blocked.id}/work-items/${blockingScope.workItem.id}`).send({ actor_id: actorOwner });
+    await request(app.getHttpServer()).post(`/releases/${blocked.id}/work-items/${blockingScope.workItem.id}`).set(ownerHeaders).send({ actor_id: actorOwner });
     await request(app.getHttpServer())
       .post(`/releases/${blocked.id}/execution-packages/${blockingScope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner });
     const submitted = await request(app.getHttpServer())
       .post(`/releases/${blocked.id}/submit-for-approval`)
@@ -784,19 +895,19 @@ describe('release module', () => {
       .expect(201);
     expect(overridden.body.release).toMatchObject({ phase: 'rollout', gate_state: 'approved' });
     expect(overridden.body.overridden_blockers).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+      expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
     );
 
     const cockpit = await request(app.getHttpServer()).get(`/query/release-cockpit/${blocked.id}`).expect(200);
     expect(cockpit.body.overridden_blockers).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+      expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
     );
     expect(cockpit.body.decisions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           decision_type: 'manual_override',
           blocker_snapshot: expect.objectContaining({
-            blockers: expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+            blockers: expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
           }),
         }),
       ]),
@@ -810,7 +921,7 @@ describe('release module', () => {
           payload: expect.objectContaining({
             decision_type: 'manual_override',
             blocker_snapshot: expect.objectContaining({
-              blockers: expect.arrayContaining([expect.objectContaining({ code: 'package_not_release_ready' })]),
+              blockers: expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
             }),
           }),
         }),
@@ -837,14 +948,15 @@ describe('release module', () => {
     );
 
     const staleScope = await seedReadyScope(repo, {
-      execution_package: { id: 'execution-package-stale', gate_state: 'not_submitted', phase: 'ready', resolution: 'none' },
+      execution_package: { id: 'execution-package-stale' },
       run_session: { id: 'run-session-stale', execution_package_id: 'execution-package-stale' },
       review_packet: { id: 'review-packet-stale', execution_package_id: 'execution-package-stale', run_session_id: 'run-session-stale' },
     });
     const stale = await createRelease(app);
-    await request(app.getHttpServer()).post(`/releases/${stale.id}/work-items/${staleScope.workItem.id}`).send({ actor_id: actorOwner });
+    await request(app.getHttpServer()).post(`/releases/${stale.id}/work-items/${staleScope.workItem.id}`).set(ownerHeaders).send({ actor_id: actorOwner });
     await request(app.getHttpServer())
       .post(`/releases/${stale.id}/execution-packages/${staleScope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner });
     const staleSubmit = await request(app.getHttpServer())
       .post(`/releases/${stale.id}/submit-for-approval`)
@@ -874,7 +986,7 @@ describe('release module', () => {
   });
 
   it('does not commit release approval when decision persistence fails', async () => {
-    const repo = new InMemoryP0Repository();
+    const repo = new InMemoryDeliveryRepository();
     const decisionFailure = { enabled: false };
     const { app } = await track(createTestApp('volatile_demo', repositoryFailingNextTransactionDecision(repo, decisionFailure)));
     await seedProject(repo);
@@ -996,9 +1108,10 @@ describe('release module', () => {
     await seedProject(repo);
     const scope = await seedReadyScope(repo);
     const { id } = await createRelease(app);
-    await request(app.getHttpServer()).post(`/releases/${id}/work-items/${scope.workItem.id}`).send({ actor_id: actorOwner }).expect(201);
+    await request(app.getHttpServer()).post(`/releases/${id}/work-items/${scope.workItem.id}`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     await request(app.getHttpServer())
       .post(`/releases/${id}/execution-packages/${scope.executionPackage.id}`)
+      .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
 
@@ -1212,6 +1325,7 @@ describe('release module', () => {
     });
     const patched = await request(app.getHttpServer())
       .patch(`/releases/${id}`)
+      .set(ownerHeaders)
       .send({
         actor_id: actorOwner,
         title: 'Release Radar v2',

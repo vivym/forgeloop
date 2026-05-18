@@ -20,9 +20,9 @@ import type {
 
 import {
   createDbClient,
-  DrizzleP0Repository,
-  InMemoryP0Repository,
-  type P0Repository,
+  DrizzleDeliveryRepository,
+  InMemoryDeliveryRepository,
+  type DeliveryRepository,
   type TraceArtifactRefRecord,
   type TraceEventRecord,
   type TraceLinkRecord,
@@ -32,7 +32,7 @@ import {
   release_work_items,
   releases,
 } from '../../packages/db/src/index';
-import { runP0RepositoryContract } from './repository-contract';
+import { runDeliveryRepositoryContract } from './repository-contract';
 
 const now = '2026-05-05T00:00:00.000Z';
 
@@ -77,9 +77,9 @@ const workItem: WorkItem = {
   id: 'work-item-1',
   project_id: project.id,
   kind: 'requirement',
-  title: 'Ship P0 db boundary',
-  goal: 'Persist the P0 delivery loop state.',
-  success_criteria: ['Required P0 records can be saved and queried.'],
+  title: 'Ship delivery db boundary',
+  goal: 'Persist the delivery loop state.',
+  success_criteria: ['Required delivery records can be saved and queried.'],
   priority: 'P0',
   risk: 'medium',
   owner_actor_id: 'actor-owner',
@@ -114,9 +114,9 @@ const specRevision: SpecRevision = {
   summary: 'Approved spec',
   content: 'Spec body',
   background: 'Background',
-  goals: ['Persist P0 state'],
+  goals: ['Persist delivery state'],
   scope_in: ['DB package'],
-  scope_out: ['Non-P0 workflows'],
+  scope_out: ['Non-delivery workflows'],
   acceptance_criteria: ['Repository can replay minimal flow'],
   risk_notes: ['Adapter is not integration-tested against Postgres yet'],
   test_strategy_summary: 'Vitest repository tests',
@@ -165,7 +165,7 @@ const executionPackage: ExecutionPackage = {
   plan_revision_id: planRevision.id,
   project_id: project.id,
   repo_id: projectRepo.repo_id,
-  objective: 'Add the P0 db boundary.',
+  objective: 'Add the delivery db boundary.',
   owner_actor_id: 'actor-owner',
   reviewer_actor_id: 'actor-reviewer',
   qa_owner_actor_id: 'actor-qa',
@@ -294,7 +294,7 @@ const reviewPacket: ReviewPacket = {
     status: 'succeeded',
     summary: 'The db boundary matches the approved plan.',
     spec_plan_alignment: 'Aligned.',
-    test_assessment: 'DB repository tests cover the P0 flow.',
+    test_assessment: 'DB repository tests cover the delivery flow.',
     risk_notes: ['Postgres integration remains future work.'],
     follow_up_questions: [],
   },
@@ -465,7 +465,7 @@ const createInsertCaptureRepository = () => {
     },
   };
 
-  return { repository: new DrizzleP0Repository(db as never), captures, deletes, transactions };
+  return { repository: new DrizzleDeliveryRepository(db as never), captures, deletes, transactions };
 };
 
 const createSingleRowRepository = (row: Record<string, unknown>) => {
@@ -479,7 +479,7 @@ const createSingleRowRepository = (row: Record<string, unknown>) => {
     }),
   };
 
-  return new DrizzleP0Repository(db as never);
+  return new DrizzleDeliveryRepository(db as never);
 };
 
 const createEmptySelectRepository = () => {
@@ -493,7 +493,7 @@ const createEmptySelectRepository = () => {
     }),
   };
 
-  return new DrizzleP0Repository(db as never);
+  return new DrizzleDeliveryRepository(db as never);
 };
 
 const createReleaseSelectRepository = () => {
@@ -561,16 +561,16 @@ const createReleaseSelectRepository = () => {
     }),
   };
 
-  return new DrizzleP0Repository(db as never);
+  return new DrizzleDeliveryRepository(db as never);
 };
 
-describe('P0Repository in-memory adapter', () => {
+describe('DeliveryRepository in-memory adapter', () => {
   it('satisfies the shared repository contract', async () => {
-    await runP0RepositoryContract(new InMemoryP0Repository());
+    await runDeliveryRepositoryContract(new InMemoryDeliveryRepository());
   });
 
-  it('persists and queries a minimal P0 delivery flow', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+  it('persists and queries a minimal delivery flow', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
     await repository.saveProject(project);
     await repository.saveProjectRepo(projectRepo);
@@ -611,7 +611,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('does not leak mutable references for key records', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
 
     await repository.saveProject(project);
     await repository.saveWorkItem(workItem);
@@ -635,10 +635,10 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('rolls back in-memory transaction writes when the callback throws', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
 
     await expect(
-      repository.withP0Transaction(async (transaction) => {
+      repository.withDeliveryTransaction(async (transaction) => {
         await transaction.saveProject(project);
         await transaction.saveProjectRepo(projectRepo);
         throw new Error('rollback');
@@ -650,7 +650,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('does not roll back concurrent in-memory writes when a transaction throws', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const concurrentProject: Project = {
       ...project,
       id: 'project-concurrent-commit',
@@ -659,7 +659,7 @@ describe('P0Repository in-memory adapter', () => {
     let releaseTransaction: (() => void) | undefined;
     let transaction: Promise<unknown> | undefined;
     const transactionStarted = new Promise<void>((resolve) => {
-      transaction = repository.withP0Transaction(async (tx) => {
+      transaction = repository.withDeliveryTransaction(async (tx) => {
         await tx.saveProject(project);
         resolve();
         await new Promise<void>((release) => {
@@ -683,7 +683,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('rejects an in-memory transaction that would overwrite a concurrent write', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     await repository.saveProject(project);
     const concurrentProject: Project = {
       ...project,
@@ -696,7 +696,7 @@ describe('P0Repository in-memory adapter', () => {
     let releaseTransaction: (() => void) | undefined;
     let transaction: Promise<unknown> | undefined;
     const transactionStarted = new Promise<void>((resolve) => {
-      transaction = repository.withP0Transaction(async (tx) => {
+      transaction = repository.withDeliveryTransaction(async (tx) => {
         await tx.saveProject(transactionProject);
         resolve();
         await new Promise<void>((release) => {
@@ -717,7 +717,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('gets spec revisions by id and returns undefined for unknown ids', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     await repository.saveSpec(spec);
     await repository.saveSpecRevision(specRevision);
 
@@ -728,7 +728,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('gets plan revisions by id and returns undefined for unknown ids', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     await repository.savePlan(plan);
     await repository.savePlanRevision(planRevision);
 
@@ -739,7 +739,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('keeps the original object event when the same event id is appended again', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const duplicateEvent: ObjectEvent = {
       ...objectEvent,
       event_type: 'run_started',
@@ -754,7 +754,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('keeps the original status history when the same history id is appended again', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
     const duplicateStatusHistory: StatusHistory = {
       ...statusHistory,
       from_status: 'ready',
@@ -770,7 +770,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('persists artifact trace subject fields', async () => {
-    const repository = new InMemoryP0Repository();
+    const repository = new InMemoryDeliveryRepository();
 
     await repository.saveArtifact(artifactWithTraceSubject);
 
@@ -778,7 +778,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('persists trace events, links, and artifact refs', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
     await repository.saveTraceEvent(traceEvent);
     for (const link of traceLinks) {
@@ -792,7 +792,7 @@ describe('P0Repository in-memory adapter', () => {
   });
 
   it('orders trace rows by creation time and id for deterministic projections', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const firstEvent: TraceEventRecord = { ...traceEvent, id: 'trace-event-a' };
     const secondEvent: TraceEventRecord = { ...traceEvent, id: 'trace-event-b' };
     const firstLink: TraceLinkRecord = { ...traceLinks[0]!, id: 'trace-link-a' };
@@ -815,8 +815,8 @@ describe('P0Repository in-memory adapter', () => {
     expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([firstArtifactRef, secondArtifactRef]);
   });
 
-  it('round-trips release canonical fields and filters releases by project', async () => {
-    const repository: P0Repository = new InMemoryP0Repository();
+  it('round-trips release canonical fields and lists releases with optional project filtering', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const otherProjectRelease: Release = {
       ...release,
       id: 'release-other-project',
@@ -829,11 +829,12 @@ describe('P0Repository in-memory adapter', () => {
     await repository.saveRelease(otherProjectRelease);
 
     expect(await repository.getRelease(release.id)).toEqual(release);
-    expect(await repository.listReleasesForProject(project.id)).toEqual([release]);
+    expect(await repository.listReleases(project.id)).toEqual([release]);
+    expect(await repository.listReleases()).toEqual([release, otherProjectRelease]);
   });
 });
 
-describe('P0Repository Drizzle adapter contract', () => {
+describe('DeliveryRepository Drizzle adapter contract', () => {
   const databaseUrl = process.env.FORGELOOP_TEST_DATABASE_URL ?? process.env.FORGELOOP_DATABASE_URL;
 
   if (databaseUrl === undefined) {
@@ -845,7 +846,7 @@ describe('P0Repository Drizzle adapter contract', () => {
       await resetForgeloopDatabase(databaseUrl);
       const { db, pool } = createDbClient({ connectionString: databaseUrl });
       try {
-        await runP0RepositoryContract(new DrizzleP0Repository(db));
+        await runDeliveryRepositoryContract(new DrizzleDeliveryRepository(db));
       } finally {
         await pool.end();
       }
@@ -853,7 +854,7 @@ describe('P0Repository Drizzle adapter contract', () => {
   }
 });
 
-describe('P0Repository Drizzle adapter persistence mapping', () => {
+describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
   it('writes omitted nullable optional domain fields as null without nulling required JSON fields', async () => {
     const { repository, captures } = createInsertCaptureRepository();
     const executionPackageWithoutLastRun: ExecutionPackage = { ...executionPackage };
