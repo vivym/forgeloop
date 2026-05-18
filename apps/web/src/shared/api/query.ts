@@ -46,6 +46,8 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ) as ProductListResponse,
     listRuns: async (query: ProductRegistryQuery) =>
       productListResponseSchema.parse(await request<unknown>(`/query/runs${queryString(query)}`)) as ProductListResponse,
+    listReviewPackets: async (query: ProductRegistryQuery) =>
+      productListResponseSchema.parse(await request<unknown>(`/query/review-packets${queryString(query)}`)) as ProductListResponse,
     listReviews: (query: ProjectQuery) => request<ReviewPacket[]>(`/query/reviews${queryString(query)}`),
     getReview: (reviewPacketId: string) => request<ReviewPacket>(`/query/reviews/${encodeURIComponent(reviewPacketId)}`),
     listReleases: (query: ProjectQuery) => request<ReleaseListResponse>(`/query/releases${queryString(query)}`),

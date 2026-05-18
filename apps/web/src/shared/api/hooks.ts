@@ -6,15 +6,27 @@ import { createForgeloopQueryApi } from './query';
 import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from './query-keys';
 import type {
   CockpitResponse,
+  AcknowledgeReleaseTestAcceptanceBody,
+  ApproveReleaseBody,
+  CloseReleaseBody,
+  CreateReleaseBody,
+  CreateReleaseEvidenceBody,
   CreateExecutionPackageBody,
   ExecutionPackage,
+  LinkReleaseScopeBody,
   ListProductQuery,
+  OverrideApproveReleaseBody,
   PatchExecutionPackageBody,
   PlanRevision,
+  ReleaseCommandBody,
+  RequestReleaseChangesBody,
+  ReviewDecisionBody,
   RoleWorkbenchId,
   RoleWorkbenchQuery,
   SpecPlan,
   SpecRevision,
+  StartReleaseObservingBody,
+  UnlinkReleaseScopeBody,
 } from './types';
 
 const workbenchIdForRole = (role: 'work-item-owner' | RoleWorkbenchId | string): RoleWorkbenchId =>
@@ -22,6 +34,16 @@ const workbenchIdForRole = (role: 'work-item-owner' | RoleWorkbenchId | string):
 
 const createQueryApi = () => createForgeloopQueryApi();
 const createCommandApi = () => createForgeloopCommandApi();
+
+type ReleaseProductQuery = {
+  project_id: string;
+  release_owner_actor_id?: string;
+  phase?: string;
+  gate_state?: string;
+  resolution?: string;
+  cursor?: string;
+  limit?: number;
+};
 
 export function useWorkbenchQuery(input: {
   role: 'work-item-owner' | RoleWorkbenchId | string;
@@ -192,10 +214,37 @@ export function useReviewsQuery(projectId: string) {
   });
 }
 
+export function useReviewPacketsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeReviewPacketQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.reviewPackets(normalizedQuery),
+    queryFn: () => createQueryApi().listReviewPackets(normalizedQuery),
+  });
+}
+
 export function useReviewQuery(reviewPacketId: string) {
   return useQuery({
     queryKey: queryKeys.review(reviewPacketId),
-    queryFn: () => createQueryApi().getReview(reviewPacketId),
+    queryFn: () => createCommandApi().getReviewPacket(reviewPacketId),
+  });
+}
+
+export function useApproveReviewPacketMutation(reviewPacketId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ReviewDecisionBody) => createCommandApi().approveReviewPacket(reviewPacketId, body),
+    onSuccess: () => invalidateReviewPacketResources(queryClient, reviewPacketId),
+  });
+}
+
+export function useRequestReviewChangesMutation(reviewPacketId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ReviewDecisionBody) => createCommandApi().requestReviewChanges(reviewPacketId, body),
+    onSuccess: () => invalidateReviewPacketResources(queryClient, reviewPacketId),
   });
 }
 
@@ -285,10 +334,12 @@ export function useResumeRunMutation(runSessionId: string) {
   });
 }
 
-export function useReleasesQuery(projectId: string) {
+export function useReleasesQuery(query: ReleaseProductQuery) {
+  const normalizedQuery = normalizeReleaseQuery(query);
+
   return useQuery({
-    queryKey: queryKeys.releases(projectId),
-    queryFn: () => createQueryApi().listReleases({ project_id: projectId }),
+    queryKey: queryKeys.releases(normalizedQuery),
+    queryFn: () => createQueryApi().listReleases(normalizedQuery),
   });
 }
 
@@ -370,6 +421,89 @@ export function useReleaseReplayQuery(releaseId: string) {
   });
 }
 
+export function useCreateReleaseMutation(projectId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: CreateReleaseBody) => createCommandApi().createRelease(body),
+    onSuccess: () => invalidateReleases(queryClient, projectId),
+  });
+}
+
+export function useLinkReleaseWorkItemMutation(releaseId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { workItemId: string; body: LinkReleaseScopeBody }) =>
+      createCommandApi().linkReleaseWorkItem(releaseId, input.workItemId, input.body),
+    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+  });
+}
+
+export function useUnlinkReleaseWorkItemMutation(releaseId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { workItemId: string; body: UnlinkReleaseScopeBody }) =>
+      createCommandApi().unlinkReleaseWorkItem(releaseId, input.workItemId, input.body),
+    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+  });
+}
+
+export function useLinkReleaseExecutionPackageMutation(releaseId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { packageId: string; body: LinkReleaseScopeBody }) =>
+      createCommandApi().linkReleaseExecutionPackage(releaseId, input.packageId, input.body),
+    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+  });
+}
+
+export function useUnlinkReleaseExecutionPackageMutation(releaseId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { packageId: string; body: UnlinkReleaseScopeBody }) =>
+      createCommandApi().unlinkReleaseExecutionPackage(releaseId, input.packageId, input.body),
+    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+  });
+}
+
+export function useSubmitReleaseMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: ReleaseCommandBody) => createCommandApi().submitReleaseForApproval(releaseId, body));
+}
+
+export function useApproveReleaseMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: ApproveReleaseBody) => createCommandApi().approveRelease(releaseId, body));
+}
+
+export function useAcknowledgeReleaseTestAcceptanceMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: AcknowledgeReleaseTestAcceptanceBody) =>
+    createCommandApi().acknowledgeReleaseTestAcceptance(releaseId, body),
+  );
+}
+
+export function useOverrideApproveReleaseMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: OverrideApproveReleaseBody) => createCommandApi().overrideApproveRelease(releaseId, body));
+}
+
+export function useRequestReleaseChangesMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: RequestReleaseChangesBody) => createCommandApi().requestReleaseChanges(releaseId, body));
+}
+
+export function useStartReleaseObservingMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: StartReleaseObservingBody) => createCommandApi().startReleaseObserving(releaseId, body));
+}
+
+export function useCloseReleaseMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: CloseReleaseBody) => createCommandApi().closeRelease(releaseId, body));
+}
+
+export function useCreateReleaseEvidenceMutation(releaseId: string) {
+  return useReleaseCommandMutation(releaseId, (body: CreateReleaseEvidenceBody) => createCommandApi().createReleaseEvidence(releaseId, body));
+}
+
 export function useCreateSpecMutation(workItemId: string | undefined) {
   const queryClient = useQueryClient();
 
@@ -438,6 +572,35 @@ function invalidatePackages(queryClient: QueryClient) {
   return queryClient.invalidateQueries({ queryKey: ['packages'] });
 }
 
+function invalidateReviewPacketResources(queryClient: QueryClient, reviewPacketId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.review(reviewPacketId) }),
+    queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
+  ]);
+}
+
+function invalidateReleases(queryClient: QueryClient, projectId: string) {
+  return queryClient.invalidateQueries({ queryKey: ['releases', { project_id: projectId }] });
+}
+
+function invalidateReleaseCockpit(queryClient: QueryClient, releaseId: string) {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.releaseCockpit(releaseId) });
+}
+
+function useReleaseCommandMutation<TBody>(releaseId: string, mutationFn: (body: TBody) => Promise<unknown>) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn,
+    onSuccess: () =>
+      Promise.all([
+        invalidateReleaseCockpit(queryClient, releaseId),
+        queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
+        queryClient.invalidateQueries({ queryKey: ['releases'] }),
+      ]),
+  });
+}
+
 function setPackageDetail(queryClient: QueryClient, packageId: string, executionPackage: ExecutionPackage) {
   queryClient.setQueryData<ExecutionPackage>(queryKeys.package(packageId), executionPackage);
 }
@@ -467,6 +630,32 @@ function normalizePackageRunQuery(query: ListProductQuery): ListProductQuery {
     ...(query.executor_type === undefined ? {} : { executor_type: query.executor_type }),
     ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
     ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+  };
+}
+
+function normalizeReviewPacketQuery(query: ListProductQuery): ListProductQuery {
+  return {
+    project_id: query.project_id,
+    ...(query.status === undefined ? {} : { status: query.status }),
+    ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
+    ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
+    ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
+    ...(query.review_packet_id === undefined ? {} : { review_packet_id: query.review_packet_id }),
+    ...(query.decision === undefined ? {} : { decision: query.decision }),
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+  };
+}
+
+function normalizeReleaseQuery(query: ReleaseProductQuery): ReleaseProductQuery {
+  return {
+    project_id: query.project_id,
+    ...(query.release_owner_actor_id === undefined ? {} : { release_owner_actor_id: query.release_owner_actor_id }),
+    ...(query.phase === undefined ? {} : { phase: query.phase }),
+    ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
+    ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
     ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
     ...(query.limit === undefined ? {} : { limit: query.limit }),
   };
