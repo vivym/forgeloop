@@ -50,6 +50,7 @@ const routeTimeline = timeline.map((entry) => ({
 
 export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/pipeline?project_id=${projectId}`]: [workItem],
+  [`GET /work-items?project_id=${projectId}`]: [workItem],
   [`GET /query/workbenches/intake?project_id=${projectId}`]: {
     summary: { role: 'intake', project_id: projectId, actor_id: actorId, total: 1 },
     items: [
@@ -97,6 +98,22 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     review_packets: [reviewPacket],
     next_actions: ['open_work_item'],
     completion_state: { fixture: true },
+  },
+  [`POST /work-items/${routeWorkItem.id}/specs`]: routeSpec,
+  [`POST /work-items/${routeWorkItem.id}/plans`]: routePlan,
+  [`POST /specs/${spec.id}/generate-draft`]: specRevision,
+  [`POST /specs/${routeSpec.id}/generate-draft`]: {
+    ...specRevision,
+    id: 'spec-revision-route',
+    spec_id: routeSpec.id,
+    work_item_id: routeWorkItem.id,
+  },
+  [`POST /plans/${plan.id}/generate-draft`]: planRevision,
+  [`POST /plans/${routePlan.id}/generate-draft`]: {
+    ...planRevision,
+    id: 'plan-revision-route',
+    plan_id: routePlan.id,
+    work_item_id: routeWorkItem.id,
   },
   [`GET /query/release-cockpit/${release.id}`]: {
     release,

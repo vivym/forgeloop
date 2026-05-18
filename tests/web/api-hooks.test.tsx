@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
 import { productRoleToWorkbenchId } from '../../apps/web/src/features/role-workbench/role-labels';
-import { usePipelineQuery } from '../../apps/web/src/shared/api/hooks';
+import { usePipelineQuery, useWorkItemsQuery } from '../../apps/web/src/shared/api/hooks';
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { projectId, workItem } from './fixtures/product-data';
@@ -108,6 +108,27 @@ describe('Web product API hooks', () => {
     expect(result.current.data?.[0]?.id).toBe(workItem.id);
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/query/pipeline?project_id=${projectId}`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+
+    unmount();
+    queryClient.clear();
+  });
+
+  it('uses the command API work item list endpoint for work item list hooks', async () => {
+    const fetchMock = installProductApiMock();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result, unmount } = renderHook(() => useWorkItemsQuery(projectId), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.[0]?.id).toBe(workItem.id);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/work-items?project_id=${projectId}`,
       expect.objectContaining({ method: 'GET' }),
     );
 

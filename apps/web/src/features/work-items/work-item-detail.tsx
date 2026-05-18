@@ -7,11 +7,21 @@ import { createWorkItemDetailViewModel, formatValue } from './work-item-view-mod
 
 export function WorkItemDetail() {
   const params = useParams();
-  const workItemId = params.workItemId ?? 'wi-1';
+  const workItemId = params.workItemId;
   const cockpit = useWorkItemCockpitQuery(workItemId);
   const replay = useWorkItemReplayQuery(workItemId);
   const viewModel = createWorkItemDetailViewModel(cockpit.data, replay.data);
   const { workItem } = viewModel;
+
+  if (workItemId === undefined) {
+    return (
+      <DetailLayout header={<PageHeader subtitle="No work item route parameter was provided." title="Work Item" />}>
+        <Section title="Invalid route">
+          <p className="empty">This Work Item route is missing a work item.</p>
+        </Section>
+      </DetailLayout>
+    );
+  }
 
   if (cockpit.status === 'pending') {
     return (

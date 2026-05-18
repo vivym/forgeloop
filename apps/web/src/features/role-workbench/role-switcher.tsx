@@ -14,7 +14,7 @@ export function RoleSwitcher({ activeRole }: { activeRole: ProductRole }) {
           title="Role switching pending wiring"
           variant="ghost"
         >
-          {role === activeRole ? 'Owner queue' : role}
+          {role === activeRole ? 'Work Item Owner' : role}
         </Button>
       ))}
     </div>

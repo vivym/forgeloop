@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import WorkItemSpecPlanRoute from '../../apps/web/src/app/routes/work-items/$workItemId/spec-plan';
 import { renderRoute } from './router-test-utils';
 
 describe('Work Item scoped Spec & Plan route', () => {
@@ -10,23 +12,175 @@ describe('Work Item scoped Spec & Plan route', () => {
     expect(screen.getByRole('button', { name: 'Create Spec' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Create Plan' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open revision history' })).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Create Spec' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Create Plan' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByLabelText('spec_id')).toBeNull();
     expect(screen.queryByLabelText('plan_id')).toBeNull();
     expect(screen.queryByText('raw JSON')).toBeNull();
     expect(screen.queryByText('actor-owner')).toBeNull();
   });
 
-  it('disables deferred spec and plan commands when artifacts exist', async () => {
+  it('runs create spec when no spec exists and refreshes the work item cockpit', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': {
+          work_item: {
+            id: 'wi-1',
+            project_id: 'project-web-product',
+            kind: 'requirement',
+            title: 'Improve release cockpit',
+            goal: 'Improve release readiness visibility.',
+            success_criteria: ['Planning artifacts are visible'],
+            priority: 'P0',
+            risk: 'medium',
+            owner_actor_id: 'actor-owner',
+            phase: 'planning',
+            activity_state: 'active',
+            gate_state: 'open',
+            resolution: 'unresolved',
+          },
+          current_spec: null,
+          current_plan: null,
+          packages: [],
+          run_sessions: [],
+          review_packets: [],
+          next_actions: [],
+          completion_state: {},
+        },
+        'POST /work-items/wi-1/specs': {
+          id: 'spec-created',
+          work_item_id: 'wi-1',
+          entity_type: 'spec',
+          status: 'draft',
+          editing_state: 'editable',
+          gate_state: 'open',
+          resolution: 'unresolved',
+        },
+      },
+    });
+
+    const createSpec = (await screen.findByRole('button', { name: 'Create Spec' })) as HTMLButtonElement;
+    await waitFor(() => expect(createSpec.disabled).toBe(false));
+    expect((screen.getByRole('button', { name: 'Create Plan' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Generate spec draft' })).toBeNull();
+
+    await user.click(createSpec);
+
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        'http://localhost:3000/work-items/wi-1/specs',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    await waitFor(() => {
+      const cockpitRequests = vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) => String(input).includes('/query/work-item-cockpit/wi-1'));
+      expect(cockpitRequests.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('runs create plan only after a spec exists', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': {
+          work_item: {
+            id: 'wi-1',
+            project_id: 'project-web-product',
+            kind: 'requirement',
+            title: 'Improve release cockpit',
+            goal: 'Improve release readiness visibility.',
+            success_criteria: ['Planning artifacts are visible'],
+            priority: 'P0',
+            risk: 'medium',
+            owner_actor_id: 'actor-owner',
+            phase: 'planning',
+            activity_state: 'active',
+            gate_state: 'open',
+            resolution: 'unresolved',
+            current_spec_id: 'spec-1',
+          },
+          current_spec: {
+            id: 'spec-1',
+            work_item_id: 'wi-1',
+            entity_type: 'spec',
+            status: 'draft',
+            editing_state: 'editable',
+            gate_state: 'open',
+            resolution: 'unresolved',
+          },
+          current_plan: null,
+          packages: [],
+          run_sessions: [],
+          review_packets: [],
+          next_actions: [],
+          completion_state: {},
+        },
+        'POST /work-items/wi-1/plans': {
+          id: 'plan-created',
+          work_item_id: 'wi-1',
+          entity_type: 'plan',
+          status: 'draft',
+          editing_state: 'editable',
+          gate_state: 'open',
+          resolution: 'unresolved',
+        },
+      },
+    });
+
+    const createPlan = (await screen.findByRole('button', { name: 'Create Plan' })) as HTMLButtonElement;
+    expect((screen.getByRole('button', { name: 'Create Spec' }) as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect(createPlan.disabled).toBe(false));
+
+    await user.click(createPlan);
+
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        'http://localhost:3000/work-items/wi-1/plans',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+  });
+
+  it('generates drafts only for existing artifacts and keeps approval commands deferred', async () => {
+    const user = userEvent.setup();
     const screen = await renderRoute('/work-items/wi-1/spec-plan');
 
-    expect((await screen.findByRole('button', { name: 'Generate spec draft' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Generate plan draft' }) as HTMLButtonElement).disabled).toBe(true);
+    const generateSpec = (await screen.findByRole('button', { name: 'Generate spec draft' })) as HTMLButtonElement;
+    const generatePlan = screen.getByRole('button', { name: 'Generate plan draft' }) as HTMLButtonElement;
+    expect(generateSpec.disabled).toBe(false);
+    expect(generatePlan.disabled).toBe(false);
     expect((screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Request changes' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByText('Pending command wiring').length).toBeGreaterThan(0);
+
+    await user.click(generateSpec);
+    await user.click(generatePlan);
+
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        'http://localhost:3000/specs/spec-web-product/generate-draft',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        'http://localhost:3000/plans/plan-web-product/generate-draft',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+  });
+
+  it('renders an invalid route state when work item route params are missing', async () => {
+    const screen = await renderRoute('/', {
+      routes: [{ path: '/', Component: WorkItemSpecPlanRoute }],
+    });
+
+    expect(screen.getByText('This Spec & Plan route is missing a work item.')).toBeTruthy();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
+      expect.stringContaining('/query/work-item-cockpit/wi-1'),
+      expect.anything(),
+    );
   });
 
   it('shows revision history without raw revision ids', async () => {

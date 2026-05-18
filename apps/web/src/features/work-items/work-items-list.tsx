@@ -1,6 +1,7 @@
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 
-import { usePipelineQuery } from '../../shared/api/hooks';
+import { useWorkItemsQuery } from '../../shared/api/hooks';
+import type { WorkItem } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { PageHeader, Section } from '../../shared/layout';
 import { DataTable, StatusPill } from '../../shared/ui';
@@ -8,8 +9,10 @@ import { formatValue } from './work-item-view-model';
 
 export function WorkItemsList() {
   const { projectId } = useProjectContext();
-  const query = usePipelineQuery(projectId);
-  const items = query.data ?? [];
+  const [searchParams] = useSearchParams();
+  const query = useWorkItemsQuery(projectId);
+  const filters = parseWorkItemFilters(searchParams);
+  const items = filterWorkItems(query.data ?? [], filters);
 
   return (
     <>
@@ -51,4 +54,39 @@ export function WorkItemsList() {
       </Section>
     </>
   );
+}
+
+interface WorkItemFilters {
+  kind?: string;
+  risk?: string;
+  phase?: string;
+  status?: string;
+}
+
+function parseWorkItemFilters(searchParams: URLSearchParams): WorkItemFilters {
+  return {
+    ...optionalSearchFilter(searchParams, 'kind'),
+    ...optionalSearchFilter(searchParams, 'risk'),
+    ...optionalSearchFilter(searchParams, 'phase'),
+    ...optionalSearchFilter(searchParams, 'status'),
+  };
+}
+
+function optionalSearchFilter(searchParams: URLSearchParams, key: keyof WorkItemFilters) {
+  const value = searchParams.get(key)?.trim();
+  return value ? { [key]: value } : {};
+}
+
+function filterWorkItems(items: WorkItem[], filters: WorkItemFilters) {
+  return items.filter((item) => {
+    if (filters.kind !== undefined && item.kind !== filters.kind) return false;
+    if (filters.risk !== undefined && item.risk !== filters.risk) return false;
+    if (filters.phase !== undefined && item.phase !== filters.phase) return false;
+    if (filters.status !== undefined && !matchesWorkItemStatus(item, filters.status)) return false;
+    return true;
+  });
+}
+
+function matchesWorkItemStatus(item: WorkItem, status: string) {
+  return item.activity_state === status || item.gate_state === status || item.resolution === status;
 }

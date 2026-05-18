@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { createForgeloopCommandApi } from './commands';
 import { createForgeloopQueryApi } from './query';
 import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from './query-keys';
 import type { RoleWorkbenchId, RoleWorkbenchQuery } from './types';
@@ -8,6 +9,7 @@ const workbenchIdForRole = (role: 'work-item-owner' | RoleWorkbenchId | string):
   workbenchIdForProductRole(role) as RoleWorkbenchId;
 
 const createQueryApi = () => createForgeloopQueryApi();
+const createCommandApi = () => createForgeloopCommandApi();
 
 export function useWorkbenchQuery(input: {
   role: 'work-item-owner' | RoleWorkbenchId | string;
@@ -34,6 +36,13 @@ export function usePipelineQuery(projectId: string) {
   return useQuery({
     queryKey: queryKeys.pipeline(projectId),
     queryFn: () => createQueryApi().getPipeline({ project_id: projectId }),
+  });
+}
+
+export function useWorkItemsQuery(projectId: string) {
+  return useQuery({
+    queryKey: queryKeys.workItems(projectId),
+    queryFn: () => createCommandApi().listWorkItems(projectId),
   });
 }
 
@@ -128,17 +137,19 @@ export function useReleasesQuery(projectId: string) {
   });
 }
 
-export function useWorkItemCockpitQuery(workItemId: string) {
+export function useWorkItemCockpitQuery(workItemId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.workItemCockpit(workItemId),
-    queryFn: () => createQueryApi().getWorkItemCockpit(workItemId),
+    queryFn: () => createQueryApi().getWorkItemCockpit(requiredId(workItemId, 'workItemId')),
+    enabled: workItemId !== undefined,
   });
 }
 
-export function useWorkItemReplayQuery(workItemId: string) {
+export function useWorkItemReplayQuery(workItemId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.workItemReplay(workItemId),
-    queryFn: () => createQueryApi().getWorkItemReplay(workItemId),
+    queryFn: () => createQueryApi().getWorkItemReplay(requiredId(workItemId, 'workItemId')),
+    enabled: workItemId !== undefined,
   });
 }
 
@@ -168,4 +179,63 @@ export function useReleaseReplayQuery(releaseId: string) {
     queryKey: queryKeys.releaseReplay(releaseId),
     queryFn: () => createQueryApi().getReleaseReplay(releaseId),
   });
+}
+
+export function useCreateSpecMutation(workItemId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => createCommandApi().createSpec(requiredId(workItemId, 'workItemId')),
+    onSuccess: () => {
+      if (workItemId !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
+      }
+    },
+  });
+}
+
+export function useCreatePlanMutation(workItemId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => createCommandApi().createPlan(requiredId(workItemId, 'workItemId')),
+    onSuccess: () => {
+      if (workItemId !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
+      }
+    },
+  });
+}
+
+export function useGenerateSpecDraftMutation(input: { workItemId: string | undefined; specId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => createCommandApi().generateSpecDraft(requiredId(input.specId, 'specId')),
+    onSuccess: () => {
+      if (input.workItemId !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) });
+      }
+    },
+  });
+}
+
+export function useGeneratePlanDraftMutation(input: { workItemId: string | undefined; planId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => createCommandApi().generatePlanDraft(requiredId(input.planId, 'planId')),
+    onSuccess: () => {
+      if (input.workItemId !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) });
+      }
+    },
+  });
+}
+
+function requiredId(id: string | undefined, label: string) {
+  if (id === undefined) {
+    throw new Error(`${label} is required`);
+  }
+  return id;
 }

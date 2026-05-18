@@ -2,19 +2,29 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useParams } from 'react-router';
 
-import { useWorkItemCockpitQuery } from '../../shared/api/hooks';
+import {
+  useCreatePlanMutation,
+  useCreateSpecMutation,
+  useGeneratePlanDraftMutation,
+  useGenerateSpecDraftMutation,
+  useWorkItemCockpitQuery,
+} from '../../shared/api/hooks';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Badge, Button, Drawer, DrawerClose, StatusPill } from '../../shared/ui';
 import { createWorkItemDetailViewModel, formatValue } from '../work-items/work-item-view-model';
 
 export function SpecPlanWorkItemFlow() {
   const params = useParams();
-  const workItemId = params.workItemId ?? 'wi-1';
+  const workItemId = params.workItemId;
   const cockpit = useWorkItemCockpitQuery(workItemId);
   const viewModel = createWorkItemDetailViewModel(cockpit.data, undefined);
   const [historyOpen, setHistoryOpen] = useState(false);
   const hasSpec = viewModel.spec !== null;
   const hasPlan = viewModel.plan !== null;
+  const createSpec = useCreateSpecMutation(workItemId);
+  const createPlan = useCreatePlanMutation(workItemId);
+  const generateSpecDraft = useGenerateSpecDraftMutation({ workItemId, specId: viewModel.spec?.id });
+  const generatePlanDraft = useGeneratePlanDraftMutation({ workItemId, planId: viewModel.plan?.id });
   const workItemTitle = viewModel.workItem?.title ?? 'Work item planning';
   const commandPendingReason = 'Pending command wiring';
   const hasPlanningContext = cockpit.status === 'success' && !cockpit.isError && viewModel.workItem !== null;
@@ -22,6 +32,16 @@ export function SpecPlanWorkItemFlow() {
   const handleHistoryOpenChange = (open: boolean) => {
     setHistoryOpen(hasPlanningContext ? open : false);
   };
+
+  if (workItemId === undefined) {
+    return (
+      <DetailLayout header={<PageHeader subtitle="No work item route parameter was provided." title="Spec & Plan" />}>
+        <Section title="Invalid route">
+          <p className="empty">This Spec & Plan route is missing a work item.</p>
+        </Section>
+      </DetailLayout>
+    );
+  }
 
   return (
     <DetailLayout
@@ -45,11 +65,21 @@ export function SpecPlanWorkItemFlow() {
         <PageHeader
           actions={
             <div className="button-row">
-              <Button disabled title={commandPendingReason} variant="primary">
-                Create Spec
+              <Button
+                disabled={!hasPlanningContext || hasSpec || createSpec.isPending}
+                onClick={() => createSpec.mutate()}
+                title={createSpecTitle({ hasPlanningContext, hasSpec })}
+                variant="primary"
+              >
+                {createSpec.isPending ? 'Creating spec...' : 'Create Spec'}
               </Button>
-              <Button disabled title={commandPendingReason} variant="primary">
-                Create Plan
+              <Button
+                disabled={!hasPlanningContext || !hasSpec || hasPlan || createPlan.isPending}
+                onClick={() => createPlan.mutate()}
+                title={createPlanTitle({ hasPlanningContext, hasSpec, hasPlan })}
+                variant="primary"
+              >
+                {createPlan.isPending ? 'Creating plan...' : 'Create Plan'}
               </Button>
               <Drawer
                 content={
@@ -85,6 +115,12 @@ export function SpecPlanWorkItemFlow() {
                 </Button>
               </Drawer>
               {!hasPlanningContext ? <p className="status-line">{revisionHistoryPendingReason}</p> : null}
+              <CommandFeedback
+                messages={[
+                  mutationFeedback(createSpec, 'Spec is being created.', 'Spec could not be created.'),
+                  mutationFeedback(createPlan, 'Plan is being created.', 'Plan could not be created.'),
+                ]}
+              />
             </div>
           }
           eyebrow={workItemTitle}
@@ -122,9 +158,24 @@ export function SpecPlanWorkItemFlow() {
             <ArtifactState
               action={
                 hasSpec ? (
-                  <Button disabled title={commandPendingReason}>
-                    Generate spec draft
-                  </Button>
+                  <div className="stack-form compact">
+                    <Button
+                      disabled={generateSpecDraft.isPending}
+                      onClick={() => generateSpecDraft.mutate()}
+                      title="Generate a draft revision for this spec."
+                    >
+                      {generateSpecDraft.isPending ? 'Generating spec draft...' : 'Generate spec draft'}
+                    </Button>
+                    <CommandFeedback
+                      messages={[
+                        mutationFeedback(
+                          generateSpecDraft,
+                          'Spec draft is being generated.',
+                          'Spec draft could not be generated.',
+                        ),
+                      ]}
+                    />
+                  </div>
                 ) : null
               }
               created={hasSpec}
@@ -136,9 +187,24 @@ export function SpecPlanWorkItemFlow() {
             <ArtifactState
               action={
                 hasPlan ? (
-                  <Button disabled title={commandPendingReason}>
-                    Generate plan draft
-                  </Button>
+                  <div className="stack-form compact">
+                    <Button
+                      disabled={generatePlanDraft.isPending}
+                      onClick={() => generatePlanDraft.mutate()}
+                      title="Generate a draft revision for this plan."
+                    >
+                      {generatePlanDraft.isPending ? 'Generating plan draft...' : 'Generate plan draft'}
+                    </Button>
+                    <CommandFeedback
+                      messages={[
+                        mutationFeedback(
+                          generatePlanDraft,
+                          'Plan draft is being generated.',
+                          'Plan draft could not be generated.',
+                        ),
+                      ]}
+                    />
+                  </div>
                 ) : null
               }
               created={hasPlan}
@@ -158,6 +224,44 @@ export function SpecPlanWorkItemFlow() {
         </>
       ) : null}
     </DetailLayout>
+  );
+}
+
+interface MutationState {
+  isError: boolean;
+  isPending: boolean;
+}
+
+function createSpecTitle(input: { hasPlanningContext: boolean; hasSpec: boolean }) {
+  if (!input.hasPlanningContext) return 'Create Spec after work item planning data loads.';
+  if (input.hasSpec) return 'A spec already exists for this work item.';
+  return 'Create a spec for this work item.';
+}
+
+function createPlanTitle(input: { hasPlanningContext: boolean; hasSpec: boolean; hasPlan: boolean }) {
+  if (!input.hasPlanningContext) return 'Create Plan after work item planning data loads.';
+  if (!input.hasSpec) return 'Create a spec before creating a plan.';
+  if (input.hasPlan) return 'A plan already exists for this work item.';
+  return 'Create a plan for this work item.';
+}
+
+function mutationFeedback(mutation: MutationState, pendingMessage: string, errorMessage: string) {
+  if (mutation.isPending) return pendingMessage;
+  if (mutation.isError) return errorMessage;
+  return null;
+}
+
+function CommandFeedback({ messages }: { messages: Array<string | null> }) {
+  return (
+    <>
+      {messages
+        .filter((message): message is string => message !== null)
+        .map((message) => (
+          <p className="status-line" key={message}>
+            {message}
+          </p>
+        ))}
+    </>
   );
 }
 
