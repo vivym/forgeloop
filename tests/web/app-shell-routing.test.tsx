@@ -10,6 +10,11 @@ describe('React Router product shell', () => {
     expect(screen.queryByText('Load role queue')).toBeNull();
   });
 
+  it('respects the requested route path', async () => {
+    const screen = await renderRoute('/not-a-product-route');
+    expect(screen.queryByRole('heading', { name: /workbench/i })).toBeNull();
+  });
+
   it('exports root route loading and error boundaries', async () => {
     const rootModule = await import('../../apps/web/src/app/root');
     expect(rootModule.HydrateFallback).toEqual(expect.any(Function));
