@@ -43,7 +43,7 @@ describe('Spec and Plan direct routes', () => {
             object_id: 'spec-1',
             summary: 'Spec approved from product planning review.',
             created_at: '2026-05-18T00:30:00.000Z',
-            payload: { work_item_id: 'wi-1' },
+            payload: { actor_id: 'actor-owner', work_item_id: 'wi-1' },
           },
         ],
       },
@@ -53,7 +53,8 @@ describe('Spec and Plan direct routes', () => {
     expect(await screen.findByText('History / Timeline')).toBeTruthy();
     expect(screen.getByText('Spec approved from product planning review.')).toBeTruthy();
     expect(screen.getByText('2026-05-18T00:30:00.000Z')).toBeTruthy();
-    expect(screen.getByText('Parent: Work Item')).toBeTruthy();
+    expect(screen.getByText('Parent: Work Item | Actor: actor-owner')).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/actor_id/);
     expect(screen.queryByText('Revision 1 created')).toBeNull();
     expect(screen.getByRole('link', { name: 'Work Item' })).toBeTruthy();
     await waitFor(() => {
@@ -211,7 +212,7 @@ describe('Spec and Plan direct routes', () => {
 
     expect(await screen.findByText('Plan approved for package preparation.')).toBeTruthy();
     expect(screen.getByText('2026-05-18T00:35:00.000Z')).toBeTruthy();
-    expect(screen.getByText('Parent: Work Item')).toBeTruthy();
+    expect(screen.getByText('Parent: Work Item | Actor: Not recorded')).toBeTruthy();
     expect(screen.getByText('Package generation starts from the Packages workspace.')).toBeTruthy();
     expect(screen.getByText('Package generation is ready for this approved Plan. Open package readiness to continue.')).toBeTruthy();
     expect((screen.getByRole('link', { name: 'View package readiness' }) as HTMLAnchorElement).getAttribute('href')).toBe(

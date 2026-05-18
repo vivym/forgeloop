@@ -640,7 +640,7 @@ function replayTimelineItems(events: TimelineEntry[], workItemId: string): Timel
   return events.map((event) => ({
     id: event.id,
     title: event.summary,
-    description: eventParentContext(event, workItemId),
+    description: eventTimelineDescription(event, workItemId),
     meta: formatDate(event.created_at),
   }));
 }
@@ -669,6 +669,40 @@ function eventParentContext(event: TimelineEntry, workItemId: string) {
 
   if (payloadWorkItemId === workItemId) {
     return 'Parent: Work Item';
+  }
+
+  return undefined;
+}
+
+function eventTimelineDescription(event: TimelineEntry, workItemId: string) {
+  return [eventParentContext(event, workItemId), eventActorLabel(event)].filter(Boolean).join(' | ');
+}
+
+function eventActorLabel(event: TimelineEntry) {
+  const actorId =
+    eventActorValue(event, 'actor_id') ??
+    eventActorValue(event, 'decided_by_actor_id') ??
+    eventActorValue(event, 'created_by_actor_id') ??
+    eventActorValue(event, 'updated_by_actor_id') ??
+    eventActorValue(event, 'reviewed_by_actor_id') ??
+    eventActorValue(event, 'author_actor_id') ??
+    eventActorValue(event, 'requested_by_actor_id');
+
+  return `Actor: ${actorId ?? 'Not recorded'}`;
+}
+
+function eventActorValue(event: TimelineEntry, field: string) {
+  const eventRecord = event as unknown as Record<string, unknown>;
+  const eventValue = eventRecord[field];
+
+  if (typeof eventValue === 'string' && eventValue.trim().length > 0) {
+    return eventValue;
+  }
+
+  const payloadValue = event.payload?.[field];
+
+  if (typeof payloadValue === 'string' && payloadValue.trim().length > 0) {
+    return payloadValue;
   }
 
   return undefined;
