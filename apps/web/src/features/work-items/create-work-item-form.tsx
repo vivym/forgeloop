@@ -24,6 +24,7 @@ const createWorkItemFormSchema = z.object({
 });
 
 type CreateWorkItemFormValues = z.infer<typeof createWorkItemFormSchema>;
+type CreateWorkItemVisibleFormValues = Omit<CreateWorkItemFormValues, 'project_id' | 'owner_actor_id'>;
 
 const toCommandBody = (values: CreateWorkItemFormValues): CreateWorkItemBody => ({
   project_id: values.project_id,
@@ -41,17 +42,16 @@ export function CreateWorkItemForm() {
   const { projectId } = useProjectContext();
   const { actorId } = useActorContext();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const form = useForm<CreateWorkItemFormValues>({
-    resolver: zodResolver(createWorkItemFormSchema),
+  const visibleFormSchema = createWorkItemFormSchema.omit({ project_id: true, owner_actor_id: true });
+  const form = useForm<CreateWorkItemVisibleFormValues>({
+    resolver: zodResolver(visibleFormSchema),
     defaultValues: {
-      project_id: projectId,
       kind: 'requirement',
       title: '',
       goal: '',
       success_criteria: [''],
       priority: 'P1',
       risk: 'medium',
-      owner_actor_id: actorId,
       raw_request: '',
     },
   });
@@ -59,7 +59,12 @@ export function CreateWorkItemForm() {
   const onSubmit = form.handleSubmit(async (values) => {
     setSubmitError(null);
     try {
-      const created = await createForgeloopCommandApi().createWorkItem(toCommandBody(values));
+      const payload = createWorkItemFormSchema.parse({
+        ...values,
+        project_id: projectId,
+        owner_actor_id: actorId,
+      });
+      const created = await createForgeloopCommandApi().createWorkItem(toCommandBody(payload));
       navigate(`/work-items/${encodeURIComponent(created.id)}`);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : 'Could not create the work item.');
@@ -71,15 +76,11 @@ export function CreateWorkItemForm() {
       <PageHeader subtitle="Capture the owner brief and the validation outcome expected from the work item." title="New Work Item" />
       <Section title="Create work item">
         <form className="stack-form" onSubmit={(event) => void onSubmit(event)}>
+          <div className="state-grid" aria-label="Product context">
+            <ContextMetric label="Workspace" value="Current project" />
+            <ContextMetric label="Owner" value="Signed-in work item owner" />
+          </div>
           <div className="form-grid two">
-            <label>
-              Project
-              <Input {...form.register('project_id')} invalid={Boolean(form.formState.errors.project_id)} />
-            </label>
-            <label>
-              Owner
-              <Input {...form.register('owner_actor_id')} invalid={Boolean(form.formState.errors.owner_actor_id)} />
-            </label>
             <label>
               Kind
               <Select
@@ -142,5 +143,14 @@ export function CreateWorkItemForm() {
         </form>
       </Section>
     </>
+  );
+}
+
+function ContextMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }

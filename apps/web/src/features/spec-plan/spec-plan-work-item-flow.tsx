@@ -40,12 +40,20 @@ export function SpecPlanWorkItemFlow() {
               <Drawer
                 content={
                   <div className="stack-form compact">
-                    <p className="status-line">Revision history is scoped to this work item and its current artifacts.</p>
-                    <RevisionStatus label="Spec" value={viewModel.spec?.current_revision_id} />
-                    <RevisionStatus label="Plan" value={viewModel.plan?.current_revision_id} />
+                    <RevisionStatus
+                      available={Boolean(viewModel.spec?.current_revision_id)}
+                      label="Spec"
+                      status={viewModel.spec?.status}
+                    />
+                    <RevisionStatus
+                      available={Boolean(viewModel.plan?.current_revision_id)}
+                      label="Plan"
+                      status={viewModel.plan?.status}
+                    />
                     <DrawerClose label="Close revision history">Close</DrawerClose>
                   </div>
                 }
+                description="Revision availability and approval state for this work item."
                 onOpenChange={setHistoryOpen}
                 open={historyOpen}
                 title="Revision history"
@@ -64,7 +72,7 @@ export function SpecPlanWorkItemFlow() {
         <div className="state-grid">
           <Metric label="Kind" value={formatValue(viewModel.workItem.kind)} />
           <Metric label="Risk" value={formatValue(viewModel.workItem.risk)} />
-          <Metric label="Owner" value={viewModel.workItem.owner_actor_id} />
+          <Metric label="Owner" value="Work Item Owner" />
           <Metric label="Phase" value={formatValue(viewModel.workItem.phase)} />
         </div>
       </Section>
@@ -119,11 +127,11 @@ function ArtifactState({
   );
 }
 
-function RevisionStatus({ label, value }: { label: string; value: string | undefined }) {
+function RevisionStatus({ available, label, status }: { available: boolean; label: string; status: string | undefined }) {
   return (
     <div className="metric">
       <span>{label}</span>
-      <strong>{value ?? 'No revision yet'}</strong>
+      <strong>{available ? `${formatValue(status)} revision available` : 'No revision yet'}</strong>
     </div>
   );
 }
