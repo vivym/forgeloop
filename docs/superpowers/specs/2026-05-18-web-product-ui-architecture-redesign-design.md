@@ -55,14 +55,16 @@ The product now needs a true frontend architecture: role-based entry, object det
 ## Hard Requirements
 
 - The final Web app must have one product entry, not old and new UIs side by side.
-- The old single-file workbench structure must be removed or reduced to a trivial route composition entry.
-- The old `.panel` / `.workbench-grid` debug panel visual system must not remain as an active page styling system.
+- The old single-file workbench structure must be removed. `App.tsx` may only survive as a trivial framework compatibility export during migration if React Router requires it; it must not own workbench state, command forms, debug controls, or page composition.
+- The old `.panel` / `.workbench-grid` debug panel visual system must not remain as an active or dead page styling system. New surfaces use named layout primitives from `shared/layout` and `shared/ui`.
 - Main product pages must not expose raw JSON blobs, manual ID loaders, direct patch helpers, or direct link/unlink helpers unless the raw data is itself a product evidence/log artifact.
 - Dev Tools must be hidden outside development or explicit configuration.
 - Force rerun, override approval, release close, observation evidence, and similar high-risk commands remain product governance actions on the relevant object pages. They must not be hidden in Dev Tools simply because they are advanced.
 - No emoji icons. Use a consistent icon set.
 - No card-in-card page composition. Use page sections, panels, tables, drawers, dialogs, and action rails.
 - All major pages must fit desktop and mobile without horizontal scroll.
+- No historical compatibility route, compatibility stylesheet, compatibility selector alias, or old/new branch switch may remain in the final branch.
+- Existing pure helpers may be relocated only when they are small, named, tested, and business-generic. Old mixed UI state containers, broad workbench components, and page-specific CSS must be deleted rather than wrapped.
 
 ## Technology Decision
 
@@ -125,7 +127,10 @@ Primary navigation:
 - `Workbench`
 - `Pipeline`
 - `Work Items`
+- `Specs & Plans`
+- `Packages`
 - `Runs`
+- `Reviews`
 - `Releases`
 - `Dev Tools` when enabled
 
@@ -139,6 +144,20 @@ The default route is `Workbench`, oriented around the Work Item Owner. The user 
 - Release Owner
 - Manager
 
+Role labels are product language. Backend/query ids are adapter details and must not leak into navigation labels:
+
+| Product label | Query/workbench id |
+| --- | --- |
+| Work Item Owner | `intake` |
+| Spec Approver | `spec-approver` |
+| Execution Owner | `execution-owner` |
+| Reviewer | `reviewer` |
+| QA / Test Owner | `qa-test-owner` |
+| Release Owner | `release-owner` |
+| Manager | `manager-health` |
+
+`Intake` may appear only in adapter code, API fixtures, or developer-facing tests. Product UI copy uses `Work Item Owner`.
+
 Object detail pages are first-class routes:
 
 - `/workbench`
@@ -147,13 +166,17 @@ Object detail pages are first-class routes:
 - `/work-items/new`
 - `/work-items/:workItemId`
 - `/work-items/:workItemId/spec-plan`
+- `/specs`
 - `/specs/:specId`
 - `/specs/:specId/revisions/:revisionId`
+- `/plans`
 - `/plans/:planId`
 - `/plans/:planId/revisions/:revisionId`
+- `/packages`
 - `/packages/:packageId`
 - `/runs`
 - `/runs/:runSessionId`
+- `/reviews`
 - `/reviews/:reviewPacketId`
 - `/releases`
 - `/releases/:releaseId`
@@ -192,6 +215,8 @@ Structure:
   - left: queue table/list with priority, object type, state, risk, SLA/staleness indicators;
   - right: selected item preview with summary, blockers, next actions, and links to the full object page.
 
+`Work Item Owner` is a role, not a Work Item type. Queue rows must still expose product object type and Work Item kind/surface where available, such as feature, defect, tech debt, infra, QA/integration, release/flag, incident follow-up, or documentation. The UI must not collapse those object distinctions into one coarse owner bucket.
+
 The Workbench must not expand all editing forms inline. It routes users into object pages or opens narrow drawers for simple create flows.
 
 ### `/pipeline`
@@ -204,6 +229,8 @@ Stages:
 - Spec / Plan
 - Execution
 - Review
+- Integration / Cross-end Validation
+- Test / Acceptance
 - Release
 - Observation
 
@@ -215,11 +242,15 @@ Each stage shows:
 - stale/SLA hints
 - representative cards or table rows
 
+Integration / Cross-end Validation must show readiness status, dependency blockers, cross-surface contract/mock readiness, environment requirements, and linked packages that are waiting on another surface.
+
+Test / Acceptance must show QA/test owner queues, test strategy gaps, acceptance criteria state, high-risk quality gates, regression coverage gaps, and release-blocking acceptance issues.
+
 Pipeline is primarily for Manager, Release Owner, and cross-role coordination. It does not replace object detail pages.
 
 Pipeline needs an explicit read model. It must not fake a global board by scraping only the currently selected Work Item. The implementation has two acceptable paths:
 
-- preferred: add a first-class `/query/pipeline` API that returns stage counts, representative objects, blocker summaries, high-risk counts, and stale/SLA hints;
+- preferred: add a first-class `/query/pipeline` API that returns stage counts, representative objects, blocker summaries, high-risk counts, stale/SLA hints, integration readiness fields, test/acceptance gate fields, and per-stage degraded-data markers;
 - temporary within the same final PR only: compose the initial Pipeline from existing role workbench projections, clearly document the degraded data coverage in code, and still expose a route-level empty/degraded state.
 
 If the preferred API is not implemented in this UI slice, the plan must include a concrete limitation and the Pipeline page must not claim global completeness.
@@ -235,6 +266,25 @@ Capabilities:
 - create Work Item action;
 - row click to `/work-items/:workItemId`;
 - empty state with product copy and primary create action.
+
+### Work Item Intake And Brief
+
+The PRD intake flow is part of the main product loop and must not disappear behind generic Work Item creation.
+
+`/work-items/new`:
+
+- captures project, kind, title, goal, success criteria, priority, risk, owner, and optional raw request/context;
+- shows structured normalization feedback before creation when supported;
+- routes to the created Work Item detail and its Intake/Brief area.
+
+Workbench and Work Item detail:
+
+- Work Item Owner queue highlights items needing triage, brief confirmation, classification, or pre-Spec readiness;
+- Work Item detail Overview includes a Brief / Intake section with normalized problem statement, user value, constraints, acceptance intent, risk/priority rationale, owner, and missing-info blockers;
+- users can confirm the brief before Spec creation when the backend supports that state;
+- Spec creation is blocked or clearly warned when required brief fields/readiness are missing.
+
+Current API gap: the Web client currently exposes basic `createWorkItem`, `listWorkItems`, and `getWorkItem` commands, but not Work Item Brief generation, normalization, triage classification, or confirm-before-Spec endpoints. The implementation plan must either add those read/command endpoints and query hooks in this slice, or explicitly mark the first UI as a degraded intake surface that captures the structured fields manually and shows that automated brief generation/confirmation is unavailable. It must not silently imply that AI-generated brief/triage is complete when no backend capability exists.
 
 ### `/work-items/:workItemId`
 
@@ -256,6 +306,7 @@ Tabs:
 - Overview
 - Spec & Plan
 - Packages
+- Validation
 - Timeline
 - Evidence
 
@@ -265,6 +316,8 @@ Action Rail:
 - next actions
 - key dates/status
 - primary commands
+
+The Validation tab surfaces cross-end readiness, package dependencies, test strategy, QA owner, acceptance criteria, blocked integrations, and links to related release/test evidence. It is the Work Item-level home for the PRD Integration / Cross-end Validation and Test / Acceptance stages.
 
 The detail page is the main "finish this item" surface. It must not look like a debug dump.
 
@@ -292,13 +345,41 @@ The page must preserve the current new-item path where a Work Item has no Spec o
 
 Spec and Plan are primary delivery objects and need direct URLs in addition to the Work Item-scoped Spec & Plan page.
 
+`/specs` and `/plans` are registry/list pages for discovery and cross-role review:
+
+- filters for project, status, approver, current revision state, and updated age;
+- table rows link to the direct detail routes;
+- empty/degraded states are explicit if the API can only list through Work Item context initially;
+- create actions route users back to Work Item context when a new Spec or Plan requires a parent Work Item.
+
 These routes are detail shortcuts:
 
-- `/specs/:specId` loads the Spec status, current revision, parent Work Item link, and allowed Spec commands;
-- `/plans/:planId` loads the Plan status, current revision, parent Work Item link, and allowed Plan commands;
-- `/specs/:specId/revisions/:revisionId` and `/plans/:planId/revisions/:revisionId` show a read-only revision detail with structured document content and parent links.
+- `/specs/:specId` loads the Spec status, current revision, parent Work Item link, allowed Spec commands, and a History / Timeline section;
+- `/plans/:planId` loads the Plan status, current revision, parent Work Item link, allowed Plan commands, and a History / Timeline section;
+- `/specs/:specId/revisions/:revisionId` and `/plans/:planId/revisions/:revisionId` show a read-only revision detail with structured document content, parent links, and revision history metadata.
+
+Spec/Plan History / Timeline must show revision creation/submission/approval/request-changes events, current revision changes, actor and timestamp, parent Work Item linkage, and downstream package generation when applicable.
+
+Current API gap: the query API exposes Work Item, Execution Package, Review Packet, and Release replay, but not Spec/Plan replay. The implementation plan must choose one explicit backing path:
+
+- preferred: add `getSpecReplay` and `getPlanReplay` query endpoints;
+- acceptable first slice: derive Spec/Plan history from parent Work Item replay and revision lists, with an explicit degraded state when the parent Work Item cannot be resolved.
 
 If the current API cannot directly resolve a Spec or Plan by id in a way the route needs, the implementation plan must add or expose the missing read endpoint. Do not implement these routes as broken shells.
+
+### `/packages`
+
+Execution Packages list page.
+
+Capabilities:
+
+- filters for project, Work Item, PlanRevision, owner, reviewer, QA owner, surface type, lifecycle state, risk, and blocked status;
+- table view for package objective, Work Item, surface type, state, last run, reviewer/QA, and updated age;
+- actions to generate packages from an approved PlanRevision when launched with Plan context;
+- action to create a manual Execution Package when a PlanRevision is selected;
+- row click to `/packages/:packageId`.
+
+If the backend cannot list Execution Packages globally yet, the final implementation must either add a read model or show a truthful scoped/degraded list state. It must not fake a complete package inventory by scraping the currently selected Work Item.
 
 ### `/packages/:packageId`
 
@@ -310,6 +391,7 @@ Tabs:
 - Runs
 - Review
 - Artifacts
+- Timeline / Replay
 - Policy
 
 Content:
@@ -323,6 +405,7 @@ Content:
 - required artifact kinds
 - blocked reason
 - last failure summary
+- replay timeline from `getExecutionPackageReplay`, shown as product history rather than raw JSON
 
 Actions:
 
@@ -364,7 +447,16 @@ Raw debug metadata is hidden unless Dev Tools are enabled. Product evidence and 
 
 ### `/reviews/:reviewPacketId`
 
-Review Packet detail page.
+Review Packet list and detail pages.
+
+`/reviews` is the Reviewer queue and review history page:
+
+- filters for project, reviewer, decision state, risk, changed files, related package, and stale/SLA status;
+- table rows show package, summary, decision state, risk, check summary, and updated age;
+- row click to `/reviews/:reviewPacketId`;
+- empty/degraded state is explicit if the API can only discover Review Packets through Role Workbench links initially.
+
+`/reviews/:reviewPacketId` is the judgment detail page.
 
 Content:
 
@@ -376,6 +468,7 @@ Content:
 - risk notes
 - requested changes
 - related run/package links
+- timeline/replay tab or section from `getReviewPacketReplay`
 
 Actions:
 
@@ -386,7 +479,18 @@ The page must optimize for judgment. It should show decision material, not inter
 
 ### `/releases` and `/releases/:releaseId`
 
-Releases list shows candidate and active releases.
+Releases list shows candidate and active releases using the existing `listReleases` API.
+
+`/releases` list contract:
+
+- filters for project, release owner, phase, gate state, resolution, release type where available, and updated age;
+- table rows show title/key, phase, gate state, resolution, release owner, linked Work Item count, linked Execution Package count, rollout/rollback/observation completeness, blocker/acceptance summary where available, and updated age;
+- row click routes to `/releases/:releaseId`;
+- primary create-release action opens a drawer/dialog, not an always-visible form;
+- empty state explains that no releases match the current filters and provides the create-release action;
+- loading and error states use the shared page section/table states;
+- pagination uses `next_cursor` from `ReleaseListResponse`;
+- the page must not include manual `release_id` loaders, raw replay controls, raw JSON, or direct low-level link/unlink text fields. Those remain Dev Tools-only.
 
 Release creation and edit are productized flows:
 
@@ -400,8 +504,10 @@ Release detail is the Release Cockpit:
 - scope summary;
 - linked Work Items;
 - linked Execution Packages;
+- productized scope management for adding/removing Work Items and Execution Packages through pickers or scoped action dialogs;
 - blockers grouped by category;
 - checklist;
+- Test Acceptance / Acceptance Evidence section;
 - risk summary;
 - evidence and observations;
 - decisions;
@@ -411,13 +517,18 @@ Actions:
 
 - create release from the release list;
 - edit release details;
+- add/remove Work Items from scope;
+- add/remove Execution Packages from scope;
 - submit
 - approve
+- acknowledge test acceptance
 - override approve
 - request changes
 - start observing
 - close release
 - submit observation evidence
+
+Release approval must make the PRD Test / Acceptance gate visible before release. `acknowledgeReleaseTestAcceptance` is a product action, not a Dev Tools action. It requires actor, acceptance summary, linked evidence where supported, and a visible state transition/checklist update. If the implementation needs separate risk notes beyond the current API contract, the plan must either extend the API explicitly or represent the risk context through supported summary/evidence fields.
 
 Override approval and close release must use clear confirmation and rationale capture.
 
@@ -436,6 +547,14 @@ They contain:
 
 Dev Tools are not a fallback for the old app.
 
+Dev Tools gating is explicit:
+
+- flag source: `import.meta.env.DEV` or a typed environment flag such as `VITE_FORGELOOP_ENABLE_DEV_TOOLS=true`;
+- route guard: `/dev-tools` returns a product 404 or "not enabled" route state when disabled, and the sidebar item is absent;
+- production behavior: production builds default to hidden unless the explicit flag is present at build/runtime configuration;
+- negative tests: every primary product route is tested with Dev Tools disabled to ensure raw controls, manual ID loaders, direct patch forms, raw replay loaders, and direct link/unlink forms are absent;
+- current raw examples that move here include manual Work Item ID loaders, release ID loaders, raw replay readers, raw JSON inspection, direct release scope link/unlink by id, and low-level patch helpers.
+
 ## Frontend Architecture
 
 Target directory structure:
@@ -446,18 +565,18 @@ apps/web/src/
     root.tsx
     providers.tsx
     routes.ts
-  routes/
-    _layout.tsx
-    workbench/
-    pipeline/
-    work-items/
-    specs/
-    plans/
-    packages/
-    runs/
-    reviews/
-    releases/
-    dev-tools/
+    routes/
+      _layout.tsx
+      workbench/
+      pipeline/
+      work-items/
+      specs/
+      plans/
+      packages/
+      runs/
+      reviews/
+      releases/
+      dev-tools/
   features/
     work-items/
     spec-plan/
@@ -482,20 +601,38 @@ This project must use React Router Framework Mode, not a hand-rolled BrowserRout
 
 Implementation requirements:
 
-- add `@react-router/dev` and the React Router runtime packages required by Framework Mode;
-- configure the React Router Vite plugin in the Web Vite config;
-- add a route config or file-route convention under `apps/web/src/routes`;
+- add `react-router` and `@react-router/node` as runtime dependencies, and `@react-router/dev` as a dev dependency for Framework Mode tooling;
+- add `apps/web/react-router.config.ts` with:
+  - `appDirectory: "src/app"`;
+  - `buildDirectory: "dist/react-router"` or another explicit build directory chosen in the plan;
+  - `ssr: false` because this slice is a SPA/framework migration, not a server-side migration;
+- keep every route module under `apps/web/src/app/routes` or register it from `apps/web/src/app/routes.ts`;
+- configure the React Router Vite plugin from `@react-router/dev/vite`; the Web Vite config must not remain a plain `@vitejs/plugin-react` SPA config;
+- remove reliance on `@vitejs/plugin-react` as the only app plugin path; if it remains installed, it must not be the Framework Mode entry point;
 - generate and use route types for params/search params where supported;
-- replace the current `main.tsx` direct `createRoot(<App />)` entry with the Framework Mode entry pattern;
+- update `apps/web/tsconfig.json` for React Router generated route types:
+  - include `src/**/*.ts`, `src/**/*.tsx`, and `.react-router/types/**/*`;
+  - set `compilerOptions.rootDirs` to include `.` and `./.react-router/types`;
+- ensure `.react-router/` is ignored by git;
+- replace the current `main.tsx` direct `createRoot(<App />)` entry with the Framework Mode entry pattern. If an entry file remains, it must mount React Router's framework hydration entry, not render the old `App`;
 - move app-wide providers into `app/providers.tsx` or the root route component;
 - make route-level error and loading boundaries part of the root/layout design;
 - keep Vite as the build tool.
 
 `app/routes.ts` names the route tree when a config file is used. It must not be a custom router competing with React Router Framework Mode.
 
+Package scripts must move to the React Router CLI path:
+
+- `dev`: `react-router dev`;
+- `typecheck`: `react-router typegen && tsc --noEmit`;
+- `build`: `react-router typegen && tsc --noEmit && react-router build`;
+- Playwright/e2e startup must use the same `dev` script or serve the React Router build output, not a raw Vite-only harness.
+
+The implementation plan must list concrete package additions for Tailwind, shadcn/Radix primitives, lucide-react, TanStack Query, React Hook Form, Zod resolver, TanStack Table, class name utilities, and test utilities.
+
 Rules:
 
-- `routes/*` owns page composition, route params, route-level loading/error boundaries, and URL search state.
+- `app/routes/*` owns page composition, route params, route-level loading/error boundaries, and URL search state.
 - `features/*` owns business components, query hooks, mutation hooks, forms, and view models for that domain.
 - `shared/ui` contains business-agnostic components.
 - `shared/layout` contains product layout components.
@@ -567,6 +704,61 @@ apps/web/src/shared/layout/
   section/
 ```
 
+### Token Baseline
+
+The implementation plan may tune exact values, but it must start from a concrete visual contract rather than a vague palette:
+
+- color roles:
+  - background: `#f6f8fb`;
+  - surface: `#ffffff`;
+  - surface-muted: `#f1f5f9`;
+  - border: `#d9e2ec`;
+  - text-primary: `#0f172a`;
+  - text-secondary: `#475569`;
+  - text-muted: `#64748b`;
+  - primary: `#2563eb`;
+  - primary-hover: `#1d4ed8`;
+  - success: `#15803d`;
+  - warning: `#b45309`;
+  - danger: `#dc2626`;
+  - info: `#0369a1`;
+- typography:
+  - font family: Plus Jakarta Sans preferred, otherwise system sans;
+  - page title: 24/32, 600;
+  - section title: 16/24, 600;
+  - body: 14/22, 400;
+  - compact/table: 13/20, 400 or 500 for labels;
+  - caption/meta: 12/18, 500;
+- spacing:
+  - 4px base scale;
+  - page padding: 24px desktop, 16px tablet/mobile;
+  - section gap: 16-24px;
+  - control gap: 8px;
+- radius:
+  - controls and panels: 6px;
+  - dialogs/drawers: 8px;
+  - no pill-shaped generic cards unless the component is a badge/status pill;
+- shadows:
+  - none for normal page sections;
+  - subtle overlay shadow only for popovers, menus, dialogs, drawers, and raised active surfaces;
+- z-index:
+  - shell/topbar, popover/menu, drawer, dialog, toast are named tokens, not magic numbers.
+
+### Component Anatomy
+
+Every shared component must define its anatomy and allowed density:
+
+- `Button`: variants for primary, secondary, ghost, danger, and destructive-confirm; supports loading and icon-leading/trailing states without width shift.
+- `IconButton`: square touch target, lucide icon, accessible label, tooltip for non-obvious actions, no text-only fake icon controls.
+- `Panel` / `Section`: page-level boundary with heading, optional description, action slot, and content slot; not a nested card container.
+- `StatusPill` / `Badge`: color plus text label; never rely on color alone.
+- `Table`: TanStack-backed data shape, sticky header where useful, empty/loading/error states, mobile card/list fallback where columns cannot fit.
+- `ActionRail`: narrow object-command region with grouped actions, disabled reasons, high-risk confirmation patterns, and stable width on desktop.
+- `Drawer` / `Dialog`: focus trap, close affordance, escape handling, labelled title/description, and validation summary slot.
+- `Timeline`: normalized entry rows with source, time, summary, actor/system marker, and expandable details when raw evidence is product-relevant.
+
+`shared/design-system/docs/component-guidelines.md` must include replacement rules for old `.panel` usage: old panels become `Section`, `DetailLayout`, `ActionRail`, `Table`, `Drawer`, or `DevToolsRawPanel` depending on intent. There is no generic compatibility wrapper named after the old CSS.
+
 ### Visual Direction
 
 Use a clean SaaS operations dashboard style:
@@ -609,27 +801,47 @@ Theme:
 
 All server data flows through TanStack Query.
 
+Because this slice uses React Router Framework Mode with `ssr: false`, route modules do not use server `loader` functions for object data except for an optional root shell loader that is safe at build time. Object data uses one of two patterns:
+
+- preferred default: component-level TanStack Query hooks with route params/search params as inputs, plus page skeletons, empty states, and query error states inside the feature view;
+- allowed where it improves route transitions: route `clientLoader` prefetches or hydrates TanStack Query cache, while the component still reads through query hooks.
+
+Do not split the app into competing data models where route loaders own some server state and TanStack Query owns the rest. Route error boundaries catch render/module errors and not-found routing states; query errors render product error states inside the page or feature boundary.
+
 Feature query hooks:
 
 - `useWorkItemsQuery`
 - `useWorkItemQuery`
+- `useWorkItemBriefQuery`
 - `useWorkItemCockpitQuery`
+- `useSpecsQuery`
 - `useSpecQuery`
+- `useSpecHistoryQuery`
 - `useSpecRevisionQuery`
+- `usePlansQuery`
 - `usePlanQuery`
+- `usePlanHistoryQuery`
 - `usePlanRevisionQuery`
 - `useRoleWorkbenchQuery`
 - `usePipelineQuery`
 - `useRunsQuery`
+- `usePackagesQuery`
 - `usePackageQuery`
 - `useRunSessionQuery`
 - `useRunEventsQuery`
+- `useReviewPacketsQuery`
 - `useReviewPacketQuery`
+- `useReleasesQuery`
 - `useReleaseCockpitQuery`
+- `useWorkItemReplayQuery`
+- `useExecutionPackageReplayQuery`
+- `useReviewPacketReplayQuery`
+- `useReleaseReplayQuery`
 
 Feature mutation hooks:
 
 - `useCreateWorkItemMutation`
+- `useConfirmWorkItemBriefMutation`
 - `useCreateSpecMutation`
 - `useCreatePlanMutation`
 - `useCreateSpecRevisionMutation`
@@ -646,8 +858,10 @@ Feature mutation hooks:
 - `usePatchReleaseMutation`
 - `useReleaseCommandMutation`
 - `useReleaseEvidenceMutation`
+- `useAcknowledgeReleaseTestAcceptanceMutation`
+- `useReleaseScopeMutation`
 
-Backend/read-model gaps discovered during implementation must be made explicit in the plan. The UI must either add the needed query endpoint in the same feature branch or render a truthful degraded state. It must not invent complete pipeline/run list data on the client.
+Backend/read-model gaps discovered during implementation must be made explicit in the plan. The UI must either add the needed query endpoint in the same feature branch or render a truthful degraded state. It must not invent complete pipeline/run/spec/plan/package/review list data on the client.
 
 Mutation success invalidates specific query keys only. Do not use global "reload all" behavior as the main data model.
 
@@ -681,10 +895,19 @@ Implementation may internally build the new architecture in steps, but the final
 - not include `/legacy`;
 - not expose old and new routes side by side;
 - not leave old CSS classes as active page styling;
+- delete unused old workbench components, old debug CSS, and stale tests that assert old DOM compatibility;
 - keep only reusable pure helpers after moving them to feature modules or shared utilities;
 - update tests to target the new UI architecture rather than old DOM compatibility.
 
 Old API client code can be moved and refactored. It must not remain as a broad root-level mixed client with page-specific logic leaking everywhere.
+
+No-legacy verification must include scans for:
+
+- `/legacy` routes or labels;
+- `.panel`, `.workbench-grid`, and other removed debug layout classes in active CSS/JSX;
+- imports from old monolithic `App.tsx` into route or feature modules;
+- old manual ID loader controls on product routes;
+- stale test names that require the previous one-page workbench DOM.
 
 ## Dev Tools Boundary
 
@@ -703,6 +926,8 @@ They are hidden unless:
 - explicit configuration enables them.
 
 Dev Tools must not include product governance actions that users need in normal workflow. Those actions live on the relevant object page with proper UX.
+
+The explicit configuration is the same `import.meta.env.DEV` / `VITE_FORGELOOP_ENABLE_DEV_TOOLS` contract described above. A disabled Dev Tools route must not silently redirect to product pages because that can hide broken links; it should render a stable not-found/not-enabled route state that is easy to test.
 
 ## Accessibility And Responsiveness
 
@@ -723,6 +948,39 @@ Required:
 - responsive layouts for 375, 768, 1024, and 1440px viewports;
 - no horizontal scroll on mobile;
 - stable hover states that do not shift layout.
+
+### Responsive Layout Contract
+
+- App shell:
+  - desktop >= 1200px: persistent left sidebar, topbar, main content, optional right Action Rail;
+  - tablet 768-1199px: collapsible sidebar, topbar keeps search/project/actor controls compact, Action Rail becomes an inline section or drawer;
+  - mobile <= 767px: sidebar becomes a sheet/bottom navigation trigger, topbar prioritizes page title/context, global search opens in a command dialog.
+- Workbench:
+  - desktop: two-column queue + preview;
+  - tablet: queue and preview use a resizable or stacked split with preview below when width is constrained;
+  - mobile: queue is the primary list; item preview opens as a route/detail sheet, not a squeezed side panel.
+- Object detail pages:
+  - desktop: header + tabs + main content + Action Rail;
+  - tablet/mobile: Action Rail collapses below the header or into a sticky action drawer; tabs become horizontally scrollable with visible focus and no page overflow.
+- Run detail:
+  - desktop: metadata rail, event stream, artifact/check panel as three regions;
+  - tablet: metadata becomes collapsible, stream remains primary, artifacts below/right depending on available width;
+  - mobile: stream first, metadata/artifacts/checks as tabs or accordions.
+- Tables:
+  - desktop/tablet: normal data table;
+  - mobile: responsive row cards or prioritized columns, with no horizontal page scroll.
+
+### Accessibility Gates
+
+Implementation is not complete until automated and manual checks cover:
+
+- keyboard traversal from skip link through sidebar, topbar, page tabs, table rows, action rail, and dialogs;
+- focus trap and focus return for every drawer/dialog;
+- visible focus states for buttons, icon buttons, links, table rows, tabs, menu items, and destructive confirmations;
+- skip-to-main link visible on focus and tested on at least `/workbench`, `/runs/:runSessionId`, and `/releases/:releaseId`;
+- axe or equivalent automated checks on the main route set;
+- contrast checks for token pairs, status pills, disabled states, selected rows, and warning/danger surfaces;
+- form validation announced with text, not color alone.
 
 ## Testing Strategy
 
@@ -749,12 +1007,15 @@ Cover:
 - Work Item detail tabs;
 - Spec & Plan revision drawer;
 - direct Spec/Plan detail routes;
+- Releases list;
 - Execution Package overview;
 - package generation/manual creation flows;
 - Run Console;
 - Review Packet detail;
 - Release Cockpit;
 - create/edit release flows;
+- release scope picker add/remove flows;
+- Test Acceptance acknowledgement flow;
 - Dev Tools visibility flag.
 
 ### API / Query Tests
@@ -768,48 +1029,92 @@ Cover:
 - error states;
 - actor/project context propagation.
 
+### Test Harness Migration
+
+Existing tests that server-render the old `App` must be replaced with router-aware test utilities. The new harness must provide:
+
+- a React Router Framework Mode route stub or route module test helper for isolated route tests;
+- QueryClient provider setup with deterministic cache cleanup;
+- actor/project/Dev Tools flag provider setup;
+- test fixtures for workbench projections, cockpit responses, replay entries, release cockpit, and run events;
+- route-param and search-param helpers for direct deep-link tests.
+
+E2E tests must boot the Web app through `pnpm --filter @forgeloop/web dev` or a built React Router artifact. They must not start a raw Vite-only server config that bypasses React Router Framework Mode.
+
 ### E2E And Visual Smoke
 
 Use Playwright to verify:
 
 - `/workbench` loads without horizontal overflow at 375, 768, 1024, and 1440px;
 - Workbench can navigate to a Work Item detail page;
+- Work Item Owner queue surfaces triage/brief/readiness state or an explicit degraded intake state;
 - Work Item detail shows lifecycle tabs;
+- Work Item detail shows Brief / Intake and Validation sections without debug/raw controls;
 - Spec & Plan page opens revision actions in a drawer/dialog;
+- Spec and Plan detail routes show History / Timeline sections or a truthful degraded state;
 - a Work Item with no Spec can create a Spec, then create a Plan when appropriate;
 - Spec and Plan detail/revision routes load directly;
 - Package page exposes run/rerun/force rerun in a productized action area;
+- Specs, Plans, Packages, and Reviews list pages load directly or show truthful degraded states;
 - package generation and manual package creation are reachable outside Dev Tools;
 - Run Console renders events and input controls without overlap;
+- `/runs` loads directly or shows its truthful deep-link/degraded state;
 - `/runs/:runSessionId` deep links to an individual run;
 - Release Cockpit blockers/checklist/evidence are readable;
+- `/releases` loads release rows through `listReleases`, supports filters, and navigates rows to Release Cockpit without manual release-id loading;
 - release creation and edit details are productized outside Dev Tools;
+- release scope add/remove by picker is productized outside Dev Tools;
+- release Test Acceptance acknowledgement is productized outside Dev Tools;
 - Dev Tools are hidden by default and visible when explicitly enabled;
+- Dev Tools disabled negative checks pass on Workbench, Work Item detail, Package detail, Run detail, Review detail, Releases list, and Release detail;
 - no blank screens after route navigation;
 - no primary text overflow in buttons, tabs, tables, or action rails.
+
+### Visual QA Gates
+
+Each primary route needs a desktop and mobile screenshot artifact before completion:
+
+- viewports: 375, 768, 1024, and 1440px for `/workbench`, `/pipeline`, `/work-items`, `/work-items/:id`, `/work-items/:id/spec-plan`, `/specs`, `/plans`, `/packages`, `/packages/:id`, `/runs`, `/runs/:id`, `/reviews`, `/reviews/:id`, `/releases`, and `/releases/:id`;
+- screenshot review checks: no card-in-card page composition, no old debug panel styling, no raw controls on product routes, no overlapped text, no clipped action labels, no hidden focus outline on visible focus states;
+- automated DOM/layout checks where practical: body scroll width <= viewport width, key bounding boxes do not overlap, buttons/tabs keep stable dimensions on hover/loading, and empty/loading/error states fit their containers;
+- visual smoke must include at least one high-density data state and one empty/degraded state for Workbench, Pipeline, Runs list, Releases list, and Release Cockpit.
 
 ## Acceptance Criteria
 
 - The app uses React Router Framework Mode with product route boundaries.
+- `react-router.config.ts` explicitly sets `appDirectory`, `buildDirectory`, and `ssr: false`; Web scripts use the React Router CLI and typegen path.
+- `apps/web/tsconfig.json` includes `.react-router/types/**/*`, configures `rootDirs` for generated route types, and `.react-router/` is gitignored.
 - The app has a complete shared design system layer.
+- The design system defines concrete tokens, component anatomy, layout primitives, and old `.panel` replacement rules.
 - The app has a product AppShell, Sidebar, Topbar, PageHeader, DetailLayout, and ActionRail.
 - The default route is a Work Item Owner-oriented Workbench.
+- Product role labels map cleanly to backend workbench ids without leaking `Intake` into user-facing UI.
+- Workbench rows preserve Work Item kind/surface/object type rather than treating Work Item Owner as a coarse work-item type.
+- Work Item intake/brief readiness is represented in Workbench and Work Item detail, with backend gaps explicitly implemented or degraded.
 - Every current main-flow capability has a new page or drawer/dialog location.
+- Every primary navigation item has a direct route that loads real data or an explicit degraded state backed by the implementation plan.
 - Spec, Plan, SpecRevision, PlanRevision, ExecutionPackage, RunSession, ReviewPacket, Release, and Work Item have direct route coverage or an explicitly documented API-backed route limitation resolved in the implementation plan.
 - Create Spec, Create Plan, generate packages, create manual package, create release, and edit release details remain productized flows.
+- Release scope add/remove and Release Test Acceptance acknowledgement remain productized flows.
+- Execution Package and Review Packet detail pages include productized Timeline/Replay views.
+- Spec and Plan detail pages include productized History / Timeline views backed by replay endpoints or parent Work Item replay/revision data.
+- Pipeline explicitly includes Intake, Spec / Plan, Execution, Review, Integration / Cross-end Validation, Test / Acceptance, Release, and Observation.
 - Pipeline and Runs list use explicit backend/query read models or truthful degraded states documented in the plan.
 - The current monolithic `App.tsx` workbench shape is removed.
-- The old debug-panel CSS system is removed as active page styling.
+- The old debug-panel CSS system is removed as active and dead page styling.
 - No `/legacy` route exists.
 - Dev Tools are hidden unless development or explicit configuration enables them.
+- Dev Tools disabled negative tests prove raw/manual controls are absent from product routes.
 - Main product pages do not expose raw/debug controls.
 - Product governance actions remain visible on the relevant product pages.
 - All main objects are deep-linkable.
-- Server state uses TanStack Query hooks rather than app-root reload orchestration.
+- Server state uses TanStack Query hooks rather than app-root reload orchestration or competing server-loader ownership.
 - Complex forms use React Hook Form plus Zod or an equivalent typed form boundary.
 - Structured tables use TanStack Table or shared table primitives, not ad hoc div grids.
 - All click targets use semantic buttons/links.
 - All primary pages pass responsive visual smoke at 375, 768, 1024, and 1440px.
+- Accessibility gates pass for keyboard traversal, focus traps, skip link, contrast, labels, and automated axe checks.
+- Test harnesses exercise route modules through React Router Framework Mode rather than old `App` SSR snapshots or raw Vite startup.
 - `pnpm test`, `pnpm build`, and Web visual smoke checks pass.
 
 ## References
