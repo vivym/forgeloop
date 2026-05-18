@@ -48,7 +48,7 @@ export function PackagesRegistry() {
                 Generate packages
               </Button>
               <Button disabled variant="secondary">
-                Create manual package
+                Create package
               </Button>
             </div>
           ) : null
@@ -58,7 +58,7 @@ export function PackagesRegistry() {
       />
       {planRevisionId ? (
         <Section
-          description="Generation and manual package creation start from the selected PlanRevision context. Manual ID entry stays in Dev Tools."
+          description="Package generation and creation start from the selected PlanRevision context when enabled for this workspace."
           title="PlanRevision package actions"
         >
           <div className="fl-inline-actions">
@@ -66,7 +66,7 @@ export function PackagesRegistry() {
               Generate packages from this PlanRevision
             </Button>
             <Button disabled variant="secondary">
-              Create manual package
+              Create package
             </Button>
           </div>
         </Section>
@@ -201,7 +201,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
                 Generate packages from this PlanRevision
               </Button>
               <Button disabled variant="secondary">
-                Create manual package
+                Create package
               </Button>
             </div>
           ) : null}
@@ -420,7 +420,7 @@ function FilterSummary({
       ) : null}
       {unsupportedFilters.length ? (
         <p className="empty">
-          {formatUnsupportedFilters(unsupportedFilters)} are not applied to the package inventory yet.
+          {formatUnsupportedFilters(unsupportedFilters)} {unsupportedFilters.length === 1 ? 'is' : 'are'} not applied to the package inventory yet.
         </p>
       ) : null}
     </div>
@@ -476,14 +476,29 @@ function packageFiltersFromSearch(searchParams: URLSearchParams) {
   for (const key of supportedPackageFilters) {
     const value = searchParams.get(key)?.trim();
     if (!value) continue;
-    filters[key] = key === 'blocked' ? value === 'true' : value;
+    if (key === 'blocked') {
+      if (isStrictBooleanFilter(value)) {
+        filters[key] = value === 'true';
+      }
+      continue;
+    }
+    filters[key] = value;
   }
   return filters;
 }
 
 function unsupportedPackageFilters(searchParams: URLSearchParams) {
   const allowed = new Set<string>([...supportedPackageFilters, 'project_id', 'cursor', 'limit']);
-  return [...searchParams.keys()].filter((key) => !allowed.has(key));
+  const unsupported = new Set([...searchParams.keys()].filter((key) => !allowed.has(key)));
+  const blocked = searchParams.get('blocked')?.trim();
+  if (blocked && !isStrictBooleanFilter(blocked)) {
+    unsupported.add('blocked');
+  }
+  return [...unsupported];
+}
+
+function isStrictBooleanFilter(value: string) {
+  return value === 'true' || value === 'false';
 }
 
 function formatUnsupportedFilters(filters: string[]) {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { renderableRunEvents } from '@forgeloop/contracts';
 
 import { createForgeloopCommandApi } from '../../shared/api/commands';
@@ -19,11 +19,17 @@ import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layo
 import { Badge, Button, DataTable, StatusPill, Textarea } from '../../shared/ui';
 
 const emptyRunEvents: RunEvent[] = [];
+const supportedRunFilters = ['status', 'execution_package_id', 'run_session_id', 'executor_type', 'cursor', 'limit'] as const;
+type RunFilterKey = (typeof supportedRunFilters)[number];
+type RunFilters = Partial<Record<Exclude<RunFilterKey, 'limit'>, string>> & { limit?: number };
 
 export function RunsRegistry() {
   const { projectId } = useProjectContext();
-  const query = useRunsQuery({ project_id: projectId, limit: 100 });
+  const [searchParams] = useSearchParams();
+  const filters = runFiltersFromSearch(searchParams);
+  const query = useRunsQuery({ project_id: projectId, ...filters, limit: filters.limit ?? 100 });
   const items = query.data?.items ?? [];
+  const unsupportedFilters = unsupportedRunFilters(searchParams);
 
   return (
     <>
@@ -36,6 +42,7 @@ export function RunsRegistry() {
         title="Run registry"
       >
         <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="runs" />
+        <FilterSummary filters={filters} unsupportedFilters={unsupportedFilters} />
         {query.status !== 'pending' && !query.isError ? (
           <>
             <DegradedNotice degradedSources={query.data?.degraded_sources ?? []} />
@@ -223,10 +230,8 @@ function RunMetadata({
   streamStatus: string;
 }) {
   const metadata = run.runtime_metadata;
-  const threadId = metadata?.codex_thread_id ?? latestPayloadString(events, ['thread_id', 'threadId']);
-  const turnId = metadata?.active_turn_id ?? latestPayloadString(events, ['active_turn_id', 'turn_id', 'turnId']);
   const lastEventAt = events.at(-1)?.created_at ?? metadata?.last_event_at ?? run.updated_at;
-  const currentPlanStep = latestPlanStep(events) ?? latestPayloadString(events, ['current_plan_step']);
+  const currentPlanStep = latestPlanStep(events) ?? latestPayloadString(events, ['current_plan_step']) ?? metadataText(metadata, 'current_plan_step');
 
   return (
     <dl className="fl-metadata-grid">
@@ -234,12 +239,9 @@ function RunMetadata({
       <Metadata label="Executor" value={run.executor_type ?? metadata?.driver_kind ?? 'unknown'} />
       <Metadata label="Status" value={run.status} />
       <Metadata label="Stream" value={streamStatus} />
-      <Metadata label="Worker lease" value={workerLeaseLabel(metadata, events)} />
-      <Metadata label="Danger mode" value={metadata?.effective_dangerous_mode ?? 'not requested'} />
-      <Metadata label="Thread" value={threadId ?? 'none'} />
-      <Metadata label="Turn" value={turnId ?? 'none'} />
       <Metadata label="Last event" value={formatAge(lastEventAt)} />
       <Metadata label="Current plan step" value={currentPlanStep ?? 'none'} />
+      <Metadata label="Summary" value={run.failure_reason ?? run.summary ?? 'none'} />
     </dl>
   );
 }
@@ -310,9 +312,17 @@ function useRunEventStream({
       clearTimeout(retryRef.current);
       retryRef.current = undefined;
     }
-    setEvents(appendRunEvents([], initialEvents));
-    cursorRef.current = initialCursor;
-  }, [initialCursor, initialEvents, runSessionId]);
+    setEvents([]);
+    cursorRef.current = undefined;
+    setError('');
+    setStreamStatus('idle');
+  }, [actorId, runSessionId]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    setEvents((current) => appendRunEvents(current, initialEvents));
+    cursorRef.current = nextCursor(cursorRef.current, initialCursor ?? latestEventCursor(initialEvents));
+  }, [enabled, initialCursor, initialEvents]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -335,7 +345,7 @@ function useRunEventStream({
             onEvent: (event) => {
               if (stopped) return;
               setEvents((current) => appendRunEvents(current, [event]));
-              cursorRef.current = event.cursor ?? cursorRef.current;
+              cursorRef.current = nextCursor(cursorRef.current, event.cursor);
               setError('');
               setStreamStatus('live');
             },
@@ -397,6 +407,25 @@ function numericSequence(event: RunEvent) {
   return 0;
 }
 
+function latestEventCursor(events: RunEvent[]) {
+  return events.reduce<string | undefined>((cursor, event) => nextCursor(cursor, event.cursor), undefined);
+}
+
+function nextCursor(current: string | undefined, incoming: string | undefined) {
+  if (incoming === undefined) return current;
+  if (current === undefined) return incoming;
+  return compareCursor(incoming, current) >= 0 ? incoming : current;
+}
+
+function compareCursor(left: string, right: string) {
+  const leftNumber = Number.parseInt(left, 10);
+  const rightNumber = Number.parseInt(right, 10);
+  if (!Number.isNaN(leftNumber) && !Number.isNaN(rightNumber)) {
+    return leftNumber - rightNumber;
+  }
+  return left.localeCompare(right);
+}
+
 function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
   if (isPending) return <p className="empty">Loading {kind}...</p>;
   if (isError) return <p className="empty">{kind} are temporarily unavailable.</p>;
@@ -406,6 +435,34 @@ function RegistryState({ isError, isPending, kind }: { isError: boolean; isPendi
 function DegradedNotice({ degradedSources }: { degradedSources: string[] }) {
   if (degradedSources.length === 0) return null;
   return <p className="empty">The global run list is degraded: {degradedSources.join(', ')}.</p>;
+}
+
+function FilterSummary({
+  filters,
+  unsupportedFilters,
+}: {
+  filters: RunFilters;
+  unsupportedFilters: string[];
+}) {
+  const entries = Object.entries(filters);
+  if (entries.length === 0 && unsupportedFilters.length === 0) return null;
+
+  return (
+    <div className="stack-form compact">
+      {entries.length ? (
+        <div className="fl-inline-actions">
+          {entries.map(([key, value]) => (
+            <Badge key={key}>{key}: {String(value)}</Badge>
+          ))}
+        </div>
+      ) : null}
+      {unsupportedFilters.length ? (
+        <p className="empty">
+          {formatUnsupportedFilters(unsupportedFilters)} {unsupportedFilters.length === 1 ? 'is' : 'are'} not applied to the run inventory yet.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function InvalidDetail({ title, message }: { title: string; message: string }) {
@@ -455,22 +512,16 @@ function runArtifactDisplayLabel(artifact: Pick<ArtifactRef, 'kind' | 'name'>): 
   return [artifact.kind ?? 'artifact', artifact.name].filter(Boolean).join(': ');
 }
 
-function workerLeaseLabel(
-  metadata: { worker_id?: string; worker_lease_status?: string } | undefined,
-  events: Array<{ event_type?: string; payload?: Record<string, unknown> }>,
-) {
-  if (metadata?.worker_id) {
-    return `${metadata.worker_id} / ${metadata.worker_lease_status ?? 'status unavailable'}`;
-  }
-  const leaseEvent = [...events].reverse().find((event) => event.event_type === 'worker_lease_acquired' || event.event_type === 'watchdog_heartbeat');
-  const workerId = payloadText(leaseEvent?.payload ?? {}, ['worker_id', 'workerId']);
-  if (!workerId) return 'none';
-  return `${workerId} / ${payloadText(leaseEvent?.payload ?? {}, ['lease_status', 'leaseStatus', 'status']) ?? 'status unavailable'}`;
-}
-
 function latestPlanStep(events: Array<{ event_type?: string; payload?: Record<string, unknown> }>) {
   const planEvent = [...events].reverse().find((event) => event.event_type === 'plan_updated');
   return payloadText(planEvent?.payload ?? {}, ['current_step', 'plan_step', 'step', 'status']);
+}
+
+function metadataText(metadata: RunSession['runtime_metadata'] | undefined, key: string) {
+  const value = (metadata as Record<string, unknown> | undefined)?.[key];
+  if (typeof value === 'string' && value.trim()) return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return undefined;
 }
 
 function latestActiveTurnId(run: RunSession, events: RunEvent[]) {
@@ -518,4 +569,42 @@ function formatDate(value?: string) {
   if (!value) return 'unknown';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function runFiltersFromSearch(searchParams: URLSearchParams) {
+  const filters: RunFilters = {};
+  for (const key of supportedRunFilters) {
+    const value = searchParams.get(key)?.trim();
+    if (!value) continue;
+    if (key === 'limit') {
+      if (isSupportedLimitFilter(value)) {
+        filters[key] = Number.parseInt(value, 10);
+      }
+      continue;
+    }
+    filters[key] = value;
+  }
+  return filters;
+}
+
+function unsupportedRunFilters(searchParams: URLSearchParams) {
+  const allowed = new Set<string>([...supportedRunFilters, 'project_id']);
+  const unsupported = new Set([...searchParams.keys()].filter((key) => !allowed.has(key)));
+  const limit = searchParams.get('limit')?.trim();
+  if (limit && !isSupportedLimitFilter(limit)) {
+    unsupported.add('limit');
+  }
+  return [...unsupported];
+}
+
+function isSupportedLimitFilter(value: string) {
+  if (!/^\d+$/.test(value)) return false;
+  const parsed = Number.parseInt(value, 10);
+  return parsed > 0 && parsed <= 100;
+}
+
+function formatUnsupportedFilters(filters: string[]) {
+  if (filters.length <= 1) return filters[0] ?? 'Unsupported filters';
+  if (filters.length === 2) return `${filters[0]} and ${filters[1]}`;
+  return `${filters.slice(0, -1).join(', ')}, and ${filters[filters.length - 1]}`;
 }
