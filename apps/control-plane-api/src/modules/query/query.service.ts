@@ -2,6 +2,8 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 
 import {
   type DeliveryRepository,
+  getPlanReplayTimeline,
+  getProductPipeline,
   getExecutionOwnerWorkbench,
   getIntakeWorkbench,
   getManagerHealthWorkbench,
@@ -10,10 +12,17 @@ import {
   getReleaseCockpit as getReleaseCockpitQuery,
   getReleaseOwnerWorkbench,
   getReviewerWorkbench,
+  getSpecReplayTimeline,
+  listProductExecutionPackages,
+  listProductPlans,
+  listProductReviewPackets,
+  listProductRuns,
+  listProductSpecs,
   getSpecApproverWorkbench,
   getWorkItemCockpit,
   type RoleWorkbenchFilters,
 } from '@forgeloop/db';
+import type { ProductListQuery } from '@forgeloop/contracts';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
@@ -75,6 +84,48 @@ export class QueryService {
     }
 
     return timeline;
+  }
+
+  async getSpecReplay(specId: string) {
+    const timeline = await getSpecReplayTimeline(this.repository, specId);
+    if (timeline === undefined) {
+      throw new NotFoundException(`Replay spec ${specId} not found`);
+    }
+
+    return timeline;
+  }
+
+  async getPlanReplay(planId: string) {
+    const timeline = await getPlanReplayTimeline(this.repository, planId);
+    if (timeline === undefined) {
+      throw new NotFoundException(`Replay plan ${planId} not found`);
+    }
+
+    return timeline;
+  }
+
+  getPipeline(query: ProductListQuery) {
+    return getProductPipeline(this.repository, query);
+  }
+
+  listSpecs(query: ProductListQuery) {
+    return listProductSpecs(this.repository, query);
+  }
+
+  listPlans(query: ProductListQuery) {
+    return listProductPlans(this.repository, query);
+  }
+
+  listExecutionPackages(query: ProductListQuery) {
+    return listProductExecutionPackages(this.repository, query);
+  }
+
+  listRuns(query: ProductListQuery) {
+    return listProductRuns(this.repository, query);
+  }
+
+  listReviewPackets(query: ProductListQuery) {
+    return listProductReviewPackets(this.repository, query);
   }
 
   async getRoleWorkbench(workbenchId: RoleWorkbenchId, query: QueryParams) {

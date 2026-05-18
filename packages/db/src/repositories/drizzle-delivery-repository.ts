@@ -321,6 +321,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById(specs, specs.id, specId);
   }
 
+  async listSpecs(projectId?: string): Promise<Spec[]> {
+    const rows = await this.listWhere<Spec>(specs, undefined, specs.createdAt);
+    if (projectId === undefined) {
+      return rows;
+    }
+
+    const workItems = await this.listWorkItems(projectId);
+    const workItemIds = new Set(workItems.map((workItem) => workItem.id));
+    return rows.filter((spec) => workItemIds.has(spec.work_item_id));
+  }
+
   async saveSpecRevision(specRevision: SpecRevision): Promise<void> {
     await this.upsert(spec_revisions, spec_revisions.id, specRevision);
   }
@@ -341,6 +352,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById(plans, plans.id, planId);
   }
 
+  async listPlans(projectId?: string): Promise<Plan[]> {
+    const rows = await this.listWhere<Plan>(plans, undefined, plans.createdAt);
+    if (projectId === undefined) {
+      return rows;
+    }
+
+    const workItems = await this.listWorkItems(projectId);
+    const workItemIds = new Set(workItems.map((workItem) => workItem.id));
+    return rows.filter((plan) => workItemIds.has(plan.work_item_id));
+  }
+
   async savePlanRevision(planRevision: PlanRevision): Promise<void> {
     await this.upsert(plan_revisions, plan_revisions.id, planRevision);
   }
@@ -359,6 +381,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined> {
     return this.getById(execution_packages, execution_packages.id, executionPackageId);
+  }
+
+  async listExecutionPackages(projectId?: string): Promise<ExecutionPackage[]> {
+    return projectId === undefined
+      ? this.listWhere<ExecutionPackage>(execution_packages, undefined, execution_packages.createdAt)
+      : this.listWhere<ExecutionPackage>(
+          execution_packages,
+          eq(execution_packages.projectId, projectId),
+          execution_packages.createdAt,
+        );
   }
 
   async listExecutionPackagesForWorkItem(workItemId: string): Promise<ExecutionPackage[]> {
@@ -398,6 +430,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getRunSession(runSessionId: string): Promise<RunSession | undefined> {
     return this.getById(run_sessions, run_sessions.id, runSessionId);
+  }
+
+  async listRunSessions(projectId?: string): Promise<RunSession[]> {
+    const rows = await this.listWhere<RunSession>(run_sessions, undefined, run_sessions.createdAt);
+    if (projectId === undefined) {
+      return rows;
+    }
+
+    const executionPackages = await this.listExecutionPackages(projectId);
+    const executionPackageIds = new Set(executionPackages.map((executionPackage) => executionPackage.id));
+    return rows.filter((runSession) => executionPackageIds.has(runSession.execution_package_id));
   }
 
   async listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]> {
@@ -765,6 +808,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getReviewPacket(reviewPacketId: string): Promise<ReviewPacket | undefined> {
     return this.getById(review_packets, review_packets.id, reviewPacketId);
+  }
+
+  async listReviewPackets(projectId?: string): Promise<ReviewPacket[]> {
+    const rows = await this.listWhere<ReviewPacket>(review_packets, undefined, review_packets.createdAt);
+    if (projectId === undefined) {
+      return rows;
+    }
+
+    const executionPackages = await this.listExecutionPackages(projectId);
+    const executionPackageIds = new Set(executionPackages.map((executionPackage) => executionPackage.id));
+    return rows.filter((reviewPacket) => executionPackageIds.has(reviewPacket.execution_package_id));
   }
 
   async listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]> {

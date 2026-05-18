@@ -169,6 +169,48 @@ describe('query module', () => {
     expect(response.body.risk_summary).toEqual(expect.any(Object));
   });
 
+  it('serves the product pipeline read model with all PRD stages', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const response = await request(app.getHttpServer()).get('/query/pipeline').query({ project_id: projectId }).expect(200);
+
+    expect(response.body.stages.map((stage: { id: string }) => stage.id)).toEqual([
+      'intake',
+      'spec_plan',
+      'execution',
+      'review',
+      'integration_validation',
+      'test_acceptance',
+      'release',
+      'observation',
+    ]);
+    expect(response.body.degraded_sources).toEqual(expect.any(Array));
+  });
+
+  it('serves product list read models for specs, plans, packages, runs, and reviews', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    await request(app.getHttpServer()).get('/query/specs').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/plans').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/execution-packages').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/runs').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/review-packets').query({ project_id: projectId }).expect(200);
+  });
+
+  it('serves Spec and Plan history through replay-compatible endpoints', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const specId = executionPackage.spec_id;
+    const planId = executionPackage.plan_id;
+
+    await request(app.getHttpServer()).get(`/query/replay/spec/${specId}`).expect(200);
+    await request(app.getHttpServer()).get(`/query/replay/plan/${planId}`).expect(200);
+  });
+
   it('does not expose unsafe release cockpit internals', async () => {
     const { app } = await track(createTestApp());
     const { releaseId } = await createLinkedRelease(app);

@@ -286,6 +286,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.specs.get(specId));
   }
 
+  async listSpecs(projectId?: string): Promise<Spec[]> {
+    const specs = valuesFor(this.specs);
+    if (projectId === undefined) {
+      return specs;
+    }
+
+    return specs.filter((spec) => this.workItems.get(spec.work_item_id)?.project_id === projectId);
+  }
+
   async saveSpecRevision(specRevision: SpecRevision): Promise<void> {
     this.specRevisions.set(specRevision.id, clone(specRevision));
   }
@@ -308,6 +317,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.plans.get(planId));
   }
 
+  async listPlans(projectId?: string): Promise<Plan[]> {
+    const plans = valuesFor(this.plans);
+    if (projectId === undefined) {
+      return plans;
+    }
+
+    return plans.filter((plan) => this.workItems.get(plan.work_item_id)?.project_id === projectId);
+  }
+
   async savePlanRevision(planRevision: PlanRevision): Promise<void> {
     this.planRevisions.set(planRevision.id, clone(planRevision));
   }
@@ -328,6 +346,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined> {
     return this.cloneMaybe(this.executionPackages.get(executionPackageId));
+  }
+
+  async listExecutionPackages(projectId?: string): Promise<ExecutionPackage[]> {
+    const executionPackages = valuesFor(this.executionPackages);
+    return projectId === undefined
+      ? executionPackages
+      : executionPackages.filter((executionPackage) => executionPackage.project_id === projectId);
   }
 
   async listExecutionPackagesForWorkItem(workItemId: string): Promise<ExecutionPackage[]> {
@@ -359,6 +384,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getRunSession(runSessionId: string): Promise<RunSession | undefined> {
     return this.cloneMaybe(this.runSessions.get(runSessionId));
+  }
+
+  async listRunSessions(projectId?: string): Promise<RunSession[]> {
+    const runSessions = valuesFor(this.runSessions).sort(byCreatedAt);
+    if (projectId === undefined) {
+      return runSessions;
+    }
+
+    return runSessions.filter(
+      (runSession) => this.executionPackages.get(runSession.execution_package_id)?.project_id === projectId,
+    );
   }
 
   async listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]> {
@@ -655,6 +691,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getReviewPacket(reviewPacketId: string): Promise<ReviewPacket | undefined> {
     return this.cloneMaybe(this.reviewPackets.get(reviewPacketId));
+  }
+
+  async listReviewPackets(projectId?: string): Promise<ReviewPacket[]> {
+    const reviewPackets = valuesFor(this.reviewPackets).sort(byCreatedAt);
+    if (projectId === undefined) {
+      return reviewPackets;
+    }
+
+    return reviewPackets.filter(
+      (reviewPacket) => this.executionPackages.get(reviewPacket.execution_package_id)?.project_id === projectId,
+    );
   }
 
   async listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]> {
