@@ -1,0 +1,727 @@
+# Web Product UI Architecture Redesign Design
+
+## Status
+
+User-approved design draft. This document defines the target Web product architecture and visual system before implementation planning.
+
+The redesign is intentionally not a skin over the current Web workbench. The final implementation must replace the existing monolithic UI with a product-grade frontend architecture and must not keep a legacy route, legacy workbench fallback, or parallel old/new CSS system.
+
+## Context
+
+ForgeLoop now has a delivery/product backend model with Work Items, Spec/Plan, Execution Packages, Run Sessions, Review Packets, Evidence Chain, Release Cockpit, Role Workbench projections, and durable replay/evidence paths.
+
+The current Web app exposes many of those capabilities, but it presents them as a dense single-page internal workbench:
+
+- `apps/web/src/App.tsx` owns most page state, forms, role queue rendering, Work Item cockpit, Spec/Plan commands, package commands, Run Console, Review Packet decisions, Release cockpit, release commands, replay snippets, and debug-style manual ID entry.
+- `apps/web/src/styles.css` defines a broad `.panel` / `.workbench-grid` / form-grid visual system that reads like an internal control panel.
+- Most modules are shown at once, which makes the app hard to scan and weakens the PRD product story.
+- Product actions and debug/manual operations are mixed together.
+- The UI has no page-level URL model for the main objects. A user cannot reliably deep link into Work Item, Run, Review, or Release contexts as first-class pages.
+
+The product now needs a true frontend architecture: role-based entry, object detail pages, a clean design system, responsive layout, strong visual hierarchy, and a deliberate place for raw/debug tools.
+
+## Goals
+
+- Replace the current Web UI with a product-grade app shell, routes, layout system, and design system.
+- Make the default product entry a Work Item Owner-oriented role workbench.
+- Preserve all current main-flow capabilities under new productized pages:
+  - Role Workbench
+  - Pipeline
+  - Work Item detail
+  - Spec & Plan
+  - Execution Package
+  - Run Console
+  - Review Packet
+  - Release Cockpit
+  - Dev Tools for raw/debug operations only
+- Make all primary delivery objects deep-linkable.
+- Separate product actions from debug/raw tools.
+- Introduce a complete design system layer rather than ad hoc page-local styling.
+- Use a product-grade frontend stack that supports routing, server state, forms, tables, component primitives, and visual tests.
+- Keep the UI clean, calm, professional, and information-dense.
+- Remove the historical monolithic workbench shape by the end of implementation.
+
+## Non-Goals
+
+- No backend object model redesign in this slice.
+- No Evolution Loop / retrospective-learning implementation.
+- No Next.js or Remix server-side migration in this slice.
+- No dark-mode UI switch in the first version.
+- No legacy route such as `/legacy`.
+- No old workbench fallback.
+- No long-lived dual styling system.
+- No attempt to productize every raw/debug endpoint. Debug affordances belong in Dev Tools, not primary product pages.
+
+## Hard Requirements
+
+- The final Web app must have one product entry, not old and new UIs side by side.
+- The old single-file workbench structure must be removed or reduced to a trivial route composition entry.
+- The old `.panel` / `.workbench-grid` debug panel visual system must not remain as an active page styling system.
+- Main product pages must not expose raw JSON blobs, manual ID loaders, direct patch helpers, or direct link/unlink helpers unless the raw data is itself a product evidence/log artifact.
+- Dev Tools must be hidden outside development or explicit configuration.
+- Force rerun, override approval, release close, observation evidence, and similar high-risk commands remain product governance actions on the relevant object pages. They must not be hidden in Dev Tools simply because they are advanced.
+- No emoji icons. Use a consistent icon set.
+- No card-in-card page composition. Use page sections, panels, tables, drawers, dialogs, and action rails.
+- All major pages must fit desktop and mobile without horizontal scroll.
+
+## Technology Decision
+
+Use:
+
+- React Router Framework Mode
+- Vite
+- Tailwind CSS
+- shadcn/ui plus Radix primitives
+- lucide-react
+- TanStack Query
+- React Hook Form plus Zod
+- TanStack Table
+- Vitest
+- Playwright visual/smoke checks
+
+### Why React Router Framework Mode
+
+ForgeLoop is a highly interactive internal SaaS workbench. It needs route modules, nested layouts, deep links, route error/loading boundaries, code splitting, and URL state. React Router Framework Mode provides those product app boundaries while preserving the current Vite/React foundation.
+
+React Router's framework mode supports Vite integration, type generation, code splitting, and optional rendering strategies without forcing a server-component architecture.
+
+### Why Not Next.js
+
+Next.js App Router is strong for public SaaS sites, content-heavy apps, SSR-heavy surfaces, and React Server Component use cases. ForgeLoop's current Web surface is mostly authenticated, stateful, client-interactive operations:
+
+- Run Console SSE
+- command forms
+- role queue filters
+- object detail tabs
+- release cockpit commands
+- local actor/project context
+
+Most pages would become client components, while Next's server/cache/RSC boundary would add complexity. The extra migration cost is not justified for this scope.
+
+### Why Not Keep Plain Vite SPA Tabs
+
+Continuing as a plain single-page tabbed app would retain the main historical frontend problem: weak page boundaries, weak deep links, and broad app-root state. The redesign must introduce true page architecture.
+
+### UI System Decision
+
+Use shadcn/ui and Radix primitives because they provide accessible component structure while keeping component code owned by the project. This avoids a heavy third-party component library look and supports a ForgeLoop-specific product language.
+
+Use lucide-react for icons. Do not use emojis as UI icons.
+
+Use TanStack Query for server state so pages stop manually coordinating global reloads and broad app-level state updates. Use feature-specific query keys and targeted invalidation.
+
+Use React Hook Form plus Zod for complex command and revision forms. Keep Zod schemas close to payload parsing where useful.
+
+Use TanStack Table for structured data tables instead of div grids for table-like layouts.
+
+## Information Architecture
+
+### Top-Level Navigation
+
+The app uses a hybrid model: a role-based home plus object detail routes.
+
+Primary navigation:
+
+- `Workbench`
+- `Pipeline`
+- `Work Items`
+- `Runs`
+- `Releases`
+- `Dev Tools` when enabled
+
+The default route is `Workbench`, oriented around the Work Item Owner. The user can switch role queues from there:
+
+- Work Item Owner
+- Spec Approver
+- Execution Owner
+- Reviewer
+- QA / Test Owner
+- Release Owner
+- Manager
+
+Object detail pages are first-class routes:
+
+- `/workbench`
+- `/pipeline`
+- `/work-items`
+- `/work-items/new`
+- `/work-items/:workItemId`
+- `/work-items/:workItemId/spec-plan`
+- `/packages/:packageId`
+- `/runs`
+- `/runs/:runSessionId`
+- `/reviews/:reviewPacketId`
+- `/releases`
+- `/releases/:releaseId`
+- `/dev-tools` only when enabled
+
+### Product Layout
+
+The main shell has:
+
+- Left sidebar for product navigation, project context, and role context.
+- Topbar for global search, project filter, actor context, environment/durability state, and lightweight notifications.
+- Main content region for the selected page.
+- Right-side Action Rail on object detail pages.
+- Drawers/dialogs for create/edit/decision flows.
+
+The app should feel like a focused operations product:
+
+- The home page answers "what needs my attention now?"
+- Object pages answer "what is the state of this item and what can I do next?"
+- Pipeline answers "where is the system blocked?"
+- Run Console answers "what is this AI execution doing right now?"
+- Release pages answer "can this ship safely?"
+
+## Page Designs
+
+### `/workbench`
+
+The Workbench is the default landing page and role queue.
+
+Structure:
+
+- Page header with role, project, actor, queue count, and active filters.
+- Role switcher for the seven PRD roles.
+- Filter bar for project, actor, kind, phase, status, risk.
+- Two-column body:
+  - left: queue table/list with priority, object type, state, risk, SLA/staleness indicators;
+  - right: selected item preview with summary, blockers, next actions, and links to the full object page.
+
+The Workbench must not expand all editing forms inline. It routes users into object pages or opens narrow drawers for simple create flows.
+
+### `/pipeline`
+
+Pipeline is the delivery flow overview.
+
+Stages:
+
+- Intake
+- Spec / Plan
+- Execution
+- Review
+- Release
+- Observation
+
+Each stage shows:
+
+- item count
+- blocked count
+- high-risk count
+- stale/SLA hints
+- representative cards or table rows
+
+Pipeline is primarily for Manager, Release Owner, and cross-role coordination. It does not replace object detail pages.
+
+### `/work-items`
+
+Work Items list page.
+
+Capabilities:
+
+- filters via URL search params;
+- table view for title, kind, risk, phase, gate, owner, updated age;
+- create Work Item action;
+- row click to `/work-items/:workItemId`;
+- empty state with product copy and primary create action.
+
+### `/work-items/:workItemId`
+
+Work Item detail page.
+
+Header:
+
+- title
+- kind
+- priority
+- risk
+- phase
+- gate state
+- owner
+- primary next action
+
+Tabs:
+
+- Overview
+- Spec & Plan
+- Packages
+- Timeline
+- Evidence
+
+Action Rail:
+
+- blockers
+- next actions
+- key dates/status
+- primary commands
+
+The detail page is the main "finish this item" surface. It must not look like a debug dump.
+
+### `/work-items/:workItemId/spec-plan`
+
+Spec & Plan strong page.
+
+Structure:
+
+- split view for current Spec and current Plan status;
+- revision list with current revision clearly marked;
+- structured document view in the center;
+- Action Rail for generate draft, submit, approve, request changes, and create revision.
+
+Revision forms use drawer/dialog flows. Large textareas do not live permanently on the first screen.
+
+### `/packages/:packageId`
+
+Execution Package detail page.
+
+Tabs:
+
+- Overview
+- Runs
+- Review
+- Artifacts
+- Policy
+
+Content:
+
+- objective
+- repo
+- owner/reviewer/QA
+- lifecycle state
+- path policy
+- required checks
+- required artifact kinds
+- blocked reason
+- last failure summary
+
+Actions:
+
+- mark ready
+- run
+- rerun
+- force rerun
+- edit package details
+
+Force rerun is advanced but productized; it belongs here with clear reason capture and risk wording.
+
+### `/runs` and `/runs/:runSessionId`
+
+Runs list shows active and recent Run Sessions.
+
+Run detail is the Execution Command Center:
+
+- Run Console is the center of the page.
+- Left metadata rail shows package, executor, status, worker lease, danger mode, thread/turn ids, last event, and current plan step.
+- Center stream shows visible run events and terminal/agent messages.
+- Right panel shows artifacts, checks, failure summary, and related Review Packet.
+- Input, cancel, and resume controls are stable and responsive.
+
+Raw debug metadata is hidden unless Dev Tools are enabled. Product evidence and logs can still be displayed when they are part of the Run product surface.
+
+### `/reviews/:reviewPacketId`
+
+Review Packet detail page.
+
+Content:
+
+- summary
+- decision/status
+- changed files
+- check result summary
+- self-review
+- risk notes
+- requested changes
+- related run/package links
+
+Actions:
+
+- approve
+- request changes
+
+The page must optimize for judgment. It should show decision material, not internal object clutter.
+
+### `/releases` and `/releases/:releaseId`
+
+Releases list shows candidate and active releases.
+
+Release detail is the Release Cockpit:
+
+- header with title, phase, gate state, resolution, release owner, blocker fingerprint;
+- scope summary;
+- linked Work Items;
+- linked Execution Packages;
+- blockers grouped by category;
+- checklist;
+- risk summary;
+- evidence and observations;
+- decisions;
+- replay timeline.
+
+Actions:
+
+- submit
+- approve
+- override approve
+- request changes
+- start observing
+- close release
+- submit observation evidence
+
+Override approval and close release must use clear confirmation and rationale capture.
+
+### `/dev-tools`
+
+Dev Tools are available only in development or explicit feature configuration.
+
+They contain:
+
+- manual object ID loaders;
+- raw replay reads;
+- direct link/unlink helpers;
+- direct patch/debug helpers;
+- API smoke utilities;
+- raw payload inspection when necessary.
+
+Dev Tools are not a fallback for the old app.
+
+## Frontend Architecture
+
+Target directory structure:
+
+```text
+apps/web/src/
+  app/
+    router.tsx
+    root.tsx
+    providers.tsx
+  routes/
+    workbench/
+    pipeline/
+    work-items/
+    packages/
+    runs/
+    reviews/
+    releases/
+    dev-tools/
+  features/
+    work-items/
+    spec-plan/
+    execution-packages/
+    run-console/
+    review-packets/
+    releases/
+    role-workbench/
+    pipeline/
+  shared/
+    api/
+    ui/
+    layout/
+    design-system/
+    hooks/
+    utils/
+```
+
+Rules:
+
+- `routes/*` owns page composition, route params, route-level loading/error boundaries, and URL search state.
+- `features/*` owns business components, query hooks, mutation hooks, forms, and view models for that domain.
+- `shared/ui` contains business-agnostic components.
+- `shared/layout` contains product layout components.
+- `shared/design-system` contains tokens, theme primitives, and component usage guidance.
+- `shared/api` contains typed API clients, endpoint wrappers, query key factories, and shared request utilities.
+- Feature modules may import `shared/*`.
+- Shared modules must not import feature modules.
+- Route modules may import feature modules and shared modules.
+
+## Design System
+
+The redesign includes a complete design system layer.
+
+Target structure:
+
+```text
+apps/web/src/shared/design-system/
+  tokens/
+    colors.ts
+    typography.ts
+    spacing.ts
+    radius.ts
+    shadows.ts
+    zIndex.ts
+    motion.ts
+  theme/
+    css-variables.css
+    tailwind-preset.ts
+  docs/
+    component-guidelines.md
+```
+
+Base UI:
+
+```text
+apps/web/src/shared/ui/
+  button/
+  icon-button/
+  input/
+  textarea/
+  select/
+  checkbox/
+  tabs/
+  badge/
+  status-pill/
+  card/
+  panel/
+  table/
+  timeline/
+  drawer/
+  dialog/
+  command-bar/
+  empty-state/
+  skeleton/
+  toast/
+```
+
+Layout UI:
+
+```text
+apps/web/src/shared/layout/
+  app-shell/
+  sidebar-nav/
+  topbar/
+  page-header/
+  detail-layout/
+  split-pane/
+  action-rail/
+  section/
+```
+
+### Visual Direction
+
+Use a clean SaaS operations dashboard style:
+
+- professional;
+- calm;
+- high information density;
+- strong hierarchy;
+- no decorative hero/marketing patterns;
+- no one-note purple or dark-blue dashboard palette;
+- no gradient orbs or decorative blobs;
+- no oversized hero typography inside workbench pages.
+
+Suggested token direction:
+
+- primary: blue used sparingly for focus and primary actions;
+- accent: warm color for urgent CTA only, not broad backgrounds;
+- background: neutral light gray/blue-gray surfaces;
+- text: high-contrast slate/near-black;
+- status colors: success, warning, danger, info with distinct hues and text labels;
+- radius: restrained, generally 6-8px;
+- shadow: subtle, only for overlays/drawers/popovers and active surfaces;
+- motion: 150-250ms transitions, reduced-motion respected.
+
+Typography:
+
+- Prefer Plus Jakarta Sans if the project accepts an external font.
+- Otherwise use the existing system stack through typography tokens.
+- Do not scale font size with viewport width.
+- Do not use negative letter spacing.
+- Dense surfaces use compact but readable sizes.
+
+Theme:
+
+- Implement and polish light mode.
+- Token structure reserves dark mode values.
+- Do not implement dark-mode switching in this first slice.
+
+## Data Flow And State Management
+
+All server data flows through TanStack Query.
+
+Feature query hooks:
+
+- `useWorkItemsQuery`
+- `useWorkItemQuery`
+- `useWorkItemCockpitQuery`
+- `useRoleWorkbenchQuery`
+- `usePipelineQuery`
+- `usePackageQuery`
+- `useRunSessionQuery`
+- `useRunEventsQuery`
+- `useReviewPacketQuery`
+- `useReleaseCockpitQuery`
+
+Feature mutation hooks:
+
+- `useCreateWorkItemMutation`
+- `useCreateSpecRevisionMutation`
+- `useSpecCommandMutation`
+- `usePlanCommandMutation`
+- `usePackageCommandMutation`
+- `useRunPackageMutation`
+- `useRunControlMutation`
+- `useReviewDecisionMutation`
+- `useReleaseCommandMutation`
+- `useReleaseEvidenceMutation`
+
+Mutation success invalidates specific query keys only. Do not use global "reload all" behavior as the main data model.
+
+URL state:
+
+- object identity comes from route params;
+- filters go in search params;
+- selected role and project can be represented in URL where useful;
+- local tab/drawer state stays local unless deep-linking is required.
+
+Shared context:
+
+- actor context;
+- project context;
+- environment/runtime state;
+- feature flag for Dev Tools.
+
+Run Console:
+
+- SSE stream lifecycle lives inside the run-console feature.
+- Cursor and reconnect handling must not live in app root.
+- The feature exposes a narrow view model for visible events, stream status, input commands, and active run metadata.
+
+## Migration Strategy
+
+Use one-shot replacement from the user's perspective.
+
+Implementation may internally build the new architecture in steps, but the final branch must:
+
+- remove the old default workbench UI;
+- not include `/legacy`;
+- not expose old and new routes side by side;
+- not leave old CSS classes as active page styling;
+- keep only reusable pure helpers after moving them to feature modules or shared utilities;
+- update tests to target the new UI architecture rather than old DOM compatibility.
+
+Old API client code can be moved and refactored. It must not remain as a broad root-level mixed client with page-specific logic leaking everywhere.
+
+## Dev Tools Boundary
+
+Dev Tools are for raw/debug operations:
+
+- manual ID loading;
+- raw replay reads;
+- direct low-level link/unlink;
+- direct patch/debug helpers;
+- API smoke helpers;
+- payload inspection.
+
+They are hidden unless:
+
+- development mode; or
+- explicit configuration enables them.
+
+Dev Tools must not include product governance actions that users need in normal workflow. Those actions live on the relevant object page with proper UX.
+
+## Accessibility And Responsiveness
+
+Required:
+
+- semantic HTML;
+- route and page headings in a logical hierarchy;
+- skip-to-main link for keyboard users;
+- visible focus states;
+- tab order matching visual order;
+- keyboard-accessible dialogs/drawers;
+- no keyboard traps;
+- loading skeletons or explicit loading states for route/page data;
+- predictable browser back behavior;
+- labels for all form controls;
+- error states that do not rely only on color;
+- color contrast suitable for workbench reading;
+- responsive layouts for 375, 768, 1024, and 1440px viewports;
+- no horizontal scroll on mobile;
+- stable hover states that do not shift layout.
+
+## Testing Strategy
+
+### Unit And View-Model Tests
+
+Cover:
+
+- role queue display mapping;
+- role action labels and disabled reasons;
+- status/action label mapping;
+- release blocker grouping;
+- run event rendering;
+- form payload parsing;
+- query key factories;
+- URL search param parsing.
+
+### Component Tests
+
+Cover:
+
+- AppShell navigation;
+- DetailLayout and ActionRail;
+- Workbench queue;
+- Work Item detail tabs;
+- Spec & Plan revision drawer;
+- Execution Package overview;
+- Run Console;
+- Review Packet detail;
+- Release Cockpit;
+- Dev Tools visibility flag.
+
+### API / Query Tests
+
+Cover:
+
+- query key stability;
+- mutation invalidation targets;
+- loading states;
+- empty states;
+- error states;
+- actor/project context propagation.
+
+### E2E And Visual Smoke
+
+Use Playwright to verify:
+
+- `/workbench` loads without horizontal overflow at 375, 768, 1024, and 1440px;
+- Workbench can navigate to a Work Item detail page;
+- Work Item detail shows lifecycle tabs;
+- Spec & Plan page opens revision actions in a drawer/dialog;
+- Package page exposes run/rerun/force rerun in a productized action area;
+- Run Console renders events and input controls without overlap;
+- Release Cockpit blockers/checklist/evidence are readable;
+- Dev Tools are hidden by default and visible when explicitly enabled;
+- no blank screens after route navigation;
+- no primary text overflow in buttons, tabs, tables, or action rails.
+
+## Acceptance Criteria
+
+- The app uses React Router Framework Mode with product route boundaries.
+- The app has a complete shared design system layer.
+- The app has a product AppShell, Sidebar, Topbar, PageHeader, DetailLayout, and ActionRail.
+- The default route is a Work Item Owner-oriented Workbench.
+- Every current main-flow capability has a new page or drawer/dialog location.
+- The current monolithic `App.tsx` workbench shape is removed.
+- The old debug-panel CSS system is removed as active page styling.
+- No `/legacy` route exists.
+- Dev Tools are hidden unless development or explicit configuration enables them.
+- Main product pages do not expose raw/debug controls.
+- Product governance actions remain visible on the relevant product pages.
+- All main objects are deep-linkable.
+- Server state uses TanStack Query hooks rather than app-root reload orchestration.
+- Complex forms use React Hook Form plus Zod or an equivalent typed form boundary.
+- Structured tables use TanStack Table or shared table primitives, not ad hoc div grids.
+- All click targets use semantic buttons/links.
+- All primary pages pass responsive visual smoke at 375, 768, 1024, and 1440px.
+- `pnpm test`, `pnpm build`, and Web visual smoke checks pass.
+
+## References
+
+- PRD: `docs/PRD_v1.md`
+- Current app: `apps/web/src/App.tsx`
+- Current styles: `apps/web/src/styles.css`
+- Delivery boundary design: `docs/superpowers/specs/2026-05-16-delivery-boundary-and-role-workbench-design.md`
+- React Router framework modes: https://reactrouter.com/start/modes
+- Next.js App Router docs: https://nextjs.org/docs/app
+- shadcn/ui docs: https://ui.shadcn.com/docs
+- TanStack Query docs: https://tanstack.com/query/latest/docs/framework/react/overview
