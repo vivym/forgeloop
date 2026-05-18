@@ -52,6 +52,48 @@ The first implementation should preserve human approval gates:
 - Keep automatic Spec approval and Plan approval out of scope.
 - Keep production autonomous run enqueue out of scope.
 
+## Implementation Plan Boundaries
+
+This spec defines the full closed-loop foundation, but implementation must be planned as three separate plans. Do not write one monolithic implementation plan for the whole document.
+
+### Plan 1: Spec Draft Foundation
+
+First shippable slice:
+
+- add `canGenerateSpecDraft`;
+- add `work_items_requiring_spec` / `workItemsRequiringSpec` runtime snapshot projection;
+- add `ensure_spec_draft` action type, idempotency, DTOs, planner, and executor support;
+- add the `spec-draft` generation-context endpoint;
+- add the internal `ensure-spec-draft` command;
+- support a local minimal fake generation path for deterministic tests. The shared Codex runtime package lands in Plan 2.
+
+This plan proves WorkItem -> generated Spec draft without changing Plan, Package, or run enqueue behavior.
+
+### Plan 2: Codex Generation Runtime and Generated Plan/Package Payloads
+
+Second shippable slice:
+
+- add `packages/codex-runtime`;
+- add schema validators and fake/Codex generation drivers;
+- add generated Plan draft payload support;
+- add generated Package draft set payload support;
+- add package manifest canonicalization, package-key mapping, generation package records, and dependency row persistence;
+- add plan/package generation-context endpoints.
+
+This plan proves approved Spec -> generated Plan draft -> approved Plan -> generated Package drafts. It still does not enqueue runs.
+
+### Plan 3: Dogfood Autorun Bridge
+
+Third shippable slice:
+
+- add canonical enqueue-preflight attestation production;
+- add `enqueue_package_run` action type, idempotency, planner, executor, and endpoint wrapper;
+- keep autorun default-off and dogfood-only;
+- require a Package to be ready before planner emits `enqueue_package_run`;
+- hand actual source-changing work to `run-worker`.
+
+This plan proves Package ready -> queued RunSession -> run-worker execution -> ReviewPacket. It must not start until Plans 1 and 2 are stable.
+
 ## Non-Goals
 
 - No automatic approval of Spec, Plan, ExecutionPackage, ReviewPacket, Release, or merge decisions.
@@ -138,7 +180,7 @@ Driver rules:
 
 Codex output must be schema-first. The daemon sends only normalized, validated payloads to the control plane.
 
-`GeneratedSpecDraft` maps to `CreateSpecRevisionDto` fields. The top-level `schema_version` value for v1 is `spec_draft.v1`.
+`GeneratedSpecDraft` maps to `CreateSpecRevisionDto` fields. The top-level `schema_version` value for v1 is `spec_draft.v1`. The daemon validates the wrapper and strips `schema_version` before passing fields into strict control-plane DTO mapping.
 
 - `summary`
 - `content`
@@ -151,7 +193,7 @@ Codex output must be schema-first. The daemon sends only normalized, validated p
 - `test_strategy_summary`
 - `structured_document`
 
-`GeneratedPlanDraft` maps to `CreatePlanRevisionDto` fields. The top-level `schema_version` value for v1 is `plan_draft.v1`.
+`GeneratedPlanDraft` maps to `CreatePlanRevisionDto` fields. The top-level `schema_version` value for v1 is `plan_draft.v1`. The daemon validates the wrapper and strips `schema_version` before passing fields into strict control-plane DTO mapping.
 
 - `summary`
 - `content`
@@ -186,6 +228,8 @@ Codex output must be schema-first. The daemon sends only normalized, validated p
   - `dependency_type`
   - `reason`
 
+Ownership fields are not generated in v1. The control plane derives `owner_actor_id`, `reviewer_actor_id`, and `qa_owner_actor_id` from the WorkItem owner when persisting generated packages. A future spec can introduce assignment policy, but Codex output must not choose reviewers or QA owners in this scope.
+
 Package draft validation must reject:
 
 - no packages;
@@ -201,6 +245,169 @@ Package draft validation must reject:
 - dependency cycles according to `validatePackageDependencyGraph`.
 
 The control plane, not Codex, computes the canonical `manifest_digest` from the normalized package set. It creates one `ExecutionPackageGenerationRun` with `expected_package_count` and sorted `expected_package_keys`, persists one `ExecutionPackageGenerationPackageRecord` per package, maps `package_key` to the persisted package id, and persists `ExecutionPackageDependency` rows for every dependency edge after package ids are known. Dependency edges that block automatic execution use `dependency_type: 'blocks_run_enqueue'`.
+
+Canonical manifest digest:
+
+- normalize generated package set by removing undefined values and fields not persisted in v1;
+- sort object keys recursively;
+- sort packages by ascending `sequence`, then `package_key`;
+- require `sequence` to be unique, zero-based, and contiguous after normalization;
+- sort dependencies by `package_key`, then `depends_on_package_key`, then `dependency_type`;
+- compute `manifest_digest = "sha256:" + sha256(JSON.stringify(normalized_manifest))`;
+- set `expected_package_count = normalized_manifest.packages.length`;
+- set `expected_package_keys = normalized_manifest.packages.map(package_key).sort()`.
+
+Replay rule: for a completed generation run, the command replays the first persisted `execution_package_set_id`, package id list, expected package keys, and manifest digest. It must not accept a later Codex output with the same command idempotency key but a different normalized manifest.
+
+## Schema Contracts
+
+The implementation plan should convert these sketches into shared Zod schemas.
+Validation ownership is explicit:
+
+- `packages/codex-runtime` validates raw driver output into one of these generated payload schemas.
+- `packages/automation` validates normalized generated payloads before calling internal command endpoints.
+- `apps/control-plane-api` revalidates the command payload and generated payload before persisting state.
+
+```ts
+type AutomationGenerationArtifactRef = ArtifactRef;
+
+interface GeneratedSpecDraftV1 {
+  schema_version: 'spec_draft.v1';
+  summary: string;
+  content: string;
+  background: string;
+  goals: string[];
+  scope_in: string[];
+  scope_out: string[];
+  acceptance_criteria: string[];
+  risk_notes: string[];
+  test_strategy_summary: string;
+  structured_document?: Record<string, unknown>;
+}
+
+interface GeneratedPlanDraftV1 {
+  schema_version: 'plan_draft.v1';
+  summary: string;
+  content: string;
+  implementation_summary: string;
+  split_strategy: string;
+  dependency_order: string[];
+  test_matrix: string[];
+  risk_mitigations: string[];
+  rollback_notes: string;
+  structured_document?: Record<string, unknown>;
+}
+
+interface GeneratedPackageDraftV1 {
+  package_key: string;
+  sequence: number;
+  objective: string;
+  repo_id: string;
+  required_checks: RequiredCheckSpec[];
+  required_artifact_kinds: ArtifactKind[];
+  allowed_paths: string[];
+  forbidden_paths: string[];
+  source_mutation_policy: SourceMutationPolicy;
+  validation_strategy?: string;
+  required_test_gates: string[];
+  public_summary: string;
+  structured_manifest?: Record<string, unknown>;
+}
+
+interface GeneratedPackageDependencyV1 {
+  package_key: string;
+  depends_on_package_key: string;
+  dependency_type: 'blocks_run_enqueue' | 'blocks_release' | string;
+  reason?: string;
+}
+
+interface GeneratedPackageDraftSetV1 {
+  schema_version: 'package_drafts.v1';
+  packages: GeneratedPackageDraftV1[];
+  dependencies: GeneratedPackageDependencyV1[];
+}
+
+interface GenerationCommandPayload<TGenerated> {
+  action_run_id: string;
+  claim_token?: string;
+  idempotency_key: string;
+  automation_precondition: AutomationPrecondition;
+  generated: TGenerated;
+  generation_artifacts: AutomationGenerationArtifactRef[];
+}
+
+interface AutomationGenerationRepoContextV1 {
+  project_id: string;
+  repo_id: string;
+  default_branch: string;
+  policy_status: 'missing' | 'loaded' | 'parse_failed' | 'unsafe_path';
+  policy_digest?: string;
+  parser_version?: string;
+  package_manager?: string;
+  workspace_summary?: string;
+}
+
+interface AutomationGenerationWorkItemContextV1 {
+  context_version: 'generation_context.work_item.v1';
+  action_run_id: string;
+  work_item: {
+    id: string;
+    project_id: string;
+    title: string;
+    goal: string;
+    success_criteria: string[];
+    risk?: string;
+    priority?: string;
+    kind?: string;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+}
+
+interface AutomationGenerationPlanContextV1 {
+  context_version: 'generation_context.plan.v1';
+  action_run_id: string;
+  work_item: AutomationGenerationWorkItemContextV1['work_item'];
+  spec: {
+    id: string;
+    approved_revision_id: string;
+  };
+  spec_revision: {
+    id: string;
+    summary: string;
+    content: string;
+    background: string;
+    goals: string[];
+    scope_in: string[];
+    scope_out: string[];
+    acceptance_criteria: string[];
+    risk_notes: string[];
+    test_strategy_summary: string;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+}
+
+interface AutomationGenerationPackageContextV1 {
+  context_version: 'generation_context.package.v1';
+  action_run_id: string;
+  generation_key: string;
+  work_item: AutomationGenerationWorkItemContextV1['work_item'];
+  spec_revision: AutomationGenerationPlanContextV1['spec_revision'];
+  plan_revision: {
+    id: string;
+    summary: string;
+    content: string;
+    implementation_summary: string;
+    split_strategy: string;
+    dependency_order: string[];
+    test_matrix: string[];
+    risk_mitigations: string[];
+    rollback_notes: string;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+}
+```
+
+The wire field names remain task-specific (`generated_spec_draft`, `generated_plan_draft`, `generated_package_drafts`) for strict DTO clarity. `GenerationCommandPayload<TGenerated>` is only a planning shorthand.
 
 ### Runtime Snapshot and Planner
 
@@ -232,6 +439,8 @@ Preset behavior:
 - `ready_projection`: runtime projection only.
 - `draft_only`: can project runtime state and generate Spec, Plan, and Package drafts.
 - `run_enqueue`: same as `draft_only` plus `canEnqueueRuns`.
+
+Existing persisted automation capability JSON must normalize missing `canGenerateSpecDraft` to `false` before applying preset-derived updates. Code that resolves presets should always materialize all capability booleans so older rows cannot accidentally inherit Spec draft generation.
 
 Planner action order:
 
@@ -297,7 +506,7 @@ Add `enqueue_package_run`:
 - target object type: `execution_package`
 - target object id: ExecutionPackage id
 - target revision id: PlanRevision id
-- target version: ExecutionPackage version
+- target version: current `ExecutionPackage.version` from runtime snapshot projection
 - required capability: `canEnqueueRuns`
 - emitted only when dogfood autorun is enabled
 - action input JSON:
@@ -374,7 +583,7 @@ It must:
 - persist one or more ExecutionPackage drafts;
 - compute or validate package policy snapshots through existing package policy helpers;
 - persist generation package records;
-- leave packages in draft or ready according to existing package validation rules, not according to Codex preference;
+- leave generated packages in draft; package readiness is a separate explicit product transition;
 - preserve idempotent replay behavior.
 
 Add internal command:
@@ -395,6 +604,19 @@ It must:
 - validate runtime safety attestation;
 - create a queued RunSession and wake `run-worker`;
 - return the accepted RunSession id.
+
+### Package Readiness Gate
+
+Generated ExecutionPackages remain draft unless existing product validation already marks them ready through an explicit command. This spec does not add automatic package approval or automatic package-ready transition.
+
+Dogfood autorun therefore has an explicit gate:
+
+- planner emits `enqueue_package_run` only for packages already projected as ready;
+- generated draft packages require a human or existing product command to mark them ready before autorun;
+- deterministic dogfood scripts may include that explicit package-ready step, but the step must be recorded as a separate product transition and must not be hidden inside Codex generation;
+- if no ready package exists, dogfood autorun is a no-op and reports `package_not_ready`.
+
+This preserves the approved boundary: Codex can draft artifacts automatically, but execution starts only after package readiness is established.
 
 ### Daemon Executor Flow
 
@@ -445,10 +667,39 @@ Rules:
 - Tests can use `fake`.
 - Local dogfood can use `codex`.
 - Autorun default is `0`.
-- `local_codex` autorun requires an enforcing runtime safety attestation. If unavailable, the action must block with a public-safe runtime safety reason instead of bypassing safety.
-- `mock` autorun is allowed only for deterministic smoke tests and must be reported as not satisfying strict local Codex acceptance.
+- `local_codex` autorun requires an enforcing `enqueue_preflight` runtime safety attestation. If unavailable, the action must block with a public-safe runtime safety reason instead of bypassing safety.
+- `mock` autorun is allowed only for deterministic smoke tests with `executor_type: 'mock'`, `workflow_only: true`, and `environment: 'test' | 'local_dogfood'`. It must be reported as not satisfying strict local Codex acceptance.
 
 This preserves a fast deterministic dogfood path and a strict real Codex path without confusing one for the other.
+
+### Enqueue Preflight Attestation Producer
+
+Plan 3 must add a canonical producer for enqueue preflight attestations before enabling `enqueue_package_run`.
+
+Add a helper in the runtime safety layer, for example:
+
+```ts
+interface EnqueuePreflightAttestationInput {
+  executionPackageId: string;
+  expectedPackageVersion: number;
+  projectId: string;
+  repoId: string;
+  executorType: ExecutorType;
+  workflowOnly: boolean;
+  policySnapshot?: PackageRuntimePolicySnapshot;
+  policySnapshotVersion?: number;
+  environment: RuntimeSafetyEnvironment;
+  maxAgeMs: number;
+}
+
+interface RuntimeSafetyPreflightProvider {
+  createEnqueuePreflightAttestation(input: EnqueuePreflightAttestationInput): Promise<RuntimeSafetyAttestation>;
+}
+```
+
+The returned attestation must have `attestation_scope: 'enqueue_preflight'` and must be validated by the existing domain enqueue validator. It is distinct from `run_execution` attestations, which remain reserved for run-worker/executor execution.
+
+The daemon must call this canonical producer or a test fake implementing the same interface. It must not hand-build enqueue attestations inline. For `executor_type: 'local_codex'`, the producer must return `hard_limit_mode: 'enforcing'` or the daemon blocks the action with a public-safe runtime safety reason. For deterministic mock dogfood, the producer may return a `test_only_mock` attestation only when `executor_type: 'mock'`, `workflow_only: true`, and `environment: 'test' | 'local_dogfood'`; the dogfood report must state that strict local Codex acceptance was not satisfied.
 
 ### Prompting
 
@@ -496,11 +747,10 @@ Each endpoint must assert the trusted automation actor signature and require `ac
 
 The endpoints use explicit serializers:
 
-- `AutomationGenerationWorkItemContext`
-- `AutomationGenerationSpecContext`
-- `AutomationGenerationPlanContext`
-- `AutomationGenerationRepoContext`
-- `AutomationGenerationPolicyContext`
+- `AutomationGenerationWorkItemContextV1`
+- `AutomationGenerationPlanContextV1`
+- `AutomationGenerationPackageContextV1`
+- `AutomationGenerationRepoContextV1`
 
 The serializers should redact:
 
@@ -631,7 +881,7 @@ They should not show:
 ### Dogfood Package Run
 
 1. Runtime snapshot projects ready package in `run_enqueue_disabled_packages`.
-2. If dogfood autorun is enabled and settings allow `canEnqueueRuns`, planner emits `enqueue_package_run`.
+2. If dogfood autorun is enabled, the package is ready, and settings allow `canEnqueueRuns`, planner emits `enqueue_package_run`.
 3. Daemon claims action and collects enqueue preflight attestation.
 4. Daemon calls internal enqueue command.
 5. Control plane creates queued RunSession and wakes run-worker.
@@ -655,6 +905,7 @@ Control-plane tests:
 - internal `ensure-spec-draft` asserts active action claim;
 - generated Spec draft command creates Spec when missing;
 - generated Spec draft command replays idempotently;
+- generation artifact refs are accepted by internal command DTOs but are not leaked through public action result projections;
 - generated Plan draft command requires approved current SpecRevision;
 - generated Package draft command persists generation run and package records;
 - package draft command rejects unsafe paths and invalid required checks;
