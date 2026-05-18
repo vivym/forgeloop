@@ -1,15 +1,118 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 
 import { productRoleToWorkbenchId } from '../../apps/web/src/features/role-workbench/role-labels';
+import { usePipelineQuery } from '../../apps/web/src/shared/api/hooks';
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
+import { installProductApiMock } from './fixtures/product-api-mock';
+import { projectId, workItem } from './fixtures/product-data';
 
 describe('Web product API hooks', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it('uses stable query keys for route-backed product data', () => {
     expect(queryKeys.workbench({ role: 'work-item-owner', projectId: 'proj' })).toEqual([
       'workbench',
       'intake',
-      { projectId: 'proj' },
+      { project_id: 'proj' },
     ]);
+  });
+
+  it('includes response-affecting workbench query inputs in stable cache keys', () => {
+    const workItemOwnerKey = queryKeys.workbench({
+      role: 'work-item-owner',
+      query: {
+        status: 'ready',
+        project_id: 'proj',
+        actor_id: 'actor-owner',
+        kind: 'bug',
+        limit: 25,
+        cursor: 'cursor-1',
+        phase: 'triage',
+        risk: 'high',
+      },
+    });
+    const sameQueryDifferentPropertyOrder = queryKeys.workbench({
+      role: 'work-item-owner',
+      query: {
+        risk: 'high',
+        phase: 'triage',
+        cursor: 'cursor-1',
+        limit: 25,
+        kind: 'bug',
+        actor_id: 'actor-owner',
+        project_id: 'proj',
+        status: 'ready',
+      },
+    });
+    const changedActorKey = queryKeys.workbench({
+      role: 'work-item-owner',
+      query: {
+        project_id: 'proj',
+        actor_id: 'actor-reviewer',
+        kind: 'bug',
+        limit: 25,
+        cursor: 'cursor-1',
+        phase: 'triage',
+        status: 'ready',
+        risk: 'high',
+      },
+    });
+
+    expect(workItemOwnerKey).toEqual(sameQueryDifferentPropertyOrder);
+    expect(workItemOwnerKey).not.toEqual(changedActorKey);
+    expect(workItemOwnerKey).toEqual([
+      'workbench',
+      'intake',
+      {
+        project_id: 'proj',
+        actor_id: 'actor-owner',
+        kind: 'bug',
+        limit: 25,
+        cursor: 'cursor-1',
+        phase: 'triage',
+        status: 'ready',
+        risk: 'high',
+      },
+    ]);
+    expect(Object.keys(workItemOwnerKey[2] as Record<string, unknown>)).toEqual([
+      'project_id',
+      'actor_id',
+      'kind',
+      'limit',
+      'cursor',
+      'phase',
+      'status',
+      'risk',
+    ]);
+  });
+
+  it('uses the installed product API mock when hooks were imported before fetch was stubbed', async () => {
+    const fetchMock = installProductApiMock();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result, unmount } = renderHook(() => usePipelineQuery(projectId), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.[0]?.id).toBe(workItem.id);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/query/pipeline?project_id=${projectId}`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+
+    unmount();
+    queryClient.clear();
   });
 
   it('maps product role labels to backend workbench ids without leaking Intake', () => {
