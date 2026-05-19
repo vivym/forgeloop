@@ -32,7 +32,7 @@ Do not implement:
 - `FORGELOOP_CODEX_AUTOMATION_DOGFOOD_AUTORUN`.
 - Production `run_enqueue`.
 - `apps/web`.
-- Any `p0service`, `p0`, or compatibility alias naming.
+- Any historical subsystem naming or compatibility alias naming.
 
 ## File Structure
 
@@ -2388,7 +2388,8 @@ Expected: no `apps/web` files, no `packages/codex-runtime`, no run enqueue imple
 Run:
 
 ```bash
-git diff --unified=0 main...HEAD -- packages apps tests | rg '^\+' | rg -v '^\+\+\+' | rg -n "p0service|\\bp0\\b|enqueue_package_run|DOGFOOD_AUTORUN|packages/codex-runtime|generated_plan_draft|generated_package_drafts"
+pnpm vitest run --pool=forks --no-file-parallelism --maxWorkers=1 tests/naming/delivery-naming.test.ts
+git diff --unified=0 main...HEAD -- packages apps tests | rg '^\+' | rg -v '^\+\+\+' | rg -n "enqueue_package_run|DOGFOOD_AUTORUN|packages/codex-runtime|generated_plan_draft|generated_package_drafts"
 ```
 
 Expected:
