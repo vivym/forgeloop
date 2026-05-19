@@ -29,9 +29,9 @@ const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|L
 const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
   /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
-const gatedPlanActionPattern = /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/i;
-const negatedGatedPlanActionPattern =
-  /(?:\b(?:no|exclude|excludes|excluding)\b[\s\S]{0,80}\b(?:approve|submit|merge|push|release|deploy|enqueue\s+(?:the\s+)?(?:package\s+)?run)\b|\bdo\s+not\b[\s\S]{0,80}\b(?:approve|submit|merge|push|release|deploy|enqueue\s+(?:the\s+)?(?:package\s+)?run)\b)/i;
+const gatedPlanActionPattern =
+  /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/gi;
+const gatedPlanActionNegationPattern = /\b(?:no|exclude|excludes|excluding|do\s+not)\b/i;
 
 const hasUnsafeUnixLocalPath = (value: string): boolean =>
   Array.from(value.matchAll(unixLocalPathPattern)).some((match) => {
@@ -48,7 +48,18 @@ const isUnsafePublicString = (value: string): boolean =>
   bypassHumanGatePattern.test(value);
 
 const isUnsafePlanString = (value: string): boolean =>
-  isUnsafePublicString(value) || (gatedPlanActionPattern.test(value) && !negatedGatedPlanActionPattern.test(value));
+  isUnsafePublicString(value) ||
+  Array.from(value.matchAll(gatedPlanActionPattern)).some((match) => {
+    const actionIndex = match.index ?? 0;
+    const previousBoundary = Math.max(
+      value.lastIndexOf('.', actionIndex),
+      value.lastIndexOf('!', actionIndex),
+      value.lastIndexOf('?', actionIndex),
+      value.lastIndexOf('\n', actionIndex),
+    );
+    const clausePrefix = value.slice(Math.max(previousBoundary + 1, actionIndex - 80), actionIndex);
+    return !gatedPlanActionNegationPattern.test(clausePrefix);
+  });
 
 const safeParseOrThrow = <T>(schema: z.ZodType<T>, value: unknown, errorCode: string): T => {
   const result = schema.safeParse(value);
@@ -94,7 +105,7 @@ const assertPlanPublicSafeText = (value: unknown, errorCode: string): void => {
 
   if (value !== null && typeof value === 'object') {
     Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
-      assertPublicSafeText(key, errorCode);
+      assertPlanPublicSafeText(key, errorCode);
       assertPlanPublicSafeText(entry, errorCode);
     });
   }

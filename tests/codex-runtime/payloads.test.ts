@@ -137,6 +137,7 @@ describe('GeneratedPlanDraftV1', () => {
     'After tests pass deploy to staging',
     'If tests pass deploy to staging',
     'Finally merge to main after checks pass',
+    'No release work is included. Finally merge to main after checks pass',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
@@ -217,6 +218,25 @@ describe('GeneratedPlanDraftV1', () => {
         rollback_notes: 'rollback',
         structured_document: {
           '/Users/viv/private/raw-output.log': 'redacted',
+        },
+      }),
+    ).toThrow(/generated_plan_draft_invalid/);
+  });
+
+  it('rejects gated Plan instructions in public structured document keys', () => {
+    expect(() =>
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary: 'Plan summary',
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+        structured_document: {
+          'Finally merge to main after checks pass': 'redacted',
         },
       }),
     ).toThrow(/generated_plan_draft_invalid/);
