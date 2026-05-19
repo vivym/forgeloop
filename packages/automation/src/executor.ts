@@ -268,7 +268,6 @@ const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'codex_generation_sandbox_invalid' ||
   code === 'generated_spec_draft_invalid' ||
   (code === 'generated_plan_draft_invalid' && error instanceof AutomationHttpError && error.status < 500) ||
-  code === 'generated_output_schema_invalid' ||
   code === 'generated_payload_idempotency_drift' ||
   code === 'manual_path_hold_active' ||
   code === 'automation_hold_active' ||

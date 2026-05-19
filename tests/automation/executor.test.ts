@@ -576,6 +576,48 @@ describe('automation executor', () => {
     });
   });
 
+  it('fails retryably when app-server Plan draft output fails schema validation', async () => {
+    const client = new FakeAutomationClient();
+    client.planContext = validPlanGenerationContext();
+    const runtime: CodexGenerationRuntime = {
+      async generateSpecDraft() {
+        throw new Error('unexpected_spec_generation');
+      },
+      async generatePlanDraft() {
+        throw new Error('generated_output_schema_invalid');
+      },
+      async generatePackageDrafts() {
+        throw new Error('unexpected_package_generation');
+      },
+    };
+
+    const result = await executeActionRun({
+      client,
+      action: claimedAction(),
+      actorId: 'actor-automation',
+      daemonIdentity: 'daemon-main',
+      generationRuntime: runtime,
+      generationPlanning: planGenerationPlanning(),
+    });
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: true,
+      reasonCode: 'generated_output_schema_invalid',
+    });
+    expect(client.calls.map((call) => call.method)).toContain('planDraftGenerationContext');
+    expect(client.calls.map((call) => call.method)).not.toContain('ensurePlanDraft');
+    expect(client.calls.find((call) => call.method === 'failAction')?.args).toEqual([
+      'action-run-1',
+      expect.objectContaining({
+        retryable: true,
+        result_json: { status: 422, code: 'generated_output_schema_invalid' },
+      }),
+    ]);
+    expect(client.calls.map((call) => call.method)).not.toContain('blockAction');
+  });
+
   it('treats replayed succeeded actions as complete without claiming or re-entering commands', async () => {
     const client = new FakeAutomationClient();
     client.actionToClaim = null;
