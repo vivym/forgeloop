@@ -631,7 +631,7 @@ describe('automation executor', () => {
     expect(client.calls.map((call) => call.method)).toEqual(['createOrReplayAction']);
   });
 
-  it('routes ensure_package_drafts to the plan revision package endpoint', async () => {
+  it('blocks ensure_package_drafts until Package runtime wiring is enabled', async () => {
     const client = new FakeAutomationClient();
     client.actionToClaim = claimedAction({
       actionType: 'ensure_package_drafts',
@@ -644,7 +644,7 @@ describe('automation executor', () => {
       },
     });
 
-    await execute(
+    const result = await execute(
       client,
       baseAction({
         actionType: 'ensure_package_drafts',
@@ -658,11 +658,18 @@ describe('automation executor', () => {
       }),
     );
 
-    expect(client.calls.find((call) => call.method === 'ensurePackageDrafts')?.args).toEqual([
-      'plan-revision-1',
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: false,
+      reasonCode: 'package_generation_runtime_not_wired',
+    });
+    expect(client.calls.map((call) => call.method)).not.toContain('ensurePackageDrafts');
+    expect(client.calls.find((call) => call.method === 'failAction')?.args).toEqual([
+      'action-run-1',
       expect.objectContaining({
-        action_run_id: 'action-run-1',
-        generation_key: 'default:plan-revision-1',
+        retryable: false,
+        result_json: { status: 422, code: 'package_generation_runtime_not_wired' },
       }),
     ]);
   });
@@ -897,7 +904,7 @@ describe('automation executor', () => {
     ]);
   });
 
-  it('binds package draft commands to the generation key in the target-aware precondition', async () => {
+  it('blocks retry package draft commands while Package runtime wiring is gated', async () => {
     const client = new FakeAutomationClient();
     const expectedPrecondition = {
       automation_scope: repoScope,
@@ -926,7 +933,7 @@ describe('automation executor', () => {
       },
     });
 
-    await execute(
+    const result = await execute(
       client,
       baseAction({
         actionType: 'ensure_package_drafts',
@@ -935,14 +942,13 @@ describe('automation executor', () => {
       }),
     );
 
-    const ensureCall = client.calls.find((call) => call.method === 'ensurePackageDrafts');
-    const commandInput = ensureCall?.args[1] as { automation_precondition?: AutomationPrecondition } | undefined;
-    expect(commandInput?.automation_precondition).toMatchObject({
-      command_concurrency_token: 'retry:plan-revision-1',
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: false,
+      reasonCode: 'package_generation_runtime_not_wired',
     });
-    expect(automationPreconditionFingerprint(commandInput?.automation_precondition as AutomationPrecondition)).toBe(
-      automationPreconditionFingerprint(expectedPrecondition),
-    );
+    expect(client.calls.map((call) => call.method)).not.toContain('ensurePackageDrafts');
   });
 
   it('maps stale preconditions to gate_pending', async () => {
