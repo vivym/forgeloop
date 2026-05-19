@@ -5,7 +5,7 @@ import type { AutomationGenerationWorkItemContextV1, GeneratedSpecDraftV1 } from
 export const specDraftPromptVersion = 'spec-draft.fake.v1';
 export const specDraftOutputSchemaVersion = 'spec_draft.v1';
 
-export type AutomationGenerationMode = 'disabled' | 'fake';
+export type AutomationGenerationMode = 'disabled' | 'fake' | 'app_server';
 
 export interface GeneratedSpecDraftResult {
   generated: unknown;

@@ -67,26 +67,24 @@ const policyProjectionFor = (
 
 const legacyGenerationPlanningFor = (
   mode: AutomationGenerationMode | undefined,
-): AutomationGenerationPlanningConfig | undefined => {
-  if (mode === undefined) {
-    return undefined;
-  }
-  const enabled = mode !== 'disabled';
+): AutomationGenerationPlanningConfig => {
+  const effectiveMode = mode ?? 'fake';
+  const generationEnabled = effectiveMode !== 'disabled';
   return {
-    mode,
+    mode: effectiveMode,
     tasks: {
       spec_draft: {
-        enabled,
+        enabled: mode !== undefined && generationEnabled,
         promptVersion: specDraftPromptVersion,
         outputSchemaVersion: specDraftOutputSchemaVersion,
       },
       plan_draft: {
-        enabled,
+        enabled: generationEnabled,
         promptVersion: 'plan-draft.fake.v1',
         outputSchemaVersion: 'plan_draft.v1',
       },
       package_drafts: {
-        enabled: false,
+        enabled: mode === undefined && generationEnabled,
         promptVersion: 'package-drafts.fake.v1',
         outputSchemaVersion: 'package_drafts.v1',
       },
@@ -134,9 +132,7 @@ export class AutomationDaemon {
     const snapshot = await this.snapshotWithPolicyDigests(await this.options.client.runtimeSnapshot());
     const generationPlanning =
       this.options.generationPlanning ?? legacyGenerationPlanningFor(this.options.specDraftGenerationMode);
-    const actions = planNextActions(snapshot, {
-      ...(generationPlanning === undefined ? {} : { generation: generationPlanning }),
-    });
+    const actions = planNextActions(snapshot, { generation: generationPlanning });
     for (const action of actions) {
       await this.options.client.createOrReplayAction(action);
     }

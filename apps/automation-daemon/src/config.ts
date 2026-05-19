@@ -16,6 +16,12 @@ export interface AutomationDaemonConfig {
   policyParserVersion: string;
   codexAutomationGeneration: AutomationGenerationPlanningConfig['mode'];
   generationPlanning: AutomationGenerationPlanningConfig;
+  appServerEndpoint?: string;
+  generationArtifactRoot?: string;
+  generationTurnTimeoutMs?: number;
+  generationOutputLimitBytes?: number;
+  generationRawNotificationLimitBytes?: number;
+  generationMaxConcurrency?: number;
 }
 
 type EnvLike = Record<string, string | undefined>;
@@ -32,6 +38,18 @@ const optionalPositiveInt = (env: EnvLike, key: string, fallback: number): numbe
   const raw = env[key];
   if (raw === undefined || raw.trim().length === 0) {
     return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`Invalid automation daemon config: ${key} must be a positive integer`);
+  }
+  return value;
+};
+
+const optionalPositiveIntEnv = (env: EnvLike, key: string): number | undefined => {
+  const raw = env[key];
+  if (raw === undefined || raw.trim().length === 0) {
+    return undefined;
   }
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) {
@@ -65,6 +83,14 @@ const booleanEnv = (env: EnvLike, key: string, fallback: boolean): boolean => {
     return false;
   }
   throw new Error(`Invalid automation daemon config: ${key} must be true or false`);
+};
+
+const optionalNonBlankEnv = (env: EnvLike, key: string): string | undefined => {
+  const raw = env[key];
+  if (raw === undefined || raw.trim().length === 0) {
+    return undefined;
+  }
+  return raw.trim();
 };
 
 const legacyGenerationModeEnv = (env: EnvLike): AutomationGenerationPlanningConfig['mode'] => {
@@ -121,8 +147,30 @@ const generationPlanningEnv = (env: EnvLike): AutomationGenerationPlanningConfig
   };
 };
 
+const assertAppServerRuntimeConfig = (env: EnvLike, mode: AutomationGenerationPlanningConfig['mode']): void => {
+  if (mode !== 'app_server') {
+    return;
+  }
+  if (optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT') === undefined) {
+    throw new Error('Invalid automation daemon config: app-server generation requires FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
+  }
+  if (optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT') === undefined) {
+    throw new Error('Invalid automation daemon config: app-server generation requires FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
+  }
+};
+
 export const loadAutomationDaemonConfig = (env: EnvLike = process.env): AutomationDaemonConfig => {
   const generationPlanning = generationPlanningEnv(env);
+  assertAppServerRuntimeConfig(env, generationPlanning.mode);
+  const appServerEndpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
+  const generationArtifactRoot = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
+  const generationTurnTimeoutMs = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_TURN_TIMEOUT_MS');
+  const generationOutputLimitBytes = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_OUTPUT_LIMIT_BYTES');
+  const generationRawNotificationLimitBytes = optionalPositiveIntEnv(
+    env,
+    'FORGELOOP_CODEX_GENERATION_RAW_NOTIFICATION_LIMIT_BYTES',
+  );
+  const generationMaxConcurrency = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_MAX_CONCURRENCY');
   return {
     controlPlaneUrl: requiredEnv(env, 'FORGELOOP_CONTROL_PLANE_URL'),
     trustedActorHeaderSecret: requiredEnv(env, 'FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET'),
@@ -142,5 +190,11 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     policyParserVersion: DEFAULT_WORKFLOW_POLICY_PARSER_VERSION,
     codexAutomationGeneration: generationPlanning.mode,
     generationPlanning,
+    ...(appServerEndpoint === undefined ? {} : { appServerEndpoint }),
+    ...(generationArtifactRoot === undefined ? {} : { generationArtifactRoot }),
+    ...(generationTurnTimeoutMs === undefined ? {} : { generationTurnTimeoutMs }),
+    ...(generationOutputLimitBytes === undefined ? {} : { generationOutputLimitBytes }),
+    ...(generationRawNotificationLimitBytes === undefined ? {} : { generationRawNotificationLimitBytes }),
+    ...(generationMaxConcurrency === undefined ? {} : { generationMaxConcurrency }),
   };
 };

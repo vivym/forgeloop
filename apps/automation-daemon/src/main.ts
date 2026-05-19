@@ -1,7 +1,8 @@
-import { AutomationHttpClient, createFakeSpecDraftGenerator, disabledSpecDraftGenerator } from '@forgeloop/automation';
+import { AutomationHttpClient } from '@forgeloop/automation';
 
 import { AutomationDaemon } from './automation-daemon.js';
 import { loadAutomationDaemonConfig } from './config.js';
+import { createAutomationDaemonSpecDraftGenerator } from './generation-runtime.js';
 import { loadDaemonWorkflowPolicyDigest } from './workflow-policy-loader.js';
 
 const config = loadAutomationDaemonConfig();
@@ -11,8 +12,7 @@ const client = new AutomationHttpClient({
   daemonIdentity: config.daemonIdentity,
   secret: config.trustedActorHeaderSecret,
 });
-const specDraftGenerator =
-  config.generationPlanning.mode === 'fake' ? createFakeSpecDraftGenerator() : disabledSpecDraftGenerator;
+const specDraftGenerator = createAutomationDaemonSpecDraftGenerator(config);
 const daemon = new AutomationDaemon({
   client,
   actorId: config.actorId,

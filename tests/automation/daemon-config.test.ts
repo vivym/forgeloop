@@ -22,13 +22,26 @@ describe('automation daemon generation config', () => {
     expect(config.generationPlanning.tasks.package_drafts.enabled).toBe(false);
   });
 
-  it('maps legacy codex generation mode to the app_server generation driver', () => {
+  it('rejects app_server generation without a governed endpoint and artifact root', () => {
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...baseEnv,
+        FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      }),
+    ).toThrow(/app-server/i);
+  });
+
+  it('maps legacy codex generation mode to the app_server generation driver when governed runtime config is present', () => {
     const config = loadAutomationDaemonConfig({
       ...baseEnv,
       FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
+      FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
     });
 
     expect(config.generationPlanning.mode).toBe('app_server');
+    expect(config.appServerEndpoint).toBe('unix:/tmp/forgeloop-codex.sock');
+    expect(config.generationArtifactRoot).toBe('/tmp/forgeloop-artifacts');
   });
 
   it('rejects conflicting legacy and new generation drivers', () => {

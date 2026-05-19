@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
+import { createAutomationDaemonSpecDraftGenerator } from '../../apps/automation-daemon/src/generation-runtime';
 import {
   createFakeSpecDraftGenerator,
   type AutomationGenerationWorkItemContextV1,
@@ -98,6 +99,17 @@ const claimedSpecAction = (overrides: Partial<AutomationActionRunRecord> = {}): 
   claimToken: 'claim-token-1',
   ...overrides,
 });
+
+const packageTarget = () => ({
+  targetObjectType: 'plan_revision',
+  targetObjectId: 'plan-revision-1',
+  targetRevisionId: 'default:plan-revision-1',
+  targetStatus: 'approved',
+  projectId: 'project-1',
+  repoId: 'repo-1',
+  automationScope: repoScope,
+  generationKey: 'default:plan-revision-1',
+} as const);
 
 class FakeDaemonClient implements AutomationDaemonClient {
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
@@ -259,11 +271,24 @@ describe('automation daemon loop', () => {
       loadAutomationDaemonConfig({
         ...validEnv(),
         FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+        FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
+        FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
       }),
     ).toMatchObject({
       codexAutomationGeneration: 'app_server',
       generationPlanning: { mode: 'app_server' },
     });
+  });
+
+  it('builds an app_server Spec draft generator from governed runtime config', () => {
+    const config = loadAutomationDaemonConfig({
+      ...validEnv(),
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+      FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
+      FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
+    });
+
+    expect(createAutomationDaemonSpecDraftGenerator(config).mode).toBe('app_server');
   });
 
   it('throws early when required config is missing', () => {
@@ -319,6 +344,33 @@ describe('automation daemon loop', () => {
       .map((call) => (call.args[0] as NextAction).actionType);
     expect(createdActions).toEqual(['ensure_plan_draft', 'project_runtime_snapshot']);
     expect(JSON.stringify(client.calls)).not.toContain('enqueue');
+  });
+
+  it('preserves legacy daemon plan and package planning when no generation config is provided', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      workItemsRequiringPlan: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetRevisionId: 'spec-revision-1',
+          targetStatus: 'approved',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+      planRevisionsRequiringPackages: [packageTarget()],
+    });
+    client.actionToClaim = null;
+    const daemon = new AutomationDaemon(daemonOptions(client));
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({ plannedActionCount: 3, executed: { status: 'skipped' } });
+    expect(
+      client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
+    ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
   });
 
   it('plans and executes Spec draft actions when fake generation is enabled', async () => {
