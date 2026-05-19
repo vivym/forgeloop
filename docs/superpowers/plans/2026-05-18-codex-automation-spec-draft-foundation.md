@@ -44,6 +44,7 @@ Create:
     - `specDraftOutputSchemaVersion`
     - `AutomationGenerationMode`
     - `SpecDraftGenerator`
+    - `validateGeneratedSpecDraft`
     - `createFakeSpecDraftGenerator`
     - `disabledSpecDraftGenerator`
 - `apps/control-plane-api/src/modules/automation/automation-generation-context.service.ts`
@@ -51,6 +52,10 @@ Create:
 
 Modify:
 
+- `packages/automation/package.json`
+  - Add `@forgeloop/contracts` as a workspace dependency so the new generation-context and command types can reference `ArtifactRef`.
+- `pnpm-lock.yaml`
+  - Update if the workspace dependency graph changes after adding the new package dependency.
 - `packages/domain/src/automation.ts`
   - Add `canGenerateSpecDraft`.
   - Add `normalizeAutomationCapabilities`.
@@ -642,6 +647,7 @@ git commit -m "feat: project work items requiring spec drafts"
 ### Task 3: Automation Types, Generated Spec Schema, and HTTP Wire Parsing
 
 **Files:**
+- Modify: `packages/automation/package.json`
 - Create: `packages/automation/src/spec-draft-generation.ts`
 - Modify: `packages/automation/src/types.ts`
 - Modify: `packages/automation/src/http-client.ts`
@@ -653,7 +659,56 @@ git commit -m "feat: project work items requiring spec drafts"
 
 In `tests/automation/planner.test.ts` or a new nearby describe block, add a runtime snapshot fixture with `workItemsRequiringSpec`.
 
+At the top of that test file, add a dedicated Spec target helper so the new cases do not rely on a nonexistent fixture name:
+
+```ts
+const specWorkItemTarget = (overrides: Partial<RuntimeSnapshotTarget> = {}): RuntimeSnapshotTarget => ({
+  targetObjectType: 'work_item',
+  targetObjectId: 'work-item-needs-spec',
+  targetStatus: 'triage',
+  projectId: 'project-1',
+  repoId: 'repo-1',
+  automationScope: repoScope,
+  ...overrides,
+});
+```
+
+Keep the existing `workItemTarget` and `packageTarget` helpers for the approved Spec and Package cases.
+
 In `tests/automation/executor.test.ts`, extend the fake client interface to require:
+
+Add a local `specDraftContext()` fixture near the existing `baseAction` and `claimedAction` helpers so the new test does not depend on an undefined helper:
+
+```ts
+import { createFakeSpecDraftGenerator } from '../../packages/automation/src/index';
+import type {
+  AutomationGenerationWorkItemContextV1,
+  EnsureSpecDraftCommandInput,
+} from '../../packages/automation/src/index';
+
+const specDraftContext = (): AutomationGenerationWorkItemContextV1 => ({
+  context_version: 'generation_context.work_item.v1',
+  action_run_id: 'action-run-1',
+  work_item: {
+    id: 'work-item-1',
+    project_id: 'project-1',
+    title: 'Spec draft work item',
+    goal: 'Ship the spec draft path',
+    success_criteria: ['Draft spec exists'],
+    risk: 'low',
+    priority: 'high',
+    kind: 'initiative',
+  },
+  repos: [
+    {
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      default_branch: 'main',
+      policy_status: 'missing',
+    },
+  ],
+});
+```
 
 ```ts
 async specDraftGenerationContext(workItemId: string, input: { actionRunId: string; claimToken: string }) {
@@ -661,11 +716,13 @@ async specDraftGenerationContext(workItemId: string, input: { actionRunId: strin
   return specDraftContext();
 }
 
-async ensureSpecDraft(workItemId: string, input: Record<string, unknown>) {
+async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {
   this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
   return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
 }
 ```
+
+Update the local `commandPreconditionFor` helper to return `canGenerateSpecDraft` for `ensure_spec_draft` actions, `canGeneratePlanDraft` for plan draft actions, and `canGeneratePackageDrafts` for package draft actions so the expected precondition fingerprint stays aligned with the production executor.
 
 Add an HTTP client parser test in `tests/automation/planner.test.ts` near existing wire tests:
 
@@ -687,6 +744,9 @@ pnpm vitest run --pool=forks --no-file-parallelism --maxWorkers=1 tests/automati
 Expected: FAIL because types/client methods and parser fields do not exist.
 
 - [ ] **Step 3: Add generation types**
+
+First update `packages/automation/package.json` to add the workspace dependency on `@forgeloop/contracts`, then make the type imports below compile.
+If `pnpm-lock.yaml` changes, include it in the same commit.
 
 In `packages/automation/src/types.ts`, add:
 
@@ -779,7 +839,7 @@ export const specDraftOutputSchemaVersion = 'spec_draft.v1';
 export type AutomationGenerationMode = 'disabled' | 'fake';
 
 export interface GeneratedSpecDraftResult {
-  generated: GeneratedSpecDraftV1;
+  generated: unknown;
   generationArtifacts: ArtifactRef[];
 }
 
@@ -787,6 +847,35 @@ export interface SpecDraftGenerator {
   readonly mode: AutomationGenerationMode;
   generateSpecDraft(context: AutomationGenerationWorkItemContextV1): Promise<GeneratedSpecDraftResult>;
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const nonBlank = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+const stringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => nonBlank(entry));
+
+export const validateGeneratedSpecDraft = (value: unknown): GeneratedSpecDraftV1 => {
+  if (!isRecord(value) || value.schema_version !== 'spec_draft.v1') {
+    throw new Error('generated_spec_draft_invalid');
+  }
+  if (
+    !nonBlank(value.summary) ||
+    !nonBlank(value.content) ||
+    !nonBlank(value.background) ||
+    !stringList(value.goals) ||
+    !stringList(value.scope_in) ||
+    !stringList(value.scope_out) ||
+    !stringList(value.acceptance_criteria) ||
+    !stringList(value.risk_notes) ||
+    !nonBlank(value.test_strategy_summary) ||
+    (value.structured_document !== undefined && !isRecord(value.structured_document))
+  ) {
+    throw new Error('generated_spec_draft_invalid');
+  }
+  return value as unknown as GeneratedSpecDraftV1;
+};
 
 export const disabledSpecDraftGenerator: SpecDraftGenerator = {
   mode: 'disabled',
@@ -877,7 +966,7 @@ Expected: PASS for type/parser coverage added in this task, even though planner/
 - [ ] **Step 8: Commit**
 
 ```bash
-git add packages/automation/src/spec-draft-generation.ts packages/automation/src/types.ts packages/automation/src/http-client.ts packages/automation/src/index.ts tests/automation/planner.test.ts tests/automation/executor.test.ts
+git add packages/automation/package.json pnpm-lock.yaml packages/automation/src/spec-draft-generation.ts packages/automation/src/types.ts packages/automation/src/http-client.ts packages/automation/src/index.ts tests/automation/planner.test.ts tests/automation/executor.test.ts
 git commit -m "feat: add spec draft generation wire types"
 ```
 
@@ -925,9 +1014,9 @@ In `tests/automation/planner.test.ts`, add:
 it('emits ensure_spec_draft before downstream draft actions when fake generation is enabled', () => {
   const actions = planNextActions(
     baseSnapshot({
-      workItemsRequiringSpec: [workItemSpecTarget()],
+      workItemsRequiringSpec: [specWorkItemTarget()],
       workItemsRequiringPlan: [workItemTarget()],
-      planRevisionsRequiringPackages: [planRevisionTarget()],
+      planRevisionsRequiringPackages: [packageTarget()],
     }),
     { specDraftGenerationMode: 'fake' },
   );
@@ -947,7 +1036,7 @@ it('emits ensure_spec_draft before downstream draft actions when fake generation
 
 it('does not emit ensure_spec_draft when generation is disabled', () => {
   expect(
-    planNextActions(baseSnapshot({ workItemsRequiringSpec: [workItemSpecTarget()] }), {
+    planNextActions(baseSnapshot({ workItemsRequiringSpec: [specWorkItemTarget()] }), {
       specDraftGenerationMode: 'disabled',
     }).map((action) => action.actionType),
   ).not.toContain('ensure_spec_draft');
@@ -959,7 +1048,7 @@ Add suppression and ambiguity tests:
 ```ts
 it('uses canGenerateSpecDraft when a Spec target needs manual path disambiguation', () => {
   const actions = planNextActions(
-    baseSnapshot({ workItemsRequiringSpec: [workItemSpecTarget({ repoId: undefined, eligibleRepoIds: ['repo-1', 'repo-2'] })] }),
+    baseSnapshot({ workItemsRequiringSpec: [specWorkItemTarget({ repoId: undefined, eligibleRepoIds: ['repo-1', 'repo-2'] })] }),
     { specDraftGenerationMode: 'fake' },
   );
   expect(actions[0]).toMatchObject({
@@ -1177,6 +1266,12 @@ export const ensureSpecDraftCommandSchema = z
     generation_artifacts: z.array(artifactRefSchema).default([]),
   })
   .strict();
+```
+
+Export the inferred DTO for controller and service imports:
+
+```ts
+export type EnsureSpecDraftCommandDto = z.infer<typeof ensureSpecDraftCommandSchema>;
 ```
 
 Add generation context query schema:
@@ -1584,6 +1679,7 @@ expect(JSON.stringify(body)).not.toContain('claim-token');
 - Wrong `claim_token` returns 409 with `automation_action_claim_conflict`.
 - Action type `ensure_plan_draft` cannot fetch Spec context.
 - `workItemId` mismatch returns 409.
+- Repo context is scoped to the claimed action's repo automation scope; it must not return every project repo for a repo-scoped `ensure_spec_draft` action.
 
 - [ ] **Step 2: Run tests to verify failure**
 
@@ -1648,6 +1744,11 @@ const claimConflictBody = {
 
 const isAtOrBefore = (left: string, right: string): boolean => Date.parse(left) <= Date.parse(right);
 
+const repoIdFromAutomationScope = (automationScope: string): string | undefined => {
+  const [scopeType, , repoId, extra] = automationScope.split(':');
+  return scopeType === 'repo' && repoId !== undefined && extra === undefined ? repoId : undefined;
+};
+
 const currentIsoTime = (): string => {
   const testNow = process.env.NODE_ENV === 'test' ? process.env.FORGELOOP_AUTOMATION_TEST_NOW?.trim() : undefined;
   return testNow === undefined || testNow.length === 0 ? new Date().toISOString() : new Date(testNow).toISOString();
@@ -1672,14 +1773,18 @@ export class AutomationGenerationContextService {
     if (workItem === undefined) {
       throw new NotFoundException(`WorkItem ${workItemId}`);
     }
+    const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
     const repos = (await this.repository.listProjectRepos(workItem.project_id))
-      .filter((repo) => repo.status === 'active')
+      .filter((repo) => repo.status === 'active' && (scopedRepoId === undefined || repo.repo_id === scopedRepoId))
       .map((repo) => ({
         project_id: repo.project_id,
         repo_id: repo.repo_id,
         default_branch: repo.default_branch,
         policy_status: 'missing' as const,
       }));
+    if (scopedRepoId !== undefined && repos.length === 0) {
+      throw new ConflictException(claimConflictBody);
+    }
 
     return {
       context_version: 'generation_context.work_item.v1',
@@ -1762,6 +1867,20 @@ git commit -m "feat: add spec draft generation context endpoint"
 
 - [ ] **Step 1: Write failing executor tests**
 
+In `tests/automation/executor.test.ts`, update the existing automation package import to include `executeActionRun` because the representative direct-run test calls it:
+
+```ts
+import {
+  AutomationHttpError,
+  executeActionRun,
+  executeClaimedAction,
+  type AutomationActionResponse,
+  type AutomationActionRunRecord,
+  type AutomationExecutorClient,
+  type NextAction,
+} from '../../packages/automation/src/index';
+```
+
 Add tests:
 
 1. Claimed `ensure_spec_draft` with fake generator calls:
@@ -1770,7 +1889,8 @@ Add tests:
    - `completeAction`
 2. Command payload contains `generated_spec_draft.schema_version === 'spec_draft.v1'`, `generation_artifacts`, `automation_precondition.required_capability === 'canGenerateSpecDraft'`.
 3. Disabled generator blocks with `generation_disabled` and does not call `ensureSpecDraft`.
-4. Context endpoint transport failure maps through existing retry/failure handling without leaking prompt/raw data.
+4. Invalid generated Spec payload fails before `ensureSpecDraft` is called and returns public code `generated_spec_draft_invalid`.
+5. Context endpoint transport failure maps through existing retry/failure handling without leaking prompt/raw data.
 
 Representative test:
 
@@ -1814,7 +1934,7 @@ Expected: FAIL because executor cannot parse or execute `ensure_spec_draft`.
 In `packages/automation/src/executor.ts`:
 
 ```ts
-import { disabledSpecDraftGenerator, type SpecDraftGenerator } from './spec-draft-generation.js';
+import { disabledSpecDraftGenerator, validateGeneratedSpecDraft, type SpecDraftGenerator } from './spec-draft-generation.js';
 
 export interface ExecuteClaimedActionInput {
   client: AutomationExecutorClient;
@@ -1877,12 +1997,13 @@ if (action.actionType === 'ensure_spec_draft') {
     claimToken: action.claimToken ?? '',
   });
   const generated = await generator.generateSpecDraft(context);
+  const generatedSpecDraft = validateGeneratedSpecDraft(generated.generated);
   await client.ensureSpecDraft(actionInput.workItemId, {
     action_run_id: action.id,
     ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
     idempotency_key: action.idempotencyKey,
     automation_precondition: precondition,
-    generated_spec_draft: generated.generated,
+    generated_spec_draft: generatedSpecDraft,
     generation_artifacts: generated.generationArtifacts,
   });
   return;
@@ -1894,9 +2015,12 @@ Update error mapping so `generation_disabled` becomes blocked and non-retryable:
 ```ts
 const isBlockedByGate = (code: string | undefined): boolean =>
   code === 'generation_disabled' ||
+  code === 'generated_spec_draft_invalid' ||
   code === 'manual_path_hold_active' ||
   ...
 ```
+
+Update `errorCode` or generation error handling so a thrown `Error('generated_spec_draft_invalid')` maps to public code `generated_spec_draft_invalid` instead of generic `transport_error`.
 
 - [ ] **Step 6: Run executor tests**
 
@@ -1931,6 +2055,91 @@ Update `baseSnapshot` in `tests/automation/daemon.test.ts` to include:
 
 ```ts
 workItemsRequiringSpec: [],
+```
+
+Add these local helpers at the top of the file so the new test remains self-contained:
+
+```ts
+import { createFakeSpecDraftGenerator } from '../../packages/automation/src/index';
+import type {
+  AutomationGenerationWorkItemContextV1,
+  EnsureSpecDraftCommandInput,
+} from '../../packages/automation/src/index';
+
+const validEnv = () => ({
+  FORGELOOP_CONTROL_PLANE_URL: 'http://127.0.0.1:3000',
+  FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'secret-1',
+  FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'daemon-1',
+  FORGELOOP_AUTOMATION_ACTOR_ID: 'actor-1',
+  FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS: ['/workspace'].join(':'),
+});
+
+const claimedSpecAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
+  id: 'spec-action-run-1',
+  actionType: 'ensure_spec_draft',
+  targetObjectType: 'work_item',
+  targetObjectId: 'work-item-1',
+  targetStatus: 'triage',
+  idempotencyKey: 'spec-action-run-1-idempotency',
+  automationScope: repoScope,
+  automationSettingsVersion: 3,
+  capabilityFingerprint: 'capability-fingerprint-1',
+  preconditionFingerprint: 'precondition-fingerprint-1',
+  actionInputJson: { work_item_id: 'work-item-1' },
+  status: 'running',
+  attempt: 1,
+  claimToken: 'claim-token-1',
+  ...overrides,
+});
+
+const daemonOptions = {
+  actorId: 'daemon-actor',
+  daemonIdentity: 'daemon-1',
+  claimToken: 'claim-token-1',
+  allowedRepoRoots: ['/workspace'],
+  policyParserVersion: parserVersion,
+  policyLoader: async () => loadedPolicy(),
+  noClaimBackoffMs: 25,
+  loopIntervalMs: 1_000,
+};
+```
+
+Extend the `FakeDaemonClient` in this test file with the new Spec-generation methods before the daemon test cases:
+
+```ts
+async specDraftGenerationContext(
+  workItemId: string,
+  input: Record<string, unknown>,
+): Promise<AutomationGenerationWorkItemContextV1> {
+  this.calls.push({ method: 'specDraftGenerationContext', args: [workItemId, input] });
+  return {
+    context_version: 'generation_context.work_item.v1',
+    action_run_id: 'action-run-1',
+    work_item: {
+      id: workItemId,
+      project_id: 'project-1',
+      title: 'Spec draft work item',
+      goal: 'Ship the spec draft path',
+      success_criteria: ['Draft spec exists'],
+      risk: 'low',
+      priority: 'high',
+      kind: 'initiative',
+    },
+    repos: [
+      {
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        default_branch: 'main',
+        policy_status: 'missing',
+      },
+    ],
+  };
+}
+
+async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown> {
+  this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
+  return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
+}
 ```
 
 Add config tests:
@@ -1976,6 +2185,7 @@ client.actionToClaim = claimedSpecAction();
 
 const daemon = new AutomationDaemon({
   ...daemonOptions,
+  client,
   specDraftGenerationMode: 'fake',
   specDraftGenerator: createFakeSpecDraftGenerator(),
 });
@@ -2229,7 +2439,39 @@ Expected: only intentional files are modified, or clean if prior task commits we
 - [ ] **Step 6: Final commit if cleanup changed files**
 
 ```bash
-git add <intentional-files>
+git add packages/domain/src/automation.ts \
+  packages/db/src/repositories/delivery-repository.ts \
+  packages/db/src/repositories/in-memory-delivery-repository.ts \
+  packages/db/src/repositories/drizzle-delivery-repository.ts \
+  packages/automation/package.json \
+  pnpm-lock.yaml \
+  packages/automation/src/spec-draft-generation.ts \
+  packages/automation/src/types.ts \
+  packages/automation/src/idempotency.ts \
+  packages/automation/src/planner.ts \
+  packages/automation/src/executor.ts \
+  packages/automation/src/http-client.ts \
+  packages/automation/src/index.ts \
+  apps/automation-daemon/src/config.ts \
+  apps/automation-daemon/src/automation-daemon.ts \
+  apps/automation-daemon/src/main.ts \
+  apps/control-plane-api/src/modules/automation/automation.dto.ts \
+  apps/control-plane-api/src/modules/automation/automation.controller.ts \
+  apps/control-plane-api/src/modules/automation/automation-command.service.ts \
+  apps/control-plane-api/src/modules/automation/automation-generation-context.service.ts \
+  apps/control-plane-api/src/modules/automation/automation.module.ts \
+  tests/domain/automation.test.ts \
+  tests/db/repository-contract.ts \
+  tests/db/automation-repository.test.ts \
+  tests/automation/idempotency.test.ts \
+  tests/automation/planner.test.ts \
+  tests/automation/executor.test.ts \
+  tests/automation/daemon.test.ts \
+  tests/api/automation-runtime-snapshot.test.ts \
+  tests/api/automation-commands.test.ts \
+  tests/api/automation-internal-auth.test.ts \
+  tests/api/automation-daemon.integration.test.ts \
+  tests/smoke/automation-dogfood-script.test.ts
 git commit -m "chore: finalize spec draft automation foundation"
 ```
 
