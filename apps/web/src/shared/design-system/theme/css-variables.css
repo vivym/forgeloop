@@ -462,6 +462,22 @@ a {
   color: var(--fl-color-text-secondary);
 }
 
+.detail-block,
+.entity-summary {
+  display: grid;
+  gap: var(--fl-space-2);
+  min-width: 0;
+}
+
+.entity-summary strong,
+.entity-summary span {
+  overflow-wrap: anywhere;
+}
+
+.entity-summary span {
+  color: var(--fl-color-text-secondary);
+}
+
 .fl-metadata-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
