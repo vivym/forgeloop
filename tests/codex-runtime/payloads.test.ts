@@ -70,6 +70,44 @@ describe('GeneratedPlanDraftV1', () => {
       }),
     ).toThrow(/generated_plan_draft_invalid/);
   });
+
+  it.each([
+    'Merge the package run and release after tests pass',
+    'Push to main once implementation is complete',
+  ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
+    expect(() =>
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary,
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+      }),
+    ).toThrow(/generated_plan_draft_invalid/);
+  });
+
+  it.each(['BEGIN PROMPT user asks for feature', 'APP SERVER LOG: token redacted'])(
+    'rejects raw prompt/output/log markers in public Plan fields: %s',
+    (summary) => {
+      expect(() =>
+        validateGeneratedPlanDraft({
+          schema_version: 'plan_draft.v1',
+          summary,
+          content: 'Plan body',
+          implementation_summary: 'Implement safely',
+          split_strategy: 'Split',
+          dependency_order: ['api'],
+          test_matrix: ['pnpm test'],
+          risk_mitigations: ['risk'],
+          rollback_notes: 'rollback',
+        }),
+      ).toThrow(/generated_plan_draft_invalid/);
+    },
+  );
 });
 
 describe('GeneratedSpecDraftV1', () => {
@@ -89,6 +127,43 @@ describe('GeneratedSpecDraftV1', () => {
       }),
     ).toMatchObject({ schema_version: 'spec_draft.v1' });
   });
+
+  it('accepts harmless standalone release and deploy scope exclusions', () => {
+    expect(
+      validateGeneratedSpecDraft({
+        schema_version: 'spec_draft.v1',
+        summary: 'Spec summary',
+        content: 'Spec body',
+        background: 'Background',
+        goals: ['Goal'],
+        scope_in: ['In scope'],
+        scope_out: ['Release, deploy, and non-delivery workflows'],
+        acceptance_criteria: ['Criterion'],
+        risk_notes: [],
+        test_strategy_summary: 'API and daemon tests',
+      }),
+    ).toMatchObject({ scope_out: ['Release, deploy, and non-delivery workflows'] });
+  });
+
+  it.each(['BEGIN PROMPT user asks for feature', 'APP SERVER LOG: token redacted'])(
+    'rejects raw prompt/output/log markers in public Spec fields: %s',
+    (summary) => {
+      expect(() =>
+        validateGeneratedSpecDraft({
+          schema_version: 'spec_draft.v1',
+          summary,
+          content: 'Spec body',
+          background: 'Background',
+          goals: ['Goal'],
+          scope_in: ['In scope'],
+          scope_out: [],
+          acceptance_criteria: ['Criterion'],
+          risk_notes: [],
+          test_strategy_summary: 'API and daemon tests',
+        }),
+      ).toThrow(/generated_spec_draft_invalid/);
+    },
+  );
 });
 
 describe('GeneratedPackageDraftSetV1', () => {
@@ -191,6 +266,25 @@ describe('GeneratedPackageDraftSetV1', () => {
 
     expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
   });
+
+  it('accepts harmless standalone release and deploy package scope exclusions', () => {
+    const payload = validPackageDraftSet();
+    payload.packages[0]!.objective = 'Exclude release, deploy, and non-delivery workflows';
+
+    expect(validateGeneratedPackageDraftSet(payload).packages[0]!.objective).toBe(
+      'Exclude release, deploy, and non-delivery workflows',
+    );
+  });
+
+  it.each(['BEGIN PROMPT user asks for feature', 'APP SERVER LOG: token redacted'])(
+    'rejects raw prompt/output/log markers in public Package fields: %s',
+    (objective) => {
+      const payload = validPackageDraftSet();
+      payload.packages[0]!.objective = objective;
+
+      expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
+    },
+  );
 
   it('rejects dependency cycles', () => {
     const payload = validPackageDraftSet();

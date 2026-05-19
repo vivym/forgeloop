@@ -24,11 +24,17 @@ const localPathPattern =
   /(?:\/Users(?:\/|\b)|\/home(?:\/|\b)|\/tmp(?:\/|\b)|\/var\/folders(?:\/|\b)|\/private(?:\/|\b)|[A-Za-z]:[\\/][^\s]*)/i;
 const secretLikePattern =
   /(?:claim[-_ ]?token|hmac|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?)/i;
+const rawPromptOutputLogMarkerPattern = /(?:\bBEGIN\s+(?:PROMPT|OUTPUT|LOG)\b|\bAPP\s+SERVER\s+LOG\s*:)/i;
 const bypassHumanGatePattern =
   /(?:(?:\b(?:auto(?:matically)?|bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
+const directPlanHumanGatePattern =
+  /(?:^|[.!?]\s+)(?:merge(?:\s+the\s+package\s+run)?(?:\s+and\s+release)?|push\s+to\s+main|release|deploy)\b[\s\S]{0,120}\b(?:after\s+tests?\s+pass|once\s+(?:the\s+)?implementation\s+is\s+complete|when\s+(?:checks|tests)\s+pass|on\s+green)\b/i;
 
 const isUnsafePublicString = (value: string): boolean =>
-  localPathPattern.test(value) || secretLikePattern.test(value) || bypassHumanGatePattern.test(value);
+  localPathPattern.test(value) ||
+  secretLikePattern.test(value) ||
+  rawPromptOutputLogMarkerPattern.test(value) ||
+  bypassHumanGatePattern.test(value);
 
 const safeParseOrThrow = <T>(schema: z.ZodType<T>, value: unknown, errorCode: string): T => {
   const result = schema.safeParse(value);
@@ -53,6 +59,24 @@ const assertPublicSafeText = (value: unknown, errorCode: string): void => {
 
   if (value !== null && typeof value === 'object') {
     Object.values(value as Record<string, unknown>).forEach((entry) => assertPublicSafeText(entry, errorCode));
+  }
+};
+
+const assertPlanPublicSafeText = (value: unknown, errorCode: string): void => {
+  if (typeof value === 'string') {
+    if (isUnsafePublicString(value) || directPlanHumanGatePattern.test(value)) {
+      throw new Error(errorCode);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((entry) => assertPlanPublicSafeText(entry, errorCode));
+    return;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    Object.values(value as Record<string, unknown>).forEach((entry) => assertPlanPublicSafeText(entry, errorCode));
   }
 };
 
@@ -153,7 +177,7 @@ export const validateGeneratedSpecDraft = (value: unknown): GeneratedSpecDraftV1
 
 export const validateGeneratedPlanDraft = (value: unknown): GeneratedPlanDraftV1 => {
   const parsed = safeParseOrThrow(generatedPlanDraftSchema, value, 'generated_plan_draft_invalid');
-  assertPublicSafeText(parsed, 'generated_plan_draft_invalid');
+  assertPlanPublicSafeText(parsed, 'generated_plan_draft_invalid');
   assertUniqueStrings(parsed.dependency_order, 'generated_plan_draft_invalid');
   return parsed as GeneratedPlanDraftV1;
 };
