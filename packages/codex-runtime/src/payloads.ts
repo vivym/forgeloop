@@ -21,10 +21,11 @@ const repoRelativePath = z
   );
 
 const unixLocalPathPattern = /(?:^|[\s"'(=])(\/[A-Za-z0-9._-]+(?:\/[^\s"'`,;)]*)?)/gi;
+const homeRelativePathPattern = /(?:^|[\s"'(=])~[\\/][^\s"'`,;)]*/i;
 const publicRoutePathPattern = /^\/(?:api|v\d+(?:\.\d+)?|graphql|health|status|auth|oauth)(?:\/|$)/i;
 const windowsLocalPathPattern = /[A-Za-z]:[\\/][^\s"'`,;)]*/i;
 const secretLikePattern =
-  /(?:claim[-_ ]?token|hmac|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?)/i;
+  /(?:claim[-_ ]?token|hmac[-_ ]?(?:key|token|secret|material)|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?)/i;
 const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|LOG)\b|\bAPP\s+SERVER\s+LOG\b:?)/i;
 const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
@@ -41,6 +42,7 @@ const hasUnsafeUnixLocalPath = (value: string): boolean =>
 
 const isUnsafePublicString = (value: string): boolean =>
   hasUnsafeUnixLocalPath(value) ||
+  homeRelativePathPattern.test(value) ||
   windowsLocalPathPattern.test(value) ||
   secretLikePattern.test(value) ||
   rawPromptOutputLogMarkerPattern.test(value) ||
@@ -55,6 +57,8 @@ const isUnsafePlanString = (value: string): boolean =>
       value.lastIndexOf('.', actionIndex),
       value.lastIndexOf('!', actionIndex),
       value.lastIndexOf('?', actionIndex),
+      value.lastIndexOf(';', actionIndex),
+      value.lastIndexOf(',', actionIndex),
       value.lastIndexOf('\n', actionIndex),
     );
     const clausePrefix = value.slice(Math.max(previousBoundary + 1, actionIndex - 80), actionIndex);

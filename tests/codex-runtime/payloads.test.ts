@@ -87,6 +87,22 @@ describe('GeneratedPlanDraftV1', () => {
     ).toThrow(/generated_plan_draft_invalid/);
   });
 
+  it('rejects home-relative paths in public Plan fields', () => {
+    expect(() =>
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary: 'Generated from ~/.codex/session.json',
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+      }),
+    ).toThrow(/generated_plan_draft_invalid/);
+  });
+
   it('accepts API routes in public Plan fields', () => {
     expect(
       validateGeneratedPlanDraft({
@@ -138,6 +154,9 @@ describe('GeneratedPlanDraftV1', () => {
     'If tests pass deploy to staging',
     'Finally merge to main after checks pass',
     'No release work is included. Finally merge to main after checks pass',
+    'No release work is included; finally merge to main after checks pass',
+    'This plan has no blockers, deploy to staging after tests pass',
+    'Exclude release work; submit for approval',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
@@ -174,6 +193,22 @@ describe('GeneratedPlanDraftV1', () => {
         rollback_notes: 'rollback',
       }),
     ).toMatchObject({ summary });
+  });
+
+  it('accepts benign HMAC algorithm mentions in public Plan fields', () => {
+    expect(
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary: 'Use HMAC validation for internal command signatures',
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+      }),
+    ).toMatchObject({ summary: 'Use HMAC validation for internal command signatures' });
   });
 
   it.each([
