@@ -1188,6 +1188,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       )
       .orderBy(
         sql`coalesce(${automation_action_runs.nextAttemptAt}, ${automation_action_runs.createdAt})`,
+        sql`case when ${automation_action_runs.actionType} = 'project_runtime_snapshot' then 1 else 0 end`,
         asc(automation_action_runs.createdAt),
         asc(automation_action_runs.id),
       )
@@ -1948,6 +1949,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .where(wherePredicate)
       .orderBy(
         sql`coalesce(${automation_action_runs.nextAttemptAt}, ${automation_action_runs.createdAt})`,
+        sql`case when ${automation_action_runs.actionType} = 'project_runtime_snapshot' then 1 else 0 end`,
         asc(automation_action_runs.createdAt),
         asc(automation_action_runs.id),
       )

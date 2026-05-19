@@ -137,6 +137,9 @@ const compareTimestamp = (left: string | undefined, right: string | undefined): 
   return (left ?? '').localeCompare(right ?? '');
 };
 
+const automationActionClaimPriority = (actionRun: AutomationActionRun): number =>
+  actionRun.action_type === 'project_runtime_snapshot' ? 1 : 0;
+
 const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
   repo_id: actionInputJson.repo_id,
   policy_status: actionInputJson.policy_status,
@@ -1750,6 +1753,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private compareAutomationActionClaimOrder(left: AutomationActionRun, right: AutomationActionRun): number {
     return (
       compareTimestamp(left.next_attempt_at ?? left.created_at, right.next_attempt_at ?? right.created_at) ||
+      automationActionClaimPriority(left) - automationActionClaimPriority(right) ||
       compareTimestamp(left.created_at, right.created_at) ||
       left.id.localeCompare(right.id)
     );
