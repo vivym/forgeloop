@@ -43,13 +43,29 @@ describe('GeneratedPlanDraftV1', () => {
     expect(() =>
       validateGeneratedPlanDraft({
         schema_version: 'plan_draft.v1',
-        summary: 'Generated from /home/runner/workspace and C:\\Users\\viv\\repo',
+        summary: 'Generated from /home/runner/workspace, /etc/forgeloop/config, and C:\\Users\\viv\\repo',
         content: 'Plan body with claim-token abc',
         implementation_summary: 'Implement safely',
         split_strategy: 'Split',
         dependency_order: ['api'],
         test_matrix: ['pnpm test'],
         risk_mitigations: ['Do not leak hmac secret material'],
+        rollback_notes: 'rollback',
+      }),
+    ).toThrow(/generated_plan_draft_invalid/);
+  });
+
+  it('rejects system absolute paths in public Plan fields', () => {
+    expect(() =>
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary: 'Generated from /etc/forgeloop/config',
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
         rollback_notes: 'rollback',
       }),
     ).toThrow(/generated_plan_draft_invalid/);
@@ -79,6 +95,12 @@ describe('GeneratedPlanDraftV1', () => {
     'Enqueue package run for api',
     'Release the package',
     'Deploy the generated release',
+    'Deploy to staging after tests pass',
+    'Release to production after validation',
+    'Submit for approval',
+    'Approve after review',
+    'Push branch after checks pass',
+    'Enqueue the run after package is ready',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
     expect(() =>
       validateGeneratedPlanDraft({
@@ -260,7 +282,7 @@ describe('GeneratedPackageDraftSetV1', () => {
 
   it('rejects local paths and secret-like tokens in public Package fields', () => {
     const payload = validPackageDraftSet();
-    payload.packages[0]!.objective = 'Implement API using /Users/viv/private claim-token data';
+    payload.packages[0]!.objective = 'Implement API using /Users/viv/private /etc/forgeloop/config claim-token data';
 
     expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
   });
@@ -268,6 +290,13 @@ describe('GeneratedPackageDraftSetV1', () => {
   it('rejects /tmp and Windows local paths in public Package fields', () => {
     const payload = validPackageDraftSet();
     payload.packages[0]!.objective = 'Read logs from /tmp/forgeloop and C:\\temp\\codex-output';
+
+    expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
+  });
+
+  it('rejects system absolute paths in public Package fields', () => {
+    const payload = validPackageDraftSet();
+    payload.packages[0]!.objective = 'Read config from /etc/forgeloop/config';
 
     expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
   });
