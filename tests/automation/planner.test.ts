@@ -74,7 +74,102 @@ const packageTarget = (overrides: Partial<RuntimeSnapshotTarget> = {}): RuntimeS
   ...overrides,
 });
 
+const generationPlanning = (overrides: {
+  mode?: 'disabled' | 'fake' | 'app_server';
+  specDraftEnabled?: boolean;
+  planDraftEnabled?: boolean;
+  packageDraftsEnabled?: boolean;
+  specDraftPromptVersion?: string;
+  planDraftPromptVersion?: string;
+  packageDraftsPromptVersion?: string;
+} = {}) => ({
+  mode: overrides.mode ?? 'fake',
+  tasks: {
+    spec_draft: {
+      enabled: overrides.specDraftEnabled ?? true,
+      promptVersion: overrides.specDraftPromptVersion ?? 'spec-draft.fake.v1',
+      outputSchemaVersion: 'spec_draft.v1',
+    },
+    plan_draft: {
+      enabled: overrides.planDraftEnabled ?? true,
+      promptVersion: overrides.planDraftPromptVersion ?? 'plan-draft.fake.v1',
+      outputSchemaVersion: 'plan_draft.v1',
+    },
+    package_drafts: {
+      enabled: overrides.packageDraftsEnabled ?? true,
+      promptVersion: overrides.packageDraftsPromptVersion ?? 'package-drafts.fake.v1',
+      outputSchemaVersion: 'package_drafts.v1',
+    },
+  },
+} as const);
+
 describe('automation planner', () => {
+  it('suppresses generation actions by default', () => {
+    const actions = planNextActions(
+      baseSnapshot({
+        workItemsRequiringSpec: [specWorkItemTarget()],
+        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
+      }),
+    );
+
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_spec_draft');
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_plan_draft');
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
+  });
+
+  it('suppresses all generation actions when generation mode is disabled', () => {
+    const actions = planNextActions(
+      baseSnapshot({
+        workItemsRequiringSpec: [specWorkItemTarget()],
+        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
+      }),
+      { generation: generationPlanning({ mode: 'disabled' }) },
+    );
+
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_spec_draft');
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_plan_draft');
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
+  });
+
+  it('suppresses package draft actions in 2A when package_drafts is disabled', () => {
+    const actions = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }), {
+      generation: generationPlanning({ packageDraftsEnabled: false }),
+    });
+
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
+  });
+
+  it('includes generation identity for Plan and package draft actions', () => {
+    const baselineActions = planNextActions(
+      baseSnapshot({
+        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
+      }),
+      { generation: generationPlanning() },
+    );
+    const changedPromptActions = planNextActions(
+      baseSnapshot({
+        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
+      }),
+      {
+        generation: generationPlanning({
+          planDraftPromptVersion: 'plan-draft.fake.v2',
+          packageDraftsPromptVersion: 'package-drafts.fake.v2',
+        }),
+      },
+    );
+
+    expect(changedPromptActions.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey).not.toBe(
+      baselineActions.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey,
+    );
+    expect(changedPromptActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
+      baselineActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,
+    );
+  });
+
   it('emits ensure_spec_draft before downstream draft actions when fake generation is enabled', () => {
     const actions = planNextActions(
       baseSnapshot({
@@ -82,7 +177,7 @@ describe('automation planner', () => {
         workItemsRequiringPlan: [workItemTarget()],
         planRevisionsRequiringPackages: [packageTarget()],
       }),
-      { specDraftGenerationMode: 'fake' },
+      { generation: generationPlanning() },
     );
 
     expect(actions.map((action) => action.actionType).slice(0, 3)).toEqual([
@@ -101,7 +196,7 @@ describe('automation planner', () => {
   it('does not emit ensure_spec_draft when generation is disabled', () => {
     expect(
       planNextActions(baseSnapshot({ workItemsRequiringSpec: [specWorkItemTarget()] }), {
-        specDraftGenerationMode: 'disabled',
+        generation: generationPlanning({ mode: 'disabled' }),
       }).map((action) => action.actionType),
     ).not.toContain('ensure_spec_draft');
   });
@@ -128,7 +223,7 @@ describe('automation planner', () => {
           }),
         ],
       }),
-      { specDraftGenerationMode: 'fake' },
+      { generation: generationPlanning() },
     );
 
     expect(actions[0]).toMatchObject({
@@ -138,7 +233,9 @@ describe('automation planner', () => {
   });
 
   it('emits ensure_plan_draft for an approved Spec missing a Plan draft', () => {
-    const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }));
+    const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
+      generation: generationPlanning(),
+    });
 
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
@@ -157,7 +254,9 @@ describe('automation planner', () => {
   });
 
   it('emits ensure_package_drafts for an approved PlanRevision missing package drafts', () => {
-    const actions = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }));
+    const actions = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }), {
+      generation: generationPlanning(),
+    });
 
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
@@ -180,6 +279,7 @@ describe('automation planner', () => {
           packageTarget({ activeHoldFingerprint: 'package_generation:plan-revision-1:manual' }),
         ],
       }),
+      { generation: generationPlanning() },
     );
 
     expect(actions).toEqual([]);
@@ -209,6 +309,7 @@ describe('automation planner', () => {
           }),
         ],
       }),
+      { generation: generationPlanning() },
     );
 
     expect(actions).toEqual([]);
@@ -245,6 +346,7 @@ describe('automation planner', () => {
         ],
         workItemsRequiringPlan: [ambiguousTarget],
       }),
+      { generation: generationPlanning() },
     );
 
     expect(actions).toHaveLength(1);
@@ -265,9 +367,12 @@ describe('automation planner', () => {
   });
 
   it('changes mutating precondition and idempotency when target status changes', () => {
-    const approvedAction = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }))[0]!;
+    const approvedAction = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
+      generation: generationPlanning(),
+    })[0]!;
     const changedStatusAction = planNextActions(
       baseSnapshot({ workItemsRequiringPlan: [workItemTarget({ targetStatus: 'ready_for_plan' })] }),
+      { generation: generationPlanning() },
     )[0]!;
 
     expect(changedStatusAction.preconditionFingerprint).not.toBe(approvedAction.preconditionFingerprint);
@@ -275,7 +380,9 @@ describe('automation planner', () => {
   });
 
   it('changes mutating precondition and idempotency when generation key changes', () => {
-    const defaultAction = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }))[0]!;
+    const defaultAction = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }), {
+      generation: generationPlanning(),
+    })[0]!;
     const changedGenerationAction = planNextActions(
       baseSnapshot({
         planRevisionsRequiringPackages: [
@@ -284,6 +391,7 @@ describe('automation planner', () => {
           }),
         ],
       }),
+      { generation: generationPlanning() },
     )[0]!;
 
     expect(changedGenerationAction.preconditionFingerprint).not.toBe(defaultAction.preconditionFingerprint);
@@ -291,7 +399,9 @@ describe('automation planner', () => {
   });
 
   it('does not include policy projection fields in mutating preconditions', () => {
-    const baseline = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }))[0]!;
+    const baseline = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
+      generation: generationPlanning(),
+    })[0]!;
     const changedPolicyProjection = planNextActions(
       baseSnapshot({
         repos: [
@@ -309,6 +419,7 @@ describe('automation planner', () => {
         ],
         workItemsRequiringPlan: [workItemTarget()],
       }),
+      { generation: generationPlanning() },
     ).find((action) => action.actionType === 'ensure_plan_draft')!;
 
     expect(changedPolicyProjection.preconditionFingerprint).toBe(baseline.preconditionFingerprint);
@@ -512,7 +623,9 @@ describe('automation planner', () => {
       parserVersion: 'workflow-md-parser:v1',
       reasonCode: 'not_found',
     } as const;
-    const plannedDraft = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }))[0]!;
+    const plannedDraft = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
+      generation: generationPlanning(),
+    })[0]!;
     const plannedProjection = planNextActions(
       baseSnapshot({
         repos: [{ ...baseSnapshot().repos[0]!, policyProjection: projectionIdentity }],
@@ -553,6 +666,7 @@ describe('automation planner', () => {
           },
         ],
       }),
+      { generation: generationPlanning() },
     );
 
     expect(actions).toEqual([]);

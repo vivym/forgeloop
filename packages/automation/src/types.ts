@@ -39,6 +39,27 @@ export interface MutatingActionIdentity {
   policyDigest?: string;
 }
 
+export interface AutomationGenerationPlanningConfig {
+  mode: 'disabled' | 'fake' | 'app_server';
+  tasks: {
+    spec_draft: {
+      enabled: boolean;
+      promptVersion: string;
+      outputSchemaVersion: 'spec_draft.v1';
+    };
+    plan_draft: {
+      enabled: boolean;
+      promptVersion: string;
+      outputSchemaVersion: 'plan_draft.v1';
+    };
+    package_drafts: {
+      enabled: boolean;
+      promptVersion: string;
+      outputSchemaVersion: 'package_drafts.v1';
+    };
+  };
+}
+
 export type WorkflowPolicyDigestStatus =
   | {
       status: 'loaded';

@@ -2,7 +2,10 @@ import {
   disabledSpecDraftGenerator,
   executeActionRun,
   planNextActions,
+  specDraftOutputSchemaVersion,
+  specDraftPromptVersion,
   type AutomationGenerationMode,
+  type AutomationGenerationPlanningConfig,
   type AutomationExecutorClient,
   type AutomationExecutorResult,
   type RuntimePolicyProjection,
@@ -35,6 +38,7 @@ export interface AutomationDaemonOptions {
   policyLoader: AutomationDaemonPolicyLoader;
   loopIntervalMs: number;
   noClaimBackoffMs: number;
+  generationPlanning?: AutomationGenerationPlanningConfig;
   specDraftGenerationMode?: AutomationGenerationMode;
   specDraftGenerator?: SpecDraftGenerator;
   claimToken?: string;
@@ -60,6 +64,35 @@ const policyProjectionFor = (
   ...('reasonCode' in digest && digest.reasonCode !== undefined ? { reasonCode: digest.reasonCode } : {}),
   ...(digest.observedAt === undefined ? {} : { observedAt: digest.observedAt }),
 });
+
+const legacyGenerationPlanningFor = (
+  mode: AutomationGenerationMode | undefined,
+): AutomationGenerationPlanningConfig | undefined => {
+  if (mode === undefined) {
+    return undefined;
+  }
+  const enabled = mode !== 'disabled';
+  return {
+    mode,
+    tasks: {
+      spec_draft: {
+        enabled,
+        promptVersion: specDraftPromptVersion,
+        outputSchemaVersion: specDraftOutputSchemaVersion,
+      },
+      plan_draft: {
+        enabled,
+        promptVersion: 'plan-draft.fake.v1',
+        outputSchemaVersion: 'plan_draft.v1',
+      },
+      package_drafts: {
+        enabled: false,
+        promptVersion: 'package-drafts.fake.v1',
+        outputSchemaVersion: 'package_drafts.v1',
+      },
+    },
+  };
+};
 
 export class AutomationDaemon {
   private readonly stopWaiters = new Set<() => void>();
@@ -99,8 +132,10 @@ export class AutomationDaemon {
 
   async runOnce(): Promise<AutomationDaemonRunOnceResult> {
     const snapshot = await this.snapshotWithPolicyDigests(await this.options.client.runtimeSnapshot());
+    const generationPlanning =
+      this.options.generationPlanning ?? legacyGenerationPlanningFor(this.options.specDraftGenerationMode);
     const actions = planNextActions(snapshot, {
-      specDraftGenerationMode: this.options.specDraftGenerationMode ?? 'disabled',
+      ...(generationPlanning === undefined ? {} : { generation: generationPlanning }),
     });
     for (const action of actions) {
       await this.options.client.createOrReplayAction(action);

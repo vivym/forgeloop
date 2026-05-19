@@ -12,7 +12,7 @@ const client = new AutomationHttpClient({
   secret: config.trustedActorHeaderSecret,
 });
 const specDraftGenerator =
-  config.codexAutomationGeneration === 'fake' ? createFakeSpecDraftGenerator() : disabledSpecDraftGenerator;
+  config.generationPlanning.mode === 'fake' ? createFakeSpecDraftGenerator() : disabledSpecDraftGenerator;
 const daemon = new AutomationDaemon({
   client,
   actorId: config.actorId,
@@ -22,7 +22,7 @@ const daemon = new AutomationDaemon({
   policyLoader: loadDaemonWorkflowPolicyDigest,
   loopIntervalMs: config.loopIntervalMs,
   noClaimBackoffMs: config.noClaimBackoffMs,
-  specDraftGenerationMode: config.codexAutomationGeneration,
+  generationPlanning: config.generationPlanning,
   specDraftGenerator,
   onIterationError: (error) => {
     console.error(error instanceof Error ? error.message : error);

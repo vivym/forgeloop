@@ -208,6 +208,15 @@ const daemonOptions = (client: AutomationDaemonClient) => ({
   loopIntervalMs: 1_000,
 });
 
+const generationPlanning = {
+  mode: 'fake',
+  tasks: {
+    spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+    plan_draft: { enabled: true, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+    package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+  },
+} as const;
+
 describe('automation daemon loop', () => {
   it('loads required config and path-list roots from the environment', () => {
     expect(
@@ -232,9 +241,10 @@ describe('automation daemon loop', () => {
     });
   });
 
-  it('loads fake Spec draft generation mode and rejects unsupported codex mode', () => {
+  it('loads legacy generation mode compatibility', () => {
     expect(loadAutomationDaemonConfig(validEnv())).toMatchObject({
       codexAutomationGeneration: 'disabled',
+      generationPlanning: { mode: 'disabled' },
     });
     expect(
       loadAutomationDaemonConfig({
@@ -243,13 +253,17 @@ describe('automation daemon loop', () => {
       }),
     ).toMatchObject({
       codexAutomationGeneration: 'fake',
+      generationPlanning: { mode: 'fake' },
     });
-    expect(() =>
+    expect(
       loadAutomationDaemonConfig({
         ...validEnv(),
         FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
       }),
-    ).toThrow(/Plan 2/);
+    ).toMatchObject({
+      codexAutomationGeneration: 'app_server',
+      generationPlanning: { mode: 'app_server' },
+    });
   });
 
   it('throws early when required config is missing', () => {
@@ -285,6 +299,7 @@ describe('automation daemon loop', () => {
       },
       noClaimBackoffMs: 25,
       loopIntervalMs: 1_000,
+      generationPlanning,
     });
 
     const result = await daemon.runOnce();
@@ -323,7 +338,7 @@ describe('automation daemon loop', () => {
     client.actionToClaim = claimedSpecAction();
     const daemon = new AutomationDaemon({
       ...daemonOptions(client),
-      specDraftGenerationMode: 'fake',
+      generationPlanning,
       specDraftGenerator: createFakeSpecDraftGenerator(),
     });
 
