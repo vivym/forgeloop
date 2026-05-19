@@ -2,16 +2,14 @@ import type { AutomationPrecondition, AutomationPreconditionCapability, Automati
 import {
   planDraftOutputSchemaVersion,
   planDraftPromptVersion,
+  specDraftOutputSchemaVersion,
+  specDraftPromptVersion,
   validateGeneratedPlanDraft,
+  validateGeneratedSpecDraft,
   type CodexGenerationRuntime,
 } from '@forgeloop/codex-runtime';
 
 import { AutomationHttpError } from './http-client.js';
-import {
-  disabledSpecDraftGenerator,
-  validateGeneratedSpecDraft,
-  type SpecDraftGenerator,
-} from './spec-draft-generation.js';
 import type {
   AutomationActionRunRecord,
   AutomationExecutorClient,
@@ -27,7 +25,6 @@ export interface ExecuteClaimedActionInput {
   actorId: string;
   daemonIdentity?: string;
   leaseMs?: number;
-  specDraftGenerator?: SpecDraftGenerator;
   generationRuntime?: CodexGenerationRuntime;
   generationPlanning?: AutomationGenerationPlanningConfig;
 }
@@ -37,7 +34,6 @@ export interface ExecuteActionRunInput {
   action: AutomationActionRunRecord;
   actorId: string;
   daemonIdentity?: string;
-  specDraftGenerator?: SpecDraftGenerator;
   generationRuntime?: CodexGenerationRuntime;
   generationPlanning?: AutomationGenerationPlanningConfig;
 }
@@ -239,11 +235,20 @@ const errorCode = (error: unknown): string | undefined => {
   if (error instanceof AutomationHttpError) {
     return error.code;
   }
+  const publicSafeErrorCodes = new Set([
+    'codex_generation_disabled',
+    'codex_generation_safety_unavailable',
+    'codex_generation_sandbox_invalid',
+    'codex_app_server_unavailable',
+    'generated_output_invalid_json',
+    'generated_output_schema_invalid',
+    'generated_spec_draft_invalid',
+    'generated_plan_draft_invalid',
+    'generated_payload_idempotency_drift',
+  ]);
   if (
     error instanceof Error &&
-    (error.message === 'generation_disabled' ||
-      error.message === 'generated_spec_draft_invalid' ||
-      error.message === 'generated_plan_draft_invalid')
+    (error.message === 'generation_disabled' || publicSafeErrorCodes.has(error.message))
   ) {
     return error.message;
   }
@@ -258,8 +263,12 @@ const isStalePrecondition = (code: string | undefined): boolean =>
 
 const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'generation_disabled' ||
+  code === 'codex_generation_disabled' ||
+  code === 'codex_generation_sandbox_invalid' ||
   code === 'generated_spec_draft_invalid' ||
   (code === 'generated_plan_draft_invalid' && error instanceof AutomationHttpError && error.status < 500) ||
+  code === 'generated_output_schema_invalid' ||
+  code === 'generated_payload_idempotency_drift' ||
   code === 'manual_path_hold_active' ||
   code === 'automation_hold_active' ||
   code === 'automation_gate_pending' ||
@@ -279,7 +288,18 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
     };
   }
   const code = errorCode(error);
-  if (code === 'generation_disabled' || code === 'generated_spec_draft_invalid' || code === 'generated_plan_draft_invalid') {
+  if (
+    code === 'generation_disabled' ||
+    code === 'codex_generation_disabled' ||
+    code === 'codex_generation_sandbox_invalid' ||
+    code === 'codex_generation_safety_unavailable' ||
+    code === 'codex_app_server_unavailable' ||
+    code === 'generated_output_invalid_json' ||
+    code === 'generated_output_schema_invalid' ||
+    code === 'generated_spec_draft_invalid' ||
+    code === 'generated_plan_draft_invalid' ||
+    code === 'generated_payload_idempotency_drift'
+  ) {
     return { status: 422, code };
   }
   return { code: 'transport_error' };
@@ -311,26 +331,36 @@ const executeCommand = async (
   action: AutomationActionRunRecord,
   input: Pick<
     ExecuteActionRunInput,
-    'actorId' | 'daemonIdentity' | 'specDraftGenerator' | 'generationRuntime' | 'generationPlanning'
+    'actorId' | 'daemonIdentity' | 'generationRuntime' | 'generationPlanning'
   >,
 ): Promise<void> => {
   const precondition = preconditionFor(action);
   if (action.actionType === 'ensure_spec_draft') {
     const actionInput = parseEnsureSpecDraftInput(action);
     const taskConfig = generationTaskConfigFor(input.generationPlanning, 'spec_draft', {
-      enabled: (input.specDraftGenerator ?? disabledSpecDraftGenerator).mode !== 'disabled',
-      promptVersion: actionInput.promptVersion ?? 'spec-draft.fake.v1',
-      outputSchemaVersion: actionInput.outputSchemaVersion ?? 'spec_draft.v1',
+      enabled: input.generationRuntime !== undefined,
+      promptVersion: specDraftPromptVersion,
+      outputSchemaVersion: specDraftOutputSchemaVersion,
     });
-    const generator = input.specDraftGenerator ?? disabledSpecDraftGenerator;
-    if (!taskConfig.enabled || generator.mode === 'disabled') {
+    const runtime = input.generationRuntime;
+    if (!taskConfig.enabled || runtime === undefined) {
       throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Spec draft generation is disabled');
     }
     const context = await client.specDraftGenerationContext(actionInput.workItemId, {
       actionRunId: action.id,
       claimToken: action.claimToken ?? '',
     });
-    const generated = await generator.generateSpecDraft(context);
+    const generated = await runtime.generateSpecDraft({
+      actionRunId: action.id,
+      projectId: context.work_item.project_id,
+      repoIds: context.repos.map((repo) => repo.repo_id),
+      context: context as unknown as Record<string, unknown>,
+      promptVersion: actionInput.promptVersion ?? taskConfig.promptVersion,
+      outputSchemaVersion: actionInput.outputSchemaVersion ?? taskConfig.outputSchemaVersion,
+      policyDigests: Object.fromEntries(
+        context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
+      ),
+    });
     let generatedSpecDraft;
     try {
       generatedSpecDraft = validateGeneratedSpecDraft(generated.generated);
@@ -556,7 +586,6 @@ export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Pr
     action: claim.action,
     actorId: input.actorId,
     ...(input.daemonIdentity === undefined ? {} : { daemonIdentity: input.daemonIdentity }),
-    ...(input.specDraftGenerator === undefined ? {} : { specDraftGenerator: input.specDraftGenerator }),
     ...(input.generationRuntime === undefined ? {} : { generationRuntime: input.generationRuntime }),
     ...(input.generationPlanning === undefined ? {} : { generationPlanning: input.generationPlanning }),
   });

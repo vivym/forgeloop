@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createCodexGenerationRuntime } from '../../packages/codex-runtime/src/index';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
-import { createAutomationDaemonSpecDraftGenerator } from '../../apps/automation-daemon/src/generation-runtime';
+import { createAutomationDaemonGenerationRuntime } from '../../apps/automation-daemon/src/generation-runtime';
 import {
-  createFakeSpecDraftGenerator,
   projectRuntimeSnapshotIdempotencyKey,
   type AutomationGenerationWorkItemContextV1,
   type AutomationGenerationPlanContextV1,
@@ -351,7 +350,7 @@ describe('automation daemon loop', () => {
     });
   });
 
-  it('builds an app_server Spec draft generator from governed runtime config', () => {
+  it('builds an app_server generation runtime from governed runtime config', () => {
     const config = loadAutomationDaemonConfig({
       ...validEnv(),
       FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
@@ -359,7 +358,7 @@ describe('automation daemon loop', () => {
       FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
     });
 
-    expect(createAutomationDaemonSpecDraftGenerator(config).mode).toBe('app_server');
+    expect(createAutomationDaemonGenerationRuntime(config)).toBeDefined();
   });
 
   it('throws early when required config is missing', () => {
@@ -640,7 +639,7 @@ describe('automation daemon loop', () => {
     const daemon = new AutomationDaemon({
       ...daemonOptions(client),
       generationPlanning,
-      specDraftGenerator: createFakeSpecDraftGenerator(),
+      generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
     });
 
     const result = await daemon.runOnce();

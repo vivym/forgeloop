@@ -1,5 +1,4 @@
 import {
-  disabledSpecDraftGenerator,
   executeActionRun,
   planNextActions,
   specDraftOutputSchemaVersion,
@@ -11,7 +10,6 @@ import {
   type RuntimePolicyProjection,
   type RuntimeSnapshot,
   type RuntimeSnapshotRepo,
-  type SpecDraftGenerator,
   type WorkflowPolicyDigestStatus,
 } from '@forgeloop/automation';
 import type { CodexGenerationRuntime } from '@forgeloop/codex-runtime';
@@ -41,7 +39,6 @@ export interface AutomationDaemonOptions {
   noClaimBackoffMs: number;
   generationPlanning?: AutomationGenerationPlanningConfig;
   specDraftGenerationMode?: AutomationGenerationMode;
-  specDraftGenerator?: SpecDraftGenerator;
   generationRuntime?: CodexGenerationRuntime;
   claimToken?: string;
   sleep?: (ms: number) => Promise<void>;
@@ -176,7 +173,6 @@ export class AutomationDaemon {
         action: claim.action,
         actorId: this.options.actorId,
         daemonIdentity: this.options.daemonIdentity,
-        specDraftGenerator: this.options.specDraftGenerator ?? disabledSpecDraftGenerator,
         ...(this.options.generationRuntime === undefined ? {} : { generationRuntime: this.options.generationRuntime }),
         generationPlanning,
       }),
