@@ -2393,6 +2393,27 @@ describe('automation command boundaries', () => {
       });
   });
 
+  it('revalidates the approved Plan boundary before replaying generated Package command results', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-replay-stale-plan',
+      dependencyOrder: ['api', 'tests'],
+    });
+
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ dependencyOrder: ['api', 'tests'] })).expect(201);
+    await repository.savePlan({
+      ...ctx.plan,
+      current_revision_id: `${ctx.planRevisionId}-new-draft`,
+    });
+
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ dependencyOrder: ['api', 'tests'] }))
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.message).toContain('not current approved revision');
+      });
+  });
+
   it('blocks generated Package identity drift across distinct command idempotency keys', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);

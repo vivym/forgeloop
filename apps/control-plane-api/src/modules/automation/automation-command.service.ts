@@ -119,6 +119,14 @@ type EnsurePackageDraftsResult = {
   package_keys?: string[];
   generation_artifacts?: ArtifactRef[];
 };
+type PackageDraftWriteBoundaryContext = {
+  project: Project;
+  workItem: WorkItem;
+  spec: Spec;
+  specRevision: SpecRevision;
+  plan: Plan;
+  planRevision: PlanRevision;
+};
 type EnqueueRunInput = {
   packageId: string;
   expectedPackageVersion: number;
@@ -916,6 +924,13 @@ export class AutomationCommandService {
         const replayed = this.replayedPackageDraftsResult(claim.result_json);
         const replayable = this.replayableCommandResultOrThrow(claim, replayed);
         if (replayable !== undefined) {
+          await this.assertPackageDraftWriteBoundary(repository, {
+            planRevisionId: input.planRevisionId,
+            generationKey,
+            precondition,
+            generated: generatedPackageDrafts,
+            ...(input.regenerationApproval === undefined ? {} : { regenerationApproval: input.regenerationApproval }),
+          });
           return { ok: true, value: { ...replayable, status: 'existing' } };
         }
 
@@ -1651,21 +1666,16 @@ export class AutomationCommandService {
     };
   }
 
-  private async writeExecutionPackageDraftsForPlanRevision(
+  private async assertPackageDraftWriteBoundary(
     repository: DeliveryRepository,
     input: {
       planRevisionId: string;
       generationKey: string;
-      claimToken: string;
       precondition: AutomationPrecondition;
-      generated: GeneratedPackageDraftSetV1;
-      generationArtifacts: ArtifactRef[];
-      generatedPayloadDigest: string;
-      promptVersion: string;
-      outputSchemaVersion: 'package_drafts.v1';
+      generated?: GeneratedPackageDraftSetV1;
       regenerationApproval?: EnsurePackageDraftsInput['regenerationApproval'];
     },
-  ): Promise<EnsurePackageDraftsResult> {
+  ): Promise<PackageDraftWriteBoundaryContext> {
     const settings = await repository.resolveAutomationProjectSettings({
       project_id: input.precondition.project_id,
       ...(input.precondition.repo_id === undefined ? {} : { repo_id: input.precondition.repo_id }),
@@ -1697,15 +1707,43 @@ export class AutomationCommandService {
       generationKey: input.generationKey,
       regenerationApproval: input.regenerationApproval,
     });
-    if (
-      context.planRevision.dependency_order.length !== input.generated.manifest.dependency_order.length ||
-      context.planRevision.dependency_order.some((packageKey, index) => packageKey !== input.generated.manifest.dependency_order[index])
-    ) {
-      throw new UnprocessableEntityException({
-        code: 'generated_package_manifest_invalid',
-        message: 'Generated Package manifest does not match the approved Plan dependency order.',
-      });
+    if (input.generated !== undefined) {
+      const generated = input.generated;
+      if (
+        context.planRevision.dependency_order.length !== generated.manifest.dependency_order.length ||
+        context.planRevision.dependency_order.some((packageKey, index) => packageKey !== generated.manifest.dependency_order[index])
+      ) {
+        throw new UnprocessableEntityException({
+          code: 'generated_package_manifest_invalid',
+          message: 'Generated Package manifest does not match the approved Plan dependency order.',
+        });
+      }
     }
+    return context;
+  }
+
+  private async writeExecutionPackageDraftsForPlanRevision(
+    repository: DeliveryRepository,
+    input: {
+      planRevisionId: string;
+      generationKey: string;
+      claimToken: string;
+      precondition: AutomationPrecondition;
+      generated: GeneratedPackageDraftSetV1;
+      generationArtifacts: ArtifactRef[];
+      generatedPayloadDigest: string;
+      promptVersion: string;
+      outputSchemaVersion: 'package_drafts.v1';
+      regenerationApproval?: EnsurePackageDraftsInput['regenerationApproval'];
+    },
+  ): Promise<EnsurePackageDraftsResult> {
+    const context = await this.assertPackageDraftWriteBoundary(repository, {
+      planRevisionId: input.planRevisionId,
+      generationKey: input.generationKey,
+      precondition: input.precondition,
+      generated: input.generated,
+      ...(input.regenerationApproval === undefined ? {} : { regenerationApproval: input.regenerationApproval }),
+    });
 
     const preparedPackages = await Promise.all(
       input.generated.packages.map(async (generatedPackage, sequence) => {
