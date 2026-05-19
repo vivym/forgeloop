@@ -1480,10 +1480,13 @@ describe('automation command boundaries', () => {
       });
   });
 
-  it('rejects Plan generation context when Spec approved_revision_id is missing or stale', async () => {
+  it.each([
+    { name: 'missing', approvedRevisionId: undefined },
+    { name: 'stale', approvedRevisionId: 'spec-revision-stale' },
+  ])('rejects Plan generation context when Spec approved_revision_id is $name', async ({ approvedRevisionId }) => {
     const { app, repository } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, { approvedRevisionId: undefined });
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, { approvedRevisionId });
 
     await signedAutomationGet(
       app,
