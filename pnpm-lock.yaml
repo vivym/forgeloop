@@ -126,6 +126,9 @@ importers:
       '@forgeloop/automation':
         specifier: workspace:*
         version: link:../../packages/automation
+      '@forgeloop/codex-runtime':
+        specifier: workspace:*
+        version: link:../../packages/codex-runtime
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

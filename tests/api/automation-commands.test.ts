@@ -93,6 +93,8 @@ type AutomationCommandTestService = AutomationCommandService & {
     specRevisionId: string,
     automationPrecondition: AutomationPrecondition,
     idempotencyKey: string,
+    generated: typeof generatedPlanDraft,
+    generationArtifacts: ArtifactRef[],
   ): Promise<{ plan_id: string; plan_revision_id: string; status: 'created' | 'existing' }>;
   ensureExecutionPackageDraftsForPlanRevision(input: {
     planRevisionId: string;
@@ -637,12 +639,35 @@ const generatedSpecDraft = {
   structured_document: { source: 'test' },
 };
 
+const generatedPlanDraft = {
+  schema_version: 'plan_draft.v1',
+  summary: 'Generated Plan summary',
+  content: 'Generated Plan content',
+  implementation_summary: 'Implement the approved Spec through automation command boundaries.',
+  split_strategy: 'Create one API package and one test package.',
+  dependency_order: ['api', 'tests'],
+  test_matrix: ['pnpm test tests/api', 'pnpm test tests/automation'],
+  risk_mitigations: ['Keep the generated Plan draft scoped to draft creation.'],
+  rollback_notes: 'Discard the generated Plan draft.',
+  structured_document: { source: 'generated-plan-test' },
+};
+
 const generationArtifacts: ArtifactRef[] = [
   {
     kind: 'raw_metadata',
     name: 'raw-spec-output',
     content_type: 'application/json',
     local_ref: 'artifact://spec/raw-output.json',
+  },
+];
+
+const planGenerationArtifacts: ArtifactRef[] = [
+  {
+    kind: 'logs',
+    name: 'plan-generation.json',
+    content_type: 'application/json',
+    storage_uri: 'artifact://plan-generation.json',
+    digest: 'sha256:plan-generation',
   },
 ];
 
@@ -840,6 +865,8 @@ const seedClaimedPlanDraftAction = async (
       spec_revision_id: ctx.specRevisionId,
       idempotency_key: `${actionId}-idempotency`,
       automation_precondition: precondition,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
     },
   };
 };
@@ -1711,9 +1738,110 @@ describe('automation command boundaries', () => {
       spec_revision_id: ctx.specRevisionId,
       idempotency_key: `${actionId}-idempotency`,
       automation_precondition: precondition,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
     }).expect(201);
 
     expect(await service.listPlanRevisions((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id ?? '')).toHaveLength(1);
+  });
+
+  it('daemon ensure-plan-draft requires generated Plan payload', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-required' },
+    });
+    const { generated_plan_draft: _generatedPlanDraft, ...bodyWithoutGeneratedPlanDraft } = ctx.commandBody;
+
+    await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      bodyWithoutGeneratedPlanDraft,
+    ).expect(400);
+  });
+
+  it('persists generated Plan fields and generation artifacts', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-persisted' },
+    });
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...ctx.commandBody,
+      generated_plan_draft: {
+        ...generatedPlanDraft,
+        summary: 'Generated summary',
+        structured_document: { sections: ['generated-plan'] },
+      },
+      generation_artifacts: planGenerationArtifacts,
+    }).expect(201);
+
+    const workItem = await repository.getWorkItem(ctx.workItem.id);
+    const revisions = await service.listPlanRevisions(workItem?.current_plan_id ?? '');
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]).toMatchObject({
+      summary: 'Generated summary',
+      content: generatedPlanDraft.content,
+      implementation_summary: generatedPlanDraft.implementation_summary,
+      split_strategy: generatedPlanDraft.split_strategy,
+      dependency_order: generatedPlanDraft.dependency_order,
+      test_matrix: generatedPlanDraft.test_matrix,
+      risk_mitigations: generatedPlanDraft.risk_mitigations,
+      rollback_notes: generatedPlanDraft.rollback_notes,
+      structured_document: { sections: ['generated-plan'] },
+      artifact_refs: planGenerationArtifacts,
+    });
+  });
+
+  it('blocks idempotency key reuse with a different generated Plan payload digest', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-drift' },
+    });
+    const body = {
+      ...ctx.commandBody,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
+    };
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, body).expect(201);
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...body,
+      generated_plan_draft: { ...generatedPlanDraft, summary: 'Generated Plan summary changed' },
+    })
+      .expect(409)
+      .expect(({ body: responseBody }) => {
+        expect(responseBody).toMatchObject({ code: 'generated_payload_idempotency_drift' });
+      });
+  });
+
+  it('rejects generated Plan artifact refs with local paths before persistence', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-local-artifact' },
+    });
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...ctx.commandBody,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: [
+        {
+          kind: 'logs',
+          name: 'raw-plan-output',
+          content_type: 'application/json',
+          local_ref: '/tmp/forgeloop/raw-plan-output.json',
+        },
+      ],
+    })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'generation_artifact_unsafe' });
+      });
+
+    await expectNoPlanDraftCommandWrites(service, repository, ctx);
   });
 
   it('rejects internal package draft commands before execution package writes on claim binding mismatch', async () => {
@@ -1910,8 +2038,22 @@ describe('automation command boundaries', () => {
     const automationService = service as AutomationCommandTestService;
 
     const [first, second] = await Promise.all([
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-1'),
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-1'),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-1',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-1',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
     ]);
 
     expect(first.plan_revision_id).toBe(second.plan_revision_id);
@@ -1952,8 +2094,22 @@ describe('automation command boundaries', () => {
     const automationService = service as AutomationCommandTestService;
 
     const [first, second] = await Promise.all([
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-target-a'),
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-target-b'),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-target-a',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-target-b',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
     ]);
 
     expect(second.plan_revision_id).toBe(first.plan_revision_id);
@@ -2013,6 +2169,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-malformed-replay',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toThrow(/idempotency/i);
     expect((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id).toBeUndefined();
@@ -2071,6 +2229,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-blocked-replay',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toThrow(/idempotency/i);
     expect((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id).toBeUndefined();
@@ -2138,6 +2298,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-current-spec-race',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toThrow(/current spec changed/i);
     expect((await repository.getWorkItem(ctx.workItem.id))?.current_spec_id).toBe(concurrentSpec.id);
@@ -2180,6 +2342,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-repo-moved',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'automation_precondition_stale' }),

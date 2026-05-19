@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   BadRequestException,
@@ -77,7 +77,12 @@ import {
 
 const commandClaimTtlMs = 5 * 60 * 1000;
 type EnsureSpecDraftResult = { spec_id: string; spec_revision_id: string; status: 'created' | 'existing' };
-type EnsurePlanDraftResult = { plan_id: string; plan_revision_id: string; status: 'created' | 'existing' };
+type EnsurePlanDraftResult = {
+  plan_id: string;
+  plan_revision_id: string;
+  status: 'created' | 'existing';
+  generated_payload_digest?: string;
+};
 type CommandBoundaryOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 type EnsurePackageDraftsInput = {
   planRevisionId: string;
@@ -151,6 +156,68 @@ const stableJson = (value: unknown): string => {
     .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
     .join(',')}}`;
 };
+
+const stripUndefined = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripUndefined(entry));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, stripUndefined(entry)]),
+    );
+  }
+  return value;
+};
+
+const canonicalizeForDigest = (value: unknown): string => stableJson(stripUndefined(value));
+
+const generatedPayloadDigest = (value: unknown): string =>
+  `sha256:${createHash('sha256').update(canonicalizeForDigest(value)).digest('hex')}`;
+
+const unsafeArtifactTextPattern =
+  /(?:claim[-_ ]?token|hmac[-_ ]?(?:key|token|secret|material)|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?|\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|LOG)\b|(?:^|[\s"'(=])\/[A-Za-z0-9._-]+(?:\/[^\s"'`,;)]*)?|(?:^|[\s"'(=])~[\\/][^\s"'`,;)]*|(?:^|[\s"'(=])[A-Za-z]:[\\/][^\s"'`,;)]*)/i;
+
+const assertPublicArtifactText = (value: unknown): void => {
+  if (typeof value === 'string') {
+    if (unsafeArtifactTextPattern.test(value)) {
+      throw new BadRequestException({
+        code: 'generation_artifact_unsafe',
+        message: 'Generation artifact refs must not expose local paths, raw logs, or secrets.',
+      });
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => assertPublicArtifactText(entry));
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    Object.values(value as Record<string, unknown>).forEach((entry) => assertPublicArtifactText(entry));
+  }
+};
+
+const safeGenerationArtifactRefs = (artifacts: readonly ArtifactRef[]): ArtifactRef[] =>
+  artifacts.map((artifact) => {
+    if (artifact.local_ref !== undefined || artifact.storage_uri === undefined || !artifact.storage_uri.startsWith('artifact://')) {
+      throw new BadRequestException({
+        code: 'generation_artifact_unsafe',
+        message: 'Generation artifact refs must use artifact:// storage_uri and must not include local_ref.',
+      });
+    }
+    const publicArtifact: ArtifactRef = {
+      kind: artifact.kind,
+      name: artifact.name,
+      content_type: artifact.content_type,
+      storage_uri: artifact.storage_uri,
+      ...(artifact.digest === undefined ? {} : { digest: artifact.digest }),
+    };
+    assertPublicArtifactText(publicArtifact);
+    return publicArtifact;
+  });
+
+const publicArtifactIdentity = (artifacts: readonly ArtifactRef[]): ArtifactRef[] => safeGenerationArtifactRefs(artifacts);
 
 @Injectable()
 export class AutomationCommandService {
@@ -308,6 +375,7 @@ export class AutomationCommandService {
 
   async ensurePlanDraftForClaimedAction(workItemId: string, input: EnsurePlanDraftCommandDto): Promise<EnsurePlanDraftResult> {
     const precondition = normalizeAutomationPrecondition(input.automation_precondition as AutomationPrecondition);
+    const generationArtifacts = safeGenerationArtifactRefs(input.generation_artifacts);
     const actionInputJson = { work_item_id: workItemId, spec_revision_id: input.spec_revision_id };
     await this.assertActiveActionClaim({
       actionRunId: input.action_run_id,
@@ -323,7 +391,14 @@ export class AutomationCommandService {
       actionInputJson,
       now: currentIsoTime(),
     });
-    return this.ensurePlanDraftForApprovedSpec(workItemId, input.spec_revision_id, precondition, input.idempotency_key);
+    return this.ensurePlanDraftForApprovedSpec(
+      workItemId,
+      input.spec_revision_id,
+      precondition,
+      input.idempotency_key,
+      input.generated_plan_draft,
+      generationArtifacts,
+    );
   }
 
   async ensureSpecDraftForClaimedAction(workItemId: string, input: EnsureSpecDraftCommandDto): Promise<EnsureSpecDraftResult> {
@@ -441,12 +516,24 @@ export class AutomationCommandService {
     specRevisionId: string,
     automationPrecondition: AutomationPrecondition,
     idempotencyKey: string,
+    generated: EnsurePlanDraftCommandDto['generated_plan_draft'],
+    generationArtifacts: EnsurePlanDraftCommandDto['generation_artifacts'],
   ): Promise<EnsurePlanDraftResult> {
     const precondition = normalizeAutomationPrecondition(automationPrecondition);
     if (precondition.required_capability !== 'canGeneratePlanDraft') {
       throw new BadRequestException('ensurePlanDraftForApprovedSpec requires canGeneratePlanDraft precondition');
     }
-    const preconditionFingerprint = automationPreconditionFingerprint(precondition);
+    const sanitizedGenerationArtifacts = safeGenerationArtifactRefs(generationArtifacts);
+    const planPayloadDigest = generatedPayloadDigest({
+      generated_plan_draft: generated,
+      generation_artifacts: publicArtifactIdentity(sanitizedGenerationArtifacts),
+    });
+    const commandPreconditionJson = {
+      automation_precondition: precondition,
+      generated_payload_digest: planPayloadDigest,
+      generation_artifact_identity: publicArtifactIdentity(sanitizedGenerationArtifacts),
+    };
+    const commandPreconditionFingerprint = generatedPayloadDigest(commandPreconditionJson);
     const actorScope = `${precondition.actor_class}:${precondition.daemon_identity ?? 'unknown'}`;
     const claimToken = randomUUID();
     const claimedAt = this.now();
@@ -454,22 +541,33 @@ export class AutomationCommandService {
     const outcome = await this.repository.withObjectLock(`work-item:${workItemId}`, async (
       repository,
     ): Promise<CommandBoundaryOutcome<EnsurePlanDraftResult>> => {
-      const claim = await repository.claimCommandIdempotency({
-        id: this.id('command-idempotency'),
-        command_name: 'ensure_plan_draft_for_approved_spec',
-        idempotency_key: idempotencyKey,
-        ...commandIdempotencyTarget({
-          objectType: 'work_item',
-          objectId: workItemId,
-          revisionId: specRevisionId,
-        }),
-        precondition_json: precondition as unknown as Record<string, unknown>,
-        precondition_fingerprint: preconditionFingerprint,
-        actor_scope: actorScope,
-        claim_token: claimToken,
-        locked_until: this.lockedUntil(claimedAt),
-        now: claimedAt,
-      });
+      let claim: CommandIdempotencyRecord;
+      try {
+        claim = await repository.claimCommandIdempotency({
+          id: this.id('command-idempotency'),
+          command_name: 'ensure_plan_draft_for_approved_spec',
+          idempotency_key: idempotencyKey,
+          ...commandIdempotencyTarget({
+            objectType: 'work_item',
+            objectId: workItemId,
+            revisionId: specRevisionId,
+          }),
+          precondition_json: commandPreconditionJson as unknown as Record<string, unknown>,
+          precondition_fingerprint: commandPreconditionFingerprint,
+          actor_scope: actorScope,
+          claim_token: claimToken,
+          locked_until: this.lockedUntil(claimedAt),
+          now: claimedAt,
+        });
+      } catch (error) {
+        if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
+          throw new ConflictException({
+            code: 'generated_payload_idempotency_drift',
+            message: 'Generated payload differs for the same idempotency key.',
+          });
+        }
+        throw error;
+      }
       const replayed = this.replayedPlanDraftResult(claim.result_json);
       const replayable = this.replayableCommandResultOrThrow(claim, replayed);
       if (replayable !== undefined) {
@@ -477,7 +575,14 @@ export class AutomationCommandService {
       }
 
       try {
-        const result = await this.writePlanDraftForApprovedSpec(repository, workItemId, specRevisionId, precondition);
+        const result = await this.writePlanDraftForApprovedSpec(repository, {
+          workItemId,
+          specRevisionId,
+          precondition,
+          generated,
+          generationArtifacts: sanitizedGenerationArtifacts,
+          generatedPayloadDigest: planPayloadDigest,
+        });
         await repository.completeCommandIdempotency({
           idempotency_key: idempotencyKey,
           claim_token: claimToken,
@@ -1046,20 +1151,25 @@ export class AutomationCommandService {
 
   private async writePlanDraftForApprovedSpec(
     repository: DeliveryRepository,
-    workItemId: string,
-    specRevisionId: string,
-    precondition: AutomationPrecondition,
+    input: {
+      workItemId: string;
+      specRevisionId: string;
+      precondition: AutomationPrecondition;
+      generated: EnsurePlanDraftCommandDto['generated_plan_draft'];
+      generationArtifacts: ArtifactRef[];
+      generatedPayloadDigest: string;
+    },
   ): Promise<EnsurePlanDraftResult> {
     const settings = await repository.resolveAutomationProjectSettings({
-      project_id: precondition.project_id,
-      ...(precondition.repo_id === undefined ? {} : { repo_id: precondition.repo_id }),
+      project_id: input.precondition.project_id,
+      ...(input.precondition.repo_id === undefined ? {} : { repo_id: input.precondition.repo_id }),
     });
-    assertAutomationPreconditionStillCurrent(settings, precondition);
+    assertAutomationPreconditionStillCurrent(settings, input.precondition);
     assertCommandCapabilityStillEnabled(settings, 'canGeneratePlanDraft');
-    await this.assertRepoScopeCurrent(repository, precondition.project_id, precondition.repo_id);
+    await this.assertRepoScopeCurrent(repository, input.precondition.project_id, input.precondition.repo_id);
 
-    const workItem = this.requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
-    if (workItem.project_id !== precondition.project_id) {
+    const workItem = this.requireFound(await repository.getWorkItem(input.workItemId), `WorkItem ${input.workItemId}`);
+    if (workItem.project_id !== input.precondition.project_id) {
       throw new ConflictException('WorkItem project does not match automation precondition');
     }
     if (isWorkItemAutomationTerminal(workItem)) {
@@ -1073,15 +1183,24 @@ export class AutomationCommandService {
     }
 
     const spec = this.requireFound(await repository.getSpec(workItem.current_spec_id), `Spec ${workItem.current_spec_id}`);
+    if (spec.approved_revision_id === undefined) {
+      throw new ConflictException('Spec approved revision is missing for this WorkItem');
+    }
+    if (spec.current_revision_id !== spec.approved_revision_id) {
+      throw new ConflictException('Spec current revision is no longer the approved revision for this WorkItem');
+    }
+    if (input.specRevisionId !== spec.approved_revision_id) {
+      throw new ConflictException('Requested Spec revision is no longer the approved revision for this WorkItem');
+    }
     if (
       spec.work_item_id !== workItem.id ||
       spec.status !== 'approved' ||
       spec.resolution !== 'approved' ||
-      spec.current_revision_id !== specRevisionId
+      spec.current_revision_id !== input.specRevisionId
     ) {
       throw new ConflictException('Spec revision is no longer the current approved revision for this WorkItem');
     }
-    const specRevision = this.requireFound(await repository.getSpecRevision(specRevisionId), `SpecRevision ${specRevisionId}`);
+    const specRevision = this.requireFound(await repository.getSpecRevision(input.specRevisionId), `SpecRevision ${input.specRevisionId}`);
     if (specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
       throw new ConflictException('SpecRevision does not belong to the WorkItem current spec');
     }
@@ -1145,17 +1264,17 @@ export class AutomationCommandService {
       work_item_id: workItem.id,
       based_on_spec_revision_id: specRevision.id,
       revision_number: (await repository.listPlanRevisions(drafting.id)).length + 1,
-      summary: `Draft plan for ${workItem.title}`,
-      content: `Implement the approved spec revision ${specRevision.id} with a bounded package and required checks.`,
-      implementation_summary: `Deliver ${workItem.title} through the delivery control plane.`,
-      split_strategy: 'Create one repo-bound execution package for the approved plan.',
-      dependency_order: ['api-package'],
-      test_matrix: ['pnpm test tests/api'],
-      risk_mitigations: specRevision.risk_notes.length === 0 ? ['Keep package scope narrow.'] : specRevision.risk_notes,
-      rollback_notes: 'Revert the execution package changes.',
-      structured_document: { generated_by: 'automation_plan_draft_command', spec_revision_id: specRevision.id },
-      author_actor_id: precondition.daemon_identity ?? 'automation-plan-drafter',
-      artifact_refs: [],
+      summary: input.generated.summary,
+      content: input.generated.content,
+      implementation_summary: input.generated.implementation_summary,
+      split_strategy: input.generated.split_strategy,
+      dependency_order: input.generated.dependency_order,
+      test_matrix: input.generated.test_matrix,
+      risk_mitigations: input.generated.risk_mitigations,
+      rollback_notes: input.generated.rollback_notes,
+      ...(input.generated.structured_document === undefined ? {} : { structured_document: input.generated.structured_document }),
+      author_actor_id: input.precondition.daemon_identity ?? 'automation-plan-drafter',
+      artifact_refs: input.generationArtifacts,
       created_at: this.now(),
     };
     await repository.savePlanRevision(revision);
@@ -1169,7 +1288,12 @@ export class AutomationCommandService {
       spec_revision_id: specRevision.id,
     });
 
-    return { plan_id: updated.id, plan_revision_id: revision.id, status: 'created' };
+    return {
+      plan_id: updated.id,
+      plan_revision_id: revision.id,
+      status: 'created',
+      generated_payload_digest: input.generatedPayloadDigest,
+    };
   }
 
   private replayedSpecDraftResult(result: Record<string, unknown> | undefined): EnsureSpecDraftResult | undefined {

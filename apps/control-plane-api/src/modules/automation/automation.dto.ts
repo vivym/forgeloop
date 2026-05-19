@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { generatedPlanDraftSchema } from '@forgeloop/codex-runtime';
 import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
@@ -232,6 +233,8 @@ export const ensurePlanDraftCommandSchema = z
   .object({
     ...internalCommandBaseShape,
     spec_revision_id: nonBlankString,
+    generated_plan_draft: generatedPlanDraftSchema,
+    generation_artifacts: z.array(artifactRefSchema).default([]),
   })
   .strict();
 

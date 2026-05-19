@@ -1,4 +1,10 @@
 import type { AutomationPrecondition, AutomationPreconditionCapability, AutomationScope } from '@forgeloop/domain';
+import {
+  planDraftOutputSchemaVersion,
+  planDraftPromptVersion,
+  validateGeneratedPlanDraft,
+  type CodexGenerationRuntime,
+} from '@forgeloop/codex-runtime';
 
 import { AutomationHttpError } from './http-client.js';
 import {
@@ -21,6 +27,7 @@ export interface ExecuteClaimedActionInput {
   daemonIdentity?: string;
   leaseMs?: number;
   specDraftGenerator?: SpecDraftGenerator;
+  generationRuntime?: CodexGenerationRuntime;
 }
 
 export interface ExecuteActionRunInput {
@@ -29,6 +36,7 @@ export interface ExecuteActionRunInput {
   actorId: string;
   daemonIdentity?: string;
   specDraftGenerator?: SpecDraftGenerator;
+  generationRuntime?: CodexGenerationRuntime;
 }
 
 const projectAndRepoFromScope = (automationScope: AutomationScope): { projectId: string; repoId?: string } => {
@@ -188,7 +196,12 @@ const errorCode = (error: unknown): string | undefined => {
   if (error instanceof AutomationHttpError) {
     return error.code;
   }
-  if (error instanceof Error && (error.message === 'generation_disabled' || error.message === 'generated_spec_draft_invalid')) {
+  if (
+    error instanceof Error &&
+    (error.message === 'generation_disabled' ||
+      error.message === 'generated_spec_draft_invalid' ||
+      error.message === 'generated_plan_draft_invalid')
+  ) {
     return error.message;
   }
   return undefined;
@@ -200,9 +213,10 @@ const isRetryableTransportError = (error: unknown): boolean =>
 const isStalePrecondition = (code: string | undefined): boolean =>
   code === 'automation_precondition_stale' || code === 'stale_execution_package_revision';
 
-const isBlockedByGate = (code: string | undefined): boolean =>
+const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'generation_disabled' ||
   code === 'generated_spec_draft_invalid' ||
+  (code === 'generated_plan_draft_invalid' && error instanceof AutomationHttpError && error.status < 500) ||
   code === 'manual_path_hold_active' ||
   code === 'automation_hold_active' ||
   code === 'automation_gate_pending' ||
@@ -222,7 +236,7 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
     };
   }
   const code = errorCode(error);
-  if (code === 'generation_disabled' || code === 'generated_spec_draft_invalid') {
+  if (code === 'generation_disabled' || code === 'generated_spec_draft_invalid' || code === 'generated_plan_draft_invalid') {
     return { status: 422, code };
   }
   return { code: 'transport_error' };
@@ -252,7 +266,7 @@ const completeProjection = async (
 const executeCommand = async (
   client: AutomationExecutorClient,
   action: AutomationActionRunRecord,
-  input: Pick<ExecuteActionRunInput, 'actorId' | 'daemonIdentity' | 'specDraftGenerator'>,
+  input: Pick<ExecuteActionRunInput, 'actorId' | 'daemonIdentity' | 'specDraftGenerator' | 'generationRuntime'>,
 ): Promise<void> => {
   const precondition = preconditionFor(action);
   if (action.actionType === 'ensure_spec_draft') {
@@ -288,12 +302,51 @@ const executeCommand = async (
 
   if (action.actionType === 'ensure_plan_draft') {
     const actionInput = parseEnsurePlanDraftInput(action);
+    const runtime = input.generationRuntime;
+    if (runtime === undefined) {
+      throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Plan draft generation is disabled');
+    }
+    const context = await client.planDraftGenerationContext(actionInput.workItemId, {
+      specRevisionId: actionInput.specRevisionId,
+      actionRunId: action.id,
+      claimToken: action.claimToken ?? '',
+    });
+    let generated;
+    try {
+      generated = await runtime.generatePlanDraft({
+        actionRunId: action.id,
+        projectId: context.work_item.project_id,
+        repoIds: context.repos.map((repo) => repo.repo_id),
+        context: context as unknown as Record<string, unknown>,
+        promptVersion: planDraftPromptVersion,
+        outputSchemaVersion: planDraftOutputSchemaVersion,
+        policyDigests: Object.fromEntries(
+          context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
+        ),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'generated_plan_draft_invalid') {
+        throw new AutomationHttpError(502, { code: 'generated_plan_draft_invalid' }, 'Generated Plan draft is invalid');
+      }
+      throw error;
+    }
+    let generatedPlanDraft;
+    try {
+      generatedPlanDraft = validateGeneratedPlanDraft(generated.generated);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'generated_plan_draft_invalid') {
+        throw new AutomationHttpError(422, { code: 'generated_plan_draft_invalid' }, 'Generated Plan draft is invalid');
+      }
+      throw error;
+    }
     await client.ensurePlanDraft(actionInput.workItemId, {
       action_run_id: action.id,
       ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
       idempotency_key: action.idempotencyKey,
       automation_precondition: precondition,
       spec_revision_id: actionInput.specRevisionId,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: generated.generationArtifacts,
     });
     return;
   }
@@ -374,7 +427,7 @@ const markCommandError = async (
     };
   }
 
-  if (isBlockedByGate(code)) {
+  if (isBlockedByGate(code, error)) {
     await client.blockAction(action.id, {
       claim_token: action.claimToken ?? '',
       idempotency_key: action.idempotencyKey,
@@ -440,6 +493,7 @@ export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Pr
     actorId: input.actorId,
     ...(input.daemonIdentity === undefined ? {} : { daemonIdentity: input.daemonIdentity }),
     ...(input.specDraftGenerator === undefined ? {} : { specDraftGenerator: input.specDraftGenerator }),
+    ...(input.generationRuntime === undefined ? {} : { generationRuntime: input.generationRuntime }),
   });
 };
 

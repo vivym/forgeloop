@@ -1,4 +1,5 @@
 import type { ArtifactRef } from '@forgeloop/contracts';
+import type { GeneratedPlanDraftV1 } from '@forgeloop/codex-runtime';
 import type { AutomationActorClass, AutomationActionRunStatus, AutomationPrecondition, AutomationScope } from '@forgeloop/domain';
 
 export type AutomationActionType =
@@ -358,6 +359,8 @@ export interface EnsurePlanDraftCommandInput {
   idempotency_key: string;
   automation_precondition: AutomationPrecondition;
   spec_revision_id: string;
+  generated_plan_draft: GeneratedPlanDraftV1;
+  generation_artifacts: ArtifactRef[];
 }
 
 export interface EnsureSpecDraftCommandInput {

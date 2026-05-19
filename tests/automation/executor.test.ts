@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import { automationPreconditionFingerprint, type AutomationPrecondition } from '../../packages/domain/src/index';
 import {
+  type CodexGenerationRuntime,
+  type GeneratedPlanDraftV1,
+} from '@forgeloop/codex-runtime';
+import {
   AutomationHttpError,
   createFakeSpecDraftGenerator,
   executeActionRun,
@@ -120,6 +124,7 @@ class FakeAutomationClient implements AutomationExecutorClient {
   createOrReplayResponse?: AutomationActionResponse;
   commandError?: AutomationHttpError;
   contextError?: AutomationHttpError;
+  planContext?: Awaited<ReturnType<FakeAutomationClient['planDraftGenerationContext']>>;
 
   async createOrReplayAction(action: NextAction) {
     this.calls.push({ method: 'createOrReplayAction', args: [action] });
@@ -186,7 +191,7 @@ class FakeAutomationClient implements AutomationExecutorClient {
     if (this.contextError !== undefined) {
       throw this.contextError;
     }
-    return {
+    return this.planContext ?? {
       context_version: 'generation_context.plan.v1' as const,
       action_run_id: input.actionRunId,
       work_item: {
@@ -243,6 +248,83 @@ class FakeAutomationClient implements AutomationExecutorClient {
   }
 }
 
+const validPlanGenerationContext = (): Awaited<ReturnType<FakeAutomationClient['planDraftGenerationContext']>> => ({
+  context_version: 'generation_context.plan.v1',
+  action_run_id: 'action-run-1',
+  work_item: {
+    id: 'work-item-1',
+    project_id: 'project-1',
+    title: 'Draft generated plan',
+    goal: 'Create a deterministic plan draft',
+    success_criteria: ['Plan draft command is submitted'],
+    risk: 'low',
+    priority: 'P1',
+    kind: 'requirement',
+  },
+  spec_revision: {
+    id: 'spec-revision-1',
+    spec_id: 'spec-1',
+    summary: 'Approved spec',
+    content: 'Approved spec body',
+    background: 'Existing tests cover executor wiring',
+    goals: ['Generate a plan draft'],
+    scope_in: ['Plan draft generation'],
+    scope_out: ['Executor behavior change'],
+    acceptance_criteria: ['Plan context is available'],
+    risk_notes: [],
+    test_strategy_summary: 'Executor unit tests',
+    structured_document: { sections: ['approved-spec'] },
+  },
+  repos: [
+    {
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      default_branch: 'main',
+      policy_status: 'loaded',
+      policy_digest: 'sha256:workflow-policy-digest',
+      parser_version: 'workflow-md-parser:v1',
+    },
+  ],
+});
+
+const validGeneratedPlanDraft = (overrides: Partial<GeneratedPlanDraftV1> = {}): GeneratedPlanDraftV1 => ({
+  schema_version: 'plan_draft.v1',
+  summary: 'Generated plan summary',
+  content: 'Generated plan body',
+  implementation_summary: 'Implement the approved spec through command boundaries.',
+  split_strategy: 'Create one API package and one test package.',
+  dependency_order: ['api', 'tests'],
+  test_matrix: ['pnpm test tests/api', 'pnpm test tests/automation'],
+  risk_mitigations: ['Keep the command boundary narrow.'],
+  rollback_notes: 'Revert the generated plan draft.',
+  structured_document: { generated_by: 'test' },
+  ...overrides,
+});
+
+const fakeGenerationRuntimeReturning = (
+  result: Awaited<ReturnType<CodexGenerationRuntime['generatePlanDraft']>>,
+): CodexGenerationRuntime => ({
+  async generateSpecDraft() {
+    throw new Error('unexpected_spec_generation');
+  },
+  async generatePlanDraft() {
+    return result;
+  },
+  async generatePackageDrafts() {
+    throw new Error('unexpected_package_generation');
+  },
+});
+
+const defaultPlanGenerationRuntime = (): CodexGenerationRuntime =>
+  fakeGenerationRuntimeReturning({
+    taskKind: 'plan_draft',
+    promptVersion: 'plan-draft.fake.v1',
+    outputSchemaVersion: 'plan_draft.v1',
+    generated: validGeneratedPlanDraft(),
+    generationArtifacts: [],
+    publicSummary: 'Plan generated.',
+  });
+
 describe('spec draft generation fixtures', () => {
   it('creates schema-versioned fake Spec drafts from public WorkItem context', async () => {
     const result = await createFakeSpecDraftGenerator().generateSpecDraft(specDraftContext());
@@ -265,6 +347,7 @@ const execute = (client: FakeAutomationClient, action: NextAction = baseAction()
     action,
     claimToken: 'claim-token-1',
     actorId: 'daemon-actor',
+    generationRuntime: defaultPlanGenerationRuntime(),
   });
 
 describe('automation executor', () => {
@@ -329,6 +412,48 @@ describe('automation executor', () => {
     expect(automationPreconditionFingerprint(commandInput?.automation_precondition as AutomationPrecondition)).toBe(
       expectedPreconditionFingerprint,
     );
+  });
+
+  it('generates and sends a Plan draft payload before ensurePlanDraft', async () => {
+    const client = new FakeAutomationClient();
+    client.planContext = validPlanGenerationContext();
+    const runtime = fakeGenerationRuntimeReturning({
+      taskKind: 'plan_draft',
+      promptVersion: 'plan-draft.fake.v1',
+      outputSchemaVersion: 'plan_draft.v1',
+      generated: validGeneratedPlanDraft({ summary: 'Generated summary' }),
+      generationArtifacts: [
+        {
+          kind: 'logs',
+          name: 'plan-generation.json',
+          content_type: 'application/json',
+          storage_uri: 'artifact://plan-generation.json',
+          digest: 'sha256:plan',
+        },
+      ],
+      publicSummary: 'Plan generated.',
+    });
+
+    await executeActionRun({
+      client,
+      action: claimedAction(),
+      actorId: 'actor-automation',
+      daemonIdentity: 'daemon-main',
+      generationRuntime: runtime,
+    });
+
+    expect(client.calls.find((call) => call.method === 'ensurePlanDraft')?.args[1]).toMatchObject({
+      generated_plan_draft: { summary: 'Generated summary' },
+      generation_artifacts: [
+        {
+          kind: 'logs',
+          name: 'plan-generation.json',
+          content_type: 'application/json',
+          storage_uri: 'artifact://plan-generation.json',
+          digest: 'sha256:plan',
+        },
+      ],
+    });
   });
 
   it('treats replayed succeeded actions as complete without claiming or re-entering commands', async () => {
