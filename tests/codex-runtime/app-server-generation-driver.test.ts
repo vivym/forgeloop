@@ -442,6 +442,45 @@ describe('AppServerGenerationDriver', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('does not send interrupt when cleanup lease consumption fails', async () => {
+    const close = vi.fn(async () => {});
+    const safety: CodexGenerationRuntimeSafety = {
+      ...fakeSafety(),
+      async consumeGenerationCommand(input) {
+        if (input.method === 'turn/interrupt') {
+          throw new Error('resource_governor_lease_invalid');
+        }
+      },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') {
+        return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+      }
+      if (method === 'turn/start') {
+        return { turnId: 'turn-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+      }
+      return { acknowledged: true };
+    });
+    const driver = new AppServerGenerationDriver({
+      transport: {
+        request,
+        notifications: async function* () {
+          await new Promise(() => undefined);
+        },
+        close,
+      },
+      runtimeSafety: safety,
+    });
+
+    await expect(
+      withTestTimeout(
+        driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1', timeoutMs: 5 }),
+      ),
+    ).rejects.toThrow(/codex_generation_timeout/);
+    expect(request).not.toHaveBeenCalledWith('turn/interrupt', expect.anything());
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('allows explicit cancellation while collecting notifications', async () => {
     const close = vi.fn(async () => {});
     const request = vi.fn(async (method: string) => {

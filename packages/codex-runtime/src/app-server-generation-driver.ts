@@ -425,16 +425,18 @@ export class AppServerGenerationDriver {
     if (options.interrupt && session?.threadId !== undefined && session.turnId !== undefined) {
       const nonce = this.options.nonceFactory ?? (() => randomUUID());
       const now = this.options.now ?? (() => new Date().toISOString());
-      await session.safety
-        .consumeGenerationCommand({
+      try {
+        await session.safety.consumeGenerationCommand({
           lease: session.lease,
           method: 'turn/interrupt',
           commandDigest: digest({ reason, threadId: session.threadId, turnId: session.turnId }),
           nonce: nonce(),
           now: now(),
-        })
-        .catch(() => undefined);
-      await this.options.transport.request('turn/interrupt', { threadId: session.threadId, turnId: session.turnId }).catch(() => undefined);
+        });
+        await this.options.transport.request('turn/interrupt', { threadId: session.threadId, turnId: session.turnId });
+      } catch {
+        // Transport cleanup must still happen, but no app-server command is sent after lease validation fails.
+      }
     }
     await this.options.transport.close?.().catch(() => undefined);
   }
