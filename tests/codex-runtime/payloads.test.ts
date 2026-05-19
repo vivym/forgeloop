@@ -173,6 +173,12 @@ describe('GeneratedPlanDraftV1', () => {
     'Request approval after checks pass',
     'Send for approval after checks pass',
     'No deploy work is included and perform a staging deployment after tests pass',
+    'Deployments to staging after tests pass are required',
+    'Releases to production after validation are required',
+    'Merges to main after checks pass are required',
+    'Pushes to main after checks pass are required',
+    'Promote to production after validation',
+    'Promotion to production after validation is required',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {

@@ -30,21 +30,28 @@ const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|L
 const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
   /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
+const planActionAliases = {
+  approval: ['approve', 'approval'],
+  deploy: ['deploy', 'deploying', 'deployment', 'deployments'],
+  enqueue: ['enqueue'],
+  merge: ['merge', 'merges'],
+  promote: ['promote', 'promoting', 'promotion', 'promotions'],
+  push: ['push', 'pushes'],
+  release: ['release', 'releases', 'releasing'],
+  submit: ['submit'],
+} as const;
+const planActionFamilyPatterns = Object.fromEntries(
+  Object.entries(planActionAliases).map(([family, aliases]) => [family, `(?:${aliases.join('|')})`]),
+) as { [K in keyof typeof planActionAliases]: string };
+const planActionAnyFamilyPattern = Object.values(planActionFamilyPatterns).join('|');
 const gatedPlanActionPattern =
-  /(?:\b(?:approve|approval|submit|merge|push|release|releasing|deploy|deploying|deployment)\b|\b(?:request|send)\s+(?:for\s+)?approval\b|\b(?:perform|run)\b[\s\S]{0,40}\bdeployment\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/gi;
+  new RegExp(
+    `(?:\\b(?:${planActionAnyFamilyPattern})\\b|\\b(?:request|send)\\s+(?:for\\s+)?approval\\b|\\b(?:perform|run)\\b[\\s\\S]{0,40}\\b(?:deployment|deployments)\\b|\\benqueue\\s+(?:the\\s+)?(?:package\\s+)?run\\b)`,
+    'gi',
+  );
 const planActionContextWindow = 80;
 const planActionClauseBoundaries = ['.', '!', '?', ';', ',', '\n'] as const;
 const planActionScopeBoundaryPattern = /\b(?:and|while|with)\b/gi;
-const planActionFamilyPatterns = {
-  approval: '(?:approve|approval)',
-  deploy: '(?:deploy|deploying|deployment)',
-  enqueue: 'enqueue',
-  merge: 'merge',
-  push: 'push',
-  release: '(?:release|releasing)',
-  submit: 'submit',
-} as const;
-const planActionAnyFamilyPattern = Object.values(planActionFamilyPatterns).join('|');
 
 const hasUnsafeUnixLocalPath = (value: string): boolean =>
   Array.from(value.matchAll(unixLocalPathPattern)).some((match) => {
@@ -74,25 +81,11 @@ type PlanActionFamily = keyof typeof planActionFamilyPatterns;
 
 const planActionFamily = (action: string): PlanActionFamily => {
   const normalized = action.toLowerCase();
-  if (/\b(?:approve|approval)\b/.test(normalized)) {
-    return 'approval';
-  }
-  if (/\b(?:deploy|deploying|deployment)\b/.test(normalized)) {
-    return 'deploy';
-  }
-  if (/\benqueue\b/.test(normalized)) {
-    return 'enqueue';
-  }
-  if (/\bmerge\b/.test(normalized)) {
-    return 'merge';
-  }
-  if (/\bpush\b/.test(normalized)) {
-    return 'push';
-  }
-  if (/\b(?:release|releasing)\b/.test(normalized)) {
-    return 'release';
-  }
-  return 'submit';
+  return (
+    (Object.entries(planActionAliases).find(([, aliases]) =>
+      aliases.some((alias) => new RegExp(`\\b${alias}\\b`).test(normalized)),
+    )?.[0] as PlanActionFamily | undefined) ?? 'submit'
+  );
 };
 
 const isPlanActionSafelyScopedOut = (clause: string, action: string, actionIndex: number): boolean => {
