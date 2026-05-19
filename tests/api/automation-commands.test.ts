@@ -844,6 +844,21 @@ const seedClaimedPlanDraftAction = async (
   };
 };
 
+const seedApprovedSpecAndClaimedPlanAction = async (
+  app: INestApplication,
+  repository: DeliveryRepository,
+  overrides: { approvedRevisionId?: string } = {},
+): Promise<ClaimedPlanDraftActionContext> => {
+  const ctx = await seedClaimedPlanDraftAction(app, repository);
+  if ('approvedRevisionId' in overrides) {
+    await repository.saveSpec({
+      ...ctx.spec,
+      approved_revision_id: overrides.approvedRevisionId,
+    });
+  }
+  return ctx;
+};
+
 const seedClaimedPackageDraftAction = async (
   app: INestApplication,
   repository: DeliveryRepository,
@@ -1442,6 +1457,38 @@ describe('automation command boundaries', () => {
         expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
         expect(JSON.stringify(body)).not.toContain('repo-2');
       });
+  });
+
+  it('returns Plan generation context for an active claimed ensure_plan_draft action', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          context_version: 'generation_context.plan.v1',
+          action_run_id: ctx.actionId,
+          work_item: { id: ctx.workItem.id },
+          spec_revision: { id: ctx.specRevisionId },
+        });
+        expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
+      });
+  });
+
+  it('rejects Plan generation context when Spec approved_revision_id is missing or stale', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, { approvedRevisionId: undefined });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    ).expect(409);
   });
 
   it('rejects Spec draft generation context when the claim token is wrong', async () => {

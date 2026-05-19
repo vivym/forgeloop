@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { artifactRefSchema } from '@forgeloop/contracts';
+import type { ArtifactRef } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
   RuntimeSnapshotBlockerRow,
@@ -296,6 +297,14 @@ export const generationContextQuerySchema = z
   })
   .strict();
 
+export const planGenerationContextQuerySchema = z
+  .object({
+    spec_revision_id: nonBlankString,
+    action_run_id: nonBlankString,
+    claim_token: nonBlankString,
+  })
+  .strict();
+
 export type CreateAutomationActionRunDto = z.infer<typeof createAutomationActionRunSchema>;
 export type ClaimNextAutomationActionRunDto = z.infer<typeof claimNextAutomationActionRunSchema>;
 export type CompleteAutomationActionRunDto = z.infer<typeof completeAutomationActionRunSchema>;
@@ -307,6 +316,7 @@ export type EnsurePlanDraftCommandDto = z.infer<typeof ensurePlanDraftCommandSch
 export type EnsureSpecDraftCommandDto = z.infer<typeof ensureSpecDraftCommandSchema>;
 export type EnsurePackageDraftsCommandDto = z.infer<typeof ensurePackageDraftsCommandSchema>;
 export type GenerationContextQueryDto = z.infer<typeof generationContextQuerySchema>;
+export type PlanGenerationContextQueryDto = z.infer<typeof planGenerationContextQuerySchema>;
 export type RequestManualPathCommandDto = z.infer<typeof requestManualPathCommandSchema>;
 
 export interface AutomationGenerationRepoContextV1 {
@@ -334,6 +344,36 @@ export interface AutomationGenerationWorkItemContextV1 {
     kind?: string;
   };
   repos: AutomationGenerationRepoContextV1[];
+}
+
+export interface AutomationGenerationPlanContextV1 {
+  context_version: 'generation_context.plan.v1';
+  action_run_id: string;
+  work_item: {
+    id: string;
+    project_id: string;
+    title: string;
+    goal: string;
+    success_criteria: string[];
+    risk?: string;
+    priority?: string;
+    kind?: string;
+  };
+  spec_revision: {
+    id: string;
+    spec_id: string;
+    work_item_id: string;
+    summary: string;
+    content: string;
+    background: string;
+    goals: string[];
+    scope_in: string[];
+    scope_out: string[];
+    acceptance_criteria: string[];
+    risk_notes: string[];
+    test_strategy_summary: string;
+    artifact_refs: ArtifactRef[];
+  };
 }
 
 export interface AutomationRuntimeSnapshotDto {

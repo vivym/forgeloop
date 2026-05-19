@@ -9,6 +9,7 @@ import type {
   CompleteActionInput,
   FailActionInput,
   GatePendingActionInput,
+  AutomationGenerationPlanContextV1,
   AutomationGenerationWorkItemContextV1,
   EnsurePlanDraftCommandInput,
   EnsurePackageDraftsCommandInput,
@@ -308,6 +309,21 @@ export class AutomationHttpClient {
       'GET',
       `/internal/automation/generation-context/work-items/${workItemId}/spec-draft?${query.toString()}`,
     ) as Promise<AutomationGenerationWorkItemContextV1>;
+  }
+
+  async planDraftGenerationContext(
+    workItemId: string,
+    input: { specRevisionId: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPlanContextV1> {
+    const query = new URLSearchParams({
+      spec_revision_id: input.specRevisionId,
+      action_run_id: input.actionRunId,
+      claim_token: input.claimToken,
+    });
+    return this.request(
+      'GET',
+      `/internal/automation/generation-context/work-items/${workItemId}/plan-draft?${query.toString()}`,
+    ) as Promise<AutomationGenerationPlanContextV1>;
   }
 
   async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {

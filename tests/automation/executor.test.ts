@@ -178,6 +178,45 @@ class FakeAutomationClient implements AutomationExecutorClient {
     return specDraftContext();
   }
 
+  async planDraftGenerationContext(
+    workItemId: string,
+    input: { specRevisionId: string; actionRunId: string; claimToken: string },
+  ) {
+    this.calls.push({ method: 'planDraftGenerationContext', args: [workItemId, input] });
+    if (this.contextError !== undefined) {
+      throw this.contextError;
+    }
+    return {
+      context_version: 'generation_context.plan.v1' as const,
+      action_run_id: input.actionRunId,
+      work_item: {
+        id: workItemId,
+        project_id: 'project-1',
+        title: 'Draft generated spec',
+        goal: 'Create a deterministic spec draft',
+        success_criteria: ['Spec draft command is submitted'],
+        risk: 'low',
+        priority: 'P1',
+        kind: 'requirement',
+      },
+      spec_revision: {
+        id: input.specRevisionId,
+        spec_id: 'spec-1',
+        work_item_id: workItemId,
+        summary: 'Approved spec',
+        content: 'Approved spec body',
+        background: 'Existing tests cover executor wiring',
+        goals: ['Generate a plan draft'],
+        scope_in: ['Plan draft generation'],
+        scope_out: ['Executor behavior change'],
+        acceptance_criteria: ['Plan context is available'],
+        risk_notes: [],
+        test_strategy_summary: 'Executor unit tests',
+        artifact_refs: [],
+      },
+    };
+  }
+
   async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {
     this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
     if (this.commandError !== undefined) {

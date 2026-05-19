@@ -119,6 +119,36 @@ export interface AutomationGenerationWorkItemContextV1 {
   repos: AutomationGenerationRepoContextV1[];
 }
 
+export interface AutomationGenerationPlanContextV1 {
+  context_version: 'generation_context.plan.v1';
+  action_run_id: string;
+  work_item: {
+    id: string;
+    project_id: string;
+    title: string;
+    goal: string;
+    success_criteria: string[];
+    risk?: string;
+    priority?: string;
+    kind?: string;
+  };
+  spec_revision: {
+    id: string;
+    spec_id: string;
+    work_item_id: string;
+    summary: string;
+    content: string;
+    background: string;
+    goals: string[];
+    scope_in: string[];
+    scope_out: string[];
+    acceptance_criteria: string[];
+    risk_notes: string[];
+    test_strategy_summary: string;
+    artifact_refs: ArtifactRef[];
+  };
+}
+
 export interface RuntimePolicyProjection extends StablePolicyObservationIdentity {
   observedAt?: string;
   lastKnownGood?: StablePolicyObservationIdentity;
@@ -374,6 +404,10 @@ export interface AutomationExecutorClient {
     workItemId: string,
     input: { actionRunId: string; claimToken: string },
   ): Promise<AutomationGenerationWorkItemContextV1>;
+  planDraftGenerationContext(
+    workItemId: string,
+    input: { specRevisionId: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPlanContextV1>;
   ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown>;
   ensurePlanDraft(workItemId: string, input: EnsurePlanDraftCommandInput): Promise<unknown>;
   ensurePackageDrafts(planRevisionId: string, input: EnsurePackageDraftsCommandInput): Promise<unknown>;
