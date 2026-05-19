@@ -122,26 +122,39 @@ describe('AppServerGenerationDriver', () => {
   });
 
   it('rejects unsafe turn/start effective config after safe thread/start response', async () => {
-    const transport: CodexAppServerTransport = {
-      async request(method) {
-        if (method === 'thread/start') {
-          return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
-        }
-        if (method === 'turn/start') {
-          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'dangerFullAccess' } } };
-        }
-        return {};
+    const consumedMethods: string[] = [];
+    const safety: CodexGenerationRuntimeSafety = {
+      ...fakeSafety(),
+      async consumeGenerationCommand(input) {
+        consumedMethods.push(input.method);
       },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') {
+        return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+      }
+      if (method === 'turn/start') {
+        return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'dangerFullAccess' } } };
+      }
+      if (method === 'turn/interrupt') {
+        return { acknowledged: true };
+      }
+      return {};
+    });
+    const transport: CodexAppServerTransport = {
+      request,
       notifications: async function* () {
         yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
         yield { type: 'turn_completed', status: 'completed' };
       },
     };
-    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: safety });
 
     await expect(
       driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
     ).rejects.toThrow(/codex_generation_sandbox_invalid/);
+    expect(consumedMethods).toEqual(['thread/start', 'turn/start', 'turn/interrupt']);
+    expect(request).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thread-1', turnId: 'turn-1' });
   });
 
   it('reads effective config from top-level and nested app-server responses', () => {
@@ -169,6 +182,7 @@ describe('AppServerGenerationDriver', () => {
   });
 
   it('collects assistant output from notifications and validates one JSON object', async () => {
+    const close = vi.fn(async () => {});
     async function* notifications() {
       yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
       yield { type: 'turn_completed', status: 'completed' };
@@ -184,12 +198,14 @@ describe('AppServerGenerationDriver', () => {
         return {};
       },
       notifications,
+      close,
     };
     const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
 
     const result = await driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' });
 
     expect(result.extractedJson).toMatchObject({ schema_version: 'plan_draft.v1' });
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('rejects terminal success with no assistant output', async () => {
@@ -281,6 +297,64 @@ describe('AppServerGenerationDriver', () => {
       ),
     ).rejects.toThrow(/codex_generation_timeout/);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('times out lease creation and closes the initialized transport', async () => {
+    const close = vi.fn(async () => {});
+    const safety: CodexGenerationRuntimeSafety = {
+      ...fakeSafety(),
+      async createGenerationLease() {
+        await new Promise(() => undefined);
+        return { lease_id: 'unreachable', expires_at: '2026-05-19T00:10:00.000Z' };
+      },
+    };
+    const driver = new AppServerGenerationDriver({
+      transport: {
+        async initialize() {},
+        async request() {
+          return {};
+        },
+        close,
+      },
+      runtimeSafety: safety,
+    });
+
+    await expect(
+      withTestTimeout(
+        driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1', timeoutMs: 5 }),
+      ),
+    ).rejects.toThrow(/codex_generation_timeout/);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects concurrent generation on the same session driver', async () => {
+    const driver = new AppServerGenerationDriver({
+      transport: {
+        async request(method) {
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          await new Promise(() => undefined);
+        },
+        async close() {},
+      },
+      runtimeSafety: fakeSafety(),
+    });
+
+    const firstGeneration = driver.generate({
+      taskKind: 'plan_draft',
+      prompt: '{}',
+      outputSchemaVersion: 'plan_draft.v1',
+      timeoutMs: 100,
+    });
+    await delay(5);
+    await expect(
+      driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1', timeoutMs: 5 }),
+    ).rejects.toThrow(/codex_generation_concurrency_limit_exceeded/);
+    await expect(firstGeneration).rejects.toThrow(/codex_generation_timeout/);
   });
 
   it('interrupts a known turn before closing on timeout', async () => {

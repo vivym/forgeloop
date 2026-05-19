@@ -197,6 +197,7 @@ interface ActiveGenerationSession {
 
 export class AppServerGenerationDriver {
   #activeSession: ActiveGenerationSession | undefined;
+  #generationActive = false;
   #cleanupDone = false;
   #cancelRequested = false;
   #resolveCancel: (() => void) | undefined;
@@ -217,37 +218,45 @@ export class AppServerGenerationDriver {
   async cancel(): Promise<void> {
     this.#cancelRequested = true;
     this.#resolveCancel?.();
-    await this.#cleanupActiveSession('codex_generation_cancelled');
+    await this.#cleanupActiveSession('codex_generation_cancelled', { interrupt: true });
   }
 
   async generate(input: AppServerGenerateInput): Promise<AppServerGenerateOutput> {
-    const safety = this.options.runtimeSafety;
-    if (safety === undefined) {
-      throw new Error('codex_generation_safety_unavailable');
+    if (this.#generationActive) {
+      throw new Error('codex_generation_concurrency_limit_exceeded');
     }
-    if (safety.taskKind !== input.taskKind) {
-      throw new Error('codex_generation_safety_unavailable');
-    }
-
+    this.#generationActive = true;
     const now = this.options.now ?? (() => new Date().toISOString());
     const nonce = this.options.nonceFactory ?? (() => randomUUID());
     const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
     const deadline = Date.now() + timeoutMs;
     this.#cleanupDone = false;
     this.#resetCancelState(input.signal);
-    await this.#withDeadline(this.options.transport.initialize?.() ?? Promise.resolve(), deadline);
-    const startTime = now();
-    const lease = await safety.createGenerationLease({
-      promptDigest: digest(input.prompt),
-      contextDigest: input.contextDigest ?? digest({}),
-      outputSchemaVersion: input.outputSchemaVersion,
-      now: startTime,
-      expiresAt: new Date(Date.parse(startTime) + timeoutMs).toISOString(),
-    });
-    this.#activeSession = { safety, lease };
 
     try {
-      await this.#consume(safety, lease, 'thread/start', input.prompt, nonce(), now());
+      const safety = this.options.runtimeSafety;
+      if (safety === undefined) {
+        throw new Error('codex_generation_safety_unavailable');
+      }
+      if (safety.taskKind !== input.taskKind) {
+        throw new Error('codex_generation_safety_unavailable');
+      }
+
+      await this.#withDeadline(this.options.transport.initialize?.() ?? Promise.resolve(), deadline);
+      const startTime = now();
+      const lease = await this.#withDeadline(
+        safety.createGenerationLease({
+          promptDigest: digest(input.prompt),
+          contextDigest: input.contextDigest ?? digest({}),
+          outputSchemaVersion: input.outputSchemaVersion,
+          now: startTime,
+          expiresAt: new Date(Date.parse(startTime) + timeoutMs).toISOString(),
+        }),
+        deadline,
+      );
+      this.#activeSession = { safety, lease };
+
+      await this.#consume(safety, lease, 'thread/start', input.prompt, nonce(), now(), deadline);
       const threadResponse = await this.#withDeadline(
         this.options.transport.request('thread/start', {
           approvalPolicy: 'never',
@@ -263,7 +272,7 @@ export class AppServerGenerationDriver {
       }
       this.#activeSession.threadId = threadId;
 
-      await this.#consume(safety, lease, 'turn/start', input.prompt, nonce(), now());
+      await this.#consume(safety, lease, 'turn/start', input.prompt, nonce(), now(), deadline);
       const turnResponse = await this.#withDeadline(
         this.options.transport.request('turn/start', {
           threadId,
@@ -273,13 +282,13 @@ export class AppServerGenerationDriver {
         }),
         deadline,
       );
-      const turnEffectiveConfig = effectiveConfigFromResponse(turnResponse);
-      if (turnEffectiveConfig !== undefined) {
-        assertSafeEffectiveConfig(turnEffectiveConfig, safety);
-      }
       const turnId = extractTurnId(turnResponse);
       if (turnId !== undefined) {
         this.#activeSession.turnId = turnId;
+      }
+      const turnEffectiveConfig = effectiveConfigFromResponse(turnResponse);
+      if (turnEffectiveConfig !== undefined) {
+        assertSafeEffectiveConfig(turnEffectiveConfig, safety);
       }
 
       const assistantText = await this.#withDeadline(
@@ -292,16 +301,17 @@ export class AppServerGenerationDriver {
         }),
         deadline,
       );
-      this.#activeSession = undefined;
-      this.#cleanupDone = true;
+      await this.#cleanupActiveSession('codex_generation_completed', { interrupt: false });
       return {
         assistantText,
         extractedJson: extractSingleJsonObject(assistantText),
         rawArtifactRefs: [],
       };
     } catch (error) {
-      await this.#cleanupActiveSession(error instanceof Error ? error.message : 'codex_generation_failed');
+      await this.#cleanupActiveSession(error instanceof Error ? error.message : 'codex_generation_failed', { interrupt: true });
       throw error;
+    } finally {
+      this.#generationActive = false;
     }
   }
 
@@ -312,8 +322,9 @@ export class AppServerGenerationDriver {
     command: unknown,
     nonce: string,
     now: string,
+    deadline: number,
   ): Promise<void> {
-    await safety.consumeGenerationCommand({ lease, method, commandDigest: digest(command), nonce, now });
+    await this.#withDeadline(safety.consumeGenerationCommand({ lease, method, commandDigest: digest(command), nonce, now }), deadline);
   }
 
   async #collectAssistantText(limits: Required<AppServerGenerationLimits>): Promise<string> {
@@ -396,14 +407,14 @@ export class AppServerGenerationDriver {
     }
   }
 
-  async #cleanupActiveSession(reason: string): Promise<void> {
+  async #cleanupActiveSession(reason: string, options: { interrupt: boolean }): Promise<void> {
     if (this.#cleanupDone) {
       return;
     }
     this.#cleanupDone = true;
     const session = this.#activeSession;
     this.#activeSession = undefined;
-    if (session?.threadId !== undefined && session.turnId !== undefined) {
+    if (options.interrupt && session?.threadId !== undefined && session.turnId !== undefined) {
       const nonce = this.options.nonceFactory ?? (() => randomUUID());
       const now = this.options.now ?? (() => new Date().toISOString());
       await session.safety
