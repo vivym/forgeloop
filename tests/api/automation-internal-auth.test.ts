@@ -46,6 +46,14 @@ describe('internal automation actor auth', () => {
     await request(app.getHttpServer()).post('/internal/automation/work-items/work-item-auth/ensure-spec-draft').send({}).expect(401);
   });
 
+  it('rejects unsigned Spec draft generation context requests', async () => {
+    const { app } = await bootAutomationApp();
+
+    await request(app.getHttpServer())
+      .get('/internal/automation/generation-context/work-items/work-item-auth/spec-draft?action_run_id=action-auth&claim_token=claim-auth')
+      .expect(401);
+  });
+
   it('rejects signed non-daemon actors', async () => {
     const { app } = await bootAutomationApp();
     const timestamp = new Date().toISOString();
@@ -163,6 +171,25 @@ describe('internal automation actor auth', () => {
       .set('Content-Type', 'application/json')
       .send(rawBody)
       .expect(409);
+  });
+
+  it('authenticates signed Spec draft generation context requests before claim validation', async () => {
+    const { app } = await bootAutomationApp();
+    const pathAndQuery =
+      '/internal/automation/generation-context/work-items/work-item-auth/spec-draft?action_run_id=action-auth&claim_token=claim-auth';
+    const timestamp = new Date().toISOString();
+    const headers = signAutomationRequest({
+      method: 'GET',
+      pathAndQuery,
+      rawBody: Buffer.alloc(0),
+      actorId: 'daemon-actor',
+      actorClass: 'automation_daemon',
+      daemonIdentity: 'daemon-1',
+      timestamp,
+      secret: 'test-secret',
+    });
+
+    await request(app.getHttpServer()).get(pathAndQuery).set(headers).expect(409);
   });
 
   it('rejects an altered query string', async () => {

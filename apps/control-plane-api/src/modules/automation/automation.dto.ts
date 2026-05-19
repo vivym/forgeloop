@@ -306,6 +306,33 @@ export type EnsurePackageDraftsCommandDto = z.infer<typeof ensurePackageDraftsCo
 export type GenerationContextQueryDto = z.infer<typeof generationContextQuerySchema>;
 export type RequestManualPathCommandDto = z.infer<typeof requestManualPathCommandSchema>;
 
+export interface AutomationGenerationRepoContextV1 {
+  project_id: string;
+  repo_id: string;
+  default_branch: string;
+  policy_status: 'missing' | 'loaded' | 'parse_failed' | 'unsafe_path';
+  policy_digest?: string;
+  parser_version?: string;
+  package_manager?: string;
+  workspace_summary?: string;
+}
+
+export interface AutomationGenerationWorkItemContextV1 {
+  context_version: 'generation_context.work_item.v1';
+  action_run_id: string;
+  work_item: {
+    id: string;
+    project_id: string;
+    title: string;
+    goal: string;
+    success_criteria: string[];
+    risk?: string;
+    priority?: string;
+    kind?: string;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+}
+
 export interface AutomationRuntimeSnapshotDto {
   generated_at: string;
   projects: AutomationRuntimeSnapshotProjectDto[];

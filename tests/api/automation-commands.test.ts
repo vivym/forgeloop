@@ -1360,6 +1360,93 @@ describe('automation command boundaries', () => {
     expect(workItemAfter?.current_spec_id).toBeUndefined();
   });
 
+  it('serves signed Spec draft generation context for a claimed action without exposing the claim token', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+    const project = await repository.getProject(ctx.project.id);
+    expect(project).toBeDefined();
+    await seedProjectRepo(repository, project!, { repo_id: 'repo-2', name: 'secondary-repo' });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          context_version: 'generation_context.work_item.v1',
+          action_run_id: ctx.actionId,
+          work_item: {
+            id: ctx.workItem.id,
+            project_id: ctx.workItem.project_id,
+            title: ctx.workItem.title,
+            goal: ctx.workItem.goal,
+            success_criteria: ctx.workItem.success_criteria,
+            risk: ctx.workItem.risk,
+            priority: ctx.workItem.priority,
+            kind: ctx.workItem.kind,
+          },
+          repos: [
+            expect.objectContaining({
+              project_id: ctx.workItem.project_id,
+              repo_id: 'repo-1',
+              default_branch: 'main',
+              policy_status: 'missing',
+            }),
+          ],
+        });
+        expect(body.repos).toHaveLength(1);
+        expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
+        expect(JSON.stringify(body)).not.toContain('repo-2');
+      });
+  });
+
+  it('rejects Spec draft generation context when the claim token is wrong', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=wrong-claim-token`,
+    )
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'automation_action_claim_conflict' });
+      });
+  });
+
+  it('rejects Spec draft generation context for non-Spec actions', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedPlanDraftAction(app, repository);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'automation_action_claim_conflict' });
+      });
+  });
+
+  it('rejects Spec draft generation context when the requested WorkItem does not match the claim', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/work-item-other/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'automation_action_claim_conflict' });
+      });
+  });
+
   it.each([
     {
       name: 'missing claim token',
