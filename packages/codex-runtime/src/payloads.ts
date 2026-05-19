@@ -31,14 +31,14 @@ const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
   /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const planActionAliases = {
-  approval: ['approve', 'approval'],
-  deploy: ['deploy', 'deploying', 'deployment', 'deployments'],
-  enqueue: ['enqueue'],
-  merge: ['merge', 'merges'],
-  promote: ['promote', 'promoting', 'promotion', 'promotions'],
-  push: ['push', 'pushes'],
-  release: ['release', 'releases', 'releasing'],
-  submit: ['submit'],
+  approval: ['approve', 'approves', 'approving', 'approval', 'approvals'],
+  deploy: ['deploy', 'deploys', 'deployed', 'deploying', 'deployment', 'deployments'],
+  enqueue: ['enqueue', 'enqueues', 'enqueued', 'enqueuing'],
+  merge: ['merge', 'merges', 'merged', 'merging'],
+  promote: ['promote', 'promotes', 'promoted', 'promoting', 'promotion', 'promotions'],
+  push: ['push', 'pushes', 'pushed', 'pushing'],
+  release: ['release', 'releases', 'released', 'releasing'],
+  submit: ['submit', 'submits', 'submitted', 'submitting', 'submission', 'submissions'],
 } as const;
 const planActionFamilyPatterns = Object.fromEntries(
   Object.entries(planActionAliases).map(([family, aliases]) => [family, `(?:${aliases.join('|')})`]),
