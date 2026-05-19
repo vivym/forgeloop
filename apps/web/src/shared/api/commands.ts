@@ -2,6 +2,7 @@ import { createApiContext, type ForgeloopApiOptions } from './common';
 import type {
   ActorCommandBody,
   AcknowledgeReleaseTestAcceptanceBody,
+  ApproveArtifactBody,
   ApproveReleaseBody,
   CreateExecutionPackageBody,
   CreateReleaseBody,
@@ -24,6 +25,7 @@ import type {
   ReleaseControlResponse,
   ReleaseListResponse,
   ReleaseResourceResponse,
+  RequestArtifactChangesBody,
   RequestReleaseChangesBody,
   ReviewDecisionBody,
   ReviewPacket,
@@ -37,6 +39,7 @@ import type {
   SpecPlan,
   SpecRevision,
   StartReleaseObservingBody,
+  SubmitForApprovalBody,
   UnlinkReleaseScopeBody,
   WorkItem,
 } from './types';
@@ -200,19 +203,19 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     createSpecRevision: (specId: string, body: CreateSpecRevisionBody) =>
       request<SpecRevision>(`/specs/${encodeURIComponent(specId)}/revisions`, { method: 'POST', body }),
     generateSpecDraft: (specId: string) => request<SpecRevision>(`/specs/${encodeURIComponent(specId)}/generate-draft`, { method: 'POST' }),
-    submitSpecForApproval: (specId: string, body: ActorCommandBody) =>
+    submitSpecForApproval: (specId: string, body: SubmitForApprovalBody) =>
       request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/submit-for-approval`, {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    approveSpec: (specId: string, body: ActorCommandBody) =>
+    approveSpec: (specId: string, body: ApproveArtifactBody) =>
       request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/approve`, {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    requestSpecChanges: (specId: string, body: ActorCommandBody) =>
+    requestSpecChanges: (specId: string, body: RequestArtifactChangesBody) =>
       request<SpecPlan>(`/specs/${encodeURIComponent(specId)}/request-changes`, {
         method: 'POST',
         body,
@@ -226,19 +229,19 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     createPlanRevision: (planId: string, body: CreatePlanRevisionBody) =>
       request<PlanRevision>(`/plans/${encodeURIComponent(planId)}/revisions`, { method: 'POST', body }),
     generatePlanDraft: (planId: string) => request<PlanRevision>(`/plans/${encodeURIComponent(planId)}/generate-draft`, { method: 'POST' }),
-    submitPlanForApproval: (planId: string, body: ActorCommandBody) =>
+    submitPlanForApproval: (planId: string, body: SubmitForApprovalBody) =>
       request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/submit-for-approval`, {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    approvePlan: (planId: string, body: ActorCommandBody) =>
+    approvePlan: (planId: string, body: ApproveArtifactBody) =>
       request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/approve`, {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    requestPlanChanges: (planId: string, body: ActorCommandBody) =>
+    requestPlanChanges: (planId: string, body: RequestArtifactChangesBody) =>
       request<SpecPlan>(`/plans/${encodeURIComponent(planId)}/request-changes`, {
         method: 'POST',
         body,

@@ -7,6 +7,7 @@ import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from '.
 import type {
   CockpitResponse,
   AcknowledgeReleaseTestAcceptanceBody,
+  ApproveArtifactBody,
   ApproveReleaseBody,
   CloseReleaseBody,
   CreateReleaseBody,
@@ -20,6 +21,7 @@ import type {
   PatchExecutionPackageBody,
   PlanRevision,
   ReleaseCommandBody,
+  RequestArtifactChangesBody,
   RequestReleaseChangesBody,
   ReviewDecisionBody,
   RoleWorkbenchId,
@@ -27,6 +29,7 @@ import type {
   SpecPlan,
   SpecRevision,
   StartReleaseObservingBody,
+  SubmitForApprovalBody,
   UnlinkReleaseScopeBody,
 } from './types';
 
@@ -574,12 +577,90 @@ export function useGeneratePlanDraftMutation(input: { workItemId: string | undef
   });
 }
 
+export function useSubmitSpecForApprovalMutation(input: { specId: string; workItemId?: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: SubmitForApprovalBody) => createCommandApi().submitSpecForApproval(input.specId, body),
+    onSuccess: () => invalidateSpecLifecycleResources(queryClient, input.specId, input.workItemId),
+  });
+}
+
+export function useApproveSpecMutation(input: { specId: string; workItemId?: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveSpec(input.specId, body),
+    onSuccess: () => invalidateSpecLifecycleResources(queryClient, input.specId, input.workItemId),
+  });
+}
+
+export function useRequestSpecChangesMutation(input: { specId: string; workItemId?: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().requestSpecChanges(input.specId, body),
+    onSuccess: () => invalidateSpecLifecycleResources(queryClient, input.specId, input.workItemId),
+  });
+}
+
+export function useSubmitPlanForApprovalMutation(input: { planId: string; workItemId?: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: SubmitForApprovalBody) => createCommandApi().submitPlanForApproval(input.planId, body),
+    onSuccess: () => invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
+  });
+}
+
+export function useApprovePlanMutation(input: { planId: string; workItemId?: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approvePlan(input.planId, body),
+    onSuccess: (plan) =>
+      Promise.all([
+        invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
+        plan.approved_revision_id === undefined ? Promise.resolve() : invalidatePackages(queryClient),
+      ]),
+  });
+}
+
+export function useRequestPlanChangesMutation(input: { planId: string; workItemId?: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().requestPlanChanges(input.planId, body),
+    onSuccess: () => invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
+  });
+}
+
 function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string | undefined) {
   if (workItemId === undefined) {
     return Promise.resolve();
   }
 
   return queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
+}
+
+function invalidateSpecLifecycleResources(queryClient: QueryClient, specId: string, workItemId: string | undefined) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.spec(specId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(specId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.specReplay(specId) }),
+    queryClient.invalidateQueries({ queryKey: ['specs'] }),
+    invalidateWorkItemCockpit(queryClient, workItemId),
+  ]);
+}
+
+function invalidatePlanLifecycleResources(queryClient: QueryClient, planId: string, workItemId: string | undefined) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan(planId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(planId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.planReplay(planId) }),
+    queryClient.invalidateQueries({ queryKey: ['plans'] }),
+    invalidateWorkItemCockpit(queryClient, workItemId),
+  ]);
 }
 
 function invalidatePackageDetail(queryClient: QueryClient, packageId: string) {

@@ -132,6 +132,9 @@ export interface SpecPlan {
   gate_state: string;
   resolution: string;
   current_revision_id?: string;
+  approved_revision_id?: string;
+  approved_at?: string;
+  approved_by_actor_id?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -405,6 +408,16 @@ export type PatchExecutionPackageBody = Partial<Omit<CreateExecutionPackageBody,
 
 export interface ActorCommandBody {
   actor_id?: string;
+}
+
+export type SubmitForApprovalBody = ActorCommandBody;
+
+export interface ApproveArtifactBody extends ActorCommandBody {
+  rationale?: string;
+}
+
+export interface RequestArtifactChangesBody extends ActorCommandBody {
+  rationale: string;
 }
 
 export interface MarkPackageReadyBody extends ActorCommandBody {
