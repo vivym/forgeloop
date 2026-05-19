@@ -2242,6 +2242,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     actionRun: AutomationActionRun,
     input: ClaimNextAutomationActionRunInput,
   ): boolean {
+    if (input.action_type !== undefined && actionRun.action_type !== input.action_type) {
+      return false;
+    }
     if (input.automation_scope !== undefined && actionRun.automation_scope !== input.automation_scope) {
       return false;
     }
@@ -2273,6 +2276,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   private automationActionClaimFilterPredicate(input: ClaimNextAutomationActionRunInput) {
     const predicates = [];
+    if (input.action_type !== undefined) {
+      predicates.push(eq(automation_action_runs.actionType, input.action_type));
+    }
     if (input.automation_scope !== undefined) {
       predicates.push(eq(automation_action_runs.automationScope, input.automation_scope));
     }

@@ -286,6 +286,7 @@ export interface ClaimNextActionInput {
   claimToken: string;
   leaseMs?: number;
   limit?: number;
+  actionType?: AutomationActionType;
   projectId?: string;
   repoId?: string;
   automationScope?: AutomationScope | string;

@@ -139,6 +139,9 @@ export const claimNextAutomationActionRunSchema = z
     claim_token: nonBlankString,
     lease_ms: z.number().int().positive().max(60 * 60 * 1000).optional(),
     limit: z.number().int().min(1).max(100).default(1),
+    action_type: z
+      .enum(['ensure_spec_draft', 'ensure_plan_draft', 'ensure_package_drafts', 'request_manual_path', 'project_runtime_snapshot'])
+      .optional(),
     project_id: nonBlankString.optional(),
     repo_id: nonBlankString.optional(),
     automation_scope: automationScopeSchema.optional(),

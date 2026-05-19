@@ -240,6 +240,7 @@ export interface ClaimNextAutomationActionRunInput {
   claim_token: string;
   locked_until: string;
   limit: number;
+  action_type?: AutomationActionRun['action_type'];
   project_id?: string;
   repo_id?: string;
   automation_scope?: AutomationScope;

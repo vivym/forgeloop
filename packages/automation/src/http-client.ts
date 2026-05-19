@@ -275,6 +275,7 @@ export class AutomationHttpClient {
         claim_token: input.claimToken,
         ...(input.leaseMs === undefined ? {} : { lease_ms: input.leaseMs }),
         limit: input.limit ?? 1,
+        ...(input.actionType === undefined ? {} : { action_type: input.actionType }),
         ...(input.projectId === undefined ? {} : { project_id: input.projectId }),
         ...(input.repoId === undefined ? {} : { repo_id: input.repoId }),
         ...(input.automationScope === undefined ? {} : { automation_scope: input.automationScope }),

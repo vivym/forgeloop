@@ -132,15 +132,25 @@ export class AutomationDaemon {
     const generationPlanning =
       this.options.generationPlanning ?? legacyGenerationPlanningFor(this.options.specDraftGenerationMode);
     const actions = planNextActions(snapshot, { generation: generationPlanning });
-    for (const action of actions) {
+    const actionsToCreate =
+      generationPlanning.mode === 'app_server' && actions.some((action) => action.actionType === 'project_runtime_snapshot')
+        ? actions.filter((action) => action.actionType === 'project_runtime_snapshot')
+        : actions;
+    for (const action of actionsToCreate) {
       await this.options.client.createOrReplayAction(action);
     }
 
     const claimToken = this.nextClaimToken();
-    const claim = await this.options.client.claimNextAction({ claimToken, limit: 1 });
+    const claim = await this.options.client.claimNextAction({
+      claimToken,
+      limit: 1,
+      ...(actionsToCreate.length > 0 && actionsToCreate.every((action) => action.actionType === 'project_runtime_snapshot')
+        ? { actionType: 'project_runtime_snapshot' as const }
+        : {}),
+    });
     if (claim.action === null) {
       return {
-        plannedActionCount: actions.length,
+        plannedActionCount: actionsToCreate.length,
         backoffMs: this.options.noClaimBackoffMs,
         executed: {
           actionRunId: claimToken,
@@ -152,7 +162,7 @@ export class AutomationDaemon {
     }
 
     return {
-      plannedActionCount: actions.length,
+      plannedActionCount: actionsToCreate.length,
       executed: await executeActionRun({
         client: this.options.client,
         action: claim.action,

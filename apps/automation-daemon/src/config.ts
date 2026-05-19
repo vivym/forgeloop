@@ -16,6 +16,7 @@ export interface AutomationDaemonConfig {
   policyParserVersion: string;
   codexAutomationGeneration: AutomationGenerationPlanningConfig['mode'];
   generationPlanning: AutomationGenerationPlanningConfig;
+  generationPlanningExplicit: boolean;
   appServerEndpoint?: string;
   generationArtifactRoot?: string;
   generationTurnTimeoutMs?: number;
@@ -147,6 +148,13 @@ const generationPlanningEnv = (env: EnvLike): AutomationGenerationPlanningConfig
   };
 };
 
+const generationPlanningExplicitEnv = (env: EnvLike): boolean =>
+  env.FORGELOOP_CODEX_AUTOMATION_GENERATION !== undefined ||
+  env.FORGELOOP_CODEX_GENERATION_DRIVER !== undefined ||
+  env.FORGELOOP_CODEX_GENERATION_SPEC_DRAFT_ENABLED !== undefined ||
+  env.FORGELOOP_CODEX_GENERATION_PLAN_DRAFT_ENABLED !== undefined ||
+  env.FORGELOOP_CODEX_GENERATION_PACKAGE_DRAFTS_ENABLED !== undefined;
+
 const assertAppServerRuntimeConfig = (env: EnvLike, mode: AutomationGenerationPlanningConfig['mode']): void => {
   if (mode !== 'app_server') {
     return;
@@ -161,6 +169,7 @@ const assertAppServerRuntimeConfig = (env: EnvLike, mode: AutomationGenerationPl
 
 export const loadAutomationDaemonConfig = (env: EnvLike = process.env): AutomationDaemonConfig => {
   const generationPlanning = generationPlanningEnv(env);
+  const generationPlanningExplicit = generationPlanningExplicitEnv(env);
   assertAppServerRuntimeConfig(env, generationPlanning.mode);
   const appServerEndpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
   const generationArtifactRoot = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
@@ -190,6 +199,7 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     policyParserVersion: DEFAULT_WORKFLOW_POLICY_PARSER_VERSION,
     codexAutomationGeneration: generationPlanning.mode,
     generationPlanning,
+    generationPlanningExplicit,
     ...(appServerEndpoint === undefined ? {} : { appServerEndpoint }),
     ...(generationArtifactRoot === undefined ? {} : { generationArtifactRoot }),
     ...(generationTurnTimeoutMs === undefined ? {} : { generationTurnTimeoutMs }),
@@ -198,3 +208,7 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     ...(generationMaxConcurrency === undefined ? {} : { generationMaxConcurrency }),
   };
 };
+
+export const generationPlanningForDaemon = (
+  config: AutomationDaemonConfig,
+): AutomationGenerationPlanningConfig | undefined => (config.generationPlanningExplicit ? config.generationPlanning : undefined);

@@ -1784,6 +1784,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     actionRun: AutomationActionRun,
     input: ClaimNextAutomationActionRunInput,
   ): boolean {
+    if (input.action_type !== undefined && actionRun.action_type !== input.action_type) {
+      return false;
+    }
     if (input.automation_scope !== undefined && actionRun.automation_scope !== input.automation_scope) {
       return false;
     }

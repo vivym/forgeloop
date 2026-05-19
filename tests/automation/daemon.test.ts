@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
+import { generationPlanningForDaemon, loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
 import { createAutomationDaemonSpecDraftGenerator } from '../../apps/automation-daemon/src/generation-runtime';
 import {
@@ -94,6 +94,29 @@ const claimedSpecAction = (overrides: Partial<AutomationActionRunRecord> = {}): 
   capabilityFingerprint: 'capability-fingerprint-1',
   preconditionFingerprint: 'precondition-fingerprint-1',
   actionInputJson: { work_item_id: 'work-item-1' },
+  status: 'running',
+  attempt: 1,
+  claimToken: 'claim-token-1',
+  ...overrides,
+});
+
+const claimedProjectionAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
+  id: 'projection-action-run-1',
+  actionType: 'project_runtime_snapshot',
+  targetObjectType: 'repo',
+  targetObjectId: 'repo-1',
+  targetStatus: 'loaded',
+  idempotencyKey: 'projection-action-run-1-idempotency',
+  automationScope: repoScope,
+  automationSettingsVersion: 3,
+  capabilityFingerprint: 'capability-fingerprint-1',
+  preconditionFingerprint: 'projection-precondition-fingerprint-1',
+  actionInputJson: {
+    repo_id: 'repo-1',
+    policy_status: 'loaded',
+    policy_digest: 'workflow-digest-1',
+    parser_version: parserVersion,
+  },
   status: 'running',
   attempt: 1,
   claimToken: 'claim-token-1',
@@ -371,6 +394,94 @@ describe('automation daemon loop', () => {
     expect(
       client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
     ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
+  });
+
+  it('preserves legacy daemon plan and package planning for minimal environment config', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      workItemsRequiringPlan: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetRevisionId: 'spec-revision-1',
+          targetStatus: 'approved',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+      planRevisionsRequiringPackages: [packageTarget()],
+    });
+    client.actionToClaim = null;
+    const config = loadAutomationDaemonConfig(validEnv());
+    const generationPlanning = generationPlanningForDaemon(config);
+    const daemon = new AutomationDaemon({
+      ...daemonOptions(client),
+      ...(generationPlanning === undefined ? {} : { generationPlanning }),
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({ plannedActionCount: 3, executed: { status: 'skipped' } });
+    expect(
+      client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
+    ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
+  });
+
+  it('claims policy projection before app_server generation actions', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      repos: [
+        {
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+          automationSettingsVersion: 3,
+          capabilityFingerprint: 'capability-fingerprint-1',
+          daemonInternalLocalPath: '/workspace/repo-1',
+          policyProjection: {
+            automationScope: repoScope,
+            repoId: 'repo-1',
+            policyStatus: 'loaded',
+            policyDigest: 'workflow-digest-1',
+            parserVersion,
+          },
+        },
+      ],
+      workItemsRequiringSpec: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetStatus: 'triage',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+    });
+    client.actionToClaim = claimedProjectionAction();
+    const daemon = new AutomationDaemon({
+      ...daemonOptions(client),
+      generationPlanning: {
+        mode: 'app_server',
+        tasks: {
+          spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+          package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+        },
+      },
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({ plannedActionCount: 1, executed: { status: 'succeeded' } });
+    expect(
+      client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
+    ).toEqual(['project_runtime_snapshot']);
+    expect(client.calls.find((call) => call.method === 'claimNextAction')?.args[0]).toMatchObject({
+      actionType: 'project_runtime_snapshot',
+    });
+    expect(client.calls.map((call) => call.method)).not.toContain('specDraftGenerationContext');
   });
 
   it.each(['fake', 'disabled'] as const)(

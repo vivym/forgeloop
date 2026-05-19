@@ -22,6 +22,12 @@ describe('automation daemon generation config', () => {
     expect(config.generationPlanning.tasks.package_drafts.enabled).toBe(false);
   });
 
+  it('keeps generation planning implicit when no generation env is set', () => {
+    const config = loadAutomationDaemonConfig(baseEnv);
+
+    expect(config.generationPlanningExplicit).toBe(false);
+  });
+
   it('rejects app_server generation without a governed endpoint and artifact root', () => {
     expect(() =>
       loadAutomationDaemonConfig({
@@ -40,6 +46,7 @@ describe('automation daemon generation config', () => {
     });
 
     expect(config.generationPlanning.mode).toBe('app_server');
+    expect(config.generationPlanningExplicit).toBe(true);
     expect(config.appServerEndpoint).toBe('unix:/tmp/forgeloop-codex.sock');
     expect(config.generationArtifactRoot).toBe('/tmp/forgeloop-artifacts');
   });
