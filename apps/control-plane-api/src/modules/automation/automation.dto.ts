@@ -313,6 +313,14 @@ export const planGenerationContextQuerySchema = z
   })
   .strict();
 
+export const packageGenerationContextQuerySchema = z
+  .object({
+    generation_key: nonBlankString,
+    action_run_id: nonBlankString,
+    claim_token: nonBlankString,
+  })
+  .strict();
+
 export type CreateAutomationActionRunDto = z.infer<typeof createAutomationActionRunSchema>;
 export type ClaimNextAutomationActionRunDto = z.infer<typeof claimNextAutomationActionRunSchema>;
 export type CompleteAutomationActionRunDto = z.infer<typeof completeAutomationActionRunSchema>;
@@ -325,6 +333,7 @@ export type EnsureSpecDraftCommandDto = z.infer<typeof ensureSpecDraftCommandSch
 export type EnsurePackageDraftsCommandDto = z.infer<typeof ensurePackageDraftsCommandSchema>;
 export type GenerationContextQueryDto = z.infer<typeof generationContextQuerySchema>;
 export type PlanGenerationContextQueryDto = z.infer<typeof planGenerationContextQuerySchema>;
+export type PackageGenerationContextQueryDto = z.infer<typeof packageGenerationContextQuerySchema>;
 export type RequestManualPathCommandDto = z.infer<typeof requestManualPathCommandSchema>;
 
 export interface AutomationGenerationRepoContextV1 {
@@ -382,6 +391,34 @@ export interface AutomationGenerationPlanContextV1 {
     structured_document?: Record<string, unknown>;
   };
   repos: AutomationGenerationRepoContextV1[];
+}
+
+export interface AutomationGenerationPackageContextV1 {
+  context_version: 'generation_context.package.v1';
+  action_run_id: string;
+  generation_key: string;
+  work_item: AutomationGenerationPlanContextV1['work_item'];
+  spec_revision: AutomationGenerationPlanContextV1['spec_revision'];
+  plan_revision: {
+    id: string;
+    plan_id: string;
+    summary: string;
+    content: string;
+    implementation_summary: string;
+    split_strategy: string;
+    dependency_order: string[];
+    test_matrix: string[];
+    risk_mitigations: string[];
+    rollback_notes: string;
+    structured_document?: Record<string, unknown>;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+  package_policy: {
+    allowed_repo_ids: string[];
+    path_policy_summary: string;
+    required_check_policy_summary: string;
+    source_mutation_policy_default: 'path_policy_scoped' | 'no_source_changes';
+  };
 }
 
 export interface AutomationRuntimeSnapshotDto {

@@ -1699,6 +1699,72 @@ describe('automation command boundaries', () => {
     ).expect(409);
   });
 
+  it('returns Package generation context for an approved PlanRevision and active claim', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedPackageDraftAction(app, repository);
+    const generationKey = `default:${ctx.planRevisionId}`;
+    const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
+    expect(planRevision).toBeDefined();
+    await repository.savePlanRevision({
+      ...planRevision!,
+      structured_document: { sections: ['split', 'tests'] },
+    });
+    await seedCompletedPolicyProjectionAction(repository, ctx);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/plan-revisions/${ctx.planRevisionId}/package-drafts?generation_key=${generationKey}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          context_version: 'generation_context.package.v1',
+          action_run_id: ctx.actionId,
+          generation_key: generationKey,
+          work_item: { id: ctx.workItem.id },
+          spec_revision: { id: ctx.specRevisionId, spec_id: ctx.spec.id },
+          plan_revision: {
+            id: ctx.planRevisionId,
+            plan_id: ctx.plan.id,
+            summary: 'Approved automation command plan',
+            dependency_order: [],
+            test_matrix: ['pnpm vitest run tests/api/automation-commands.test.ts'],
+            structured_document: { sections: ['split', 'tests'] },
+          },
+          repos: [
+            expect.objectContaining({
+              project_id: ctx.workItem.project_id,
+              repo_id: 'repo-1',
+              default_branch: 'main',
+              policy_status: 'loaded',
+              policy_digest: 'sha256:workflow-policy-digest',
+              parser_version: 'workflow-md-parser:v1',
+            }),
+          ],
+        });
+        expect(body.plan_revision).not.toHaveProperty('work_item_id');
+        expect(body.plan_revision).not.toHaveProperty('artifact_refs');
+        expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
+      });
+  });
+
+  it('rejects Package generation context when Plan approved_revision_id is stale', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedPackageDraftAction(app, repository);
+    const generationKey = `default:${ctx.planRevisionId}`;
+    await repository.savePlan({
+      ...ctx.plan,
+      approved_revision_id: 'plan-revision-stale',
+    });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/plan-revisions/${ctx.planRevisionId}/package-drafts?generation_key=${generationKey}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    ).expect(409);
+  });
+
   it('rejects Spec draft generation context when the claim token is wrong', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
