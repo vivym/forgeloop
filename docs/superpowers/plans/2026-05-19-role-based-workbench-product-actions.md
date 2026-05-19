@@ -138,7 +138,7 @@
 - Modify: `tests/web/no-legacy-web-ui.test.ts`
   - Expand guard coverage for the deleted names and product-facing routes listed below.
 - Modify: `tests/naming/delivery-naming.test.ts`
-  - If needed, exclude historical docs and this migration spec while enforcing active code/test naming cleanup.
+  - If needed, exclude historical docs while enforcing active code/test naming cleanup. Do not blanket-exclude the current implementation plan; allow deleted vocabulary only inside the Explicit Deletion Checklist section.
 
 ## Explicit Deletion Checklist
 
@@ -150,6 +150,8 @@ All legacy names in this section are deletion targets only. Do not copy them int
 - Delete file: `apps/web/src/app/routes/workbench/index.tsx` only if replacing it with a redirect module at the same path would be less clear; otherwise rewrite it completely.
 - Delete endpoint family: `GET /query/workbenches/*`
 - Delete product route/query aliases: `/workbench/work-item-owner`, `?role=`
+  - Guard pattern for the deleted role query alias: `[?&]role=`
+  - Removed-endpoint smoke path for API tests: `GET /query/workbenches/spec-approver?project_id=p`
 - Delete product-facing lane ids: `intake`, `manager-health`, `work-item-owner`
   - The `intake` deletion target is scoped to previous Workbench ids, Product Lane ids, role mappings, query keys, endpoint paths, fixtures, and e2e mocks.
   - Do not reject legitimate Work Item intake domain language or `PipelineStageId = 'intake'`.
@@ -258,7 +260,8 @@ Also add negative tests for:
 - command action without `command`;
 - enabled action carrying `disabled_reason` or `blocked_reason`;
 - disabled action missing `disabled_reason`;
-- blocked action missing `blocked_reason`;
+- `blocked_reason` empty or whitespace-only when present;
+- disabled action carrying `blocked_reason` but missing `disabled_reason`;
 - manager lane command action;
 - target lane href that does not match `lane_id`;
 - external, protocol-relative, traversal, `/query/*`, and mutating endpoint hrefs;
@@ -601,6 +604,30 @@ await request(app.getHttpServer())
   .expect(400);
 
 await request(app.getHttpServer())
+  .get(`/query/product-lanes/unknown?project_id=${project.id}`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/product-lanes/bugs?project_id=${project.id}&kind=not-a-kind`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/product-lanes/execution-owner?project_id=${project.id}&actor_id=actor-a&owner_actor_id=actor-b`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/product-lanes/reviewer?project_id=${project.id}&actor_id=actor-a&reviewer_actor_id=actor-b`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/product-lanes/qa-test-owner?project_id=${project.id}&actor_id=actor-a&qa_owner_actor_id=actor-b`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/product-lanes/release-owner?project_id=${project.id}&actor_id=actor-a&release_owner_actor_id=actor-b`)
+  .expect(400);
+
+await request(app.getHttpServer())
   .get(`/query/work-items/${workItem.id}/actions?lane=`)
   .expect(400);
 
@@ -617,12 +644,7 @@ await request(app.getHttpServer())
   .expect(400);
 ```
 
-Add a removed endpoint test using the deleted endpoint family from the Explicit Deletion Checklist:
-
-```ts
-const deletedEndpoint = `/query/${'workbenches'}/spec-approver?project_id=p`;
-await request(app.getHttpServer()).get(deletedEndpoint).expect(404);
-```
+Add a removed endpoint test using the checklist-owned removed-endpoint smoke path from the Explicit Deletion Checklist. Do not add a compatibility controller route or fallback handler.
 
 - [ ] **Step 3.2: Run tests and verify they fail**
 
@@ -639,13 +661,34 @@ Expected: FAIL because the new endpoints/parser are missing and the removed rout
 In `product-lane-query-parser.ts`, implement:
 
 ```ts
+const productLaneWorkItemKindSchema = z.enum(['initiative', 'requirement', 'bug', 'tech_debt']);
+
+export function parseProductLaneIdOrThrowBadRequest(value: string): ProductLaneId {
+  const parsed = productLaneIdSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new BadRequestException('Invalid product lane id.');
+  }
+  return parsed.data;
+}
+
+export function parseWorkItemKindOrThrowBadRequest(value: string | undefined) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = productLaneWorkItemKindSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new BadRequestException('Invalid Work Item kind.');
+  }
+  return parsed.data;
+}
+
 export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): ParsedProductLaneFilters {
   assertKnownKeys(raw, productLaneQueryKeys);
   const projectId = requiredString(raw, 'project_id');
   const limit = parseLimit(optionalString(raw, 'limit')) ?? 50;
   const blocked = parseBoolean(optionalString(raw, 'blocked'), 'blocked');
   const stale = parseBoolean(optionalString(raw, 'stale'), 'stale');
-  return resolveLaneFilters(laneId, {
+  const resolved = resolveLaneFilters(laneId, {
     project_id: projectId,
     limit,
     blocked,
@@ -656,17 +699,21 @@ export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): Par
     qa_owner_actor_id: optionalString(raw, 'qa_owner_actor_id'),
     release_owner_actor_id: optionalString(raw, 'release_owner_actor_id'),
     cursor: optionalString(raw, 'cursor'),
-    kind: optionalString(raw, 'kind'),
+    kind: parseWorkItemKindOrThrowBadRequest(optionalString(raw, 'kind')),
     phase: optionalString(raw, 'phase'),
     status: optionalString(raw, 'status'),
     gate_state: optionalString(raw, 'gate_state'),
     resolution: optionalString(raw, 'resolution'),
     risk: optionalString(raw, 'risk'),
   });
+  if (resolved.conflicts.length > 0) {
+    throw new BadRequestException({ message: 'Conflicting product lane filters.', conflicts: resolved.conflicts });
+  }
+  return resolved;
 }
 ```
 
-All `optionalString` calls must reject arrays, duplicates, and empty trimmed values.
+All `optionalString` calls must reject arrays, duplicates, and empty trimmed values. `resolveLaneFilters(...).conflicts` must be converted to HTTP 400 in the parser, not passed through as a successful response.
 
 In the same file, implement a separate Work Item actions parser:
 
@@ -688,7 +735,7 @@ The shared `optionalString` helper must make `lane=`, repeated `lane`, and array
 In `query.service.ts`:
 
 - import `getProductLane` and `getWorkItemActions` from `@forgeloop/db`;
-- parse `laneId` with `productLaneIdSchema`;
+- parse route `laneId` with `parseProductLaneIdOrThrowBadRequest` before calling `parseProductLaneQuery`;
 - parse Product Lane query with `parseProductLaneQuery`;
 - parse Work Item actions query with `parseWorkItemActionsQuery`;
 - pass `{ cockpit: { run_session_metadata_fallback: this.initialRuntimeMetadata() } }` into `getWorkItemActions`;
@@ -821,11 +868,14 @@ In `types.ts`, import and re-export the contract DTOs:
 ```ts
 export type {
   ProductAction,
+  ProductActionTarget,
   ProductCommand,
+  ProductCommandAction,
   ProductHref,
   ProductLaneId,
   ProductLaneItem,
   ProductLaneResponse,
+  ProductNavigateAction,
   WorkItemActionsResponse,
 } from '@forgeloop/contracts';
 
@@ -1129,6 +1179,7 @@ Expected: commit only if `pnpm -r build` is green. In the expected destructive m
 - Modify: `apps/web/src/app/routes/workbench/index.tsx`
 - Modify: `apps/web/src/app/routes.ts`
 - Modify: `tests/web/router-test-utils.tsx`
+- Modify: `tests/web/app-shell-routing.test.tsx`
 - Modify: `tests/web/workbench-product-route.test.tsx`
 
 - [ ] **Step 6.1: Write failing route tests**
@@ -1136,7 +1187,7 @@ Expected: commit only if `pnpm -r build` is green. In the expected destructive m
 In `tests/web/workbench-product-route.test.tsx`, assert:
 
 ```ts
-const screen = await renderRoute('/workbench?project_id=p1&kind=bug&role=old');
+const screen = await renderRoute('/workbench?project_id=p1&kind=bug&unsupported_view=old');
 expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
 expect(vi.mocked(fetch)).toHaveBeenCalledWith(
   'http://localhost:3000/query/product-lanes/requirements?project_id=p1',
@@ -1156,6 +1207,7 @@ Add tests for:
 - mobile layout does not render nested cards for actions.
 
 Also update `tests/web/router-test-utils.tsx` in this task so these tests can render canonical lane routes through the shared route stub.
+Update `tests/web/app-shell-routing.test.tsx` in the same task so the app shell expects `/workbench` to land on the Requirements lane, the route config includes `workbench/:laneId`, and old lane absence assertions are removed from this file. The no-legacy guard in Task 8 owns deleted-vocabulary assertions.
 
 - [ ] **Step 6.2: Run route tests and verify they fail**
 
@@ -1249,7 +1301,7 @@ Delete the directory listed in the Explicit Deletion Checklist after new route t
 Run:
 
 ```bash
-pnpm vitest run tests/web/workbench-product-route.test.tsx tests/web/api-hooks.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/web/workbench-product-route.test.tsx tests/web/app-shell-routing.test.tsx tests/web/api-hooks.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -1259,7 +1311,7 @@ Expected: PASS.
 Run:
 
 ```bash
-pnpm vitest run tests/contracts/product-actions.test.ts tests/api/product-lanes.test.ts tests/api/query-module.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/workbench-product-route.test.tsx tests/web/work-item-product-route.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/contracts/product-actions.test.ts tests/api/product-lanes.test.ts tests/api/query-module.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/workbench-product-route.test.tsx tests/web/app-shell-routing.test.tsx tests/web/work-item-product-route.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
 pnpm -r build
 ```
 
@@ -1275,7 +1327,7 @@ git add packages/db/src/queries/product-lane-types.ts packages/db/src/queries/pr
 git add apps/control-plane-api/src/modules/query/product-lane-query-parser.ts apps/control-plane-api/src/modules/query/query.service.ts apps/control-plane-api/src/modules/query/query.controller.ts
 git add apps/web/src/shared/api/types.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/query-keys.ts apps/web/src/shared/api/hooks.ts
 git add apps/web/src/features/product-actions apps/web/src/features/product-lanes apps/web/src/app/routes.ts apps/web/src/app/routes/workbench tests/web/router-test-utils.tsx
-git add tests/api/product-lanes.test.ts tests/api/query-module.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/workbench-product-route.test.tsx tests/web/work-item-product-route.test.tsx
+git add tests/api/product-lanes.test.ts tests/api/query-module.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/workbench-product-route.test.tsx tests/web/app-shell-routing.test.tsx tests/web/work-item-product-route.test.tsx
 git add -u packages/db/src/queries apps/web/src/features tests/api
 git commit -m "feat: replace workbench with product lanes"
 ```
@@ -1384,9 +1436,9 @@ Expand `tests/web/no-legacy-web-ui.test.ts` with a product workbench cleanup ass
 - `tests/web`;
 - `tests/e2e`.
 
-The assertion should fail on the deletion targets listed in the Explicit Deletion Checklist, except inside the guard test itself. Scope the `intake` check narrowly to previous Workbench product vocabulary: old lane ids, role mappings, query keys, endpoint paths, fixtures, and e2e mocks. Do not flag legitimate Work Item intake copy, domain model fields, or `PipelineStageId = 'intake'`.
+The assertion should fail on the deletion targets listed in the Explicit Deletion Checklist, except inside the guard test itself. It must use the checklist-owned guard pattern for the deleted role query alias so aliases cannot survive after another query param. Scope the `intake` check narrowly to previous Workbench product vocabulary: old lane ids, role mappings, query keys, endpoint paths, fixtures, and e2e mocks. Do not flag legitimate Work Item intake copy, domain model fields, or `PipelineStageId = 'intake'`.
 
-Add a naming test update that scans active product code and product tests while excluding historical specs/plans and this current migration spec/plan.
+Add a naming test update that scans active product code and product tests while excluding historical specs/plans. For the current implementation plan, the guard must strip or allow only the `## Explicit Deletion Checklist` section before scanning; all other current plan sections are subject to the same deleted-vocabulary cleanup as active product tests.
 
 - [ ] **Step 8.2: Run guards and verify they fail**
 
