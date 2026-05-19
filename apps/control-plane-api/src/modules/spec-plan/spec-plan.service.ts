@@ -31,8 +31,6 @@ import type {
 } from '../delivery/dto';
 import { WorkItemService } from '../work-items/work-item.service';
 
-const actorOrSystem = (actorId: string | undefined): string => actorId ?? 'system';
-
 const productGateRejectedActorClasses = new Set<AutomationActorClass>([
   'automation_daemon',
   'source_adapter',
@@ -148,14 +146,17 @@ export class SpecPlanService {
     const spec = await this.getSpec(specId);
     const currentRevisionId = this.requireCurrentRevision(spec);
     this.requireInReview(spec);
+    const approvedAt = this.now();
     const updated = {
-      ...(transitionSpecPlan(spec, { type: 'approve', at: this.now() }) as Spec),
+      ...(transitionSpecPlan(spec, { type: 'approve', at: approvedAt }) as Spec),
       approved_revision_id: currentRevisionId,
+      approved_at: approvedAt,
+      approved_by_actor_id: actorId,
     };
     await this.repository.saveSpec(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId);
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
-    await this.decision('spec', spec.id, actorOrSystem(actorId), 'approved', 'Spec approved.');
+    await this.decision('spec', spec.id, actorId, 'approved', dto.rationale ?? 'Spec approved.');
     return updated;
   }
 
@@ -167,12 +168,14 @@ export class SpecPlanService {
     await this.repository.saveSpec(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'request_spec_changes', actorId);
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
+    await this.decision('spec', spec.id, actorId, 'changes_requested', dto.rationale);
     return updated;
   }
 
   async createPlan(workItemId: string): Promise<Plan> {
     return this.repository.withObjectLock(`work-item:${workItemId}`, async (repository) => {
       const workItem = this.requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
+      await this.requireApprovedCurrentSpec(workItem, repository);
       const plan = transitionSpecPlan(undefined, {
         type: 'create',
         entity_type: 'plan',
@@ -267,14 +270,17 @@ export class SpecPlanService {
     const plan = await this.getPlan(planId);
     const currentRevisionId = this.requireCurrentRevision(plan);
     this.requireInReview(plan);
+    const approvedAt = this.now();
     const updated = {
-      ...(transitionSpecPlan(plan, { type: 'approve', at: this.now() }) as Plan),
+      ...(transitionSpecPlan(plan, { type: 'approve', at: approvedAt }) as Plan),
       approved_revision_id: currentRevisionId,
+      approved_at: approvedAt,
+      approved_by_actor_id: actorId,
     };
     await this.repository.savePlan(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId);
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
-    await this.decision('plan', plan.id, actorOrSystem(actorId), 'approved', 'Plan approved.');
+    await this.decision('plan', plan.id, actorId, 'approved', dto.rationale ?? 'Plan approved.');
     return updated;
   }
 
@@ -286,16 +292,23 @@ export class SpecPlanService {
     await this.repository.savePlan(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'request_plan_changes', actorId);
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
+    await this.decision('plan', plan.id, actorId, 'changes_requested', dto.rationale);
     return updated;
   }
 
-  private async requireApprovedCurrentSpec(workItem: WorkItem): Promise<Spec> {
+  private async requireApprovedCurrentSpec(workItem: WorkItem, repository: DeliveryRepository = this.repository): Promise<Spec> {
     if (workItem.current_spec_id === undefined) {
       throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
     }
-    const spec = await this.getSpec(workItem.current_spec_id);
-    if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id === undefined) {
-      throw new BadRequestException(`Spec ${spec.id} is not approved`);
+    const spec = this.requireFound(await repository.getSpec(workItem.current_spec_id), `Spec ${workItem.current_spec_id}`);
+    const approvedRevisionId = spec.approved_revision_id;
+    if (
+      spec.status !== 'approved' ||
+      spec.resolution !== 'approved' ||
+      approvedRevisionId === undefined ||
+      spec.current_revision_id !== approvedRevisionId
+    ) {
+      throw new BadRequestException(`Spec ${spec.id} does not have an approved current revision`);
     }
     return spec;
   }

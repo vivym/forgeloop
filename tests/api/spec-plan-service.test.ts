@@ -1,9 +1,11 @@
 import { INestApplication } from '@nestjs/common';
+import type { DeliveryRepository } from '@forgeloop/db';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 
 const actorOwner = 'actor-owner';
@@ -106,6 +108,7 @@ describe('SpecPlanService delivery API', () => {
     expect(app.get(SpecPlanService)).toBeInstanceOf(SpecPlanService);
 
     const server = app.getHttpServer();
+    const repo = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const { workItem } = await createProjectRepoWorkItem(app);
 
     const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
@@ -143,7 +146,18 @@ describe('SpecPlanService delivery API', () => {
       await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)
     ).body;
     expect(approvedPlan.approved_revision_id).toBe(planRevision.id);
+    expect(approvedPlan.approved_at).toEqual(expect.any(String));
+    expect(approvedPlan.approved_by_actor_id).toBe(actorReviewer);
     expect((await request(server).get(`/plans/${plan.id}`).expect(200)).body.approved_revision_id).toBe(planRevision.id);
+    expect(await repo.listDecisionsForObject('plan', plan.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actor_id: actorReviewer,
+          decision: 'approved',
+          summary: 'Plan approved.',
+        }),
+      ]),
+    );
 
     expect((await request(server).get(`/work-items/${workItem.id}`).expect(200)).body).toMatchObject({
       phase: 'execution',
@@ -288,5 +302,146 @@ describe('SpecPlanService delivery API', () => {
       phase: 'plan',
       gate_state: 'awaiting_plan_approval',
     });
+  });
+
+  it('approves specs with approval metadata and optional rationale decision', async () => {
+    const server = app.getHttpServer();
+    const repo = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const { workItem } = await createProjectRepoWorkItem(app);
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    const revision = (await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201)).body;
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+
+    const approved = (
+      await request(server)
+        .post(`/specs/${spec.id}/approve`)
+        .set(reviewerHeaders)
+        .send({ actor_id: actorReviewer, rationale: 'Ready for planning.' })
+        .expect(201)
+    ).body;
+
+    expect(approved).toMatchObject({
+      approved_revision_id: revision.id,
+      approved_by_actor_id: actorReviewer,
+    });
+    expect(approved.approved_at).toEqual(expect.any(String));
+    expect(await repo.listDecisionsForObject('spec', spec.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actor_id: actorReviewer,
+          decision: 'approved',
+          summary: 'Ready for planning.',
+        }),
+      ]),
+    );
+  });
+
+  it('records request-changes rationale for specs and plans', async () => {
+    const server = app.getHttpServer();
+    const repo = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const { workItem } = await createProjectRepoWorkItem(app);
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+
+    const changed = (
+      await request(server)
+        .post(`/specs/${spec.id}/request-changes`)
+        .set(reviewerHeaders)
+        .send({ actor_id: actorReviewer, rationale: 'Clarify acceptance criteria.' })
+        .expect(201)
+    ).body;
+
+    expect(changed.status).toBe('draft');
+    expect(changed.gate_state).toBe('changes_requested');
+    expect(await repo.listDecisionsForObject('spec', spec.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actor_id: actorReviewer,
+          decision: 'changes_requested',
+          summary: 'Clarify acceptance criteria.',
+        }),
+      ]),
+    );
+
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
+    await request(server).post(`/plans/${plan.id}/revisions`).send(validPlanRevision).expect(201);
+    await request(server)
+      .post(`/plans/${plan.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    const changedPlan = (
+      await request(server)
+        .post(`/plans/${plan.id}/request-changes`)
+        .set(reviewerHeaders)
+        .send({ actor_id: actorReviewer, rationale: 'Break implementation into smaller checks.' })
+        .expect(201)
+    ).body;
+
+    expect(changedPlan.status).toBe('draft');
+    expect(changedPlan.gate_state).toBe('changes_requested');
+    expect(await repo.listDecisionsForObject('plan', plan.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actor_id: actorReviewer,
+          decision: 'changes_requested',
+          summary: 'Break implementation into smaller checks.',
+        }),
+      ]),
+    );
+  });
+
+  it('rejects creating a plan until the current spec is the approved revision', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
+
+    await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(400);
+
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+    await request(server).post(`/specs/${spec.id}/revisions`).send({ ...validSpecRevision, summary: 'Changed after approval' }).expect(201);
+
+    const staleResponse = await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(400);
+    expect(staleResponse.body.message).toContain('approved current revision');
+  });
+
+  it('rejects generating a plan draft unless the current spec is the approved revision', async () => {
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
+    await request(server)
+      .post(`/specs/${spec.id}/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
+      .expect(201);
+    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+
+    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
+    await request(server).post(`/specs/${spec.id}/revisions`).send({ ...validSpecRevision, summary: 'Spec changed after plan creation' }).expect(201);
+
+    const staleResponse = await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(400);
+    expect(staleResponse.body.message).toContain('approved current revision');
   });
 });
