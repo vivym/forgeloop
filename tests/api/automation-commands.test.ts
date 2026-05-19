@@ -1826,6 +1826,68 @@ describe('automation command boundaries', () => {
     expect(await service.listPlanRevisions((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id ?? '')).toHaveLength(1);
   });
 
+  it('accepts claimed plan draft actions with generation prompt identity fields', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-versioned-plan-claim-binding',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable versioned plan claim binding test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      target_object_type: 'work_item',
+      target_object_id: ctx.workItem.id,
+      target_revision_id: ctx.specRevisionId,
+      target_status: 'approved',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+    } as AutomationPrecondition;
+    const actionId = `action-versioned-plan-claim-binding-${ctx.workItem.id}`;
+    const actionInputJson = {
+      work_item_id: ctx.workItem.id,
+      spec_revision_id: ctx.specRevisionId,
+      prompt_version: 'plan-draft.fake.v2',
+      output_schema_version: 'plan_draft.v1',
+    };
+
+    await signedAutomationPost(
+      app,
+      '/internal/automation/actions',
+      planDraftActionBody(ctx, precondition, actionId, { action_input_json: actionInputJson }),
+    ).expect(201);
+    const claimToken = `claim-${actionId}`;
+    await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+      claim_token: claimToken,
+      lease_ms: 10 * 60 * 1000,
+      limit: 1,
+    }).expect(200);
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      spec_revision_id: ctx.specRevisionId,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
+    }).expect(201);
+
+    expect(await service.listPlanRevisions((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id ?? '')).toHaveLength(1);
+  });
+
   it('daemon ensure-plan-draft requires generated Plan payload', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);

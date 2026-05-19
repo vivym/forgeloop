@@ -36,12 +36,16 @@ const ensurePlanDraftActionInputSchema = z
   .object({
     work_item_id: nonBlankString,
     spec_revision_id: nonBlankString,
+    prompt_version: nonBlankString.optional(),
+    output_schema_version: z.literal('plan_draft.v1').optional(),
   })
   .strict();
 
 const ensureSpecDraftActionInputSchema = z
   .object({
     work_item_id: nonBlankString,
+    prompt_version: nonBlankString.optional(),
+    output_schema_version: z.literal('spec_draft.v1').optional(),
   })
   .strict();
 
@@ -49,6 +53,8 @@ const ensurePackageDraftsActionInputSchema = z
   .object({
     plan_revision_id: nonBlankString,
     generation_key: nonBlankString,
+    prompt_version: nonBlankString.optional(),
+    output_schema_version: z.literal('package_drafts.v1').optional(),
   })
   .strict();
 

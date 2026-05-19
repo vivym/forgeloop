@@ -432,7 +432,31 @@ export class AutomationCommandService {
   async ensurePlanDraftForClaimedAction(workItemId: string, input: EnsurePlanDraftCommandDto): Promise<EnsurePlanDraftResult> {
     const precondition = normalizeAutomationPrecondition(input.automation_precondition as AutomationPrecondition);
     const generationArtifacts = safeGenerationArtifactRefs(input.generation_artifacts);
-    const actionInputJson = { work_item_id: workItemId, spec_revision_id: input.spec_revision_id };
+    let persistedActionInput: Record<string, unknown> = {};
+    try {
+      const action = await this.repository.getClaimedAutomationActionRun({
+        id: input.action_run_id,
+        claim_token: input.claim_token ?? '',
+      });
+      persistedActionInput =
+        action.action_type === 'ensure_plan_draft' && action.action_input_json !== undefined
+          ? action.action_input_json
+          : {};
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
+        throw new ConflictException(claimConflictBody);
+      }
+      throw error;
+    }
+    const promptVersion = typeof persistedActionInput.prompt_version === 'string' ? persistedActionInput.prompt_version : undefined;
+    const outputSchemaVersion =
+      typeof persistedActionInput.output_schema_version === 'string' ? persistedActionInput.output_schema_version : undefined;
+    const actionInputJson = {
+      work_item_id: workItemId,
+      spec_revision_id: input.spec_revision_id,
+      ...(promptVersion === undefined ? {} : { prompt_version: promptVersion }),
+      ...(outputSchemaVersion === undefined ? {} : { output_schema_version: outputSchemaVersion }),
+    };
     await this.assertActiveActionClaim({
       actionRunId: input.action_run_id,
       claimToken: input.claim_token ?? '',
