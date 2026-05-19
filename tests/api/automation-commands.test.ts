@@ -1427,6 +1427,62 @@ describe('automation command boundaries', () => {
       });
   });
 
+  it('accepts claimed spec draft actions with generation prompt identity fields', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedProjectRepoWorkItem(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-versioned-spec-claim-binding',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable versioned spec claim binding test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGenerateSpecDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    };
+    const actionId = 'action-versioned-spec-claim-binding';
+    await signedAutomationPost(app, '/internal/automation/actions', specDraftActionBody(ctx, precondition, actionId, {
+      action_input_json: {
+        work_item_id: ctx.workItem.id,
+        prompt_version: 'spec-draft.fake.v2',
+        output_schema_version: 'spec_draft.v1',
+      },
+    })).expect(201);
+    const claimToken = `claim-${actionId}`;
+    await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+      claim_token: claimToken,
+      lease_ms: 10 * 60 * 1000,
+      limit: 1,
+    }).expect(200);
+    const commandBody = {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+      generated_spec_draft: generatedSpecDraft,
+      generation_artifacts: generationArtifacts,
+    };
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`, commandBody)
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ status: 'created' });
+      });
+  });
+
   it('rejects Spec draft commands when the WorkItem already has a current Spec revision', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
@@ -2248,6 +2304,63 @@ describe('automation command boundaries', () => {
 
     expect([409, 422]).toContain(response.status);
     await expectNoPackageDraftCommandWrites(service, ctx);
+  });
+
+  it('accepts claimed package draft actions with generation prompt identity fields', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlan(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-versioned-package-claim-binding',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable versioned package claim binding test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    };
+    const actionId = 'action-versioned-package-claim-binding';
+    await signedAutomationPost(app, '/internal/automation/actions', packageDraftActionBody(ctx, precondition, actionId, {
+      action_input_json: {
+        plan_revision_id: ctx.planRevisionId,
+        generation_key: `default:${ctx.planRevisionId}`,
+        prompt_version: 'package-drafts.fake.v2',
+        output_schema_version: 'package_drafts.v1',
+      },
+    })).expect(201);
+    const claimToken = `claim-${actionId}`;
+    await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+      claim_token: claimToken,
+      lease_ms: 10 * 60 * 1000,
+      limit: 1,
+    }).expect(200);
+    const commandBody = {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+    };
+
+    await signedAutomationPost(
+      app,
+      `/internal/automation/plan-revisions/${ctx.planRevisionId}/ensure-package-drafts`,
+      commandBody,
+    ).expect(201);
+
+    await expect(service.listExecutionPackages(ctx.workItem.id)).resolves.toHaveLength(1);
   });
 
   it('rejects internal manual path commands before manual hold writes on claim binding mismatch', async () => {

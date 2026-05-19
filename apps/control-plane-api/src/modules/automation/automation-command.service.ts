@@ -275,6 +275,16 @@ const isCommandIdempotencyDriftError = (error: DomainError): boolean =>
 const isCommandIdempotencyActiveClaimError = (error: DomainError): boolean =>
   /already has an active claim/i.test(error.message);
 
+const generationIdentityFieldsFromActionInput = (actionInput: Record<string, unknown>): Record<string, unknown> => {
+  const promptVersion = typeof actionInput.prompt_version === 'string' ? actionInput.prompt_version : undefined;
+  const outputSchemaVersion =
+    typeof actionInput.output_schema_version === 'string' ? actionInput.output_schema_version : undefined;
+  return {
+    ...(promptVersion === undefined ? {} : { prompt_version: promptVersion }),
+    ...(outputSchemaVersion === undefined ? {} : { output_schema_version: outputSchemaVersion }),
+  };
+};
+
 @Injectable()
 export class AutomationCommandService {
   constructor(
@@ -432,30 +442,14 @@ export class AutomationCommandService {
   async ensurePlanDraftForClaimedAction(workItemId: string, input: EnsurePlanDraftCommandDto): Promise<EnsurePlanDraftResult> {
     const precondition = normalizeAutomationPrecondition(input.automation_precondition as AutomationPrecondition);
     const generationArtifacts = safeGenerationArtifactRefs(input.generation_artifacts);
-    let persistedActionInput: Record<string, unknown> = {};
-    try {
-      const action = await this.repository.getClaimedAutomationActionRun({
-        id: input.action_run_id,
-        claim_token: input.claim_token ?? '',
-      });
-      persistedActionInput =
-        action.action_type === 'ensure_plan_draft' && action.action_input_json !== undefined
-          ? action.action_input_json
-          : {};
-    } catch (error) {
-      if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
-        throw new ConflictException(claimConflictBody);
-      }
-      throw error;
-    }
-    const promptVersion = typeof persistedActionInput.prompt_version === 'string' ? persistedActionInput.prompt_version : undefined;
-    const outputSchemaVersion =
-      typeof persistedActionInput.output_schema_version === 'string' ? persistedActionInput.output_schema_version : undefined;
+    const generationIdentityFields = await this.generationIdentityFieldsForClaimedAction({
+      actionRunId: input.action_run_id,
+      claimToken: input.claim_token ?? '',
+    });
     const actionInputJson = {
       work_item_id: workItemId,
       spec_revision_id: input.spec_revision_id,
-      ...(promptVersion === undefined ? {} : { prompt_version: promptVersion }),
-      ...(outputSchemaVersion === undefined ? {} : { output_schema_version: outputSchemaVersion }),
+      ...generationIdentityFields,
     };
     await this.assertActiveActionClaim({
       actionRunId: input.action_run_id,
@@ -483,6 +477,10 @@ export class AutomationCommandService {
 
   async ensureSpecDraftForClaimedAction(workItemId: string, input: EnsureSpecDraftCommandDto): Promise<EnsureSpecDraftResult> {
     const precondition = normalizeAutomationPrecondition(input.automation_precondition as AutomationPrecondition);
+    const generationIdentityFields = await this.generationIdentityFieldsForClaimedAction({
+      actionRunId: input.action_run_id,
+      claimToken: input.claim_token ?? '',
+    });
     await this.assertActiveActionClaim({
       actionRunId: input.action_run_id,
       claimToken: input.claim_token ?? '',
@@ -493,7 +491,7 @@ export class AutomationCommandService {
       automationSettingsVersion: precondition.automation_settings_version,
       capabilityFingerprint: precondition.capability_fingerprint,
       preconditionFingerprint: automationPreconditionFingerprint(precondition),
-      actionInputJson: { work_item_id: workItemId },
+      actionInputJson: { work_item_id: workItemId, ...generationIdentityFields },
       now: currentIsoTime(),
     });
     return this.ensureSpecDraftForWorkItem({
@@ -512,6 +510,10 @@ export class AutomationCommandService {
   ): Promise<EnsurePackageDraftsResult> {
     const precondition = normalizeAutomationPrecondition(input.automation_precondition as AutomationPrecondition);
     const generationKey = input.generation_key ?? `default:${planRevisionId}`;
+    const generationIdentityFields = await this.generationIdentityFieldsForClaimedAction({
+      actionRunId: input.action_run_id,
+      claimToken: input.claim_token ?? '',
+    });
     await this.assertActiveActionClaim({
       actionRunId: input.action_run_id,
       claimToken: input.claim_token ?? '',
@@ -523,7 +525,7 @@ export class AutomationCommandService {
       automationSettingsVersion: precondition.automation_settings_version,
       capabilityFingerprint: precondition.capability_fingerprint,
       preconditionFingerprint: automationPreconditionFingerprint(precondition),
-      actionInputJson: { plan_revision_id: planRevisionId, generation_key: generationKey },
+      actionInputJson: { plan_revision_id: planRevisionId, generation_key: generationKey, ...generationIdentityFields },
       now: currentIsoTime(),
     });
     return this.ensureExecutionPackageDraftsForPlanRevision({
@@ -1076,6 +1078,27 @@ export class AutomationCommandService {
       if (mismatched || action.locked_until === undefined || isAtOrBefore(action.locked_until, input.now)) {
         throw new ConflictException(claimConflictBody);
       }
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
+        throw new ConflictException(claimConflictBody);
+      }
+      throw error;
+    }
+  }
+
+  private async generationIdentityFieldsForClaimedAction(input: {
+    actionRunId: string;
+    claimToken: string;
+  }): Promise<Record<string, unknown>> {
+    if (input.claimToken.trim().length === 0) {
+      throw new UnprocessableEntityException(claimConflictBody);
+    }
+    try {
+      const action = await this.repository.getClaimedAutomationActionRun({
+        id: input.actionRunId,
+        claim_token: input.claimToken,
+      });
+      return generationIdentityFieldsFromActionInput(action.action_input_json ?? {});
     } catch (error) {
       if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
         throw new ConflictException(claimConflictBody);
