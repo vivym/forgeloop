@@ -847,9 +847,9 @@ const seedClaimedPlanDraftAction = async (
 const seedApprovedSpecAndClaimedPlanAction = async (
   app: INestApplication,
   repository: DeliveryRepository,
-  overrides: { approvedRevisionId?: string } = {},
+  overrides: { approvedRevisionId?: string; actionOverrides?: Record<string, unknown> } = {},
 ): Promise<ClaimedPlanDraftActionContext> => {
-  const ctx = await seedClaimedPlanDraftAction(app, repository);
+  const ctx = await seedClaimedPlanDraftAction(app, repository, overrides.actionOverrides);
   if ('approvedRevisionId' in overrides) {
     await repository.saveSpec({
       ...ctx.spec,
@@ -1510,6 +1510,24 @@ describe('automation command boundaries', () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
     const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, { approvedRevisionId });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    ).expect(409);
+  });
+
+  it.each([
+    { name: 'missing', targetRevisionId: undefined },
+    { name: 'mismatched', targetRevisionId: 'spec-revision-other' },
+  ])('rejects Plan generation context when action target_revision_id is $name', async ({ targetRevisionId }) => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: {
+        ...(targetRevisionId === undefined ? { target_revision_id: undefined } : { target_revision_id: targetRevisionId }),
+      },
+    });
 
     await signedAutomationGet(
       app,

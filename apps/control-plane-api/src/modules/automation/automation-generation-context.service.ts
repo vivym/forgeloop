@@ -107,6 +107,7 @@ export class AutomationGenerationContextService {
       action.action_type !== 'ensure_plan_draft' ||
       action.target_object_type !== 'work_item' ||
       action.target_object_id !== workItemId ||
+      action.target_revision_id !== query.spec_revision_id ||
       action.action_input_json.work_item_id !== workItemId ||
       action.action_input_json.spec_revision_id !== query.spec_revision_id;
     if (mismatched) {
