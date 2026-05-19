@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AutomationHttpClient,
+  defaultGenerationPlanningConfig,
   planNextActions,
   projectRuntimeSnapshotIdempotencyKey,
   type RuntimeSnapshot,
@@ -118,6 +119,23 @@ describe('automation planner', () => {
     expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
   });
 
+  it('does not allow external mutation of the default generation planning config', () => {
+    const resetPlanDraftEnabled = defaultGenerationPlanningConfig.tasks.plan_draft.enabled;
+    try {
+      expect(() => {
+        (defaultGenerationPlanningConfig.tasks.plan_draft as { enabled: boolean }).enabled = true;
+      }).toThrow();
+    } finally {
+      if (!Object.isFrozen(defaultGenerationPlanningConfig.tasks.plan_draft)) {
+        (defaultGenerationPlanningConfig.tasks.plan_draft as { enabled: boolean }).enabled = resetPlanDraftEnabled;
+      }
+    }
+
+    const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }));
+
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_plan_draft');
+  });
+
   it('suppresses all generation actions when generation mode is disabled', () => {
     const actions = planNextActions(
       baseSnapshot({
@@ -168,6 +186,39 @@ describe('automation planner', () => {
     expect(changedPromptActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
       baselineActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,
     );
+  });
+
+  it('orders app_server runtime projection before generation actions', () => {
+    const actions = planNextActions(
+      baseSnapshot({
+        repos: [
+          {
+            projectId: 'project-1',
+            repoId: 'repo-1',
+            automationScope: repoScope,
+            automationSettingsVersion: 3,
+            capabilityFingerprint: 'capability-fingerprint-1',
+            daemonInternalLocalPath: '/private/repo-1',
+            policyProjection: {
+              automationScope: repoScope,
+              repoId: 'repo-1',
+              policyStatus: 'loaded',
+              policyDigest: 'sha256:policy',
+              parserVersion: 'workflow-md-parser:v1',
+            },
+          },
+        ],
+        workItemsRequiringSpec: [specWorkItemTarget()],
+        workItemsRequiringPlan: [workItemTarget()],
+      }),
+      { generation: generationPlanning({ mode: 'app_server', packageDraftsEnabled: false }) },
+    );
+
+    expect(actions.map((action) => action.actionType)).toEqual([
+      'project_runtime_snapshot',
+      'ensure_spec_draft',
+      'ensure_plan_draft',
+    ]);
   });
 
   it('emits ensure_spec_draft before downstream draft actions when fake generation is enabled', () => {

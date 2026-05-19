@@ -28,7 +28,15 @@ export interface AutomationPlannerOptions {
   generation?: AutomationGenerationPlanningConfig;
 }
 
-export const defaultGenerationPlanningConfig: AutomationGenerationPlanningConfig = {
+const freezeGenerationPlanningConfig = (config: AutomationGenerationPlanningConfig): AutomationGenerationPlanningConfig => {
+  Object.freeze(config.tasks.spec_draft);
+  Object.freeze(config.tasks.plan_draft);
+  Object.freeze(config.tasks.package_drafts);
+  Object.freeze(config.tasks);
+  return Object.freeze(config);
+};
+
+export const defaultGenerationPlanningConfig: AutomationGenerationPlanningConfig = freezeGenerationPlanningConfig({
   mode: 'disabled',
   tasks: {
     spec_draft: {
@@ -47,7 +55,7 @@ export const defaultGenerationPlanningConfig: AutomationGenerationPlanningConfig
       outputSchemaVersion: 'package_drafts.v1',
     },
   },
-};
+});
 
 type GenerationTaskName = keyof AutomationGenerationPlanningConfig['tasks'];
 type GenerationTaskConfig = AutomationGenerationPlanningConfig['tasks'][GenerationTaskName];
@@ -347,6 +355,18 @@ const projectRuntimeSnapshotAction = (snapshot: RuntimeSnapshot, repo: RuntimeSn
 export const planNextActions = (snapshot: RuntimeSnapshot, options: AutomationPlannerOptions = {}): NextAction[] => {
   const actions: NextAction[] = [];
   const generation = generationPlanningFor(options);
+  const appendProjectRuntimeSnapshotActions = (): void => {
+    for (const repo of snapshot.repos) {
+      const action = projectRuntimeSnapshotAction(snapshot, repo);
+      if (action !== undefined) {
+        actions.push(action);
+      }
+    }
+  };
+
+  if (generation.mode === 'app_server') {
+    appendProjectRuntimeSnapshotActions();
+  }
 
   if (generationTaskFor(generation, 'spec_draft').enabled) {
     for (const target of snapshot.workItemsRequiringSpec) {
@@ -381,11 +401,8 @@ export const planNextActions = (snapshot: RuntimeSnapshot, options: AutomationPl
     }
   }
 
-  for (const repo of snapshot.repos) {
-    const action = projectRuntimeSnapshotAction(snapshot, repo);
-    if (action !== undefined) {
-      actions.push(action);
-    }
+  if (generation.mode !== 'app_server') {
+    appendProjectRuntimeSnapshotActions();
   }
 
   return actions;

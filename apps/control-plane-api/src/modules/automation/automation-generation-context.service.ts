@@ -4,6 +4,7 @@ import { DomainError } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type { AutomationGenerationWorkItemContextV1, GenerationContextQueryDto } from './automation.dto';
+import { policyProjectionsByRepoScopeFor } from './policy-projection';
 
 const claimConflictBody = {
   code: 'automation_action_claim_conflict',
@@ -54,14 +55,21 @@ export class AutomationGenerationContextService {
     }
 
     const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
+    const runtimeSnapshot = await this.repository.getRuntimeSnapshotData();
+    const policyProjectionsByRepoScope = policyProjectionsByRepoScopeFor(runtimeSnapshot.policy_projection_action_runs);
     const repos = (await this.repository.listProjectRepos(workItem.project_id))
       .filter((repo) => repo.status === 'active' && (scopedRepoId === undefined || repo.repo_id === scopedRepoId))
-      .map((repo) => ({
-        project_id: repo.project_id,
-        repo_id: repo.repo_id,
-        default_branch: repo.default_branch,
-        policy_status: 'missing' as const,
-      }));
+      .map((repo) => {
+        const policyProjection = policyProjectionsByRepoScope.get(`repo:${repo.project_id}:${repo.repo_id}`);
+        return {
+          project_id: repo.project_id,
+          repo_id: repo.repo_id,
+          default_branch: repo.default_branch,
+          policy_status: policyProjection?.policy_status ?? 'missing',
+          ...(policyProjection?.policy_digest === undefined ? {} : { policy_digest: policyProjection.policy_digest }),
+          ...(policyProjection?.parser_version === undefined ? {} : { parser_version: policyProjection.parser_version }),
+        };
+      });
     if (scopedRepoId !== undefined && repos.length === 0) {
       throw new ConflictException(claimConflictBody);
     }

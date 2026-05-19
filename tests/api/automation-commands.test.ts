@@ -750,6 +750,45 @@ const seedClaimedSpecDraftAction = async (
   };
 };
 
+const seedCompletedPolicyProjectionAction = async (
+  repository: DeliveryRepository,
+  ctx: Pick<ClaimedSpecDraftActionContext, 'project' | 'precondition'>,
+): Promise<void> => {
+  const actionId = `projection-${ctx.project.id}`;
+  const idempotencyKey = `${actionId}-idempotency`;
+  const claimToken = `${actionId}-claim`;
+  const projectionInput = {
+    repo_id: 'repo-1',
+    policy_status: 'loaded',
+    policy_digest: 'sha256:workflow-policy-digest',
+    parser_version: 'workflow-md-parser:v1',
+  };
+  await repository.claimAutomationActionRun({
+    id: actionId,
+    action_type: 'project_runtime_snapshot',
+    target_object_type: 'repo',
+    target_object_id: 'repo-1',
+    target_status: 'loaded',
+    idempotency_key: idempotencyKey,
+    automation_scope: ctx.precondition.automation_scope,
+    automation_settings_version: ctx.precondition.automation_settings_version,
+    capability_fingerprint: ctx.precondition.capability_fingerprint,
+    precondition_fingerprint: `${actionId}-precondition`,
+    action_input_json: projectionInput,
+    claim_token: claimToken,
+    locked_until: '2026-05-05T00:10:00.000Z',
+    now: '2026-05-05T00:00:00.000Z',
+  });
+  await repository.completeAutomationActionRun({
+    id: actionId,
+    idempotency_key: idempotencyKey,
+    claim_token: claimToken,
+    status: 'succeeded',
+    result_json: projectionInput,
+    finished_at: '2026-05-05T00:00:01.000Z',
+  });
+};
+
 const seedClaimedPlanDraftAction = async (
   app: INestApplication,
   repository: DeliveryRepository,
@@ -1367,6 +1406,7 @@ describe('automation command boundaries', () => {
     const project = await repository.getProject(ctx.project.id);
     expect(project).toBeDefined();
     await seedProjectRepo(repository, project!, { repo_id: 'repo-2', name: 'secondary-repo' });
+    await seedCompletedPolicyProjectionAction(repository, ctx);
 
     await signedAutomationGet(
       app,
@@ -1392,7 +1432,9 @@ describe('automation command boundaries', () => {
               project_id: ctx.workItem.project_id,
               repo_id: 'repo-1',
               default_branch: 'main',
-              policy_status: 'missing',
+              policy_status: 'loaded',
+              policy_digest: 'sha256:workflow-policy-digest',
+              parser_version: 'workflow-md-parser:v1',
             }),
           ],
         });
