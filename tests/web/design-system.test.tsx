@@ -20,8 +20,8 @@ describe('design system primitives', () => {
   it('renders page sections without nested card markup', () => {
     render(<Section title="Release scope">Content</Section>);
     expect(screen.getByRole('heading', { name: 'Release scope' })).toBeTruthy();
-    expect(document.querySelector('.panel')).toBeNull();
-    expect(document.querySelector('.workbench-grid')).toBeNull();
+    expect(document.querySelector('.fl-section')).toBeTruthy();
+    expect(document.querySelector('.fl-section__body')).toBeTruthy();
   });
 
   it('exports dialog close semantics that can dismiss uncontrolled content', () => {

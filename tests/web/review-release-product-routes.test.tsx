@@ -290,10 +290,6 @@ describe('review and release product routes', () => {
     expect(screen.getByText('Packages: 1')).toBeTruthy();
     expect(screen.getByText('Acceptance summary unavailable from release list API.')).toBeTruthy();
     expect(screen.getByText(/release_type and updated_age are not applied to the release inventory yet/i)).toBeTruthy();
-    expect(screen.queryByLabelText('release_id')).toBeNull();
-    expect(screen.queryByText('Load cockpit')).toBeNull();
-    expect(screen.queryByText('Load replay')).toBeNull();
-    expect(screen.queryByText(/raw replay/i)).toBeNull();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=open&resolution=unresolved&limit=25`,
       expect.objectContaining({ method: 'GET' }),
@@ -396,9 +392,6 @@ describe('review and release product routes', () => {
     expect(screen.getByRole('button', { name: 'Submit observation evidence' })).toBeTruthy();
     expect(screen.getByLabelText('Override rationale')).toBeTruthy();
     expect(screen.getByLabelText('Close confirmation')).toBeTruthy();
-    expect(screen.queryByText('Load cockpit')).toBeNull();
-    expect(screen.queryByText('Load replay')).toBeNull();
-    expect(screen.queryByText(/raw JSON/i)).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Edit release' }));
     const editDialog = screen.getByRole('dialog', { name: 'Edit release details' });

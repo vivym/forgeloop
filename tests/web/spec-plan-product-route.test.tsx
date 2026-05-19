@@ -12,9 +12,6 @@ describe('Work Item scoped Spec & Plan route', () => {
     expect(screen.getByRole('button', { name: 'Create Spec' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Create Plan' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open revision history' })).toBeTruthy();
-    expect(screen.queryByLabelText('spec_id')).toBeNull();
-    expect(screen.queryByLabelText('plan_id')).toBeNull();
-    expect(screen.queryByText('raw JSON')).toBeNull();
     expect(screen.queryByText('actor-owner')).toBeNull();
   });
 

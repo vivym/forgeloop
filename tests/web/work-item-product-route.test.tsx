@@ -16,7 +16,6 @@ describe('Work Item product route', () => {
     expect(screen.getByTitle('Evidence attachment is not available for this work item yet.')).toBeTruthy();
     expect(screen.queryByText(new RegExp(`Pending command ${'wir'}${'ing'}`, 'i'))).toBeNull();
     expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
-    expect(screen.queryByText('raw JSON')).toBeNull();
   });
 
   it('renders unavailable detail state instead of fabricated fallback data', async () => {

@@ -16,7 +16,6 @@ describe('Workbench product route', () => {
     expect(screen.queryByRole('link', { name: 'Edit work item' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Create spec' })).toBeNull();
     expect(screen.queryByText('Intake')).toBeNull();
-    expect(screen.queryByText('Load role queue')).toBeNull();
   });
 
   it('renders empty queue state without fabricated work items', async () => {

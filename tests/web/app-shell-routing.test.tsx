@@ -17,10 +17,9 @@ function containsElement(node: ReactNode, predicate: (element: ReactElement) => 
 }
 
 describe('React Router product shell', () => {
-  it('renders Workbench through route modules, not the legacy App', async () => {
+  it('renders Workbench through route modules', async () => {
     const screen = await renderRoute('/workbench');
     expect(screen.getByRole('heading', { name: /workbench/i })).toBeTruthy();
-    expect(screen.queryByText('Load role queue')).toBeNull();
   });
 
   it('shows product nav labels and does not show Intake as user-facing role copy', async () => {

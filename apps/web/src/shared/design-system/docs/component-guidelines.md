@@ -2,24 +2,13 @@
 
 This design system layer is shared infrastructure. Keep primitives business-agnostic and compose product pages from layout primitives plus focused UI controls.
 
-## Legacy Replacement Map
-
-Replace legacy `.panel` usage by intent:
-
-- Page or content section: `Section`
-- Detail page structure: `DetailLayout`
-- Sticky or supporting actions: `ActionRail`
-- Data grids and row lists: `Table` or `DataTable`
-- Temporary side workflow: `Drawer`
-- Developer-only raw payloads: `DevToolsRawPanel`
-
-Replace legacy `.workbench-grid` usage with `DetailLayout`, `SplitPane`, or route-specific CSS using `fl-*` class names.
-
 ## Composition Rules
 
 - Do not build card-in-card page composition. `Section` is a page or layout section, not a nested card container.
 - Keep route shell navigation out of UI primitives. `AppShell`, `SidebarNav`, and `Topbar` provide structure only.
-- Use `fl-*` classes for layout primitives and shared UI. Do not add new legacy visual-system classes.
+- Use `fl-*` classes for layout primitives and shared UI.
+- Use `Section`, `DetailLayout`, `SplitPane`, `ActionRail`, `Table`, `DataTable`, and `Drawer` according to page intent instead of route-local container patterns.
+- Keep developer payload inspection in the gated Dev Tools route.
 - Keep all global CSS in `apps/web/src/shared/design-system/theme/css-variables.css`.
 
 ## Accessibility Rules

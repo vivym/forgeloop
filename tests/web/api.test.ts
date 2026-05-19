@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createForgeloopCommandApi, createForgeloopQueryApi, ForgeloopApiError } from '../../apps/web/src/api';
+import { createForgeloopCommandApi } from '../../apps/web/src/shared/api/commands';
+import { ForgeloopApiError } from '../../apps/web/src/shared/api/common';
+import { createForgeloopQueryApi } from '../../apps/web/src/shared/api/query';
 
 describe('Forgeloop web API client', () => {
   afterEach(() => {
