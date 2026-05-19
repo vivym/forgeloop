@@ -18,6 +18,7 @@ export type AutomationActorClass =
 
 export interface AutomationCapabilities {
   canProjectRuntimeState: boolean;
+  canGenerateSpecDraft: boolean;
   canGeneratePlanDraft: boolean;
   canGeneratePackageDrafts: boolean;
   canEnqueueRuns: boolean;
@@ -323,24 +324,28 @@ export interface ExecutionPackageGenerationRun {
 const automationCapabilityByPreset: Record<AutomationPreset, AutomationCapabilities> = {
   off: {
     canProjectRuntimeState: false,
+    canGenerateSpecDraft: false,
     canGeneratePlanDraft: false,
     canGeneratePackageDrafts: false,
     canEnqueueRuns: false,
   },
   ready_projection: {
     canProjectRuntimeState: true,
+    canGenerateSpecDraft: false,
     canGeneratePlanDraft: false,
     canGeneratePackageDrafts: false,
     canEnqueueRuns: false,
   },
   draft_only: {
     canProjectRuntimeState: true,
+    canGenerateSpecDraft: true,
     canGeneratePlanDraft: true,
     canGeneratePackageDrafts: true,
     canEnqueueRuns: false,
   },
   run_enqueue: {
     canProjectRuntimeState: true,
+    canGenerateSpecDraft: true,
     canGeneratePlanDraft: true,
     canGeneratePackageDrafts: true,
     canEnqueueRuns: true,
@@ -401,9 +406,18 @@ const ensureNonBlank = (label: string, value: string): void => {
   }
 };
 
-export const automationCapabilitiesForPreset = (preset: AutomationPreset): AutomationCapabilities => ({
-  ...automationCapabilityByPreset[preset],
+export const normalizeAutomationCapabilities = (
+  value: Partial<AutomationCapabilities> | undefined,
+): AutomationCapabilities => ({
+  canProjectRuntimeState: value?.canProjectRuntimeState === true,
+  canGenerateSpecDraft: value?.canGenerateSpecDraft === true,
+  canGeneratePlanDraft: value?.canGeneratePlanDraft === true,
+  canGeneratePackageDrafts: value?.canGeneratePackageDrafts === true,
+  canEnqueueRuns: value?.canEnqueueRuns === true,
 });
+
+export const automationCapabilitiesForPreset = (preset: AutomationPreset): AutomationCapabilities =>
+  normalizeAutomationCapabilities(automationCapabilityByPreset[preset]);
 
 export const assertAutomationCapabilityActor = (actor: AutomationActorContext): void => {
   if (!hasText(actor.actor_id)) {
@@ -420,7 +434,8 @@ export const assertAutomationCapabilityActor = (actor: AutomationActorContext): 
   }
 };
 
-export const capabilityFingerprint = (capabilities: AutomationCapabilities): string => fingerprint(capabilities);
+export const capabilityFingerprint = (capabilities: AutomationCapabilities): string =>
+  fingerprint(normalizeAutomationCapabilities(capabilities));
 
 export const buildManualScopeKey = (
   scope:
