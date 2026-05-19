@@ -186,6 +186,10 @@ describe('automation planner', () => {
     expect(changedPromptActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
       baselineActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,
     );
+    expect(changedPromptActions.find((action) => action.actionType === 'ensure_plan_draft')?.actionInputJson).toMatchObject({
+      prompt_version: 'plan-draft.fake.v2',
+      output_schema_version: 'plan_draft.v1',
+    });
   });
 
   it('orders app_server runtime projection before generation actions', () => {

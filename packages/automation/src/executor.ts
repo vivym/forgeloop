@@ -16,6 +16,7 @@ import type {
   AutomationActionRunRecord,
   AutomationExecutorClient,
   AutomationExecutorResult,
+  AutomationGenerationPlanningConfig,
   NextAction,
 } from './types.js';
 
@@ -28,6 +29,7 @@ export interface ExecuteClaimedActionInput {
   leaseMs?: number;
   specDraftGenerator?: SpecDraftGenerator;
   generationRuntime?: CodexGenerationRuntime;
+  generationPlanning?: AutomationGenerationPlanningConfig;
 }
 
 export interface ExecuteActionRunInput {
@@ -37,6 +39,7 @@ export interface ExecuteActionRunInput {
   daemonIdentity?: string;
   specDraftGenerator?: SpecDraftGenerator;
   generationRuntime?: CodexGenerationRuntime;
+  generationPlanning?: AutomationGenerationPlanningConfig;
 }
 
 const projectAndRepoFromScope = (automationScope: AutomationScope): { projectId: string; repoId?: string } => {
@@ -98,15 +101,21 @@ const preconditionFor = (action: AutomationActionRunRecord): AutomationPrecondit
 type EnsurePlanDraftActionInput = {
   workItemId: string;
   specRevisionId: string;
+  promptVersion?: string;
+  outputSchemaVersion?: string;
 };
 
 type EnsureSpecDraftActionInput = {
   workItemId: string;
+  promptVersion?: string;
+  outputSchemaVersion?: string;
 };
 
 type EnsurePackageDraftsActionInput = {
   planRevisionId: string;
   generationKey: string;
+  promptVersion?: string;
+  outputSchemaVersion?: string;
 };
 
 type RequestManualPathActionInput = {
@@ -128,6 +137,12 @@ type ProjectRuntimeSnapshotActionInput = {
   observedAt?: string;
 };
 
+type GenerationTaskExecutionConfig = {
+  enabled: boolean;
+  promptVersion: string;
+  outputSchemaVersion: string;
+};
+
 const policyStatuses = new Set<ProjectRuntimeSnapshotActionInput['policyStatus']>([
   'missing',
   'loaded',
@@ -146,18 +161,32 @@ const requiredString = (input: Record<string, unknown>, field: string): string =
   return value;
 };
 
+const generationVersionFields = (
+  action: AutomationActionRunRecord,
+): Pick<EnsurePlanDraftActionInput, 'promptVersion' | 'outputSchemaVersion'> => {
+  const promptVersion = stringField(action.actionInputJson, 'prompt_version');
+  const outputSchemaVersion = stringField(action.actionInputJson, 'output_schema_version');
+  return {
+    ...(promptVersion === undefined ? {} : { promptVersion }),
+    ...(outputSchemaVersion === undefined ? {} : { outputSchemaVersion }),
+  };
+};
+
 const parseEnsurePlanDraftInput = (action: AutomationActionRunRecord): EnsurePlanDraftActionInput => ({
   workItemId: requiredString(action.actionInputJson, 'work_item_id'),
   specRevisionId: requiredString(action.actionInputJson, 'spec_revision_id'),
+  ...generationVersionFields(action),
 });
 
 const parseEnsureSpecDraftInput = (action: AutomationActionRunRecord): EnsureSpecDraftActionInput => ({
   workItemId: requiredString(action.actionInputJson, 'work_item_id'),
+  ...generationVersionFields(action),
 });
 
 const parseEnsurePackageDraftsInput = (action: AutomationActionRunRecord): EnsurePackageDraftsActionInput => ({
   planRevisionId: requiredString(action.actionInputJson, 'plan_revision_id'),
   generationKey: requiredString(action.actionInputJson, 'generation_key'),
+  ...generationVersionFields(action),
 });
 
 const parseRequestManualPathInput = (action: AutomationActionRunRecord): RequestManualPathActionInput => {
@@ -190,6 +219,20 @@ const parseProjectRuntimeSnapshotInput = (action: AutomationActionRunRecord): Pr
     ...(reasonCode === undefined ? {} : { reasonCode }),
     ...(observedAt === undefined ? {} : { observedAt }),
   };
+};
+
+const generationTaskConfigFor = (
+  planning: AutomationGenerationPlanningConfig | undefined,
+  task: keyof AutomationGenerationPlanningConfig['tasks'],
+  fallback: GenerationTaskExecutionConfig,
+): GenerationTaskExecutionConfig => {
+  if (planning === undefined) {
+    return fallback;
+  }
+  if (planning.mode === 'disabled') {
+    return { ...planning.tasks[task], enabled: false };
+  }
+  return planning.tasks[task];
 };
 
 const errorCode = (error: unknown): string | undefined => {
@@ -266,13 +309,21 @@ const completeProjection = async (
 const executeCommand = async (
   client: AutomationExecutorClient,
   action: AutomationActionRunRecord,
-  input: Pick<ExecuteActionRunInput, 'actorId' | 'daemonIdentity' | 'specDraftGenerator' | 'generationRuntime'>,
+  input: Pick<
+    ExecuteActionRunInput,
+    'actorId' | 'daemonIdentity' | 'specDraftGenerator' | 'generationRuntime' | 'generationPlanning'
+  >,
 ): Promise<void> => {
   const precondition = preconditionFor(action);
   if (action.actionType === 'ensure_spec_draft') {
     const actionInput = parseEnsureSpecDraftInput(action);
+    const taskConfig = generationTaskConfigFor(input.generationPlanning, 'spec_draft', {
+      enabled: (input.specDraftGenerator ?? disabledSpecDraftGenerator).mode !== 'disabled',
+      promptVersion: actionInput.promptVersion ?? 'spec-draft.fake.v1',
+      outputSchemaVersion: actionInput.outputSchemaVersion ?? 'spec_draft.v1',
+    });
     const generator = input.specDraftGenerator ?? disabledSpecDraftGenerator;
-    if (generator.mode === 'disabled') {
+    if (!taskConfig.enabled || generator.mode === 'disabled') {
       throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Spec draft generation is disabled');
     }
     const context = await client.specDraftGenerationContext(actionInput.workItemId, {
@@ -302,8 +353,13 @@ const executeCommand = async (
 
   if (action.actionType === 'ensure_plan_draft') {
     const actionInput = parseEnsurePlanDraftInput(action);
+    const taskConfig = generationTaskConfigFor(input.generationPlanning, 'plan_draft', {
+      enabled: input.generationRuntime !== undefined,
+      promptVersion: planDraftPromptVersion,
+      outputSchemaVersion: planDraftOutputSchemaVersion,
+    });
     const runtime = input.generationRuntime;
-    if (runtime === undefined) {
+    if (!taskConfig.enabled || runtime === undefined) {
       throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Plan draft generation is disabled');
     }
     const context = await client.planDraftGenerationContext(actionInput.workItemId, {
@@ -318,8 +374,8 @@ const executeCommand = async (
         projectId: context.work_item.project_id,
         repoIds: context.repos.map((repo) => repo.repo_id),
         context: context as unknown as Record<string, unknown>,
-        promptVersion: planDraftPromptVersion,
-        outputSchemaVersion: planDraftOutputSchemaVersion,
+        promptVersion: actionInput.promptVersion ?? taskConfig.promptVersion,
+        outputSchemaVersion: actionInput.outputSchemaVersion ?? taskConfig.outputSchemaVersion,
         policyDigests: Object.fromEntries(
           context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
         ),
@@ -353,6 +409,14 @@ const executeCommand = async (
 
   if (action.actionType === 'ensure_package_drafts') {
     const actionInput = parseEnsurePackageDraftsInput(action);
+    const taskConfig = generationTaskConfigFor(input.generationPlanning, 'package_drafts', {
+      enabled: true,
+      promptVersion: actionInput.promptVersion ?? 'package-drafts.fake.v1',
+      outputSchemaVersion: actionInput.outputSchemaVersion ?? 'package_drafts.v1',
+    });
+    if (!taskConfig.enabled) {
+      throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Package draft generation is disabled');
+    }
     await client.ensurePackageDrafts(actionInput.planRevisionId, {
       action_run_id: action.id,
       ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
@@ -494,6 +558,7 @@ export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Pr
     ...(input.daemonIdentity === undefined ? {} : { daemonIdentity: input.daemonIdentity }),
     ...(input.specDraftGenerator === undefined ? {} : { specDraftGenerator: input.specDraftGenerator }),
     ...(input.generationRuntime === undefined ? {} : { generationRuntime: input.generationRuntime }),
+    ...(input.generationPlanning === undefined ? {} : { generationPlanning: input.generationPlanning }),
   });
 };
 

@@ -12,6 +12,7 @@ import {
   executeClaimedAction,
   type AutomationActionResponse,
   type AutomationActionRunRecord,
+  type AutomationGenerationPlanningConfig,
   type AutomationGenerationWorkItemContextV1,
   type AutomationExecutorClient,
   type EnsureSpecDraftCommandInput,
@@ -303,11 +304,13 @@ const validGeneratedPlanDraft = (overrides: Partial<GeneratedPlanDraftV1> = {}):
 
 const fakeGenerationRuntimeReturning = (
   result: Awaited<ReturnType<CodexGenerationRuntime['generatePlanDraft']>>,
+  inputs: unknown[] = [],
 ): CodexGenerationRuntime => ({
   async generateSpecDraft() {
     throw new Error('unexpected_spec_generation');
   },
-  async generatePlanDraft() {
+  async generatePlanDraft(input) {
+    inputs.push(input);
     return result;
   },
   async generatePackageDrafts() {
@@ -324,6 +327,17 @@ const defaultPlanGenerationRuntime = (): CodexGenerationRuntime =>
     generationArtifacts: [],
     publicSummary: 'Plan generated.',
   });
+
+const generationPlanning = (
+  overrides: Partial<AutomationGenerationPlanningConfig['tasks']['plan_draft']> = {},
+): AutomationGenerationPlanningConfig => ({
+  mode: 'fake',
+  tasks: {
+    spec_draft: { enabled: false, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+    plan_draft: { enabled: true, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1', ...overrides },
+    package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+  },
+});
 
 describe('spec draft generation fixtures', () => {
   it('creates schema-versioned fake Spec drafts from public WorkItem context', async () => {
@@ -453,6 +467,60 @@ describe('automation executor', () => {
           digest: 'sha256:plan',
         },
       ],
+    });
+  });
+
+  it('blocks Plan draft actions when the Plan generation task is disabled', async () => {
+    const client = new FakeAutomationClient();
+
+    const result = await executeActionRun({
+      client,
+      action: claimedAction(),
+      actorId: 'actor-automation',
+      daemonIdentity: 'daemon-main',
+      generationRuntime: defaultPlanGenerationRuntime(),
+      generationPlanning: generationPlanning({ enabled: false }),
+    });
+
+    expect(result).toMatchObject({ actionRunId: 'action-run-1', status: 'blocked', retryable: false, reasonCode: 'generation_disabled' });
+    expect(client.calls.map((call) => call.method)).not.toContain('planDraftGenerationContext');
+    expect(client.calls.map((call) => call.method)).not.toContain('ensurePlanDraft');
+  });
+
+  it('uses the claimed Plan action prompt and output schema versions for generation', async () => {
+    const client = new FakeAutomationClient();
+    const runtimeInputs: unknown[] = [];
+    const runtime = fakeGenerationRuntimeReturning(
+      {
+        taskKind: 'plan_draft',
+        promptVersion: 'plan-draft.fake.v3',
+        outputSchemaVersion: 'plan_draft.v1',
+        generated: validGeneratedPlanDraft(),
+        generationArtifacts: [],
+        publicSummary: 'Plan generated.',
+      },
+      runtimeInputs,
+    );
+
+    await executeActionRun({
+      client,
+      action: claimedAction({
+        actionInputJson: {
+          work_item_id: 'persisted-work-item',
+          spec_revision_id: 'persisted-spec-revision',
+          prompt_version: 'plan-draft.fake.v3',
+          output_schema_version: 'plan_draft.v1',
+        },
+      }),
+      actorId: 'actor-automation',
+      daemonIdentity: 'daemon-main',
+      generationRuntime: runtime,
+      generationPlanning: generationPlanning({ promptVersion: 'plan-draft.fake.v2' }),
+    });
+
+    expect(runtimeInputs[0]).toMatchObject({
+      promptVersion: 'plan-draft.fake.v3',
+      outputSchemaVersion: 'plan_draft.v1',
     });
   });
 

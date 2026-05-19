@@ -178,6 +178,7 @@ export class AutomationDaemon {
         daemonIdentity: this.options.daemonIdentity,
         specDraftGenerator: this.options.specDraftGenerator ?? disabledSpecDraftGenerator,
         ...(this.options.generationRuntime === undefined ? {} : { generationRuntime: this.options.generationRuntime }),
+        generationPlanning,
       }),
     };
   }

@@ -709,6 +709,7 @@ describe('automation daemon loop', () => {
       },
       noClaimBackoffMs: 1,
       loopIntervalMs: 1,
+      generationPlanning,
       generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
       sleep: async () => undefined,
     });

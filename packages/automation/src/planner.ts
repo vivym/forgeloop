@@ -260,15 +260,21 @@ const mutatingActionForTarget = (
     actionType === 'ensure_spec_draft'
       ? ({
           work_item_id: target.targetObjectId,
+          prompt_version: generationTask.promptVersion,
+          output_schema_version: generationTask.outputSchemaVersion,
         } satisfies ActionInputJson)
       : actionType === 'ensure_plan_draft'
       ? ({
           work_item_id: target.targetObjectId,
           spec_revision_id: target.targetRevisionId ?? '',
+          prompt_version: generationTask.promptVersion,
+          output_schema_version: generationTask.outputSchemaVersion,
         } satisfies ActionInputJson)
       : ({
           plan_revision_id: target.targetObjectId,
           generation_key: generationKey ?? '',
+          prompt_version: generationTask.promptVersion,
+          output_schema_version: generationTask.outputSchemaVersion,
         } satisfies ActionInputJson);
   const idempotencyKey = mutatingActionIdempotencyKey({
     actionType,
