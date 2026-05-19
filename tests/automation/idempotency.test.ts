@@ -94,6 +94,31 @@ describe('automation idempotency helpers', () => {
     );
   });
 
+  it('includes Spec draft generation mode and schema identity', () => {
+    const specDraftBase = {
+      actionType: 'ensure_spec_draft',
+      targetObjectType: 'work_item',
+      targetObjectId: 'work-item-1',
+      automationScope: 'repo:project-1:repo-1',
+      automationSettingsVersion: 3,
+      capabilityFingerprint: 'capability-1',
+      preconditionFingerprint: 'precondition-1',
+      generationMode: 'fake',
+      promptVersion: 'spec-draft.fake.v1',
+      outputSchemaVersion: 'spec_draft.v1',
+    } satisfies MutatingActionIdentity;
+
+    expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
+      mutatingActionIdempotencyKey({ ...specDraftBase, generationMode: 'codex' }),
+    );
+    expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
+      mutatingActionIdempotencyKey({ ...specDraftBase, promptVersion: 'spec-draft.fake.v2' }),
+    );
+    expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
+      mutatingActionIdempotencyKey({ ...specDraftBase, outputSchemaVersion: 'spec_draft.v2' }),
+    );
+  });
+
   it('builds runtime snapshot keys from stable policy observation identity and repo scope', () => {
     expect(projectRuntimeSnapshotIdempotencyKey(observationA)).toBe(
       projectRuntimeSnapshotIdempotencyKey({ ...observationA, observedAt: '2026-05-15T00:00:01.000Z' }),
@@ -117,6 +142,7 @@ describe('automation idempotency helpers', () => {
         generatedAt: '2026-05-15T00:00:00.000Z',
         projects: [],
         repos: [],
+        workItemsRequiringSpec: [],
         workItemsRequiringPlan: [],
         planRevisionsRequiringPackages: [],
         recentActionRuns: [],

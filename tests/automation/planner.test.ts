@@ -75,6 +75,68 @@ const packageTarget = (overrides: Partial<RuntimeSnapshotTarget> = {}): RuntimeS
 });
 
 describe('automation planner', () => {
+  it('emits ensure_spec_draft before downstream draft actions when fake generation is enabled', () => {
+    const actions = planNextActions(
+      baseSnapshot({
+        workItemsRequiringSpec: [specWorkItemTarget()],
+        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
+      }),
+      { specDraftGenerationMode: 'fake' },
+    );
+
+    expect(actions.map((action) => action.actionType).slice(0, 3)).toEqual([
+      'ensure_spec_draft',
+      'ensure_plan_draft',
+      'ensure_package_drafts',
+    ]);
+    expect(actions[0]).toMatchObject({
+      actionType: 'ensure_spec_draft',
+      targetObjectType: 'work_item',
+      targetObjectId: 'work-item-needs-spec',
+      actionInputJson: { work_item_id: 'work-item-needs-spec' },
+    });
+  });
+
+  it('does not emit ensure_spec_draft when generation is disabled', () => {
+    expect(
+      planNextActions(baseSnapshot({ workItemsRequiringSpec: [specWorkItemTarget()] }), {
+        specDraftGenerationMode: 'disabled',
+      }).map((action) => action.actionType),
+    ).not.toContain('ensure_spec_draft');
+  });
+
+  it('uses canGenerateSpecDraft when a Spec target needs manual path disambiguation', () => {
+    const actions = planNextActions(
+      baseSnapshot({
+        repos: [
+          baseSnapshot().repos[0]!,
+          {
+            projectId: 'project-1',
+            repoId: 'repo-2',
+            automationScope: 'repo:project-1:repo-2',
+            automationSettingsVersion: 4,
+            capabilityFingerprint: 'capability-fingerprint-2',
+            daemonInternalLocalPath: '/private/repo-2',
+          },
+        ],
+        workItemsRequiringSpec: [
+          specWorkItemTarget({
+            repoId: undefined,
+            eligibleRepoIds: ['repo-1', 'repo-2'],
+            automationScope: 'project:project-1',
+          }),
+        ],
+      }),
+      { specDraftGenerationMode: 'fake' },
+    );
+
+    expect(actions[0]).toMatchObject({
+      actionType: 'request_manual_path',
+      actionInputJson: expect.objectContaining({ object_type: 'work_item' }),
+    });
+  });
+
   it('emits ensure_plan_draft for an approved Spec missing a Plan draft', () => {
     const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }));
 

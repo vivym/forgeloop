@@ -31,6 +31,9 @@ export interface MutatingActionIdentity {
   capabilityFingerprint: string;
   preconditionFingerprint: string;
   generationKey?: string;
+  promptVersion?: string;
+  outputSchemaVersion?: string;
+  generationMode?: string;
   manualPathScopeKey?: string;
   manualPathReasonCode?: string;
   policyDigest?: string;
