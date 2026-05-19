@@ -200,6 +200,7 @@ export class AppServerGenerationDriver {
   #generationActive = false;
   #cleanupDone = false;
   #cancelRequested = false;
+  #removeAbortListener: (() => void) | undefined;
   #resolveCancel: (() => void) | undefined;
   #cancelPromise: Promise<void> = new Promise((resolve) => {
     this.#resolveCancel = resolve;
@@ -319,6 +320,7 @@ export class AppServerGenerationDriver {
       await this.#cleanupActiveSession(error instanceof Error ? error.message : 'codex_generation_failed', { interrupt: true });
       throw error;
     } finally {
+      this.#clearAbortListener();
       this.#generationActive = false;
     }
   }
@@ -373,6 +375,7 @@ export class AppServerGenerationDriver {
   }
 
   #resetCancelState(signal: AbortSignal | undefined): void {
+    this.#clearAbortListener();
     this.#cancelRequested = signal?.aborted ?? false;
     this.#cancelPromise = new Promise((resolve) => {
       this.#resolveCancel = resolve;
@@ -381,14 +384,19 @@ export class AppServerGenerationDriver {
       this.#resolveCancel?.();
       return;
     }
-    signal?.addEventListener(
-      'abort',
-      () => {
+    if (signal !== undefined) {
+      const onAbort = (): void => {
         this.#cancelRequested = true;
         this.#resolveCancel?.();
-      },
-      { once: true },
-    );
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.#removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  #clearAbortListener(): void {
+    this.#removeAbortListener?.();
+    this.#removeAbortListener = undefined;
   }
 
   async #withDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {

@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import {
+  appServerResultFromResponse,
   CodexAppServerJsonRpcClient,
   effectiveConfigFromResponse,
   isRecord,
@@ -258,32 +259,36 @@ export const confirmAppServerDangerousMode = async (
 };
 
 const extractThreadId = (response: unknown): string | undefined => {
-  if (response !== null && typeof response === 'object') {
-    const record = response as Record<string, unknown>;
-    if (typeof record.threadId === 'string') {
-      return record.threadId;
-    }
-
-    const thread = record.thread;
-    if (thread !== null && typeof thread === 'object' && typeof (thread as Record<string, unknown>).id === 'string') {
-      return (thread as Record<string, unknown>).id as string;
-    }
+  const record = appServerResultFromResponse(response);
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  if (typeof record.threadId === 'string') {
+    return record.threadId;
+  }
+  if (typeof record.thread_id === 'string') {
+    return record.thread_id;
+  }
+  if (isRecord(record.thread) && typeof record.thread.id === 'string') {
+    return record.thread.id;
   }
 
   return undefined;
 };
 
 const extractTurnId = (response: unknown): string | undefined => {
-  if (response !== null && typeof response === 'object') {
-    const record = response as Record<string, unknown>;
-    if (typeof record.turnId === 'string') {
-      return record.turnId;
-    }
-
-    const turn = record.turn;
-    if (turn !== null && typeof turn === 'object' && typeof (turn as Record<string, unknown>).id === 'string') {
-      return (turn as Record<string, unknown>).id as string;
-    }
+  const record = appServerResultFromResponse(response);
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  if (typeof record.turnId === 'string') {
+    return record.turnId;
+  }
+  if (typeof record.turn_id === 'string') {
+    return record.turn_id;
+  }
+  if (isRecord(record.turn) && typeof record.turn.id === 'string') {
+    return record.turn.id;
   }
 
   return undefined;
@@ -511,6 +516,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       return { acknowledged: false, reason: 'missing_thread_or_turn' };
     }
 
+    await this.#consumeLeaseCommand(this.#requireExistingLease(), 'turn/interrupt', JSON.stringify({ threadId, turnId }));
     const response = await this.#transport.request('turn/interrupt', { threadId, turnId });
     return {
       acknowledged: true,

@@ -251,6 +251,47 @@ describe('AppServerGenerationDriver', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('removes completed run abort listeners before the next generation', async () => {
+    const oldController = new AbortController();
+    let notificationStreams = 0;
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turnId: 'turn-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+      },
+      notifications: async function* () {
+        notificationStreams += 1;
+        if (notificationStreams === 1) {
+          yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
+          yield { type: 'turn_completed', status: 'completed' };
+          return;
+        }
+        await new Promise(() => undefined);
+      },
+      async close() {},
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    await driver.generate({
+      taskKind: 'plan_draft',
+      prompt: '{}',
+      outputSchemaVersion: 'plan_draft.v1',
+      signal: oldController.signal,
+    });
+    const secondGeneration = driver.generate({
+      taskKind: 'plan_draft',
+      prompt: '{}',
+      outputSchemaVersion: 'plan_draft.v1',
+      timeoutMs: 10,
+    });
+    await delay(5);
+    oldController.abort();
+
+    await expect(withTestTimeout(secondGeneration, 100)).rejects.toThrow(/codex_generation_timeout/);
+  });
+
   it('rejects terminal success with no assistant output', async () => {
     const transport: CodexAppServerTransport = {
       async request(method) {
