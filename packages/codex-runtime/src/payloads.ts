@@ -29,8 +29,9 @@ const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|L
 const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
   /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
-const directPlanHumanGatePattern =
-  /(?:(?:^|[.!?,;]\s+|\n\s*(?:[-*]|\d+\.)\s*)|\b(?:please|then|next)\s+|\b(?:after|when|once|if)\b[\s\S]{0,80}\b)(?:auto(?:matically)?\s+)?(?:(?:approve|submit|merge|push|release|deploy)\b|enqueue\s+(?:the\s+)?(?:package\s+)?run\b)/i;
+const gatedPlanActionPattern = /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/i;
+const negatedGatedPlanActionPattern =
+  /(?:\b(?:no|exclude|excludes|excluding)\b[\s\S]{0,80}\b(?:approve|submit|merge|push|release|deploy|enqueue\s+(?:the\s+)?(?:package\s+)?run)\b|\bdo\s+not\b[\s\S]{0,80}\b(?:approve|submit|merge|push|release|deploy|enqueue\s+(?:the\s+)?(?:package\s+)?run)\b)/i;
 
 const hasUnsafeUnixLocalPath = (value: string): boolean =>
   Array.from(value.matchAll(unixLocalPathPattern)).some((match) => {
@@ -45,6 +46,9 @@ const isUnsafePublicString = (value: string): boolean =>
   rawPromptOutputLogMarkerPattern.test(value) ||
   rawBlockBoundaryMarkerPattern.test(value) ||
   bypassHumanGatePattern.test(value);
+
+const isUnsafePlanString = (value: string): boolean =>
+  isUnsafePublicString(value) || (gatedPlanActionPattern.test(value) && !negatedGatedPlanActionPattern.test(value));
 
 const safeParseOrThrow = <T>(schema: z.ZodType<T>, value: unknown, errorCode: string): T => {
   const result = schema.safeParse(value);
@@ -77,7 +81,7 @@ const assertPublicSafeText = (value: unknown, errorCode: string): void => {
 
 const assertPlanPublicSafeText = (value: unknown, errorCode: string): void => {
   if (typeof value === 'string') {
-    if (isUnsafePublicString(value) || directPlanHumanGatePattern.test(value)) {
+    if (isUnsafePlanString(value)) {
       throw new Error(errorCode);
     }
     return;

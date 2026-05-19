@@ -136,6 +136,7 @@ describe('GeneratedPlanDraftV1', () => {
     'Then deploy to staging after tests pass',
     'After tests pass deploy to staging',
     'If tests pass deploy to staging',
+    'Finally merge to main after checks pass',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
