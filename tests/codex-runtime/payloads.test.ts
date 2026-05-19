@@ -137,7 +137,13 @@ describe('GeneratedPlanDraftV1', () => {
     ).toThrow(/generated_plan_draft_invalid/);
   });
 
-  it.each(['BEGIN PROMPT user asks for feature', 'APP SERVER LOG: token redacted'])(
+  it.each([
+    'BEGIN PROMPT user asks for feature',
+    'END PROMPT',
+    'END OUTPUT',
+    'END LOG',
+    'APP SERVER LOG: token redacted',
+  ])(
     'rejects raw prompt/output/log markers in public Plan fields: %s',
     (summary) => {
       expect(() =>
@@ -192,7 +198,13 @@ describe('GeneratedSpecDraftV1', () => {
     ).toMatchObject({ scope_out: ['Release, deploy, and non-delivery workflows'] });
   });
 
-  it.each(['BEGIN PROMPT user asks for feature', 'APP SERVER LOG: token redacted'])(
+  it.each([
+    'BEGIN PROMPT user asks for feature',
+    'END PROMPT',
+    'END OUTPUT',
+    'END LOG',
+    'APP SERVER LOG: token redacted',
+  ])(
     'rejects raw prompt/output/log markers in public Spec fields: %s',
     (summary) => {
       expect(() =>
@@ -337,7 +349,13 @@ describe('GeneratedPackageDraftSetV1', () => {
     );
   });
 
-  it.each(['BEGIN PROMPT user asks for feature', 'APP SERVER LOG: token redacted'])(
+  it.each([
+    'BEGIN PROMPT user asks for feature',
+    'END PROMPT',
+    'END OUTPUT',
+    'END LOG',
+    'APP SERVER LOG: token redacted',
+  ])(
     'rejects raw prompt/output/log markers in public Package fields: %s',
     (objective) => {
       const payload = validPackageDraftSet();
