@@ -76,11 +76,38 @@ export class CodexAppServerJsonRpcClient {
         yield notification;
         continue;
       }
-      await Promise.race([delay(50), new Promise((resolve) => this.#events.once('notification', resolve))]);
+      await this.#waitForNotification();
     }
 
     if (this.#closeError !== undefined) {
       throw this.#closeError;
+    }
+  }
+
+  async #waitForNotification(): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let cleanup: (() => void) | undefined;
+    try {
+      await new Promise<void>((resolve) => {
+        const onNotification = (): void => {
+          cleanup?.();
+          resolve();
+        };
+        timeout = setTimeout(() => {
+          cleanup?.();
+          resolve();
+        }, 50);
+        cleanup = () => {
+          if (timeout !== undefined) {
+            clearTimeout(timeout);
+            timeout = undefined;
+          }
+          this.#events.off('notification', onNotification);
+        };
+        this.#events.once('notification', onNotification);
+      });
+    } finally {
+      cleanup?.();
     }
   }
 
