@@ -87,6 +87,22 @@ describe('GeneratedPlanDraftV1', () => {
     ).toThrow(/generated_plan_draft_invalid/);
   });
 
+  it('accepts API routes in public Plan fields', () => {
+    expect(
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary: 'Plan API route handling',
+        content: 'Validate GET /api/work-items and POST /api/work-items/:id.',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+      }),
+    ).toMatchObject({ content: 'Validate GET /api/work-items and POST /api/work-items/:id.' });
+  });
+
   it('rejects generated Plan text that asks automation to bypass human gates', () => {
     expect(() =>
       validateGeneratedPlanDraft({
@@ -139,6 +155,26 @@ describe('GeneratedPlanDraftV1', () => {
   });
 
   it.each([
+    'No release or deploy work is included',
+    'Do not deploy automatically',
+    'Do not automatically deploy',
+  ])('accepts negated or out-of-scope Plan text that mentions gated actions: %s', (summary) => {
+    expect(
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary,
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+      }),
+    ).toMatchObject({ summary });
+  });
+
+  it.each([
     'BEGIN PROMPT user asks for feature',
     'BEGIN',
     'END PROMPT',
@@ -165,6 +201,25 @@ describe('GeneratedPlanDraftV1', () => {
       ).toThrow(/generated_plan_draft_invalid/);
     },
   );
+
+  it('rejects unsafe public Plan structured document keys', () => {
+    expect(() =>
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary: 'Plan summary',
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+        structured_document: {
+          '/Users/viv/private/raw-output.log': 'redacted',
+        },
+      }),
+    ).toThrow(/generated_plan_draft_invalid/);
+  });
 });
 
 describe('GeneratedSpecDraftV1', () => {
@@ -202,6 +257,23 @@ describe('GeneratedSpecDraftV1', () => {
     ).toMatchObject({ scope_out: ['Release, deploy, and non-delivery workflows'] });
   });
 
+  it('accepts API routes in public Spec fields', () => {
+    expect(
+      validateGeneratedSpecDraft({
+        schema_version: 'spec_draft.v1',
+        summary: 'Spec summary',
+        content: 'Expose GET /api/work-items for reads.',
+        background: 'Background',
+        goals: ['Goal'],
+        scope_in: ['In scope'],
+        scope_out: ['Out of scope'],
+        acceptance_criteria: ['Criterion'],
+        risk_notes: [],
+        test_strategy_summary: 'API and daemon tests',
+      }),
+    ).toMatchObject({ content: 'Expose GET /api/work-items for reads.' });
+  });
+
   it.each([
     'BEGIN PROMPT user asks for feature',
     'BEGIN',
@@ -230,6 +302,26 @@ describe('GeneratedSpecDraftV1', () => {
       ).toThrow(/generated_spec_draft_invalid/);
     },
   );
+
+  it('rejects unsafe public Spec structured document keys', () => {
+    expect(() =>
+      validateGeneratedSpecDraft({
+        schema_version: 'spec_draft.v1',
+        summary: 'Spec summary',
+        content: 'Spec body',
+        background: 'Background',
+        goals: ['Goal'],
+        scope_in: ['In scope'],
+        scope_out: [],
+        acceptance_criteria: ['Criterion'],
+        risk_notes: [],
+        test_strategy_summary: 'API and daemon tests',
+        structured_document: {
+          'claim-token': 'redacted',
+        },
+      }),
+    ).toThrow(/generated_spec_draft_invalid/);
+  });
 });
 
 describe('GeneratedPackageDraftSetV1', () => {
@@ -374,6 +466,15 @@ describe('GeneratedPackageDraftSetV1', () => {
       expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
     },
   );
+
+  it('rejects unsafe public Package metadata keys', () => {
+    const payload = validPackageDraftSet();
+    payload.dependencies[0]!.metadata = {
+      '/Users/viv/private/raw-output.log': 'redacted',
+    };
+
+    expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
+  });
 
   it('rejects dependency cycles', () => {
     const payload = validPackageDraftSet();

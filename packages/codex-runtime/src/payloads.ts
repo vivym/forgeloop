@@ -20,19 +20,26 @@ const repoRelativePath = z
     { message: 'path must be repo-relative and safe' },
   );
 
-const unixLocalPathPattern = /(?:^|[\s"'(=])\/[A-Za-z0-9._-]+(?:\/[^\s"'`,;)]*)?/i;
+const unixLocalPathPattern = /(?:^|[\s"'(=])(\/[A-Za-z0-9._-]+(?:\/[^\s"'`,;)]*)?)/gi;
+const publicRoutePathPattern = /^\/(?:api|v\d+(?:\.\d+)?|graphql|health|status|auth|oauth)(?:\/|$)/i;
 const windowsLocalPathPattern = /[A-Za-z]:[\\/][^\s"'`,;)]*/i;
 const secretLikePattern =
   /(?:claim[-_ ]?token|hmac|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?)/i;
 const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|LOG)\b|\bAPP\s+SERVER\s+LOG\b:?)/i;
 const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
-  /(?:(?:\b(?:auto(?:matically)?|bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
+  /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const directPlanHumanGatePattern =
-  /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/i;
+  /(?:(?:^|[.!?,;]\s+|\n\s*(?:[-*]|\d+\.)\s*)|\b(?:please|then|next)\s+|\b(?:after|when|once|if)\b[\s\S]{0,80}\b)(?:auto(?:matically)?\s+)?(?:(?:approve|submit|merge|push|release|deploy)\b|enqueue\s+(?:the\s+)?(?:package\s+)?run\b)/i;
+
+const hasUnsafeUnixLocalPath = (value: string): boolean =>
+  Array.from(value.matchAll(unixLocalPathPattern)).some((match) => {
+    const path = match[1];
+    return path !== undefined && !publicRoutePathPattern.test(path);
+  });
 
 const isUnsafePublicString = (value: string): boolean =>
-  unixLocalPathPattern.test(value) ||
+  hasUnsafeUnixLocalPath(value) ||
   windowsLocalPathPattern.test(value) ||
   secretLikePattern.test(value) ||
   rawPromptOutputLogMarkerPattern.test(value) ||
@@ -61,7 +68,10 @@ const assertPublicSafeText = (value: unknown, errorCode: string): void => {
   }
 
   if (value !== null && typeof value === 'object') {
-    Object.values(value as Record<string, unknown>).forEach((entry) => assertPublicSafeText(entry, errorCode));
+    Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
+      assertPublicSafeText(key, errorCode);
+      assertPublicSafeText(entry, errorCode);
+    });
   }
 };
 
@@ -79,7 +89,10 @@ const assertPlanPublicSafeText = (value: unknown, errorCode: string): void => {
   }
 
   if (value !== null && typeof value === 'object') {
-    Object.values(value as Record<string, unknown>).forEach((entry) => assertPlanPublicSafeText(entry, errorCode));
+    Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
+      assertPublicSafeText(key, errorCode);
+      assertPlanPublicSafeText(entry, errorCode);
+    });
   }
 };
 
