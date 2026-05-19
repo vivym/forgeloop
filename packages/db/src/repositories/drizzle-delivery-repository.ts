@@ -326,6 +326,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById(specs, specs.id, specId);
   }
 
+  async listSpecs(projectId?: string): Promise<Spec[]> {
+    if (projectId === undefined) {
+      return this.listWhere<Spec>(specs, undefined, specs.createdAt);
+    }
+
+    const rows = await this.db
+      .select(getTableColumns(specs))
+      .from(specs)
+      .innerJoin(work_items, eq(specs.workItemId, work_items.id))
+      .where(eq(work_items.projectId, projectId))
+      .orderBy(asc(specs.createdAt));
+    return rows.map((row) => fromDbRecord<Spec>(row));
+  }
+
   async saveSpecRevision(specRevision: SpecRevision): Promise<void> {
     await this.upsert(spec_revisions, spec_revisions.id, specRevision);
   }
@@ -344,6 +358,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getPlan(planId: string): Promise<Plan | undefined> {
     return this.getById(plans, plans.id, planId);
+  }
+
+  async listPlans(projectId?: string): Promise<Plan[]> {
+    if (projectId === undefined) {
+      return this.listWhere<Plan>(plans, undefined, plans.createdAt);
+    }
+
+    const rows = await this.db
+      .select(getTableColumns(plans))
+      .from(plans)
+      .innerJoin(work_items, eq(plans.workItemId, work_items.id))
+      .where(eq(work_items.projectId, projectId))
+      .orderBy(asc(plans.createdAt));
+    return rows.map((row) => fromDbRecord<Plan>(row));
   }
 
   async savePlanRevision(planRevision: PlanRevision): Promise<void> {
@@ -367,6 +395,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined> {
     return this.getById(execution_packages, execution_packages.id, executionPackageId);
+  }
+
+  async listExecutionPackages(projectId?: string): Promise<ExecutionPackage[]> {
+    return projectId === undefined
+      ? this.listWhere<ExecutionPackage>(execution_packages, undefined, execution_packages.createdAt)
+      : this.listWhere<ExecutionPackage>(
+          execution_packages,
+          eq(execution_packages.projectId, projectId),
+          execution_packages.createdAt,
+        );
   }
 
   async listExecutionPackagesForWorkItem(workItemId: string): Promise<ExecutionPackage[]> {
@@ -406,6 +444,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getRunSession(runSessionId: string): Promise<RunSession | undefined> {
     return this.getById(run_sessions, run_sessions.id, runSessionId);
+  }
+
+  async listRunSessions(projectId?: string): Promise<RunSession[]> {
+    if (projectId === undefined) {
+      return this.listWhere<RunSession>(run_sessions, undefined, run_sessions.createdAt);
+    }
+
+    const rows = await this.db
+      .select(getTableColumns(run_sessions))
+      .from(run_sessions)
+      .innerJoin(execution_packages, eq(run_sessions.executionPackageId, execution_packages.id))
+      .where(eq(execution_packages.projectId, projectId))
+      .orderBy(asc(run_sessions.createdAt));
+    return rows.map((row) => fromDbRecord<RunSession>(row));
   }
 
   async listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]> {
@@ -773,6 +825,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getReviewPacket(reviewPacketId: string): Promise<ReviewPacket | undefined> {
     return this.getById(review_packets, review_packets.id, reviewPacketId);
+  }
+
+  async listReviewPackets(projectId?: string): Promise<ReviewPacket[]> {
+    if (projectId === undefined) {
+      return this.listWhere<ReviewPacket>(review_packets, undefined, review_packets.createdAt);
+    }
+
+    const rows = await this.db
+      .select(getTableColumns(review_packets))
+      .from(review_packets)
+      .innerJoin(execution_packages, eq(review_packets.executionPackageId, execution_packages.id))
+      .where(eq(execution_packages.projectId, projectId))
+      .orderBy(asc(review_packets.createdAt));
+    return rows.map((row) => fromDbRecord<ReviewPacket>(row));
   }
 
   async listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]> {

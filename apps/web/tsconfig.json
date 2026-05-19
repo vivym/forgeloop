@@ -1,7 +1,8 @@
 {
   "extends": "../../tsconfig.web.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    "rootDirs": [".", "./.react-router/types"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", ".react-router/types/**/*"]
 }

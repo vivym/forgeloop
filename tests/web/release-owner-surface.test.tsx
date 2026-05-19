@@ -1,53 +1,26 @@
-import { renderToString } from 'react-dom/server';
+// @vitest-environment jsdom
+
 import { describe, expect, it } from 'vitest';
 
-import { App } from '../../apps/web/src/App';
+import { renderRoute } from './router-test-utils';
+import { release } from './fixtures/product-data';
 
 describe('Release Owner surface', () => {
-  it('server-renders role workbench controls from the MVP role matrix', () => {
-    const html = renderToString(<App />);
+  it('renders the release list route as a product inventory', async () => {
+    const screen = await renderRoute('/releases');
 
-    expect(html).toContain('Role Workbench');
-    expect(html).toContain('Intake');
-    expect(html).toContain('Spec Approver');
-    expect(html).toContain('Execution Owner');
-    expect(html).toContain('Reviewer');
-    expect(html).toContain('QA/Test Owner');
-    expect(html).toContain('Manager Health');
-    expect(html).toContain('Load role queue');
+    expect(await screen.findByRole('heading', { name: 'Releases' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Create release' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Dev Tools' })).toBeNull();
   });
 
-  it('server-renders compact release controls and backend-derived cockpit sections', () => {
-    const html = renderToString(<App />);
+  it('renders the release cockpit route as a governed product surface', async () => {
+    const screen = await renderRoute(`/releases/${release.id}`);
 
-    expect(html).toContain('Release Owner');
-    expect(html).toContain('release_id');
-    expect(html).toContain('project_id');
-    expect(html).toContain('Load cockpit');
-    expect(html).toContain('Load replay');
-    expect(html).toContain('Create release');
-    expect(html).toContain('Patch release');
-    expect(html).toContain('Scope summary');
-    expect(html).toContain('Rollout strategy');
-    expect(html).toContain('Rollback plan');
-    expect(html).toContain('Observation plan');
-    expect(html).toContain('State summary');
-    expect(html).toContain('Linked WorkItems');
-    expect(html).toContain('ExecutionPackages');
-    expect(html).toContain('Link WorkItem');
-    expect(html).toContain('Unlink WorkItem');
-    expect(html).toContain('Link ExecutionPackage');
-    expect(html).toContain('Unlink ExecutionPackage');
-    expect(html).toContain('Blockers');
-    expect(html).toContain('Checklist');
-    expect(html).toContain('Risk summary');
-    expect(html).toContain('Evidence/observations');
-    expect(html).toContain('Decisions');
-    expect(html).toContain('Next actions');
-    expect(html).toContain('Submit');
-    expect(html).toContain('Override approve');
-    expect(html).toContain('Start observing');
-    expect(html).toContain('Close release');
-    expect(html).toContain('Observation evidence');
+    expect(await screen.findByText('Scope summary')).toBeTruthy();
+    expect(screen.getByText('Linked Work Items')).toBeTruthy();
+    expect(screen.getByText('Linked Execution Packages')).toBeTruthy();
+    expect(screen.getByText('Timeline / Replay')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Dev Tools' })).toBeNull();
   });
 });
