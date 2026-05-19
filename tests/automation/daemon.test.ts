@@ -373,6 +373,39 @@ describe('automation daemon loop', () => {
     ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
   });
 
+  it.each(['fake', 'disabled'] as const)(
+    'keeps legacy specDraftGenerationMode=%s scoped to Spec draft planning only',
+    async (specDraftGenerationMode) => {
+      const client = new FakeDaemonClient();
+      client.snapshot = baseSnapshot({
+        workItemsRequiringPlan: [
+          {
+            targetObjectType: 'work_item',
+            targetObjectId: 'work-item-1',
+            targetRevisionId: 'spec-revision-1',
+            targetStatus: 'approved',
+            projectId: 'project-1',
+            repoId: 'repo-1',
+            automationScope: repoScope,
+          },
+        ],
+        planRevisionsRequiringPackages: [packageTarget()],
+      });
+      client.actionToClaim = null;
+      const daemon = new AutomationDaemon({
+        ...daemonOptions(client),
+        specDraftGenerationMode,
+      });
+
+      const result = await daemon.runOnce();
+
+      expect(result).toMatchObject({ plannedActionCount: 3, executed: { status: 'skipped' } });
+      expect(
+        client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
+      ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
+    },
+  );
+
   it('plans and executes Spec draft actions when fake generation is enabled', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
