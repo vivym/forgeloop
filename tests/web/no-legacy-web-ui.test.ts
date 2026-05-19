@@ -16,6 +16,17 @@ const sourceText = () =>
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
+const productSourceText = () =>
+  textFiles('apps/web')
+    .filter((file) => !file.includes('/features/dev-tools/') && !file.includes('/routes/dev-tools/'))
+    .concat(
+      textFiles('tests/web').filter(
+        (file) => !file.endsWith('no-legacy-web-ui.test.ts') && !file.endsWith('dev-tools-gating.test.tsx'),
+      ),
+    )
+    .map((file) => readFileSync(file, 'utf8'))
+    .join('\n');
+
 describe('no legacy Web UI baggage', () => {
   it('does not keep old workbench classes or legacy routes', () => {
     expect(sourceText()).not.toMatch(/workbench-grid|className="panel"|\.panel\b|\/legacy|src\/main\.tsx|Load role queue|Load cockpit|Load replay/);
@@ -27,6 +38,12 @@ describe('no legacy Web UI baggage', () => {
 
   it('does not keep old API or state shims', () => {
     expect(sourceText()).not.toMatch(/src\/api|src\/workbenchState|from ['"].*\/api['"]/);
+  });
+
+  it('does not expose raw or debug-only controls on product Web surfaces', () => {
+    expect(productSourceText()).not.toMatch(
+      /raw JSON|raw replay|raw payload|Replay payload|Load raw replay|Object ID|manual ID|manual .*loader|direct id loading|debug-only/i,
+    );
   });
 
   it('removes old Web entry, API, state, and stylesheet files', () => {

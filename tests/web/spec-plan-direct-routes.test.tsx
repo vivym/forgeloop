@@ -496,7 +496,7 @@ describe('Spec and Plan direct routes', () => {
     expect(document.body.textContent).not.toMatch(/work_item_id|actor_id/);
   });
 
-  it('recognizes Work Item replay events as parent context by object identity', async () => {
+  it('recognizes Work Item replay events as parent context by parent linkage', async () => {
     const screen = await renderRoute('/specs/spec-1', {
       apiOverrides: {
         'GET /specs/spec-1': {
