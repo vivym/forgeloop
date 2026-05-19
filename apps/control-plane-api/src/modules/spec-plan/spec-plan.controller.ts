@@ -2,12 +2,16 @@ import { Body, Controller, Get, Headers, Inject, Param, Post } from '@nestjs/com
 
 import { actorContextFromHeaders } from '../auth/actor-context';
 import {
-  actorCommandSchema,
+  approveArtifactCommandSchema,
   createPlanRevisionSchema,
   createSpecRevisionSchema,
-  type ActorCommandDto,
+  requestArtifactChangesCommandSchema,
+  submitForApprovalCommandSchema,
+  type ApproveArtifactCommandDto,
   type CreatePlanRevisionDto,
   type CreateSpecRevisionDto,
+  type RequestArtifactChangesCommandDto,
+  type SubmitForApprovalCommandDto,
 } from '../delivery/dto';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import { SpecPlanService } from './spec-plan.service';
@@ -52,7 +56,7 @@ export class SpecPlanController {
   @Post('specs/:specId/submit-for-approval')
   submitSpec(
     @Param('specId') specId: string,
-    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.specPlanService.submitSpecForApproval(specId, body, actorContextFromHeaders(headers));
@@ -61,7 +65,7 @@ export class SpecPlanController {
   @Post('specs/:specId/approve')
   approveSpec(
     @Param('specId') specId: string,
-    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Body(new ZodValidationPipe(approveArtifactCommandSchema)) body: ApproveArtifactCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.specPlanService.approveSpec(specId, body, actorContextFromHeaders(headers));
@@ -70,7 +74,7 @@ export class SpecPlanController {
   @Post('specs/:specId/request-changes')
   requestSpecChanges(
     @Param('specId') specId: string,
-    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Body(new ZodValidationPipe(requestArtifactChangesCommandSchema)) body: RequestArtifactChangesCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.specPlanService.requestSpecChanges(specId, body, actorContextFromHeaders(headers));
@@ -112,7 +116,7 @@ export class SpecPlanController {
   @Post('plans/:planId/submit-for-approval')
   submitPlan(
     @Param('planId') planId: string,
-    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.specPlanService.submitPlanForApproval(planId, body, actorContextFromHeaders(headers));
@@ -121,7 +125,7 @@ export class SpecPlanController {
   @Post('plans/:planId/approve')
   approvePlan(
     @Param('planId') planId: string,
-    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Body(new ZodValidationPipe(approveArtifactCommandSchema)) body: ApproveArtifactCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.specPlanService.approvePlan(planId, body, actorContextFromHeaders(headers));
@@ -130,7 +134,7 @@ export class SpecPlanController {
   @Post('plans/:planId/request-changes')
   requestPlanChanges(
     @Param('planId') planId: string,
-    @Body(new ZodValidationPipe(actorCommandSchema)) body: ActorCommandDto,
+    @Body(new ZodValidationPipe(requestArtifactChangesCommandSchema)) body: RequestArtifactChangesCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.specPlanService.requestPlanChanges(planId, body, actorContextFromHeaders(headers));

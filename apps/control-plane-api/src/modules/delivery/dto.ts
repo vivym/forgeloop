@@ -70,6 +70,23 @@ export const actorCommandSchema = z
   .strict();
 export type ActorCommandDto = z.infer<typeof actorCommandSchema>;
 
+export const submitForApprovalCommandSchema = actorCommandSchema;
+export type SubmitForApprovalCommandDto = z.infer<typeof submitForApprovalCommandSchema>;
+
+export const approveArtifactCommandSchema = actorCommandSchema
+  .extend({
+    rationale: nonEmptyString.optional(),
+  })
+  .strict();
+export type ApproveArtifactCommandDto = z.infer<typeof approveArtifactCommandSchema>;
+
+export const requestArtifactChangesCommandSchema = actorCommandSchema
+  .extend({
+    rationale: nonEmptyString,
+  })
+  .strict();
+export type RequestArtifactChangesCommandDto = z.infer<typeof requestArtifactChangesCommandSchema>;
+
 const runPackageBaseSchema = z.object({
   execution_package_id: nonEmptyString.optional(),
   executor_type: executorTypeSchema.optional(),
