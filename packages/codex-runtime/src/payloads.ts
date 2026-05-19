@@ -34,6 +34,7 @@ const gatedPlanActionPattern =
   /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/gi;
 const planActionContextWindow = 80;
 const planActionClauseBoundaries = ['.', '!', '?', ';', ',', '\n'] as const;
+const planActionScopeBoundaryPattern = /\b(?:and|while|with)\b/gi;
 
 const hasUnsafeUnixLocalPath = (value: string): boolean =>
   Array.from(value.matchAll(unixLocalPathPattern)).some((match) => {
@@ -65,12 +66,15 @@ const isPlanActionSafelyScopedOut = (clause: string, action: string, actionIndex
   const escapedAction = escapeRegExp(action.toLowerCase().startsWith('enqueue') ? 'enqueue' : action);
   const prefix = clause.slice(Math.max(0, actionIndex - 40), actionIndex);
   const suffix = clause.slice(actionIndex + action.length, actionIndex + action.length + 60);
+  const previousScopeBoundary = Array.from(prefix.matchAll(planActionScopeBoundaryPattern)).at(-1);
+  const scopedPrefix =
+    previousScopeBoundary?.index === undefined ? prefix : prefix.slice(previousScopeBoundary.index + previousScopeBoundary[0].length);
 
-  if (/\b(?:do\s+not|exclude|excludes|excluding)\b/i.test(prefix)) {
+  if (/\b(?:do\s+not|exclude|excludes|excluding)\b/i.test(scopedPrefix)) {
     return true;
   }
 
-  const actionThroughScopeNoun = clause.slice(0, actionIndex + action.length + 40);
+  const actionThroughScopeNoun = `${scopedPrefix}${clause.slice(actionIndex, actionIndex + action.length + 40)}`;
   const noScopePattern = new RegExp(
     `\\bno\\b[\\s\\S]{0,40}\\b${escapedAction}\\b[\\s\\S]{0,40}\\b(?:work|workflow|workflows|action|actions|operation|operations|task|tasks)\\b`,
     'i',

@@ -160,6 +160,11 @@ describe('GeneratedPlanDraftV1', () => {
     'Deploy to staging after tests pass and no release work is included',
     'Deploy to staging after tests pass while release work is out of scope',
     'Deploy to staging after tests pass with release work excluded',
+    'Do not automatically deploy and deploy to staging after tests pass',
+    'No deploy work is included and deploy to staging after tests pass',
+    'Exclude deploy work and deploy to staging after tests pass',
+    'Exclude docs and deploy to staging after tests pass',
+    'Exclude release work and submit for approval',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
