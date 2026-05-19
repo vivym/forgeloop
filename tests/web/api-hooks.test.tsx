@@ -118,7 +118,36 @@ describe('Web product API hooks', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data?.[0]?.id).toBe(workItem.id);
+    expect(result.current.data?.stages.map((stage) => stage.id)).toEqual([
+      'intake',
+      'spec_plan',
+      'execution',
+      'review',
+      'integration_validation',
+      'test_acceptance',
+      'release',
+      'observation',
+    ]);
+    expect(result.current.data?.stages[0]?.representative_items[0]?.id).toBe(workItem.id);
+    expect(result.current.data?.stages.find((stage) => stage.id === 'integration_validation')?.integration_readiness).toEqual(
+      expect.objectContaining({
+        readiness_status: expect.any(String),
+        dependency_blockers: expect.any(Array),
+        contract_mock_readiness: expect.any(Array),
+        environment_requirements: expect.any(Array),
+        waiting_package_refs: expect.any(Array),
+      }),
+    );
+    expect(result.current.data?.stages.find((stage) => stage.id === 'test_acceptance')?.test_acceptance).toEqual(
+      expect.objectContaining({
+        qa_owner_queues: expect.any(Array),
+        test_strategy_gaps: expect.any(Array),
+        acceptance_criteria_state: expect.any(String),
+        quality_gates: expect.any(Array),
+        regression_coverage_gaps: expect.any(Array),
+        release_blocking_issues: expect.any(Array),
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/query/pipeline?project_id=${projectId}`,
       expect.objectContaining({ method: 'GET' }),

@@ -151,6 +151,37 @@ export const pipelineStageIdSchema = z.enum([
 ]);
 export type PipelineStageId = z.infer<typeof pipelineStageIdSchema>;
 
+export const pipelineIntegrationReadinessSchema = z
+  .object({
+    readiness_status: z.string().min(1),
+    dependency_blockers: z.array(z.string().min(1)).default([]),
+    contract_mock_readiness: z.array(z.string().min(1)).default([]),
+    environment_requirements: z.array(z.string().min(1)).default([]),
+    waiting_package_refs: z.array(productObjectRefSchema).default([]),
+  })
+  .strict();
+export type PipelineIntegrationReadiness = z.infer<typeof pipelineIntegrationReadinessSchema>;
+
+export const pipelineQaOwnerQueueSchema = z
+  .object({
+    owner_actor_id: z.string().min(1),
+    item_count: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PipelineQaOwnerQueue = z.infer<typeof pipelineQaOwnerQueueSchema>;
+
+export const pipelineTestAcceptanceSchema = z
+  .object({
+    qa_owner_queues: z.array(pipelineQaOwnerQueueSchema).default([]),
+    test_strategy_gaps: z.array(z.string().min(1)).default([]),
+    acceptance_criteria_state: z.string().min(1),
+    quality_gates: z.array(z.string().min(1)).default([]),
+    regression_coverage_gaps: z.array(z.string().min(1)).default([]),
+    release_blocking_issues: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+export type PipelineTestAcceptance = z.infer<typeof pipelineTestAcceptanceSchema>;
+
 export const pipelineStageSchema = z
   .object({
     id: pipelineStageIdSchema,
@@ -159,8 +190,11 @@ export const pipelineStageSchema = z
     blocked_count: z.number().int().nonnegative(),
     high_risk_count: z.number().int().nonnegative(),
     stale_count: z.number().int().nonnegative(),
+    stale_hint: z.string().min(1).optional(),
     representative_items: z.array(productListItemSchema).default([]),
     degraded: z.boolean().default(false),
+    integration_readiness: pipelineIntegrationReadinessSchema.optional(),
+    test_acceptance: pipelineTestAcceptanceSchema.optional(),
   })
   .strict();
 export type PipelineStage = z.infer<typeof pipelineStageSchema>;

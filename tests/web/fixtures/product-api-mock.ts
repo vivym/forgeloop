@@ -139,7 +139,77 @@ const runListItem = {
 };
 
 export const defaultProductApiResponses: ProductApiResponseMap = {
-  [`GET /query/pipeline?project_id=${projectId}`]: [workItem],
+  [`GET /query/pipeline?project_id=${projectId}`]: {
+    stages: [
+      {
+        id: 'intake',
+        label: 'Intake',
+        item_count: 1,
+        blocked_count: 0,
+        high_risk_count: 0,
+        stale_count: 0,
+        representative_items: [
+          {
+            id: workItem.id,
+            object: { type: 'work_item', id: workItem.id, title: workItem.title },
+            title: workItem.title,
+            status: workItem.activity_state,
+            phase: workItem.phase,
+            gate_state: workItem.gate_state,
+            resolution: workItem.resolution,
+            risk: workItem.risk,
+            owner_actor_id: workItem.owner_actor_id,
+            related: [],
+            counts: {},
+            updated_at: workItem.updated_at ?? '2026-05-18T00:00:00.000Z',
+          },
+        ],
+        degraded: false,
+      },
+      { id: 'spec_plan', label: 'Spec & Plan', item_count: 1, blocked_count: 0, high_risk_count: 0, stale_count: 0, representative_items: [productListItem(spec, workItem, 'spec')], degraded: false },
+      { id: 'execution', label: 'Execution', item_count: 1, blocked_count: 0, high_risk_count: 0, stale_count: 0, representative_items: [packageListItem], degraded: false },
+      { id: 'review', label: 'Review', item_count: 1, blocked_count: 0, high_risk_count: 0, stale_count: 0, representative_items: [], degraded: false },
+      {
+        id: 'integration_validation',
+        label: 'Integration Validation',
+        item_count: 1,
+        blocked_count: 1,
+        high_risk_count: 0,
+        stale_count: 0,
+        stale_hint: 'Stale/SLA calculation is not available yet for this stage.',
+        representative_items: [packageListItem],
+        degraded: true,
+        integration_readiness: {
+          readiness_status: 'Blocked by package dependencies.',
+          dependency_blockers: ['Release cockpit frontend waits on contract fixture parity.'],
+          contract_mock_readiness: ['Release cockpit: product API mocks aligned for list/detail routes.'],
+          environment_requirements: ['Web build and route smoke must pass before cross-end validation.'],
+          waiting_package_refs: [{ type: 'execution_package', id: executionPackage.id, title: executionPackage.objective }],
+        },
+      },
+      {
+        id: 'test_acceptance',
+        label: 'Test Acceptance',
+        item_count: 1,
+        blocked_count: 0,
+        high_risk_count: 0,
+        stale_count: 0,
+        representative_items: [packageListItem],
+        degraded: true,
+        test_acceptance: {
+          qa_owner_queues: [{ owner_actor_id: executionPackage.qa_owner_actor_id, item_count: 1 }],
+          test_strategy_gaps: ['Visual smoke still needs populated route screenshots.'],
+          acceptance_criteria_state: 'Acceptance criteria mapped to Web route smoke and axe checks.',
+          quality_gates: ['Web typecheck', 'Web build', 'Product route smoke'],
+          regression_coverage_gaps: ['No mobile regression screenshot reviewed yet.'],
+          release_blocking_issues: ['Release approval waits for test acceptance acknowledgement.'],
+        },
+      },
+      { id: 'release', label: 'Release', item_count: 1, blocked_count: 0, high_risk_count: 0, stale_count: 0, representative_items: [], degraded: false },
+      { id: 'observation', label: 'Observation', item_count: 0, blocked_count: 0, high_risk_count: 0, stale_count: 0, representative_items: [], degraded: true },
+    ],
+    degraded_sources: ['pipeline:stale_filter_not_available'],
+  },
   [`GET /work-items?project_id=${projectId}`]: [workItem],
   [`GET /query/work-items?project_id=${projectId}&limit=100`]: {
     items: [

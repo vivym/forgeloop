@@ -1,8 +1,9 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
-import { productListResponseSchema } from '@forgeloop/contracts';
+import { pipelineResponseSchema, productListResponseSchema } from '@forgeloop/contracts';
 import type {
   CockpitResponse,
   ListProductQuery,
+  PipelineResponse,
   ProductListResponse,
   ReleaseCockpitResponse,
   ReleaseListResponse,
@@ -35,7 +36,8 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const { request } = createApiContext(options);
 
   const productMethods = {
-    getPipeline: (query: ProjectQuery) => request<WorkItem[]>(`/query/pipeline${queryString(query)}`),
+    getPipeline: async (query: ProjectQuery) =>
+      pipelineResponseSchema.parse(await request<unknown>(`/query/pipeline${queryString(query)}`)) as PipelineResponse,
     listWorkItems: async (query: ProductRegistryQuery) =>
       productListResponseSchema.parse(await request<unknown>(`/query/work-items${queryString(query)}`)) as ProductListResponse,
     listSpecs: async (query: ProductRegistryQuery) =>

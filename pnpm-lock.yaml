@@ -84,6 +84,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.1
         version: 6.0.1(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.46.2)(tsx@4.21.0))
+      axe-core:
+        specifier: ^4.11.4
+        version: 4.11.4
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
@@ -2513,6 +2516,10 @@ packages:
 
   asynckit@0.4.0:
     resolution: {integrity: sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==}
+
+  axe-core@4.11.4:
+    resolution: {integrity: sha512-KunSNx+TVpkAw/6ULfhnx+HWRecjqZGTOyquAoWHYLRSdK1tB5Ihce1ZW+UY3fj33bYAFWPu7W/GRSmmrCGuxA==}
+    engines: {node: '>=4'}
 
   babel-dead-code-elimination@1.0.12:
     resolution: {integrity: sha512-GERT7L2TiYcYDtYk1IpD+ASAYXjKbLTDPhBtYj7X1NuRMDTMtAx9kyBenub1Ev41lo91OHCKdmP+egTDmfQ7Ig==}
@@ -5913,6 +5920,8 @@ snapshots:
   assertion-error@2.0.1: {}
 
   asynckit@0.4.0: {}
+
+  axe-core@4.11.4: {}
 
   babel-dead-code-elimination@1.0.12:
     dependencies:

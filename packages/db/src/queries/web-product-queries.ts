@@ -381,7 +381,11 @@ export async function getProductPipeline(
     'pipeline:stale_filter_not_available',
   ];
   const workItems = (await repository.listWorkItems(query.project_id)).filter(visible);
+  const specs = await repository.listSpecs(query.project_id);
+  const plans = await repository.listPlans(query.project_id);
   const packages = (await repository.listExecutionPackages(query.project_id)).filter(visible);
+  const runSessions = await repository.listRunSessions(query.project_id);
+  const reviewPackets = await repository.listReviewPackets(query.project_id);
   const releases = await repository.listReleases(query.project_id);
   const itemsByStage = new Map<StageId, ProductListItem[]>();
 
@@ -392,8 +396,32 @@ export async function getProductPipeline(
   for (const workItem of workItems) {
     itemsByStage.get(stageForWorkItem(workItem))?.push(workItemListItem(workItem));
   }
+  for (const spec of specs) {
+    const item = await specListItem(repository, spec);
+    if (item !== undefined) {
+      itemsByStage.get('spec_plan')?.push(item);
+    }
+  }
+  for (const plan of plans) {
+    const item = await planListItem(repository, plan);
+    if (item !== undefined) {
+      itemsByStage.get('spec_plan')?.push(item);
+    }
+  }
   for (const executionPackage of packages) {
     itemsByStage.get(stageForPackage(executionPackage))?.push(await executionPackageListItem(repository, executionPackage));
+  }
+  for (const runSession of runSessions) {
+    const item = await runSessionListItem(repository, runSession);
+    if (item !== undefined) {
+      itemsByStage.get(stageForRunSession(runSession))?.push(item);
+    }
+  }
+  for (const reviewPacket of reviewPackets) {
+    const item = await reviewPacketListItem(repository, reviewPacket);
+    if (item !== undefined) {
+      itemsByStage.get('review')?.push(item);
+    }
   }
   for (const release of releases) {
     itemsByStage.get(stageForRelease(release))?.push(releaseListItem(release));
@@ -409,8 +437,11 @@ export async function getProductPipeline(
         blocked_count: items.filter((item) => item.package_state?.blocked_reason !== undefined).length,
         high_risk_count: items.filter((item) => item.risk === 'high').length,
         stale_count: 0,
+        stale_hint: 'Stale/SLA calculation is not available yet for this stage.',
         representative_items: items.sort(byUpdatedAtDesc).slice(0, query.limit),
-        degraded: false,
+        degraded: true,
+        ...(stage.id === 'integration_validation' ? { integration_readiness: integrationReadinessDetails(packages) } : {}),
+        ...(stage.id === 'test_acceptance' ? { test_acceptance: testAcceptanceDetails(packages, releases) } : {}),
       };
     }),
     degraded_sources: degradedSources,
@@ -505,6 +536,62 @@ const workItemListItem = (workItem: WorkItem): ProductListItem => ({
   updated_at: workItem.updated_at,
 });
 
+const specListItem = async (
+  repository: DeliveryRepository,
+  spec: Spec,
+): Promise<ProductListItem | undefined> => {
+  const workItem = await repository.getWorkItem(spec.work_item_id);
+  if (workItem === undefined || !visible(workItem)) {
+    return undefined;
+  }
+  const title = `${workItem.title} Spec`;
+  return {
+    id: spec.id,
+    object: objectRef('spec', spec.id, title),
+    title,
+    status: spec.status,
+    gate_state: spec.gate_state,
+    resolution: spec.resolution,
+    parent: objectRef('work_item', workItem.id, workItem.title),
+    revision_state: {
+      current_revision_id: spec.current_revision_id,
+      approved_revision_id: spec.approved_revision_id,
+      revision_number: await latestSpecRevisionNumber(repository, spec),
+    },
+    counts: {},
+    related: [],
+    updated_at: spec.updated_at,
+  };
+};
+
+const planListItem = async (
+  repository: DeliveryRepository,
+  plan: Plan,
+): Promise<ProductListItem | undefined> => {
+  const workItem = await repository.getWorkItem(plan.work_item_id);
+  if (workItem === undefined || !visible(workItem)) {
+    return undefined;
+  }
+  const title = `${workItem.title} Plan`;
+  return {
+    id: plan.id,
+    object: objectRef('plan', plan.id, title),
+    title,
+    status: plan.status,
+    gate_state: plan.gate_state,
+    resolution: plan.resolution,
+    parent: objectRef('work_item', workItem.id, workItem.title),
+    revision_state: {
+      current_revision_id: plan.current_revision_id,
+      approved_revision_id: plan.approved_revision_id,
+      revision_number: await latestPlanRevisionNumber(repository, plan),
+    },
+    counts: {},
+    related: [],
+    updated_at: plan.updated_at,
+  };
+};
+
 const executionPackageListItem = async (
   repository: DeliveryRepository,
   executionPackage: ExecutionPackage,
@@ -546,6 +633,37 @@ const executionPackageListItem = async (
       required_artifact_kinds: executionPackage.required_artifact_kinds.length,
     },
     updated_at: executionPackage.updated_at,
+  };
+};
+
+const runSessionListItem = async (
+  repository: DeliveryRepository,
+  runSession: RunSession,
+): Promise<ProductListItem | undefined> => {
+  const executionPackage = await repository.getExecutionPackage(runSession.execution_package_id);
+  if (executionPackage === undefined || !visible(executionPackage)) {
+    return undefined;
+  }
+  const title = `Run ${runSession.id}`;
+  return {
+    id: runSession.id,
+    object: objectRef('run_session', runSession.id, title),
+    title,
+    status: runSession.status,
+    parent: objectRef('execution_package', executionPackage.id, executionPackage.objective),
+    run_state: {
+      execution_package_id: runSession.execution_package_id,
+      executor_type: runSession.executor_type,
+      started_at: runSession.started_at,
+      finished_at: runSession.finished_at,
+    },
+    related: [objectRef('execution_package', executionPackage.id, executionPackage.objective)],
+    counts: {
+      changed_files: runSession.changed_files.length,
+      checks: runSession.check_results.length,
+      artifacts: runSession.artifacts.length,
+    },
+    updated_at: runSession.updated_at,
   };
 };
 
@@ -639,9 +757,90 @@ const stageForPackage = (executionPackage: ExecutionPackage): StageId => {
   return 'execution';
 };
 
+const stageForRunSession = (runSession: RunSession): StageId => {
+  if (runSession.status === 'failed' || runSession.status === 'timed_out' || runSession.status === 'cancelled') {
+    return 'test_acceptance';
+  }
+  return 'execution';
+};
+
 const stageForRelease = (release: Release): StageId => {
   if (release.phase === 'observing' || release.phase === 'completed' || release.phase === 'closed') {
     return 'observation';
   }
   return 'release';
+};
+
+const integrationReadinessDetails = (packages: readonly ExecutionPackage[]): PipelineResponse['stages'][number]['integration_readiness'] => {
+  const integrationPackages = packages.filter((executionPackage) => stageForPackage(executionPackage) === 'integration_validation');
+  const dependencyBlockers = integrationPackages
+    .filter((executionPackage) => executionPackage.blocked_reason !== undefined)
+    .map((executionPackage) => `${executionPackage.objective}: ${executionPackage.blocked_reason}`);
+  const readinessStatus =
+    integrationPackages.length === 0
+      ? 'No packages are currently in cross-end validation.'
+      : dependencyBlockers.length > 0
+        ? 'Blocked by package dependencies.'
+        : 'Ready for cross-end validation.';
+  const waitingPackageRefs = integrationPackages
+    .filter((executionPackage) => executionPackage.blocked_reason !== undefined)
+    .map((executionPackage) => objectRef('execution_package', executionPackage.id, executionPackage.objective));
+
+  return {
+    readiness_status: readinessStatus,
+    dependency_blockers: dependencyBlockers,
+    contract_mock_readiness: integrationPackages.length
+      ? integrationPackages.map((executionPackage) => contractMockReadinessLabel(executionPackage))
+      : ['No active integration packages with contract/mock readiness recorded.'],
+    environment_requirements: integrationPackages.length
+      ? integrationPackages.map((executionPackage) => environmentRequirementLabel(executionPackage))
+      : ['No active integration package environment requirements recorded.'],
+    waiting_package_refs: waitingPackageRefs,
+  };
+};
+
+const testAcceptanceDetails = (
+  packages: readonly ExecutionPackage[],
+  releases: readonly Release[],
+): PipelineResponse['stages'][number]['test_acceptance'] => {
+  const testPackages = packages.filter((executionPackage) => stageForPackage(executionPackage) === 'test_acceptance');
+  const qaOwnerQueues = [...testPackages.reduce((owners, executionPackage) => {
+    owners.set(executionPackage.qa_owner_actor_id, (owners.get(executionPackage.qa_owner_actor_id) ?? 0) + 1);
+    return owners;
+  }, new Map<string, number>())].map(([owner_actor_id, item_count]) => ({ owner_actor_id, item_count }));
+  const qualityGates = testPackages.flatMap((executionPackage) =>
+    executionPackage.required_checks.map((check) => `${executionPackage.objective}: ${check.display_name}`),
+  );
+  const missingTestGates = testPackages
+    .filter((executionPackage) => (executionPackage.required_test_gates ?? []).length === 0)
+    .map((executionPackage) => `${executionPackage.objective}: no required test gates recorded.`);
+  const releaseBlockingIssues = releases
+    .filter((release) => release.phase === 'approval' || release.gate_state === 'changes_requested' || release.gate_state === 'rollout_failed')
+    .map((release) => `${release.title}: release gate ${release.gate_state} / phase ${release.phase}.`);
+
+  return {
+    qa_owner_queues: qaOwnerQueues,
+    test_strategy_gaps: missingTestGates,
+    acceptance_criteria_state: testPackages.length
+      ? `${testPackages.length} package${testPackages.length === 1 ? '' : 's'} in test acceptance.`
+      : 'No packages are currently in test acceptance.',
+    quality_gates: qualityGates.length ? qualityGates : ['No quality gates pending in test acceptance.'],
+    regression_coverage_gaps: missingTestGates,
+    release_blocking_issues: releaseBlockingIssues,
+  };
+};
+
+const contractMockReadinessLabel = (executionPackage: ExecutionPackage): string => {
+  const readiness = executionPackage.integration_readiness;
+  if (readiness !== undefined && Object.keys(readiness).length > 0) {
+    return `${executionPackage.objective}: integration readiness recorded.`;
+  }
+  return `${executionPackage.objective}: no contract/mock readiness recorded.`;
+};
+
+const environmentRequirementLabel = (executionPackage: ExecutionPackage): string => {
+  if (executionPackage.required_checks.length > 0) {
+    return `${executionPackage.objective}: ${executionPackage.required_checks.length} required check${executionPackage.required_checks.length === 1 ? '' : 's'}.`;
+  }
+  return `${executionPackage.objective}: no explicit environment requirements recorded.`;
 };

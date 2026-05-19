@@ -107,6 +107,7 @@ function RunConsoleRoute({ runSessionId }: { runSessionId: string }) {
 function RunTable({ items }: { items: ProductListItem[] }) {
   return (
     <DataTable
+      ariaLabel="Runs"
       columns={[
         {
           key: 'title',

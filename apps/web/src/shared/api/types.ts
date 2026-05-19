@@ -49,6 +49,7 @@ export type {
   ProductListItem,
   ProductListQuery,
   ProductListResponse,
+  PipelineResponse,
   StartReleaseObservingRequest,
   SubmitReleaseForApprovalRequest,
   UnlinkReleaseObjectRequest,

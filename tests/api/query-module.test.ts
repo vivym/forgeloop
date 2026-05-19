@@ -170,9 +170,42 @@ describe('query module', () => {
   });
 
   it('serves the product pipeline read model with all PRD stages', async () => {
-    const { app } = await track(createTestApp());
+    const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
     const projectId = executionPackage.project_id;
+    const runSession: RunSession = {
+      id: 'run-session-for-pipeline',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      status: 'succeeded',
+      executor_type: 'mock',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      summary: 'Pipeline run succeeded.',
+      created_at: later,
+      updated_at: later,
+      finished_at: later,
+    };
+    await repo.saveRunSession(runSession);
+    await repo.saveReviewPacket({
+      id: 'review-packet-for-pipeline',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      reviewer_actor_id: executionPackage.reviewer_actor_id,
+      spec_revision_id: executionPackage.spec_revision_id,
+      plan_revision_id: executionPackage.plan_revision_id,
+      status: 'ready',
+      decision: 'none',
+      changed_files: [],
+      check_result_summary: 'Pipeline checks passed.',
+      self_review: { status: 'succeeded', summary: 'Ready for review.' },
+      requested_changes: [],
+      risk_notes: [],
+      created_at: later,
+      updated_at: later,
+    });
 
     const response = await request(app.getHttpServer()).get('/query/pipeline').query({ project_id: projectId }).expect(200);
 
@@ -187,6 +220,21 @@ describe('query module', () => {
       'observation',
     ]);
     expect(response.body.degraded_sources).toEqual(expect.any(Array));
+    expect(response.body.stages.every((stage: { degraded: boolean; stale_hint?: string }) => stage.degraded && stage.stale_hint)).toBe(
+      true,
+    );
+    expect(response.body.stages.find((stage: { id: string }) => stage.id === 'spec_plan').representative_items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ object: expect.objectContaining({ type: 'spec' }) }),
+        expect.objectContaining({ object: expect.objectContaining({ type: 'plan' }) }),
+      ]),
+    );
+    expect(response.body.stages.find((stage: { id: string }) => stage.id === 'execution').representative_items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'run_session' }) })]),
+    );
+    expect(response.body.stages.find((stage: { id: string }) => stage.id === 'review').representative_items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'review_packet' }) })]),
+    );
   });
 
   it('reports unsupported product pipeline filters as degraded sources', async () => {

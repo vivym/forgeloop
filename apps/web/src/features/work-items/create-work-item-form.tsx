@@ -144,7 +144,7 @@ export function CreateWorkItemForm() {
 }
 
 function FieldError({ message }: { message: string | undefined }) {
-  return message ? <span className="danger-text">{message}</span> : null;
+  return message ? <span className="danger-text" role="alert">{message}</span> : null;
 }
 
 function ContextMetric({ label, value }: { label: string; value: string }) {

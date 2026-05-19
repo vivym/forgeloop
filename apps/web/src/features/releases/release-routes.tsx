@@ -163,7 +163,7 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
       <Section title="Test Acceptance" description="QA acceptance is acknowledged with summary and artifact references.">
         <TestAcceptanceForm actorId={actorId} releaseId={release.id} />
       </Section>
-      <Section title="Observation evidence" description="Submit observed release evidence without exposing raw payload controls.">
+      <Section title="Observation evidence" description="Submit governed release observations through summary and evidence fields.">
         <ObservationEvidenceForm actorId={actorId} releaseId={release.id} />
       </Section>
       <Section title="Timeline / Replay" description="Release replay timeline.">
