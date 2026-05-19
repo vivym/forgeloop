@@ -32,7 +32,9 @@ const bypassHumanGatePattern =
   /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const gatedPlanActionPattern =
   /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/gi;
-const gatedPlanActionNegationPattern = /\b(?:no|exclude|excludes|excluding|do\s+not)\b/i;
+const gatedPlanActionSafeContextPattern = /\b(?:no|exclude|excludes|excluding|excluded|do\s+not|out\s+of\s+scope)\b/i;
+const planActionContextWindow = 80;
+const planActionClauseBoundaries = ['.', '!', '?', ';', ',', '\n'] as const;
 
 const hasUnsafeUnixLocalPath = (value: string): boolean =>
   Array.from(value.matchAll(unixLocalPathPattern)).some((match) => {
@@ -49,20 +51,26 @@ const isUnsafePublicString = (value: string): boolean =>
   rawBlockBoundaryMarkerPattern.test(value) ||
   bypassHumanGatePattern.test(value);
 
+const previousPlanActionBoundary = (value: string, actionIndex: number): number =>
+  Math.max(...planActionClauseBoundaries.map((boundary) => value.lastIndexOf(boundary, actionIndex)));
+
+const nextPlanActionBoundary = (value: string, actionIndex: number): number =>
+  planActionClauseBoundaries
+    .map((boundary) => value.indexOf(boundary, actionIndex))
+    .filter((index) => index >= 0)
+    .reduce((left, right) => Math.min(left, right), value.length);
+
 const isUnsafePlanString = (value: string): boolean =>
   isUnsafePublicString(value) ||
   Array.from(value.matchAll(gatedPlanActionPattern)).some((match) => {
     const actionIndex = match.index ?? 0;
-    const previousBoundary = Math.max(
-      value.lastIndexOf('.', actionIndex),
-      value.lastIndexOf('!', actionIndex),
-      value.lastIndexOf('?', actionIndex),
-      value.lastIndexOf(';', actionIndex),
-      value.lastIndexOf(',', actionIndex),
-      value.lastIndexOf('\n', actionIndex),
+    const previousBoundary = previousPlanActionBoundary(value, actionIndex);
+    const nextBoundary = nextPlanActionBoundary(value, actionIndex);
+    const clause = value.slice(
+      Math.max(previousBoundary + 1, actionIndex - planActionContextWindow),
+      Math.min(nextBoundary, actionIndex + planActionContextWindow),
     );
-    const clausePrefix = value.slice(Math.max(previousBoundary + 1, actionIndex - 80), actionIndex);
-    return !gatedPlanActionNegationPattern.test(clausePrefix);
+    return !gatedPlanActionSafeContextPattern.test(clause);
   });
 
 const safeParseOrThrow = <T>(schema: z.ZodType<T>, value: unknown, errorCode: string): T => {

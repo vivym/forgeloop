@@ -179,6 +179,9 @@ describe('GeneratedPlanDraftV1', () => {
     'No release or deploy work is included',
     'Do not deploy automatically',
     'Do not automatically deploy',
+    'Release work is out of scope',
+    'Release work is excluded',
+    'Deploy work is out of scope',
   ])('accepts negated or out-of-scope Plan text that mentions gated actions: %s', (summary) => {
     expect(
       validateGeneratedPlanDraft({
