@@ -264,7 +264,7 @@ describe('role workbench query routes', () => {
     await request(server)
       .post(`/specs/${spec.id}/request-changes`)
       .set(ownerHeaders)
-      .send({ actor_id: actorOwner })
+      .send({ actor_id: actorOwner, rationale: 'Verify workbench projections before approval.' })
       .expect(201);
 
     const response = await request(app.getHttpServer())
