@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
 import {
   automationActorClassHeaderName,
   automationActorIdHeaderName,
@@ -14,9 +14,11 @@ import {
   claimNextAutomationActionRunSchema,
   completeAutomationActionRunSchema,
   createAutomationActionRunSchema,
+  ensureSpecDraftCommandSchema,
   ensurePackageDraftsCommandSchema,
   ensurePlanDraftCommandSchema,
   failAutomationActionRunSchema,
+  generationContextQuerySchema,
   gatePendingAutomationActionRunSchema,
   requestManualPathCommandSchema,
   type AutomationActionResponseDto,
@@ -25,12 +27,15 @@ import {
   type ClaimNextAutomationActionRunDto,
   type CompleteAutomationActionRunDto,
   type CreateAutomationActionRunDto,
+  type EnsureSpecDraftCommandDto,
   type EnsurePackageDraftsCommandDto,
   type EnsurePlanDraftCommandDto,
   type FailAutomationActionRunDto,
+  type GenerationContextQueryDto,
   type GatePendingAutomationActionRunDto,
   type RequestManualPathCommandDto,
 } from './automation.dto';
+import { AutomationGenerationContextService } from './automation-generation-context.service';
 import { RuntimeSnapshotService } from './runtime-snapshot.service';
 import { TrustedAutomationActorGuard } from './trusted-automation-actor.guard';
 
@@ -63,6 +68,8 @@ export class AutomationController {
     private readonly automationActionService: AutomationActionService,
     @Inject(AutomationCommandService)
     private readonly automationCommandService: AutomationCommandService,
+    @Inject(AutomationGenerationContextService)
+    private readonly automationGenerationContextService: AutomationGenerationContextService,
     @Inject(RuntimeSnapshotService)
     private readonly runtimeSnapshotService: RuntimeSnapshotService,
   ) {}
@@ -70,6 +77,14 @@ export class AutomationController {
   @Get('runtime-snapshot')
   getRuntimeSnapshot(): Promise<AutomationRuntimeSnapshotDto> {
     return this.runtimeSnapshotService.getRuntimeSnapshot();
+  }
+
+  @Get('generation-context/work-items/:workItemId/spec-draft')
+  specDraftGenerationContext(
+    @Param('workItemId') workItemId: string,
+    @Query(new ZodValidationPipe(generationContextQuerySchema)) query: GenerationContextQueryDto,
+  ) {
+    return this.automationGenerationContextService.getSpecDraftContext(workItemId, query);
   }
 
   @Post('actions')
@@ -129,6 +144,14 @@ export class AutomationController {
     @Body(new ZodValidationPipe(ensurePlanDraftCommandSchema)) body: EnsurePlanDraftCommandDto,
   ) {
     return this.automationCommandService.ensurePlanDraftForClaimedAction(workItemId, body);
+  }
+
+  @Post('work-items/:workItemId/ensure-spec-draft')
+  ensureSpecDraft(
+    @Param('workItemId') workItemId: string,
+    @Body(new ZodValidationPipe(ensureSpecDraftCommandSchema)) body: EnsureSpecDraftCommandDto,
+  ) {
+    return this.automationCommandService.ensureSpecDraftForClaimedAction(workItemId, body);
   }
 
   @Post('plan-revisions/:planRevisionId/ensure-package-drafts')

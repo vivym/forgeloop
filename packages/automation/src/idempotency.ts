@@ -48,6 +48,9 @@ const mutatingActionIdentityJson = (input: MutatingActionIdentity) => ({
   capabilityFingerprint: input.capabilityFingerprint,
   preconditionFingerprint: input.preconditionFingerprint,
   generationKey: input.generationKey,
+  promptVersion: input.promptVersion,
+  outputSchemaVersion: input.outputSchemaVersion,
+  generationMode: input.generationMode,
   manualPathScopeKey: input.manualPathScopeKey,
   manualPathReasonCode: input.manualPathReasonCode,
 });

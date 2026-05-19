@@ -311,6 +311,37 @@ describe('internal automation runtime snapshot', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
+  it('lists work items missing Spec drafts', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedProjectRepo(repository);
+    const {
+      current_spec_id: _currentSpecId,
+      current_spec_revision_id: _currentSpecRevisionId,
+      ...specNeededWorkItem
+    } = workItem({
+      id: 'work-item-needs-spec',
+      title: 'Create first Spec',
+      goal: 'Draft the first Spec from the WorkItem.',
+      success_criteria: ['Spec draft exists.'],
+      phase: 'triage',
+    });
+    await repository.saveWorkItem(specNeededWorkItem);
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_spec).toContainEqual(
+          expect.objectContaining({
+            target_object_type: 'work_item',
+            target_object_id: specNeededWorkItem.id,
+            target_status: specNeededWorkItem.phase,
+            project_id: specNeededWorkItem.project_id,
+            repo_id: 'repo-1',
+          }),
+        );
+      });
+  });
+
   it('lists approved spec revisions missing plan drafts', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedSpec(repository);

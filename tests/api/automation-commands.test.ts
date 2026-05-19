@@ -545,6 +545,15 @@ type ClaimedPlanDraftActionContext = ApprovedSpecContext & {
   commandBody: Record<string, unknown>;
 };
 
+type ClaimedSpecDraftActionContext = {
+  project: { id: string };
+  workItem: WorkItem;
+  precondition: AutomationPrecondition;
+  actionId: string;
+  claimToken: string;
+  commandBody: Record<string, unknown>;
+};
+
 type ClaimedPackageDraftActionContext = ApprovedSpecContext & {
   plan: Plan;
   planRevisionId: string;
@@ -614,6 +623,51 @@ const packageDraftActionBody = (
   };
 };
 
+const generatedSpecDraft = {
+  schema_version: 'spec_draft.v1',
+  summary: 'Generated spec summary',
+  content: 'Generated spec content',
+  background: 'Generated background',
+  goals: ['Goal 1'],
+  scope_in: ['Scope in'],
+  scope_out: ['Scope out'],
+  acceptance_criteria: ['Criterion 1'],
+  risk_notes: ['Risk 1'],
+  test_strategy_summary: 'Run API and daemon tests.',
+  structured_document: { source: 'test' },
+};
+
+const generationArtifacts: ArtifactRef[] = [
+  {
+    kind: 'raw_metadata',
+    name: 'raw-spec-output',
+    content_type: 'application/json',
+    local_ref: 'artifact://spec/raw-output.json',
+  },
+];
+
+const specDraftActionBody = (
+  ctx: { project: { id: string }; workItem: WorkItem },
+  precondition: AutomationPrecondition,
+  actionId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  id: actionId,
+  action_type: 'ensure_spec_draft',
+  target_object_type: 'work_item',
+  target_object_id: ctx.workItem.id,
+  target_status: ctx.workItem.phase,
+  idempotency_key: `${actionId}-idempotency`,
+  automation_scope: precondition.automation_scope,
+  automation_settings_version: precondition.automation_settings_version,
+  capability_fingerprint: precondition.capability_fingerprint,
+  precondition_fingerprint: automationPreconditionFingerprint(precondition),
+  action_input_json: {
+    work_item_id: ctx.workItem.id,
+  },
+  ...overrides,
+});
+
 const manualPathActionBody = (
   ctx: { project: { id: string }; workItem: WorkItem },
   precondition: AutomationPrecondition,
@@ -640,6 +694,59 @@ const manualPathActionBody = (
       reason: 'Automation stopped for human triage.',
     },
     ...overrides,
+  };
+};
+
+const seedClaimedSpecDraftAction = async (
+  app: INestApplication,
+  repository: DeliveryRepository,
+  overrides: Record<string, unknown> = {},
+): Promise<ClaimedSpecDraftActionContext> => {
+  const ctx = await seedProjectRepoWorkItem(app);
+  const settings = await repository.setAutomationProjectSettings({
+    id: `automation-settings-spec-claim-binding-${overrides.id ?? 'default'}`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    scope_type: 'repo',
+    preset: 'draft_only',
+    expected_version: 0,
+    reason: 'enable Spec draft claim binding test',
+    evidence_refs: [],
+    actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+    now: '2026-05-05T00:00:00.000Z',
+  });
+  const precondition: AutomationPrecondition = {
+    automation_scope: `repo:${ctx.project.id}:repo-1`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    automation_settings_version: settings.version,
+    capability_fingerprint: settings.capability_fingerprint,
+    required_capability: 'canGenerateSpecDraft',
+    actor_class: 'automation_daemon',
+    daemon_identity: automationDaemonIdentity,
+  };
+  const actionId = typeof overrides.id === 'string' ? overrides.id : `action-spec-claim-binding-${ctx.workItem.id}`;
+  await signedAutomationPost(app, '/internal/automation/actions', specDraftActionBody(ctx, precondition, actionId, overrides)).expect(201);
+  const claimToken = `claim-${actionId}`;
+  await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+    claim_token: claimToken,
+    lease_ms: 10 * 60 * 1000,
+    limit: 1,
+  }).expect(200);
+
+  return {
+    ...ctx,
+    precondition,
+    actionId,
+    claimToken,
+    commandBody: {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+      generated_spec_draft: generatedSpecDraft,
+      generation_artifacts: generationArtifacts,
+    },
   };
 };
 
@@ -1114,6 +1221,230 @@ describe('automation command boundaries', () => {
         reason: 'Automation stopped for human triage.',
       },
     }).expect(400);
+  });
+
+  it('creates and replays a Spec draft for a claimed automation action', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+
+    const first = await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      ctx.commandBody,
+    ).expect(201);
+    const second = await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      ctx.commandBody,
+    ).expect(201);
+
+    expect(first.body).toMatchObject({ status: 'created' });
+    expect(second.body).toMatchObject({
+      status: 'existing',
+      spec_id: first.body.spec_id,
+      spec_revision_id: first.body.spec_revision_id,
+    });
+    const updatedWorkItem = await repository.getWorkItem(ctx.workItem.id);
+    expect(updatedWorkItem?.current_spec_id).toBe(first.body.spec_id);
+    const spec = await repository.getSpec(first.body.spec_id);
+    expect(spec).toMatchObject({ work_item_id: ctx.workItem.id, current_revision_id: first.body.spec_revision_id });
+    const revisions = await repository.listSpecRevisions(first.body.spec_id);
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]).toMatchObject({
+      id: first.body.spec_revision_id,
+      summary: generatedSpecDraft.summary,
+      content: generatedSpecDraft.content,
+      artifact_refs: generationArtifacts,
+    });
+
+    await signedAutomationGet(app, '/internal/automation/runtime-snapshot')
+      .expect(200)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body.recent_action_runs)).not.toContain('artifact://spec/raw-output.json');
+      });
+  });
+
+  it('rejects Spec draft commands when the WorkItem already has a current Spec revision', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+    const existingSpec = transitionSpecPlan(undefined, {
+      type: 'create',
+      entity_type: 'spec',
+      id: 'existing-spec-for-command',
+      work_item_id: ctx.workItem.id,
+      at: automationTestNow,
+    }) as Spec;
+    const existingRevision: SpecRevision = {
+      id: 'existing-spec-revision-for-command',
+      spec_id: existingSpec.id,
+      work_item_id: ctx.workItem.id,
+      revision_number: 1,
+      summary: 'Existing spec',
+      content: 'Existing spec',
+      background: 'Existing',
+      goals: ['Existing'],
+      scope_in: ['Existing'],
+      scope_out: [],
+      acceptance_criteria: ['Existing'],
+      risk_notes: [],
+      test_strategy_summary: 'Existing',
+      artifact_refs: [],
+      created_at: automationTestNow,
+    };
+    await repository.saveSpec({ ...existingSpec, current_revision_id: existingRevision.id });
+    await repository.saveSpecRevision(existingRevision);
+    await repository.saveWorkItem({
+      ...ctx.workItem,
+      current_spec_id: existingSpec.id,
+      current_spec_revision_id: existingRevision.id,
+      updated_at: automationTestNow,
+    });
+
+    await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      ctx.commandBody,
+    ).expect(409);
+  });
+
+  it.each([
+    {
+      name: 'wrong required capability',
+      preconditionOverride: { required_capability: 'canGeneratePlanDraft' },
+    },
+    {
+      name: 'wrong claim token',
+      bodyOverrides: { claim_token: 'claim-token-other' },
+    },
+    {
+      name: 'wrong action type',
+      actionOverrides: {
+        action_type: 'ensure_plan_draft',
+        target_revision_id: 'spec-revision-other',
+        action_input_json: {
+          work_item_id: 'work-item-other',
+          spec_revision_id: 'spec-revision-other',
+        },
+      },
+    },
+    {
+      name: 'wrong action input',
+      actionOverrides: {
+        action_input_json: { work_item_id: 'work-item-other' },
+      },
+    },
+  ])('rejects Spec draft commands before writes for $name', async ({ actionOverrides = {}, bodyOverrides = {}, preconditionOverride = {} }) => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository, {
+      id: `action-spec-reject-${String(actionOverrides.action_type ?? bodyOverrides.claim_token ?? preconditionOverride.required_capability ?? 'input').replace(/[^a-z0-9-]/gi, '-')}`,
+      ...actionOverrides,
+    });
+    const precondition = { ...ctx.precondition, ...preconditionOverride };
+    const body = {
+      ...ctx.commandBody,
+      automation_precondition: precondition,
+      ...bodyOverrides,
+    };
+
+    const response = await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      body,
+    );
+
+    expect([400, 409, 422]).toContain(response.status);
+    const workItemAfter = await repository.getWorkItem(ctx.workItem.id);
+    expect(workItemAfter?.current_spec_id).toBeUndefined();
+  });
+
+  it('serves signed Spec draft generation context for a claimed action without exposing the claim token', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+    const project = await repository.getProject(ctx.project.id);
+    expect(project).toBeDefined();
+    await seedProjectRepo(repository, project!, { repo_id: 'repo-2', name: 'secondary-repo' });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          context_version: 'generation_context.work_item.v1',
+          action_run_id: ctx.actionId,
+          work_item: {
+            id: ctx.workItem.id,
+            project_id: ctx.workItem.project_id,
+            title: ctx.workItem.title,
+            goal: ctx.workItem.goal,
+            success_criteria: ctx.workItem.success_criteria,
+            risk: ctx.workItem.risk,
+            priority: ctx.workItem.priority,
+            kind: ctx.workItem.kind,
+          },
+          repos: [
+            expect.objectContaining({
+              project_id: ctx.workItem.project_id,
+              repo_id: 'repo-1',
+              default_branch: 'main',
+              policy_status: 'missing',
+            }),
+          ],
+        });
+        expect(body.repos).toHaveLength(1);
+        expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
+        expect(JSON.stringify(body)).not.toContain('repo-2');
+      });
+  });
+
+  it('rejects Spec draft generation context when the claim token is wrong', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=wrong-claim-token`,
+    )
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'automation_action_claim_conflict' });
+      });
+  });
+
+  it('rejects Spec draft generation context for non-Spec actions', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedPlanDraftAction(app, repository);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'automation_action_claim_conflict' });
+      });
+  });
+
+  it('rejects Spec draft generation context when the requested WorkItem does not match the claim', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedSpecDraftAction(app, repository);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/work-item-other/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'automation_action_claim_conflict' });
+      });
   });
 
   it.each([

@@ -631,6 +631,7 @@ export interface RuntimeSnapshotManualHoldRow {
 export interface RuntimeSnapshotRepositoryData {
   projects: RuntimeSnapshotProjectRow[];
   repos: RuntimeSnapshotRepoRow[];
+  work_items_requiring_spec: RuntimeSnapshotTargetRow[];
   work_items_requiring_plan: RuntimeSnapshotTargetRow[];
   plan_revisions_requiring_packages: RuntimeSnapshotTargetRow[];
   run_enqueue_disabled_packages: RuntimeSnapshotTargetRow[];

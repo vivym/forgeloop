@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, gt, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
@@ -41,6 +41,7 @@ import {
   capabilityFingerprint,
   isActiveRunSessionStatus,
   isWorkItemAutomationTerminal,
+  normalizeAutomationCapabilities,
 } from '@forgeloop/domain';
 
 import * as schema from '../schema';
@@ -876,7 +877,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ];
     const [row] = await this.db.select().from(automation_project_settings).where(and(...conditions)).limit(1);
     if (row !== undefined) {
-      return fromDbRecord<AutomationProjectSettings>(row);
+      const settings = fromDbRecord<AutomationProjectSettings>(row);
+      return {
+        ...settings,
+        capabilities_json: normalizeAutomationCapabilities(settings.capabilities_json),
+      };
     }
 
     const capabilities = automationCapabilitiesForPreset('off');
@@ -1249,6 +1254,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       )
       .orderBy(
         sql`coalesce(${automation_action_runs.nextAttemptAt}, ${automation_action_runs.createdAt})`,
+        sql`case when ${automation_action_runs.actionType} = 'project_runtime_snapshot' then 1 else 0 end`,
         asc(automation_action_runs.createdAt),
         asc(automation_action_runs.id),
       )
@@ -1307,7 +1313,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const settingsByScope = new Map(
       settingsRecords.map((row) => {
         const settings = fromDbRecord<AutomationProjectSettings>(row);
-        return [this.automationSettingsKey(settings.project_id, settings.repo_id), settings] as const;
+        return [
+          this.automationSettingsKey(settings.project_id, settings.repo_id),
+          {
+            ...settings,
+            capabilities_json: normalizeAutomationCapabilities(settings.capabilities_json),
+          },
+        ] as const;
       }),
     );
     const projectSnapshotRows = projectRows.map((project) => {
@@ -1355,6 +1367,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         runSession,
       ]);
     }
+    const workItemsRequiringSpec = await this.runtimeSnapshotWorkItemsRequiringSpec(
+      workItemRows,
+      repoRows,
+      specsById,
+      holds,
+      settingsByScope,
+    );
     const workItemsRequiringPlan = await this.runtimeSnapshotWorkItemsRequiringPlan(
       workItemRows,
       repoRows,
@@ -1371,7 +1390,21 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       holds,
       settingsByScope,
     );
-    const latestMatchingTargets = [...workItemsRequiringPlan, ...planRevisionsRequiringPackages];
+    const latestMatchingTargets = [...workItemsRequiringSpec, ...workItemsRequiringPlan, ...planRevisionsRequiringPackages];
+    const targetRevisionIds = [
+      ...new Set(
+        latestMatchingTargets.flatMap((target) =>
+          target.target_revision_id === undefined ? [] : [target.target_revision_id],
+        ),
+      ),
+    ];
+    const includesRevisionlessTargets = latestMatchingTargets.some((target) => target.target_revision_id === undefined);
+    const revisionCondition =
+      targetRevisionIds.length === 0
+        ? isNull(automation_action_runs.targetRevisionId)
+        : includesRevisionlessTargets
+          ? or(inArray(automation_action_runs.targetRevisionId, targetRevisionIds), isNull(automation_action_runs.targetRevisionId))
+          : inArray(automation_action_runs.targetRevisionId, targetRevisionIds);
     const latestMatchingActionRuns =
       latestMatchingTargets.length === 0
         ? []
@@ -1381,15 +1414,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
               .from(automation_action_runs)
               .where(
                 and(
-                  inArray(automation_action_runs.actionType, ['ensure_plan_draft', 'ensure_package_drafts']),
+                  inArray(automation_action_runs.actionType, [
+                    'ensure_spec_draft',
+                    'ensure_plan_draft',
+                    'ensure_package_drafts',
+                  ]),
                   inArray(
                     automation_action_runs.targetObjectId,
                     [...new Set(latestMatchingTargets.map((target) => target.target_object_id))],
                   ),
-                  inArray(
-                    automation_action_runs.targetRevisionId,
-                    [...new Set(latestMatchingTargets.flatMap((target) => (target.target_revision_id === undefined ? [] : [target.target_revision_id])))],
-                  ),
+                  revisionCondition,
                 ),
               )
               .orderBy(
@@ -1399,8 +1433,19 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
                 desc(automation_action_runs.id),
               )
               .limit(runtimeSnapshotActionRunLookback(latestMatchingTargets.length))
-          ).map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
+    ).map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
     const latestMatchingActionFields = this.latestMatchingActionFieldsByTarget(latestMatchingActionRuns);
+    const suppressingLatestActionStatuses = new Set(['pending', 'running', 'succeeded']);
+    const suppressTargetsWithLatestAction = (targets: RuntimeSnapshotTargetRow[]): RuntimeSnapshotTargetRow[] =>
+      targets.filter(
+        (target) =>
+          target.latest_matching_action_status === undefined ||
+          !suppressingLatestActionStatuses.has(target.latest_matching_action_status),
+      );
+    const workItemsRequiringSpecWithActionFields = this.applyLatestMatchingActionFields(
+      workItemsRequiringSpec,
+      latestMatchingActionFields,
+    );
     const policyProjectionActionRuns = (
       await this.db
         .select()
@@ -1413,6 +1458,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return {
       projects: projectSnapshotRows,
       repos: repoSnapshotRows,
+      work_items_requiring_spec: suppressTargetsWithLatestAction(workItemsRequiringSpecWithActionFields),
       work_items_requiring_plan: this.applyLatestMatchingActionFields(workItemsRequiringPlan, latestMatchingActionFields),
       plan_revisions_requiring_packages: this.applyLatestMatchingActionFields(
         planRevisionsRequiringPackages,
@@ -1969,6 +2015,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .where(wherePredicate)
       .orderBy(
         sql`coalesce(${automation_action_runs.nextAttemptAt}, ${automation_action_runs.createdAt})`,
+        sql`case when ${automation_action_runs.actionType} = 'project_runtime_snapshot' then 1 else 0 end`,
         asc(automation_action_runs.createdAt),
         asc(automation_action_runs.id),
       )
@@ -2292,6 +2339,45 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return targets;
   }
 
+  private async runtimeSnapshotWorkItemsRequiringSpec(
+    workItems: WorkItem[],
+    repos: ProjectRepo[],
+    specsById: Map<string, Spec>,
+    holds: ManualPathHold[],
+    settingsByScope: Map<string, AutomationProjectSettings>,
+  ): Promise<RuntimeSnapshotTargetRow[]> {
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const workItem of workItems) {
+      if (isWorkItemAutomationTerminal(workItem)) {
+        continue;
+      }
+      const existingSpec = workItem.current_spec_id === undefined ? undefined : specsById.get(workItem.current_spec_id);
+      if (existingSpec?.current_revision_id !== undefined) {
+        continue;
+      }
+      const targetScope = this.runtimeSnapshotDraftTargetScope(
+        repos,
+        workItem.project_id,
+        'canGenerateSpecDraft',
+        settingsByScope,
+      );
+      if (targetScope === undefined) {
+        continue;
+      }
+      if (this.hasActiveManualHold(holds, [`work_item:${workItem.id}`])) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'work_item',
+        target_object_id: workItem.id,
+        target_status: workItem.phase,
+        project_id: workItem.project_id,
+        ...targetScope,
+      });
+    }
+    return targets;
+  }
+
   private async runtimeSnapshotPlanRevisionsRequiringPackages(
     plansToEvaluate: Plan[],
     repos: ProjectRepo[],
@@ -2351,7 +2437,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   private runtimeSnapshotDraftTargetScope(
     repos: ProjectRepo[],
     projectId: string,
-    capability: 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
+    capability: 'canGenerateSpecDraft' | 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
     settingsByScope: Map<string, AutomationProjectSettings>,
   ): Pick<RuntimeSnapshotTargetRow, 'repo_id' | 'eligible_repo_ids' | 'automation_scope'> | undefined {
     const eligibleReposById = new Map<string, ProjectRepo>();
@@ -2444,7 +2530,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         this.latestMatchingActionKey(
           this.runtimeSnapshotActionTypeForTarget(target),
           target.target_object_id,
-          target.target_revision_id ?? '',
+          target.target_revision_id,
         ),
       ),
     }));
@@ -2461,11 +2547,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary' | 'blockers'>
     >();
     for (const actionRun of actions) {
-      const targetRevisionId = actionRun.target_revision_id;
-      if (targetRevisionId === undefined) {
-        continue;
-      }
-      const key = this.latestMatchingActionKey(actionRun.action_type, actionRun.target_object_id, targetRevisionId);
+      const key = this.latestMatchingActionKey(actionRun.action_type, actionRun.target_object_id, actionRun.target_revision_id);
       if (!fieldsByTarget.has(key)) {
         fieldsByTarget.set(key, this.latestMatchingActionFields(actionRun));
       }
@@ -2485,12 +2567,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     };
   }
 
-  private runtimeSnapshotActionTypeForTarget(target: RuntimeSnapshotTargetRow): 'ensure_plan_draft' | 'ensure_package_drafts' {
-    return target.target_object_type === 'plan_revision' ? 'ensure_package_drafts' : 'ensure_plan_draft';
+  private runtimeSnapshotActionTypeForTarget(
+    target: RuntimeSnapshotTargetRow,
+  ): 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts' {
+    if (target.target_object_type === 'plan_revision') {
+      return 'ensure_package_drafts';
+    }
+    return target.target_revision_id === undefined ? 'ensure_spec_draft' : 'ensure_plan_draft';
   }
 
-  private latestMatchingActionKey(actionType: string, targetObjectId: string, targetRevisionId: string): string {
-    return `${actionType}:${targetObjectId}:${targetRevisionId}`;
+  private latestMatchingActionKey(actionType: string, targetObjectId: string, targetRevisionId?: string): string {
+    return `${actionType}:${targetObjectId}:${targetRevisionId ?? '<none>'}`;
   }
 
   private isAutomationActionClaimable(actionRun: AutomationActionRun, now: string): boolean {
@@ -2557,7 +2644,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   ): AutomationProjectSettings {
     const existing = settingsByScope.get(this.automationSettingsKey(input.project_id, input.repo_id));
     if (existing !== undefined) {
-      return existing;
+      return {
+        ...existing,
+        capabilities_json: normalizeAutomationCapabilities(existing.capabilities_json),
+      };
     }
 
     const capabilities = automationCapabilitiesForPreset('off');

@@ -1,6 +1,11 @@
 import type { AutomationPrecondition, AutomationPreconditionCapability, AutomationScope } from '@forgeloop/domain';
 
 import { AutomationHttpError } from './http-client.js';
+import {
+  disabledSpecDraftGenerator,
+  validateGeneratedSpecDraft,
+  type SpecDraftGenerator,
+} from './spec-draft-generation.js';
 import type {
   AutomationActionRunRecord,
   AutomationExecutorClient,
@@ -15,6 +20,7 @@ export interface ExecuteClaimedActionInput {
   actorId: string;
   daemonIdentity?: string;
   leaseMs?: number;
+  specDraftGenerator?: SpecDraftGenerator;
 }
 
 export interface ExecuteActionRunInput {
@@ -22,6 +28,7 @@ export interface ExecuteActionRunInput {
   action: AutomationActionRunRecord;
   actorId: string;
   daemonIdentity?: string;
+  specDraftGenerator?: SpecDraftGenerator;
 }
 
 const projectAndRepoFromScope = (automationScope: AutomationScope): { projectId: string; repoId?: string } => {
@@ -33,6 +40,9 @@ const projectAndRepoFromScope = (automationScope: AutomationScope): { projectId:
 };
 
 const requiredCapabilityFor = (action: AutomationActionRunRecord): AutomationPreconditionCapability => {
+  if (action.actionType === 'ensure_spec_draft') {
+    return 'canGenerateSpecDraft';
+  }
   if (action.actionType === 'ensure_package_drafts') {
     return 'canGeneratePackageDrafts';
   }
@@ -82,6 +92,10 @@ type EnsurePlanDraftActionInput = {
   specRevisionId: string;
 };
 
+type EnsureSpecDraftActionInput = {
+  workItemId: string;
+};
+
 type EnsurePackageDraftsActionInput = {
   planRevisionId: string;
   generationKey: string;
@@ -129,6 +143,10 @@ const parseEnsurePlanDraftInput = (action: AutomationActionRunRecord): EnsurePla
   specRevisionId: requiredString(action.actionInputJson, 'spec_revision_id'),
 });
 
+const parseEnsureSpecDraftInput = (action: AutomationActionRunRecord): EnsureSpecDraftActionInput => ({
+  workItemId: requiredString(action.actionInputJson, 'work_item_id'),
+});
+
 const parseEnsurePackageDraftsInput = (action: AutomationActionRunRecord): EnsurePackageDraftsActionInput => ({
   planRevisionId: requiredString(action.actionInputJson, 'plan_revision_id'),
   generationKey: requiredString(action.actionInputJson, 'generation_key'),
@@ -170,6 +188,9 @@ const errorCode = (error: unknown): string | undefined => {
   if (error instanceof AutomationHttpError) {
     return error.code;
   }
+  if (error instanceof Error && (error.message === 'generation_disabled' || error.message === 'generated_spec_draft_invalid')) {
+    return error.message;
+  }
   return undefined;
 };
 
@@ -180,6 +201,8 @@ const isStalePrecondition = (code: string | undefined): boolean =>
   code === 'automation_precondition_stale' || code === 'stale_execution_package_revision';
 
 const isBlockedByGate = (code: string | undefined): boolean =>
+  code === 'generation_disabled' ||
+  code === 'generated_spec_draft_invalid' ||
   code === 'manual_path_hold_active' ||
   code === 'automation_hold_active' ||
   code === 'automation_gate_pending' ||
@@ -197,6 +220,10 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
       status: error.status,
       ...(error.code === undefined ? {} : { code: error.code }),
     };
+  }
+  const code = errorCode(error);
+  if (code === 'generation_disabled' || code === 'generated_spec_draft_invalid') {
+    return { status: 422, code };
   }
   return { code: 'transport_error' };
 };
@@ -225,9 +252,40 @@ const completeProjection = async (
 const executeCommand = async (
   client: AutomationExecutorClient,
   action: AutomationActionRunRecord,
-  input: Pick<ExecuteActionRunInput, 'actorId' | 'daemonIdentity'>,
+  input: Pick<ExecuteActionRunInput, 'actorId' | 'daemonIdentity' | 'specDraftGenerator'>,
 ): Promise<void> => {
   const precondition = preconditionFor(action);
+  if (action.actionType === 'ensure_spec_draft') {
+    const actionInput = parseEnsureSpecDraftInput(action);
+    const generator = input.specDraftGenerator ?? disabledSpecDraftGenerator;
+    if (generator.mode === 'disabled') {
+      throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Spec draft generation is disabled');
+    }
+    const context = await client.specDraftGenerationContext(actionInput.workItemId, {
+      actionRunId: action.id,
+      claimToken: action.claimToken ?? '',
+    });
+    const generated = await generator.generateSpecDraft(context);
+    let generatedSpecDraft;
+    try {
+      generatedSpecDraft = validateGeneratedSpecDraft(generated.generated);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'generated_spec_draft_invalid') {
+        throw new AutomationHttpError(422, { code: 'generated_spec_draft_invalid' }, 'Generated Spec draft is invalid');
+      }
+      throw error;
+    }
+    await client.ensureSpecDraft(actionInput.workItemId, {
+      action_run_id: action.id,
+      ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
+      idempotency_key: action.idempotencyKey,
+      automation_precondition: precondition,
+      generated_spec_draft: generatedSpecDraft,
+      generation_artifacts: generated.generationArtifacts,
+    });
+    return;
+  }
+
   if (action.actionType === 'ensure_plan_draft') {
     const actionInput = parseEnsurePlanDraftInput(action);
     await client.ensurePlanDraft(actionInput.workItemId, {
@@ -381,6 +439,7 @@ export const executeClaimedAction = async (input: ExecuteClaimedActionInput): Pr
     action: claim.action,
     actorId: input.actorId,
     ...(input.daemonIdentity === undefined ? {} : { daemonIdentity: input.daemonIdentity }),
+    ...(input.specDraftGenerator === undefined ? {} : { specDraftGenerator: input.specDraftGenerator }),
   });
 };
 

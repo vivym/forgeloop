@@ -3,11 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { automationPreconditionFingerprint, type AutomationPrecondition } from '../../packages/domain/src/index';
 import {
   AutomationHttpError,
+  createFakeSpecDraftGenerator,
+  executeActionRun,
   executeClaimedAction,
   type AutomationActionResponse,
   type AutomationActionRunRecord,
+  type AutomationGenerationWorkItemContextV1,
   type AutomationExecutorClient,
+  type EnsureSpecDraftCommandInput,
   type NextAction,
+  type SpecDraftGenerator,
 } from '../../packages/automation/src/index';
 
 const repoScope = 'repo:project-1:repo-1' as const;
@@ -52,6 +57,42 @@ const claimedAction = (overrides: Partial<AutomationActionRunRecord> = {}): Auto
   ...overrides,
 });
 
+const claimedSpecDraftAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord =>
+  claimedAction({
+    actionType: 'ensure_spec_draft',
+    targetObjectType: 'work_item',
+    targetObjectId: 'work-item-1',
+    targetRevisionId: undefined,
+    targetStatus: 'triage',
+    actionInputJson: {
+      work_item_id: 'work-item-1',
+    },
+    ...overrides,
+  });
+
+const specDraftContext = (): AutomationGenerationWorkItemContextV1 => ({
+  context_version: 'generation_context.work_item.v1',
+  action_run_id: 'action-run-1',
+  work_item: {
+    id: 'work-item-1',
+    project_id: 'project-1',
+    title: 'Spec draft work item',
+    goal: 'Ship the spec draft path',
+    success_criteria: ['Draft spec exists'],
+    risk: 'low',
+    priority: 'high',
+    kind: 'initiative',
+  },
+  repos: [
+    {
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      default_branch: 'main',
+      policy_status: 'missing',
+    },
+  ],
+});
+
 const commandPreconditionFor = (action: AutomationActionRunRecord): AutomationPrecondition =>
   ({
     automation_scope: action.automationScope,
@@ -65,7 +106,9 @@ const commandPreconditionFor = (action: AutomationActionRunRecord): AutomationPr
     automation_settings_version: action.automationSettingsVersion,
     capability_fingerprint: action.capabilityFingerprint,
     required_capability:
-      action.actionType === 'ensure_package_drafts' || action.targetObjectType === 'plan_revision'
+      action.actionType === 'ensure_spec_draft'
+        ? 'canGenerateSpecDraft'
+        : action.actionType === 'ensure_package_drafts' || action.targetObjectType === 'plan_revision'
         ? 'canGeneratePackageDrafts'
         : 'canGeneratePlanDraft',
     actor_class: 'automation_daemon',
@@ -76,6 +119,7 @@ class FakeAutomationClient implements AutomationExecutorClient {
   actionToClaim: AutomationActionRunRecord | null = claimedAction();
   createOrReplayResponse?: AutomationActionResponse;
   commandError?: AutomationHttpError;
+  contextError?: AutomationHttpError;
 
   async createOrReplayAction(action: NextAction) {
     this.calls.push({ method: 'createOrReplayAction', args: [action] });
@@ -126,6 +170,22 @@ class FakeAutomationClient implements AutomationExecutorClient {
     return { status: 'created' };
   }
 
+  async specDraftGenerationContext(workItemId: string, input: { actionRunId: string; claimToken: string }) {
+    this.calls.push({ method: 'specDraftGenerationContext', args: [workItemId, input] });
+    if (this.contextError !== undefined) {
+      throw this.contextError;
+    }
+    return specDraftContext();
+  }
+
+  async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {
+    this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
+    if (this.commandError !== undefined) {
+      throw this.commandError;
+    }
+    return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
+  }
+
   async requestManualPathHold(input: Record<string, unknown>) {
     this.calls.push({ method: 'requestManualPathHold', args: [input] });
     if (this.commandError !== undefined) {
@@ -134,6 +194,22 @@ class FakeAutomationClient implements AutomationExecutorClient {
     return { status: 'active' };
   }
 }
+
+describe('spec draft generation fixtures', () => {
+  it('creates schema-versioned fake Spec drafts from public WorkItem context', async () => {
+    const result = await createFakeSpecDraftGenerator().generateSpecDraft(specDraftContext());
+
+    expect(result).toMatchObject({
+      generated: {
+        schema_version: 'spec_draft.v1',
+        summary: 'Draft spec for Spec draft work item',
+        goals: ['Ship the spec draft path'],
+        acceptance_criteria: ['Draft spec exists'],
+      },
+      generationArtifacts: [],
+    });
+  });
+});
 
 const execute = (client: FakeAutomationClient, action: NextAction = baseAction()) =>
   executeClaimedAction({
@@ -252,6 +328,117 @@ describe('automation executor', () => {
       expect.objectContaining({
         action_run_id: 'action-run-1',
         generation_key: 'default:plan-revision-1',
+      }),
+    ]);
+  });
+
+  it('executes claimed Spec draft actions with fake generation and completes the action', async () => {
+    const client = new FakeAutomationClient();
+    const action = claimedSpecDraftAction();
+
+    const result = await executeActionRun({
+      client,
+      action,
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+      specDraftGenerator: createFakeSpecDraftGenerator(),
+    });
+
+    expect(result).toMatchObject({ actionRunId: 'action-run-1', status: 'succeeded', retryable: false });
+    expect(client.calls.map((call) => call.method)).toEqual([
+      'specDraftGenerationContext',
+      'ensureSpecDraft',
+      'completeAction',
+    ]);
+    const ensureCall = client.calls.find((call) => call.method === 'ensureSpecDraft');
+    expect(ensureCall?.args).toEqual([
+      'work-item-1',
+      expect.objectContaining({
+        action_run_id: 'action-run-1',
+        claim_token: 'claim-token-1',
+        idempotency_key: 'idempotency-key-1',
+        generated_spec_draft: expect.objectContaining({ schema_version: 'spec_draft.v1' }),
+        generation_artifacts: [],
+        automation_precondition: expect.objectContaining({
+          required_capability: 'canGenerateSpecDraft',
+          target_object_type: 'work_item',
+          target_object_id: 'work-item-1',
+          target_status: 'triage',
+        }),
+      }),
+    ]);
+  });
+
+  it('blocks Spec draft actions when generation is disabled', async () => {
+    const client = new FakeAutomationClient();
+
+    const result = await executeActionRun({
+      client,
+      action: claimedSpecDraftAction(),
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+    });
+
+    expect(result).toMatchObject({ actionRunId: 'action-run-1', status: 'blocked', retryable: false, reasonCode: 'generation_disabled' });
+    expect(client.calls.map((call) => call.method)).not.toContain('ensureSpecDraft');
+    expect(client.calls.find((call) => call.method === 'blockAction')?.args).toEqual([
+      'action-run-1',
+      expect.objectContaining({
+        claim_token: 'claim-token-1',
+        idempotency_key: 'idempotency-key-1',
+        retryable: false,
+        result_json: { status: 422, code: 'generation_disabled' },
+      }),
+    ]);
+  });
+
+  it('blocks invalid generated Spec draft payloads before calling the command endpoint', async () => {
+    const client = new FakeAutomationClient();
+    const invalidGenerator: SpecDraftGenerator = {
+      mode: 'fake',
+      async generateSpecDraft() {
+        return { generated: { schema_version: 'spec_draft.v1' }, generationArtifacts: [] };
+      },
+    };
+
+    const result = await executeActionRun({
+      client,
+      action: claimedSpecDraftAction(),
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+      specDraftGenerator: invalidGenerator,
+    });
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'blocked',
+      retryable: false,
+      reasonCode: 'generated_spec_draft_invalid',
+    });
+    expect(client.calls.map((call) => call.method)).toContain('specDraftGenerationContext');
+    expect(client.calls.map((call) => call.method)).not.toContain('ensureSpecDraft');
+  });
+
+  it('fails retryably when Spec draft generation context transport fails', async () => {
+    const client = new FakeAutomationClient();
+    client.contextError = new AutomationHttpError(503, { code: 'context_unavailable', raw_prompt: 'must-not-leak' });
+
+    const result = await executeActionRun({
+      client,
+      action: claimedSpecDraftAction(),
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+      specDraftGenerator: createFakeSpecDraftGenerator(),
+    });
+
+    expect(result).toMatchObject({ actionRunId: 'action-run-1', status: 'failed', retryable: true, reasonCode: 'context_unavailable' });
+    const failCall = client.calls.find((call) => call.method === 'failAction');
+    expect(JSON.stringify(failCall)).not.toContain('must-not-leak');
+    expect(failCall?.args).toEqual([
+      'action-run-1',
+      expect.objectContaining({
+        retryable: true,
+        result_json: { status: 503, code: 'context_unavailable' },
       }),
     ]);
   });
