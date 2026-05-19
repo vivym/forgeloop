@@ -264,6 +264,7 @@ const isStalePrecondition = (code: string | undefined): boolean =>
 const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'generation_disabled' ||
   code === 'codex_generation_disabled' ||
+  code === 'codex_generation_safety_unavailable' ||
   code === 'codex_generation_sandbox_invalid' ||
   code === 'generated_spec_draft_invalid' ||
   (code === 'generated_plan_draft_invalid' && error instanceof AutomationHttpError && error.status < 500) ||

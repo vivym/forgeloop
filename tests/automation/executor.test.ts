@@ -782,6 +782,47 @@ describe('automation executor', () => {
     expect(client.calls.map((call) => call.method)).not.toContain('ensureSpecDraft');
   });
 
+  it('blocks Spec draft generation when Codex safety enforcement is unavailable', async () => {
+    const client = new FakeAutomationClient();
+    const unsafeRuntime: CodexGenerationRuntime = {
+      async generateSpecDraft() {
+        throw new Error('codex_generation_safety_unavailable');
+      },
+      async generatePlanDraft() {
+        throw new Error('unexpected_plan_generation');
+      },
+      async generatePackageDrafts() {
+        throw new Error('unexpected_package_generation');
+      },
+    };
+
+    const result = await executeActionRun({
+      client,
+      action: claimedSpecDraftAction(),
+      actorId: 'daemon-actor',
+      daemonIdentity: 'daemon-1',
+      generationRuntime: unsafeRuntime,
+      generationPlanning: generationPlanning(),
+    });
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'blocked',
+      retryable: false,
+      reasonCode: 'codex_generation_safety_unavailable',
+    });
+    expect(client.calls.map((call) => call.method)).toContain('specDraftGenerationContext');
+    expect(client.calls.map((call) => call.method)).not.toContain('ensureSpecDraft');
+    expect(client.calls.find((call) => call.method === 'blockAction')?.args).toEqual([
+      'action-run-1',
+      expect.objectContaining({
+        retryable: false,
+        result_json: { status: 422, code: 'codex_generation_safety_unavailable' },
+      }),
+    ]);
+    expect(client.calls.map((call) => call.method)).not.toContain('failAction');
+  });
+
   it('fails retryably when Spec draft generation context transport fails', async () => {
     const client = new FakeAutomationClient();
     client.contextError = new AutomationHttpError(503, { code: 'context_unavailable', raw_prompt: 'must-not-leak' });
