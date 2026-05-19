@@ -105,6 +105,8 @@ Acceptable implementation choices:
 
 The plan must not create a second independent app-server JSON-RPC implementation.
 
+The generation runtime must not call the existing source-changing `CodexAppServerDriver.startRun` path as-is. That execution driver is shaped around `RunSpec`, mutable workspaces, dangerous source-changing sandbox settings, and fallback-to-exec metadata. Plan 2 may reuse its protocol types, JSON-RPC transport, notification normalization, raw log store, and lease patterns, but generation needs its own session adapter with generation-specific safety and sandbox settings.
+
 ### `packages/automation`
 
 `packages/automation` keeps planner, action types, idempotency, executor orchestration, and HTTP client code. It calls a generic generation driver interface supplied by the daemon. It must not own app-server protocol details.
@@ -239,6 +241,7 @@ The real driver uses Codex app-server mode. The design distinguishes app-server 
 - `codex exec` is not allowed;
 - CLI fallback is not allowed;
 - an app-server process may only be used when launched or connected through a governed transport that enforces the runtime policy; unsafe direct spawn remains test-only or local explicit opt-in and does not satisfy production acceptance.
+- generation app-server turns must request a read-only or artifact-only sandbox profile, not the source-changing `dangerFullAccess` profile used by local Codex execution.
 
 The app-server transport contract must cover:
 
@@ -261,6 +264,8 @@ The generation driver must enforce:
 - cleanup after terminal or timeout;
 - retryable vs non-retryable classification;
 - no CLI fallback.
+
+The generation driver must reject any effective app-server config that reports `dangerFullAccess`, approval bypass for source-changing work, or any write permission outside the configured artifact root. Unlike source-changing run-worker execution, generation success must not require `effective_dangerous_mode=confirmed`.
 
 The existing run-worker app-server stub is not required to be replaced in this plan, but this plan must define contracts that allow Plan 3 or runtime hardening work to swap run-worker from `AppServerGovernorUnavailableDriver` to the same governed app-server transport family.
 
@@ -309,6 +314,7 @@ The generation lease binds:
 - allowed repo ids;
 - workspace root when provided;
 - artifact root;
+- sandbox/write policy;
 - hard timeout and output limits.
 
 If the runtime cannot create this narrower generation lease, real `codex` generation blocks with `codex_generation_safety_unavailable`.
@@ -540,17 +546,29 @@ Command payload:
 
 For the signed internal automation endpoint, `generated_plan_draft` is required. If a separate human/manual helper still needs server-synthesized plan content, it must use a different public command path outside this daemon endpoint. Automation daemon commands must not synthesize Plan content in the control plane.
 
+Before idempotent replay or persistence, the command handler computes a canonical `generated_payload_digest` over `GeneratedPlanDraftV1` plus public-safe `generation_artifacts` identity. Artifact identity includes stable artifact kind/id/content digest metadata, but excludes volatile local paths, raw prompts, raw outputs, and raw logs. The command idempotency identity/precondition metadata must store this digest.
+
+The command handler must revalidate the writer boundary before replaying or writing:
+
+- action claim is active and matches `ensure_plan_draft`;
+- target WorkItem and `spec_revision_id` match the claimed action input;
+- Spec has `status === "approved"` and `resolution === "approved"`;
+- Spec has `approved_revision_id` set;
+- Spec `current_revision_id === approved_revision_id`;
+- requested `spec_revision_id === approved_revision_id`;
+- active holds still block writes.
+
 Persistence:
 
 - create Plan if absent;
 - create PlanRevision from generated fields;
 - set `based_on_spec_revision_id`;
 - set `author_actor_id` to daemon identity or a stable automation actor id;
-- attach `artifact_refs`;
+- attach `generation_artifacts` to PlanRevision `artifact_refs`;
 - leave Plan in draft state;
 - do not submit or approve.
 
-Idempotent replay returns existing PlanRevision for the same WorkItem and SpecRevision when compatible.
+Idempotent replay returns an existing PlanRevision only when the same idempotency key, WorkItem, `spec_revision_id`, command scope/precondition fingerprint, and `generated_payload_digest` match. For Plan drafts, "compatible" means the same `spec_revision_id`, same generated payload digest, and same public-safe generation artifact identity. The same idempotency key with a different generated payload digest blocks as `generated_payload_idempotency_drift`.
 
 ## Generated Package Draft Set Payload
 
@@ -634,6 +652,20 @@ Command payload:
 
 For the signed internal automation endpoint, `generated_package_drafts` is required. If a separate human/manual helper still needs server-synthesized packages, it must use a different public command path outside this daemon endpoint. The control plane must not fall back to hard-coded `api-package` generation for automation daemon commands.
 
+Before idempotent replay or persistence, the command handler computes a canonical `generated_payload_digest` over `GeneratedPackageDraftSetV1`, `generation_key`, and public-safe `generation_artifacts` identity. This digest is distinct from the package-set `manifest_digest`: `generated_payload_digest` protects command replay, while `manifest_digest` identifies the canonical persisted package set. The command idempotency identity/precondition metadata must store `generated_payload_digest`.
+
+The command handler must revalidate the writer boundary before replaying or writing:
+
+- action claim is active and matches `ensure_package_drafts`;
+- target PlanRevision and `generation_key` match the claimed action input;
+- PlanRevision exists and equals the Plan `approved_revision_id`;
+- Plan has `status === "approved"` and `resolution === "approved"`;
+- Plan `current_revision_id === approved_revision_id`;
+- PlanRevision `based_on_spec_revision_id` equals the WorkItem Spec `approved_revision_id`;
+- WorkItem Spec has `status === "approved"` and `resolution === "approved"`;
+- WorkItem Spec `current_revision_id === approved_revision_id`;
+- active holds still block writes.
+
 ## Manifest Canonicalization
 
 The control plane canonicalizes the generated package set before persistence:
@@ -663,6 +695,7 @@ The generation run must retain public-safe generation metadata in `result_json` 
 - prompt version;
 - output schema version;
 - manifest digest;
+- generated payload digest;
 - package keys;
 - generation artifact ref summaries.
 
@@ -695,11 +728,14 @@ After all packages are created and mapped, save dependency rows:
 
 Complete `execution_package_generation_runs` only after all packages and dependencies are persisted.
 
+`generation_artifacts` from the command payload must be stored on `execution_package_generation_runs.evidence_refs`. Only public-safe artifact summaries and digests may be copied into `result_json`; full artifact contents and internal paths remain in the artifact store.
+
 Policy validation must be authoritative in the control plane. The daemon may prevalidate generated paths, but the command handler must reload current repo policy/projection and reject payloads that would widen allowed paths, bypass forbidden paths, require checks not allowed by policy, request source changes when the policy is missing or safe-default read-only, or bind a package to an ineligible repo. When policy is missing, parse-failed, or unsafe-path, `path_policy_scoped` packages are blocked or routed to the existing manual path mechanism; they are not converted into broad defaults.
 
 Idempotency must detect drift:
 
-- same idempotency key and same generated payload replays;
+- same idempotency key and same generated payload digest replays;
+- same idempotency key with a different generated payload digest blocks as `generated_payload_idempotency_drift`;
 - same plan revision/generation key/package key with different generated package identity blocks as drift;
 - existing succeeded generation for a plan revision suppresses duplicate package generation unless explicit regeneration approval exists.
 
@@ -713,6 +749,31 @@ Planner action ordering remains:
 4. `project_runtime_snapshot`
 
 Plan 2 does not add `enqueue_package_run`.
+
+The planner receives generation identity as explicit input from the daemon, not by importing app-server runtime details:
+
+```ts
+interface AutomationGenerationPlanningConfig {
+  mode: 'disabled' | 'fake' | 'app_server';
+  tasks: {
+    spec_draft: { enabled: boolean; promptVersion: string; outputSchemaVersion: 'spec_draft.v1' };
+    plan_draft: { enabled: boolean; promptVersion: string; outputSchemaVersion: 'plan_draft.v1' };
+    package_drafts: { enabled: boolean; promptVersion: string; outputSchemaVersion: 'package_drafts.v1' };
+  };
+}
+```
+
+Final Plan 2 behavior:
+
+- `disabled` suppresses `ensure_spec_draft`, `ensure_plan_draft`, and `ensure_package_drafts`;
+- `fake` and `app_server` allow enabled generation tasks to be planned;
+- a task with `enabled: false` is suppressed even when other tasks are enabled;
+- the planner uses only `mode`, task enabled flags, prompt version, and output schema version for action identity;
+- the planner must not import `packages/codex-runtime` app-server protocol code.
+
+During 2A, only `plan_draft` must migrate to this generated-payload behavior. The daemon planning config must set `package_drafts.enabled=false` by default in 2A, and the planner must suppress `ensure_package_drafts` even when a generated Plan is later manually approved. This prevents a mixed flow where a generated Plan feeds the old daemon-origin hard-coded package synthesis path.
+
+During 2B, `package_drafts` may be enabled only after `ensure_package_drafts` requires `generated_package_drafts`, command-side payload digest/idempotency drift detection is in place, and the remaining control-plane hard-coded package synthesis path for automation commands is removed.
 
 Runtime snapshot projections must use stable approved revision ids:
 
@@ -737,6 +798,8 @@ Idempotency for generation actions must include:
 - policy digest where applicable.
 
 Changing prompt version or output schema version must produce a distinct action identity when the target still needs generation.
+
+Planner action identity is computed before generation and therefore does not include `generated_payload_digest`. Command idempotency is checked after generation and must include the command-side `generated_payload_digest` rules defined for Plan and Package commands above.
 
 ## Daemon Execution Flow
 
@@ -773,15 +836,19 @@ Error mapping:
 | Condition | Action outcome | Retryable | Public reason |
 | --- | --- | --- | --- |
 | generation disabled | blocked | false | `generation_disabled` |
+| generation safety lease unavailable | blocked | false | `codex_generation_safety_unavailable` |
 | app-server transport unavailable | failed | true | `codex_app_server_unavailable` |
 | app-server unsafe direct spawn requested in production | blocked | false | `codex_app_server_unsafe_transport` |
+| app-server effective config allows source writes | blocked | false | `codex_generation_sandbox_invalid` |
 | task timeout | failed | true | `codex_generation_timeout` |
 | cancellation during daemon shutdown | failed | true | `codex_generation_cancelled` |
 | invalid JSON output | failed | true by default | `generated_output_invalid_json` |
+| app-server output schema validation failure | failed | true | `generated_output_schema_invalid` |
 | schema validation failure from stable fake output | blocked | false | task-specific invalid payload code |
-| generated Plan invalid | blocked | false | `generated_plan_draft_invalid` |
-| generated Package paths unsafe | blocked | false | `generated_package_policy_invalid` |
-| generated Package dependency cycle | blocked | false | `generated_package_dependency_invalid` |
+| command-side generated Plan payload invalid | blocked | false | `generated_plan_draft_invalid` |
+| command-side generated Package paths unsafe | blocked | false | `generated_package_policy_invalid` |
+| command-side generated Package dependency cycle | blocked | false | `generated_package_dependency_invalid` |
+| command idempotency key reused with different generated payload digest | blocked | false | `generated_payload_idempotency_drift` |
 | command precondition stale | gate_pending | true | existing stale precondition code |
 | active hold | blocked | false | existing hold code |
 | transport 5xx/429 equivalent | failed | true | `codex_app_server_unavailable` |
@@ -817,40 +884,60 @@ Unit tests:
 - package validator rejects duplicate required check ids.
 - generation runtime rejects non-JSON or ambiguous output.
 - generation runtime maps app-server unavailable without CLI fallback.
+- generation runtime rejects `dangerFullAccess` or source-write-capable app-server effective config.
+- generation runtime blocks real app-server mode when generation safety lease creation is unavailable.
 - idempotency includes prompt and schema versions.
+- planner suppresses Spec, Plan, and Package generation actions when generation mode is `disabled`.
+- planner uses daemon-supplied prompt and output schema versions in generation action identity without importing app-server runtime code.
+- app-server invalid JSON/schema output fails retryably with public-safe reason and does not call the command endpoint.
+- stable fake invalid output blocks non-retryably so deterministic prompt/schema bugs are not retried forever.
 
 Control-plane tests:
 
 - Plan generation context requires active claim and matching `spec_revision_id`.
 - Plan generation context rejects unapproved Spec state, missing `approved_revision_id`, or `current_revision_id !== approved_revision_id`.
 - `ensure-plan-draft` daemon command requires `generated_plan_draft`.
+- `ensure-plan-draft` daemon command revalidates approved Spec state, `approved_revision_id`, and `current_revision_id === approved_revision_id` before replaying or writing.
+- `ensure-plan-draft` daemon command stores and compares `generated_payload_digest`, and blocks idempotency-key reuse with different generated Plan payload/artifact identity.
 - generated Plan command persists generated fields and artifact refs.
+- generated Plan command rejects or sanitizes claim tokens, HMACs, secrets, raw prompts/output/logs, and local absolute paths in generated public fields, `generation_artifacts`, and action `result_json`.
 - Package generation context requires active claim and matching generation key.
 - Package generation context rejects unapproved Plan state, missing `approved_revision_id`, `current_revision_id !== approved_revision_id`, or mismatch between PlanRevision and Spec `approved_revision_id`.
 - `ensure-package-drafts` daemon command requires `generated_package_drafts`.
+- `ensure-package-drafts` daemon command revalidates approved Plan state, `approved_revision_id`, `current_revision_id === approved_revision_id`, and PlanRevision-to-Spec approved revision lineage before replaying or writing.
+- `ensure-package-drafts` daemon command stores and compares `generated_payload_digest`, and blocks idempotency-key reuse with different generated Package payload/artifact identity.
 - generated Package command persists generation run with canonical manifest digest.
+- generated Package command persists `generation_artifacts` to `execution_package_generation_runs.evidence_refs` and copies only public-safe summaries/digests to `result_json`.
 - generated Package command persists multiple package records.
 - generated Package command persists dependency rows using package-key mapping.
 - generated Package command rejects unsafe paths and dependency cycles.
+- generated Package command rejects or sanitizes claim tokens, HMACs, secrets, raw prompts/output/logs, and local absolute paths in generated public fields, `generation_artifacts`, package records, dependency metadata, generation run `result_json`, and runtime snapshot projections.
 - hard-coded `api-package` fallback is not used for daemon-origin package generation.
 
 Daemon tests:
 
 - fake runtime creates Plan draft from approved Spec.
 - fake runtime creates Package drafts from approved Plan.
-- daemon blocks invalid generated Plan output with public-safe reason.
-- daemon blocks invalid generated Package output with public-safe reason.
+- daemon fails retryably on invalid app-server generated Plan output with public-safe reason.
+- daemon fails retryably on invalid app-server generated Package output with public-safe reason.
+- daemon blocks stable fake invalid Plan/Package output non-retryably with public-safe reason.
 - daemon does not call command endpoint when validation fails.
 - daemon does not enqueue runs.
 - daemon does not use CLI fallback when app-server is unavailable.
+- daemon blocks real app-server generation when read-only/artifact-only sandbox enforcement is unavailable.
 - daemon cancels or cleans up in-flight generation on shutdown.
 
 Integration/E2E tests:
 
 - WorkItem without Spec still reaches fake Spec draft as in Plan 1.
-- approved Spec -> generated Plan draft -> human approval -> generated Package drafts.
+- after 2B, approved Spec -> generated Plan draft -> human approval -> generated Package drafts.
 - generated Plan content differs from previous hard-coded service-side fallback and matches fake/Codex payload.
-- generated Package set can include at least two packages with one dependency.
+- after 2B, generated Package set can include at least two packages with one dependency.
+- generated Spec draft does not cause a Plan action until the Spec is manually approved.
+- generated Plan draft does not cause a Package action until the Plan is manually approved.
+- in a 2A deployment with `package_drafts.enabled=false`, an approved generated Plan does not emit or execute `ensure_package_drafts`.
+- daemon never performs Spec submit/approve or Plan submit/approve transitions.
+- Package generation cannot occur in the same daemon run as Plan draft generation unless an approved PlanRevision was explicitly seeded before that run.
 - no RunSession is created by Plan 2 flows.
 
 Dogfood:
@@ -869,18 +956,23 @@ Implementation checkpoints:
 - Add `packages/codex-runtime` skeleton.
 - Move or wrap Spec fake generation under runtime interface.
 - Add task definitions and fake/app-server driver contracts.
+- Add app-server startup validation that rejects unsafe direct spawn, CLI/exec fallback, missing generation safety lease, source-write-capable effective config, and `dangerFullAccess`.
 - Add `GeneratedPlanDraftV1` validator.
 - Add Plan generation context endpoint.
 - Extend `ensure_plan_draft` DTO and command.
+- Add command-side generated payload digest, idempotency drift detection, and approved revision writer-boundary revalidation for Plan drafts.
 - Wire daemon `ensure_plan_draft` through runtime.
+- Add redaction validators for generated Plan public fields, `generation_artifacts`, action result JSON, and runtime snapshot projections.
 - Add focused unit, API, daemon, and E2E tests.
 
 Acceptance:
 
 - approved Spec creates generated Plan draft through the daemon;
 - Plan remains draft;
-- no Package generation behavior regresses;
-- no CLI fallback exists.
+- existing non-daemon/manual Package draft behavior does not regress;
+- `package_drafts.enabled=false` suppresses `ensure_package_drafts` for 2A, including after a generated Plan is manually approved;
+- no CLI fallback exists;
+- `codex` mode cannot start unless governed app-server read-only/artifact-only sandbox enforcement is available.
 
 ### 2B: Package Draft Set
 
@@ -889,13 +981,17 @@ Acceptance:
 - Extend `ensure_package_drafts` DTO and command.
 - Add manifest canonicalization and digest.
 - Persist generated packages and generation package records.
+- Persist package generation artifact refs on `execution_package_generation_runs.evidence_refs`.
 - Persist dependencies by package-key mapping.
+- Add command-side generated payload digest, idempotency drift detection, and approved revision writer-boundary revalidation for Package drafts.
 - Replace daemon-origin hard-coded `api-package` generation.
+- Add redaction validators for generated Package public fields, dependency metadata, package records, `generation_artifacts`, generation run result JSON, and runtime snapshot projections.
 - Add focused unit, API, daemon, and E2E tests.
 
 Acceptance:
 
 - approved Plan creates generated Package drafts through the daemon;
+- `package_drafts.enabled` is turned on only after daemon-origin hard-coded package synthesis is removed;
 - package manifest and dependency graph are persisted;
 - no RunSession is created;
 - unsafe generated package proposals are blocked.
@@ -903,8 +999,7 @@ Acceptance:
 ### 2C: App-Server Hardening
 
 - Solidify governed app-server transport contract.
-- Enforce no CLI fallback.
-- Add timeout, cancellation, cleanup, redaction, raw log, and concurrency tests.
+- Expand timeout, cancellation, cleanup, raw log, concurrency, and long-running transport lifecycle tests.
 - Add real app-server dogfood path where environment supports it.
 - Document how Plan 3/run-worker will reuse the same transport family.
 
@@ -931,6 +1026,6 @@ Acceptance:
 
 ## Open Follow-Ups
 
-- Plan 3 should add `enqueue_package_run`, enqueue preflight attestation production, and dogfood autorun after Plan 2 is stable.
-- Run-worker app-server replacement should use the app-server transport contracts established here, but source-changing execution remains outside this Plan 2 spec.
+- Plan 3 will add `enqueue_package_run`, enqueue preflight attestation production, and dogfood autorun after Plan 2 is stable.
+- Run-worker app-server replacement will use the app-server transport contracts established here, but source-changing execution remains outside this Plan 2 spec.
 - The product UI may later expose generation artifacts, validation reports, and retry controls, but this spec does not add UI surfaces.
