@@ -104,6 +104,8 @@ type AutomationCommandTestService = AutomationCommandService & {
     actorContext: { authenticatedActorId?: string; actorClass?: string; daemonIdentity?: string };
     idempotencyKey: string;
     generationKey?: string;
+    generated: GeneratedPackageDraftSetV1;
+    generationArtifacts: ArtifactRef[];
     regenerationApproval?: {
       supersededGenerationKey: string;
       supersededExecutionPackageSetId: string;
@@ -1034,7 +1036,7 @@ const seedClaimedPackageDraftAction = async (
   repository: DeliveryRepository,
   overrides: Record<string, unknown> = {},
 ): Promise<ClaimedPackageDraftActionContext> => {
-  const ctx = await seedApprovedPlan(app);
+  const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
   const settings = await repository.setAutomationProjectSettings({
     id: `automation-settings-package-claim-binding-${overrides.id ?? 'default'}`,
     project_id: ctx.project.id,
@@ -1077,6 +1079,9 @@ const seedClaimedPackageDraftAction = async (
       claim_token: claimToken,
       idempotency_key: `${actionId}-idempotency`,
       automation_precondition: precondition,
+      generation_key: `default:${ctx.planRevisionId}`,
+      generated_package_drafts: validGeneratedPackageDraftSet({ dependencyOrder: ['api'] }),
+      generation_artifacts: packageGenerationArtifacts,
     },
   };
 };
@@ -1148,6 +1153,11 @@ const postGeneratedPackages = (
     generation_artifacts: packageGenerationArtifacts,
     ...overrides,
   });
+
+const generatedPackageCommandFields = (options: { dependencyOrder?: string[]; objectiveSuffix?: string } = {}) => ({
+  generated: validGeneratedPackageDraftSet({ dependencyOrder: options.dependencyOrder ?? ['api'], objectiveSuffix: options.objectiveSuffix }),
+  generationArtifacts: packageGenerationArtifacts,
+});
 
 const seedClaimedManualPathAction = async (
   app: INestApplication,
@@ -1858,7 +1868,7 @@ describe('automation command boundaries', () => {
             id: ctx.planRevisionId,
             plan_id: ctx.plan.id,
             summary: 'Approved automation command plan',
-            dependency_order: [],
+            dependency_order: ['api'],
             test_matrix: ['pnpm vitest run tests/api/automation-commands.test.ts'],
             structured_document: { sections: ['split', 'tests'] },
           },
@@ -2375,6 +2385,39 @@ describe('automation command boundaries', () => {
       });
   });
 
+  it('blocks generated Package identity drift across distinct command idempotency keys', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-generation-drift',
+      dependencyOrder: ['api', 'tests'],
+    });
+    const automationService = service as AutomationCommandTestService;
+    const actorContext = { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon' as const, daemonIdentity: 'daemon-1' };
+
+    await automationService.ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: ctx.precondition,
+      actorContext,
+      idempotencyKey: 'idem-generated-package-generation-drift-first',
+      generated: validGeneratedPackageDraftSet({ objectiveSuffix: 'first' }),
+      generationArtifacts: packageGenerationArtifacts,
+    });
+
+    await expect(
+      automationService.ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: ctx.precondition,
+        actorContext,
+        idempotencyKey: 'idem-generated-package-generation-drift-second',
+        generated: validGeneratedPackageDraftSet({ objectiveSuffix: 'second' }),
+        generationArtifacts: packageGenerationArtifacts,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'generated_payload_idempotency_drift' }),
+    });
+  });
+
   it('rejects generated Package artifact refs with local paths before persistence', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
@@ -2613,7 +2656,7 @@ describe('automation command boundaries', () => {
   it('accepts claimed package draft actions with generation prompt identity fields', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-versioned-package-claim-binding',
       project_id: ctx.project.id,
@@ -2656,6 +2699,9 @@ describe('automation command boundaries', () => {
       claim_token: claimToken,
       idempotency_key: `${actionId}-idempotency`,
       automation_precondition: precondition,
+      generation_key: `default:${ctx.planRevisionId}`,
+      generated_package_drafts: validGeneratedPackageDraftSet({ dependencyOrder: ['api'] }),
+      generation_artifacts: packageGenerationArtifacts,
     };
 
     await signedAutomationPost(
@@ -3451,7 +3497,7 @@ describe('automation command boundaries', () => {
   it('ensures one execution package draft set for an approved plan revision under duplicate commands', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-draft',
       project_id: ctx.project.id,
@@ -3482,12 +3528,14 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-draft-1',
+        ...generatedPackageCommandFields(),
       }),
       automationService.ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-draft-1',
+        ...generatedPackageCommandFields(),
       }),
     ]);
 
@@ -3501,7 +3549,7 @@ describe('automation command boundaries', () => {
   it('allows project-scoped package draft automation for repos in the project', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-project-scope',
       project_id: ctx.project.id,
@@ -3529,6 +3577,7 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-project-scope',
+        ...generatedPackageCommandFields(),
       }),
     ).resolves.toMatchObject({ status: 'created', package_ids: [expect.any(String)] });
   });
@@ -3536,7 +3585,7 @@ describe('automation command boundaries', () => {
   it('blocks project-scoped package draft automation when multiple repos make the package repo ambiguous', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const project = await repository.getProject(ctx.project.id);
     if (project === undefined) {
       throw new Error(`Missing seeded project ${ctx.project.id}`);
@@ -3570,22 +3619,27 @@ describe('automation command boundaries', () => {
       daemon_identity: 'daemon-1',
     };
 
+    const generatedOutsideProject = validGeneratedPackageDraftSet({ dependencyOrder: ['api'] });
+    generatedOutsideProject.packages[0] = { ...generatedOutsideProject.packages[0]!, repo_id: 'repo-missing' };
+
     await expect(
       (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-project-scope-ambiguous',
+        generated: generatedOutsideProject,
+        generationArtifacts: packageGenerationArtifacts,
       }),
     ).rejects.toMatchObject({
-      response: expect.objectContaining({ code: 'automation_gate_blocked' }),
+      response: expect.objectContaining({ code: 'generated_package_policy_invalid' }),
     });
   });
 
   it('rejects manual mark-ready when the package plan revision has no frozen spec revision target', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-mark-ready-missing-spec-target',
       project_id: ctx.project.id,
@@ -3612,6 +3666,7 @@ describe('automation command boundaries', () => {
       },
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       idempotencyKey: 'idem-package-mark-ready-missing-spec-target',
+      ...generatedPackageCommandFields(),
     });
     const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
     expect(planRevision).toBeDefined();
@@ -3629,7 +3684,7 @@ describe('automation command boundaries', () => {
   it('rejects manual mark-ready when the package version is stale', async () => {
     const { app } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const executionPackage = (await request(app.getHttpServer())
       .post(`/plan-revisions/${ctx.planRevisionId}/execution-packages`)
       .send({
@@ -3671,7 +3726,7 @@ describe('automation command boundaries', () => {
   it('rejects stale package generation supersede versions', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-supersede-version',
       project_id: ctx.project.id,
@@ -3701,6 +3756,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       idempotencyKey: 'idem-package-supersede-version-default',
+      ...generatedPackageCommandFields(),
     });
 
     await expect(
@@ -3719,7 +3775,7 @@ describe('automation command boundaries', () => {
   it('rejects non-default package regeneration when the supersede approval reference does not match', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-regeneration-approval',
       project_id: ctx.project.id,
@@ -3748,6 +3804,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
       idempotencyKey: 'idem-package-regeneration-default',
+      ...generatedPackageCommandFields(),
     });
     const supersede = await automationService.supersedeExecutionPackageGenerationRun({
       planRevisionId: ctx.planRevisionId,
@@ -3771,6 +3828,7 @@ describe('automation command boundaries', () => {
           supersededExecutionPackageSetId: `${defaultGeneration.execution_package_set_id}:wrong`,
           supersedeCommandId: supersede.supersede_command_id,
         },
+        ...generatedPackageCommandFields(),
       }),
     ).rejects.toThrow(/supersede approval|approval/i);
 
@@ -3785,6 +3843,7 @@ describe('automation command boundaries', () => {
         supersededExecutionPackageSetId: defaultGeneration.execution_package_set_id,
         supersedeCommandId: supersede.supersede_command_id,
       },
+      ...generatedPackageCommandFields(),
     });
     expect(regenerated).toMatchObject({
       status: 'created',
@@ -3795,7 +3854,7 @@ describe('automation command boundaries', () => {
   it('persists package generation supersede evidence refs', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-regeneration-evidence',
       project_id: ctx.project.id,
@@ -3823,6 +3882,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
       idempotencyKey: 'idem-package-regeneration-evidence-default',
+      ...generatedPackageCommandFields(),
     });
     const evidenceRefs: ArtifactRef[] = [
       {
@@ -3851,7 +3911,7 @@ describe('automation command boundaries', () => {
   it('rejects package generation when a package-generation manual hold is active', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-generation-hold',
       project_id: ctx.project.id,
@@ -3895,6 +3955,7 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-generation-held',
+        ...generatedPackageCommandFields(),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'manual_path_hold_active' }),
@@ -3904,7 +3965,7 @@ describe('automation command boundaries', () => {
   it('rejects package regeneration when the same idempotency key is reused for a different generation key', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-generation-idem-key',
       project_id: ctx.project.id,
@@ -3932,6 +3993,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
       idempotencyKey: 'idem-package-generation-cross-key',
+      ...generatedPackageCommandFields(),
     });
     const supersede = await automationService.supersedeExecutionPackageGenerationRun({
       planRevisionId: ctx.planRevisionId,
@@ -3955,14 +4017,17 @@ describe('automation command boundaries', () => {
           supersededExecutionPackageSetId: defaultGeneration.execution_package_set_id,
           supersedeCommandId: supersede.supersede_command_id,
         },
+        ...generatedPackageCommandFields(),
       }),
-    ).rejects.toThrow(/idempotency identity|fingerprint changed/i);
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'generated_payload_idempotency_drift' }),
+    });
   });
 
   it('rejects package generation for plan revisions without a frozen spec revision target', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
     expect(planRevision).toBeDefined();
     await repository.savePlanRevision({
@@ -3998,6 +4063,7 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-missing-spec-target',
+        ...generatedPackageCommandFields(),
       }),
     ).rejects.toThrow(/based on/i);
   });

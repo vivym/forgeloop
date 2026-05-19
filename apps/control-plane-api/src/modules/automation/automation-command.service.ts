@@ -1699,6 +1699,7 @@ export class AutomationCommandService {
       planRevisionId: input.planRevisionId,
       generationKey: input.generationKey,
       generated: input.generated,
+      generatedPayloadDigest: input.generatedPayloadDigest,
       packagePolicyDigests: preparedPackages.map(({ generatedPackage, policyFields }) => ({
         package_key: generatedPackage.package_key,
         repo_id: generatedPackage.repo_id,
@@ -1714,20 +1715,41 @@ export class AutomationCommandService {
     });
     const manifestDigest = generatedPayloadDigest(manifest);
 
-    const generationRun = await repository.claimExecutionPackageGenerationRun({
-      plan_revision_id: input.planRevisionId,
-      generation_key: input.generationKey,
-      generator_version: 'codex-runtime:package_drafts.v1',
-      manifest_digest: manifestDigest,
-      expected_package_count: input.generated.packages.length,
-      expected_package_keys: input.generated.packages.map((entry) => entry.package_key),
-      evidence_refs: safeGenerationArtifactRefs(input.generationArtifacts),
-      claim_token: input.claimToken,
-      locked_until: this.lockedUntil(this.now()),
-      now: this.now(),
-    });
+    let generationRun;
+    try {
+      generationRun = await repository.claimExecutionPackageGenerationRun({
+        plan_revision_id: input.planRevisionId,
+        generation_key: input.generationKey,
+        generator_version: 'codex-runtime:package_drafts.v1',
+        manifest_digest: manifestDigest,
+        expected_package_count: input.generated.packages.length,
+        expected_package_keys: input.generated.packages.map((entry) => entry.package_key),
+        evidence_refs: safeGenerationArtifactRefs(input.generationArtifacts),
+        claim_token: input.claimToken,
+        locked_until: this.lockedUntil(this.now()),
+        now: this.now(),
+      });
+    } catch (error) {
+      if (
+        error instanceof DomainError &&
+        error.code === 'INVALID_TRANSITION' &&
+        /manifest drift/i.test(error.message)
+      ) {
+        throw new ConflictException({
+          code: 'generated_payload_idempotency_drift',
+          message: 'Generated Package payload differs for the same generation key.',
+        });
+      }
+      throw error;
+    }
     const replayed = this.replayedPackageDraftsResult(generationRun.result_json);
     if (generationRun.status === 'succeeded' && replayed !== undefined) {
+      if (replayed.generated_payload_digest !== input.generatedPayloadDigest) {
+        throw new ConflictException({
+          code: 'generated_payload_idempotency_drift',
+          message: 'Generated Package payload differs for the same generation key.',
+        });
+      }
       return { ...replayed, status: 'existing' };
     }
 
@@ -1901,6 +1923,7 @@ export class AutomationCommandService {
     planRevisionId: string;
     generationKey: string;
     generated: GeneratedPackageDraftSetV1;
+    generatedPayloadDigest: string;
     packagePolicyDigests: Array<{
       package_key: string;
       repo_id: string;
@@ -1916,6 +1939,7 @@ export class AutomationCommandService {
       schema_version: input.generated.schema_version,
       plan_revision_id: input.planRevisionId,
       generation_key: input.generationKey,
+      generated_payload_digest: input.generatedPayloadDigest,
       package_set_key: input.generated.manifest.package_set_key,
       package_keys: input.generated.packages.map((entry) => entry.package_key),
       dependency_order: input.generated.manifest.dependency_order,
