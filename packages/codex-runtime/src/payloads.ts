@@ -32,7 +32,6 @@ const bypassHumanGatePattern =
   /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const gatedPlanActionPattern =
   /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/gi;
-const gatedPlanActionSafeContextPattern = /\b(?:no|exclude|excludes|excluding|excluded|do\s+not|out\s+of\s+scope)\b/i;
 const planActionContextWindow = 80;
 const planActionClauseBoundaries = ['.', '!', '?', ';', ',', '\n'] as const;
 
@@ -60,17 +59,29 @@ const nextPlanActionBoundary = (value: string, actionIndex: number): number =>
     .filter((index) => index >= 0)
     .reduce((left, right) => Math.min(left, right), value.length);
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const isPlanActionSafelyScopedOut = (clause: string, action: string): boolean => {
+  const escapedAction = escapeRegExp(action.toLowerCase().startsWith('enqueue') ? 'enqueue' : action);
+  const actionPattern = new RegExp(
+    `(?:\\bdo\\s+not\\b[\\s\\S]{0,40}\\b${escapedAction}\\b|\\b(?:no|exclude|excludes|excluding)\\b[\\s\\S]{0,40}\\b${escapedAction}\\b|\\b${escapedAction}\\b[\\s\\S]{0,40}\\b(?:excluded|out\\s+of\\s+scope)\\b)`,
+    'i',
+  );
+  return actionPattern.test(clause);
+};
+
 const isUnsafePlanString = (value: string): boolean =>
   isUnsafePublicString(value) ||
   Array.from(value.matchAll(gatedPlanActionPattern)).some((match) => {
     const actionIndex = match.index ?? 0;
+    const action = match[0] ?? '';
     const previousBoundary = previousPlanActionBoundary(value, actionIndex);
     const nextBoundary = nextPlanActionBoundary(value, actionIndex);
     const clause = value.slice(
       Math.max(previousBoundary + 1, actionIndex - planActionContextWindow),
       Math.min(nextBoundary, actionIndex + planActionContextWindow),
     );
-    return !gatedPlanActionSafeContextPattern.test(clause);
+    return !isPlanActionSafelyScopedOut(clause, action);
   });
 
 const safeParseOrThrow = <T>(schema: z.ZodType<T>, value: unknown, errorCode: string): T => {

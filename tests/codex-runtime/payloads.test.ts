@@ -157,6 +157,9 @@ describe('GeneratedPlanDraftV1', () => {
     'No release work is included; finally merge to main after checks pass',
     'This plan has no blockers, deploy to staging after tests pass',
     'Exclude release work; submit for approval',
+    'Deploy to staging after tests pass and no release work is included',
+    'Deploy to staging after tests pass while release work is out of scope',
+    'Deploy to staging after tests pass with release work excluded',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
