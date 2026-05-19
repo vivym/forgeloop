@@ -202,7 +202,6 @@ class FakeAutomationClient implements AutomationExecutorClient {
       spec_revision: {
         id: input.specRevisionId,
         spec_id: 'spec-1',
-        work_item_id: workItemId,
         summary: 'Approved spec',
         content: 'Approved spec body',
         background: 'Existing tests cover executor wiring',
@@ -212,8 +211,18 @@ class FakeAutomationClient implements AutomationExecutorClient {
         acceptance_criteria: ['Plan context is available'],
         risk_notes: [],
         test_strategy_summary: 'Executor unit tests',
-        artifact_refs: [],
+        structured_document: { sections: ['approved-spec'] },
       },
+      repos: [
+        {
+          project_id: 'project-1',
+          repo_id: 'repo-1',
+          default_branch: 'main',
+          policy_status: 'loaded',
+          policy_digest: 'sha256:workflow-policy-digest',
+          parser_version: 'workflow-md-parser:v1',
+        },
+      ],
     };
   }
 

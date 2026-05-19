@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { artifactRefSchema } from '@forgeloop/contracts';
-import type { ArtifactRef } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
   RuntimeSnapshotBlockerRow,
@@ -362,7 +361,6 @@ export interface AutomationGenerationPlanContextV1 {
   spec_revision: {
     id: string;
     spec_id: string;
-    work_item_id: string;
     summary: string;
     content: string;
     background: string;
@@ -372,8 +370,9 @@ export interface AutomationGenerationPlanContextV1 {
     acceptance_criteria: string[];
     risk_notes: string[];
     test_strategy_summary: string;
-    artifact_refs: ArtifactRef[];
+    structured_document?: Record<string, unknown>;
   };
+  repos: AutomationGenerationRepoContextV1[];
 }
 
 export interface AutomationRuntimeSnapshotDto {

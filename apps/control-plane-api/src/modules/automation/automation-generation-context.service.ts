@@ -5,6 +5,7 @@ import { DomainError } from '@forgeloop/domain';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type {
   AutomationGenerationPlanContextV1,
+  AutomationGenerationRepoContextV1,
   AutomationGenerationWorkItemContextV1,
   GenerationContextQueryDto,
   PlanGenerationContextQueryDto,
@@ -35,6 +36,13 @@ const isAtOrBefore = (left: string, right: string): boolean => Date.parse(left) 
 const repoIdFromAutomationScope = (automationScope: string): string | undefined => {
   const [scopeType, , repoId, extra] = automationScope.split(':');
   return scopeType === 'repo' && repoId !== undefined && extra === undefined ? repoId : undefined;
+};
+
+const projectIdFromAutomationScope = (automationScope: string): string | undefined => {
+  const [scopeType, projectId, , extra] = automationScope.split(':');
+  return (scopeType === 'project' || scopeType === 'repo') && projectId !== undefined && extra === undefined
+    ? projectId
+    : undefined;
 };
 
 const isTerminalWorkItem = (workItem: { phase: string; resolution: string; archived_at?: string; deleted_at?: string }): boolean =>
@@ -68,21 +76,7 @@ export class AutomationGenerationContextService {
     }
 
     const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
-    const runtimeSnapshot = await this.repository.getRuntimeSnapshotData();
-    const policyProjectionsByRepoScope = policyProjectionsByRepoScopeFor(runtimeSnapshot.policy_projection_action_runs);
-    const repos = (await this.repository.listProjectRepos(workItem.project_id))
-      .filter((repo) => repo.status === 'active' && (scopedRepoId === undefined || repo.repo_id === scopedRepoId))
-      .map((repo) => {
-        const policyProjection = policyProjectionsByRepoScope.get(`repo:${repo.project_id}:${repo.repo_id}`);
-        return {
-          project_id: repo.project_id,
-          repo_id: repo.repo_id,
-          default_branch: repo.default_branch,
-          policy_status: policyProjection?.policy_status ?? 'missing',
-          ...(policyProjection?.policy_digest === undefined ? {} : { policy_digest: policyProjection.policy_digest }),
-          ...(policyProjection?.parser_version === undefined ? {} : { parser_version: policyProjection.parser_version }),
-        };
-      });
+    const repos = await this.repoContextsFor(workItem.project_id, scopedRepoId);
     if (scopedRepoId !== undefined && repos.length === 0) {
       throw new ConflictException(claimConflictBody);
     }
@@ -123,6 +117,10 @@ export class AutomationGenerationContextService {
     if (workItem === undefined) {
       throw new NotFoundException(`WorkItem ${workItemId}`);
     }
+    const scopedProjectId = projectIdFromAutomationScope(action.automation_scope);
+    if (scopedProjectId !== undefined && workItem.project_id !== scopedProjectId) {
+      throw new ConflictException(claimConflictBody);
+    }
     if (isTerminalWorkItem(workItem)) {
       throw new ConflictException(claimConflictBody);
     }
@@ -151,6 +149,12 @@ export class AutomationGenerationContextService {
       throw new ConflictException(claimConflictBody);
     }
 
+    const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
+    const repos = await this.repoContextsFor(workItem.project_id, scopedRepoId);
+    if (scopedRepoId !== undefined && repos.length === 0) {
+      throw new ConflictException(claimConflictBody);
+    }
+
     await assertNoActiveHolds(this.repository, [
       { object_type: 'work_item', object_id: workItem.id },
       { object_type: 'spec_revision', object_id: specRevision.id },
@@ -172,7 +176,6 @@ export class AutomationGenerationContextService {
       spec_revision: {
         id: specRevision.id,
         spec_id: specRevision.spec_id,
-        work_item_id: specRevision.work_item_id,
         summary: specRevision.summary,
         content: specRevision.content,
         background: specRevision.background,
@@ -182,9 +185,30 @@ export class AutomationGenerationContextService {
         acceptance_criteria: specRevision.acceptance_criteria,
         risk_notes: specRevision.risk_notes,
         test_strategy_summary: specRevision.test_strategy_summary,
-        artifact_refs: specRevision.artifact_refs,
+        ...(specRevision.structured_document === undefined
+          ? {}
+          : { structured_document: specRevision.structured_document }),
       },
+      repos,
     };
+  }
+
+  private async repoContextsFor(projectId: string, scopedRepoId: string | undefined): Promise<AutomationGenerationRepoContextV1[]> {
+    const runtimeSnapshot = await this.repository.getRuntimeSnapshotData();
+    const policyProjectionsByRepoScope = policyProjectionsByRepoScopeFor(runtimeSnapshot.policy_projection_action_runs);
+    return (await this.repository.listProjectRepos(projectId))
+      .filter((repo) => repo.status === 'active' && (scopedRepoId === undefined || repo.repo_id === scopedRepoId))
+      .map((repo) => {
+        const policyProjection = policyProjectionsByRepoScope.get(`repo:${repo.project_id}:${repo.repo_id}`);
+        return {
+          project_id: repo.project_id,
+          repo_id: repo.repo_id,
+          default_branch: repo.default_branch,
+          policy_status: policyProjection?.policy_status ?? 'missing',
+          ...(policyProjection?.policy_digest === undefined ? {} : { policy_digest: policyProjection.policy_digest }),
+          ...(policyProjection?.parser_version === undefined ? {} : { parser_version: policyProjection.parser_version }),
+        };
+      });
   }
 
   private async getActiveClaim(actionRunId: string, claimToken: string) {

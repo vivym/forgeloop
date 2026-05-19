@@ -1463,6 +1463,13 @@ describe('automation command boundaries', () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
     const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository);
+    const specRevision = await repository.getSpecRevision(ctx.specRevisionId);
+    expect(specRevision).toBeDefined();
+    await repository.saveSpecRevision({
+      ...specRevision!,
+      structured_document: { sections: ['goals', 'scope'] },
+    });
+    await seedCompletedPolicyProjectionAction(repository, ctx);
 
     await signedAutomationGet(
       app,
@@ -1474,8 +1481,24 @@ describe('automation command boundaries', () => {
           context_version: 'generation_context.plan.v1',
           action_run_id: ctx.actionId,
           work_item: { id: ctx.workItem.id },
-          spec_revision: { id: ctx.specRevisionId },
+          spec_revision: {
+            id: ctx.specRevisionId,
+            spec_id: ctx.spec.id,
+            structured_document: { sections: ['goals', 'scope'] },
+          },
+          repos: [
+            expect.objectContaining({
+              project_id: ctx.workItem.project_id,
+              repo_id: 'repo-1',
+              default_branch: 'main',
+              policy_status: 'loaded',
+              policy_digest: 'sha256:workflow-policy-digest',
+              parser_version: 'workflow-md-parser:v1',
+            }),
+          ],
         });
+        expect(body.spec_revision).not.toHaveProperty('work_item_id');
+        expect(body.spec_revision).not.toHaveProperty('artifact_refs');
         expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
       });
   });
