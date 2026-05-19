@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { INestApplication } from '@nestjs/common';
@@ -95,7 +96,7 @@ type AutomationCommandTestService = AutomationCommandService & {
     idempotencyKey: string,
     generated: typeof generatedPlanDraft,
     generationArtifacts: ArtifactRef[],
-  ): Promise<{ plan_id: string; plan_revision_id: string; status: 'created' | 'existing' }>;
+  ): Promise<{ plan_id: string; plan_revision_id: string; status: 'created' | 'existing'; generated_payload_digest?: string }>;
   ensureExecutionPackageDraftsForPlanRevision(input: {
     planRevisionId: string;
     automationPrecondition: AutomationPrecondition;
@@ -150,6 +151,25 @@ class OverlapDetectingRepository extends InMemoryDeliveryRepository {
     } finally {
       this.activeRunChecksInFlight -= 1;
     }
+  }
+}
+
+class HideCurrentPlanOnceRepository extends InMemoryDeliveryRepository {
+  hideCurrentPlanForWorkItemId?: string;
+  private hiddenCurrentPlan = false;
+
+  override async getWorkItem(id: string) {
+    const workItem = await super.getWorkItem(id);
+    if (
+      workItem !== undefined &&
+      this.hideCurrentPlanForWorkItemId === id &&
+      this.hiddenCurrentPlan === false
+    ) {
+      this.hiddenCurrentPlan = true;
+      const { current_plan_id: _currentPlanId, ...withoutCurrentPlan } = workItem;
+      return withoutCurrentPlan as WorkItem;
+    }
+    return workItem;
   }
 }
 
@@ -670,6 +690,67 @@ const planGenerationArtifacts: ArtifactRef[] = [
     digest: 'sha256:plan-generation',
   },
 ];
+
+const testStableJson = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => testStableJson(entry)).join(',')}]`;
+  }
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${testStableJson(entry)}`)
+    .join(',')}}`;
+};
+
+const testStripUndefined = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => testStripUndefined(entry));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, testStripUndefined(entry)]),
+    );
+  }
+  return value;
+};
+
+const testGeneratedPayloadDigest = (value: unknown): string =>
+  `sha256:${createHash('sha256').update(testStableJson(testStripUndefined(value))).digest('hex')}`;
+
+const testPublicArtifactIdentity = (artifacts: ArtifactRef[]): Array<Record<string, unknown>> =>
+  artifacts.map((artifact) =>
+    testStripUndefined({
+      kind: artifact.kind,
+      name: artifact.name,
+      content_type: artifact.content_type,
+      storage_uri: artifact.storage_uri,
+      digest: artifact.digest,
+    }) as Record<string, unknown>,
+  );
+
+const testPlanCommandPrecondition = (
+  precondition: AutomationPrecondition,
+  generated: typeof generatedPlanDraft,
+  artifacts: ArtifactRef[],
+): { json: Record<string, unknown>; fingerprint: string } => {
+  const generatedPayloadDigest = testGeneratedPayloadDigest({
+    generated_plan_draft: generated,
+    generation_artifacts: testPublicArtifactIdentity(artifacts),
+  });
+  const json = {
+    automation_precondition: precondition,
+    generated_payload_digest: generatedPayloadDigest,
+    generation_artifact_identity: testPublicArtifactIdentity(artifacts),
+  };
+  return {
+    json,
+    fingerprint: testGeneratedPayloadDigest(json),
+  };
+};
 
 const specDraftActionBody = (
   ctx: { project: { id: string }; workItem: WorkItem },
@@ -1844,6 +1925,37 @@ describe('automation command boundaries', () => {
     await expectNoPlanDraftCommandWrites(service, repository, ctx);
   });
 
+  it.each(['artifact:///tmp/raw-plan-output.json', 'artifact:///Users/viv/raw-plan-output.json'])(
+    'rejects generated Plan artifact storage URI that embeds a local path: %s',
+    async (storageUri) => {
+      const { app, repository, service } = await createTestApp();
+      apps.push(app);
+      const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+        actionOverrides: { id: `action-generated-plan-local-uri-${storageUri.includes('tmp') ? 'tmp' : 'users'}` },
+      });
+
+      await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+        ...ctx.commandBody,
+        generated_plan_draft: generatedPlanDraft,
+        generation_artifacts: [
+          {
+            kind: 'logs',
+            name: 'plan-generation.json',
+            content_type: 'application/json',
+            storage_uri: storageUri,
+            digest: 'sha256:plan-generation',
+          },
+        ],
+      })
+        .expect(400)
+        .expect(({ body }) => {
+          expect(body).toMatchObject({ code: 'generation_artifact_unsafe' });
+        });
+
+      await expectNoPlanDraftCommandWrites(service, repository, ctx);
+    },
+  );
+
   it('rejects generated Plan payloads that fail runtime validation before persistence', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
@@ -1916,6 +2028,142 @@ describe('automation command boundaries', () => {
       plan_revision_id: first.plan_revision_id,
       status: 'existing',
       generated_payload_digest: expect.stringMatching(/^sha256:/),
+    });
+  });
+
+  it('includes generated payload digest when replaying the same generated Plan command idempotency key', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-replay-digest' },
+    });
+
+    const first = await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      ctx.commandBody,
+    ).expect(201);
+    const replay = await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      ctx.commandBody,
+    ).expect(201);
+
+    expect(first.body).toMatchObject({ generated_payload_digest: expect.stringMatching(/^sha256:/) });
+    expect(replay.body).toMatchObject({
+      plan_revision_id: first.body.plan_revision_id,
+      status: 'existing',
+      generated_payload_digest: first.body.generated_payload_digest,
+    });
+  });
+
+  it('includes generated payload digest when an existing Plan revision appears during attach', async () => {
+    const repository = new HideCurrentPlanOnceRepository();
+    const { app, service } = await createTestApp(repository);
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-generated-plan-race-digest',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable generated plan race digest test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    } as AutomationPrecondition;
+    const automationService = service as AutomationCommandTestService;
+    const first = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-race-digest-first',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+    repository.hideCurrentPlanForWorkItemId = ctx.workItem.id;
+
+    const second = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-race-digest-second',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+
+    expect(second).toMatchObject({
+      plan_revision_id: first.plan_revision_id,
+      status: 'existing',
+      generated_payload_digest: expect.stringMatching(/^sha256:/),
+    });
+  });
+
+  it('reports active generated Plan idempotency claims without labeling them as payload drift', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-generated-plan-active-command',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable generated plan active command conflict test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    } as AutomationPrecondition;
+    const commandPrecondition = testPlanCommandPrecondition(precondition, generatedPlanDraft, planGenerationArtifacts);
+    await repository.claimCommandIdempotency({
+      id: 'command-idem-active-generated-plan',
+      command_name: 'ensure_plan_draft_for_approved_spec',
+      idempotency_key: 'idem-plan-draft-active-generated-plan',
+      target_object_type: 'work_item',
+      target_object_id: ctx.workItem.id,
+      target_revision_id: ctx.specRevisionId,
+      precondition_json: commandPrecondition.json,
+      precondition_fingerprint: commandPrecondition.fingerprint,
+      actor_scope: `automation_daemon:${automationDaemonIdentity}`,
+      claim_token: 'claim-active-generated-plan',
+      locked_until: '2026-05-05T00:05:00.000Z',
+      now: '2026-05-05T00:00:00.000Z',
+    });
+
+    await expect(
+      (service as AutomationCommandTestService).ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-active-generated-plan',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'command_idempotency_conflict' }),
     });
   });
 

@@ -2,7 +2,10 @@ import { AutomationHttpClient } from '@forgeloop/automation';
 
 import { AutomationDaemon } from './automation-daemon.js';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from './config.js';
-import { createAutomationDaemonSpecDraftGenerator } from './generation-runtime.js';
+import {
+  createAutomationDaemonGenerationRuntime,
+  createAutomationDaemonSpecDraftGenerator,
+} from './generation-runtime.js';
 import { loadDaemonWorkflowPolicyDigest } from './workflow-policy-loader.js';
 
 const config = loadAutomationDaemonConfig();
@@ -13,6 +16,7 @@ const client = new AutomationHttpClient({
   secret: config.trustedActorHeaderSecret,
 });
 const specDraftGenerator = createAutomationDaemonSpecDraftGenerator(config);
+const generationRuntime = createAutomationDaemonGenerationRuntime(config);
 const generationPlanning = generationPlanningForDaemon(config);
 const daemon = new AutomationDaemon({
   client,
@@ -25,6 +29,7 @@ const daemon = new AutomationDaemon({
   noClaimBackoffMs: config.noClaimBackoffMs,
   ...(generationPlanning === undefined ? {} : { generationPlanning }),
   specDraftGenerator,
+  ...(generationRuntime === undefined ? {} : { generationRuntime }),
   onIterationError: (error) => {
     console.error(error instanceof Error ? error.message : error);
   },

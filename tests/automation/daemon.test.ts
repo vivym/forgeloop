@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { createCodexGenerationRuntime } from '../../packages/codex-runtime/src/index';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
 import { createAutomationDaemonSpecDraftGenerator } from '../../apps/automation-daemon/src/generation-runtime';
@@ -7,6 +8,7 @@ import {
   createFakeSpecDraftGenerator,
   projectRuntimeSnapshotIdempotencyKey,
   type AutomationGenerationWorkItemContextV1,
+  type AutomationGenerationPlanContextV1,
   AutomationActionResponse,
   AutomationActionRunRecord,
   BlockActionInput,
@@ -214,6 +216,51 @@ class FakeDaemonClient implements AutomationDaemonClient {
     };
   }
 
+  async planDraftGenerationContext(
+    workItemId: string,
+    input: { specRevisionId: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPlanContextV1> {
+    this.calls.push({ method: 'planDraftGenerationContext', args: [workItemId, input] });
+    return {
+      context_version: 'generation_context.plan.v1',
+      action_run_id: input.actionRunId,
+      work_item: {
+        id: workItemId,
+        project_id: 'project-1',
+        title: 'Plan draft work item',
+        goal: 'Ship the plan draft path',
+        success_criteria: ['Draft plan exists'],
+        risk: 'low',
+        priority: 'high',
+        kind: 'initiative',
+      },
+      spec_revision: {
+        id: input.specRevisionId,
+        spec_id: 'spec-1',
+        summary: 'Approved spec',
+        content: 'Approved spec content',
+        background: 'Plan draft generation should use the daemon runtime.',
+        goals: ['Generate a Plan draft'],
+        scope_in: ['Plan draft command boundary'],
+        scope_out: ['Package draft generation'],
+        acceptance_criteria: ['Plan draft payload is sent to the command boundary'],
+        risk_notes: ['Keep the Plan draft human gated.'],
+        test_strategy_summary: 'Run daemon and API command tests.',
+        structured_document: { source: 'daemon-test' },
+      },
+      repos: [
+        {
+          project_id: 'project-1',
+          repo_id: 'repo-1',
+          default_branch: 'main',
+          policy_status: 'loaded',
+          policy_digest: 'workflow-digest-1',
+          parser_version: parserVersion,
+        },
+      ],
+    };
+  }
+
   async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown> {
     this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
     return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
@@ -242,6 +289,7 @@ const daemonOptions = (client: AutomationDaemonClient) => ({
   policyLoader: async () => loadedPolicy(),
   noClaimBackoffMs: 25,
   loopIntervalMs: 1_000,
+  generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
 });
 
 const generationPlanning = {
@@ -349,6 +397,7 @@ describe('automation daemon loop', () => {
       noClaimBackoffMs: 25,
       loopIntervalMs: 1_000,
       generationPlanning,
+      generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
     });
 
     const result = await daemon.runOnce();
@@ -360,6 +409,7 @@ describe('automation daemon loop', () => {
       'createOrReplayAction',
       'createOrReplayAction',
       'claimNextAction',
+      'planDraftGenerationContext',
       'ensurePlanDraft',
       'completeAction',
     ]);
@@ -660,6 +710,7 @@ describe('automation daemon loop', () => {
       },
       noClaimBackoffMs: 1,
       loopIntervalMs: 1,
+      generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
       sleep: async () => undefined,
     });
 

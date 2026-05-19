@@ -199,19 +199,54 @@ const assertPublicArtifactText = (value: unknown): void => {
   }
 };
 
+const decodeArtifactUriRemainder = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const assertSafeArtifactStorageUri = (storageUri: string | undefined): string => {
+  if (storageUri === undefined || !storageUri.startsWith('artifact://')) {
+    throw new BadRequestException({
+      code: 'generation_artifact_unsafe',
+      message: 'Generation artifact refs must use artifact:// storage_uri and must not include local_ref.',
+    });
+  }
+  const rawRemainder = storageUri.slice('artifact://'.length);
+  const decodedRemainder = decodeArtifactUriRemainder(rawRemainder);
+  const looksLikeLocalPath = (value: string): boolean =>
+    value.startsWith('/') || value.startsWith('~/') || /^[A-Za-z]:[\\/]/.test(value);
+  if (
+    rawRemainder.length === 0 ||
+    looksLikeLocalPath(rawRemainder) ||
+    looksLikeLocalPath(decodedRemainder)
+  ) {
+    throw new BadRequestException({
+      code: 'generation_artifact_unsafe',
+      message: 'Generation artifact refs must not encode local paths in artifact storage URIs.',
+    });
+  }
+  assertPublicArtifactText(storageUri);
+  assertPublicArtifactText(decodedRemainder);
+  return storageUri;
+};
+
 const safeGenerationArtifactRefs = (artifacts: readonly ArtifactRef[]): ArtifactRef[] =>
   artifacts.map((artifact) => {
-    if (artifact.local_ref !== undefined || artifact.storage_uri === undefined || !artifact.storage_uri.startsWith('artifact://')) {
+    if (artifact.local_ref !== undefined) {
       throw new BadRequestException({
         code: 'generation_artifact_unsafe',
         message: 'Generation artifact refs must use artifact:// storage_uri and must not include local_ref.',
       });
     }
+    const storageUri = assertSafeArtifactStorageUri(artifact.storage_uri);
     const publicArtifact: ArtifactRef = {
       kind: artifact.kind,
       name: artifact.name,
       content_type: artifact.content_type,
-      storage_uri: artifact.storage_uri,
+      storage_uri: storageUri,
       ...(artifact.digest === undefined ? {} : { digest: artifact.digest }),
     };
     assertPublicArtifactText(publicArtifact);
@@ -233,6 +268,12 @@ const generatedPlanDraftForCommand = (value: unknown): GeneratedPlanDraftV1 => {
     throw error;
   }
 };
+
+const isCommandIdempotencyDriftError = (error: DomainError): boolean =>
+  /identity or precondition fingerprint changed/i.test(error.message);
+
+const isCommandIdempotencyActiveClaimError = (error: DomainError): boolean =>
+  /already has an active claim/i.test(error.message);
 
 @Injectable()
 export class AutomationCommandService {
@@ -576,10 +617,24 @@ export class AutomationCommandService {
           now: claimedAt,
         });
       } catch (error) {
-        if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') {
+        if (
+          error instanceof DomainError &&
+          error.code === 'INVALID_TRANSITION' &&
+          isCommandIdempotencyDriftError(error)
+        ) {
           throw new ConflictException({
             code: 'generated_payload_idempotency_drift',
             message: 'Generated payload differs for the same idempotency key.',
+          });
+        }
+        if (
+          error instanceof DomainError &&
+          error.code === 'INVALID_TRANSITION' &&
+          isCommandIdempotencyActiveClaimError(error)
+        ) {
+          throw new ConflictException({
+            code: 'command_idempotency_conflict',
+            message: 'Command idempotency key already has an active claim.',
           });
         }
         throw error;
@@ -1264,7 +1319,12 @@ export class AutomationCommandService {
             ? undefined
             : (await repository.listPlanRevisions(currentPlan.id)).find((revision) => revision.based_on_spec_revision_id === specRevision.id);
         if (currentPlan !== undefined && currentRevision !== undefined) {
-          return { plan_id: currentPlan.id, plan_revision_id: currentRevision.id, status: 'existing' };
+          return {
+            plan_id: currentPlan.id,
+            plan_revision_id: currentRevision.id,
+            status: 'existing',
+            generated_payload_digest: input.generatedPayloadDigest,
+          };
         }
         throw new ConflictException('WorkItem current plan changed before plan draft could be attached');
       }
@@ -1346,6 +1406,9 @@ export class AutomationCommandService {
       plan_id: result.plan_id,
       plan_revision_id: result.plan_revision_id,
       status: result.status,
+      ...(typeof result.generated_payload_digest === 'string'
+        ? { generated_payload_digest: result.generated_payload_digest }
+        : {}),
     };
   }
 
