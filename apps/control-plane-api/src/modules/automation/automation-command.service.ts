@@ -11,6 +11,7 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { validateGeneratedPlanDraft, type GeneratedPlanDraftV1 } from '@forgeloop/codex-runtime';
 import type { ArtifactRef, ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
 import {
@@ -218,6 +219,20 @@ const safeGenerationArtifactRefs = (artifacts: readonly ArtifactRef[]): Artifact
   });
 
 const publicArtifactIdentity = (artifacts: readonly ArtifactRef[]): ArtifactRef[] => safeGenerationArtifactRefs(artifacts);
+
+const generatedPlanDraftForCommand = (value: unknown): GeneratedPlanDraftV1 => {
+  try {
+    return validateGeneratedPlanDraft(value);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'generated_plan_draft_invalid') {
+      throw new BadRequestException({
+        code: 'generated_plan_draft_invalid',
+        message: 'Generated Plan draft payload is invalid.',
+      });
+    }
+    throw error;
+  }
+};
 
 @Injectable()
 export class AutomationCommandService {
@@ -523,9 +538,10 @@ export class AutomationCommandService {
     if (precondition.required_capability !== 'canGeneratePlanDraft') {
       throw new BadRequestException('ensurePlanDraftForApprovedSpec requires canGeneratePlanDraft precondition');
     }
+    const generatedPlanDraft = generatedPlanDraftForCommand(generated);
     const sanitizedGenerationArtifacts = safeGenerationArtifactRefs(generationArtifacts);
     const planPayloadDigest = generatedPayloadDigest({
-      generated_plan_draft: generated,
+      generated_plan_draft: generatedPlanDraft,
       generation_artifacts: publicArtifactIdentity(sanitizedGenerationArtifacts),
     });
     const commandPreconditionJson = {
@@ -579,7 +595,7 @@ export class AutomationCommandService {
           workItemId,
           specRevisionId,
           precondition,
-          generated,
+          generated: generatedPlanDraft,
           generationArtifacts: sanitizedGenerationArtifacts,
           generatedPayloadDigest: planPayloadDigest,
         });
@@ -1217,7 +1233,12 @@ export class AutomationCommandService {
         (revision) => revision.based_on_spec_revision_id === specRevision.id,
       );
       if (existingRevision !== undefined) {
-        return { plan_id: existingPlan.id, plan_revision_id: existingRevision.id, status: 'existing' };
+        return {
+          plan_id: existingPlan.id,
+          plan_revision_id: existingRevision.id,
+          status: 'existing',
+          generated_payload_digest: input.generatedPayloadDigest,
+        };
       }
     }
 

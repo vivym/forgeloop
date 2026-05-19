@@ -1844,6 +1844,81 @@ describe('automation command boundaries', () => {
     await expectNoPlanDraftCommandWrites(service, repository, ctx);
   });
 
+  it('rejects generated Plan payloads that fail runtime validation before persistence', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-invalid-runtime-payload' },
+    });
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...ctx.commandBody,
+      generated_plan_draft: {
+        ...generatedPlanDraft,
+        dependency_order: ['api', 'api'],
+      },
+      generation_artifacts: planGenerationArtifacts,
+    })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'generated_plan_draft_invalid' });
+      });
+
+    await expectNoPlanDraftCommandWrites(service, repository, ctx);
+  });
+
+  it('includes generated payload digest when reusing an existing generated Plan revision', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-generated-plan-existing-digest',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable generated plan existing digest test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    } as AutomationPrecondition;
+    const automationService = service as AutomationCommandTestService;
+
+    const first = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-existing-digest-first',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+    const second = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-existing-digest-second',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+
+    expect(second).toMatchObject({
+      plan_revision_id: first.plan_revision_id,
+      status: 'existing',
+      generated_payload_digest: expect.stringMatching(/^sha256:/),
+    });
+  });
+
   it('rejects internal package draft commands before execution package writes on claim binding mismatch', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
