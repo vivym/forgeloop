@@ -61,13 +61,27 @@ const nextPlanActionBoundary = (value: string, actionIndex: number): number =>
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const isPlanActionSafelyScopedOut = (clause: string, action: string): boolean => {
+const isPlanActionSafelyScopedOut = (clause: string, action: string, actionIndex: number): boolean => {
   const escapedAction = escapeRegExp(action.toLowerCase().startsWith('enqueue') ? 'enqueue' : action);
-  const actionPattern = new RegExp(
-    `(?:\\bdo\\s+not\\b[\\s\\S]{0,40}\\b${escapedAction}\\b|\\b(?:no|exclude|excludes|excluding)\\b[\\s\\S]{0,40}\\b${escapedAction}\\b|\\b${escapedAction}\\b[\\s\\S]{0,40}\\b(?:excluded|out\\s+of\\s+scope)\\b)`,
+  const prefix = clause.slice(Math.max(0, actionIndex - 40), actionIndex);
+  const suffix = clause.slice(actionIndex + action.length, actionIndex + action.length + 60);
+
+  if (/\b(?:do\s+not|exclude|excludes|excluding)\b/i.test(prefix)) {
+    return true;
+  }
+
+  const actionThroughScopeNoun = clause.slice(0, actionIndex + action.length + 40);
+  const noScopePattern = new RegExp(
+    `\\bno\\b[\\s\\S]{0,40}\\b${escapedAction}\\b[\\s\\S]{0,40}\\b(?:work|workflow|workflows|action|actions|operation|operations|task|tasks)\\b`,
     'i',
   );
-  return actionPattern.test(clause);
+  if (noScopePattern.test(actionThroughScopeNoun)) {
+    return true;
+  }
+
+  return /^\s+(?:work|workflow|workflows|action|actions|operation|operations|task|tasks)\b[\s\S]{0,40}\b(?:excluded|out\s+of\s+scope)\b/i.test(
+    suffix,
+  );
 };
 
 const isUnsafePlanString = (value: string): boolean =>
@@ -81,7 +95,8 @@ const isUnsafePlanString = (value: string): boolean =>
       Math.max(previousBoundary + 1, actionIndex - planActionContextWindow),
       Math.min(nextBoundary, actionIndex + planActionContextWindow),
     );
-    return !isPlanActionSafelyScopedOut(clause, action);
+    const actionIndexInClause = actionIndex - Math.max(previousBoundary + 1, actionIndex - planActionContextWindow);
+    return !isPlanActionSafelyScopedOut(clause, action, actionIndexInClause);
   });
 
 const safeParseOrThrow = <T>(schema: z.ZodType<T>, value: unknown, errorCode: string): T => {
