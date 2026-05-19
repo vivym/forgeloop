@@ -119,6 +119,7 @@ describe('GeneratedPlanDraftV1', () => {
     'Enqueue the run after package is ready',
     'Then deploy to staging after tests pass',
     'After tests pass deploy to staging',
+    'If tests pass deploy to staging',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
@@ -139,10 +140,13 @@ describe('GeneratedPlanDraftV1', () => {
 
   it.each([
     'BEGIN PROMPT user asks for feature',
+    'BEGIN',
     'END PROMPT',
     'END OUTPUT',
     'END LOG',
+    'END',
     'APP SERVER LOG: token redacted',
+    'APP SERVER LOG',
   ])(
     'rejects raw prompt/output/log markers in public Plan fields: %s',
     (summary) => {
@@ -200,10 +204,13 @@ describe('GeneratedSpecDraftV1', () => {
 
   it.each([
     'BEGIN PROMPT user asks for feature',
+    'BEGIN',
     'END PROMPT',
     'END OUTPUT',
     'END LOG',
+    'END',
     'APP SERVER LOG: token redacted',
+    'APP SERVER LOG',
   ])(
     'rejects raw prompt/output/log markers in public Spec fields: %s',
     (summary) => {
@@ -351,10 +358,13 @@ describe('GeneratedPackageDraftSetV1', () => {
 
   it.each([
     'BEGIN PROMPT user asks for feature',
+    'BEGIN',
     'END PROMPT',
     'END OUTPUT',
     'END LOG',
+    'END',
     'APP SERVER LOG: token redacted',
+    'APP SERVER LOG',
   ])(
     'rejects raw prompt/output/log markers in public Package fields: %s',
     (objective) => {

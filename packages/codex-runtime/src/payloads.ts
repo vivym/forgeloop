@@ -24,17 +24,19 @@ const unixLocalPathPattern = /(?:^|[\s"'(=])\/[A-Za-z0-9._-]+(?:\/[^\s"'`,;)]*)?
 const windowsLocalPathPattern = /[A-Za-z]:[\\/][^\s"'`,;)]*/i;
 const secretLikePattern =
   /(?:claim[-_ ]?token|hmac|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?)/i;
-const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|LOG)\b|\bAPP\s+SERVER\s+LOG\s*:)/i;
+const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|LOG)\b|\bAPP\s+SERVER\s+LOG\b:?)/i;
+const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
   /(?:(?:\b(?:auto(?:matically)?|bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const directPlanHumanGatePattern =
-  /(?:(?:^|[.!?,;]\s+|\n\s*(?:[-*]|\d+\.)\s*)(?:(?:approve|submit|merge|push|release|deploy)\b|enqueue\s+(?:the\s+)?(?:package\s+)?run\b)|\b(?:please|then|next)\s+(?:(?:approve|submit|merge|push|release|deploy)\b|enqueue\s+(?:the\s+)?(?:package\s+)?run\b)|\b(?:after|when|once)\b[\s\S]{0,80}\b(?:(?:approve|submit|merge|push|release|deploy)\b|enqueue\s+(?:the\s+)?(?:package\s+)?run\b))/i;
+  /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/i;
 
 const isUnsafePublicString = (value: string): boolean =>
   unixLocalPathPattern.test(value) ||
   windowsLocalPathPattern.test(value) ||
   secretLikePattern.test(value) ||
   rawPromptOutputLogMarkerPattern.test(value) ||
+  rawBlockBoundaryMarkerPattern.test(value) ||
   bypassHumanGatePattern.test(value);
 
 const safeParseOrThrow = <T>(schema: z.ZodType<T>, value: unknown, errorCode: string): T => {
