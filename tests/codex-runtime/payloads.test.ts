@@ -117,6 +117,10 @@ describe('GeneratedPlanDraftV1', () => {
     'Approve after review',
     'Push branch after checks pass',
     'Enqueue the run after package is ready',
+    'Then deploy to staging after tests pass',
+    'After tests pass deploy to staging',
+    'Next submit for approval',
+    'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
     expect(() =>
       validateGeneratedPlanDraft({
