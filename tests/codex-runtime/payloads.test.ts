@@ -43,7 +43,7 @@ describe('GeneratedPlanDraftV1', () => {
     expect(() =>
       validateGeneratedPlanDraft({
         schema_version: 'plan_draft.v1',
-        summary: 'Generated from /home/runner/workspace, /etc/forgeloop/config, and C:\\Users\\viv\\repo',
+        summary: 'Generated from /home/runner/workspace, /etc/forgeloop/config, /data/forgeloop/config, and C:\\Users\\viv\\repo',
         content: 'Plan body with claim-token abc',
         implementation_summary: 'Implement safely',
         split_strategy: 'Split',
@@ -60,6 +60,22 @@ describe('GeneratedPlanDraftV1', () => {
       validateGeneratedPlanDraft({
         schema_version: 'plan_draft.v1',
         summary: 'Generated from /etc/forgeloop/config',
+        content: 'Plan body',
+        implementation_summary: 'Implement safely',
+        split_strategy: 'Split',
+        dependency_order: ['api'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['risk'],
+        rollback_notes: 'rollback',
+      }),
+    ).toThrow(/generated_plan_draft_invalid/);
+  });
+
+  it('rejects arbitrary Unix absolute paths in public Plan fields', () => {
+    expect(() =>
+      validateGeneratedPlanDraft({
+        schema_version: 'plan_draft.v1',
+        summary: 'Generated from /data/forgeloop/config',
         content: 'Plan body',
         implementation_summary: 'Implement safely',
         split_strategy: 'Split',
@@ -297,6 +313,13 @@ describe('GeneratedPackageDraftSetV1', () => {
   it('rejects system absolute paths in public Package fields', () => {
     const payload = validPackageDraftSet();
     payload.packages[0]!.objective = 'Read config from /etc/forgeloop/config';
+
+    expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
+  });
+
+  it('rejects arbitrary Unix absolute paths in public Package fields', () => {
+    const payload = validPackageDraftSet();
+    payload.packages[0]!.objective = 'Read config from /data/forgeloop/config';
 
     expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
   });

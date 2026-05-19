@@ -20,8 +20,8 @@ const repoRelativePath = z
     { message: 'path must be repo-relative and safe' },
   );
 
-const localPathPattern =
-  /(?:\/(?:Users|home|root|workspace|workspaces|tmp|private|var\/folders|private\/var\/folders|etc|opt|mnt|srv|usr|bin)(?:\/|\b)|[A-Za-z]:[\\/][^\s]*)/i;
+const unixLocalPathPattern = /(?:^|[\s"'(=])\/[A-Za-z0-9._-]+(?:\/[^\s"'`,;)]*)?/i;
+const windowsLocalPathPattern = /[A-Za-z]:[\\/][^\s"'`,;)]*/i;
 const secretLikePattern =
   /(?:claim[-_ ]?token|hmac|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?)/i;
 const rawPromptOutputLogMarkerPattern = /(?:\bBEGIN\s+(?:PROMPT|OUTPUT|LOG)\b|\bAPP\s+SERVER\s+LOG\s*:)/i;
@@ -31,7 +31,8 @@ const directPlanHumanGatePattern =
   /(?:^|[.!?,;]\s+|\n\s*(?:[-*]|\d+\.)\s*)(?:(?:approve|submit|merge|push|release|deploy)\b|enqueue\s+(?:the\s+)?(?:package\s+)?run\b)/i;
 
 const isUnsafePublicString = (value: string): boolean =>
-  localPathPattern.test(value) ||
+  unixLocalPathPattern.test(value) ||
+  windowsLocalPathPattern.test(value) ||
   secretLikePattern.test(value) ||
   rawPromptOutputLogMarkerPattern.test(value) ||
   bypassHumanGatePattern.test(value);
