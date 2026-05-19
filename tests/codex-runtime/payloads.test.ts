@@ -165,6 +165,14 @@ describe('GeneratedPlanDraftV1', () => {
     'Exclude deploy work and deploy to staging after tests pass',
     'Exclude docs and deploy to staging after tests pass',
     'Exclude release work and submit for approval',
+    'Perform a staging deployment after tests pass',
+    'Run the staging deployment after tests pass',
+    'Deploying to staging after tests pass is required',
+    'Deployment to staging after tests pass is required',
+    'Releasing to production after validation is required',
+    'Request approval after checks pass',
+    'Send for approval after checks pass',
+    'No deploy work is included and perform a staging deployment after tests pass',
     'Next submit for approval',
     'Please approve after review',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
@@ -190,6 +198,7 @@ describe('GeneratedPlanDraftV1', () => {
     'Release work is out of scope',
     'Release work is excluded',
     'Deploy work is out of scope',
+    'Release/deploy work is out of scope',
   ])('accepts negated or out-of-scope Plan text that mentions gated actions: %s', (summary) => {
     expect(
       validateGeneratedPlanDraft({

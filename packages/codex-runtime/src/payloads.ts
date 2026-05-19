@@ -31,10 +31,20 @@ const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
 const bypassHumanGatePattern =
   /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const gatedPlanActionPattern =
-  /(?:\b(?:approve|submit|merge|push|release|deploy)\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/gi;
+  /(?:\b(?:approve|approval|submit|merge|push|release|releasing|deploy|deploying|deployment)\b|\b(?:request|send)\s+(?:for\s+)?approval\b|\b(?:perform|run)\b[\s\S]{0,40}\bdeployment\b|\benqueue\s+(?:the\s+)?(?:package\s+)?run\b)/gi;
 const planActionContextWindow = 80;
 const planActionClauseBoundaries = ['.', '!', '?', ';', ',', '\n'] as const;
 const planActionScopeBoundaryPattern = /\b(?:and|while|with)\b/gi;
+const planActionFamilyPatterns = {
+  approval: '(?:approve|approval)',
+  deploy: '(?:deploy|deploying|deployment)',
+  enqueue: 'enqueue',
+  merge: 'merge',
+  push: 'push',
+  release: '(?:release|releasing)',
+  submit: 'submit',
+} as const;
+const planActionAnyFamilyPattern = Object.values(planActionFamilyPatterns).join('|');
 
 const hasUnsafeUnixLocalPath = (value: string): boolean =>
   Array.from(value.matchAll(unixLocalPathPattern)).some((match) => {
@@ -60,10 +70,34 @@ const nextPlanActionBoundary = (value: string, actionIndex: number): number =>
     .filter((index) => index >= 0)
     .reduce((left, right) => Math.min(left, right), value.length);
 
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+type PlanActionFamily = keyof typeof planActionFamilyPatterns;
+
+const planActionFamily = (action: string): PlanActionFamily => {
+  const normalized = action.toLowerCase();
+  if (/\b(?:approve|approval)\b/.test(normalized)) {
+    return 'approval';
+  }
+  if (/\b(?:deploy|deploying|deployment)\b/.test(normalized)) {
+    return 'deploy';
+  }
+  if (/\benqueue\b/.test(normalized)) {
+    return 'enqueue';
+  }
+  if (/\bmerge\b/.test(normalized)) {
+    return 'merge';
+  }
+  if (/\bpush\b/.test(normalized)) {
+    return 'push';
+  }
+  if (/\b(?:release|releasing)\b/.test(normalized)) {
+    return 'release';
+  }
+  return 'submit';
+};
 
 const isPlanActionSafelyScopedOut = (clause: string, action: string, actionIndex: number): boolean => {
-  const escapedAction = escapeRegExp(action.toLowerCase().startsWith('enqueue') ? 'enqueue' : action);
+  const family = planActionFamily(action);
+  const actionPattern = planActionFamilyPatterns[family];
   const prefix = clause.slice(Math.max(0, actionIndex - 40), actionIndex);
   const suffix = clause.slice(actionIndex + action.length, actionIndex + action.length + 60);
   const previousScopeBoundary = Array.from(prefix.matchAll(planActionScopeBoundaryPattern)).at(-1);
@@ -76,14 +110,17 @@ const isPlanActionSafelyScopedOut = (clause: string, action: string, actionIndex
 
   const actionThroughScopeNoun = `${scopedPrefix}${clause.slice(actionIndex, actionIndex + action.length + 40)}`;
   const noScopePattern = new RegExp(
-    `\\bno\\b[\\s\\S]{0,40}\\b${escapedAction}\\b[\\s\\S]{0,40}\\b(?:work|workflow|workflows|action|actions|operation|operations|task|tasks)\\b`,
+    `\\bno\\b[\\s\\S]{0,40}\\b${actionPattern}\\b[\\s\\S]{0,40}\\b(?:work|workflow|workflows|action|actions|operation|operations|task|tasks)\\b`,
     'i',
   );
   if (noScopePattern.test(actionThroughScopeNoun)) {
     return true;
   }
 
-  return /^\s+(?:work|workflow|workflows|action|actions|operation|operations|task|tasks)\b[\s\S]{0,40}\b(?:excluded|out\s+of\s+scope)\b/i.test(
+  return new RegExp(
+    `^[\\s/,-]*(?:(?:${planActionAnyFamilyPattern})[\\s/,-]+)*(?:work|workflow|workflows|action|actions|operation|operations|task|tasks)\\b[\\s\\S]{0,40}\\b(?:excluded|out\\s+of\\s+scope)\\b`,
+    'i',
+  ).test(
     suffix,
   );
 };
