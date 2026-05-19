@@ -5,6 +5,19 @@ export interface GenerationLease {
   expires_at: string;
 }
 
+export interface GenerationLeaseInput {
+  promptDigest: string;
+  contextDigest: string;
+  outputSchemaVersion: string;
+  sandboxPolicy: 'readOnly' | 'artifactOnly';
+  writableRoots: string[];
+  timeoutMs: number;
+  outputLimitBytes: number;
+  rawNotificationLimitBytes: number;
+  now: string;
+  expiresAt: string;
+}
+
 export interface CodexGenerationRuntimeSafety {
   readonly taskKind: CodexGenerationTaskKind;
   readonly actionRunId: string;
@@ -13,13 +26,7 @@ export interface CodexGenerationRuntimeSafety {
   readonly artifactRoot: string;
   readonly workspaceRoot?: string;
   readonly policyDigests: Record<string, string>;
-  createGenerationLease(input: {
-    promptDigest: string;
-    contextDigest: string;
-    outputSchemaVersion: string;
-    now: string;
-    expiresAt: string;
-  }): Promise<GenerationLease>;
+  createGenerationLease(input: GenerationLeaseInput): Promise<GenerationLease>;
   consumeGenerationCommand(input: {
     lease: GenerationLease;
     method: string;

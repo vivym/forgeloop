@@ -121,6 +121,49 @@ describe('AppServerGenerationDriver', () => {
     });
   });
 
+  it('binds generation lease to sandbox policy and hard limits', async () => {
+    const leaseInputs: unknown[] = [];
+    const safety: CodexGenerationRuntimeSafety = {
+      ...fakeSafety(),
+      async createGenerationLease(input) {
+        leaseInputs.push(input);
+        return { lease_id: 'lease-1', expires_at: input.expiresAt };
+      },
+    };
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        }
+        return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+      },
+      notifications: async function* () {
+        yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
+        yield { type: 'turn_completed', status: 'completed' };
+      },
+      async close() {},
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: safety });
+
+    await driver.generate({
+      taskKind: 'plan_draft',
+      prompt: '{}',
+      outputSchemaVersion: 'plan_draft.v1',
+      timeoutMs: 123,
+      outputLimitBytes: 456,
+      rawNotificationLimitBytes: 789,
+    });
+
+    expect(leaseInputs[0]).toMatchObject({
+      outputSchemaVersion: 'plan_draft.v1',
+      sandboxPolicy: 'readOnly',
+      writableRoots: [],
+      timeoutMs: 123,
+      outputLimitBytes: 456,
+      rawNotificationLimitBytes: 789,
+    });
+  });
+
   it('rejects unsafe turn/start effective config after safe thread/start response', async () => {
     const consumedMethods: string[] = [];
     const safety: CodexGenerationRuntimeSafety = {
@@ -541,6 +584,11 @@ describe('app-server endpoint and generation safety contracts', () => {
         promptDigest: 'sha256:prompt',
         contextDigest: 'sha256:context',
         outputSchemaVersion: 'plan_draft.v1',
+        sandboxPolicy: 'readOnly',
+        writableRoots: [],
+        timeoutMs: 300_000,
+        outputLimitBytes: 1_048_576,
+        rawNotificationLimitBytes: 4_194_304,
         now: '2026-05-19T00:00:00.000Z',
         expiresAt: '2026-05-19T00:05:00.000Z',
       }),

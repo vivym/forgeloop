@@ -249,6 +249,14 @@ export class AppServerGenerationDriver {
           promptDigest: digest(input.prompt),
           contextDigest: input.contextDigest ?? digest({}),
           outputSchemaVersion: input.outputSchemaVersion,
+          sandboxPolicy: 'readOnly',
+          writableRoots: [],
+          timeoutMs,
+          outputLimitBytes: input.outputLimitBytes ?? this.options.limits?.outputLimitBytes ?? defaultOutputLimitBytes,
+          rawNotificationLimitBytes:
+            input.rawNotificationLimitBytes ??
+            this.options.limits?.rawNotificationLimitBytes ??
+            defaultRawNotificationLimitBytes,
           now: startTime,
           expiresAt: new Date(Date.parse(startTime) + timeoutMs).toISOString(),
         }),
