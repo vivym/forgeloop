@@ -111,6 +111,11 @@ import type {
   TraceEventRecord,
   TraceLinkRecord,
 } from './delivery-repository';
+import {
+  runtimeSnapshotBlockerFieldsFor,
+  runtimeSnapshotBlockersForActionRun,
+  runtimeSnapshotBlockersForExecutionPackage,
+} from './delivery-repository';
 
 export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 
@@ -382,7 +387,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveExecutionPackage(executionPackage: ExecutionPackage): Promise<void> {
-    await this.upsert(execution_packages, execution_packages.id, executionPackage);
+    await this.upsert(execution_packages, execution_packages.id, {
+      ...executionPackage,
+      source_mutation_policy: executionPackage.source_mutation_policy ?? 'path_policy_scoped',
+    });
   }
 
   async getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined> {
@@ -1258,6 +1266,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       planRevisionRecords,
       generationRunRecords,
       executionPackageRecords,
+      runSessionRecords,
       holdRecords,
       settingsRecords,
       recentActionRunRecords,
@@ -1274,6 +1283,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         this.db.select().from(plan_revisions),
         this.db.select().from(execution_package_generation_runs),
         this.db.select().from(execution_packages).orderBy(asc(execution_packages.createdAt), asc(execution_packages.id)),
+        this.db.select().from(run_sessions).orderBy(asc(run_sessions.createdAt), asc(run_sessions.id)),
         this.db
           .select()
           .from(manual_path_holds)
@@ -1338,6 +1348,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
     const workItemsById = new Map(workItemRows.map((record) => [record.id, record] as const));
     const generationRuns = generationRunRecords.map((row) => fromDbRecord<ExecutionPackageGenerationRun>(row));
+    const runSessionsByPackage = new Map<string, RunSession[]>();
+    for (const runSession of runSessionRecords.map((row) => fromDbRecord<RunSession>(row))) {
+      runSessionsByPackage.set(runSession.execution_package_id, [
+        ...(runSessionsByPackage.get(runSession.execution_package_id) ?? []),
+        runSession,
+      ]);
+    }
     const workItemsRequiringPlan = await this.runtimeSnapshotWorkItemsRequiringPlan(
       workItemRows,
       repoRows,
@@ -1404,6 +1421,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(
         executionPackageRecords.map((row) => fromDbRecord<ExecutionPackage>(row)),
         repoRows,
+        runSessionsByPackage,
       ),
       active_holds: this.runtimeSnapshotActiveHolds(holds),
       recent_action_runs: recentActionRunRecords.map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row))),
@@ -2366,6 +2384,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   private runtimeSnapshotRunEnqueueDisabledPackages(
     executionPackages: ExecutionPackage[],
     repos: ProjectRepo[],
+    runSessionsByPackage: Map<string, RunSession[]> = new Map(),
   ): RuntimeSnapshotTargetRow[] {
     return executionPackages
       .filter(
@@ -2382,6 +2401,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         repo_id: executionPackage.repo_id,
         automation_scope: `repo:${executionPackage.project_id}:${executionPackage.repo_id}` as const,
         disabled_reason: 'run_enqueue_disabled_by_scope',
+        ...runtimeSnapshotBlockerFieldsFor(
+          runtimeSnapshotBlockersForExecutionPackage(executionPackage, runSessionsByPackage.get(executionPackage.id) ?? []),
+        ),
       }));
   }
 
@@ -2413,7 +2435,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     targets: RuntimeSnapshotTargetRow[],
     latestMatchingActionFields: Map<
       string,
-      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>
+      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary' | 'blockers'>
     >,
   ): RuntimeSnapshotTargetRow[] {
     return targets.map((target) => ({
@@ -2430,10 +2452,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   private latestMatchingActionFieldsByTarget(
     actions: AutomationActionRun[],
-  ): Map<string, Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>> {
+  ): Map<
+    string,
+    Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary' | 'blockers'>
+  > {
     const fieldsByTarget = new Map<
       string,
-      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'>
+      Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary' | 'blockers'>
     >();
     for (const actionRun of actions) {
       const targetRevisionId = actionRun.target_revision_id;
@@ -2450,18 +2475,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   private latestMatchingActionFields(
     actionRun: AutomationActionRun | undefined,
-  ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary'> {
+  ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary' | 'blockers'> {
     if (actionRun === undefined) {
       return {};
     }
     return {
       latest_matching_action_status: actionRun.status,
-      ...(actionRun.status !== 'blocked'
-        ? {}
-        : {
-            ...(actionRun.reason === undefined ? {} : { blocked_reason_code: actionRun.reason }),
-            ...(actionRun.error_code === undefined ? {} : { blocked_summary: actionRun.error_code }),
-          }),
+      ...runtimeSnapshotBlockerFieldsFor(runtimeSnapshotBlockersForActionRun(actionRun)),
     };
   }
 

@@ -23,6 +23,7 @@ import type { ArtifactRef } from '../../packages/contracts/src/index';
 import {
   automationPreconditionFingerprint,
   buildManualScopeKey,
+  resourceLimitDigest,
   transitionSpecPlan,
   transitionWorkItem,
   type AutomationPrecondition,
@@ -33,6 +34,7 @@ import {
   type ProjectRepo,
   type Release,
   type ReviewPacket,
+  type ResourceLimitVector,
   type RunSession,
   type RuntimeSafetyAttestation,
   type Spec,
@@ -40,6 +42,7 @@ import {
   type WorkItem,
 } from '../../packages/domain/src/index';
 import { seedReadyExecutionPackage, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -61,6 +64,19 @@ const automationActorId = 'daemon-actor';
 const automationDaemonIdentity = 'daemon-1';
 const automationTestNow = '2026-05-05T00:00:00.000Z';
 let seedCounter = 0;
+
+const runtimeLimitVector = (overrides: Partial<ResourceLimitVector> = {}): ResourceLimitVector => ({
+  cpu_ms: 1_000,
+  memory_mb: 512,
+  pids: 32,
+  fds: 64,
+  workspace_bytes: 1_048_576,
+  artifact_bytes: 1_048_576,
+  timeout_ms: 30_000,
+  output_limit_bytes: 100_000,
+  run_output_limit_bytes: 500_000,
+  ...overrides,
+});
 
 type ApprovedSpecContext = {
   project: { id: string };
@@ -291,7 +307,7 @@ const seedProjectRepo = async (
     project_id: project.id,
     name: overrides.name ?? 'forgeloop',
     status: overrides.status ?? 'active',
-    local_path: overrides.local_path ?? '/workspace/forgeloop',
+    local_path: overrides.local_path ?? (await createWorkflowPolicyRepoRoot()),
     default_branch: overrides.default_branch ?? 'main',
     base_commit_sha: overrides.base_commit_sha ?? 'abc123',
     ...(overrides.org_id !== undefined ? { org_id: overrides.org_id } : {}),
@@ -459,6 +475,7 @@ const seedApprovedPlan = async (app: INestApplication): Promise<ApprovedSpecCont
 const runtimeSafetyAttestation = (
   overrides: Partial<RuntimeSafetyAttestation> = {},
 ): RuntimeSafetyAttestation => ({
+  attestation_scope: 'enqueue_preflight',
   hard_limit_mode: 'test_only_mock',
   environment: 'test',
   executor_type: 'mock',
@@ -476,8 +493,50 @@ const runtimeSafetyAttestation = (
   supports_fd_limit: false,
   supports_workspace_disk_limit: false,
   supports_artifact_size_limit: false,
+  network_mode: 'disabled',
+  project_id: 'project-1',
+  repo_id: 'repo-1',
+  execution_package_id: 'execution-package-1',
+  expected_package_version: 1,
+  policy_digest: 'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+  policy_snapshot_version: 1,
+  env_policy_digest: 'sha256:2222222222222222222222222222222222222222222222222222222222222222',
+  command_policy_digest: 'sha256:3333333333333333333333333333333333333333333333333333333333333333',
+  mount_policy_digest: 'sha256:4444444444444444444444444444444444444444444444444444444444444444',
+  network_policy_digest: 'network-disabled',
+  resource_limit_digest: resourceLimitDigest(runtimeLimitVector()),
+  resource_limits: runtimeLimitVector(),
+  sandbox_id: 'sandbox-1',
+  sandbox_version: 'test-sandbox@1',
+  sandbox_binary_digest: 'sandbox-binary-digest-1',
+  sandbox_config_digest: 'sandbox-config-digest-1',
+  sandbox_wrapper_environment_digest: 'sandbox-wrapper-env-digest-1',
+  supports_filesystem_containment: true,
+  supports_host_secret_isolation: true,
+  supports_network_policy: true,
+  supports_wrapper_env_isolation: true,
+  supports_process_tree_kill: true,
+  expires_at: '2026-05-05T00:36:00.000Z',
   ...overrides,
 });
+
+const runtimeSafetyAttestationForPackage = (
+  executionPackage: ExecutionPackage,
+  overrides: Partial<RuntimeSafetyAttestation> = {},
+): RuntimeSafetyAttestation =>
+  runtimeSafetyAttestation({
+    project_id: executionPackage.project_id,
+    repo_id: executionPackage.repo_id,
+    execution_package_id: executionPackage.id,
+    expected_package_version: executionPackage.version,
+    policy_digest: executionPackage.package_policy_snapshot?.policy_digest,
+    policy_snapshot_version: executionPackage.policy_snapshot_version,
+    env_policy_digest: executionPackage.package_policy_snapshot?.env_policy_digest,
+    command_policy_digest: executionPackage.package_policy_snapshot?.command_policy_digest,
+    mount_policy_digest: executionPackage.package_policy_snapshot?.mount_policy_digest,
+    network_policy_digest: executionPackage.package_policy_snapshot?.network_policy_digest,
+    ...overrides,
+  });
 
 type ClaimedPlanDraftActionContext = ApprovedSpecContext & {
   precondition: AutomationPrecondition;
@@ -2052,10 +2111,11 @@ describe('automation command boundaries', () => {
     if (project === undefined) {
       throw new Error(`Missing seeded project ${ctx.project.id}`);
     }
+    const workerRepoRoot = await createWorkflowPolicyRepoRoot({ prefix: 'forgeloop-worker-policy-repo-' });
     await seedProjectRepo(repository, project, {
       repo_id: 'repo-2',
       name: 'forgeloop-worker',
-      local_path: '/workspace/forgeloop-worker',
+      local_path: workerRepoRoot,
       default_branch: 'main',
       base_commit_sha: 'def456',
     });
@@ -2663,7 +2723,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'local_codex',
         workflowOnly: false,
-        runtimeSafetyAttestation: runtimeSafetyAttestation({
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage, {
           executor_type: 'local_codex',
           workflow_only: false,
           environment: 'local_dogfood',
@@ -2711,7 +2771,7 @@ describe('automation command boundaries', () => {
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       executorType: 'mock',
       workflowOnly: true,
-      runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
     });
     const replayed = await automationService.enqueueRunIfPackageStillReady({
       packageId: executionPackage.id,
@@ -2721,7 +2781,9 @@ describe('automation command boundaries', () => {
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       executorType: 'mock',
       workflowOnly: true,
-      runtimeSafetyAttestation: runtimeSafetyAttestation({ checked_at: '2026-05-04T23:00:00.000Z' }),
+      runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage, {
+        checked_at: '2026-05-04T23:00:00.000Z',
+      }),
     });
 
     expect(replayed).toEqual(first);
@@ -2768,7 +2830,7 @@ describe('automation command boundaries', () => {
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       executorType: 'mock',
       workflowOnly: true,
-      runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
     });
 
     expect(kickCount).toBe(1);
@@ -2815,7 +2877,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).resolves.toMatchObject({ status: 'accepted', execution_package_id: executionPackage.id });
   });
@@ -2861,7 +2923,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'stale_execution_package_revision' }),
@@ -2935,7 +2997,7 @@ describe('automation command boundaries', () => {
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       executorType: 'mock' as const,
       workflowOnly: true,
-      runtimeSafetyAttestation: runtimeSafetyAttestation(),
+      runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
     };
 
     await expect((service as AutomationCommandTestService).enqueueRunIfPackageStillReady(input)).rejects.toThrow(
@@ -2987,7 +3049,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).resolves.toMatchObject({ status: 'accepted', execution_package_id: executionPackage.id });
   });
@@ -3040,7 +3102,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'manual_path_hold_active' }),
@@ -3111,7 +3173,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'manual_path_hold_active' }),
@@ -3204,7 +3266,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'manual_path_hold_active' }),
@@ -3265,7 +3327,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'automation_gate_pending' }),
@@ -3324,7 +3386,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'automation_gate_pending' }),
@@ -3374,25 +3436,9 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: {
-          hard_limit_mode: 'test_only_mock',
-          environment: 'test',
-          executor_type: 'mock',
-          workflow_only: true,
-          governor_id: 'test-governor',
-          governor_provenance: 'test_only_mock',
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage, {
           checked_at: '2026-05-05T00:31:00.000Z',
-          max_command_timeout_ms: 120_000,
-          max_hook_timeout_ms: 30_000,
-          max_command_output_bytes: 1_000_000,
-          max_run_output_bytes: 5_000_000,
-          supports_cpu_limit: false,
-          supports_memory_limit: false,
-          supports_process_limit: false,
-          supports_fd_limit: false,
-          supports_workspace_disk_limit: false,
-          supports_artifact_size_limit: false,
-        },
+        }),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'stale_execution_package_revision' }),
@@ -3441,7 +3487,7 @@ describe('automation command boundaries', () => {
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         executorType: 'mock',
         workflowOnly: true,
-        runtimeSafetyAttestation: runtimeSafetyAttestation(),
+        runtimeSafetyAttestation: runtimeSafetyAttestationForPackage(executionPackage),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'stale_execution_package_revision' }),

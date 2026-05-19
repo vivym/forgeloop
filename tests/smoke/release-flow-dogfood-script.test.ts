@@ -34,6 +34,7 @@ import {
   verifyDurableReleaseAfterReopen,
 } from '../../scripts/dogfood/release-flow-core';
 import { requiredReleaseFlowReportMarkers as wrapperRequiredReleaseFlowReportMarkers } from '../../scripts/release-flow-dogfood';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 describe('release flow dogfood script helpers', () => {
   const createDurableTestApp = async (repository: InMemoryDeliveryRepository): Promise<INestApplication> => {
@@ -147,7 +148,7 @@ describe('release flow dogfood script helpers', () => {
         {
           check_id: 'release-strict-local-codex',
           display_name: 'Release strict local Codex required check',
-          command: 'node -e "process.exit(0)"',
+          command: 'node --version',
           timeout_seconds: 30,
           blocks_review: true,
         },
@@ -338,26 +339,31 @@ describe('release flow dogfood script helpers', () => {
       status: 'PASSED' as const,
       details: ['strict local Codex evidence linked'],
     };
+    const repoPath = await createWorkflowPolicyRepoRoot({
+      allowedPaths: ['README.md'],
+      forbiddenPaths: ['.git', '.git/**'],
+      prefix: 'forgeloop-release-strict-test-',
+    });
 
     try {
       const lifecycle = await runDurableReleaseLifecycle({
         app,
         repository,
         identity: buildDurableReleaseDogfoodIdentity('2026-05-11T00:00:00.000Z'),
-        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1', FORGELOOP_REPO_PATH: '/repo' },
+        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1', FORGELOOP_REPO_PATH: repoPath },
         deps: {
           runCommand: async () => ({ stdout: 'base-sha\n', stderr: '' }),
           preflightStrictLocalCodex: async () => ({
             ok: true,
             blockers: [],
-            repoPath: '/repo',
+            repoPath,
             dirtyFiles: [],
             dirtySource: {
               allowed_dirty_entries: [],
               blocked_dirty_entries: [],
               dirty_allowlist_source: 'RELEASE_STRICT_DIRTY_ALLOWLIST',
             },
-            worktreeProbePath: '/repo/.worktrees/probe',
+            worktreeProbePath: `${repoPath}/.worktrees/probe`,
           }),
           runStrictLocalCodexPackage: async (input) => {
             await input.runWorkerDrain?.();
@@ -492,7 +498,7 @@ describe('release flow dogfood script helpers', () => {
         status: 'failed',
         runtime_metadata: {
           durability_mode: 'durable',
-          workspace_path: `/repo/.worktrees/${currentRun.id}`,
+          workspace_path: `${repoPath}/.worktrees/${currentRun.id}`,
           recovery_attempt_count: 0,
           effective_dangerous_mode: 'confirmed',
           app_server_attempted: true,
@@ -516,13 +522,18 @@ describe('release flow dogfood script helpers', () => {
     });
     const cleanupCalls: string[] = [];
     const cleanupActions: Array<{ label: string; run: () => Promise<void> }> = [];
+    const repoPath = await createWorkflowPolicyRepoRoot({
+      allowedPaths: ['README.md'],
+      forbiddenPaths: ['.git', '.git/**'],
+      prefix: 'forgeloop-release-strict-test-',
+    });
 
     try {
       const lifecycle = await runDurableReleaseLifecycle({
         app,
         repository,
         identity: buildDurableReleaseDogfoodIdentity('2026-05-11T00:00:00.000Z'),
-        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1', FORGELOOP_REPO_PATH: '/repo' },
+        env: { FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: '1', FORGELOOP_REPO_PATH: repoPath },
         deps: {
           runCommand: async (command, args) => {
             cleanupCalls.push(`${command} ${args.join(' ')}`);
@@ -531,14 +542,14 @@ describe('release flow dogfood script helpers', () => {
           preflightStrictLocalCodex: async () => ({
             ok: true,
             blockers: [],
-            repoPath: '/repo',
+            repoPath,
             dirtyFiles: [],
             dirtySource: {
               allowed_dirty_entries: [],
               blocked_dirty_entries: [],
               dirty_allowlist_source: 'RELEASE_STRICT_DIRTY_ALLOWLIST',
             },
-            worktreeProbePath: '/repo/.worktrees/probe',
+            worktreeProbePath: `${repoPath}/.worktrees/probe`,
           }),
           runWorkerDrain: realWorkerDrain,
           cleanupActions,
@@ -553,7 +564,7 @@ describe('release flow dogfood script helpers', () => {
       for (const action of cleanupActions) {
         await action.run();
       }
-      expect(cleanupCalls).toEqual(expect.arrayContaining([`git worktree remove --force /repo/.worktrees/${failedRunId}`]));
+      expect(cleanupCalls).toEqual(expect.arrayContaining([`git worktree remove --force ${repoPath}/.worktrees/${failedRunId}`]));
     } finally {
       await app.close();
     }

@@ -8,6 +8,16 @@
 .superpowers/
 .react-router/
 
+# Python local artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,node,go,rust
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,node,go,rust
 

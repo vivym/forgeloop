@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
+  RuntimeSnapshotBlockerRow,
   RuntimeSnapshotManualHoldRow,
   RuntimeSnapshotProjectRow,
   RuntimeSnapshotRepoRow,
@@ -296,8 +297,22 @@ export interface AutomationRuntimeSnapshotTargetDto {
   latest_matching_action_status?: string;
   blocked_reason_code?: string;
   blocked_summary?: string;
+  blockers?: AutomationRuntimeBlockerDto[];
   generation_key?: string;
   disabled_reason?: 'run_enqueue_disabled_by_scope';
+}
+
+export interface AutomationRuntimeBlockerDto {
+  target_object_type: string;
+  target_object_id: string;
+  target_revision_id?: string;
+  repo_id?: string;
+  blocked_reason_code: string;
+  blocked_summary: string;
+  retryable: boolean;
+  policy_digest?: string;
+  policy_snapshot_version?: number;
+  diagnostic_ref?: string;
 }
 
 export interface AutomationRuntimeSnapshotManualHoldDto {
@@ -463,8 +478,27 @@ export const toRuntimeSnapshotTargetDto = (target: RuntimeSnapshotTargetRow): Au
     : { latest_matching_action_status: target.latest_matching_action_status }),
   ...(target.blocked_reason_code === undefined ? {} : { blocked_reason_code: target.blocked_reason_code }),
   ...(target.blocked_summary === undefined ? {} : { blocked_summary: target.blocked_summary }),
+  ...(target.blockers === undefined
+    ? {}
+    : { blockers: target.blockers.map((blocker) => toRuntimeBlockerDto(target, blocker)) }),
   ...(target.generation_key === undefined ? {} : { generation_key: target.generation_key }),
   ...(target.disabled_reason === undefined ? {} : { disabled_reason: target.disabled_reason }),
+});
+
+export const toRuntimeBlockerDto = (
+  target: RuntimeSnapshotTargetRow,
+  blocker: RuntimeSnapshotBlockerRow,
+): AutomationRuntimeBlockerDto => ({
+  target_object_type: target.target_object_type,
+  target_object_id: target.target_object_id,
+  ...(target.target_revision_id === undefined ? {} : { target_revision_id: target.target_revision_id }),
+  ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }),
+  blocked_reason_code: blocker.blocked_reason_code,
+  blocked_summary: blocker.blocked_summary,
+  retryable: blocker.retryable,
+  ...(blocker.policy_digest === undefined ? {} : { policy_digest: blocker.policy_digest }),
+  ...(blocker.policy_snapshot_version === undefined ? {} : { policy_snapshot_version: blocker.policy_snapshot_version }),
+  ...(blocker.diagnostic_ref === undefined ? {} : { diagnostic_ref: blocker.diagnostic_ref }),
 });
 
 export const toRuntimeSnapshotManualHoldDto = (

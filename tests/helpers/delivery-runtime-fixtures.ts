@@ -17,6 +17,7 @@ import type {
   WorkItem,
 } from '../../packages/domain/src/index';
 import { transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src/index';
+import { buildPackageRuntimePolicySnapshot, runtimePolicyFromDocument } from '../../packages/executor/src/index';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import {
@@ -25,6 +26,7 @@ import {
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src';
+import { createWorkflowPolicyRepoRoot } from './runtime-policy-repo';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
@@ -96,26 +98,27 @@ const packagePolicyFieldsFor = (executionPackage: ExecutionPackage): Pick<
   validation_public_summary: 'Required checks and package path policy are frozen for this test package.',
   policy_snapshot_status: 'captured',
   policy_snapshot_version: 1,
-  package_policy_snapshot: {
-    policy_snapshot_version: 1,
-    policy_digest: 'sha256:test-runtime-policy',
-    policy_source_path: '.forgeloop/runtime-policy.json',
-    policy_loaded_at: now,
-    policy_last_known_good: true,
-    hooks: [],
-    command_policy: { required_checks: executionPackage.required_checks.map((check) => check.check_id) },
-    check_policy: { required_checks: executionPackage.required_checks.map((check) => check.check_id) },
-    env_policy: {},
-    path_policy: {
+  package_policy_snapshot: buildPackageRuntimePolicySnapshot({
+    loadedPolicy: runtimePolicyFromDocument({
+      document: {
+        codex: { primary_executor: 'mock', network_mode: 'disabled' },
+        path_policy: {
+          allowed_paths: executionPackage.allowed_paths,
+          forbidden_paths: executionPackage.forbidden_paths,
+        },
+        observability: { public_summary: 'Required checks and package path policy are frozen for this test package.' },
+      },
+      markdownBody: '',
+      loadedAt: now,
+    }),
+    executionPackageChecks: executionPackage.required_checks,
+    executionPackagePathPolicy: {
       allowed_paths: executionPackage.allowed_paths,
       forbidden_paths: executionPackage.forbidden_paths,
     },
-    codex_runtime_mode: 'mock',
-    fallback_policy: { allow_exec_fallback: false },
-    validation_strategy_version: 1,
-    validation_strategy: 'checks_required',
-    validation_public_summary: 'Required checks and package path policy are frozen for this test package.',
-  },
+    validationStrategy: 'checks_required',
+    sourceMutationPolicy: executionPackage.source_mutation_policy,
+  }),
 });
 
 export const succeededSelfReview = (): SelfReviewResult => ({
@@ -266,6 +269,7 @@ const baseRecords = (): {
     required_artifact_kinds: ['execution_summary'],
     allowed_paths: ['packages/workflow/**', 'tests/workflow/**'],
     forbidden_paths: ['packages/db/**'],
+    source_mutation_policy: 'path_policy_scoped',
     at: now,
   });
   const executionPackage = transitionExecutionPackage(
@@ -282,6 +286,8 @@ const baseRecords = (): {
 const runSpecFor = (executionPackage: ExecutionPackage, runSessionId: string): RunSpec => ({
   run_session_id: runSessionId,
   execution_package_id: executionPackage.id,
+  project_id: executionPackage.project_id,
+  expected_package_version: executionPackage.version,
   work_item_id: executionPackage.work_item_id,
   spec_revision_id: executionPackage.spec_revision_id,
   plan_revision_id: executionPackage.plan_revision_id,
@@ -301,6 +307,7 @@ const runSpecFor = (executionPackage: ExecutionPackage, runSessionId: string): R
   },
   review_context: { latest_decision: 'none', requested_changes: [] },
   workflow_only: true,
+  source_mutation_policy: executionPackage.source_mutation_policy ?? 'path_policy_scoped',
   allowed_paths: executionPackage.allowed_paths,
   forbidden_paths: executionPackage.forbidden_paths,
   required_checks: [...requiredChecks],
@@ -499,7 +506,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
     .send({
       repo_id: 'repo-1',
       name: 'forgeloop',
-      local_path: '/workspace/forgeloop',
+      local_path: await createWorkflowPolicyRepoRoot(),
       default_branch: 'main',
       base_commit_sha: 'abc123',
     })

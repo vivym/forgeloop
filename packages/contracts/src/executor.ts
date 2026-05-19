@@ -13,6 +13,9 @@ const isoDateTimeSchema = z.string().datetime();
 export const executorTypeSchema = z.enum(['mock', 'local_codex']);
 export type ExecutorType = z.infer<typeof executorTypeSchema>;
 
+export const sourceMutationPolicySchema = z.enum(['path_policy_scoped', 'no_source_changes']);
+export type SourceMutationPolicy = z.infer<typeof sourceMutationPolicySchema>;
+
 export const failureKindSchema = z.enum([
   'required_check_failed',
   'executor_error',
@@ -226,6 +229,8 @@ export const runSpecSchema = z
   .object({
     run_session_id: z.string().min(1),
     execution_package_id: z.string().min(1),
+    project_id: z.string().min(1),
+    expected_package_version: z.number().int().nonnegative(),
     work_item_id: z.string().min(1),
     spec_revision_id: z.string().min(1),
     plan_revision_id: z.string().min(1),
@@ -245,7 +250,8 @@ export const runSpecSchema = z
     }),
     review_context: reviewContextSchema,
     workflow_only: z.boolean().default(false),
-    allowed_paths: z.array(z.string().min(1)).min(1),
+    source_mutation_policy: sourceMutationPolicySchema.default('path_policy_scoped'),
+    allowed_paths: z.array(z.string().min(1)),
     forbidden_paths: z.array(z.string().min(1)),
     required_checks: z.array(requiredCheckSpecSchema),
     artifact_policy: z.object({
@@ -260,6 +266,22 @@ export const runSpecSchema = z
         code: 'custom',
         path: ['required_checks'],
         message: 'required_checks must match context.required_checks in order',
+      });
+    }
+
+    if (runSpec.allowed_paths.length === 0 && runSpec.source_mutation_policy !== 'no_source_changes') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['allowed_paths'],
+        message: 'allowed_paths may be empty only when source_mutation_policy is no_source_changes',
+      });
+    }
+
+    if (runSpec.source_mutation_policy === 'path_policy_scoped' && runSpec.allowed_paths.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['source_mutation_policy'],
+        message: 'path_policy_scoped packages require non-empty allowed_paths',
       });
     }
 

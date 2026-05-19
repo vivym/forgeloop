@@ -1,8 +1,16 @@
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it, vi } from 'vitest';
 import type { ExecutorResult } from '@forgeloop/contracts';
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src';
 import type { Artifact, Decision, ReviewPacket } from '../../packages/domain/src/index';
-import { finalizePackageRunWithExecutorResult, reviewPacketIdForRunSession, stableWorkflowUuidFor } from '../../packages/workflow/src';
+import {
+  completePackageRunReviewFinalization,
+  finalizePackageRunWithExecutorResult,
+  reviewPacketIdForRunSession,
+  stableWorkflowUuidFor,
+  terminalizePackageRunWithRuntimeEvidence,
+} from '../../packages/workflow/src';
 import {
   seedReadyStartedPackageRun,
   succeededExecutorResult,
@@ -153,6 +161,201 @@ describe('execution finalizer', () => {
 
     expect(repo.maxConcurrentArtifactWrites).toBe(1);
     expect(await repo.listArtifactsForObject('run_session', context.runSession.id)).toHaveLength(result.artifacts.length);
+  });
+
+  it('terminalizes runtime evidence without creating a review packet', async () => {
+    const repo = new InMemoryDeliveryRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = succeededExecutorResult(context.runSession.id);
+
+    const terminalized = await terminalizePackageRunWithRuntimeEvidence({
+      repository: repo,
+      runSessionId: context.runSession.id,
+      evidence: {
+        executorResult: result,
+        authoritativeChangedFiles: result.changed_files,
+        requiredCheckResults: result.checks,
+        primaryArtifactRefs: result.artifacts,
+        runtimeBlockers: [],
+        pathPolicy: { ok: true },
+      },
+      now: () => '2026-05-07T00:00:00.000Z',
+    });
+
+    expect(terminalized).toMatchObject({
+      runSessionId: context.runSession.id,
+      status: 'succeeded',
+      reviewEligible: true,
+    });
+    expect(await repo.getReviewPacket(reviewPacketIdForRunSession(context.runSession.id))).toBeUndefined();
+    expect(await repo.getRunSession(context.runSession.id)).toMatchObject({
+      status: 'succeeded',
+      changed_files: result.changed_files,
+      check_results: result.checks,
+      executor_result: {
+        raw_metadata: {
+          runtime_finalization: {
+            path_policy: { ok: true },
+            primary_artifact_count: result.artifacts.length,
+          },
+        },
+      },
+    });
+  });
+
+  it('completes review finalization only after runtime terminalization', async () => {
+    const repo = new InMemoryDeliveryRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = succeededExecutorResult(context.runSession.id);
+
+    await terminalizePackageRunWithRuntimeEvidence({
+      repository: repo,
+      runSessionId: context.runSession.id,
+      evidence: {
+        executorResult: result,
+        authoritativeChangedFiles: result.changed_files,
+        requiredCheckResults: result.checks,
+        primaryArtifactRefs: result.artifacts,
+        runtimeBlockers: [],
+        pathPolicy: { ok: true },
+      },
+      now: () => '2026-05-07T00:00:00.000Z',
+    });
+
+    const finalResult = await completePackageRunReviewFinalization({
+      repository: repo,
+      runSessionId: context.runSession.id,
+      selfReview: async () => succeededSelfReview(),
+      now: () => '2026-05-07T00:00:01.000Z',
+    });
+
+    expect(finalResult).toMatchObject({
+      runSessionId: context.runSession.id,
+      status: 'succeeded',
+      reviewPacketId: reviewPacketIdForRunSession(context.runSession.id),
+    });
+    expect(await repo.getReviewPacket(reviewPacketIdForRunSession(context.runSession.id))).toMatchObject({
+      run_session_id: context.runSession.id,
+      status: 'ready',
+    });
+  });
+
+  it('fails closed when actual runtime PathPolicy rejects authoritative changed files', async () => {
+    const repo = new InMemoryDeliveryRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = {
+      ...succeededExecutorResult(context.runSession.id),
+      changed_files: [{ repo_id: 'repo-1', path: 'packages/workflow/src/index.ts', change_kind: 'modified' as const }],
+    };
+    const diagnosticRef = {
+      kind: 'raw_metadata' as const,
+      name: 'path-policy-diagnostic.json',
+      content_type: 'application/json',
+      local_ref: 'artifacts/run-session/path-policy-diagnostic.json',
+    };
+
+    const terminalized = await terminalizePackageRunWithRuntimeEvidence({
+      repository: repo,
+      runSessionId: context.runSession.id,
+      evidence: {
+        executorResult: result,
+        authoritativeChangedFiles: [{ repo_id: 'repo-1', path: 'packages/db/src/index.ts', change_kind: 'modified' }],
+        requiredCheckResults: result.checks,
+        primaryArtifactRefs: result.artifacts,
+        runtimeBlockers: [],
+        pathPolicy: {
+          ok: false,
+          blockerCode: 'path_policy_actual_changes_rejected',
+          publicSummary: 'Changed files are outside the approved package scope.',
+          diagnosticRef,
+        },
+      },
+      now: () => '2026-05-07T00:00:00.000Z',
+    });
+
+    expect(terminalized).toEqual({
+      runSessionId: context.runSession.id,
+      status: 'failed',
+      reviewEligible: false,
+    });
+    expect(await repo.getRunSession(context.runSession.id)).toMatchObject({
+      status: 'failed',
+      changed_files: [{ repo_id: 'repo-1', path: 'packages/db/src/index.ts', change_kind: 'modified' }],
+      failure_kind: 'path_violation',
+      failure_reason: 'Changed files are outside the approved package scope.',
+    });
+    expect(await repo.getReviewPacket(reviewPacketIdForRunSession(context.runSession.id))).toBeUndefined();
+    expect((await repo.listArtifactsForObject('run_session', context.runSession.id)).map((artifact) => artifact.ref)).toEqual(
+      expect.arrayContaining([diagnosticRef]),
+    );
+  });
+
+  it('fails closed when authoritative changed files are unavailable', async () => {
+    const repo = new InMemoryDeliveryRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = succeededExecutorResult(context.runSession.id);
+
+    const terminalized = await terminalizePackageRunWithRuntimeEvidence({
+      repository: repo,
+      runSessionId: context.runSession.id,
+      evidence: {
+        executorResult: result,
+        authoritativeChangedFiles: [],
+        requiredCheckResults: result.checks,
+        primaryArtifactRefs: result.artifacts,
+        runtimeBlockers: [],
+        pathPolicy: {
+          ok: false,
+          blockerCode: 'changed_files_unavailable',
+          publicSummary: 'Authoritative changed-file evidence is unavailable.',
+        },
+      },
+      now: () => '2026-05-07T00:00:00.000Z',
+    });
+
+    expect(terminalized).toMatchObject({ status: 'failed', reviewEligible: false });
+    expect(await repo.getRunSession(context.runSession.id)).toMatchObject({
+      status: 'failed',
+      failure_kind: 'path_violation',
+      failure_reason: 'Authoritative changed-file evidence is unavailable.',
+    });
+    expect(await repo.getReviewPacket(reviewPacketIdForRunSession(context.runSession.id))).toBeUndefined();
+  });
+
+  it('ignores executor-reported changed files in favor of authoritative runtime evidence', async () => {
+    const repo = new InMemoryDeliveryRepository();
+    const context = await seedReadyStartedPackageRun(repo);
+    const result = {
+      ...succeededExecutorResult(context.runSession.id),
+      changed_files: [{ repo_id: 'repo-1', path: 'packages/db/src/index.ts', change_kind: 'modified' as const }],
+    };
+
+    const terminalized = await terminalizePackageRunWithRuntimeEvidence({
+      repository: repo,
+      runSessionId: context.runSession.id,
+      evidence: {
+        executorResult: result,
+        authoritativeChangedFiles: [{ repo_id: 'repo-1', path: 'packages/workflow/src/index.ts', change_kind: 'modified' }],
+        requiredCheckResults: result.checks,
+        primaryArtifactRefs: result.artifacts,
+        runtimeBlockers: [],
+        pathPolicy: { ok: true },
+      },
+      now: () => '2026-05-07T00:00:00.000Z',
+    });
+
+    expect(terminalized).toMatchObject({ status: 'succeeded', reviewEligible: true });
+    expect(await repo.getRunSession(context.runSession.id)).toMatchObject({
+      status: 'succeeded',
+      changed_files: [{ repo_id: 'repo-1', path: 'packages/workflow/src/index.ts', change_kind: 'modified' }],
+    });
+  });
+
+  it('keeps workflow finalization free of executor imports', async () => {
+    const source = await readFile(new URL('../../packages/workflow/src/execution-finalizer.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toContain('@forgeloop/executor');
+    expect(source).not.toContain('../../executor/');
   });
 
   it('writes terminal evidence trace events, links, and artifact refs', async () => {

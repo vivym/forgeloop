@@ -14,6 +14,7 @@ import { z } from 'zod';
 
 const nonEmptyString = z.string().trim().min(1);
 const stringList = z.array(nonEmptyString);
+const sourceMutationPolicySchema = z.enum(['path_policy_scoped', 'no_source_changes']);
 const workItemReadinessPhases = ['draft', 'triage'] as const;
 
 export const createProjectSchema = z
@@ -161,6 +162,7 @@ export const createExecutionPackageSchema = z
     required_artifact_kinds: z.array(artifactKindSchema) satisfies z.ZodType<ArtifactKind[]>,
     allowed_paths: stringList,
     forbidden_paths: stringList,
+    source_mutation_policy: sourceMutationPolicySchema.optional(),
   })
   .strict();
 export type CreateExecutionPackageDto = z.infer<typeof createExecutionPackageSchema>;
@@ -175,6 +177,7 @@ export const patchExecutionPackageSchema = z
     required_artifact_kinds: z.array(artifactKindSchema).optional(),
     allowed_paths: stringList.optional(),
     forbidden_paths: stringList.optional(),
+    source_mutation_policy: sourceMutationPolicySchema.optional(),
   })
   .strict();
 export type PatchExecutionPackageDto = z.infer<typeof patchExecutionPackageSchema>;

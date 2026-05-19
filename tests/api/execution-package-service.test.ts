@@ -7,6 +7,7 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { ExecutionPackageService } from '../../apps/control-plane-api/src/modules/execution-packages/execution-package.service';
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
 import { transitionReviewPacket } from '../../packages/domain/src/index';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -77,7 +78,7 @@ const createApprovedPlan = async (app: INestApplication) => {
     .send({
       repo_id: 'repo-1',
       name: 'forgeloop',
-      local_path: '/workspace/forgeloop',
+      local_path: await createWorkflowPolicyRepoRoot(),
       default_branch: 'main',
       base_commit_sha: 'abc123',
     })
@@ -146,14 +147,14 @@ describe('ExecutionPackageService delivery API', () => {
     expect(generated).toHaveLength(1);
     expect(generated[0].execution_package_set_id).toBe(`generation:${planRevision.id}:default`);
     expect(generated[0].generation_key).toBe('default');
-    expect(generated[0].package_policy_snapshot.policy_digest).toBe('delivery-default-policy');
-    expect(generated[0].package_policy_snapshot.policy_source_path).toBe('forgeloop://delivery/default-package-policy');
+    expect(generated[0].package_policy_snapshot.policy_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(generated[0].package_policy_snapshot.policy_source_path).toBe('WORKFLOW.md');
 
     const created = (
       await request(server).post(`/plan-revisions/${planRevision.id}/execution-packages`).send(validPackageBody).expect(201)
     ).body;
-    expect(created.package_policy_snapshot.policy_digest).toBe('delivery-manual-package-policy');
-    expect(created.package_policy_snapshot.policy_source_path).toBe('forgeloop://delivery/manual-package-policy');
+    expect(created.package_policy_snapshot.policy_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(created.package_policy_snapshot.policy_source_path).toBe('WORKFLOW.md');
 
     expect((await request(server).get(`/work-items/${workItem.id}/execution-packages`).expect(200)).body.length).toBeGreaterThanOrEqual(2);
     await request(server).get(`/execution-packages/${created.id}`).expect(200);

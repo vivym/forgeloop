@@ -84,6 +84,10 @@ export const createExecutorGatewayAdapter = (
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
 
   return async (runSpec: RunSpec): Promise<ExecutorResult> => {
+    if (runSpec.executor_type === 'local_codex' && runSpec.workflow_only !== true) {
+      throw new Error('primary_executor_governor_unavailable: production local_codex runs must use the run-worker runtime safety boundary');
+    }
+
     const response = await fetchImpl(`${baseUrl}/internal/executions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

@@ -266,6 +266,7 @@ export async function runDeliveryRepositoryContract(repository: DeliveryReposito
     required_artifact_kinds: ['execution_summary'],
     allowed_paths: ['packages/db/**', 'tests/db/**'],
     forbidden_paths: ['apps/**'],
+    source_mutation_policy: 'path_policy_scoped',
     integration_readiness: {
       status: 'ready',
       checked_at: later,

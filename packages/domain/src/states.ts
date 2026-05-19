@@ -108,6 +108,7 @@ export type ExecutionPackageTransition =
       required_artifact_kinds: ArtifactKind[];
       allowed_paths: string[];
       forbidden_paths: string[];
+      source_mutation_policy?: ExecutionPackage['source_mutation_policy'];
     })
   | (Timestamped & {
       type: 'mark_ready' | 'workflow_start' | 'execution_succeeded' | 'review_approved' | 'review_changes_requested';
@@ -135,7 +136,7 @@ type RunSessionTerminalExecutorResultTransition = Timestamped & {
   executor_result: ExecutorResult;
 };
 
-type RunSessionTerminalInlineEvidenceTransition =
+type RunSessionTerminalLegacyTransition =
   | (Timestamped & {
       type: 'executor_success';
       executor_result?: undefined;
@@ -187,7 +188,7 @@ export type RunSessionTransition =
       runtime_metadata?: RunRuntimeMetadataUpdate;
     })
   | RunSessionTerminalExecutorResultTransition
-  | RunSessionTerminalInlineEvidenceTransition;
+  | RunSessionTerminalLegacyTransition;
 
 export type ReviewPacketTransition =
   | (Timestamped & {
@@ -367,6 +368,7 @@ const cloneRunSpec = (runSpec: RunSpec): RunSpec => ({
     ...runSpec.review_context,
     requested_changes: (runSpec.review_context.requested_changes ?? []).map(cloneRequestedChange),
   },
+  source_mutation_policy: runSpec.source_mutation_policy ?? 'path_policy_scoped',
   allowed_paths: [...runSpec.allowed_paths],
   forbidden_paths: [...runSpec.forbidden_paths],
   required_checks: runSpec.required_checks.map(cloneRequiredCheckSpec),
@@ -694,6 +696,7 @@ export const transitionExecutionPackage = (
       required_artifact_kinds: [...event.required_artifact_kinds],
       allowed_paths: [...event.allowed_paths],
       forbidden_paths: [...event.forbidden_paths],
+      source_mutation_policy: event.source_mutation_policy ?? 'path_policy_scoped',
       version: 0,
       created_at: at,
       updated_at: at,
@@ -1363,10 +1366,10 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
     case 'executor_failure':
       if (runSession.status === 'running') {
         const terminalEvidence = cloneRunSessionTerminalEvidence(runSession.id, event);
-        const eventFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
-        const eventFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
-        const failureKind = terminalEvidence.failure_kind ?? eventFailureKind;
-        const failureReason = terminalEvidence.failure_reason ?? eventFailureReason;
+        const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
+        const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
+        const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
+        const failureReason = terminalEvidence.failure_reason ?? legacyFailureReason;
 
         if (failureKind === undefined || failureReason === undefined) {
           return invalidTransition('RunSession', 'invalid_terminal_payload', event.type);
@@ -1386,10 +1389,10 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
     case 'executor_timeout':
       if (runSession.status === 'running') {
         const terminalEvidence = cloneRunSessionTerminalEvidence(runSession.id, event);
-        const eventFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
-        const eventFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
-        const failureKind = terminalEvidence.failure_kind ?? eventFailureKind;
-        const failureReason = terminalEvidence.failure_reason ?? eventFailureReason;
+        const legacyFailureKind = 'failure_kind' in event ? event.failure_kind : undefined;
+        const legacyFailureReason = 'failure_reason' in event ? event.failure_reason : undefined;
+        const failureKind = terminalEvidence.failure_kind ?? legacyFailureKind;
+        const failureReason = terminalEvidence.failure_reason ?? legacyFailureReason;
 
         if (failureKind === undefined || failureReason === undefined) {
           return invalidTransition('RunSession', 'invalid_terminal_payload', event.type);

@@ -177,6 +177,7 @@ const executionPackage: ExecutionPackage = {
   required_artifact_kinds: ['execution_summary'],
   allowed_paths: ['packages/db/**', 'tests/db/**'],
   forbidden_paths: ['apps/**'],
+  source_mutation_policy: 'path_policy_scoped',
   last_run_session_id: 'run-session-1',
   created_at: now,
   updated_at: now,

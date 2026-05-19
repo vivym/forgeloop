@@ -140,8 +140,8 @@ export const dogfoodRequiredChecks = [
   {
     check_id: 'dogfood-work-item',
     display_name: 'Delivery dogfood work item',
-    command: 'pnpm install --frozen-lockfile && pnpm smoke:delivery',
-    timeout_seconds: 300,
+    command: 'pnpm smoke:delivery',
+    timeout_seconds: 120,
     blocks_review: true,
   },
 ];

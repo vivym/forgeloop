@@ -1432,6 +1432,65 @@ describe('RunWorker', () => {
     });
   });
 
+  it.each([
+    ['runtime_hard_limits_unavailable', 'Runtime hard limits are unavailable.', true],
+    ['fallback_denied_by_policy', 'Executor fallback is denied by policy.', false],
+  ] as const)('preserves %s as a runtime blocker from failed local Codex terminals', async (code, publicSummary, retryable) => {
+    const repository = new InMemoryDeliveryRepository();
+    const { repo, head } = await createGitRepo();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'exec_fallback',
+        driver_status: 'active',
+        workspace_path: repo,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        codex_thread_id: 'thread-existing',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const driver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'terminal',
+          status: 'failed',
+          summary: 'Local Codex terminal failed before producing runtime evidence.',
+          failure: {
+            kind: 'executor_error',
+            message: `${code}: injected runtime safety failure`,
+            retryable,
+          },
+        },
+      ],
+    });
+    const worker = runWorker({ repository, driver });
+
+    await worker.drainOnce();
+
+    const finalized = await repository.getRunSession(runSession.id);
+    expect(finalized).toMatchObject({
+      status: 'failed',
+      executor_result: {
+        raw_metadata: {
+          runtime_finalization: {
+            runtime_blockers: [{ code, summary: publicSummary, retryable }],
+          },
+        },
+      },
+    });
+    expect(finalized?.failure_kind).toBe('path_violation');
+    expect(finalized?.failure_reason).toBe(publicSummary);
+  });
+
   it('watchdog stalls a long active stream when Codex activity goes stale', async () => {
     const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);

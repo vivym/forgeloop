@@ -285,6 +285,303 @@ export interface ListClaimableAutomationActionRunsInput {
   limit: number;
 }
 
+export const runtimeSnapshotBlockerCodeOrder = [
+  'policy_snapshot_missing',
+  'policy_snapshot_invalid',
+  'policy_digest_mismatch',
+  'runtime_policy_invalid',
+  'path_policy_declared_scope_rejected',
+  'required_check_command_invalid',
+  'structured_command_invalid',
+  'runtime_hard_limits_unavailable',
+  'sandbox_isolation_unavailable',
+  'runtime_attestation_invalid',
+  'primary_executor_governor_unavailable',
+  'before_run_hook_failed',
+  'before_run_hook_timed_out',
+  'required_check_failed',
+  'required_check_timed_out',
+  'changed_files_unavailable',
+  'path_policy_actual_changes_rejected',
+  'fallback_denied_by_policy',
+  'artifact_visibility_denied',
+] as const;
+
+export type RuntimeSnapshotBlockerCode = (typeof runtimeSnapshotBlockerCodeOrder)[number];
+
+const runtimeSnapshotBlockerCodes = new Set<string>(runtimeSnapshotBlockerCodeOrder);
+const runtimeSnapshotBlockerRank = new Map<string, number>(
+  runtimeSnapshotBlockerCodeOrder.map((code, index) => [code, index]),
+);
+
+const runtimeSnapshotBlockerPublicSummaries: Record<RuntimeSnapshotBlockerCode, string> = {
+  policy_snapshot_missing: 'Policy snapshot is missing.',
+  policy_snapshot_invalid: 'Policy snapshot is invalid.',
+  policy_digest_mismatch: 'Policy digest does not match the captured snapshot.',
+  runtime_policy_invalid: 'Runtime policy is invalid.',
+  path_policy_declared_scope_rejected: 'Declared source scope is outside the runtime path policy.',
+  required_check_command_invalid: 'Required check command policy is invalid.',
+  structured_command_invalid: 'Structured command policy is invalid.',
+  runtime_hard_limits_unavailable: 'Runtime hard limits are unavailable.',
+  sandbox_isolation_unavailable: 'Sandbox isolation is unavailable.',
+  runtime_attestation_invalid: 'Runtime safety attestation is invalid.',
+  primary_executor_governor_unavailable: 'Primary executor governor is unavailable.',
+  before_run_hook_failed: 'Before-run hook failed.',
+  before_run_hook_timed_out: 'Before-run hook timed out.',
+  required_check_failed: 'Required check failed.',
+  required_check_timed_out: 'Required check timed out.',
+  changed_files_unavailable: 'Changed-file evidence is unavailable.',
+  path_policy_actual_changes_rejected: 'Runtime path policy rejected the actual source changes.',
+  fallback_denied_by_policy: 'Executor fallback is denied by policy.',
+  artifact_visibility_denied: 'Artifact visibility policy denied public projection.',
+};
+
+const safePublicRefPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
+const codeUnitCompare = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
+export interface RuntimeSnapshotBlockerRow {
+  blocked_reason_code: string;
+  blocked_summary: string;
+  retryable: boolean;
+  policy_digest?: string;
+  policy_snapshot_version?: number;
+  diagnostic_ref?: string;
+}
+
+export const isRuntimeSnapshotBlockerCode = (value: unknown): value is RuntimeSnapshotBlockerCode =>
+  typeof value === 'string' && runtimeSnapshotBlockerCodes.has(value);
+
+export const normalizeRuntimeSnapshotBlockerCode = (value: unknown): RuntimeSnapshotBlockerCode | undefined => {
+  if (value === 'runtime_policy_snapshot_missing') {
+    return 'policy_snapshot_missing';
+  }
+  if (value === 'runtime_policy_missing') {
+    return 'runtime_policy_invalid';
+  }
+  return isRuntimeSnapshotBlockerCode(value) ? value : undefined;
+};
+
+export const sanitizeRuntimeSnapshotDiagnosticRef = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!safePublicRefPattern.test(trimmed) || /secret|token|stdout|stderr|diff/i.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+};
+
+export const runtimeSnapshotDiagnosticRefFromArtifact = (
+  artifact: { kind?: unknown; digest?: unknown; name?: unknown } | undefined,
+): string | undefined => {
+  if (artifact === undefined || typeof artifact.kind !== 'string') {
+    return undefined;
+  }
+  const ref = typeof artifact.digest === 'string' ? artifact.digest : typeof artifact.name === 'string' ? artifact.name : undefined;
+  return sanitizeRuntimeSnapshotDiagnosticRef(ref === undefined ? `artifact:${artifact.kind}` : `artifact:${artifact.kind}:${ref}`);
+};
+
+export const normalizeRuntimeSnapshotBlocker = (input: {
+  blocked_reason_code?: unknown;
+  code?: unknown;
+  blocked_summary?: unknown;
+  summary?: unknown;
+  retryable?: unknown;
+  policy_digest?: unknown;
+  policy_snapshot_version?: unknown;
+  diagnostic_ref?: unknown;
+}): RuntimeSnapshotBlockerRow | undefined => {
+  const blockedReasonCode = normalizeRuntimeSnapshotBlockerCode(input.blocked_reason_code ?? input.code);
+  if (blockedReasonCode === undefined) {
+    return undefined;
+  }
+  const policyDigest =
+    typeof input.policy_digest === 'string' && safePublicRefPattern.test(input.policy_digest) ? input.policy_digest : undefined;
+  const policySnapshotVersion =
+    typeof input.policy_snapshot_version === 'number' &&
+    Number.isInteger(input.policy_snapshot_version) &&
+    input.policy_snapshot_version >= 0
+      ? input.policy_snapshot_version
+      : undefined;
+  const diagnosticRef = sanitizeRuntimeSnapshotDiagnosticRef(input.diagnostic_ref);
+  return {
+    blocked_reason_code: blockedReasonCode,
+    blocked_summary: runtimeSnapshotBlockerPublicSummaries[blockedReasonCode],
+    retryable: typeof input.retryable === 'boolean' ? input.retryable : false,
+    ...(policyDigest === undefined ? {} : { policy_digest: policyDigest }),
+    ...(policySnapshotVersion === undefined ? {} : { policy_snapshot_version: policySnapshotVersion }),
+    ...(diagnosticRef === undefined ? {} : { diagnostic_ref: diagnosticRef }),
+  };
+};
+
+export const sortRuntimeSnapshotBlockers = (
+  blockers: readonly RuntimeSnapshotBlockerRow[] | undefined,
+): RuntimeSnapshotBlockerRow[] => {
+  const normalized = (blockers ?? [])
+    .map((blocker) => normalizeRuntimeSnapshotBlocker(blocker))
+    .filter((blocker): blocker is RuntimeSnapshotBlockerRow => blocker !== undefined);
+  const deduped: RuntimeSnapshotBlockerRow[] = [];
+  const seen = new Set<string>();
+  for (const blocker of normalized) {
+    const key = JSON.stringify(blocker);
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(blocker);
+    }
+  }
+  return deduped.sort(
+    (left, right) =>
+      (runtimeSnapshotBlockerRank.get(left.blocked_reason_code) ?? Number.MAX_SAFE_INTEGER) -
+        (runtimeSnapshotBlockerRank.get(right.blocked_reason_code) ?? Number.MAX_SAFE_INTEGER) ||
+      codeUnitCompare(left.blocked_reason_code, right.blocked_reason_code) ||
+      codeUnitCompare(left.diagnostic_ref ?? '', right.diagnostic_ref ?? ''),
+  );
+};
+
+const objectRecord = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+
+const runSessionRecencyValue = (runSession: RunSession): number => {
+  const parsed = Date.parse(runSession.finished_at ?? runSession.updated_at);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+export const runtimeSnapshotBlockerFieldsFor = (
+  blockers: readonly RuntimeSnapshotBlockerRow[],
+): Pick<RuntimeSnapshotTargetRow, 'blocked_reason_code' | 'blocked_summary' | 'blockers'> => {
+  const sortedBlockers = sortRuntimeSnapshotBlockers(blockers);
+  const firstBlocker = sortedBlockers[0];
+  if (firstBlocker === undefined) {
+    return {};
+  }
+  return {
+    blocked_reason_code: firstBlocker.blocked_reason_code,
+    blocked_summary: firstBlocker.blocked_summary,
+    blockers: sortedBlockers,
+  };
+};
+
+export const runtimeSnapshotBlockersForActionRun = (actionRun: AutomationActionRun): RuntimeSnapshotBlockerRow[] => {
+  if (actionRun.status !== 'blocked' && actionRun.status !== 'failed' && actionRun.status !== 'gate_pending') {
+    return [];
+  }
+  const resultRecord = objectRecord(actionRun.result_json) ?? {};
+  const blocker = normalizeRuntimeSnapshotBlocker({
+    code: actionRun.reason ?? actionRun.error_code ?? resultRecord.code ?? resultRecord.reason_code,
+    retryable: actionRun.status === 'gate_pending' ? true : actionRun.retryable ?? false,
+    diagnostic_ref: resultRecord.diagnostic_ref,
+  });
+  return blocker === undefined ? [] : [blocker];
+};
+
+const runtimeSnapshotPackagePolicyBlocker = (executionPackage: ExecutionPackage): RuntimeSnapshotBlockerRow | undefined => {
+  const code =
+    executionPackage.policy_snapshot_status === undefined || executionPackage.policy_snapshot_status === 'missing'
+      ? 'policy_snapshot_missing'
+      : executionPackage.policy_snapshot_status !== 'captured' || executionPackage.package_policy_snapshot === undefined
+        ? 'policy_snapshot_invalid'
+        : executionPackage.package_policy_snapshot.policy_snapshot_status !== undefined &&
+            executionPackage.package_policy_snapshot.policy_snapshot_status !== 'captured'
+          ? 'policy_snapshot_invalid'
+          : executionPackage.policy_snapshot_version !== undefined &&
+              executionPackage.package_policy_snapshot.policy_snapshot_version !== executionPackage.policy_snapshot_version
+            ? 'policy_snapshot_invalid'
+            : undefined;
+  return normalizeRuntimeSnapshotBlocker({
+    code,
+    retryable: false,
+    policy_digest: executionPackage.package_policy_snapshot?.policy_digest,
+    policy_snapshot_version: executionPackage.policy_snapshot_version,
+  });
+};
+
+const runtimeSnapshotBlockersForRunSession = (runSession: RunSession): RuntimeSnapshotBlockerRow[] => {
+  const blockers: RuntimeSnapshotBlockerRow[] = [];
+  const runtimeFinalization = objectRecord(runSession.executor_result?.raw_metadata.runtime_finalization);
+  const runtimeBlockers = Array.isArray(runtimeFinalization?.runtime_blockers) ? runtimeFinalization.runtime_blockers : [];
+  for (const blocker of runtimeBlockers) {
+    const normalized = normalizeRuntimeSnapshotBlocker(objectRecord(blocker) ?? {});
+    if (normalized !== undefined) {
+      blockers.push(normalized);
+    }
+  }
+
+  const pathPolicy = objectRecord(runtimeFinalization?.path_policy);
+  if (pathPolicy?.ok === false) {
+    const diagnosticRef =
+      objectRecord(pathPolicy.diagnostic_ref) === undefined
+        ? pathPolicy.diagnostic_ref
+        : runtimeSnapshotDiagnosticRefFromArtifact(objectRecord(pathPolicy.diagnostic_ref));
+    const normalized = normalizeRuntimeSnapshotBlocker({
+      code: pathPolicy.blocker_code,
+      retryable: true,
+      diagnostic_ref: diagnosticRef,
+    });
+    if (normalized !== undefined) {
+      blockers.push(normalized);
+    }
+  }
+
+  for (const check of runSession.check_results) {
+    if (!check.blocks_review || check.status === 'succeeded') {
+      continue;
+    }
+    const normalized = normalizeRuntimeSnapshotBlocker({
+      code: check.status === 'timed_out' ? 'required_check_timed_out' : 'required_check_failed',
+      retryable: true,
+    });
+    if (normalized !== undefined) {
+      blockers.push(normalized);
+    }
+  }
+
+  const hasRequiredCheckBlocker = blockers.some(
+    (blocker) => blocker.blocked_reason_code === 'required_check_failed' || blocker.blocked_reason_code === 'required_check_timed_out',
+  );
+  const hasPathPolicyBlocker = blockers.some(
+    (blocker) =>
+      blocker.blocked_reason_code === 'changed_files_unavailable' ||
+      blocker.blocked_reason_code === 'path_policy_actual_changes_rejected',
+  );
+  const failureMessage = `${runSession.failure_reason ?? ''} ${runSession.executor_result?.failure?.message ?? ''}`.toLowerCase();
+  const failureKindCode =
+    runSession.failure_kind === 'required_check_failed' && !hasRequiredCheckBlocker
+      ? 'required_check_failed'
+      : runSession.failure_kind === 'path_violation' && !hasPathPolicyBlocker
+        ? failureMessage.includes('changed-file') && failureMessage.includes('unavailable')
+          ? 'changed_files_unavailable'
+          : 'path_policy_actual_changes_rejected'
+        : undefined;
+  const failureBlocker = normalizeRuntimeSnapshotBlocker({
+    code: failureKindCode,
+    retryable: runSession.executor_result?.failure?.retryable ?? false,
+  });
+  if (failureBlocker !== undefined) {
+    blockers.push(failureBlocker);
+  }
+
+  return sortRuntimeSnapshotBlockers(blockers);
+};
+
+export const runtimeSnapshotBlockersForExecutionPackage = (
+  executionPackage: ExecutionPackage,
+  runSessions: readonly RunSession[],
+): RuntimeSnapshotBlockerRow[] => {
+  const blockers: RuntimeSnapshotBlockerRow[] = [];
+  const policyBlocker = runtimeSnapshotPackagePolicyBlocker(executionPackage);
+  if (policyBlocker !== undefined) {
+    blockers.push(policyBlocker);
+  }
+  const latestRunSession = [...runSessions].sort(
+    (left, right) => runSessionRecencyValue(right) - runSessionRecencyValue(left) || codeUnitCompare(right.id, left.id),
+  )[0];
+  if (latestRunSession !== undefined) {
+    blockers.push(...runtimeSnapshotBlockersForRunSession(latestRunSession));
+  }
+  return sortRuntimeSnapshotBlockers(blockers);
+};
+
 export interface RuntimeSnapshotTargetRow {
   target_object_type: string;
   target_object_id: string;
@@ -299,6 +596,7 @@ export interface RuntimeSnapshotTargetRow {
   latest_matching_action_status?: string;
   blocked_reason_code?: string;
   blocked_summary?: string;
+  blockers?: RuntimeSnapshotBlockerRow[];
   generation_key?: string;
   disabled_reason?: 'run_enqueue_disabled_by_scope';
 }

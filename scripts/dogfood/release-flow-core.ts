@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
-import { rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -61,6 +62,27 @@ import type {
   RunSession,
   WorkItem,
 } from '../../packages/domain/src';
+
+const runtimePolicyMarkdown = (input: { allowedPaths: readonly string[]; forbiddenPaths: readonly string[] }): string => `---
+path_policy:
+  allowed_paths: ${JSON.stringify(input.allowedPaths)}
+  forbidden_paths: ${JSON.stringify(input.forbiddenPaths)}
+observability:
+  public_summary: "Release dogfood runtime policy fixture."
+---
+
+Release dogfood runtime policy fixture.
+`;
+
+const createRuntimePolicyRepoRoot = async (input: {
+  allowedPaths: readonly string[];
+  forbiddenPaths: readonly string[];
+  prefix?: string;
+}): Promise<string> => {
+  const repoRoot = await mkdtemp(join(tmpdir(), input.prefix ?? 'forgeloop-release-dogfood-policy-repo-'));
+  await writeFile(join(repoRoot, 'WORKFLOW.md'), runtimePolicyMarkdown(input), 'utf8');
+  return repoRoot;
+};
 
 export type MarkerStatus = 'PASSED' | 'BLOCKED with reason' | 'FAILED';
 export type VerificationMarker = {
@@ -251,7 +273,7 @@ export const buildReleaseLocalCodexPackageInput = (input: {
     {
       check_id: 'release-strict-local-codex',
       display_name: 'Release strict local Codex required check',
-      command: 'node -e "process.exit(0)"',
+      command: 'node --version',
       timeout_seconds: 30,
       blocks_review: true,
     },
@@ -755,13 +777,17 @@ const createDeliveryPath = async (
       .send({ name: 'Release Flow Dogfood', owner_actor_id: actorOwner })
       .expect(201)
   ).body as { id: string };
+  const repoRoot = await createRuntimePolicyRepoRoot({
+    allowedPaths: ['apps/control-plane-api/**', 'packages/db/**', 'tests/api/**'],
+    forbiddenPaths: ['secrets/**', '.git', '.git/**'],
+  });
 
   await request(server)
     .post(`/projects/${project.id}/repos`)
     .send({
       repo_id: 'repo-1',
       name: 'forgeloop',
-      local_path: '/workspace/forgeloop',
+      local_path: repoRoot,
       default_branch: 'main',
       base_commit_sha: 'dogfood-base',
     })
@@ -1486,7 +1512,13 @@ export const runDurableReleaseLifecycle = async (input: {
   const deps = input.deps ?? {};
   const effectiveRunCommand = deps.runCommand ?? runCommand;
   const strictLocalCodexEnabled = shouldAttemptReleaseStrictLocalCodex(env);
-  const repoPath = strictLocalCodexEnabled ? resolve(env.FORGELOOP_REPO_PATH ?? process.cwd()) : '/workspace/forgeloop';
+  const repoPath = strictLocalCodexEnabled
+    ? resolve(env.FORGELOOP_REPO_PATH ?? process.cwd())
+    : await createRuntimePolicyRepoRoot({
+        allowedPaths: ['README.md'],
+        forbiddenPaths: ['.git', '.git/**'],
+        prefix: 'forgeloop-release-strict-policy-repo-',
+      });
   const baseCommitSha = strictLocalCodexEnabled
     ? (
         await effectiveRunCommand('git', ['rev-parse', env.FORGELOOP_BASE_COMMIT_SHA ?? 'HEAD'], {
@@ -1513,7 +1545,7 @@ export const runDurableReleaseLifecycle = async (input: {
     .send({
       repo_id: 'forgeloop-source',
       name: 'forgeloop',
-      local_path: strictLocalCodexEnabled ? repoPath : '/workspace/forgeloop',
+      local_path: repoPath,
       default_branch: 'main',
       base_commit_sha: strictLocalCodexEnabled ? baseCommitSha : 'strict-dogfood-base',
     })

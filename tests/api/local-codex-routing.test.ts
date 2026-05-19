@@ -12,6 +12,7 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { DeliveryRepository } from '../../packages/db/src';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -85,7 +86,7 @@ const createApprovedPlanRevision = async (app: INestApplication) => {
     .send({
       repo_id: 'repo-1',
       name: 'forgeloop',
-      local_path: '/workspace/forgeloop',
+      local_path: await createWorkflowPolicyRepoRoot(),
       default_branch: 'main',
       base_commit_sha: 'abc123',
     })

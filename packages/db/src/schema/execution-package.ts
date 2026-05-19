@@ -40,6 +40,10 @@ export const execution_packages = pgTable('execution_packages', {
   requiredArtifactKinds: jsonb('required_artifact_kinds').$type<ExecutionPackage['required_artifact_kinds']>().notNull(),
   allowedPaths: jsonb('allowed_paths').$type<ExecutionPackage['allowed_paths']>().notNull(),
   forbiddenPaths: jsonb('forbidden_paths').$type<ExecutionPackage['forbidden_paths']>().notNull(),
+  sourceMutationPolicy: text('source_mutation_policy')
+    .$type<ExecutionPackage['source_mutation_policy']>()
+    .notNull()
+    .default('path_policy_scoped'),
   version: integer('version').notNull().default(0),
   executionPackageSetId: text('execution_package_set_id'),
   executionPackageVersion: integer('execution_package_version'),

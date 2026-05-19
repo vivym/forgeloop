@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createWorkflowWorkerOptions, startWorkflowWorker } from '../../apps/workflow-worker/src/worker';
+import { createExecutorGatewayAdapter, createWorkflowWorkerOptions, startWorkflowWorker } from '../../apps/workflow-worker/src/worker';
+import { createRunSpec } from '../executor/test-fixtures';
+import { succeededExecutorResult } from '../helpers/delivery-runtime-fixtures';
 
 describe('workflow worker app wiring', () => {
   it('builds Temporal worker options with the delivery workflow path, task queue, and activities', async () => {
@@ -100,5 +102,42 @@ describe('workflow worker app wiring', () => {
       }),
     ).rejects.toThrow('Failed to start Forgeloop workflow worker for task queue delivery-worker-test: connection refused');
     expect(createRuntimeDependencies).not.toHaveBeenCalled();
+  });
+
+  it('fails closed locally instead of calling executor-gateway for production local Codex runs', async () => {
+    const fetchImpl = vi.fn();
+    const adapter = createExecutorGatewayAdapter({ baseUrl: 'http://executor.test', fetchImpl: fetchImpl as never });
+    const runSpec = createRunSpec({
+      executor_type: 'local_codex',
+      workflow_only: false,
+      run_session_id: 'run-local-codex-worker',
+      idempotency_key: 'idem-local-codex-worker',
+    });
+
+    await expect(adapter(runSpec)).rejects.toThrow('primary_executor_governor_unavailable');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps mock workflow dogfood on executor-gateway adapter', async () => {
+    const runSpec = createRunSpec({
+      executor_type: 'mock',
+      workflow_only: true,
+      run_session_id: 'run-mock-worker',
+      idempotency_key: 'idem-mock-worker',
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ result: { ...succeededExecutorResult(runSpec.run_session_id), executor_type: 'mock' } }),
+    });
+    const adapter = createExecutorGatewayAdapter({ baseUrl: 'http://executor.test/', fetchImpl: fetchImpl as never });
+
+    await expect(adapter(runSpec)).resolves.toMatchObject({ run_session_id: 'run-mock-worker', executor_type: 'mock' });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://executor.test/internal/executions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(runSpec),
+      }),
+    );
   });
 });
