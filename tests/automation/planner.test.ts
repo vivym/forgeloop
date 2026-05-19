@@ -31,12 +31,23 @@ const baseSnapshot = (overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
       daemonInternalLocalPath: '/private/repo-1',
     },
   ],
+  workItemsRequiringSpec: [],
   workItemsRequiringPlan: [],
   planRevisionsRequiringPackages: [],
   runEnqueueDisabledPackages: [],
   activeHolds: [],
   recentActionRuns: [],
   runEnqueueDisabledReason: 'run_enqueue_disabled_by_scope',
+  ...overrides,
+});
+
+const specWorkItemTarget = (overrides: Partial<RuntimeSnapshotTarget> = {}): RuntimeSnapshotTarget => ({
+  targetObjectType: 'work_item',
+  targetObjectId: 'work-item-needs-spec',
+  targetStatus: 'triage',
+  projectId: 'project-1',
+  repoId: 'repo-1',
+  automationScope: repoScope,
   ...overrides,
 });
 
@@ -312,6 +323,16 @@ describe('automation planner', () => {
           generated_at: generatedAt,
           projects: [],
           repos: [],
+          work_items_requiring_spec: [
+            {
+              target_object_type: 'work_item',
+              target_object_id: 'work-item-1',
+              target_status: 'triage',
+              project_id: 'project-1',
+              repo_id: 'repo-1',
+              automation_scope: repoScope,
+            },
+          ],
           work_items_requiring_plan: [
             {
               target_object_type: 'work_item',
@@ -351,6 +372,10 @@ describe('automation planner', () => {
 
     const snapshot = await client.runtimeSnapshot();
 
+    expect(snapshot.workItemsRequiringSpec[0]).toMatchObject({
+      targetObjectType: 'work_item',
+      targetObjectId: 'work-item-1',
+    });
     expect(snapshot.workItemsRequiringPlan[0]).toMatchObject({
       blockedReasonCode: 'runtime_policy_invalid',
       blockedSummary: 'Runtime policy is invalid.',

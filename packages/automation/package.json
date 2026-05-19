@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@forgeloop/contracts": "workspace:*",
     "@forgeloop/domain": "workspace:*"
   }
 }

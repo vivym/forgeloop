@@ -5,3 +5,4 @@ export * from './planner.js';
 export * from './http-client.js';
 export * from './executor.js';
 export * from './policy-digest.js';
+export * from './spec-draft-generation.js';

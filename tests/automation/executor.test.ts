@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { automationPreconditionFingerprint, type AutomationPrecondition } from '../../packages/domain/src/index';
 import {
   AutomationHttpError,
+  createFakeSpecDraftGenerator,
   executeClaimedAction,
   type AutomationActionResponse,
   type AutomationActionRunRecord,
+  type AutomationGenerationWorkItemContextV1,
   type AutomationExecutorClient,
+  type EnsureSpecDraftCommandInput,
   type NextAction,
 } from '../../packages/automation/src/index';
 
@@ -52,6 +55,29 @@ const claimedAction = (overrides: Partial<AutomationActionRunRecord> = {}): Auto
   ...overrides,
 });
 
+const specDraftContext = (): AutomationGenerationWorkItemContextV1 => ({
+  context_version: 'generation_context.work_item.v1',
+  action_run_id: 'action-run-1',
+  work_item: {
+    id: 'work-item-1',
+    project_id: 'project-1',
+    title: 'Spec draft work item',
+    goal: 'Ship the spec draft path',
+    success_criteria: ['Draft spec exists'],
+    risk: 'low',
+    priority: 'high',
+    kind: 'initiative',
+  },
+  repos: [
+    {
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      default_branch: 'main',
+      policy_status: 'missing',
+    },
+  ],
+});
+
 const commandPreconditionFor = (action: AutomationActionRunRecord): AutomationPrecondition =>
   ({
     automation_scope: action.automationScope,
@@ -65,7 +91,9 @@ const commandPreconditionFor = (action: AutomationActionRunRecord): AutomationPr
     automation_settings_version: action.automationSettingsVersion,
     capability_fingerprint: action.capabilityFingerprint,
     required_capability:
-      action.actionType === 'ensure_package_drafts' || action.targetObjectType === 'plan_revision'
+      action.actionType === 'ensure_spec_draft'
+        ? 'canGenerateSpecDraft'
+        : action.actionType === 'ensure_package_drafts' || action.targetObjectType === 'plan_revision'
         ? 'canGeneratePackageDrafts'
         : 'canGeneratePlanDraft',
     actor_class: 'automation_daemon',
@@ -126,6 +154,19 @@ class FakeAutomationClient implements AutomationExecutorClient {
     return { status: 'created' };
   }
 
+  async specDraftGenerationContext(workItemId: string, input: { actionRunId: string; claimToken: string }) {
+    this.calls.push({ method: 'specDraftGenerationContext', args: [workItemId, input] });
+    return specDraftContext();
+  }
+
+  async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {
+    this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
+    if (this.commandError !== undefined) {
+      throw this.commandError;
+    }
+    return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
+  }
+
   async requestManualPathHold(input: Record<string, unknown>) {
     this.calls.push({ method: 'requestManualPathHold', args: [input] });
     if (this.commandError !== undefined) {
@@ -134,6 +175,22 @@ class FakeAutomationClient implements AutomationExecutorClient {
     return { status: 'active' };
   }
 }
+
+describe('spec draft generation fixtures', () => {
+  it('creates schema-versioned fake Spec drafts from public WorkItem context', async () => {
+    const result = await createFakeSpecDraftGenerator().generateSpecDraft(specDraftContext());
+
+    expect(result).toMatchObject({
+      generated: {
+        schema_version: 'spec_draft.v1',
+        summary: 'Draft spec for Spec draft work item',
+        goals: ['Ship the spec draft path'],
+        acceptance_criteria: ['Draft spec exists'],
+      },
+      generationArtifacts: [],
+    });
+  });
+});
 
 const execute = (client: FakeAutomationClient, action: NextAction = baseAction()) =>
   executeClaimedAction({

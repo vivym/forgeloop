@@ -1,6 +1,8 @@
+import type { ArtifactRef } from '@forgeloop/contracts';
 import type { AutomationActorClass, AutomationActionRunStatus, AutomationPrecondition, AutomationScope } from '@forgeloop/domain';
 
 export type AutomationActionType =
+  | 'ensure_spec_draft'
   | 'ensure_plan_draft'
   | 'ensure_package_drafts'
   | 'request_manual_path'
@@ -51,6 +53,47 @@ export type WorkflowPolicyDigestStatus =
       observedAt?: string;
       publicSummary?: string;
     };
+
+export interface GeneratedSpecDraftV1 {
+  schema_version: 'spec_draft.v1';
+  summary: string;
+  content: string;
+  background: string;
+  goals: string[];
+  scope_in: string[];
+  scope_out: string[];
+  acceptance_criteria: string[];
+  risk_notes: string[];
+  test_strategy_summary: string;
+  structured_document?: Record<string, unknown>;
+}
+
+export interface AutomationGenerationRepoContextV1 {
+  project_id: string;
+  repo_id: string;
+  default_branch: string;
+  policy_status: 'missing' | 'loaded' | 'parse_failed' | 'unsafe_path';
+  policy_digest?: string;
+  parser_version?: string;
+  package_manager?: string;
+  workspace_summary?: string;
+}
+
+export interface AutomationGenerationWorkItemContextV1 {
+  context_version: 'generation_context.work_item.v1';
+  action_run_id: string;
+  work_item: {
+    id: string;
+    project_id: string;
+    title: string;
+    goal: string;
+    success_criteria: string[];
+    risk?: string;
+    priority?: string;
+    kind?: string;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+}
 
 export interface RuntimePolicyProjection extends StablePolicyObservationIdentity {
   observedAt?: string;
@@ -136,6 +179,7 @@ export interface RuntimeSnapshot {
   generatedAt: string;
   projects: RuntimeSnapshotProject[];
   repos: RuntimeSnapshotRepo[];
+  workItemsRequiringSpec: RuntimeSnapshotTarget[];
   workItemsRequiringPlan: RuntimeSnapshotTarget[];
   planRevisionsRequiringPackages: RuntimeSnapshotTarget[];
   runEnqueueDisabledPackages?: RuntimeSnapshotTarget[];
@@ -261,6 +305,15 @@ export interface EnsurePlanDraftCommandInput {
   spec_revision_id: string;
 }
 
+export interface EnsureSpecDraftCommandInput {
+  action_run_id: string;
+  claim_token?: string;
+  idempotency_key: string;
+  automation_precondition: AutomationPrecondition;
+  generated_spec_draft: GeneratedSpecDraftV1;
+  generation_artifacts: ArtifactRef[];
+}
+
 export interface EnsurePackageDraftsCommandInput {
   action_run_id: string;
   claim_token?: string;
@@ -292,6 +345,11 @@ export interface AutomationExecutorClient {
   gatePendingAction(actionRunId: string, input: GatePendingActionInput): Promise<AutomationActionResponse>;
   blockAction(actionRunId: string, input: BlockActionInput): Promise<AutomationActionResponse>;
   failAction(actionRunId: string, input: FailActionInput): Promise<AutomationActionResponse>;
+  specDraftGenerationContext(
+    workItemId: string,
+    input: { actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationWorkItemContextV1>;
+  ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown>;
   ensurePlanDraft(workItemId: string, input: EnsurePlanDraftCommandInput): Promise<unknown>;
   ensurePackageDrafts(planRevisionId: string, input: EnsurePackageDraftsCommandInput): Promise<unknown>;
   requestManualPathHold(input: RequestManualPathCommandInput): Promise<unknown>;
