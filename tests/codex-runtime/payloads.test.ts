@@ -74,6 +74,11 @@ describe('GeneratedPlanDraftV1', () => {
   it.each([
     'Merge the package run and release after tests pass',
     'Push to main once implementation is complete',
+    'Approve the generated Plan after review',
+    'Submit the generated Plan for approval',
+    'Enqueue package run for api',
+    'Release the package',
+    'Deploy the generated release',
   ])('rejects generated Plan text with direct human-gated action instructions: %s', (summary) => {
     expect(() =>
       validateGeneratedPlanDraft({

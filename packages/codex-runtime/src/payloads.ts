@@ -28,7 +28,7 @@ const rawPromptOutputLogMarkerPattern = /(?:\bBEGIN\s+(?:PROMPT|OUTPUT|LOG)\b|\b
 const bypassHumanGatePattern =
   /(?:(?:\b(?:auto(?:matically)?|bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const directPlanHumanGatePattern =
-  /(?:^|[.!?]\s+)(?:merge(?:\s+the\s+package\s+run)?(?:\s+and\s+release)?|push\s+to\s+main|release|deploy)\b[\s\S]{0,120}\b(?:after\s+tests?\s+pass|once\s+(?:the\s+)?implementation\s+is\s+complete|when\s+(?:checks|tests)\s+pass|on\s+green)\b/i;
+  /(?:^|[.!?]\s+|\n\s*(?:[-*]|\d+\.)\s*)(?:(?:approve|submit)\s+(?:the\s+|this\s+|generated\s+)*(?:spec|plan|package|revision|draft)\b|enqueue\s+(?:package\s+)?run\b|merge(?:\s+(?:the\s+|this\s+|generated\s+)*(?:package\s+run|pr|pull\s+request|branch)\b|\b[\s\S]{0,80}\b(?:after\s+tests?\s+pass|once\s+(?:the\s+)?implementation\s+is\s+complete|when\s+(?:checks|tests)\s+pass|on\s+green)\b)|push\s+to\s+main\b|release\s+(?:the\s+|this\s+|generated\s+)*(?:package|release)\b|deploy\s+(?:the\s+|this\s+|generated\s+)*(?:package|release)\b)/i;
 
 const isUnsafePublicString = (value: string): boolean =>
   localPathPattern.test(value) ||
