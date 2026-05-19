@@ -106,6 +106,17 @@ const packageContextOrDefault = (
   };
 };
 
+const validateAppServerOutput = <TGenerated>(
+  validate: (value: unknown) => TGenerated,
+  value: unknown,
+): TGenerated => {
+  try {
+    return validate(value);
+  } catch {
+    throw new Error('generated_output_schema_invalid');
+  }
+};
+
 export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfig): CodexGenerationRuntime => {
   assertPositiveInt('codex_generation_timeout_ms', config.timeoutMs);
   assertPositiveInt('codex_generation_output_limit_bytes', config.outputLimitBytes);
@@ -160,7 +171,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         taskKind,
         promptVersion: input.promptVersion,
         outputSchemaVersion: input.outputSchemaVersion,
-        generated: validate(output.extractedJson),
+        generated: validateAppServerOutput(validate, output.extractedJson),
         generationArtifacts: output.rawArtifactRefs as CodexGenerationResult<TGenerated>['generationArtifacts'],
         publicSummary: 'Codex app-server draft generated.',
       };

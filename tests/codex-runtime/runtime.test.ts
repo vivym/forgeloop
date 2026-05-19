@@ -76,6 +76,32 @@ describe('createCodexGenerationRuntime', () => {
     expect(requests[0]?.params).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly' } });
   });
 
+  it('maps app-server schema-invalid Plan output to generated_output_schema_invalid', async () => {
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        async request(method) {
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"missing fields"}' };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    await expect(runtime.generatePlanDraft(planInput)).rejects.toThrow(/generated_output_schema_invalid/);
+  });
+
   it('enforces runtime-level generation concurrency', async () => {
     const runtime = createCodexGenerationRuntime({
       mode: 'app_server',
