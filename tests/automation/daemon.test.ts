@@ -5,6 +5,7 @@ import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automa
 import { createAutomationDaemonSpecDraftGenerator } from '../../apps/automation-daemon/src/generation-runtime';
 import {
   createFakeSpecDraftGenerator,
+  projectRuntimeSnapshotIdempotencyKey,
   type AutomationGenerationWorkItemContextV1,
   AutomationActionResponse,
   AutomationActionRunRecord,
@@ -478,6 +479,61 @@ describe('automation daemon loop', () => {
     expect(
       client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
     ).toEqual(['project_runtime_snapshot']);
+    expect(client.calls.find((call) => call.method === 'claimNextAction')?.args[0]).toMatchObject({
+      actionType: 'project_runtime_snapshot',
+    });
+    expect(client.calls.map((call) => call.method)).not.toContain('specDraftGenerationContext');
+  });
+
+  it('claims existing pending policy projection before app_server generation actions', async () => {
+    const client = new FakeDaemonClient();
+    const projectionIdempotencyKey = projectRuntimeSnapshotIdempotencyKey({
+      automationScope: repoScope,
+      repoId: 'repo-1',
+      policyStatus: 'loaded',
+      policyDigest: 'workflow-digest-1',
+      parserVersion,
+    });
+    client.snapshot = baseSnapshot({
+      recentActionRuns: [
+        {
+          id: 'pending-projection-action',
+          actionType: 'project_runtime_snapshot',
+          targetObjectType: 'repo',
+          targetObjectId: 'repo-1',
+          status: 'pending',
+          idempotencyKey: projectionIdempotencyKey,
+          automationScope: repoScope,
+        },
+      ],
+      workItemsRequiringSpec: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetStatus: 'triage',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+    });
+    client.actionToClaim = claimedProjectionAction({ id: 'pending-projection-action', idempotencyKey: projectionIdempotencyKey });
+    const daemon = new AutomationDaemon({
+      ...daemonOptions(client),
+      generationPlanning: {
+        mode: 'app_server',
+        tasks: {
+          spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+          package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+        },
+      },
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({ plannedActionCount: 0, executed: { status: 'succeeded' } });
+    expect(client.calls.filter((call) => call.method === 'createOrReplayAction')).toHaveLength(0);
     expect(client.calls.find((call) => call.method === 'claimNextAction')?.args[0]).toMatchObject({
       actionType: 'project_runtime_snapshot',
     });

@@ -91,6 +91,13 @@ const legacyGenerationPlanningFor = (
   };
 };
 
+const openProjectionStatuses = new Set(['pending', 'running']);
+
+const hasOpenProjectRuntimeSnapshotAction = (snapshot: RuntimeSnapshot): boolean =>
+  snapshot.recentActionRuns.some(
+    (actionRun) => actionRun.actionType === 'project_runtime_snapshot' && openProjectionStatuses.has(actionRun.status),
+  );
+
 export class AutomationDaemon {
   private readonly stopWaiters = new Set<() => void>();
   private stopped = false;
@@ -132,10 +139,11 @@ export class AutomationDaemon {
     const generationPlanning =
       this.options.generationPlanning ?? legacyGenerationPlanningFor(this.options.specDraftGenerationMode);
     const actions = planNextActions(snapshot, { generation: generationPlanning });
+    const shouldClaimProjectionFirst =
+      generationPlanning.mode === 'app_server' &&
+      (actions.some((action) => action.actionType === 'project_runtime_snapshot') || hasOpenProjectRuntimeSnapshotAction(snapshot));
     const actionsToCreate =
-      generationPlanning.mode === 'app_server' && actions.some((action) => action.actionType === 'project_runtime_snapshot')
-        ? actions.filter((action) => action.actionType === 'project_runtime_snapshot')
-        : actions;
+      shouldClaimProjectionFirst ? actions.filter((action) => action.actionType === 'project_runtime_snapshot') : actions;
     for (const action of actionsToCreate) {
       await this.options.client.createOrReplayAction(action);
     }
@@ -144,9 +152,7 @@ export class AutomationDaemon {
     const claim = await this.options.client.claimNextAction({
       claimToken,
       limit: 1,
-      ...(actionsToCreate.length > 0 && actionsToCreate.every((action) => action.actionType === 'project_runtime_snapshot')
-        ? { actionType: 'project_runtime_snapshot' as const }
-        : {}),
+      ...(shouldClaimProjectionFirst ? { actionType: 'project_runtime_snapshot' as const } : {}),
     });
     if (claim.action === null) {
       return {
