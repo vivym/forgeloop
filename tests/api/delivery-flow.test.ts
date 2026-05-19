@@ -1066,7 +1066,13 @@ describe('delivery control plane API', () => {
       .expect(201);
     await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     expect(
-      (await request(server).post(`/specs/${spec.id}/request-changes`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)).body,
+      (
+        await request(server)
+          .post(`/specs/${spec.id}/request-changes`)
+          .set(reviewerHeaders)
+          .send({ actor_id: actorReviewer, rationale: 'Clarify the API acceptance criteria.' })
+          .expect(201)
+      ).body,
     ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
 
     const { workItem: planWorkItem } = await createProjectRepoWorkItem(app);
@@ -1086,7 +1092,13 @@ describe('delivery control plane API', () => {
       .expect(201);
     await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     expect(
-      (await request(server).post(`/plans/${plan.id}/request-changes`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)).body,
+      (
+        await request(server)
+          .post(`/plans/${plan.id}/request-changes`)
+          .set(reviewerHeaders)
+          .send({ actor_id: actorReviewer, rationale: 'Split the verification rollout steps.' })
+          .expect(201)
+      ).body,
     ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
   });
 });

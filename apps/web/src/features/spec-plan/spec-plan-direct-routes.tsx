@@ -14,9 +14,11 @@ import {
   useSpecsQuery,
 } from '../../shared/api/hooks';
 import type { PlanRevision, ProductListItem, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
+import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Badge, Button, DataTable, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
+import { SpecPlanLifecycleActions } from './spec-plan-lifecycle-actions';
 
 type ArtifactKind = 'spec' | 'plan';
 
@@ -205,6 +207,7 @@ function ArtifactDetailView({
   revisionsIsError: boolean;
   revisionsStatus: 'pending' | 'error' | 'success';
 }) {
+  const { actorId } = useActorContext();
   const artifactName = kind === 'spec' ? 'Spec' : 'Plan';
   const revisionBasePath = kind === 'spec' ? `/specs/${encodeURIComponent(artifactId)}` : `/plans/${encodeURIComponent(artifactId)}`;
 
@@ -252,15 +255,7 @@ function ArtifactDetailView({
                 Open current revision
               </Button>
             )}
-            <Button disabled title="Available from the approval workflow." variant="secondary">
-              Submit for approval
-            </Button>
-            <Button disabled title="Available to assigned approvers." variant="secondary">
-              Approve
-            </Button>
-            <Button disabled title="Available to assigned approvers." variant="secondary">
-              Request changes
-            </Button>
+            <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} workItemId={artifact.work_item_id} />
             <p className="status-line">Creation and edits start from the parent Work Item planning flow.</p>
           </div>
         </ActionRail>
@@ -525,11 +520,11 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
     );
   }
 
-  if (plan.current_revision_id === undefined) {
+  if (plan.approved_revision_id === undefined) {
     return (
       <Section title="Downstream package">
         <div className="artifact-list">
-          <span>This approved Plan does not have a current approved revision recorded yet.</span>
+          <span>This approved Plan does not have an approved revision recorded yet.</span>
           <Link to="/packages">View package inventory</Link>
         </div>
         <p className="status-line">Open the package inventory to find packages that may already exist for this work.</p>
@@ -541,7 +536,7 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
     <Section title="Downstream package">
       <div className="artifact-list">
         <span>Package generation starts from the Packages workspace.</span>
-        <Link to={`/packages?plan_revision_id=${encodeURIComponent(plan.current_revision_id)}`}>View package readiness</Link>
+        <Link to={`/packages?plan_revision_id=${encodeURIComponent(plan.approved_revision_id)}`}>View package readiness</Link>
       </div>
       <p className="status-line">Package generation is ready for this approved Plan. Open package readiness to continue.</p>
     </Section>

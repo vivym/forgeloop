@@ -13,7 +13,9 @@ import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
 import { seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
+const actorReviewer = 'actor-reviewer';
 const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
+const reviewerHeaders = { [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' };
 const later = '2026-05-05T00:01:00.000Z';
 const unsafeInternalStrings = [
   'allowed_paths',
@@ -25,6 +27,31 @@ const unsafeInternalStrings = [
   'raw_extra',
   'client_secret',
 ] as const;
+
+const validSpecRevision = {
+  summary: 'Replay decision spec',
+  content: 'Spec content for replay decision coverage.',
+  background: 'Replay should show human decision evidence.',
+  goals: ['Expose decision summaries'],
+  scope_in: ['Spec replay'],
+  scope_out: ['Package execution'],
+  acceptance_criteria: ['Decision summaries are visible'],
+  risk_notes: ['Keep public replay redacted'],
+  test_strategy_summary: 'Query module replay test',
+  author_actor_id: actorOwner,
+};
+
+const validPlanRevision = {
+  summary: 'Replay decision plan',
+  content: 'Plan content for replay decision coverage.',
+  implementation_summary: 'Implement replay decision coverage.',
+  split_strategy: 'Single focused change.',
+  dependency_order: ['query-replay'],
+  test_matrix: ['pnpm vitest run tests/api/query-module.test.ts'],
+  risk_mitigations: ['Keep replay public-safe'],
+  rollback_notes: 'Revert query replay changes.',
+  author_actor_id: actorOwner,
+};
 
 describe('query module', () => {
   const apps: INestApplication[] = [];
@@ -128,6 +155,39 @@ describe('query module', () => {
       .expect(201);
 
     return { executionPackage, releaseId };
+  };
+
+  const createProjectRepoWorkItem = async (app: INestApplication) => {
+    const server = app.getHttpServer();
+    const project = (await request(server).post('/projects').send({ name: 'Replay Project', owner_actor_id: actorOwner }).expect(201))
+      .body;
+    await request(server)
+      .post(`/projects/${project.id}/repos`)
+      .send({
+        repo_id: 'repo-replay',
+        name: 'forgeloop',
+        local_path: '/workspace/forgeloop',
+        default_branch: 'main',
+        base_commit_sha: 'abc123',
+      })
+      .expect(201);
+    const workItem = (
+      await request(server)
+        .post('/work-items')
+        .send({
+          project_id: project.id,
+          kind: 'requirement',
+          title: 'Replay decision evidence',
+          goal: 'Show Spec and Plan decisions in replay.',
+          success_criteria: ['Spec replay includes decisions', 'Plan replay includes decisions'],
+          priority: 'high',
+          risk: 'medium',
+          owner_actor_id: actorOwner,
+        })
+        .expect(201)
+    ).body;
+
+    return { project, workItem };
   };
 
   it('returns the work item cockpit from the query surface', async () => {
@@ -330,6 +390,54 @@ describe('query module', () => {
 
     await request(app.getHttpServer()).get(`/query/replay/spec/${specId}`).expect(200);
     await request(app.getHttpServer()).get(`/query/replay/plan/${planId}`).expect(200);
+  });
+
+  it('includes Spec and Plan approval decisions in replay timelines', async () => {
+    const { app } = await track(createTestApp());
+    const server = app.getHttpServer();
+    const { workItem } = await createProjectRepoWorkItem(app);
+    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+    await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
+    await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+    await request(server)
+      .post(`/specs/${spec.id}/approve`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer, rationale: 'Spec approved for replay.' })
+      .expect(201);
+
+    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
+    await request(server).post(`/plans/${plan.id}/revisions`).send(validPlanRevision).expect(201);
+    await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+    await request(server)
+      .post(`/plans/${plan.id}/approve`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer, rationale: 'Plan approved for replay.' })
+      .expect(201);
+
+    const specReplay = await request(server).get(`/query/replay/spec/${spec.id}`).expect(200);
+    const planReplay = await request(server).get(`/query/replay/plan/${plan.id}`).expect(200);
+
+    expect(specReplay.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'decision',
+          object_type: 'spec',
+          object_id: spec.id,
+          summary: 'Spec approved for replay.',
+        }),
+      ]),
+    );
+    expect(planReplay.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'decision',
+          object_type: 'plan',
+          object_id: plan.id,
+          summary: 'Plan approved for replay.',
+        }),
+      ]),
+    );
+    expect(JSON.stringify([...specReplay.body, ...planReplay.body])).not.toContain('raw_ref');
   });
 
   it('does not expose unsafe release cockpit internals', async () => {

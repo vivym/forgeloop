@@ -22,10 +22,14 @@ import { AuditWriterService } from '../audit/audit-writer.service';
 import type { ActorContext } from '../auth/actor-context';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
-import type { ActorCommandDto, CreatePlanRevisionDto, CreateSpecRevisionDto } from '../delivery/dto';
+import type {
+  ApproveArtifactCommandDto,
+  CreatePlanRevisionDto,
+  CreateSpecRevisionDto,
+  RequestArtifactChangesCommandDto,
+  SubmitForApprovalCommandDto,
+} from '../delivery/dto';
 import { WorkItemService } from '../work-items/work-item.service';
-
-const actorOrSystem = (actorId: string | undefined): string => actorId ?? 'system';
 
 const productGateRejectedActorClasses = new Set<AutomationActorClass>([
   'automation_daemon',
@@ -126,46 +130,52 @@ export class SpecPlanService {
     return revision;
   }
 
-  async submitSpecForApproval(specId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Spec> {
+  async submitSpecForApproval(specId: string, dto: SubmitForApprovalCommandDto, actorContext?: ActorContext): Promise<Spec> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const spec = await this.getSpec(specId);
+    this.requireCurrentRevision(spec);
     const updated = transitionSpecPlan(spec, { type: 'submit_for_approval', at: this.now() }) as Spec;
     await this.repository.saveSpec(updated);
-    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'submit_spec', actorId);
+    await this.updateWorkItemForSpecPlan(updated.work_item_id, this.workItemSubmitTransitionFor(spec), actorId);
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
     return updated;
   }
 
-  async approveSpec(specId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Spec> {
+  async approveSpec(specId: string, dto: ApproveArtifactCommandDto, actorContext?: ActorContext): Promise<Spec> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const spec = await this.getSpec(specId);
-    if (spec.current_revision_id === undefined) {
-      throw new BadRequestException(`Spec ${spec.id} has no current revision to approve`);
-    }
+    const currentRevisionId = this.requireCurrentRevision(spec);
+    this.requireInReview(spec);
+    const approvedAt = this.now();
     const updated = {
-      ...(transitionSpecPlan(spec, { type: 'approve', at: this.now() }) as Spec),
-      approved_revision_id: spec.current_revision_id,
+      ...(transitionSpecPlan(spec, { type: 'approve', at: approvedAt }) as Spec),
+      approved_revision_id: currentRevisionId,
+      approved_at: approvedAt,
+      approved_by_actor_id: actorId,
     };
     await this.repository.saveSpec(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId);
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
-    await this.decision('spec', spec.id, actorOrSystem(actorId), 'approved', 'Spec approved.');
+    await this.decision('spec', spec.id, actorId, 'approved', dto.rationale ?? 'Spec approved.');
     return updated;
   }
 
-  async requestSpecChanges(specId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Spec> {
+  async requestSpecChanges(specId: string, dto: RequestArtifactChangesCommandDto, actorContext?: ActorContext): Promise<Spec> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const spec = await this.getSpec(specId);
+    this.requireInReview(spec);
     const updated = transitionSpecPlan(spec, { type: 'request_changes', at: this.now() }) as Spec;
     await this.repository.saveSpec(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'request_spec_changes', actorId);
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
+    await this.decision('spec', spec.id, actorId, 'changes_requested', dto.rationale);
     return updated;
   }
 
   async createPlan(workItemId: string): Promise<Plan> {
     return this.repository.withObjectLock(`work-item:${workItemId}`, async (repository) => {
       const workItem = this.requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
+      await this.requireApprovedCurrentSpec(workItem, repository);
       const plan = transitionSpecPlan(undefined, {
         type: 'create',
         entity_type: 'plan',
@@ -244,50 +254,61 @@ export class SpecPlanService {
     return revision;
   }
 
-  async submitPlanForApproval(planId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Plan> {
+  async submitPlanForApproval(planId: string, dto: SubmitForApprovalCommandDto, actorContext?: ActorContext): Promise<Plan> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const plan = await this.getPlan(planId);
+    this.requireCurrentRevision(plan);
     const updated = transitionSpecPlan(plan, { type: 'submit_for_approval', at: this.now() }) as Plan;
     await this.repository.savePlan(updated);
-    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'submit_plan', actorId);
+    await this.updateWorkItemForSpecPlan(updated.work_item_id, this.workItemSubmitTransitionFor(plan), actorId);
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
     return updated;
   }
 
-  async approvePlan(planId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Plan> {
+  async approvePlan(planId: string, dto: ApproveArtifactCommandDto, actorContext?: ActorContext): Promise<Plan> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const plan = await this.getPlan(planId);
-    if (plan.current_revision_id === undefined) {
-      throw new BadRequestException(`Plan ${plan.id} has no current revision to approve`);
-    }
+    const currentRevisionId = this.requireCurrentRevision(plan);
+    this.requireInReview(plan);
+    const approvedAt = this.now();
     const updated = {
-      ...(transitionSpecPlan(plan, { type: 'approve', at: this.now() }) as Plan),
-      approved_revision_id: plan.current_revision_id,
+      ...(transitionSpecPlan(plan, { type: 'approve', at: approvedAt }) as Plan),
+      approved_revision_id: currentRevisionId,
+      approved_at: approvedAt,
+      approved_by_actor_id: actorId,
     };
     await this.repository.savePlan(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId);
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
-    await this.decision('plan', plan.id, actorOrSystem(actorId), 'approved', 'Plan approved.');
+    await this.decision('plan', plan.id, actorId, 'approved', dto.rationale ?? 'Plan approved.');
     return updated;
   }
 
-  async requestPlanChanges(planId: string, dto: ActorCommandDto, actorContext?: ActorContext): Promise<Plan> {
+  async requestPlanChanges(planId: string, dto: RequestArtifactChangesCommandDto, actorContext?: ActorContext): Promise<Plan> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const plan = await this.getPlan(planId);
+    this.requireInReview(plan);
     const updated = transitionSpecPlan(plan, { type: 'request_changes', at: this.now() }) as Plan;
     await this.repository.savePlan(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'request_plan_changes', actorId);
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
+    await this.decision('plan', plan.id, actorId, 'changes_requested', dto.rationale);
     return updated;
   }
 
-  private async requireApprovedCurrentSpec(workItem: WorkItem): Promise<Spec> {
+  private async requireApprovedCurrentSpec(workItem: WorkItem, repository: DeliveryRepository = this.repository): Promise<Spec> {
     if (workItem.current_spec_id === undefined) {
       throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
     }
-    const spec = await this.getSpec(workItem.current_spec_id);
-    if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id === undefined) {
-      throw new BadRequestException(`Spec ${spec.id} is not approved`);
+    const spec = this.requireFound(await repository.getSpec(workItem.current_spec_id), `Spec ${workItem.current_spec_id}`);
+    const approvedRevisionId = spec.approved_revision_id;
+    if (
+      spec.status !== 'approved' ||
+      spec.resolution !== 'approved' ||
+      approvedRevisionId === undefined ||
+      spec.current_revision_id !== approvedRevisionId
+    ) {
+      throw new BadRequestException(`Spec ${spec.id} does not have an approved current revision`);
     }
     return spec;
   }
@@ -298,9 +319,11 @@ export class SpecPlanService {
       | 'submit_spec'
       | 'approve_spec'
       | 'request_spec_changes'
+      | 'resubmit_spec'
       | 'submit_plan'
       | 'approve_plan'
-      | 'request_plan_changes',
+      | 'request_plan_changes'
+      | 'resubmit_plan',
     actorId: string | undefined,
   ): Promise<void> {
     await this.repository.withObjectLock(`work-item:${workItemId}`, async (repository) => {
@@ -316,6 +339,30 @@ export class SpecPlanService {
         actorId,
       );
     });
+  }
+
+  private requireCurrentRevision(entity: Spec | Plan): string {
+    if (entity.current_revision_id === undefined) {
+      throw new BadRequestException(`${this.artifactLabel(entity)} ${entity.id} has no current revision`);
+    }
+    return entity.current_revision_id;
+  }
+
+  private requireInReview(entity: Spec | Plan): void {
+    if (entity.status !== 'in_review' || entity.gate_state !== 'awaiting_approval') {
+      throw new BadRequestException(`${this.artifactLabel(entity)} ${entity.id} is not awaiting approval`);
+    }
+  }
+
+  private workItemSubmitTransitionFor(entity: Spec | Plan): 'submit_spec' | 'resubmit_spec' | 'submit_plan' | 'resubmit_plan' {
+    if (entity.entity_type === 'spec') {
+      return entity.gate_state === 'changes_requested' ? 'resubmit_spec' : 'submit_spec';
+    }
+    return entity.gate_state === 'changes_requested' ? 'resubmit_plan' : 'submit_plan';
+  }
+
+  private artifactLabel(entity: Spec | Plan): 'Spec' | 'Plan' {
+    return entity.entity_type === 'spec' ? 'Spec' : 'Plan';
   }
 
   private async saveSpecRevision(

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { useParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 
 import {
   useCreatePlanMutation,
@@ -9,12 +9,15 @@ import {
   useGenerateSpecDraftMutation,
   useWorkItemCockpitQuery,
 } from '../../shared/api/hooks';
+import { useActorContext } from '../../shared/context/actor-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Badge, Button, Drawer, DrawerClose, StatusPill } from '../../shared/ui';
 import { createWorkItemDetailViewModel, formatValue } from '../work-items/work-item-view-model';
+import { isStrictlyApproved, SpecPlanLifecycleActions } from './spec-plan-lifecycle-actions';
 
 export function SpecPlanWorkItemFlow() {
   const params = useParams();
+  const { actorId } = useActorContext();
   const workItemId = params.workItemId;
   const cockpit = useWorkItemCockpitQuery(workItemId);
   const viewModel = createWorkItemDetailViewModel(cockpit.data, undefined);
@@ -27,9 +30,17 @@ export function SpecPlanWorkItemFlow() {
   const generatePlanDraft = useGeneratePlanDraftMutation({ workItemId, planId: viewModel.plan?.id });
   const workItemTitle = viewModel.workItem?.title ?? 'Work item planning';
   const cockpitRefreshing = cockpit.isFetching && cockpit.status !== 'pending';
-  const approvalUnavailableReason = 'Approval controls will be available in the dedicated approval flow.';
   const hasPlanningContext = cockpit.status === 'success' && !cockpit.isError && viewModel.workItem !== null;
+  const specApprovedForPlan = isStrictlyApproved(viewModel.spec);
+  const planApprovedForPackages = isStrictlyApproved(viewModel.plan);
   const revisionHistoryPendingReason = 'Revision history is available after work item planning data loads.';
+  const createPlanBlockedReason = createPlanTitle({
+    hasPlanningContext,
+    cockpitRefreshing,
+    hasSpec,
+    hasPlan,
+    specApprovedForPlan,
+  });
   const handleHistoryOpenChange = (open: boolean) => {
     setHistoryOpen(hasPlanningContext ? open : false);
   };
@@ -48,18 +59,14 @@ export function SpecPlanWorkItemFlow() {
     <DetailLayout
       actionRail={
         <ActionRail title="Approval actions">
-          <div className="stack-form compact">
-            <Button disabled title={approvalUnavailableReason}>
-              Submit for approval
-            </Button>
-            <Button disabled title={approvalUnavailableReason}>
-              Approve
-            </Button>
-            <Button disabled title={approvalUnavailableReason}>
-              Request changes
-            </Button>
-            <p className="status-line">{approvalUnavailableReason}</p>
-          </div>
+          {hasPlanningContext ? (
+            <div className="stack-form compact">
+              <SpecPlanLifecycleActions actorId={actorId} artifact={viewModel.spec} kind="spec" workItemId={workItemId} />
+              <SpecPlanLifecycleActions actorId={actorId} artifact={viewModel.plan} kind="plan" workItemId={workItemId} />
+            </div>
+          ) : (
+            <p className="empty">Approval actions load with the work item planning context.</p>
+          )}
         </ActionRail>
       }
       header={
@@ -75,13 +82,16 @@ export function SpecPlanWorkItemFlow() {
                 {createSpec.isPending ? 'Creating spec...' : 'Create Spec'}
               </Button>
               <Button
-                disabled={!hasPlanningContext || cockpitRefreshing || !hasSpec || hasPlan || createPlan.isPending}
+                disabled={!hasPlanningContext || cockpitRefreshing || !specApprovedForPlan || hasPlan || createPlan.isPending}
                 onClick={() => createPlan.mutate()}
-                title={createPlanTitle({ hasPlanningContext, cockpitRefreshing, hasSpec, hasPlan })}
+                title={createPlanBlockedReason}
                 variant="primary"
               >
                 {createPlan.isPending ? 'Creating plan...' : 'Create Plan'}
               </Button>
+              {hasPlanningContext && hasSpec && !hasPlan && !specApprovedForPlan ? (
+                <p className="status-line">{createPlanBlockedReason}</p>
+              ) : null}
               <Drawer
                 content={
                   <div className="stack-form compact">
@@ -194,11 +204,13 @@ export function SpecPlanWorkItemFlow() {
                 hasPlan ? (
                   <div className="stack-form compact">
                     <Button
-                      disabled={cockpitRefreshing || generatePlanDraft.isPending}
+                      disabled={cockpitRefreshing || !specApprovedForPlan || generatePlanDraft.isPending}
                       onClick={() => generatePlanDraft.mutate()}
                       title={
                         cockpitRefreshing
                           ? 'Available after planning artifacts refresh.'
+                          : !specApprovedForPlan
+                            ? 'Generate Plan draft unlocks after the current Spec revision is approved.'
                           : 'Generate a draft revision for this plan.'
                       }
                     >
@@ -213,6 +225,7 @@ export function SpecPlanWorkItemFlow() {
                         ),
                       ]}
                     />
+                    <PlanPackageHandoff plan={viewModel.plan} />
                   </div>
                 ) : null
               }
@@ -225,8 +238,8 @@ export function SpecPlanWorkItemFlow() {
             <div className="pill-list">
               <Badge tone={hasSpec ? 'success' : 'warning'}>{hasSpec ? 'Spec exists' : 'Spec needed'}</Badge>
               <Badge tone={hasPlan ? 'success' : 'warning'}>{hasPlan ? 'Plan exists' : 'Plan needed'}</Badge>
-              <StatusPill tone={hasSpec && hasPlan ? 'success' : 'warning'}>
-                {hasSpec && hasPlan ? 'Ready for packages' : 'Planning in progress'}
+              <StatusPill tone={planApprovedForPackages ? 'success' : 'warning'}>
+                {planApprovedForPackages ? 'Ready for packages' : 'Planning in progress'}
               </StatusPill>
             </div>
           </Section>
@@ -248,10 +261,17 @@ function createSpecTitle(input: { hasPlanningContext: boolean; cockpitRefreshing
   return 'Create a spec for this work item.';
 }
 
-function createPlanTitle(input: { hasPlanningContext: boolean; cockpitRefreshing: boolean; hasSpec: boolean; hasPlan: boolean }) {
+function createPlanTitle(input: {
+  hasPlanningContext: boolean;
+  cockpitRefreshing: boolean;
+  hasSpec: boolean;
+  hasPlan: boolean;
+  specApprovedForPlan: boolean;
+}) {
   if (!input.hasPlanningContext) return 'Create Plan after work item planning data loads.';
   if (input.cockpitRefreshing) return 'Available after planning artifacts refresh.';
   if (!input.hasSpec) return 'Create a spec before creating a plan.';
+  if (!input.specApprovedForPlan) return 'Create Plan unlocks after the current Spec revision is approved.';
   if (input.hasPlan) return 'A plan already exists for this work item.';
   return 'Create a plan for this work item.';
 }
@@ -273,6 +293,26 @@ function CommandFeedback({ messages }: { messages: Array<string | null> }) {
           </p>
         ))}
     </>
+  );
+}
+
+function PlanPackageHandoff({ plan }: { plan: { status?: string; approved_revision_id?: string } | null }) {
+  if (plan?.status !== 'approved') {
+    return null;
+  }
+
+  if (plan.approved_revision_id) {
+    return (
+      <Link className="fl-button fl-button--primary" to={`/packages?plan_revision_id=${encodeURIComponent(plan.approved_revision_id)}`}>
+        Continue to Packages
+      </Link>
+    );
+  }
+
+  return (
+    <Link className="fl-button fl-button--secondary" to="/packages">
+      View package inventory
+    </Link>
   );
 }
 
