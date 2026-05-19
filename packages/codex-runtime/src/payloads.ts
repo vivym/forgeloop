@@ -28,8 +28,6 @@ const secretLikePattern =
   /(?:claim[-_ ]?token|hmac[-_ ]?(?:key|token|secret|material)|secret(?:[-_ ]?(?:key|token|material))?|api[-_ ]?key|raw\s+(?:prompt|output|log)s?)/i;
 const rawPromptOutputLogMarkerPattern = /(?:\b(?:BEGIN|END)\s+(?:PROMPT|OUTPUT|LOG)\b|\bAPP\s+SERVER\s+LOG\b:?)/i;
 const rawBlockBoundaryMarkerPattern = /\b(?:BEGIN|END)\b/;
-const bypassHumanGatePattern =
-  /(?:(?:\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b[\s\S]{0,80}\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b)|(?:\b(?:approve|submit|enqueue\s+(?:package\s+)?run|merge|push|release|deploy)\b[\s\S]{0,80}\b(?:bypass(?:es|ing)?|skip|without\s+(?:waiting\s+for\s+)?(?:human\s+)?(?:review|approval|gate))\b))/i;
 const planActionAliases = {
   approval: ['approve', 'approves', 'approving', 'approval', 'approvals'],
   deploy: ['deploy', 'deploys', 'deployed', 'deploying', 'deployment', 'deployments'],
@@ -44,11 +42,13 @@ const planActionFamilyPatterns = Object.fromEntries(
   Object.entries(planActionAliases).map(([family, aliases]) => [family, `(?:${aliases.join('|')})`]),
 ) as { [K in keyof typeof planActionAliases]: string };
 const planActionAnyFamilyPattern = Object.values(planActionFamilyPatterns).join('|');
+const anyGatedActionPattern = `(?:\\b(?:${planActionAnyFamilyPattern})\\b|\\b(?:request|send)\\s+(?:for\\s+)?approval\\b|\\b(?:perform|run)\\b[\\s\\S]{0,40}\\b(?:deployment|deployments)\\b|\\benqueue\\s+(?:the\\s+)?(?:package\\s+)?run\\b)`;
+const bypassHumanGatePattern = new RegExp(
+  `(?:(?:\\b(?:bypass(?:es|ing)?|skip|without\\s+(?:waiting\\s+for\\s+)?(?:human\\s+)?(?:review|approval|gate))\\b[\\s\\S]{0,80}${anyGatedActionPattern})|(?:${anyGatedActionPattern}[\\s\\S]{0,80}\\b(?:bypass(?:es|ing)?|skip|without\\s+(?:waiting\\s+for\\s+)?(?:human\\s+)?(?:review|approval|gate))\\b))`,
+  'i',
+);
 const gatedPlanActionPattern =
-  new RegExp(
-    `(?:\\b(?:${planActionAnyFamilyPattern})\\b|\\b(?:request|send)\\s+(?:for\\s+)?approval\\b|\\b(?:perform|run)\\b[\\s\\S]{0,40}\\b(?:deployment|deployments)\\b|\\benqueue\\s+(?:the\\s+)?(?:package\\s+)?run\\b)`,
-    'gi',
-  );
+  new RegExp(anyGatedActionPattern, 'gi');
 const planActionContextWindow = 80;
 const planActionClauseBoundaries = ['.', '!', '?', ';', ',', '\n'] as const;
 const planActionScopeBoundaryPattern = /\b(?:and|while|with)\b/gi;

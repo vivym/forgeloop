@@ -349,6 +349,29 @@ describe('GeneratedSpecDraftV1', () => {
     ).toMatchObject({ scope_out: ['Release, deploy, and non-delivery workflows'] });
   });
 
+  it.each([
+    'Deployed to staging without waiting for review',
+    'Promote to production without review',
+    'Promoted to production without review',
+    'Released without approval',
+    'Approving without review',
+  ])('rejects inflected human-gate bypass wording in public Spec fields: %s', (summary) => {
+    expect(() =>
+      validateGeneratedSpecDraft({
+        schema_version: 'spec_draft.v1',
+        summary,
+        content: 'Spec body',
+        background: 'Background',
+        goals: ['Goal'],
+        scope_in: ['In scope'],
+        scope_out: [],
+        acceptance_criteria: ['Criterion'],
+        risk_notes: [],
+        test_strategy_summary: 'API and daemon tests',
+      }),
+    ).toThrow(/generated_spec_draft_invalid/);
+  });
+
   it('accepts API routes in public Spec fields', () => {
     expect(
       validateGeneratedSpecDraft({
@@ -538,6 +561,19 @@ describe('GeneratedPackageDraftSetV1', () => {
     expect(validateGeneratedPackageDraftSet(payload).packages[0]!.objective).toBe(
       'Exclude release, deploy, and non-delivery workflows',
     );
+  });
+
+  it.each([
+    'Deployed to staging without waiting for review',
+    'Promote to production without review',
+    'Promoted to production without review',
+    'Released without approval',
+    'Approving without review',
+  ])('rejects inflected human-gate bypass wording in public Package fields: %s', (objective) => {
+    const payload = validPackageDraftSet();
+    payload.packages[0]!.objective = objective;
+
+    expect(() => validateGeneratedPackageDraftSet(payload)).toThrow(/generated_package_policy_invalid/);
   });
 
   it.each([
