@@ -111,7 +111,7 @@ Use names that describe the current delivery model:
 
 - New automation action for package execution: `enqueue_package_run`.
 - Existing automation preset/capability can continue to use `run_enqueue` / `canEnqueueRuns` because those are already part of the product settings model.
-- Do not introduce `p0service`, `p0`, or compatibility aliases for old service boundaries.
+- Do not introduce compatibility aliases for old service boundaries.
 
 ## Architecture
 
