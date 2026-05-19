@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
-import type {
+import {
+  createFakeSpecDraftGenerator,
+  type AutomationGenerationWorkItemContextV1,
   AutomationActionResponse,
   AutomationActionRunRecord,
   BlockActionInput,
@@ -10,6 +12,7 @@ import type {
   CompleteActionInput,
   FailActionInput,
   GatePendingActionInput,
+  type EnsureSpecDraftCommandInput,
   NextAction,
   RuntimeSnapshot,
   WorkflowPolicyDigestStatus,
@@ -38,6 +41,7 @@ const baseSnapshot = (overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
       daemonInternalLocalPath: '/workspace/repo-1',
     },
   ],
+  workItemsRequiringSpec: [],
   workItemsRequiringPlan: [],
   planRevisionsRequiringPackages: [],
   runEnqueueDisabledPackages: [],
@@ -45,6 +49,14 @@ const baseSnapshot = (overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
   recentActionRuns: [],
   runEnqueueDisabledReason: 'run_enqueue_disabled_by_scope',
   ...overrides,
+});
+
+const validEnv = () => ({
+  FORGELOOP_CONTROL_PLANE_URL: 'http://127.0.0.1:3000',
+  FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'secret-1',
+  FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'daemon-1',
+  FORGELOOP_AUTOMATION_ACTOR_ID: 'actor-1',
+  FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS: ['/workspace'].join(':'),
 });
 
 const claimedPlanAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
@@ -63,6 +75,24 @@ const claimedPlanAction = (overrides: Partial<AutomationActionRunRecord> = {}): 
     work_item_id: 'work-item-1',
     spec_revision_id: 'spec-revision-1',
   },
+  status: 'running',
+  attempt: 1,
+  claimToken: 'claim-token-1',
+  ...overrides,
+});
+
+const claimedSpecAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
+  id: 'spec-action-run-1',
+  actionType: 'ensure_spec_draft',
+  targetObjectType: 'work_item',
+  targetObjectId: 'work-item-1',
+  targetStatus: 'triage',
+  idempotencyKey: 'spec-action-run-1-idempotency',
+  automationScope: repoScope,
+  automationSettingsVersion: 3,
+  capabilityFingerprint: 'capability-fingerprint-1',
+  preconditionFingerprint: 'precondition-fingerprint-1',
+  actionInputJson: { work_item_id: 'work-item-1' },
   status: 'running',
   attempt: 1,
   claimToken: 'claim-token-1',
@@ -119,6 +149,40 @@ class FakeDaemonClient implements AutomationDaemonClient {
     return { status: 'created' };
   }
 
+  async specDraftGenerationContext(
+    workItemId: string,
+    input: Record<string, unknown>,
+  ): Promise<AutomationGenerationWorkItemContextV1> {
+    this.calls.push({ method: 'specDraftGenerationContext', args: [workItemId, input] });
+    return {
+      context_version: 'generation_context.work_item.v1',
+      action_run_id: 'spec-action-run-1',
+      work_item: {
+        id: workItemId,
+        project_id: 'project-1',
+        title: 'Spec draft work item',
+        goal: 'Ship the spec draft path',
+        success_criteria: ['Draft spec exists'],
+        risk: 'low',
+        priority: 'high',
+        kind: 'initiative',
+      },
+      repos: [
+        {
+          project_id: 'project-1',
+          repo_id: 'repo-1',
+          default_branch: 'main',
+          policy_status: 'missing',
+        },
+      ],
+    };
+  }
+
+  async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown> {
+    this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
+    return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
+  }
+
   async requestManualPathHold(input: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ method: 'requestManualPathHold', args: [input] });
     return { status: 'active' };
@@ -130,6 +194,18 @@ const loadedPolicy = (): WorkflowPolicyDigestStatus => ({
   policyDigest: 'workflow-digest-1',
   parserVersion,
   policyPath: 'WORKFLOW.md',
+});
+
+const daemonOptions = (client: AutomationDaemonClient) => ({
+  client,
+  actorId: 'daemon-actor',
+  daemonIdentity: 'daemon-1',
+  claimToken: 'claim-token-1',
+  allowedRepoRoots: ['/workspace'],
+  policyParserVersion: parserVersion,
+  policyLoader: async () => loadedPolicy(),
+  noClaimBackoffMs: 25,
+  loopIntervalMs: 1_000,
 });
 
 describe('automation daemon loop', () => {
@@ -152,7 +228,28 @@ describe('automation daemon loop', () => {
       allowedRepoRoots: ['/workspace/a', '/workspace/b'],
       loopIntervalMs: 1500,
       noClaimBackoffMs: 250,
+      codexAutomationGeneration: 'disabled',
     });
+  });
+
+  it('loads fake Spec draft generation mode and rejects unsupported codex mode', () => {
+    expect(loadAutomationDaemonConfig(validEnv())).toMatchObject({
+      codexAutomationGeneration: 'disabled',
+    });
+    expect(
+      loadAutomationDaemonConfig({
+        ...validEnv(),
+        FORGELOOP_CODEX_AUTOMATION_GENERATION: 'fake',
+      }),
+    ).toMatchObject({
+      codexAutomationGeneration: 'fake',
+    });
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...validEnv(),
+        FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      }),
+    ).toThrow(/Plan 2/);
   });
 
   it('throws early when required config is missing', () => {
@@ -207,6 +304,44 @@ describe('automation daemon loop', () => {
       .map((call) => (call.args[0] as NextAction).actionType);
     expect(createdActions).toEqual(['ensure_plan_draft', 'project_runtime_snapshot']);
     expect(JSON.stringify(client.calls)).not.toContain('enqueue');
+  });
+
+  it('plans and executes Spec draft actions when fake generation is enabled', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      workItemsRequiringSpec: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetStatus: 'triage',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+    });
+    client.actionToClaim = claimedSpecAction();
+    const daemon = new AutomationDaemon({
+      ...daemonOptions(client),
+      specDraftGenerationMode: 'fake',
+      specDraftGenerator: createFakeSpecDraftGenerator(),
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({ plannedActionCount: 2, executed: { status: 'succeeded' } });
+    expect(client.calls.map((call) => call.method)).toEqual([
+      'runtimeSnapshot',
+      'createOrReplayAction',
+      'createOrReplayAction',
+      'claimNextAction',
+      'specDraftGenerationContext',
+      'ensureSpecDraft',
+      'completeAction',
+    ]);
+    expect(
+      client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
+    ).toEqual(['ensure_spec_draft', 'project_runtime_snapshot']);
   });
 
   it('returns no-claim backoff when nothing is claimable', async () => {
