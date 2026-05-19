@@ -1,18 +1,24 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
-import { pipelineResponseSchema, productListResponseSchema } from '@forgeloop/contracts';
+import {
+  pipelineResponseSchema,
+  productLaneResponseSchema,
+  productListResponseSchema,
+  workItemActionsResponseSchema,
+} from '@forgeloop/contracts';
 import type {
   CockpitResponse,
   ListProductQuery,
   PipelineResponse,
+  ProductLaneId,
+  ProductLaneQuery,
+  ProductLaneResponse,
   ProductListResponse,
   ReleaseCockpitResponse,
   ReleaseListResponse,
   ReviewPacket,
-  RoleWorkbenchId,
-  RoleWorkbenchQuery,
-  RoleWorkbenchResponse,
   TimelineEntry,
-  WorkItem,
+  WorkItemActionsQuery,
+  WorkItemActionsResponse,
 } from './types';
 
 export interface ProjectQuery {
@@ -58,8 +64,14 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   };
 
   const api = {
-    getRoleWorkbench: (workbenchId: RoleWorkbenchId, query: RoleWorkbenchQuery = {}) =>
-      request<RoleWorkbenchResponse>(`/query/workbenches/${encodeURIComponent(workbenchId)}${queryString(query)}`),
+    getProductLane: async (laneId: ProductLaneId, query: ProductLaneQuery) =>
+      productLaneResponseSchema.parse(
+        await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
+      ) as ProductLaneResponse,
+    getWorkItemActions: async (workItemId: string, query: WorkItemActionsQuery = {}) =>
+      workItemActionsResponseSchema.parse(
+        await request<unknown>(`/query/work-items/${encodeURIComponent(workItemId)}/actions${queryString(query)}`),
+      ) as WorkItemActionsResponse,
     getWorkItemCockpit: (workItemId: string) =>
       request<CockpitResponse>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
     getWorkItemReplay: (workItemId: string) =>

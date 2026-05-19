@@ -8,6 +8,15 @@ import {
   reviewSubmitDecisionSchema,
 } from './review.js';
 
+type ProductParsedUrl = {
+  origin: string;
+  pathname: string;
+};
+
+declare const URL: {
+  new (input: string, base?: string): ProductParsedUrl;
+};
+
 const isoDateTimeSchema = z.string().datetime();
 
 const commandNames = [
@@ -82,25 +91,578 @@ export const commandInventoryResponseSchema = z
   });
 export type CommandInventoryResponse = z.infer<typeof commandInventoryResponseSchema>;
 
-export const roleWorkbenchActionSchema = z
-  .object({
-    label: z.string().min(1),
-    method: z.enum(['GET', 'POST', 'PATCH', 'DELETE']),
-    path: z.string().min(1),
-    enabled: z.boolean().default(true),
-    reason: z.string().min(1).optional(),
-  })
-  .strict();
-export type RoleWorkbenchAction = z.infer<typeof roleWorkbenchActionSchema>;
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 
-export const roleWorkbenchResponseSchema = z
+export const productLaneIds = [
+  'requirements',
+  'bugs',
+  'tech-debt',
+  'initiatives',
+  'spec-approver',
+  'execution-owner',
+  'reviewer',
+  'qa-test-owner',
+  'release-owner',
+  'manager',
+] as const;
+
+export const productLaneIdSchema = z.enum(productLaneIds);
+export type ProductLaneId = z.infer<typeof productLaneIdSchema>;
+
+export const productActionPrioritySchema = z.enum(['primary', 'secondary', 'tertiary']);
+export type ProductActionPriority = z.infer<typeof productActionPrioritySchema>;
+
+export const productObjectTypeSchema = z.enum([
+  'work_item',
+  'spec',
+  'spec_revision',
+  'plan',
+  'plan_revision',
+  'execution_package',
+  'run_session',
+  'review_packet',
+  'release',
+]);
+export type ProductObjectType = z.infer<typeof productObjectTypeSchema>;
+
+const productHrefPrefixes = [
+  '/workbench',
+  '/work-items',
+  '/specs',
+  '/plans',
+  '/packages',
+  '/runs',
+  '/reviews',
+  '/releases',
+  '/pipeline',
+] as const;
+
+const mutatingRouteSegments = new Set([
+  'approve',
+  'cancel',
+  'create',
+  'delete',
+  'force-rerun',
+  'generate-draft',
+  'mark-ready',
+  'patch',
+  'request-changes',
+  'rerun',
+  'resume',
+  'run',
+  'submit',
+  'update',
+]);
+
+const productHrefBaseUrl = 'https://forgeloop.local';
+
+const supportedProductLaneQueryKeys = new Set([
+  'project_id',
+  'actor_id',
+  'owner_actor_id',
+  'reviewer_actor_id',
+  'qa_owner_actor_id',
+  'release_owner_actor_id',
+  'cursor',
+  'limit',
+  'kind',
+  'phase',
+  'status',
+  'gate_state',
+  'resolution',
+  'risk',
+  'blocked',
+  'stale',
+]);
+
+function decodeProductPathname(pathname: string): string | undefined {
+  let decoded = pathname;
+  for (let index = 0; index < 3; index += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) {
+        break;
+      }
+      decoded = next;
+    } catch {
+      return undefined;
+    }
+  }
+  return decoded;
+}
+
+function isSafeProductPathname(pathname: string): boolean {
+  if (/%2e|%2f|%5c/i.test(pathname)) {
+    return false;
+  }
+
+  const decoded = decodeProductPathname(pathname);
+  if (decoded === undefined || /[%\\\s]/.test(decoded)) {
+    return false;
+  }
+
+  const segments = decoded.split('/');
+  if (segments.some((segment) => segment === '.' || segment === '..')) {
+    return false;
+  }
+
+  return true;
+}
+
+function productLaneTargetQueryKeys(href: string): string[] | undefined {
+  const withoutHash = href.split('#', 1)[0] ?? '';
+  const queryStart = withoutHash.indexOf('?');
+  if (queryStart === -1) {
+    return [];
+  }
+
+  const query = withoutHash.slice(queryStart + 1);
+  if (query.length === 0) {
+    return [];
+  }
+
+  const keys: string[] = [];
+  for (const part of query.split('&')) {
+    if (part.length === 0) {
+      return undefined;
+    }
+    const rawKey = part.split('=', 1)[0] ?? '';
+    try {
+      keys.push(decodeURIComponent(rawKey.replace(/\+/g, ' ')));
+    } catch {
+      return undefined;
+    }
+  }
+  return keys;
+}
+
+export const productHrefSchema = nonEmptyTrimmedStringSchema.refine(
+  (href) => {
+    if (!href.startsWith('/') || href.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(href) || /[\s\\]/.test(href)) {
+      return false;
+    }
+
+    const rawPathname = href.split(/[?#]/, 1)[0] ?? '';
+    if (!isSafeProductPathname(rawPathname)) {
+      return false;
+    }
+
+    let url: ProductParsedUrl;
+    let pathname: string;
+    try {
+      url = new URL(href, productHrefBaseUrl);
+      pathname = decodeProductPathname(url.pathname) ?? '';
+    } catch {
+      return false;
+    }
+
+    if (!isSafeProductPathname(url.pathname)) {
+      return false;
+    }
+
+    if (url.origin !== productHrefBaseUrl || pathname === '/query' || pathname.startsWith('/query/')) {
+      return false;
+    }
+
+    const hasAllowedPrefix = productHrefPrefixes.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    );
+    if (!hasAllowedPrefix) {
+      return false;
+    }
+
+    const segments = pathname.split('/').filter(Boolean);
+    return !segments.some((segment, index) => index > 0 && mutatingRouteSegments.has(segment));
+  },
+  { message: 'must be a same-origin product UI route' },
+);
+export type ProductHref = z.infer<typeof productHrefSchema>;
+
+const productActionObjectTargetSchema = z
   .object({
-    summary: z.record(z.string(), z.unknown()),
-    items: z.array(z.record(z.string(), z.unknown())),
-    next_cursor: z.string().min(1).optional(),
+    kind: z.literal('object'),
+    object_type: productObjectTypeSchema,
+    object_id: nonEmptyTrimmedStringSchema,
+    href: productHrefSchema,
   })
   .strict();
-export type RoleWorkbenchResponse = z.infer<typeof roleWorkbenchResponseSchema>;
+
+const productActionLaneTargetSchema = z
+  .object({
+    kind: z.literal('lane'),
+    lane_id: productLaneIdSchema,
+    href: productHrefSchema,
+  })
+  .strict()
+  .superRefine((target, ctx) => {
+    let url: ProductParsedUrl;
+    try {
+      url = new URL(target.href, productHrefBaseUrl);
+    } catch {
+      return;
+    }
+
+    const pathname = decodeProductPathname(url.pathname);
+    if (pathname === undefined || pathname !== `/workbench/${target.lane_id}`) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['href'],
+        message: 'lane target href must match lane_id',
+      });
+    }
+
+    const queryKeys = productLaneTargetQueryKeys(target.href);
+    if (queryKeys === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['href'],
+        message: 'lane target href query must be parseable',
+      });
+      return;
+    }
+
+    const seenKeys = new Set<string>();
+    for (const key of queryKeys) {
+      if (!supportedProductLaneQueryKeys.has(key) || seenKeys.has(key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['href'],
+          message: 'lane target href query must use supported product lane keys once',
+        });
+        return;
+      }
+      seenKeys.add(key);
+    }
+  });
+
+export const productActionTargetSchema = z.discriminatedUnion('kind', [
+  productActionObjectTargetSchema,
+  productActionLaneTargetSchema,
+]);
+export type ProductActionTarget = z.infer<typeof productActionTargetSchema>;
+
+const commandBaseSchema = {
+  object_id: nonEmptyTrimmedStringSchema,
+  work_item_id: nonEmptyTrimmedStringSchema,
+} as const;
+
+const generateSpecDraftCommandSchema = z
+  .object({
+    type: z.literal('generate_spec_draft'),
+    object_type: z.literal('spec'),
+    ...commandBaseSchema,
+    spec_id: nonEmptyTrimmedStringSchema,
+  })
+  .strict()
+  .superRefine((command, ctx) => {
+    if (command.object_id !== command.spec_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['object_id'],
+        message: 'object_id must match spec_id',
+      });
+    }
+  });
+
+const generatePlanDraftCommandSchema = z
+  .object({
+    type: z.literal('generate_plan_draft'),
+    object_type: z.literal('plan'),
+    ...commandBaseSchema,
+    plan_id: nonEmptyTrimmedStringSchema,
+  })
+  .strict()
+  .superRefine((command, ctx) => {
+    if (command.object_id !== command.plan_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['object_id'],
+        message: 'object_id must match plan_id',
+      });
+    }
+  });
+
+const generatePackagesCommandSchema = z
+  .object({
+    type: z.literal('generate_packages'),
+    object_type: z.literal('plan_revision'),
+    ...commandBaseSchema,
+    plan_revision_id: nonEmptyTrimmedStringSchema,
+  })
+  .strict()
+  .superRefine((command, ctx) => {
+    if (command.object_id !== command.plan_revision_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['object_id'],
+        message: 'object_id must match plan_revision_id',
+      });
+    }
+  });
+
+const markPackageReadyCommandSchema = z
+  .object({
+    type: z.literal('mark_package_ready'),
+    object_type: z.literal('execution_package'),
+    ...commandBaseSchema,
+    package_id: nonEmptyTrimmedStringSchema,
+    expected_package_version: z.number().int(),
+  })
+  .strict()
+  .superRefine((command, ctx) => {
+    if (command.object_id !== command.package_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['object_id'],
+        message: 'object_id must match package_id',
+      });
+    }
+  });
+
+const runPackageCommandSchema = z
+  .object({
+    type: z.literal('run_package'),
+    object_type: z.literal('execution_package'),
+    ...commandBaseSchema,
+    package_id: nonEmptyTrimmedStringSchema,
+  })
+  .strict()
+  .superRefine((command, ctx) => {
+    if (command.object_id !== command.package_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['object_id'],
+        message: 'object_id must match package_id',
+      });
+    }
+  });
+
+export const productCommandSchema = z.discriminatedUnion('type', [
+  generateSpecDraftCommandSchema,
+  generatePlanDraftCommandSchema,
+  generatePackagesCommandSchema,
+  markPackageReadyCommandSchema,
+  runPackageCommandSchema,
+]);
+export type ProductCommand = z.infer<typeof productCommandSchema>;
+
+const productActionBaseSchema = {
+  id: nonEmptyTrimmedStringSchema,
+  lane_id: productLaneIdSchema,
+  priority: productActionPrioritySchema,
+  label: nonEmptyTrimmedStringSchema,
+  description: nonEmptyTrimmedStringSchema.optional(),
+  enabled: z.boolean(),
+  disabled_reason: nonEmptyTrimmedStringSchema.optional(),
+  blocked_reason: nonEmptyTrimmedStringSchema.optional(),
+} as const;
+
+const productNavigateActionSchema = z
+  .object({
+    ...productActionBaseSchema,
+    kind: z.literal('navigate'),
+    target: productActionTargetSchema,
+    command: z.never().optional(),
+  })
+  .strict();
+
+const productCommandActionSchema = z
+  .object({
+    ...productActionBaseSchema,
+    kind: z.literal('command'),
+    command: productCommandSchema,
+    target: productActionTargetSchema.optional(),
+  })
+  .strict();
+
+export const productActionSchema = z
+  .discriminatedUnion('kind', [productNavigateActionSchema, productCommandActionSchema])
+  .superRefine((action, ctx) => {
+    if (action.enabled) {
+      if (action.disabled_reason !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['disabled_reason'],
+          message: 'enabled actions must not include disabled_reason',
+        });
+      }
+
+      if (action.blocked_reason !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['blocked_reason'],
+          message: 'enabled actions must not include blocked_reason',
+        });
+      }
+    } else if (action.disabled_reason === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['disabled_reason'],
+        message: 'disabled actions require disabled_reason',
+      });
+    }
+
+    if (action.kind === 'command' && action.lane_id === 'manager') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['lane_id'],
+        message: 'manager lane does not allow command actions',
+      });
+    }
+  });
+export type ProductNavigateAction = z.infer<typeof productNavigateActionSchema>;
+export type ProductCommandAction = z.infer<typeof productCommandActionSchema>;
+export type ProductAction = z.infer<typeof productActionSchema>;
+
+const productLaneItemObjectSchema = z
+  .object({
+    type: productObjectTypeSchema,
+    id: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const productLaneItemSummaryObjectSchema = z
+  .object({
+    type: z.literal('lane_summary'),
+    id: nonEmptyTrimmedStringSchema,
+    lane_id: productLaneIdSchema,
+  })
+  .strict();
+
+const productLaneItemParentSchema = z
+  .object({
+    type: productObjectTypeSchema,
+    id: nonEmptyTrimmedStringSchema,
+    title: nonEmptyTrimmedStringSchema.optional(),
+  })
+  .strict();
+
+export const productLaneItemSchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    title: nonEmptyTrimmedStringSchema,
+    object: z.union([productLaneItemObjectSchema, productLaneItemSummaryObjectSchema]),
+    parent: productLaneItemParentSchema.optional(),
+    kind: nonEmptyTrimmedStringSchema.optional(),
+    surface_type: nonEmptyTrimmedStringSchema.optional(),
+    phase: nonEmptyTrimmedStringSchema.optional(),
+    status: nonEmptyTrimmedStringSchema.optional(),
+    gate_state: nonEmptyTrimmedStringSchema.optional(),
+    resolution: nonEmptyTrimmedStringSchema.optional(),
+    risk: nonEmptyTrimmedStringSchema.optional(),
+    updated_at: isoDateTimeSchema,
+    actions: z.array(productActionSchema),
+  })
+  .strict()
+  .superRefine((item, ctx) => {
+    const actionIds = new Set<string>();
+
+    item.actions.forEach((action, index) => {
+      if (actionIds.has(action.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actions', index, 'id'],
+          message: `product action id must be unique within item: ${action.id}`,
+        });
+      }
+      actionIds.add(action.id);
+    });
+  });
+export type ProductLaneItem = z.infer<typeof productLaneItemSchema>;
+
+const productLaneSummarySchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    blocked: z.number().int().nonnegative(),
+    high_risk: z.number().int().nonnegative(),
+    stale: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const productLaneResponseSchema = z
+  .object({
+    lane_id: productLaneIdSchema,
+    label: nonEmptyTrimmedStringSchema,
+    description: nonEmptyTrimmedStringSchema,
+    items: z.array(productLaneItemSchema),
+    unsupported_filters: z.array(nonEmptyTrimmedStringSchema),
+    summary: productLaneSummarySchema,
+    next_cursor: nonEmptyTrimmedStringSchema.optional(),
+  })
+  .strict()
+  .superRefine((response, ctx) => {
+    const itemIds = new Set<string>();
+
+    response.items.forEach((item, index) => {
+      if (itemIds.has(item.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['items', index, 'id'],
+          message: `product lane item id must be unique: ${item.id}`,
+        });
+      }
+      itemIds.add(item.id);
+
+      if (item.object.type === 'lane_summary' && item.object.lane_id !== response.lane_id) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['items', index, 'object', 'lane_id'],
+          message: 'lane summary item lane_id must match response lane_id',
+        });
+      }
+
+      item.actions.forEach((action, actionIndex) => {
+        if (action.lane_id !== response.lane_id) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['items', index, 'actions', actionIndex, 'lane_id'],
+            message: 'action lane_id must match response lane_id',
+          });
+        }
+      });
+    });
+  });
+export type ProductLaneResponse = z.infer<typeof productLaneResponseSchema>;
+
+export const workItemActionsResponseSchema = z
+  .object({
+    work_item_id: nonEmptyTrimmedStringSchema,
+    lane_id: productLaneIdSchema,
+    default_lane_id: productLaneIdSchema,
+    actions: z.array(productActionSchema),
+  })
+  .strict()
+  .superRefine((response, ctx) => {
+    const actionIds = new Set<string>();
+
+    response.actions.forEach((action, index) => {
+      if (actionIds.has(action.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actions', index, 'id'],
+          message: `product action id must be unique within Work Item actions response: ${action.id}`,
+        });
+      }
+      actionIds.add(action.id);
+
+      if (action.kind === 'command' && action.command.work_item_id !== response.work_item_id) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actions', index, 'command', 'work_item_id'],
+          message: 'command work_item_id must match response work_item_id',
+        });
+      }
+
+      if (action.lane_id !== response.lane_id) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actions', index, 'lane_id'],
+          message: 'action lane_id must match response lane_id',
+        });
+      }
+    });
+  });
+export type WorkItemActionsResponse = z.infer<typeof workItemActionsResponseSchema>;
 
 export const runPackageRequestSchema = z
   .object({

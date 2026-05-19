@@ -435,17 +435,46 @@ describe('Forgeloop web API client', () => {
     });
   });
 
-  it('routes release cockpit and replay reads through the query client', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  it('routes release cockpit, replay, Product Lane, and Work Item action reads through the query client', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/query/product-lanes/')) {
+        return new Response(
+          JSON.stringify({
+            lane_id: 'execution-owner',
+            label: 'Execution Owner',
+            description: 'Execution packages that need owner attention.',
+            items: [],
+            unsupported_filters: [],
+            summary: { total: 0, blocked: 0, high_risk: 0, stale: 0 },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/query/work-items/')) {
+        return new Response(
+          JSON.stringify({
+            work_item_id: 'wi/1',
+            lane_id: 'bugs',
+            default_lane_id: 'bugs',
+            actions: [],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
     await queryApi.getReleaseCockpit('release/1');
     await queryApi.getReleaseReplay('release/1');
-    await queryApi.getRoleWorkbench('execution-owner', {
+    await queryApi.getProductLane('execution-owner', {
       project_id: 'project 1',
       actor_id: 'actor-owner',
       limit: 25,
+      blocked: true,
     });
+    await queryApi.getWorkItemActions('wi/1', { lane: 'bugs' });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/release-cockpit/release%2F1', {
       method: 'GET',
@@ -457,31 +486,52 @@ describe('Forgeloop web API client', () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      'http://api.local/root/query/workbenches/execution-owner?project_id=project+1&actor_id=actor-owner&limit=25',
+      'http://api.local/root/query/product-lanes/execution-owner?project_id=project+1&actor_id=actor-owner&limit=25&blocked=true',
       {
         method: 'GET',
         headers: { 'content-type': 'application/json' },
       },
     );
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/query/work-items/wi%2F1/actions?lane=bugs', {
+      method: 'GET',
+      headers: { 'content-type': 'application/json' },
+    });
   });
 
-  it('fetches role workbench projections with all supported filters', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ summary: {}, items: [] }), { status: 200 }));
+  it('fetches Product Lane projections with all supported filters', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          lane_id: 'qa-test-owner',
+          label: 'QA / Test Owner',
+          description: 'QA attention.',
+          items: [],
+          unsupported_filters: [],
+          summary: { total: 0, blocked: 0, high_risk: 0, stale: 0 },
+        }),
+        { status: 200 },
+      ),
+    );
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
-    await queryApi.getRoleWorkbench('intake', {
+    await queryApi.getProductLane('qa-test-owner', {
       project_id: 'project 1',
       actor_id: 'actor/owner',
+      qa_owner_actor_id: 'actor/owner',
       kind: 'initiative',
       limit: 25,
       cursor: 'item 1',
       phase: 'triage',
       status: 'needs_review',
+      gate_state: 'awaiting_test',
+      resolution: 'none',
       risk: 'high risk',
+      blocked: false,
+      stale: true,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://api.local/query/workbenches/intake?project_id=project+1&actor_id=actor%2Fowner&kind=initiative&limit=25&cursor=item+1&phase=triage&status=needs_review&risk=high+risk',
+      'http://api.local/query/product-lanes/qa-test-owner?project_id=project+1&actor_id=actor%2Fowner&qa_owner_actor_id=actor%2Fowner&kind=initiative&limit=25&cursor=item+1&phase=triage&status=needs_review&gate_state=awaiting_test&resolution=none&risk=high+risk&blocked=false&stale=true',
       expect.objectContaining({ method: 'GET' }),
     );
   });
@@ -501,11 +551,12 @@ describe('Forgeloop web API client', () => {
     expect(Object.keys(queryApi).sort()).toEqual([
       'getExecutionPackageReplay',
       'getPlanReplay',
+      'getProductLane',
       'getReleaseCockpit',
       'getReleaseReplay',
       'getReviewPacketReplay',
-      'getRoleWorkbench',
       'getSpecReplay',
+      'getWorkItemActions',
       'getWorkItemCockpit',
       'getWorkItemReplay',
     ]);

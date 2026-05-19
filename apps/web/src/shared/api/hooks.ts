@@ -3,7 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { createForgeloopCommandApi } from './commands';
 import { createForgeloopQueryApi } from './query';
-import { normalizeWorkbenchQuery, queryKeys, workbenchIdForProductRole } from './query-keys';
+import { normalizeProductLaneQuery, queryKeys } from './query-keys';
 import type {
   CockpitResponse,
   AcknowledgeReleaseTestAcceptanceBody,
@@ -19,22 +19,22 @@ import type {
   OverrideApproveReleaseBody,
   PatchReleaseBody,
   PatchExecutionPackageBody,
+  ProductActionTarget,
+  ProductCommandAction,
+  ProductLaneId,
+  ProductLaneQuery,
   PlanRevision,
   ReleaseCommandBody,
   RequestArtifactChangesBody,
   RequestReleaseChangesBody,
   ReviewDecisionBody,
-  RoleWorkbenchId,
-  RoleWorkbenchQuery,
   SpecPlan,
   SpecRevision,
   StartReleaseObservingBody,
   SubmitForApprovalBody,
   UnlinkReleaseScopeBody,
+  WorkItemActionsQuery,
 } from './types';
-
-const workbenchIdForRole = (role: 'work-item-owner' | RoleWorkbenchId | string): RoleWorkbenchId =>
-  workbenchIdForProductRole(role) as RoleWorkbenchId;
 
 const createQueryApi = () => createForgeloopQueryApi();
 const createCommandApi = () => createForgeloopCommandApi();
@@ -48,27 +48,6 @@ type ReleaseProductQuery = {
   cursor?: string;
   limit?: number;
 };
-
-export function useWorkbenchQuery(input: {
-  role: 'work-item-owner' | RoleWorkbenchId | string;
-  projectId?: string;
-  actorId?: string;
-  filters?: Omit<RoleWorkbenchQuery, 'project_id' | 'actor_id'>;
-}) {
-  const query = normalizeWorkbenchQuery({
-    ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
-    ...(input.actorId === undefined ? {} : { actorId: input.actorId }),
-    ...(input.filters === undefined ? {} : { filters: input.filters }),
-  });
-
-  return useQuery({
-    queryKey: queryKeys.workbench({
-      role: input.role,
-      query,
-    }),
-    queryFn: () => createQueryApi().getRoleWorkbench(workbenchIdForRole(input.role), query),
-  });
-}
 
 export function usePipelineQuery(projectId: string) {
   return useQuery({
@@ -98,6 +77,39 @@ export function useProductWorkItemsQuery(query: Pick<ListProductQuery, 'project_
   return useQuery({
     queryKey: queryKeys.productWorkItems(normalizedQuery),
     queryFn: () => createQueryApi().listWorkItems(normalizedQuery),
+  });
+}
+
+export function useProductLaneQuery(laneId: ProductLaneId, query: ProductLaneQuery) {
+  const normalizedQuery = normalizeProductLaneQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.productLane(laneId, normalizedQuery),
+    queryFn: () => createQueryApi().getProductLane(laneId, normalizedQuery),
+  });
+}
+
+export function useWorkItemActionsQuery(workItemId: string | undefined, laneId?: ProductLaneId) {
+  const query: WorkItemActionsQuery = laneId === undefined ? {} : { lane: laneId };
+
+  return useQuery({
+    queryKey: queryKeys.workItemActions(workItemId ?? '', laneId),
+    queryFn: () => createQueryApi().getWorkItemActions(requiredId(workItemId, 'workItemId'), query),
+    enabled: workItemId !== undefined,
+  });
+}
+
+export function useProductActionCommandMutation(input: { projectId: string; action: ProductCommandAction }) {
+  const queryClient = useQueryClient();
+
+  return useMutation<unknown, Error, ProductActionCommandInput>({
+    mutationFn: (commandInput) => executeProductCommand(input.action, commandInput),
+    onSettled: () =>
+      invalidateProductActionTargets(queryClient, {
+        projectId: input.projectId,
+        workItemId: input.action.command.work_item_id,
+        action: input.action,
+      }),
   });
 }
 
@@ -560,7 +572,12 @@ export function useGenerateSpecDraftMutation(input: { workItemId: string | undef
     mutationFn: () => createCommandApi().generateSpecDraft(requiredId(input.specId, 'specId')),
     onSuccess: (revision) => {
       setCockpitSpecRevision(queryClient, input.workItemId, revision);
-      return invalidateWorkItemCockpit(queryClient, input.workItemId);
+      return Promise.all([
+        invalidateWorkItemCockpit(queryClient, input.workItemId),
+        input.specId === undefined
+          ? Promise.resolve()
+          : queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(input.specId) }),
+      ]);
     },
   });
 }
@@ -572,7 +589,12 @@ export function useGeneratePlanDraftMutation(input: { workItemId: string | undef
     mutationFn: () => createCommandApi().generatePlanDraft(requiredId(input.planId, 'planId')),
     onSuccess: (revision) => {
       setCockpitPlanRevision(queryClient, input.workItemId, revision);
-      return invalidateWorkItemCockpit(queryClient, input.workItemId);
+      return Promise.all([
+        invalidateWorkItemCockpit(queryClient, input.workItemId),
+        input.planId === undefined
+          ? Promise.resolve()
+          : queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(input.planId) }),
+      ]);
     },
   });
 }
@@ -633,6 +655,132 @@ export function useRequestPlanChangesMutation(input: { planId: string; workItemI
     mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().requestPlanChanges(input.planId, body),
     onSuccess: () => invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
   });
+}
+
+type ProductActionCommandInput = {
+  actorId: string;
+};
+
+type ProductActionInvalidationInput = {
+  projectId: string;
+  workItemId: string;
+  action: ProductCommandAction;
+};
+
+type ProductObjectTarget = Extract<ProductActionTarget, { kind: 'object' }>;
+
+function executeProductCommand(action: ProductCommandAction, input: ProductActionCommandInput) {
+  const commandApi = createCommandApi();
+  const command = action.command;
+
+  switch (command.type) {
+    case 'generate_spec_draft':
+      return commandApi.generateSpecDraft(command.spec_id);
+    case 'generate_plan_draft':
+      return commandApi.generatePlanDraft(command.plan_id);
+    case 'generate_packages':
+      return commandApi.generatePackages(command.plan_revision_id);
+    case 'mark_package_ready':
+      return commandApi.markPackageReady(command.package_id, {
+        actor_id: requiredActorId(input.actorId, 'actorId'),
+        expected_package_version: command.expected_package_version,
+      });
+    case 'run_package':
+      return commandApi.runPackage(command.package_id, requiredActorId(input.actorId, 'actorId'), {
+        execution_package_id: command.package_id,
+        executor_type: 'local_codex',
+      });
+    default: {
+      const exhaustive: never = command;
+      throw new Error(`Unsupported ProductAction command: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+export function invalidateProductActionTargets(queryClient: QueryClient, input: ProductActionInvalidationInput) {
+  return Promise.all([
+    invalidateProductLaneProjectQueries(queryClient, input.projectId),
+    queryClient.invalidateQueries({ queryKey: ['work-item-actions', input.workItemId] }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) }),
+    invalidateObjectQuery(queryClient, input.action.command.object_type, input.action.command.object_id),
+    invalidateCommandDerivedResources(queryClient, input.action.command),
+    input.action.target === undefined ? Promise.resolve() : invalidateTargetQuery(queryClient, input.action.target),
+  ]);
+}
+
+function invalidateCommandDerivedResources(queryClient: QueryClient, command: ProductCommandAction['command']) {
+  switch (command.type) {
+    case 'generate_spec_draft':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(command.spec_id) });
+    case 'generate_plan_draft':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(command.plan_id) });
+    case 'generate_packages':
+      return invalidatePackages(queryClient);
+    case 'mark_package_ready':
+    case 'run_package':
+      return Promise.resolve();
+    default: {
+      const exhaustive: never = command;
+      throw new Error(`Unsupported ProductAction command for invalidation: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+function invalidateProductLaneProjectQueries(queryClient: QueryClient, projectId: string) {
+  return queryClient.invalidateQueries({
+    predicate: ({ queryKey }) => {
+      if (queryKey[0] !== 'product-lanes') {
+        return false;
+      }
+
+      const filters = queryKey[2];
+      return (
+        typeof filters === 'object' &&
+        filters !== null &&
+        !Array.isArray(filters) &&
+        (filters as { project_id?: unknown }).project_id === projectId
+      );
+    },
+  });
+}
+
+function invalidateTargetQuery(queryClient: QueryClient, target: ProductActionTarget) {
+  if (target.kind === 'lane') {
+    return queryClient.invalidateQueries({ queryKey: ['product-lanes', target.lane_id] });
+  }
+
+  return invalidateObjectQuery(queryClient, target.object_type, target.object_id);
+}
+
+function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObjectTarget['object_type'], objectId: string) {
+  switch (objectType) {
+    case 'work_item':
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(objectId) }),
+        queryClient.invalidateQueries({ queryKey: ['work-item-actions', objectId] }),
+      ]);
+    case 'spec':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.spec(objectId) });
+    case 'spec_revision':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.specRevision(objectId) });
+    case 'plan':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.plan(objectId) });
+    case 'plan_revision':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.planRevision(objectId) });
+    case 'execution_package':
+      return invalidatePackageResources(queryClient, objectId);
+    case 'run_session':
+      return invalidateRunDetail(queryClient, objectId);
+    case 'review_packet':
+      return invalidateReviewPacketResources(queryClient, objectId);
+    case 'release':
+      return invalidateReleaseCockpit(queryClient, objectId);
+    default: {
+      const exhaustive: never = objectType;
+      throw new Error(`Unsupported ProductAction target object type: ${exhaustive}`);
+    }
+  }
 }
 
 function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string | undefined) {
@@ -851,4 +999,11 @@ function requiredId(id: string | undefined, label: string) {
     throw new Error(`${label} is required`);
   }
   return id;
+}
+
+function requiredActorId(actorId: string | undefined, label: string) {
+  if (actorId === undefined || actorId.trim().length === 0) {
+    throw new Error(`${label} is required`);
+  }
+  return actorId;
 }

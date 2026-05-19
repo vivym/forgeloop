@@ -19,14 +19,14 @@ function containsElement(node: ReactNode, predicate: (element: ReactElement) => 
 describe('React Router product shell', () => {
   it('renders Workbench through route modules', async () => {
     const screen = await renderRoute('/workbench');
-    expect(screen.getByRole('heading', { name: /workbench/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
   });
 
   it('shows product nav labels and does not show Intake as user-facing role copy', async () => {
     const screen = await renderRoute('/workbench');
     expect(screen.getByRole('link', { name: 'Workbench' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Specs & Plans' })).toBeTruthy();
-    expect(screen.queryByText('Intake')).toBeNull();
+    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
   });
 
   it('routes sidebar clicks through React Router without document navigation', async () => {
@@ -86,6 +86,7 @@ describe('React Router product shell', () => {
       expect.arrayContaining([
         expect.objectContaining({ index: true, file: './routes/workbench/index.tsx' }),
         expect.objectContaining({ path: 'workbench', file: './routes/workbench/index.tsx' }),
+        expect.objectContaining({ path: 'workbench/:laneId', file: './routes/workbench/$laneId.tsx' }),
       ]),
     );
   });

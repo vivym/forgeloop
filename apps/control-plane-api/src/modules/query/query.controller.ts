@@ -58,39 +58,14 @@ export class QueryController {
     return this.service.getReview(reviewPacketId);
   }
 
-  @Get('workbenches/intake')
-  getIntakeWorkbench(@Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getRoleWorkbench('intake', query);
+  @Get('product-lanes/:laneId')
+  getProductLane(@Param('laneId') laneId: string, @Query() query: Record<string, string | string[] | undefined>) {
+    return this.service.getProductLane(laneId, query);
   }
 
-  @Get('workbenches/spec-approver')
-  getSpecApproverWorkbench(@Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getRoleWorkbench('spec-approver', query);
-  }
-
-  @Get('workbenches/execution-owner')
-  getExecutionOwnerWorkbench(@Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getRoleWorkbench('execution-owner', query);
-  }
-
-  @Get('workbenches/reviewer')
-  getReviewerWorkbench(@Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getRoleWorkbench('reviewer', query);
-  }
-
-  @Get('workbenches/qa-test-owner')
-  getQaTestOwnerWorkbench(@Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getRoleWorkbench('qa-test-owner', query);
-  }
-
-  @Get('workbenches/release-owner')
-  getReleaseOwnerWorkbench(@Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getRoleWorkbench('release-owner', query);
-  }
-
-  @Get('workbenches/manager-health')
-  getManagerHealthWorkbench(@Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getRoleWorkbench('manager-health', query);
+  @Get('work-items/:workItemId/actions')
+  getWorkItemActions(@Param('workItemId') workItemId: string, @Query() query: Record<string, string | string[] | undefined>) {
+    return this.service.getWorkItemActions(workItemId, query);
   }
 
   @Get('replay/spec/:specId')

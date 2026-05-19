@@ -10,6 +10,7 @@ import type {
   LinkReleaseObjectRequest,
   OverrideApproveReleaseRequest,
   PatchReleaseRequest,
+  ProductLaneId,
   productListQuerySchema,
   ReleaseActorCommandRequest,
   releaseListQuerySchema,
@@ -44,8 +45,15 @@ export type {
   ReleaseListResponse,
   ReleaseResourceResponse,
   RequestReleaseChangesRequest,
-  RoleWorkbenchAction,
-  RoleWorkbenchResponse,
+  ProductAction,
+  ProductActionTarget,
+  ProductCommand,
+  ProductCommandAction,
+  ProductHref,
+  ProductLaneId,
+  ProductLaneItem,
+  ProductLaneResponse,
+  ProductNavigateAction,
   ProductListItem,
   ProductListQuery,
   ProductListResponse,
@@ -53,6 +61,7 @@ export type {
   StartReleaseObservingRequest,
   SubmitReleaseForApprovalRequest,
   UnlinkReleaseObjectRequest,
+  WorkItemActionsResponse,
 } from '@forgeloop/contracts';
 
 export type CreateReleaseBody = zInput<typeof createReleaseRequestSchema>;
@@ -70,24 +79,27 @@ export type UnlinkReleaseScopeBody = ReleaseActorCommandRequest;
 export type ListReleasesQuery = zInput<typeof releaseListQuerySchema>;
 export type ListProductQuery = zInput<typeof productListQuerySchema>;
 
-export type RoleWorkbenchId =
-  | 'intake'
-  | 'spec-approver'
-  | 'execution-owner'
-  | 'reviewer'
-  | 'qa-test-owner'
-  | 'release-owner'
-  | 'manager-health';
-
-export interface RoleWorkbenchQuery {
-  project_id?: string;
+export interface ProductLaneQuery {
+  project_id: string;
   actor_id?: string;
-  kind?: string;
-  limit?: number;
-  cursor?: string;
+  owner_actor_id?: string;
+  reviewer_actor_id?: string;
+  qa_owner_actor_id?: string;
+  release_owner_actor_id?: string;
+  kind?: 'initiative' | 'requirement' | 'bug' | 'tech_debt';
   phase?: string;
   status?: string;
+  gate_state?: string;
+  resolution?: string;
   risk?: string;
+  blocked?: boolean;
+  stale?: boolean;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface WorkItemActionsQuery {
+  lane?: ProductLaneId;
 }
 
 export type WorkItemKind = 'initiative' | 'requirement' | 'bug' | 'tech_debt';

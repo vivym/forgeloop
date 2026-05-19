@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 const roots = ['apps', 'packages', 'scripts', 'tests', 'docs', 'package.json'];
 const oldPriority = 'P' + '0';
 const oldRoute = 'p' + '0';
+const currentRoleWorkbenchPlan = 'docs/superpowers/plans/2026-05-19-role-based-workbench-product-actions.md';
 const supersededHistoricalNote =
   '> Superseded historical migration note: this document mentions the old subsystem name for audit history only. Current commands, routes, files, and product docs use delivery terminology.';
 const historicalFiles = new Set([
@@ -77,6 +78,74 @@ const withoutAllowedOldRouteAssertions = (rel: string, content: string): string 
   );
 };
 
+const withoutExplicitDeletionChecklist = (content: string): string => {
+  const heading = '## Explicit Deletion Checklist';
+  const start = content.indexOf(heading);
+  if (start === -1) return content;
+  const afterHeading = start + heading.length;
+  const nextHeadingOffset = content.slice(afterHeading).search(/\n## /);
+  const end = nextHeadingOffset === -1 ? content.length : afterHeading + nextHeadingOffset;
+  const removedLineCount = content.slice(start, end).split('\n').length - 1;
+  return `${content.slice(0, start)}${'\n'.repeat(removedLineCount)}${content.slice(end)}`;
+};
+
+const contentForNamingScan = (rel: string, content: string): string => {
+  const withoutRouteAssertions = withoutAllowedOldRouteAssertions(rel, content);
+  return rel === currentRoleWorkbenchPlan ? withoutExplicitDeletionChecklist(withoutRouteAssertions) : withoutRouteAssertions;
+};
+
+type LegacyPattern = {
+  target: string;
+  pattern: RegExp;
+};
+
+const roleWorkbenchDeletionTargetPatterns: LegacyPattern[] = [
+  { target: 'work-item-owner', pattern: /work-item-owner/ },
+  { target: 'RoleWorkbench*', pattern: /\bRoleWorkbench\w*\b/ },
+  { target: 'roleWorkbench*', pattern: /\broleWorkbench\w*\b/ },
+  { target: 'RoleQueue*', pattern: /\bRoleQueue\w*\b/ },
+  { target: 'role-workbench', pattern: /role-workbench/ },
+  { target: 'getRoleWorkbench', pattern: /\bgetRoleWorkbench\b/ },
+  { target: 'useWorkbenchQuery', pattern: /\buseWorkbenchQuery\b/ },
+  { target: 'workbenchIdForProductRole', pattern: /\bworkbenchIdForProductRole\b/ },
+  { target: 'productRoleToWorkbenchId', pattern: /\bproductRoleToWorkbenchId\b/ },
+  { target: 'workItemOwnerRole', pattern: /\bworkItemOwnerRole\b/ },
+  { target: 'workItemOwnerWorkbenchId', pattern: /\bworkItemOwnerWorkbenchId\b/ },
+  { target: 'manager-health', pattern: /manager-health/ },
+  { target: '[?&]role=', pattern: /[?&]role=/ },
+  { target: '/workbench/work-item-owner', pattern: /\/workbench\/work-item-owner/ },
+  { target: '/query/workbenches/', pattern: /\/query\/workbenches\// },
+  { target: 'Available after role queues are ready', pattern: /Available after role queues are ready/ },
+  { target: 'Available after a draft exists', pattern: /Available after a draft exists/ },
+  { target: 'Update brief', pattern: /Update brief/ },
+  { target: 'Attach evidence', pattern: /Attach evidence/ },
+];
+
+const intakeDeletionTargetPatterns: LegacyPattern[] = [
+  { target: 'old intake workbench endpoint', pattern: /\/query\/workbenches\/intake\b/ },
+  { target: 'old intake workbench route or query state', pattern: /\/workbench\/intake\b|[?&](?:role|lane|workbench)=intake\b/ },
+  {
+    target: 'old intake workbench identifier',
+    pattern:
+      /\b(?:workbenchId|workbench_id|roleWorkbenchId|role_workbench_id|productLaneId|product_lane_id|laneId|lane_id)\s*[:=]\s*['"]intake['"]/,
+  },
+];
+
+const roleWorkbenchScanRoots = ['apps', 'packages', 'scripts', 'tests', currentRoleWorkbenchPlan];
+const roleWorkbenchGuardFiles = new Set(['tests/naming/delivery-naming.test.ts', 'tests/web/no-legacy-web-ui.test.ts']);
+
+const roleWorkbenchDeletionMatches = () =>
+  roleWorkbenchScanRoots.flatMap(files).flatMap((file) => {
+    const rel = relative(process.cwd(), file);
+    if (roleWorkbenchGuardFiles.has(rel)) return [];
+    const content = contentForNamingScan(rel, readFileSync(file, 'utf8'));
+    return content.split('\n').flatMap((line, index) =>
+      roleWorkbenchDeletionTargetPatterns.concat(intakeDeletionTargetPatterns).flatMap(({ target, pattern }) =>
+        pattern.test(line) ? [`${rel}:${index + 1} ${target}: ${line.trim()}`] : [],
+      ),
+    );
+  });
+
 describe('delivery naming cleanup', () => {
   it('has no active historical subsystem names', () => {
     const offenders: string[] = [];
@@ -90,7 +159,7 @@ describe('delivery naming cleanup', () => {
     }
     for (const file of roots.flatMap(files)) {
       const rel = relative(process.cwd(), file);
-      const content = withoutAllowedOldRouteAssertions(rel, readFileSync(file, 'utf8')).replace(priorityLiteral, '');
+      const content = contentForNamingScan(rel, readFileSync(file, 'utf8')).replace(priorityLiteral, '');
       if (historicalFiles.has(rel)) {
         if (!content.startsWith(`${supersededHistoricalNote}\n\n`)) offenders.push(rel);
         continue;
@@ -100,5 +169,9 @@ describe('delivery naming cleanup', () => {
       oldSubsystem.lastIndex = 0;
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('has no active role workbench deletion targets outside the current checklist', () => {
+    expect(roleWorkbenchDeletionMatches()).toEqual([]);
   });
 });
