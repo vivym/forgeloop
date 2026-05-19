@@ -1,4 +1,4 @@
-import { AutomationHttpClient } from '@forgeloop/automation';
+import { AutomationHttpClient, createFakeSpecDraftGenerator, disabledSpecDraftGenerator } from '@forgeloop/automation';
 
 import { AutomationDaemon } from './automation-daemon.js';
 import { loadAutomationDaemonConfig } from './config.js';
@@ -11,6 +11,8 @@ const client = new AutomationHttpClient({
   daemonIdentity: config.daemonIdentity,
   secret: config.trustedActorHeaderSecret,
 });
+const specDraftGenerator =
+  config.codexAutomationGeneration === 'fake' ? createFakeSpecDraftGenerator() : disabledSpecDraftGenerator;
 const daemon = new AutomationDaemon({
   client,
   actorId: config.actorId,
@@ -20,6 +22,8 @@ const daemon = new AutomationDaemon({
   policyLoader: loadDaemonWorkflowPolicyDigest,
   loopIntervalMs: config.loopIntervalMs,
   noClaimBackoffMs: config.noClaimBackoffMs,
+  specDraftGenerationMode: config.codexAutomationGeneration,
+  specDraftGenerator,
   onIterationError: (error) => {
     console.error(error instanceof Error ? error.message : error);
   },

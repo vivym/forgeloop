@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
-const runConsoleE2eSelected = process.argv.some((argument) => argument.includes('tests/e2e/run-console.e2e.test.ts'));
+const explicitE2eSelected = process.argv.some((argument) => /(?:^|[\\/])tests[\\/]e2e(?:$|[\\/])/.test(argument));
 
 export default defineConfig({
   resolve: {
@@ -14,7 +14,7 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
-    exclude: runConsoleE2eSelected ? [] : ['tests/e2e/**'],
+    exclude: explicitE2eSelected ? [] : ['tests/e2e/**'],
     environment: 'node',
   },
 });

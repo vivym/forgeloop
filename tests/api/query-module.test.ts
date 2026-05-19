@@ -169,6 +169,169 @@ describe('query module', () => {
     expect(response.body.risk_summary).toEqual(expect.any(Object));
   });
 
+  it('serves the product pipeline read model with all PRD stages', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+    const runSession: RunSession = {
+      id: 'run-session-for-pipeline',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      status: 'succeeded',
+      executor_type: 'mock',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      summary: 'Pipeline run succeeded.',
+      created_at: later,
+      updated_at: later,
+      finished_at: later,
+    };
+    await repo.saveRunSession(runSession);
+    await repo.saveReviewPacket({
+      id: 'review-packet-for-pipeline',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      reviewer_actor_id: executionPackage.reviewer_actor_id,
+      spec_revision_id: executionPackage.spec_revision_id,
+      plan_revision_id: executionPackage.plan_revision_id,
+      status: 'ready',
+      decision: 'none',
+      changed_files: [],
+      check_result_summary: 'Pipeline checks passed.',
+      self_review: { status: 'succeeded', summary: 'Ready for review.' },
+      requested_changes: [],
+      risk_notes: [],
+      created_at: later,
+      updated_at: later,
+    });
+
+    const response = await request(app.getHttpServer()).get('/query/pipeline').query({ project_id: projectId }).expect(200);
+
+    expect(response.body.stages.map((stage: { id: string }) => stage.id)).toEqual([
+      'intake',
+      'spec_plan',
+      'execution',
+      'review',
+      'integration_validation',
+      'test_acceptance',
+      'release',
+      'observation',
+    ]);
+    expect(response.body.degraded_sources).toEqual(expect.any(Array));
+    expect(response.body.stages.every((stage: { degraded: boolean; stale_hint?: string }) => stage.degraded && stage.stale_hint)).toBe(
+      true,
+    );
+    expect(response.body.stages.find((stage: { id: string }) => stage.id === 'spec_plan').representative_items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ object: expect.objectContaining({ type: 'spec' }) }),
+        expect.objectContaining({ object: expect.objectContaining({ type: 'plan' }) }),
+      ]),
+    );
+    expect(response.body.stages.find((stage: { id: string }) => stage.id === 'execution').representative_items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'run_session' }) })]),
+    );
+    expect(response.body.stages.find((stage: { id: string }) => stage.id === 'review').representative_items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'review_packet' }) })]),
+    );
+  });
+
+  it('reports unsupported product pipeline filters as degraded sources', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const response = await request(app.getHttpServer())
+      .get('/query/pipeline')
+      .query({ project_id: projectId, status: 'idle', risk: 'high', phase: 'execution' })
+      .expect(200);
+
+    expect(response.body.degraded_sources).toEqual(
+      expect.arrayContaining([
+        'pipeline:unsupported_filter:status',
+        'pipeline:unsupported_filter:risk',
+        'pipeline:unsupported_filter:phase',
+      ]),
+    );
+  });
+
+  it('applies the product pipeline limit to representative items', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const response = await request(app.getHttpServer())
+      .get('/query/pipeline')
+      .query({ project_id: projectId, limit: 1 })
+      .expect(200);
+    const executionStage = response.body.stages.find((stage: { id: string }) => stage.id === 'execution');
+
+    expect(executionStage.representative_items).toHaveLength(1);
+    for (const stage of response.body.stages as { representative_items: unknown[] }[]) {
+      expect(stage.representative_items.length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('serves product list read models for specs, plans, packages, runs, and reviews', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    await request(app.getHttpServer()).get('/query/work-items').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/specs').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/plans').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/execution-packages').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/runs').query({ project_id: projectId }).expect(200);
+    await request(app.getHttpServer()).get('/query/review-packets').query({ project_id: projectId }).expect(200);
+  });
+
+  it('parses product list boolean query filters from strings', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const unblockedResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId, blocked: 'false' })
+      .expect(200);
+    expect(unblockedResponse.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
+    );
+
+    await repo.saveExecutionPackage({
+      ...executionPackage,
+      blocked_reason: 'Waiting for manual unblock.',
+      updated_at: later,
+    });
+
+    const blockedResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId, blocked: 'true' })
+      .expect(200);
+    expect(blockedResponse.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
+    );
+
+    const blockedFalseResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId, blocked: 'false' })
+      .expect(200);
+    expect(blockedFalseResponse.body.items).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
+    );
+  });
+
+  it('serves Spec and Plan history through replay-compatible endpoints', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const specId = executionPackage.spec_id;
+    const planId = executionPackage.plan_id;
+
+    await request(app.getHttpServer()).get(`/query/replay/spec/${specId}`).expect(200);
+    await request(app.getHttpServer()).get(`/query/replay/plan/${planId}`).expect(200);
+  });
+
   it('does not expose unsafe release cockpit internals', async () => {
     const { app } = await track(createTestApp());
     const { releaseId } = await createLinkedRelease(app);
@@ -282,11 +445,13 @@ describe('query module', () => {
     const packageReplay = await request(app.getHttpServer())
       .get(`/query/replay/execution_package/${executionPackage.id}`)
       .expect(200);
+    const reviewDetail = await request(app.getHttpServer()).get(`/query/reviews/${reviewPacketId}`).expect(200);
     const reviewReplay = await request(app.getHttpServer()).get(`/query/replay/review_packet/${reviewPacketId}`).expect(200);
 
     expect(packageReplay.body).toEqual(
       expect.arrayContaining([expect.objectContaining({ object_type: 'execution_package', object_id: executionPackage.id })]),
     );
+    expect(reviewDetail.body).toEqual(expect.objectContaining({ id: reviewPacketId, execution_package_id: executionPackage.id }));
     expect(reviewReplay.body).toEqual(
       expect.arrayContaining([expect.objectContaining({ object_type: 'review_packet', object_id: reviewPacketId })]),
     );

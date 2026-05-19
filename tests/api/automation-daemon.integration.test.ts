@@ -14,6 +14,7 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import {
   AutomationHttpClient,
+  createFakeSpecDraftGenerator,
   type AutomationActionResponse,
   type AutomationFetch,
   type ClaimNextActionInput,
@@ -104,7 +105,11 @@ const createAutomationClient = (app: INestApplication): AutomationHttpClient =>
     now: () => new Date().toISOString(),
   });
 
-const createDaemon = (app: INestApplication, client: AutomationDaemonClient = createAutomationClient(app)): AutomationDaemon =>
+const createDaemon = (
+  app: INestApplication,
+  client: AutomationDaemonClient = createAutomationClient(app),
+  options: Partial<Pick<ConstructorParameters<typeof AutomationDaemon>[0], 'specDraftGenerationMode' | 'specDraftGenerator'>> = {},
+): AutomationDaemon =>
   new AutomationDaemon({
     client,
     actorId: automationActorId,
@@ -114,6 +119,7 @@ const createDaemon = (app: INestApplication, client: AutomationDaemonClient = cr
     policyLoader: loadDaemonWorkflowPolicyDigest,
     loopIntervalMs: 1,
     noClaimBackoffMs: 1,
+    ...options,
   });
 
 const seedDraftOnlyApprovedSpec = async (
@@ -168,6 +174,49 @@ const seedDraftOnlyApprovedSpec = async (
     .send({ actor_id: actorReviewer })
     .expect(201)).body as Spec;
   return { project, workItem, spec: approvedSpec, specRevisionId: revision.id };
+};
+
+const seedDraftOnlyWorkItemWithoutSpec = async (app: INestApplication): Promise<{ project: Project; workItem: WorkItem }> => {
+  const server = app.getHttpServer();
+  const project = (await request(server).post('/projects').send({ name: 'Forgeloop', owner_actor_id: actorOwner }).expect(201))
+    .body as Project;
+  await request(server)
+    .post(`/projects/${project.id}/repos`)
+    .send({
+      repo_id: 'repo-1',
+      name: 'forgeloop',
+      local_path: repoRoot,
+      default_branch: 'main',
+      base_commit_sha: 'abc123',
+    })
+    .expect(201);
+  await request(server)
+    .post(`/automation/projects/${project.id}/capabilities`)
+    .set(humanAdminHeaders)
+    .send({
+      repo_id: 'repo-1',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable fake Spec draft automation',
+      evidence_refs: [],
+      actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
+    })
+    .expect(201);
+  const workItem = (await request(server)
+    .post('/work-items')
+    .send({
+      project_id: project.id,
+      kind: 'requirement',
+      title: 'Ship fake Spec draft automation',
+      goal: 'Generate a Spec draft through the automation daemon.',
+      success_criteria: ['Daemon creates a draft Spec revision.'],
+      priority: 'P0',
+      risk: 'medium',
+      owner_actor_id: actorOwner,
+    })
+    .expect(201)).body as WorkItem;
+
+  return { project, workItem };
 };
 
 const approveCurrentPlan = async (
@@ -276,6 +325,49 @@ afterEach(async () => {
 });
 
 describe('HTTP automation daemon integration', () => {
+  it('creates a fake Spec draft through signed HTTP actions without generating downstream drafts', async () => {
+    const { app, repository } = await bootAutomationApp();
+    const seeded = await seedDraftOnlyWorkItemWithoutSpec(app);
+    const daemon = createDaemon(app, createAutomationClient(app), {
+      specDraftGenerationMode: 'fake',
+      specDraftGenerator: createFakeSpecDraftGenerator(),
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({ plannedActionCount: 2, executed: { status: 'succeeded' } });
+    const workItem = await repository.getWorkItem(seeded.workItem.id);
+    expect(workItem).toMatchObject({
+      id: seeded.workItem.id,
+      current_spec_id: expect.any(String),
+      current_spec_revision_id: expect.any(String),
+    });
+    expect(workItem?.current_plan_id).toBeUndefined();
+    const spec = (await repository.getSpec(workItem!.current_spec_id!))!;
+    expect(spec).toMatchObject({
+      work_item_id: seeded.workItem.id,
+      status: 'draft',
+      current_revision_id: workItem!.current_spec_revision_id,
+    });
+    const revisions = await repository.listSpecRevisions(spec.id);
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]).toMatchObject({
+      id: spec.current_revision_id,
+      summary: 'Draft spec for Ship fake Spec draft automation',
+      content: expect.stringContaining('Generate a Spec draft through the automation daemon.'),
+      acceptance_criteria: ['Daemon creates a draft Spec revision.'],
+    });
+    await expect(repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).resolves.toEqual([]);
+
+    const runs = await actionRuns(repository);
+    expect(runs.map((actionRun) => actionRun.action_type)).toContain('ensure_spec_draft');
+    expect(runs.map((actionRun) => actionRun.action_type)).toContain('project_runtime_snapshot');
+    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('ensure_plan_draft');
+    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('ensure_package_drafts');
+    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('enqueue_package_run');
+    expectSucceededActionLifecycle(runs, 'ensure_spec_draft');
+  });
+
   it('creates plan and package drafts through signed HTTP actions and recovers from action runs after restart', async () => {
     const { app, repository } = await bootAutomationApp();
     const seeded = await seedDraftOnlyApprovedSpec(app);

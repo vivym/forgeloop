@@ -9,8 +9,10 @@ import type {
   CompleteActionInput,
   FailActionInput,
   GatePendingActionInput,
+  AutomationGenerationWorkItemContextV1,
   EnsurePlanDraftCommandInput,
   EnsurePackageDraftsCommandInput,
+  EnsureSpecDraftCommandInput,
   NextAction,
   RequestManualPathCommandInput,
   RuntimeSnapshot,
@@ -214,6 +216,7 @@ const runtimeSnapshotFromWire = (wire: unknown): RuntimeSnapshot => {
             }),
       };
     }),
+    workItemsRequiringSpec: targets(snapshot.work_items_requiring_spec),
     workItemsRequiringPlan: targets(snapshot.work_items_requiring_plan),
     planRevisionsRequiringPackages: targets(snapshot.plan_revisions_requiring_packages),
     runEnqueueDisabledPackages: targets(snapshot.run_enqueue_disabled_packages),
@@ -293,6 +296,21 @@ export class AutomationHttpClient {
 
   async failAction(actionRunId: string, input: FailActionInput): Promise<AutomationActionResponse> {
     return actionResponseFromWire(await this.request('POST', `/internal/automation/actions/${actionRunId}/fail`, input));
+  }
+
+  async specDraftGenerationContext(workItemId: string, input: { actionRunId: string; claimToken: string }) {
+    const query = new URLSearchParams({
+      action_run_id: input.actionRunId,
+      claim_token: input.claimToken,
+    });
+    return this.request(
+      'GET',
+      `/internal/automation/generation-context/work-items/${workItemId}/spec-draft?${query.toString()}`,
+    ) as Promise<AutomationGenerationWorkItemContextV1>;
+  }
+
+  async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {
+    return this.request('POST', `/internal/automation/work-items/${workItemId}/ensure-spec-draft`, input);
   }
 
   async ensurePlanDraft(workItemId: string, input: EnsurePlanDraftCommandInput) {

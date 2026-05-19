@@ -7,6 +7,7 @@ import {
   automationCapabilitiesForPreset,
   buildManualScopeKey,
   capabilityFingerprint,
+  normalizeAutomationCapabilities,
   isActiveRunSessionStatus,
   isOpenReviewPacketStatus,
   isWorkItemAutomationTerminal,
@@ -155,6 +156,7 @@ describe('domain automation contracts', () => {
   it('returns all capabilities disabled for the off preset', () => {
     expect(automationCapabilitiesForPreset('off')).toEqual({
       canProjectRuntimeState: false,
+      canGenerateSpecDraft: false,
       canGeneratePlanDraft: false,
       canGeneratePackageDrafts: false,
       canEnqueueRuns: false,
@@ -164,18 +166,21 @@ describe('domain automation contracts', () => {
   it('treats presets as named capability maps instead of ordinal levels', () => {
     expect(automationCapabilitiesForPreset('ready_projection')).toEqual({
       canProjectRuntimeState: true,
+      canGenerateSpecDraft: false,
       canGeneratePlanDraft: false,
       canGeneratePackageDrafts: false,
       canEnqueueRuns: false,
     });
     expect(automationCapabilitiesForPreset('draft_only')).toEqual({
       canProjectRuntimeState: true,
+      canGenerateSpecDraft: true,
       canGeneratePlanDraft: true,
       canGeneratePackageDrafts: true,
       canEnqueueRuns: false,
     });
     expect(automationCapabilitiesForPreset('run_enqueue')).toEqual({
       canProjectRuntimeState: true,
+      canGenerateSpecDraft: true,
       canGeneratePlanDraft: true,
       canGeneratePackageDrafts: true,
       canEnqueueRuns: true,
@@ -224,10 +229,12 @@ describe('domain automation contracts', () => {
       canEnqueueRuns: false,
       canGeneratePackageDrafts: true,
       canGeneratePlanDraft: true,
+      canGenerateSpecDraft: true,
       canProjectRuntimeState: true,
     });
     const second = capabilityFingerprint({
       canProjectRuntimeState: true,
+      canGenerateSpecDraft: true,
       canGeneratePlanDraft: true,
       canGeneratePackageDrafts: true,
       canEnqueueRuns: false,
@@ -237,11 +244,29 @@ describe('domain automation contracts', () => {
     expect(
       capabilityFingerprint({
         canProjectRuntimeState: true,
+        canGenerateSpecDraft: true,
         canGeneratePlanDraft: true,
         canGeneratePackageDrafts: false,
         canEnqueueRuns: false,
       }),
     ).not.toBe(first);
+  });
+
+  it('normalizes legacy capability JSON without granting Spec generation', () => {
+    expect(
+      normalizeAutomationCapabilities({
+        canProjectRuntimeState: true,
+        canGeneratePlanDraft: true,
+        canGeneratePackageDrafts: true,
+        canEnqueueRuns: false,
+      }),
+    ).toEqual({
+      canProjectRuntimeState: true,
+      canGenerateSpecDraft: false,
+      canGeneratePlanDraft: true,
+      canGeneratePackageDrafts: true,
+      canEnqueueRuns: false,
+    });
   });
 
   it('builds and validates canonical manual scope keys', () => {

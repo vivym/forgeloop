@@ -6,6 +6,11 @@ import {
 } from '@forgeloop/domain';
 
 import { mutatingActionIdempotencyKey, projectRuntimeSnapshotIdempotencyKey } from './idempotency.js';
+import {
+  specDraftOutputSchemaVersion,
+  specDraftPromptVersion,
+  type AutomationGenerationMode,
+} from './spec-draft-generation.js';
 import type {
   ActionInputJson,
   AutomationActionType,
@@ -18,6 +23,13 @@ import type {
 } from './types.js';
 
 const suppressingStatuses = new Set(['pending', 'running', 'succeeded']);
+
+export interface AutomationPlannerOptions {
+  specDraftGenerationMode?: AutomationGenerationMode;
+}
+
+const specDraftGenerationModeFor = (options?: AutomationPlannerOptions): AutomationGenerationMode =>
+  options?.specDraftGenerationMode ?? 'disabled';
 
 const projectIdFromScope = (automationScope: AutomationScope): string => {
   const [, projectId] = automationScope.split(':');
@@ -118,7 +130,12 @@ const requestManualPathForAmbiguity = (snapshot: RuntimeSnapshot, target: Runtim
     automationScope: settings.automationScope,
     automationSettingsVersion: settings.automationSettingsVersion,
     capabilityFingerprint: settings.capabilityFingerprint,
-    requiredCapability: target.targetObjectType === 'plan_revision' ? 'canGeneratePackageDrafts' : 'canGeneratePlanDraft',
+    requiredCapability:
+      target.targetObjectType === 'plan_revision'
+        ? 'canGeneratePackageDrafts'
+        : target.targetRevisionId === undefined
+          ? 'canGenerateSpecDraft'
+          : 'canGeneratePlanDraft',
     commandConcurrencyToken: `${scopeKey}:multi_repo_ambiguity`,
   });
   const preconditionFingerprint = automationPreconditionFingerprint(precondition);
@@ -161,8 +178,9 @@ const requestManualPathForAmbiguity = (snapshot: RuntimeSnapshot, target: Runtim
 const mutatingActionForTarget = (
   snapshot: RuntimeSnapshot,
   target: RuntimeSnapshotTarget,
-  actionType: Extract<AutomationActionType, 'ensure_plan_draft' | 'ensure_package_drafts'>,
+  actionType: Extract<AutomationActionType, 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts'>,
   requiredCapability: AutomationPreconditionCapability,
+  options: AutomationPlannerOptions = {},
 ): NextAction | undefined => {
   if (target.activeHoldFingerprint !== undefined) {
     return undefined;
@@ -192,7 +210,11 @@ const mutatingActionForTarget = (
   });
   const preconditionFingerprint = automationPreconditionFingerprint(precondition);
   const actionInputJson =
-    actionType === 'ensure_plan_draft'
+    actionType === 'ensure_spec_draft'
+      ? ({
+          work_item_id: target.targetObjectId,
+        } satisfies ActionInputJson)
+      : actionType === 'ensure_plan_draft'
       ? ({
           work_item_id: target.targetObjectId,
           spec_revision_id: target.targetRevisionId ?? '',
@@ -212,6 +234,13 @@ const mutatingActionForTarget = (
     capabilityFingerprint: repo.capabilityFingerprint,
     preconditionFingerprint,
     ...(generationKey === undefined ? {} : { generationKey }),
+    ...(actionType === 'ensure_spec_draft'
+      ? {
+          generationMode: specDraftGenerationModeFor(options),
+          promptVersion: specDraftPromptVersion,
+          outputSchemaVersion: specDraftOutputSchemaVersion,
+        }
+      : {}),
   });
   if (hasSuppressingAction(snapshot, idempotencyKey)) {
     return undefined;
@@ -280,8 +309,20 @@ const projectRuntimeSnapshotAction = (snapshot: RuntimeSnapshot, repo: RuntimeSn
   };
 };
 
-export const planNextActions = (snapshot: RuntimeSnapshot): NextAction[] => {
+export const planNextActions = (snapshot: RuntimeSnapshot, options: AutomationPlannerOptions = {}): NextAction[] => {
   const actions: NextAction[] = [];
+
+  const specDraftGenerationMode = specDraftGenerationModeFor(options);
+  if (specDraftGenerationMode !== 'disabled') {
+    for (const target of snapshot.workItemsRequiringSpec) {
+      const action = mutatingActionForTarget(snapshot, target, 'ensure_spec_draft', 'canGenerateSpecDraft', {
+        specDraftGenerationMode,
+      });
+      if (action !== undefined) {
+        actions.push(action);
+      }
+    }
+  }
 
   for (const target of snapshot.workItemsRequiringPlan) {
     const action = mutatingActionForTarget(snapshot, target, 'ensure_plan_draft', 'canGeneratePlanDraft');

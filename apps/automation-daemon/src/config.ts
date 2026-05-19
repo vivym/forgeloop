@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { AutomationGenerationMode } from '@forgeloop/automation';
 
 export const DEFAULT_AUTOMATION_LOOP_INTERVAL_MS = 5_000;
 export const DEFAULT_AUTOMATION_NO_CLAIM_BACKOFF_MS = 10_000;
@@ -13,6 +14,7 @@ export interface AutomationDaemonConfig {
   loopIntervalMs: number;
   noClaimBackoffMs: number;
   policyParserVersion: string;
+  codexAutomationGeneration: AutomationGenerationMode;
 }
 
 type EnvLike = Record<string, string | undefined>;
@@ -49,6 +51,17 @@ const pathListEnv = (env: EnvLike, key: string): string[] => {
   return values;
 };
 
+const generationModeEnv = (env: EnvLike): AutomationGenerationMode => {
+  const raw = env.FORGELOOP_CODEX_AUTOMATION_GENERATION?.trim() ?? 'disabled';
+  if (raw === 'disabled' || raw === 'fake') {
+    return raw;
+  }
+  if (raw === 'codex') {
+    throw new Error('FORGELOOP_CODEX_AUTOMATION_GENERATION=codex is introduced in Plan 2');
+  }
+  throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_AUTOMATION_GENERATION must be disabled or fake');
+};
+
 export const loadAutomationDaemonConfig = (env: EnvLike = process.env): AutomationDaemonConfig => ({
   controlPlaneUrl: requiredEnv(env, 'FORGELOOP_CONTROL_PLANE_URL'),
   trustedActorHeaderSecret: requiredEnv(env, 'FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET'),
@@ -66,4 +79,5 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     DEFAULT_AUTOMATION_NO_CLAIM_BACKOFF_MS,
   ),
   policyParserVersion: DEFAULT_WORKFLOW_POLICY_PARSER_VERSION,
+  codexAutomationGeneration: generationModeEnv(env),
 });

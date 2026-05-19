@@ -1,11 +1,14 @@
 import {
+  disabledSpecDraftGenerator,
   executeActionRun,
   planNextActions,
+  type AutomationGenerationMode,
   type AutomationExecutorClient,
   type AutomationExecutorResult,
   type RuntimePolicyProjection,
   type RuntimeSnapshot,
   type RuntimeSnapshotRepo,
+  type SpecDraftGenerator,
   type WorkflowPolicyDigestStatus,
 } from '@forgeloop/automation';
 
@@ -32,6 +35,8 @@ export interface AutomationDaemonOptions {
   policyLoader: AutomationDaemonPolicyLoader;
   loopIntervalMs: number;
   noClaimBackoffMs: number;
+  specDraftGenerationMode?: AutomationGenerationMode;
+  specDraftGenerator?: SpecDraftGenerator;
   claimToken?: string;
   sleep?: (ms: number) => Promise<void>;
   onIterationError?: (error: unknown) => void;
@@ -94,7 +99,9 @@ export class AutomationDaemon {
 
   async runOnce(): Promise<AutomationDaemonRunOnceResult> {
     const snapshot = await this.snapshotWithPolicyDigests(await this.options.client.runtimeSnapshot());
-    const actions = planNextActions(snapshot);
+    const actions = planNextActions(snapshot, {
+      specDraftGenerationMode: this.options.specDraftGenerationMode ?? 'disabled',
+    });
     for (const action of actions) {
       await this.options.client.createOrReplayAction(action);
     }
@@ -121,6 +128,7 @@ export class AutomationDaemon {
         action: claim.action,
         actorId: this.options.actorId,
         daemonIdentity: this.options.daemonIdentity,
+        specDraftGenerator: this.options.specDraftGenerator ?? disabledSpecDraftGenerator,
       }),
     };
   }

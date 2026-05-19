@@ -39,6 +39,7 @@ import {
   isActiveRunSessionStatus,
   isOpenReviewPacketStatus,
   isWorkItemAutomationTerminal,
+  normalizeAutomationCapabilities,
 } from '@forgeloop/domain';
 
 import type {
@@ -135,6 +136,9 @@ const compareTimestamp = (left: string | undefined, right: string | undefined): 
   }
   return (left ?? '').localeCompare(right ?? '');
 };
+
+const automationActionClaimPriority = (actionRun: AutomationActionRun): number =>
+  actionRun.action_type === 'project_runtime_snapshot' ? 1 : 0;
 
 const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
   repo_id: actionInputJson.repo_id,
@@ -291,6 +295,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.specs.get(specId));
   }
 
+  async listSpecs(projectId?: string): Promise<Spec[]> {
+    const specs = valuesFor(this.specs);
+    if (projectId === undefined) {
+      return specs;
+    }
+
+    return specs.filter((spec) => this.workItems.get(spec.work_item_id)?.project_id === projectId);
+  }
+
   async saveSpecRevision(specRevision: SpecRevision): Promise<void> {
     this.specRevisions.set(specRevision.id, clone(specRevision));
   }
@@ -311,6 +324,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getPlan(planId: string): Promise<Plan | undefined> {
     return this.cloneMaybe(this.plans.get(planId));
+  }
+
+  async listPlans(projectId?: string): Promise<Plan[]> {
+    const plans = valuesFor(this.plans);
+    if (projectId === undefined) {
+      return plans;
+    }
+
+    return plans.filter((plan) => this.workItems.get(plan.work_item_id)?.project_id === projectId);
   }
 
   async savePlanRevision(planRevision: PlanRevision): Promise<void> {
@@ -339,6 +361,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined> {
     return this.cloneMaybe(this.executionPackages.get(executionPackageId));
+  }
+
+  async listExecutionPackages(projectId?: string): Promise<ExecutionPackage[]> {
+    const executionPackages = valuesFor(this.executionPackages);
+    return projectId === undefined
+      ? executionPackages
+      : executionPackages.filter((executionPackage) => executionPackage.project_id === projectId);
   }
 
   async listExecutionPackagesForWorkItem(workItemId: string): Promise<ExecutionPackage[]> {
@@ -370,6 +399,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getRunSession(runSessionId: string): Promise<RunSession | undefined> {
     return this.cloneMaybe(this.runSessions.get(runSessionId));
+  }
+
+  async listRunSessions(projectId?: string): Promise<RunSession[]> {
+    const runSessions = valuesFor(this.runSessions).sort(byCreatedAt);
+    if (projectId === undefined) {
+      return runSessions;
+    }
+
+    return runSessions.filter(
+      (runSession) => this.executionPackages.get(runSession.execution_package_id)?.project_id === projectId,
+    );
   }
 
   async listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]> {
@@ -668,6 +708,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.reviewPackets.get(reviewPacketId));
   }
 
+  async listReviewPackets(projectId?: string): Promise<ReviewPacket[]> {
+    const reviewPackets = valuesFor(this.reviewPackets).sort(byCreatedAt);
+    if (projectId === undefined) {
+      return reviewPackets;
+    }
+
+    return reviewPackets.filter(
+      (reviewPacket) => this.executionPackages.get(reviewPacket.execution_package_id)?.project_id === projectId,
+    );
+  }
+
   async listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]> {
     return valuesFor(this.reviewPackets)
       .filter((reviewPacket) => reviewPacket.execution_package_id === executionPackageId)
@@ -691,7 +742,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const key = this.automationSettingsKey(input.project_id, input.repo_id);
     const existing = this.automationProjectSettings.get(key);
     if (existing !== undefined) {
-      return clone(existing);
+      return {
+        ...clone(existing),
+        capabilities_json: normalizeAutomationCapabilities(existing.capabilities_json),
+      };
     }
 
     const preset = 'off';
@@ -1205,6 +1259,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return {
       projects: projectRows,
       repos: repoRows,
+      work_items_requiring_spec: await this.runtimeSnapshotWorkItemsRequiringSpec(repos),
       work_items_requiring_plan: await this.runtimeSnapshotWorkItemsRequiringPlan(repos),
       plan_revisions_requiring_packages: await this.runtimeSnapshotPlanRevisionsRequiringPackages(repos),
       run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(repos),
@@ -1745,6 +1800,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private compareAutomationActionClaimOrder(left: AutomationActionRun, right: AutomationActionRun): number {
     return (
       compareTimestamp(left.next_attempt_at ?? left.created_at, right.next_attempt_at ?? right.created_at) ||
+      automationActionClaimPriority(left) - automationActionClaimPriority(right) ||
       compareTimestamp(left.created_at, right.created_at) ||
       left.id.localeCompare(right.id)
     );
@@ -1783,6 +1839,43 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         project_id: workItem.project_id,
         ...targetScope,
         ...this.latestMatchingActionFields('ensure_plan_draft', workItem.id, specRevisionId),
+      });
+    }
+    return targets;
+  }
+
+  private async runtimeSnapshotWorkItemsRequiringSpec(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
+    const suppressingLatestActionStatuses = new Set(['pending', 'running', 'succeeded']);
+    const targets: RuntimeSnapshotTargetRow[] = [];
+    for (const workItem of valuesFor(this.workItems).sort(byCreatedAtThenId)) {
+      if (isWorkItemAutomationTerminal(workItem)) {
+        continue;
+      }
+      const existingSpec = workItem.current_spec_id === undefined ? undefined : this.specs.get(workItem.current_spec_id);
+      if (existingSpec?.current_revision_id !== undefined) {
+        continue;
+      }
+      const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGenerateSpecDraft');
+      if (targetScope === undefined) {
+        continue;
+      }
+      if (this.hasActiveManualHold([`work_item:${workItem.id}`])) {
+        continue;
+      }
+      const latestActionFields = this.latestMatchingActionFields('ensure_spec_draft', workItem.id);
+      if (
+        latestActionFields.latest_matching_action_status !== undefined &&
+        suppressingLatestActionStatuses.has(latestActionFields.latest_matching_action_status)
+      ) {
+        continue;
+      }
+      targets.push({
+        target_object_type: 'work_item',
+        target_object_id: workItem.id,
+        target_status: workItem.phase,
+        project_id: workItem.project_id,
+        ...targetScope,
+        ...latestActionFields,
       });
     }
     return targets;
@@ -1835,7 +1928,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private async runtimeSnapshotDraftTargetScope(
     repos: ProjectRepo[],
     projectId: string,
-    capability: 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
+    capability: 'canGenerateSpecDraft' | 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
   ): Promise<Pick<RuntimeSnapshotTargetRow, 'repo_id' | 'eligible_repo_ids' | 'automation_scope'> | undefined> {
     const eligibleReposById = new Map<string, ProjectRepo>();
     for (const repo of repos) {
@@ -1917,7 +2010,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private latestMatchingActionFields(
     actionType: string,
     targetObjectId: string,
-    targetRevisionId: string,
+    targetRevisionId?: string,
   ): Pick<RuntimeSnapshotTargetRow, 'latest_matching_action_status' | 'blocked_reason_code' | 'blocked_summary' | 'blockers'> {
     const actionRun = valuesFor(this.automationActionRuns)
       .filter(

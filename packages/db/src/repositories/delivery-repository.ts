@@ -631,6 +631,7 @@ export interface RuntimeSnapshotManualHoldRow {
 export interface RuntimeSnapshotRepositoryData {
   projects: RuntimeSnapshotProjectRow[];
   repos: RuntimeSnapshotRepoRow[];
+  work_items_requiring_spec: RuntimeSnapshotTargetRow[];
   work_items_requiring_plan: RuntimeSnapshotTargetRow[];
   plan_revisions_requiring_packages: RuntimeSnapshotTargetRow[];
   run_enqueue_disabled_packages: RuntimeSnapshotTargetRow[];
@@ -662,24 +663,28 @@ export interface DeliveryRepository {
 
   saveSpec(spec: Spec): Promise<void>;
   getSpec(specId: string): Promise<Spec | undefined>;
+  listSpecs(projectId?: string): Promise<Spec[]>;
   saveSpecRevision(specRevision: SpecRevision): Promise<void>;
   getSpecRevision(specRevisionId: string): Promise<SpecRevision | undefined>;
   listSpecRevisions(specId: string): Promise<SpecRevision[]>;
 
   savePlan(plan: Plan): Promise<void>;
   getPlan(planId: string): Promise<Plan | undefined>;
+  listPlans(projectId?: string): Promise<Plan[]>;
   savePlanRevision(planRevision: PlanRevision): Promise<void>;
   getPlanRevision(planRevisionId: string): Promise<PlanRevision | undefined>;
   listPlanRevisions(planId: string): Promise<PlanRevision[]>;
 
   saveExecutionPackage(executionPackage: ExecutionPackage): Promise<void>;
   getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined>;
+  listExecutionPackages(projectId?: string): Promise<ExecutionPackage[]>;
   listExecutionPackagesForWorkItem(workItemId: string): Promise<ExecutionPackage[]>;
   saveExecutionPackageDependency(dependency: ExecutionPackageDependency): Promise<void>;
   listExecutionPackageDependencies(executionPackageId: string): Promise<ExecutionPackageDependency[]>;
 
   saveRunSession(runSession: RunSession): Promise<void>;
   getRunSession(runSessionId: string): Promise<RunSession | undefined>;
+  listRunSessions(projectId?: string): Promise<RunSession[]>;
   listRunSessionsForPackage(executionPackageId: string): Promise<RunSession[]>;
   findActiveRunSessionForPackage(executionPackageId: string): Promise<RunSession | undefined>;
   listRecoverableRunSessions(): Promise<RunSession[]>;
@@ -751,6 +756,7 @@ export interface DeliveryRepository {
 
   saveReviewPacket(reviewPacket: ReviewPacket): Promise<void>;
   getReviewPacket(reviewPacketId: string): Promise<ReviewPacket | undefined>;
+  listReviewPackets(projectId?: string): Promise<ReviewPacket[]>;
   listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
   findOpenReviewPacketForPackage(executionPackageId: string): Promise<ReviewPacket | undefined>;
 
