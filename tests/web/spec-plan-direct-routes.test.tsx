@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import userEvent from '@testing-library/user-event';
 import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -71,6 +72,71 @@ describe('Spec and Plan direct routes', () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
       'http://localhost:3000/query/specs/spec-1',
       expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('submits and requests changes from the direct Spec route', async () => {
+    const user = userEvent.setup();
+    let specState = {
+      id: 'spec-1',
+      work_item_id: 'wi-1',
+      entity_type: 'spec',
+      status: 'draft',
+      editing_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      current_revision_id: 'spec-rev-1',
+    };
+    const screen = await renderRoute('/specs/spec-1', {
+      actorId: 'actor-reviewer',
+      apiOverrides: {
+        'GET /specs/spec-1': () => specState,
+        'GET /specs/spec-1/revisions': [
+          {
+            id: 'spec-rev-1',
+            spec_id: 'spec-1',
+            work_item_id: 'wi-1',
+            revision_number: 1,
+            summary: 'Release cockpit scope ready for review',
+            content: 'Clarify release cockpit planning scope.',
+            background: 'Release readiness needs visible planning context.',
+            goals: ['Show planning state'],
+            scope_in: ['Direct Spec route'],
+            scope_out: ['Package execution'],
+            acceptance_criteria: ['Parent Work Item is visible'],
+            test_strategy_summary: 'Route tests cover direct navigation.',
+            created_at: '2026-05-18T00:00:00.000Z',
+          },
+        ],
+        'GET /query/replay/spec/spec-1': [],
+        'POST /specs/spec-1/submit-for-approval': () => {
+          specState = {
+            ...specState,
+            status: 'in_review',
+            gate_state: 'awaiting_approval',
+            resolution: 'none',
+          };
+          return specState;
+        },
+        'POST /specs/spec-1/request-changes': () => {
+          specState = {
+            ...specState,
+            status: 'draft',
+            gate_state: 'changes_requested',
+            resolution: 'none',
+          };
+          return specState;
+        },
+      },
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Submit Spec for approval' }));
+    await user.type(await screen.findByLabelText('Spec change rationale'), 'Needs clearer testing.');
+    await user.click(screen.getByRole('button', { name: 'Request Spec changes' }));
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'http://localhost:3000/specs/spec-1/request-changes',
+      expect.objectContaining({ method: 'POST' }),
     );
   });
 
@@ -292,7 +358,7 @@ describe('Spec and Plan direct routes', () => {
     expect(screen.queryByText('No Specs match the current product filters.')).toBeNull();
   });
 
-  it('links approved Plan package readiness by current revision without placeholder actions', async () => {
+  it('links direct approved Plans to packages by approved revision only', async () => {
     const screen = await renderRoute('/plans/plan-1', {
       apiOverrides: {
         'GET /plans/plan-1': {
@@ -301,13 +367,14 @@ describe('Spec and Plan direct routes', () => {
           entity_type: 'plan',
           status: 'approved',
           editing_state: 'locked',
-          gate_state: 'passed',
+          gate_state: 'approved',
           resolution: 'approved',
-          current_revision_id: 'plan-rev-1',
+          current_revision_id: 'plan-rev-current',
+          approved_revision_id: 'plan-rev-approved',
         },
         'GET /plans/plan-1/revisions': [
           {
-            id: 'plan-rev-1',
+            id: 'plan-rev-approved',
             plan_id: 'plan-1',
             work_item_id: 'wi-1',
             revision_number: 1,
@@ -342,31 +409,33 @@ describe('Spec and Plan direct routes', () => {
     expect(screen.getByText('Package generation starts from the Packages workspace.')).toBeTruthy();
     expect(screen.getByText('Package generation is ready for this approved Plan. Open package readiness to continue.')).toBeTruthy();
     expect((screen.getByRole('link', { name: 'View package readiness' }) as HTMLAnchorElement).getAttribute('href')).toBe(
-      '/packages?plan_revision_id=plan-rev-1',
+      '/packages?plan_revision_id=plan-rev-approved',
     );
+    expect(document.body.textContent).not.toContain('/packages?plan_revision_id=plan-rev-current');
     expect(screen.queryByRole('button', { name: 'Generate packages' })).toBeNull();
     expect(document.body.textContent).not.toMatch(/mutation|wiring/i);
     expect(screen.queryByText('Revision 1 created')).toBeNull();
   });
 
-  it('shows package inventory fallback when an approved Plan has no current revision id', async () => {
-    const screen = await renderRoute('/plans/plan-no-current-revision', {
+  it('shows package inventory fallback when an approved Plan has no approved revision id', async () => {
+    const screen = await renderRoute('/plans/plan-no-approved-revision', {
       apiOverrides: {
-        'GET /plans/plan-no-current-revision': {
-          id: 'plan-no-current-revision',
+        'GET /plans/plan-no-approved-revision': {
+          id: 'plan-no-approved-revision',
           work_item_id: 'wi-1',
           entity_type: 'plan',
           status: 'approved',
           editing_state: 'locked',
-          gate_state: 'passed',
+          gate_state: 'approved',
           resolution: 'approved',
+          current_revision_id: 'plan-rev-current',
         },
-        'GET /plans/plan-no-current-revision/revisions': [],
-        'GET /query/replay/plan/plan-no-current-revision': [],
+        'GET /plans/plan-no-approved-revision/revisions': [],
+        'GET /query/replay/plan/plan-no-approved-revision': [],
       },
     });
 
-    expect(await screen.findByText('This approved Plan does not have a current approved revision recorded yet.')).toBeTruthy();
+    expect(await screen.findByText('This approved Plan does not have an approved revision recorded yet.')).toBeTruthy();
     expect(screen.getByText('Open the package inventory to find packages that may already exist for this work.')).toBeTruthy();
     expect((screen.getByRole('link', { name: 'View package inventory' }) as HTMLAnchorElement).getAttribute('href')).toBe(
       '/packages',
