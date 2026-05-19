@@ -141,6 +141,7 @@ export interface ClaimExecutionPackageGenerationRunInput {
   manifest_digest?: string;
   expected_package_count?: number;
   expected_package_keys?: string[];
+  evidence_refs?: Artifact['ref'][];
   claim_token: string;
   now: string;
   locked_until: string;

@@ -1,5 +1,5 @@
 import type { ArtifactRef } from '@forgeloop/contracts';
-import type { GeneratedPlanDraftV1 } from '@forgeloop/codex-runtime';
+import type { GeneratedPackageDraftSetV1, GeneratedPlanDraftV1 } from '@forgeloop/codex-runtime';
 import type { AutomationActorClass, AutomationActionRunStatus, AutomationPrecondition, AutomationScope } from '@forgeloop/domain';
 
 export type AutomationActionType =
@@ -405,7 +405,9 @@ export interface EnsurePackageDraftsCommandInput {
   claim_token?: string;
   idempotency_key: string;
   automation_precondition: AutomationPrecondition;
-  generation_key?: string;
+  generation_key: string;
+  generated_package_drafts: GeneratedPackageDraftSetV1;
+  generation_artifacts: ArtifactRef[];
 }
 
 export interface RequestManualPathCommandInput {

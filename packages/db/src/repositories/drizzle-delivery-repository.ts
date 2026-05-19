@@ -1902,6 +1902,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           claim_token: input.claim_token,
           locked_until: input.locked_until,
           last_heartbeat_at: input.now,
+          ...(input.evidence_refs === undefined ? {} : { evidence_refs: input.evidence_refs.map((ref) => ({ ...ref })) }),
           updated_at: input.now,
         };
         await this.upsert(execution_package_generation_runs, execution_package_generation_runs.executionPackageSetId, reclaimed);
@@ -1935,6 +1936,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...(input.manifest_digest === undefined ? {} : { manifest_digest: input.manifest_digest }),
       ...(input.expected_package_count === undefined ? {} : { expected_package_count: input.expected_package_count }),
       ...(input.expected_package_keys === undefined ? {} : { expected_package_keys: [...input.expected_package_keys] }),
+      ...(input.evidence_refs === undefined ? {} : { evidence_refs: input.evidence_refs.map((ref) => ({ ...ref })) }),
       status: 'running',
       locked_until: input.locked_until,
       last_heartbeat_at: input.now,

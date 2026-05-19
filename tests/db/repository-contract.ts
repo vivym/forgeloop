@@ -984,6 +984,15 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     }),
   ).rejects.toThrow(/claimed|token|running/i);
 
+  const generationEvidenceRefs = [
+    {
+      kind: 'logs',
+      name: 'package-generation.json',
+      content_type: 'application/json',
+      storage_uri: 'artifact://package-generation.json',
+      digest: 'sha256:generation',
+    },
+  ];
   const generationRun = await repository.claimExecutionPackageGenerationRun({
     plan_revision_id: ids.planRevision2,
     generation_key: `default:${ids.planRevision2}`,
@@ -992,11 +1001,13 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     manifest_digest: 'sha256-manifest-a',
     expected_package_count: 2,
     expected_package_keys: ['api', 'tests'],
+    evidence_refs: generationEvidenceRefs,
     claim_token: 'generation-claim-1',
     now: at,
     locked_until: '2026-05-05T00:05:00.000Z',
   });
   expect(generationRun.status).toBe('running');
+  expect(generationRun.evidence_refs).toEqual(generationEvidenceRefs);
   await expect(
     repository.claimExecutionPackageGenerationRun({
       plan_revision_id: ids.planRevision2,
@@ -1061,6 +1072,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     manifest_digest: 'sha256-manifest-a',
     expected_package_count: 2,
     expected_package_keys: ['api', 'tests'],
+    evidence_refs: generationEvidenceRefs,
     claim_token: 'generation-claim-reclaimed',
     now: '2026-05-05T00:06:00.000Z',
     locked_until: '2026-05-05T00:11:00.000Z',
@@ -1071,6 +1083,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     claim_token: 'generation-claim-reclaimed',
     locked_until: '2026-05-05T00:11:00.000Z',
     last_heartbeat_at: '2026-05-05T00:06:00.000Z',
+    evidence_refs: generationEvidenceRefs,
   });
 
   await repository.saveExecutionPackageGenerationPackage({

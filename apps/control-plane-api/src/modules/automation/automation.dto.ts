@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { generatedPlanDraftSchema } from '@forgeloop/codex-runtime';
+import { generatedPackageDraftSetSchema, generatedPlanDraftSchema } from '@forgeloop/codex-runtime';
 import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
@@ -271,7 +271,9 @@ export const ensureSpecDraftCommandSchema = z
 export const ensurePackageDraftsCommandSchema = z
   .object({
     ...internalCommandBaseShape,
-    generation_key: nonBlankString.optional(),
+    generation_key: nonBlankString,
+    generated_package_drafts: generatedPackageDraftSetSchema,
+    generation_artifacts: z.array(artifactRefSchema),
     regeneration_approval: z
       .object({
         superseded_generation_key: nonBlankString,

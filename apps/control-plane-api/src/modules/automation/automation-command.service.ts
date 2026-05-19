@@ -11,7 +11,12 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { validateGeneratedPlanDraft, type GeneratedPlanDraftV1 } from '@forgeloop/codex-runtime';
+import {
+  validateGeneratedPackageDraftSet,
+  validateGeneratedPlanDraft,
+  type GeneratedPackageDraftSetV1,
+  type GeneratedPlanDraftV1,
+} from '@forgeloop/codex-runtime';
 import type { ArtifactRef, ExecutorType, RunAcceptedResponse } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
 import {
@@ -21,11 +26,13 @@ import {
   transitionRunSession,
   transitionSpecPlan,
   validateExecutionPackage,
+  validatePackageDependencyGraph,
   type AutomationActorContext,
   type AutomationPrecondition,
   type AutomationProjectSettings,
   type CommandIdempotencyRecord,
   type ExecutionPackage,
+  type ExecutionPackageDependency,
   type ManualPathHold,
   type ObjectEvent,
   type Plan,
@@ -72,7 +79,6 @@ import type {
   RequestManualPathCommandDto,
 } from './automation.dto';
 import {
-  DEFAULT_SOURCE_MUTATION_POLICY,
   defaultPackagePolicyFields,
 } from '../execution-packages/package-policy-fields';
 
@@ -91,13 +97,23 @@ type EnsurePackageDraftsInput = {
   actorContext: ActorContext;
   idempotencyKey: string;
   generationKey?: string;
+  generated: GeneratedPackageDraftSetV1;
+  generationArtifacts: ArtifactRef[];
   regenerationApproval?: {
     supersededGenerationKey: string;
     supersededExecutionPackageSetId: string;
     supersedeCommandId: string;
   };
 };
-type EnsurePackageDraftsResult = { execution_package_set_id: string; package_ids: string[]; status: 'created' | 'existing' };
+type EnsurePackageDraftsResult = {
+  execution_package_set_id: string;
+  package_ids: string[];
+  status: 'created' | 'existing';
+  manifest_digest?: string;
+  generated_payload_digest?: string;
+  package_keys?: string[];
+  generation_artifacts?: ArtifactRef[];
+};
 type EnqueueRunInput = {
   packageId: string;
   expectedPackageVersion: number;
@@ -263,6 +279,32 @@ const generatedPlanDraftForCommand = (value: unknown): GeneratedPlanDraftV1 => {
       throw new BadRequestException({
         code: 'generated_plan_draft_invalid',
         message: 'Generated Plan draft payload is invalid.',
+      });
+    }
+    throw error;
+  }
+};
+
+const generatedPackageDraftSetForCommand = (value: unknown): GeneratedPackageDraftSetV1 => {
+  try {
+    return validateGeneratedPackageDraftSet(value);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'generated_package_manifest_invalid') {
+      throw new UnprocessableEntityException({
+        code: 'generated_package_manifest_invalid',
+        message: 'Generated Package manifest is invalid.',
+      });
+    }
+    if (error instanceof Error && error.message === 'generated_package_dependency_invalid') {
+      throw new UnprocessableEntityException({
+        code: 'generated_package_dependency_invalid',
+        message: 'Generated Package dependencies are invalid.',
+      });
+    }
+    if (error instanceof Error && error.message === 'generated_package_policy_invalid') {
+      throw new BadRequestException({
+        code: 'generated_package_policy_invalid',
+        message: 'Generated Package payload violates package policy.',
       });
     }
     throw error;
@@ -509,7 +551,9 @@ export class AutomationCommandService {
     actorContext: ActorContext,
   ): Promise<EnsurePackageDraftsResult> {
     const precondition = normalizeAutomationPrecondition(input.automation_precondition as AutomationPrecondition);
-    const generationKey = input.generation_key ?? `default:${planRevisionId}`;
+    const generationKey = input.generation_key;
+    const generatedPackageDrafts = generatedPackageDraftSetForCommand(input.generated_package_drafts);
+    const generationArtifacts = safeGenerationArtifactRefs(input.generation_artifacts);
     const generationIdentityFields = await this.generationIdentityFieldsForClaimedAction({
       actionRunId: input.action_run_id,
       claimToken: input.claim_token ?? '',
@@ -534,6 +578,8 @@ export class AutomationCommandService {
       actorContext,
       idempotencyKey: input.idempotency_key,
       generationKey,
+      generated: generatedPackageDrafts,
+      generationArtifacts,
       ...(input.regeneration_approval === undefined
         ? {}
         : {
@@ -781,7 +827,20 @@ export class AutomationCommandService {
         throw new BadRequestException('non-default package generation requires a matching supersede approval');
       }
     }
-    const preconditionFingerprint = automationPreconditionFingerprint(precondition);
+    const generatedPackageDrafts = generatedPackageDraftSetForCommand(input.generated);
+    const sanitizedGenerationArtifacts = safeGenerationArtifactRefs(input.generationArtifacts);
+    const packagePayloadDigest = generatedPayloadDigest({
+      generation_key: generationKey,
+      generated_package_drafts: generatedPackageDrafts,
+      generation_artifacts: publicArtifactIdentity(sanitizedGenerationArtifacts),
+    });
+    const commandPreconditionJson = {
+      automation_precondition: precondition,
+      generation_key: generationKey,
+      generated_payload_digest: packagePayloadDigest,
+      generation_artifact_identity: publicArtifactIdentity(sanitizedGenerationArtifacts),
+    };
+    const commandPreconditionFingerprint = generatedPayloadDigest(commandPreconditionJson);
     const actorScope = `${precondition.actor_class}:${precondition.daemon_identity ?? input.actorContext.authenticatedActorId ?? 'unknown'}`;
     const claimToken = randomUUID();
     const claimedAt = this.now();
@@ -789,22 +848,47 @@ export class AutomationCommandService {
     const outcome = await this.repository.withObjectLock(
       `automation-command:ensure-package-drafts:${input.planRevisionId}:${generationKey}`,
       async (repository): Promise<CommandBoundaryOutcome<EnsurePackageDraftsResult>> => {
-        const claim = await repository.claimCommandIdempotency({
-          id: this.id('command-idempotency'),
-          command_name: 'ensure_execution_package_drafts_for_plan_revision',
-          idempotency_key: input.idempotencyKey,
-          ...commandIdempotencyTarget({
-            objectType: 'plan_revision',
-            objectId: input.planRevisionId,
-            revisionId: generationKey,
-          }),
-          precondition_json: precondition as unknown as Record<string, unknown>,
-          precondition_fingerprint: preconditionFingerprint,
-          actor_scope: actorScope,
-          claim_token: claimToken,
-          locked_until: this.lockedUntil(claimedAt),
-          now: claimedAt,
-        });
+        let claim: CommandIdempotencyRecord;
+        try {
+          claim = await repository.claimCommandIdempotency({
+            id: this.id('command-idempotency'),
+            command_name: 'ensure_execution_package_drafts_for_plan_revision',
+            idempotency_key: input.idempotencyKey,
+            ...commandIdempotencyTarget({
+              objectType: 'plan_revision',
+              objectId: input.planRevisionId,
+              revisionId: generationKey,
+            }),
+            precondition_json: commandPreconditionJson as unknown as Record<string, unknown>,
+            precondition_fingerprint: commandPreconditionFingerprint,
+            actor_scope: actorScope,
+            claim_token: claimToken,
+            locked_until: this.lockedUntil(claimedAt),
+            now: claimedAt,
+          });
+        } catch (error) {
+          if (
+            error instanceof DomainError &&
+            error.code === 'INVALID_TRANSITION' &&
+            isCommandIdempotencyDriftError(error)
+          ) {
+            throw new ConflictException({
+              code: 'generated_payload_idempotency_drift',
+              message: 'Generated payload differs for the same idempotency key.',
+            });
+          }
+          if (
+            error instanceof DomainError &&
+            error.code === 'INVALID_TRANSITION' &&
+            isCommandIdempotencyActiveClaimError(error)
+          ) {
+            throw new ConflictException({
+              code: 'command_idempotency_conflict',
+              message: 'Command idempotency key already has an active claim.',
+            });
+          }
+          throw error;
+        }
         const replayed = this.replayedPackageDraftsResult(claim.result_json);
         const replayable = this.replayableCommandResultOrThrow(claim, replayed);
         if (replayable !== undefined) {
@@ -817,6 +901,9 @@ export class AutomationCommandService {
             generationKey,
             claimToken,
             precondition,
+            generated: generatedPackageDrafts,
+            generationArtifacts: sanitizedGenerationArtifacts,
+            generatedPayloadDigest: packagePayloadDigest,
             ...(input.regenerationApproval === undefined ? {} : { regenerationApproval: input.regenerationApproval }),
           });
           await repository.completeCommandIdempotency({
@@ -1545,6 +1632,9 @@ export class AutomationCommandService {
       generationKey: string;
       claimToken: string;
       precondition: AutomationPrecondition;
+      generated: GeneratedPackageDraftSetV1;
+      generationArtifacts: ArtifactRef[];
+      generatedPayloadDigest: string;
       regenerationApproval?: EnsurePackageDraftsInput['regenerationApproval'];
     },
   ): Promise<EnsurePackageDraftsResult> {
@@ -1579,36 +1669,59 @@ export class AutomationCommandService {
       generationKey: input.generationKey,
       regenerationApproval: input.regenerationApproval,
     });
-    const packageRepoId = this.packageDraftRepoIdFor(context.project, input.precondition.repo_id);
-    const generatedRequiredChecks = [
-      {
-        check_id: 'unit',
-        display_name: 'Unit tests',
-        command: 'pnpm test tests/api',
-        timeout_seconds: 120,
-        blocks_review: true,
-      },
-    ];
-    const generatedAllowedPaths = ['apps/control-plane-api/**', 'tests/api/**'];
-    const generatedForbiddenPaths = ['packages/db/**'];
-    const generatedPolicyFields = await defaultPackagePolicyFields(repository, {
-      projectId: context.project.id,
-      repoId: packageRepoId,
-      loadedAt: this.now(),
-      requiredChecks: generatedRequiredChecks,
-      allowedPaths: generatedAllowedPaths,
-      forbiddenPaths: generatedForbiddenPaths,
-      sourceMutationPolicy: DEFAULT_SOURCE_MUTATION_POLICY,
+    if (
+      context.planRevision.dependency_order.length !== input.generated.manifest.dependency_order.length ||
+      context.planRevision.dependency_order.some((packageKey, index) => packageKey !== input.generated.manifest.dependency_order[index])
+    ) {
+      throw new UnprocessableEntityException({
+        code: 'generated_package_manifest_invalid',
+        message: 'Generated Package manifest does not match the approved Plan dependency order.',
+      });
+    }
+
+    const preparedPackages = await Promise.all(
+      input.generated.packages.map(async (generatedPackage, sequence) => {
+        this.assertGeneratedPackageRepoEligible(context.project, input.precondition.repo_id, generatedPackage.repo_id);
+        const policyFields = await defaultPackagePolicyFields(repository, {
+          projectId: context.project.id,
+          repoId: generatedPackage.repo_id,
+          loadedAt: this.now(),
+          requiredChecks: generatedPackage.required_checks,
+          allowedPaths: generatedPackage.allowed_paths,
+          forbiddenPaths: generatedPackage.forbidden_paths,
+          sourceMutationPolicy: generatedPackage.source_mutation_policy,
+        });
+        return { generatedPackage, sequence, policyFields };
+      }),
+    );
+
+    const manifest = this.canonicalPackageManifest({
+      planRevisionId: input.planRevisionId,
+      generationKey: input.generationKey,
+      generated: input.generated,
+      packagePolicyDigests: preparedPackages.map(({ generatedPackage, policyFields }) => ({
+        package_key: generatedPackage.package_key,
+        repo_id: generatedPackage.repo_id,
+        ...(policyFields.package_policy_snapshot?.policy_digest === undefined
+          ? {}
+          : { policy_digest: policyFields.package_policy_snapshot.policy_digest }),
+        allowed_paths: generatedPackage.allowed_paths,
+        forbidden_paths: generatedPackage.forbidden_paths,
+        required_checks: generatedPackage.required_checks,
+        source_mutation_policy: generatedPackage.source_mutation_policy,
+      })),
+      outputSchemaVersion: 'package_drafts.v1',
     });
+    const manifestDigest = generatedPayloadDigest(manifest);
 
     const generationRun = await repository.claimExecutionPackageGenerationRun({
       plan_revision_id: input.planRevisionId,
       generation_key: input.generationKey,
-      generator_version: 'mock-package-drafter@1',
-      policy_digest: generatedPolicyFields.package_policy_snapshot!.policy_digest,
-      manifest_digest: 'api-package-v1',
-      expected_package_count: 1,
-      expected_package_keys: ['api-package'],
+      generator_version: 'codex-runtime:package_drafts.v1',
+      manifest_digest: manifestDigest,
+      expected_package_count: input.generated.packages.length,
+      expected_package_keys: input.generated.packages.map((entry) => entry.package_key),
+      evidence_refs: safeGenerationArtifactRefs(input.generationArtifacts),
       claim_token: input.claimToken,
       locked_until: this.lockedUntil(this.now()),
       now: this.now(),
@@ -1620,70 +1733,101 @@ export class AutomationCommandService {
 
     const existingPackages = (await repository.listExecutionPackagesForWorkItem(context.workItem.id)).filter(
       (executionPackage) =>
-        executionPackage.plan_revision_id === context.planRevision.id &&
-        executionPackage.generation_key === input.generationKey &&
-        executionPackage.package_key === 'api-package',
+        executionPackage.plan_revision_id === context.planRevision.id && executionPackage.generation_key === input.generationKey,
     );
-    const executionPackage =
-      existingPackages[0] ??
-      ({
-        ...transitionExecutionPackage(undefined, {
-          type: 'generate_package',
-          id: this.id('execution-package'),
-          work_item_id: context.workItem.id,
-          spec_id: context.spec.id,
-          spec_revision_id: context.specRevision.id,
-          plan_id: context.plan.id,
-          plan_revision_id: context.planRevision.id,
-          project_id: context.project.id,
-          repo_id: packageRepoId,
-          objective: `Implement ${context.workItem.title}.`,
-          owner_actor_id: context.workItem.owner_actor_id,
-          reviewer_actor_id: context.workItem.owner_actor_id,
-          qa_owner_actor_id: context.workItem.owner_actor_id,
-          required_checks: generatedRequiredChecks,
-          required_artifact_kinds: ['execution_summary'],
-          allowed_paths: generatedAllowedPaths,
-          forbidden_paths: generatedForbiddenPaths,
-          source_mutation_policy: DEFAULT_SOURCE_MUTATION_POLICY,
-          at: this.now(),
-        }),
-        ...generatedPolicyFields,
+    const packagesByKey = new Map(existingPackages.map((executionPackage) => [executionPackage.package_key, executionPackage]));
+    const packageIdsByKey = new Map<string, string>();
+    const persistedPackages: ExecutionPackage[] = [];
+    let createdAny = false;
+
+    for (const { generatedPackage, sequence, policyFields } of preparedPackages) {
+      const existingPackage = packagesByKey.get(generatedPackage.package_key);
+      const executionPackage =
+        existingPackage ??
+        ({
+          ...transitionExecutionPackage(undefined, {
+            type: 'generate_package',
+            id: this.id('execution-package'),
+            work_item_id: context.workItem.id,
+            spec_id: context.spec.id,
+            spec_revision_id: context.specRevision.id,
+            plan_id: context.plan.id,
+            plan_revision_id: context.planRevision.id,
+            project_id: context.project.id,
+            repo_id: generatedPackage.repo_id,
+            objective: generatedPackage.objective,
+            owner_actor_id: context.workItem.owner_actor_id,
+            reviewer_actor_id: context.workItem.owner_actor_id,
+            qa_owner_actor_id: context.workItem.owner_actor_id,
+            required_checks: generatedPackage.required_checks,
+            required_artifact_kinds: generatedPackage.required_artifact_kinds,
+            allowed_paths: generatedPackage.allowed_paths,
+            forbidden_paths: generatedPackage.forbidden_paths,
+            source_mutation_policy: generatedPackage.source_mutation_policy,
+            at: this.now(),
+          }),
+          ...policyFields,
+          execution_package_set_id: generationRun.execution_package_set_id,
+          generation_key: input.generationKey,
+          package_key: generatedPackage.package_key,
+          sequence,
+          manifest_digest: manifestDigest,
+          required_test_gates: generatedPackage.required_test_gates ?? [],
+          ...(generatedPackage.structured_document === undefined
+            ? {}
+            : { integration_readiness: { generated_package: generatedPackage.structured_document } }),
+        } satisfies ExecutionPackage);
+      validateExecutionPackage(context.project, executionPackage);
+      if (existingPackage === undefined) {
+        await repository.saveExecutionPackage(executionPackage);
+        createdAny = true;
+        await this.eventWithRepository(
+          repository,
+          'execution_package',
+          executionPackage.id,
+          'package_draft_generated',
+          'automation-package-drafter',
+          {
+            plan_revision_id: context.planRevision.id,
+            package_key: generatedPackage.package_key,
+          },
+        );
+      }
+      await repository.saveExecutionPackageGenerationPackage({
         execution_package_set_id: generationRun.execution_package_set_id,
+        execution_package_id: executionPackage.id,
+        plan_revision_id: input.planRevisionId,
         generation_key: input.generationKey,
-        package_key: 'api-package',
-        sequence: 0,
-        manifest_digest: 'api-package-v1',
-        required_test_gates: [],
-      } satisfies ExecutionPackage);
-    validateExecutionPackage(context.project, executionPackage);
-    if (existingPackages[0] === undefined) {
-      await repository.saveExecutionPackage(executionPackage);
-      await this.eventWithRepository(
-        repository,
-        'execution_package',
-        executionPackage.id,
-        'package_draft_generated',
-        'automation-package-drafter',
-        {
-          plan_revision_id: context.planRevision.id,
-        },
-      );
+        package_key: generatedPackage.package_key,
+        sequence,
+        manifest_digest: manifestDigest,
+        claim_token: input.claimToken,
+      });
+      packageIdsByKey.set(generatedPackage.package_key, executionPackage.id);
+      persistedPackages.push(executionPackage);
     }
-    await repository.saveExecutionPackageGenerationPackage({
-      execution_package_set_id: generationRun.execution_package_set_id,
-      execution_package_id: executionPackage.id,
-      plan_revision_id: input.planRevisionId,
-      generation_key: input.generationKey,
-      package_key: 'api-package',
-      sequence: 0,
-      manifest_digest: 'api-package-v1',
-      claim_token: input.claimToken,
-    });
+
+    const dependencies: ExecutionPackageDependency[] = input.generated.dependencies.map((dependency) => ({
+      package_id: packageIdsByKey.get(dependency.package_key)!,
+      depends_on_package_id: packageIdsByKey.get(dependency.depends_on_package_key)!,
+      ...(dependency.dependency_type === undefined ? {} : { dependency_type: dependency.dependency_type }),
+      ...(dependency.reason === undefined ? {} : { reason: dependency.reason }),
+      ...(dependency.metadata === undefined ? {} : { metadata: dependency.metadata }),
+      created_at: this.now(),
+      updated_at: this.now(),
+    }));
+    validatePackageDependencyGraph(persistedPackages, dependencies);
+    for (const dependency of dependencies) {
+      await repository.saveExecutionPackageDependency(dependency);
+    }
     const result: EnsurePackageDraftsResult = {
       execution_package_set_id: generationRun.execution_package_set_id,
-      package_ids: [executionPackage.id],
-      status: existingPackages[0] === undefined ? 'created' : 'existing',
+      package_ids: input.generated.packages.map((entry) => packageIdsByKey.get(entry.package_key)!),
+      status: createdAny ? 'created' : 'existing',
+      manifest_digest: manifestDigest,
+      generated_payload_digest: input.generatedPayloadDigest,
+      package_keys: input.generated.packages.map((entry) => entry.package_key),
+      generation_artifacts: publicArtifactIdentity(input.generationArtifacts),
     };
     await repository.completeExecutionPackageGenerationRun({
       plan_revision_id: input.planRevisionId,
@@ -1708,7 +1852,12 @@ export class AutomationCommandService {
   }> {
     const planRevision = this.requireFound(await repository.getPlanRevision(planRevisionId), `PlanRevision ${planRevisionId}`);
     const plan = this.requireFound(await repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
-    if (plan.status !== 'approved' || plan.current_revision_id !== planRevisionId) {
+    if (
+      plan.status !== 'approved' ||
+      plan.resolution !== 'approved' ||
+      plan.approved_revision_id !== planRevisionId ||
+      plan.current_revision_id !== plan.approved_revision_id
+    ) {
       throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
     }
     const workItem = this.requireFound(await repository.getWorkItem(plan.work_item_id), `WorkItem ${plan.work_item_id}`);
@@ -1733,17 +1882,51 @@ export class AutomationCommandService {
     };
   }
 
-  private packageDraftRepoIdFor(project: Project, repoId: string | undefined): string {
-    if (repoId !== undefined) {
-      return repoId;
+  private assertGeneratedPackageRepoEligible(project: Project, preconditionRepoId: string | undefined, generatedRepoId: string): void {
+    if (!project.repo_ids.includes(generatedRepoId)) {
+      throw new UnprocessableEntityException({
+        code: 'generated_package_policy_invalid',
+        message: `Generated Package repo ${generatedRepoId} is not bound to project ${project.id}.`,
+      });
     }
-    if (project.repo_ids.length === 1) {
-      return project.repo_ids[0]!;
+    if (preconditionRepoId !== undefined && preconditionRepoId !== generatedRepoId) {
+      throw new UnprocessableEntityException({
+        code: 'generated_package_policy_invalid',
+        message: 'Generated Package repo does not match the automation precondition repo scope.',
+      });
     }
-    throw new UnprocessableEntityException({
-      code: 'automation_gate_blocked',
-      message: 'Project-scoped package generation requires an unambiguous repo scope.',
-    });
+  }
+
+  private canonicalPackageManifest(input: {
+    planRevisionId: string;
+    generationKey: string;
+    generated: GeneratedPackageDraftSetV1;
+    packagePolicyDigests: Array<{
+      package_key: string;
+      repo_id: string;
+      policy_digest?: string;
+      allowed_paths: string[];
+      forbidden_paths: string[];
+      required_checks: GeneratedPackageDraftSetV1['packages'][number]['required_checks'];
+      source_mutation_policy: GeneratedPackageDraftSetV1['packages'][number]['source_mutation_policy'];
+    }>;
+    outputSchemaVersion: 'package_drafts.v1';
+  }): Record<string, unknown> {
+    return {
+      schema_version: input.generated.schema_version,
+      plan_revision_id: input.planRevisionId,
+      generation_key: input.generationKey,
+      package_set_key: input.generated.manifest.package_set_key,
+      package_keys: input.generated.packages.map((entry) => entry.package_key),
+      dependency_order: input.generated.manifest.dependency_order,
+      dependency_edges: input.generated.dependencies.map((entry) => ({
+        package_key: entry.package_key,
+        depends_on_package_key: entry.depends_on_package_key,
+        ...(entry.dependency_type === undefined ? {} : { dependency_type: entry.dependency_type }),
+      })),
+      package_policy_digests: input.packagePolicyDigests,
+      output_schema_version: input.outputSchemaVersion,
+    };
   }
 
   private async requireApprovedCurrentSpecFromRepository(repository: DeliveryRepository, workItem: WorkItem): Promise<Spec> {
@@ -1753,6 +1936,9 @@ export class AutomationCommandService {
     const spec = this.requireFound(await repository.getSpec(workItem.current_spec_id), `Spec ${workItem.current_spec_id}`);
     if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id === undefined) {
       throw new BadRequestException(`Spec ${spec.id} is not approved`);
+    }
+    if (spec.approved_revision_id === undefined || spec.current_revision_id !== spec.approved_revision_id) {
+      throw new ConflictException('Spec current revision is no longer the approved revision for this WorkItem');
     }
     return spec;
   }
@@ -1771,6 +1957,16 @@ export class AutomationCommandService {
       execution_package_set_id: result.execution_package_set_id,
       package_ids: result.package_ids,
       status: result.status,
+      ...(typeof result.manifest_digest === 'string' ? { manifest_digest: result.manifest_digest } : {}),
+      ...(typeof result.generated_payload_digest === 'string'
+        ? { generated_payload_digest: result.generated_payload_digest }
+        : {}),
+      ...(Array.isArray(result.package_keys) && result.package_keys.every((packageKey) => typeof packageKey === 'string')
+        ? { package_keys: result.package_keys }
+        : {}),
+      ...(Array.isArray(result.generation_artifacts)
+        ? { generation_artifacts: result.generation_artifacts as ArtifactRef[] }
+        : {}),
     };
   }
 

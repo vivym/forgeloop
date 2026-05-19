@@ -447,14 +447,11 @@ const executeCommand = async (
     if (!taskConfig.enabled) {
       throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Package draft generation is disabled');
     }
-    await client.ensurePackageDrafts(actionInput.planRevisionId, {
-      action_run_id: action.id,
-      ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
-      idempotency_key: action.idempotencyKey,
-      automation_precondition: precondition,
-      generation_key: actionInput.generationKey,
-    });
-    return;
+    throw new AutomationHttpError(
+      422,
+      { code: 'package_generation_runtime_not_wired' },
+      'Package draft runtime wiring is not enabled in this task slice.',
+    );
   }
 
   if (action.actionType === 'request_manual_path') {

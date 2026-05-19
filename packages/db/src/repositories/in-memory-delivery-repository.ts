@@ -949,6 +949,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
           claim_token: input.claim_token,
           locked_until: input.locked_until,
           last_heartbeat_at: input.now,
+          ...(input.evidence_refs === undefined ? {} : { evidence_refs: clone(input.evidence_refs) }),
           updated_at: input.now,
         };
         this.executionPackageGenerationRuns.set(reclaimed.execution_package_set_id, clone(reclaimed));
@@ -980,6 +981,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       ...(input.manifest_digest === undefined ? {} : { manifest_digest: input.manifest_digest }),
       ...(input.expected_package_count === undefined ? {} : { expected_package_count: input.expected_package_count }),
       ...(input.expected_package_keys === undefined ? {} : { expected_package_keys: [...input.expected_package_keys] }),
+      ...(input.evidence_refs === undefined ? {} : { evidence_refs: clone(input.evidence_refs) }),
       status: 'running',
       locked_until: input.locked_until,
       last_heartbeat_at: input.now,
