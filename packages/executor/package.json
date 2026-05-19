@@ -9,6 +9,7 @@
     "build": "tsc --noEmit"
   },
   "dependencies": {
+    "@forgeloop/codex-runtime": "workspace:*",
     "@forgeloop/contracts": "workspace:*",
     "@forgeloop/domain": "workspace:*",
     "yaml": "^2.9.0",

@@ -389,6 +389,9 @@ importers:
 
   packages/executor:
     dependencies:
+      '@forgeloop/codex-runtime':
+        specifier: workspace:*
+        version: link:../codex-runtime
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../contracts
