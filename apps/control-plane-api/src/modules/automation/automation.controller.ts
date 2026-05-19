@@ -14,6 +14,7 @@ import {
   claimNextAutomationActionRunSchema,
   completeAutomationActionRunSchema,
   createAutomationActionRunSchema,
+  ensureSpecDraftCommandSchema,
   ensurePackageDraftsCommandSchema,
   ensurePlanDraftCommandSchema,
   failAutomationActionRunSchema,
@@ -25,6 +26,7 @@ import {
   type ClaimNextAutomationActionRunDto,
   type CompleteAutomationActionRunDto,
   type CreateAutomationActionRunDto,
+  type EnsureSpecDraftCommandDto,
   type EnsurePackageDraftsCommandDto,
   type EnsurePlanDraftCommandDto,
   type FailAutomationActionRunDto,
@@ -129,6 +131,14 @@ export class AutomationController {
     @Body(new ZodValidationPipe(ensurePlanDraftCommandSchema)) body: EnsurePlanDraftCommandDto,
   ) {
     return this.automationCommandService.ensurePlanDraftForClaimedAction(workItemId, body);
+  }
+
+  @Post('work-items/:workItemId/ensure-spec-draft')
+  ensureSpecDraft(
+    @Param('workItemId') workItemId: string,
+    @Body(new ZodValidationPipe(ensureSpecDraftCommandSchema)) body: EnsureSpecDraftCommandDto,
+  ) {
+    return this.automationCommandService.ensureSpecDraftForClaimedAction(workItemId, body);
   }
 
   @Post('plan-revisions/:planRevisionId/ensure-package-drafts')

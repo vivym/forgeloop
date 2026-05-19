@@ -65,6 +65,7 @@ import {
 } from './automation-command-helpers';
 import type {
   AutomationActionType,
+  EnsureSpecDraftCommandDto,
   EnsurePackageDraftsCommandDto,
   EnsurePlanDraftCommandDto,
   RequestManualPathCommandDto,
@@ -75,6 +76,7 @@ import {
 } from '../execution-packages/package-policy-fields';
 
 const commandClaimTtlMs = 5 * 60 * 1000;
+type EnsureSpecDraftResult = { spec_id: string; spec_revision_id: string; status: 'created' | 'existing' };
 type EnsurePlanDraftResult = { plan_id: string; plan_revision_id: string; status: 'created' | 'existing' };
 type CommandBoundaryOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 type EnsurePackageDraftsInput = {
@@ -324,6 +326,30 @@ export class AutomationCommandService {
     return this.ensurePlanDraftForApprovedSpec(workItemId, input.spec_revision_id, precondition, input.idempotency_key);
   }
 
+  async ensureSpecDraftForClaimedAction(workItemId: string, input: EnsureSpecDraftCommandDto): Promise<EnsureSpecDraftResult> {
+    const precondition = normalizeAutomationPrecondition(input.automation_precondition as AutomationPrecondition);
+    await this.assertActiveActionClaim({
+      actionRunId: input.action_run_id,
+      claimToken: input.claim_token ?? '',
+      actionType: 'ensure_spec_draft',
+      targetObjectType: 'work_item',
+      targetObjectId: workItemId,
+      idempotencyKey: input.idempotency_key,
+      automationSettingsVersion: precondition.automation_settings_version,
+      capabilityFingerprint: precondition.capability_fingerprint,
+      preconditionFingerprint: automationPreconditionFingerprint(precondition),
+      actionInputJson: { work_item_id: workItemId },
+      now: currentIsoTime(),
+    });
+    return this.ensureSpecDraftForWorkItem({
+      workItemId,
+      generated: input.generated_spec_draft,
+      generationArtifacts: input.generation_artifacts,
+      automationPrecondition: precondition,
+      idempotencyKey: input.idempotency_key,
+    });
+  }
+
   async ensurePackageDraftsForClaimedAction(
     planRevisionId: string,
     input: EnsurePackageDraftsCommandDto,
@@ -462,6 +488,67 @@ export class AutomationCommandService {
       } catch (error) {
         await this.blockCommandIdempotencyAfterError(repository, {
           idempotency_key: idempotencyKey,
+          claim_token: claimToken,
+          error,
+        });
+        return { ok: false, error };
+      }
+    });
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  }
+
+  private async ensureSpecDraftForWorkItem(input: {
+    workItemId: string;
+    generated: EnsureSpecDraftCommandDto['generated_spec_draft'];
+    generationArtifacts: EnsureSpecDraftCommandDto['generation_artifacts'];
+    automationPrecondition: AutomationPrecondition;
+    idempotencyKey: string;
+  }): Promise<EnsureSpecDraftResult> {
+    const precondition = normalizeAutomationPrecondition(input.automationPrecondition);
+    if (precondition.required_capability !== 'canGenerateSpecDraft') {
+      throw new BadRequestException('ensureSpecDraftForWorkItem requires canGenerateSpecDraft precondition');
+    }
+    const preconditionFingerprint = automationPreconditionFingerprint(precondition);
+    const actorScope = `${precondition.actor_class}:${precondition.daemon_identity ?? 'unknown'}`;
+    const claimToken = randomUUID();
+    const claimedAt = this.now();
+
+    const outcome = await this.repository.withObjectLock(`work-item:${input.workItemId}`, async (
+      repository,
+    ): Promise<CommandBoundaryOutcome<EnsureSpecDraftResult>> => {
+      const claim = await repository.claimCommandIdempotency({
+        id: this.id('command-idempotency'),
+        command_name: 'ensure_spec_draft_for_work_item',
+        idempotency_key: input.idempotencyKey,
+        ...commandIdempotencyTarget({ objectType: 'work_item', objectId: input.workItemId }),
+        precondition_json: precondition as unknown as Record<string, unknown>,
+        precondition_fingerprint: preconditionFingerprint,
+        actor_scope: actorScope,
+        claim_token: claimToken,
+        locked_until: this.lockedUntil(claimedAt),
+        now: claimedAt,
+      });
+      const replayed = this.replayedSpecDraftResult(claim.result_json);
+      const replayable = this.replayableCommandResultOrThrow(claim, replayed);
+      if (replayable !== undefined) {
+        return { ok: true, value: { ...replayable, status: 'existing' } };
+      }
+
+      try {
+        const result = await this.writeSpecDraftForWorkItem(repository, input);
+        await repository.completeCommandIdempotency({
+          idempotency_key: input.idempotencyKey,
+          claim_token: claimToken,
+          result_json: result,
+          finished_at: this.now(),
+        });
+        return { ok: true, value: result };
+      } catch (error) {
+        await this.blockCommandIdempotencyAfterError(repository, {
+          idempotency_key: input.idempotencyKey,
           claim_token: claimToken,
           error,
         });
@@ -843,6 +930,120 @@ export class AutomationCommandService {
     }
   }
 
+  private async writeSpecDraftForWorkItem(
+    repository: DeliveryRepository,
+    input: {
+      workItemId: string;
+      generated: EnsureSpecDraftCommandDto['generated_spec_draft'];
+      generationArtifacts: EnsureSpecDraftCommandDto['generation_artifacts'];
+      automationPrecondition: AutomationPrecondition;
+    },
+  ): Promise<EnsureSpecDraftResult> {
+    const precondition = normalizeAutomationPrecondition(input.automationPrecondition);
+    const settings = await repository.resolveAutomationProjectSettings({
+      project_id: precondition.project_id,
+      ...(precondition.repo_id === undefined ? {} : { repo_id: precondition.repo_id }),
+    });
+    assertAutomationPreconditionStillCurrent(settings, precondition);
+    assertCommandCapabilityStillEnabled(settings, 'canGenerateSpecDraft');
+    await this.assertRepoScopeCurrent(repository, precondition.project_id, precondition.repo_id);
+
+    const workItem = this.requireFound(await repository.getWorkItem(input.workItemId), `WorkItem ${input.workItemId}`);
+    if (workItem.project_id !== precondition.project_id) {
+      throw new ConflictException('WorkItem project does not match automation precondition');
+    }
+    if (isWorkItemAutomationTerminal(workItem)) {
+      throw new UnprocessableEntityException({
+        code: 'work_item_terminal',
+        message: `WorkItem ${workItem.id} is terminal for automation.`,
+      });
+    }
+    await assertNoActiveHolds(repository, [{ object_type: 'work_item', object_id: workItem.id }]);
+
+    const existingSpec = workItem.current_spec_id === undefined ? undefined : await repository.getSpec(workItem.current_spec_id);
+    if (existingSpec?.current_revision_id !== undefined) {
+      throw new ConflictException('WorkItem already has a current Spec revision');
+    }
+    if (workItem.current_spec_revision_id !== undefined) {
+      throw new ConflictException('WorkItem already has a current Spec revision');
+    }
+
+    const createdAt = this.now();
+    const spec =
+      existingSpec ??
+      (transitionSpecPlan(undefined, {
+        type: 'create',
+        entity_type: 'spec',
+        id: this.id('spec'),
+        work_item_id: workItem.id,
+        at: createdAt,
+      }) as Spec);
+
+    if (spec.work_item_id !== workItem.id) {
+      throw new ConflictException('WorkItem current spec does not belong to this WorkItem');
+    }
+
+    if (existingSpec === undefined) {
+      const currentWorkItem = this.requireFound(await repository.getWorkItem(workItem.id), `WorkItem ${workItem.id}`);
+      if (currentWorkItem.current_spec_id !== undefined) {
+        throw new ConflictException('WorkItem current spec changed before spec draft could be attached');
+      }
+      await repository.saveSpec(spec);
+      await repository.saveWorkItem({ ...currentWorkItem, current_spec_id: spec.id, updated_at: spec.updated_at });
+      await this.eventWithRepository(repository, 'spec', spec.id, 'spec_created', workItem.owner_actor_id, {
+        work_item_id: workItem.id,
+      });
+    }
+
+    const drafting = transitionSpecPlan(spec, { type: 'generate_draft_start', at: this.now() }) as Spec;
+    await repository.saveSpec(drafting);
+    await this.eventWithRepository(repository, 'spec', spec.id, 'spec_draft_generation_started', workItem.owner_actor_id, {
+      work_item_id: workItem.id,
+    });
+
+    const revision: SpecRevision = {
+      id: this.id('spec-revision'),
+      spec_id: drafting.id,
+      work_item_id: workItem.id,
+      revision_number: (await repository.listSpecRevisions(drafting.id)).length + 1,
+      summary: input.generated.summary,
+      content: input.generated.content,
+      background: input.generated.background,
+      goals: input.generated.goals,
+      scope_in: input.generated.scope_in,
+      scope_out: input.generated.scope_out,
+      acceptance_criteria: input.generated.acceptance_criteria,
+      risk_notes: input.generated.risk_notes,
+      test_strategy_summary: input.generated.test_strategy_summary,
+      ...(input.generated.structured_document === undefined ? {} : { structured_document: input.generated.structured_document }),
+      author_actor_id: precondition.daemon_identity ?? 'automation-spec-drafter',
+      artifact_refs: input.generationArtifacts,
+      created_at: this.now(),
+    };
+    await repository.saveSpecRevision(revision);
+
+    const updated = transitionSpecPlan({ ...drafting, current_revision_id: revision.id }, {
+      type: 'generate_draft_success',
+      at: this.now(),
+    }) as Spec;
+    await repository.saveSpec(updated);
+    const currentWorkItem = this.requireFound(await repository.getWorkItem(workItem.id), `WorkItem ${workItem.id}`);
+    if (currentWorkItem.current_spec_id !== updated.id) {
+      throw new ConflictException('WorkItem current spec changed before spec draft could be attached');
+    }
+    await repository.saveWorkItem({
+      ...currentWorkItem,
+      current_spec_revision_id: revision.id,
+      updated_at: updated.updated_at,
+    });
+    await this.eventWithRepository(repository, 'spec_revision', revision.id, 'spec_draft_generated', revision.author_actor_id, {
+      spec_id: updated.id,
+      work_item_id: workItem.id,
+    });
+
+    return { spec_id: updated.id, spec_revision_id: revision.id, status: 'created' };
+  }
+
   private async writePlanDraftForApprovedSpec(
     repository: DeliveryRepository,
     workItemId: string,
@@ -969,6 +1170,22 @@ export class AutomationCommandService {
     });
 
     return { plan_id: updated.id, plan_revision_id: revision.id, status: 'created' };
+  }
+
+  private replayedSpecDraftResult(result: Record<string, unknown> | undefined): EnsureSpecDraftResult | undefined {
+    if (
+      result === undefined ||
+      typeof result.spec_id !== 'string' ||
+      typeof result.spec_revision_id !== 'string' ||
+      (result.status !== 'created' && result.status !== 'existing')
+    ) {
+      return undefined;
+    }
+    return {
+      spec_id: result.spec_id,
+      spec_revision_id: result.spec_revision_id,
+      status: result.status,
+    };
   }
 
   private replayedPlanDraftResult(result: Record<string, unknown> | undefined): EnsurePlanDraftResult | undefined {
