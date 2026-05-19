@@ -24,7 +24,7 @@
 
 - Modify: `packages/contracts/src/api.ts`
   - Add `productLaneIdSchema`, `productHrefSchema`, `productActionTargetSchema`, `productCommandSchema`, `productActionSchema`, `productLaneItemSchema`, `productLaneResponseSchema`, and `workItemActionsResponseSchema`.
-  - Export `ProductLaneId`, `ProductHref`, `ProductActionTarget`, `ProductCommand`, `ProductAction`, `ProductLaneItem`, `ProductLaneResponse`, and `WorkItemActionsResponse`.
+  - Export `ProductLaneId`, `ProductHref`, `ProductActionTarget`, `ProductCommand`, `ProductNavigateAction`, `ProductCommandAction`, `ProductAction`, `ProductLaneItem`, `ProductLaneResponse`, and `WorkItemActionsResponse`.
   - Remove the superseded workbench response/action contract exports listed in the Explicit Deletion Checklist.
 - Modify: `packages/contracts/src/index.ts`
   - Keep exporting `api.ts`; no new barrel file is required unless `api.ts` grows too large during implementation.
@@ -99,6 +99,7 @@
   - ProductAction sorting, button state mapping, and narrow command capability mapping.
 - Create: `apps/web/src/features/product-actions/product-action-list.tsx`
   - Shared renderer for navigate, command, disabled, and blocked ProductActions.
+  - Requires `projectId` from the caller so command invalidation can target all Product Lane cache variants for the current project from both Workbench and Work Item Detail.
 - Create: `apps/web/src/features/product-lanes/product-lane-view-model.ts`
   - Convert `ProductLaneResponse` into table rows, summary stats, unsupported filter notices, and selected item state.
 - Create: `apps/web/src/features/product-lanes/product-lane-table.tsx`
@@ -111,6 +112,8 @@
   - Redirect `/workbench` to `/workbench/requirements`, preserving supported query params and stripping old route/query state listed in the Explicit Deletion Checklist.
 - Modify: `apps/web/src/app/routes.ts`
   - Register `workbench/:laneId`.
+- Modify: `tests/web/router-test-utils.tsx`
+  - Import the new lane route module and add `workbench/:laneId` to the test route stub.
 - Test: `tests/web/workbench-product-route.test.tsx`
   - Route redirect, unknown lane state, enabled lane navigation, API calls, unsupported filter notice, action sorting, selection re-resolution, and no disabled lane tabs.
 
@@ -148,6 +151,8 @@ All legacy names in this section are deletion targets only. Do not copy them int
 - Delete endpoint family: `GET /query/workbenches/*`
 - Delete product route/query aliases: `/workbench/work-item-owner`, `?role=`
 - Delete product-facing lane ids: `intake`, `manager-health`, `work-item-owner`
+  - The `intake` deletion target is scoped to previous Workbench ids, Product Lane ids, role mappings, query keys, endpoint paths, fixtures, and e2e mocks.
+  - Do not reject legitimate Work Item intake domain language or `PipelineStageId = 'intake'`.
 - Delete exports/types/symbols:
   - `RoleWorkbenchAction`
   - `RoleWorkbenchResponse`
@@ -194,6 +199,8 @@ pnpm vitest run tests/web/no-legacy-web-ui.test.ts tests/naming/delivery-naming.
 Expected: the current guard may fail before implementation; use the failure output only to confirm active migration targets match the Explicit Deletion Checklist.
 
 ## Task 1: ProductAction Contracts
+
+Tasks 1-6 are one coordinated destructive migration unit. Removing old contract exports before DB/API/Web consumers are migrated can make the root workspace red. Run each task's focused tests as written, but do not create an intermediate commit for Tasks 1-5 unless `pnpm -r build` is green at that exact point. The normal path is one coordinated green commit at the end of Task 6 that includes Tasks 1-6.
 
 **Files:**
 - Modify: `packages/contracts/src/api.ts`
@@ -311,7 +318,7 @@ Implement `productHrefSchema` as a string transform/refinement that parses again
 
 Implement command variants with `z.discriminatedUnion('type', [...])`, then add a `superRefine` that checks `object_id` equals the concrete id field for each command type.
 
-Implement `productActionSchema` as a `z.discriminatedUnion('kind', [navigate, command])` and add cross-field `superRefine` rules for enabled/disabled/blocked and manager lane.
+Implement `productActionSchema` as a `z.discriminatedUnion('kind', [navigate, command])` and add cross-field `superRefine` rules for enabled/disabled/blocked and manager lane. After `ProductAction` is defined, export `ProductNavigateAction = Extract<ProductAction, { kind: 'navigate' }>` and `ProductCommandAction = Extract<ProductAction, { kind: 'command' }>`.
 
 Implement response schemas with `superRefine` checks for action lane match and duplicate ids.
 
@@ -335,10 +342,14 @@ Run:
 
 ```bash
 git add packages/contracts/src/api.ts packages/contracts/src/index.ts tests/contracts/product-actions.test.ts
-git commit -m "feat: add product action contracts"
+if pnpm -r build; then
+  git commit -m "feat: add product action contracts"
+else
+  echo "Deferring contract commit to coordinated Task 6 checkpoint."
+fi
 ```
 
-Expected: commit succeeds. If root typecheck is red because consumers still reference removed exports, defer this commit and include Task 2/3 consumer changes in the same commit per the spec green-state rule.
+Expected: commit only if `pnpm -r build` is green. In the expected destructive migration path, defer this commit and include Tasks 1-6 in the coordinated Task 6 commit so old Web/API consumers are removed before the checkpoint.
 
 ## Task 2: Product Lane DB Projection
 
@@ -526,7 +537,16 @@ Missing Spec/Plan record actions must navigate to the Work Item Spec/Plan flow; 
 
 - [ ] **Step 2.9: Update DB exports and remove old export**
 
-Modify `packages/db/src/index.ts` so only the new product lane modules are exported for this surface.
+Modify `packages/db/src/index.ts` so only the new product lane modules are exported for this surface. Delete the old DB query module from the Explicit Deletion Checklist in this task, before any build/typecheck checkpoint, because the file imports removed contracts and must not survive after Task 1.
+
+Run:
+
+```bash
+legacy_db_query=$(awk -F'`' '/Delete file:/ && /packages\/db\/src\/queries/ { print $2; exit }' docs/superpowers/plans/2026-05-19-role-based-workbench-product-actions.md)
+git rm "$legacy_db_query"
+```
+
+Expected: the old DB query module is staged for deletion.
 
 - [ ] **Step 2.10: Run DB/API projection tests**
 
@@ -544,10 +564,15 @@ Run:
 
 ```bash
 git add packages/db/src/queries/product-lane-types.ts packages/db/src/queries/product-action-builders.ts packages/db/src/queries/product-lane-filters.ts packages/db/src/queries/product-lane-queries.ts packages/db/src/queries/work-item-action-queries.ts packages/db/src/index.ts tests/api/product-lanes.test.ts
-git commit -m "feat: add product lane projections"
+git add -u packages/db/src/queries
+if pnpm -r build; then
+  git commit -m "feat: add product lane projections"
+else
+  echo "Deferring DB projection commit to coordinated Task 6 checkpoint."
+fi
 ```
 
-Expected: commit succeeds only if the workspace is green. Otherwise defer until Task 3 in the same coordinated commit.
+Expected: commit only if `pnpm -r build` is green. In the expected destructive migration path, defer this commit and include Tasks 1-6 in the coordinated Task 6 commit.
 
 ## Task 3: Product Lane API Endpoints
 
@@ -577,6 +602,18 @@ await request(app.getHttpServer())
 
 await request(app.getHttpServer())
   .get(`/query/work-items/${workItem.id}/actions?lane=`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/work-items/${workItem.id}/actions?lane=bugs&lane=reviewer`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/work-items/${workItem.id}/actions?foo=bar`)
+  .expect(400);
+
+await request(app.getHttpServer())
+  .get(`/query/work-items/${workItem.id}/actions?lane=unknown`)
   .expect(400);
 ```
 
@@ -631,13 +668,29 @@ export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): Par
 
 All `optionalString` calls must reject arrays, duplicates, and empty trimmed values.
 
+In the same file, implement a separate Work Item actions parser:
+
+```ts
+export function parseWorkItemActionsQuery(raw: RawQuery): { lane?: ProductLaneId } {
+  assertKnownKeys(raw, ['lane']);
+  const lane = optionalString(raw, 'lane');
+  if (lane === undefined) {
+    return {};
+  }
+  return { lane: parseProductLaneIdOrThrowBadRequest(lane) };
+}
+```
+
+The shared `optionalString` helper must make `lane=`, repeated `lane`, and array `lane` fail with `BadRequestException` before DB query execution. Invalid lane ids must also return 400.
+
 - [ ] **Step 3.4: Wire service methods**
 
 In `query.service.ts`:
 
 - import `getProductLane` and `getWorkItemActions` from `@forgeloop/db`;
 - parse `laneId` with `productLaneIdSchema`;
-- parse query with the strict parser;
+- parse Product Lane query with `parseProductLaneQuery`;
+- parse Work Item actions query with `parseWorkItemActionsQuery`;
 - pass `{ cockpit: { run_session_metadata_fallback: this.initialRuntimeMetadata() } }` into `getWorkItemActions`;
 - throw `NotFoundException` when Work Item actions query returns `undefined`;
 - validate response with `productLaneResponseSchema` or `workItemActionsResponseSchema` before returning.
@@ -682,10 +735,14 @@ Run:
 
 ```bash
 git add apps/control-plane-api/src/modules/query/product-lane-query-parser.ts apps/control-plane-api/src/modules/query/query.service.ts apps/control-plane-api/src/modules/query/query.controller.ts tests/api/product-lanes.test.ts tests/api/query-module.test.ts
-git commit -m "feat: expose product lane query endpoints"
+if pnpm -r build; then
+  git commit -m "feat: expose product lane query endpoints"
+else
+  echo "Deferring API commit to coordinated Task 6 checkpoint."
+fi
 ```
 
-Expected: commit succeeds.
+Expected: commit only if `pnpm -r build` is green. In the expected destructive migration path, defer this commit and include Tasks 1-6 in the coordinated Task 6 commit because old Web consumers are still being replaced.
 
 ## Task 4: Web API, Query Keys, And Cache Surface
 
@@ -873,7 +930,7 @@ export function useWorkItemActionsQuery(workItemId: string | undefined, laneId: 
 }
 ```
 
-Add invalidation helpers:
+Add invalidation helpers and make `projectId` mandatory:
 
 ```ts
 export async function invalidateProductActionTargets(
@@ -891,6 +948,25 @@ export async function invalidateProductActionTargets(
 ```
 
 Then create an explicit ProductAction command mutation hook that switches on the command union and calls only the existing command hooks/API methods.
+
+```ts
+export function useProductActionCommandMutation(input: { projectId: string; action: ProductCommandAction }) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (commandInput: { actorId: string }) =>
+      executeProductCommand({ command: input.action.command, actorId: commandInput.actorId }),
+    onSettled: () =>
+      invalidateProductActionTargets(queryClient, {
+        projectId: input.projectId,
+        workItemId: input.action.command.work_item_id,
+        command: input.action.command,
+        target: input.action.target,
+      }),
+  });
+}
+```
+
+Workbench must pass its current `projectId`. Work Item Detail must pass `workItem.project_id`; do not try to derive project id from `ProductCommand`, because the command contract intentionally does not carry it.
 
 - [ ] **Step 4.8: Remove old Web API surface**
 
@@ -912,10 +988,14 @@ Run:
 
 ```bash
 git add apps/web/src/shared/api/types.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/query-keys.ts apps/web/src/shared/api/hooks.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx
-git commit -m "feat: add product lane web api"
+if pnpm -r build; then
+  git commit -m "feat: add product lane web api"
+else
+  echo "Deferring Web API commit to coordinated Task 6 checkpoint."
+fi
 ```
 
-Expected: commit succeeds.
+Expected: commit only if `pnpm -r build` is green. In the expected destructive migration path, defer this commit and include Tasks 1-6 in the coordinated Task 6 commit because the old Workbench route/components are not fully removed until Task 6.
 
 ## Task 5: Shared ProductAction UI And Command Execution
 
@@ -975,6 +1055,8 @@ In `product-action-list.tsx`, render:
 - `<Link>` for navigate actions when enabled;
 - disabled button or disabled link-styled control for disabled/blocked navigate actions, still showing `target.href` as non-clicking metadata only if the existing UI pattern supports it;
 - `<Button>` for command actions;
+- require a `projectId` prop and pass it into `useProductActionCommandMutation`;
+- use `useActorContext()` for the authenticated actor id required by `mark_package_ready` and `run_package`;
 - inline pending/error state per command action id;
 - `disabled_reason` and `blocked_reason` text when present;
 - optional post-success follow-up link only as a separate user action when command target exists.
@@ -997,10 +1079,14 @@ export async function executeProductCommand(input: { command: ProductCommand; ac
       return createCommandApi().generatePackages(command.plan_revision_id);
     case 'mark_package_ready':
       return createCommandApi().markPackageReady(command.package_id, {
+        actor_id: input.actorId,
         expected_package_version: command.expected_package_version,
       });
     case 'run_package':
-      return createCommandApi().runPackage(command.package_id, input.actorId, { workflow_only: false });
+      return createCommandApi().runPackage(command.package_id, input.actorId, {
+        execution_package_id: command.package_id,
+        executor_type: 'local_codex',
+      });
   }
 }
 ```
@@ -1023,10 +1109,14 @@ Run:
 
 ```bash
 git add apps/web/src/features/product-actions/product-actions.ts apps/web/src/features/product-actions/product-action-list.tsx apps/web/src/shared/api/hooks.ts tests/web/api-hooks.test.tsx tests/web/workbench-product-route.test.tsx tests/web/work-item-product-route.test.tsx
-git commit -m "feat: render product actions"
+if pnpm -r build; then
+  git commit -m "feat: render product actions"
+else
+  echo "Deferring ProductAction UI commit to coordinated Task 6 checkpoint."
+fi
 ```
 
-Expected: commit succeeds only if affected tests are green; otherwise combine with Task 6/7 route wiring in one green commit.
+Expected: commit only if `pnpm -r build` is green. In the expected destructive migration path, defer this commit and include Tasks 1-6 in the coordinated Task 6 commit because the Workbench route replacement is still underway.
 
 ## Task 6: Product Lane Workbench Route
 
@@ -1038,6 +1128,7 @@ Expected: commit succeeds only if affected tests are green; otherwise combine wi
 - Create: `apps/web/src/app/routes/workbench/$laneId.tsx`
 - Modify: `apps/web/src/app/routes/workbench/index.tsx`
 - Modify: `apps/web/src/app/routes.ts`
+- Modify: `tests/web/router-test-utils.tsx`
 - Modify: `tests/web/workbench-product-route.test.tsx`
 
 - [ ] **Step 6.1: Write failing route tests**
@@ -1045,8 +1136,13 @@ Expected: commit succeeds only if affected tests are green; otherwise combine wi
 In `tests/web/workbench-product-route.test.tsx`, assert:
 
 ```ts
-expect(renderedRouterAt('/workbench?project_id=p1&kind=bug&role=old')).toRedirectTo('/workbench/requirements?project_id=p1');
-expect(screen.getByRole('link', { name: /bugs/i })).toHaveAttribute('href', '/workbench/bugs?project_id=p1');
+const screen = await renderRoute('/workbench?project_id=p1&kind=bug&role=old');
+expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+  'http://localhost:3000/query/product-lanes/requirements?project_id=p1',
+  expect.objectContaining({ method: 'GET' }),
+);
+expect(screen.getByRole('link', { name: /bugs/i }).getAttribute('href')).toBe('/workbench/bugs?project_id=p1');
 ```
 
 Add tests for:
@@ -1058,6 +1154,8 @@ Add tests for:
 - selected row re-resolves after a refetch returns different items;
 - ActionRail clears when no selected item remains;
 - mobile layout does not render nested cards for actions.
+
+Also update `tests/web/router-test-utils.tsx` in this task so these tests can render canonical lane routes through the shared route stub.
 
 - [ ] **Step 6.2: Run route tests and verify they fail**
 
@@ -1105,6 +1203,15 @@ route('workbench', './routes/workbench/index.tsx'),
 route('workbench/:laneId', './routes/workbench/$laneId.tsx'),
 ```
 
+In `tests/web/router-test-utils.tsx`, import the new route module and add the lane route beside the default route:
+
+```ts
+import WorkbenchLaneRoute from '../../apps/web/src/app/routes/workbench/$laneId';
+
+{ path: 'workbench', Component: WorkbenchRoute },
+{ path: 'workbench/:laneId', Component: WorkbenchLaneRoute },
+```
+
 - [ ] **Step 6.6: Implement Workbench view model and table**
 
 In `product-lane-view-model.ts`, convert response items into rows:
@@ -1129,7 +1236,7 @@ In `product-lane-workbench.tsx`, wire:
 - lane nav;
 - unsupported filter notice;
 - table;
-- ActionRail using `ProductActionList`.
+- ActionRail using `ProductActionList projectId={projectId}`.
 
 Unknown lane must not fetch; it renders an unavailable state.
 
@@ -1147,13 +1254,29 @@ pnpm vitest run tests/web/workbench-product-route.test.tsx tests/web/api-hooks.t
 
 Expected: PASS.
 
-- [ ] **Step 6.10: Commit Workbench checkpoint**
+- [ ] **Step 6.10: Run coordinated green gate for Tasks 1-6**
 
 Run:
 
 ```bash
-git add apps/web/src/features/product-lanes apps/web/src/features/product-actions apps/web/src/app/routes.ts apps/web/src/app/routes/workbench tests/web/workbench-product-route.test.tsx
-git add -u apps/web/src/features
+pnpm vitest run tests/contracts/product-actions.test.ts tests/api/product-lanes.test.ts tests/api/query-module.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/workbench-product-route.test.tsx tests/web/work-item-product-route.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm -r build
+```
+
+Expected: PASS. This is the first required green root checkpoint after removing old contract exports and replacing all DB/API/Web Workbench consumers.
+
+- [ ] **Step 6.11: Commit coordinated Workbench migration checkpoint**
+
+Run:
+
+```bash
+git add packages/contracts/src/api.ts packages/contracts/src/index.ts tests/contracts/product-actions.test.ts
+git add packages/db/src/queries/product-lane-types.ts packages/db/src/queries/product-action-builders.ts packages/db/src/queries/product-lane-filters.ts packages/db/src/queries/product-lane-queries.ts packages/db/src/queries/work-item-action-queries.ts packages/db/src/index.ts
+git add apps/control-plane-api/src/modules/query/product-lane-query-parser.ts apps/control-plane-api/src/modules/query/query.service.ts apps/control-plane-api/src/modules/query/query.controller.ts
+git add apps/web/src/shared/api/types.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/query-keys.ts apps/web/src/shared/api/hooks.ts
+git add apps/web/src/features/product-actions apps/web/src/features/product-lanes apps/web/src/app/routes.ts apps/web/src/app/routes/workbench tests/web/router-test-utils.tsx
+git add tests/api/product-lanes.test.ts tests/api/query-module.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/workbench-product-route.test.tsx tests/web/work-item-product-route.test.tsx
+git add -u packages/db/src/queries apps/web/src/features tests/api
 git commit -m "feat: replace workbench with product lanes"
 ```
 
@@ -1206,11 +1329,11 @@ export function WorkItemNextActions({ workItem }: { workItem: WorkItem }) {
     );
   }
 
-  return <WorkItemNextActionsContent workItemId={workItem.id} laneId={parsedLane} />;
+  return <WorkItemNextActionsContent laneId={parsedLane} projectId={workItem.project_id} workItemId={workItem.id} />;
 }
 ```
 
-The content component uses `useWorkItemActionsQuery` and renders `ProductActionList`.
+The content component uses `useWorkItemActionsQuery` and renders `ProductActionList projectId={projectId}`. This is required so command execution from Work Item Detail invalidates all product-lane cache variants for the current project.
 
 - [ ] **Step 7.4: Replace Work Item Detail action rail**
 
@@ -1237,11 +1360,12 @@ Expected: PASS.
 Run:
 
 ```bash
+pnpm -r build
 git add apps/web/src/features/work-items/work-item-next-actions.tsx apps/web/src/features/work-items/work-item-detail.tsx tests/web/work-item-product-route.test.tsx
 git commit -m "feat: add work item next actions"
 ```
 
-Expected: commit succeeds.
+Expected: build passes before the commit, then commit succeeds.
 
 ## Task 8: Fixtures, E2E Mocks, And No-Legacy Guards
 
@@ -1260,7 +1384,7 @@ Expand `tests/web/no-legacy-web-ui.test.ts` with a product workbench cleanup ass
 - `tests/web`;
 - `tests/e2e`.
 
-The assertion should fail on the deletion targets listed in the Explicit Deletion Checklist, except inside the guard test itself.
+The assertion should fail on the deletion targets listed in the Explicit Deletion Checklist, except inside the guard test itself. Scope the `intake` check narrowly to previous Workbench product vocabulary: old lane ids, role mappings, query keys, endpoint paths, fixtures, and e2e mocks. Do not flag legitimate Work Item intake copy, domain model fields, or `PipelineStageId = 'intake'`.
 
 Add a naming test update that scans active product code and product tests while excluding historical specs/plans and this current migration spec/plan.
 
@@ -1405,4 +1529,4 @@ Expected: commit succeeds. If no fixes were needed, no commit is required.
 - Do not invent Web hrefs from partial ids. Backend owns ProductAction target hrefs, and contracts reject malformed hrefs.
 - Manager lane is read-only. A manager command action is a backend contract failure.
 - Work Item type lanes are not aliases for a single owner role. They are distinct product queues with kind-specific semantics.
-- Historical docs may keep historical vocabulary. Active code, product tests, fixtures, e2e mocks, and current non-checklist plan sections must not.
+- Historical docs may keep historical vocabulary. Active code, product tests, fixtures, e2e mocks, and current non-checklist plan sections must not keep deleted Workbench/action vocabulary. The `intake` term remains valid only for non-Workbench domain concepts such as Work Item intake and Pipeline stages.
