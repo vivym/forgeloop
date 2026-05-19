@@ -289,7 +289,6 @@ const daemonOptions = (client: AutomationDaemonClient) => ({
   policyLoader: async () => loadedPolicy(),
   noClaimBackoffMs: 25,
   loopIntervalMs: 1_000,
-  generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
 });
 
 const generationPlanning = {
@@ -420,7 +419,7 @@ describe('automation daemon loop', () => {
     expect(JSON.stringify(client.calls)).not.toContain('enqueue');
   });
 
-  it('preserves legacy daemon plan and package planning when no generation config is provided', async () => {
+  it('suppresses Plan and Package draft planning when no generation config is provided', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
       workItemsRequiringPlan: [
@@ -441,13 +440,13 @@ describe('automation daemon loop', () => {
 
     const result = await daemon.runOnce();
 
-    expect(result).toMatchObject({ plannedActionCount: 3, executed: { status: 'skipped' } });
+    expect(result).toMatchObject({ plannedActionCount: 1, executed: { status: 'skipped' } });
     expect(
       client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
-    ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
+    ).toEqual(['project_runtime_snapshot']);
   });
 
-  it('preserves legacy daemon plan and package planning for minimal environment config', async () => {
+  it('suppresses Plan and Package draft planning for minimal environment config', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
       workItemsRequiringPlan: [
@@ -473,10 +472,10 @@ describe('automation daemon loop', () => {
 
     const result = await daemon.runOnce();
 
-    expect(result).toMatchObject({ plannedActionCount: 3, executed: { status: 'skipped' } });
+    expect(result).toMatchObject({ plannedActionCount: 1, executed: { status: 'skipped' } });
     expect(
       client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
-    ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
+    ).toEqual(['project_runtime_snapshot']);
   });
 
   it('claims policy projection before app_server generation actions', async () => {
@@ -616,10 +615,10 @@ describe('automation daemon loop', () => {
 
       const result = await daemon.runOnce();
 
-      expect(result).toMatchObject({ plannedActionCount: 3, executed: { status: 'skipped' } });
+      expect(result).toMatchObject({ plannedActionCount: 1, executed: { status: 'skipped' } });
       expect(
         client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
-      ).toEqual(['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot']);
+      ).toEqual(['project_runtime_snapshot']);
     },
   );
 

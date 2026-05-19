@@ -70,7 +70,7 @@ const policyProjectionFor = (
 const legacyGenerationPlanningFor = (
   mode: AutomationGenerationMode | undefined,
 ): AutomationGenerationPlanningConfig => {
-  const effectiveMode = mode === 'app_server' ? 'app_server' : 'fake';
+  const effectiveMode = mode === 'app_server' ? 'app_server' : mode === 'fake' ? 'fake' : 'disabled';
   return {
     mode: effectiveMode,
     tasks: {
@@ -80,12 +80,12 @@ const legacyGenerationPlanningFor = (
         outputSchemaVersion: specDraftOutputSchemaVersion,
       },
       plan_draft: {
-        enabled: true,
+        enabled: false,
         promptVersion: 'plan-draft.fake.v1',
         outputSchemaVersion: 'plan_draft.v1',
       },
       package_drafts: {
-        enabled: true,
+        enabled: false,
         promptVersion: 'package-drafts.fake.v1',
         outputSchemaVersion: 'package_drafts.v1',
       },
