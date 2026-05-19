@@ -646,6 +646,8 @@ const packageDraftActionBody = (
     action_input_json: {
       plan_revision_id: ctx.planRevisionId,
       generation_key: generationKey,
+      prompt_version: 'package-drafts.fake.v1',
+      output_schema_version: 'package_drafts.v1',
     },
     ...overrides,
   };
@@ -2317,6 +2319,9 @@ describe('automation command boundaries', () => {
       execution_package_set_id: expect.any(String),
       package_ids: expect.arrayContaining([expect.any(String)]),
       status: 'created',
+      task_kind: 'package_drafts',
+      prompt_version: 'package-drafts.fake.v1',
+      output_schema_version: 'package_drafts.v1',
       manifest_digest: expect.stringMatching(/^sha256:/),
       generated_payload_digest: expect.stringMatching(/^sha256:/),
       package_keys: ['api', 'tests'],
@@ -2333,6 +2338,9 @@ describe('automation command boundaries', () => {
       evidence_refs: packageGenerationArtifacts,
       manifest_digest: expect.stringMatching(/^sha256:/),
       result_json: {
+        task_kind: 'package_drafts',
+        prompt_version: 'package-drafts.fake.v1',
+        output_schema_version: 'package_drafts.v1',
         generated_payload_digest: expect.stringMatching(/^sha256:/),
         package_keys: ['api', 'tests'],
         generation_artifacts: packageGenerationArtifacts,

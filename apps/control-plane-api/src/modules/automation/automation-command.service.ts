@@ -99,6 +99,8 @@ type EnsurePackageDraftsInput = {
   generationKey?: string;
   generated: GeneratedPackageDraftSetV1;
   generationArtifacts: ArtifactRef[];
+  promptVersion?: string;
+  outputSchemaVersion?: 'package_drafts.v1';
   regenerationApproval?: {
     supersededGenerationKey: string;
     supersededExecutionPackageSetId: string;
@@ -109,6 +111,9 @@ type EnsurePackageDraftsResult = {
   execution_package_set_id: string;
   package_ids: string[];
   status: 'created' | 'existing';
+  task_kind: 'package_drafts';
+  prompt_version: string;
+  output_schema_version: 'package_drafts.v1';
   manifest_digest?: string;
   generated_payload_digest?: string;
   package_keys?: string[];
@@ -580,6 +585,12 @@ export class AutomationCommandService {
       generationKey,
       generated: generatedPackageDrafts,
       generationArtifacts,
+      ...(typeof generationIdentityFields.prompt_version === 'string'
+        ? { promptVersion: generationIdentityFields.prompt_version }
+        : {}),
+      ...(generationIdentityFields.output_schema_version === 'package_drafts.v1'
+        ? { outputSchemaVersion: generationIdentityFields.output_schema_version }
+        : {}),
       ...(input.regeneration_approval === undefined
         ? {}
         : {
@@ -829,6 +840,14 @@ export class AutomationCommandService {
     }
     const generatedPackageDrafts = generatedPackageDraftSetForCommand(input.generated);
     const sanitizedGenerationArtifacts = safeGenerationArtifactRefs(input.generationArtifacts);
+    const promptVersion = input.promptVersion ?? 'package-drafts.generated.v1';
+    const outputSchemaVersion = input.outputSchemaVersion ?? generatedPackageDrafts.schema_version;
+    if (outputSchemaVersion !== generatedPackageDrafts.schema_version) {
+      throw new BadRequestException({
+        code: 'generated_package_schema_version_mismatch',
+        message: 'Generated Package output schema version does not match the payload.',
+      });
+    }
     const packagePayloadDigest = generatedPayloadDigest({
       generation_key: generationKey,
       generated_package_drafts: generatedPackageDrafts,
@@ -838,6 +857,11 @@ export class AutomationCommandService {
       automation_precondition: precondition,
       generation_key: generationKey,
       generated_payload_digest: packagePayloadDigest,
+      generation_metadata: {
+        task_kind: 'package_drafts',
+        prompt_version: promptVersion,
+        output_schema_version: outputSchemaVersion,
+      },
       generation_artifact_identity: publicArtifactIdentity(sanitizedGenerationArtifacts),
     };
     const commandPreconditionFingerprint = generatedPayloadDigest(commandPreconditionJson);
@@ -904,6 +928,8 @@ export class AutomationCommandService {
             generated: generatedPackageDrafts,
             generationArtifacts: sanitizedGenerationArtifacts,
             generatedPayloadDigest: packagePayloadDigest,
+            promptVersion,
+            outputSchemaVersion,
             ...(input.regenerationApproval === undefined ? {} : { regenerationApproval: input.regenerationApproval }),
           });
           await repository.completeCommandIdempotency({
@@ -1635,6 +1661,8 @@ export class AutomationCommandService {
       generated: GeneratedPackageDraftSetV1;
       generationArtifacts: ArtifactRef[];
       generatedPayloadDigest: string;
+      promptVersion: string;
+      outputSchemaVersion: 'package_drafts.v1';
       regenerationApproval?: EnsurePackageDraftsInput['regenerationApproval'];
     },
   ): Promise<EnsurePackageDraftsResult> {
@@ -1711,7 +1739,7 @@ export class AutomationCommandService {
         required_checks: generatedPackage.required_checks,
         source_mutation_policy: generatedPackage.source_mutation_policy,
       })),
-      outputSchemaVersion: 'package_drafts.v1',
+      outputSchemaVersion: input.outputSchemaVersion,
     });
     const manifestDigest = generatedPayloadDigest(manifest);
 
@@ -1846,6 +1874,9 @@ export class AutomationCommandService {
       execution_package_set_id: generationRun.execution_package_set_id,
       package_ids: input.generated.packages.map((entry) => packageIdsByKey.get(entry.package_key)!),
       status: createdAny ? 'created' : 'existing',
+      task_kind: 'package_drafts',
+      prompt_version: input.promptVersion,
+      output_schema_version: input.outputSchemaVersion,
       manifest_digest: manifestDigest,
       generated_payload_digest: input.generatedPayloadDigest,
       package_keys: input.generated.packages.map((entry) => entry.package_key),
@@ -1973,7 +2004,10 @@ export class AutomationCommandService {
       typeof result.execution_package_set_id !== 'string' ||
       !Array.isArray(result.package_ids) ||
       !result.package_ids.every((packageId) => typeof packageId === 'string') ||
-      (result.status !== 'created' && result.status !== 'existing')
+      (result.status !== 'created' && result.status !== 'existing') ||
+      result.task_kind !== 'package_drafts' ||
+      typeof result.prompt_version !== 'string' ||
+      result.output_schema_version !== 'package_drafts.v1'
     ) {
       return undefined;
     }
@@ -1981,6 +2015,9 @@ export class AutomationCommandService {
       execution_package_set_id: result.execution_package_set_id,
       package_ids: result.package_ids,
       status: result.status,
+      task_kind: result.task_kind,
+      prompt_version: result.prompt_version,
+      output_schema_version: result.output_schema_version,
       ...(typeof result.manifest_digest === 'string' ? { manifest_digest: result.manifest_digest } : {}),
       ...(typeof result.generated_payload_digest === 'string'
         ? { generated_payload_digest: result.generated_payload_digest }
