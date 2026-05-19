@@ -40,6 +40,7 @@ This is one shippable main-flow product slice: Spec approval, Plan approval, str
   - Require in-review state for approval and request changes through existing state transition behavior plus clearer service guards where useful.
   - Set `approved_revision_id`, `approved_at`, and `approved_by_actor_id` on approved Specs and Plans.
   - Persist approval and changes-requested decisions with rationale summaries.
+  - Use Work Item `resubmit_spec` / `resubmit_plan` transitions when submitting artifacts after changes were requested.
   - Tighten `createPlan` and `generatePlanDraft` to require an approved current Spec with `approved_revision_id` and `current_revision_id === approved_revision_id`.
 - Test `tests/api/spec-plan-service.test.ts`
   - Cover API command gates, rationale validation, approval metadata, decisions, and strict Plan creation/draft gates.
@@ -167,6 +168,59 @@ it('rejects request changes without a rationale', async () => {
     .send({ actor_id: actorReviewer, rationale: '   ' })
     .expect(400);
 });
+
+it('rejects approval and request changes unless the artifact is in review', async () => {
+  const server = app.getHttpServer();
+  const { workItem } = await createProjectRepoWorkItem(app);
+  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+  await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
+
+  await request(server)
+    .post(`/specs/${spec.id}/approve`)
+    .set(reviewerHeaders)
+    .send({ actor_id: actorReviewer })
+    .expect(400);
+  await request(server)
+    .post(`/specs/${spec.id}/request-changes`)
+    .set(reviewerHeaders)
+    .send({ actor_id: actorReviewer, rationale: 'Needs review first.' })
+    .expect(400);
+});
+
+it('resubmits specs and plans after requested changes', async () => {
+  const server = app.getHttpServer();
+  const { workItem } = await createProjectRepoWorkItem(app);
+  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
+  await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
+  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server)
+    .post(`/specs/${spec.id}/request-changes`)
+    .set(reviewerHeaders)
+    .send({ actor_id: actorReviewer, rationale: 'Clarify acceptance criteria.' })
+    .expect(201);
+
+  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  expect((await request(server).get(`/work-items/${workItem.id}`).expect(200)).body).toMatchObject({
+    phase: 'spec',
+    gate_state: 'awaiting_spec_approval',
+  });
+
+  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+  const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
+  await request(server).post(`/plans/${plan.id}/revisions`).send(validPlanRevision).expect(201);
+  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  await request(server)
+    .post(`/plans/${plan.id}/request-changes`)
+    .set(reviewerHeaders)
+    .send({ actor_id: actorReviewer, rationale: 'Split rollout checks.' })
+    .expect(201);
+
+  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  expect((await request(server).get(`/work-items/${workItem.id}`).expect(200)).body).toMatchObject({
+    phase: 'plan',
+    gate_state: 'awaiting_plan_approval',
+  });
+});
 ```
 
 Also add helper functions inside the test file:
@@ -237,9 +291,28 @@ private requireCurrentRevision(entity: Spec | Plan): string {
 private artifactLabel(entity: Spec | Plan): 'Spec' | 'Plan' {
   return entity.entity_type === 'spec' ? 'Spec' : 'Plan';
 }
+
+private requireInReview(entity: Spec | Plan): void {
+  if (entity.status !== 'in_review' || entity.gate_state !== 'awaiting_approval') {
+    throw new BadRequestException(`${this.artifactLabel(entity)} ${entity.id} is not awaiting approval`);
+  }
+}
 ```
 
-Call `requireCurrentRevision` before `submit_for_approval` and before `approve` for both Specs and Plans.
+Call `requireCurrentRevision` before `submit_for_approval` and before `approve` for both Specs and Plans. Call `requireInReview` before `approve` and `request_changes` for both Specs and Plans so lifecycle state failures return intentional product errors rather than depending on a lower-level transition exception.
+
+Update `updateWorkItemForSpecPlan` and the submit methods so resubmission after requested changes uses the domain resubmit transitions:
+
+```ts
+private workItemSubmitTransitionFor(entity: Spec | Plan): 'submit_spec' | 'resubmit_spec' | 'submit_plan' | 'resubmit_plan' {
+  if (entity.entity_type === 'spec') {
+    return entity.gate_state === 'changes_requested' ? 'resubmit_spec' : 'submit_spec';
+  }
+  return entity.gate_state === 'changes_requested' ? 'resubmit_plan' : 'submit_plan';
+}
+```
+
+Call `updateWorkItemForSpecPlan(updated.work_item_id, this.workItemSubmitTransitionFor(spec), actorId)` from `submitSpecForApproval` and the Plan equivalent. Extend the `type` union accepted by `updateWorkItemForSpecPlan` to include `resubmit_spec` and `resubmit_plan`.
 
 - [ ] **Step 6: Run API test again**
 
@@ -928,6 +1001,8 @@ Add strict disabled cases:
 ```ts
 expect((screen.getByRole('button', { name: 'Create Plan' }) as HTMLButtonElement).disabled).toBe(true);
 expect(screen.getByText('Create Plan unlocks after the current Spec revision is approved.')).toBeTruthy();
+expect(screen.queryByText('Ready for packages')).toBeNull();
+expect(screen.queryByRole('link', { name: 'Continue to Packages' })).toBeNull();
 ```
 
 Use fixtures where:
@@ -968,7 +1043,7 @@ const specApprovedForPlan = isStrictlyApproved(viewModel.spec);
 
 Change `Create Plan` disabled/title logic so it requires `specApprovedForPlan`. Change Plan draft button disabled/title logic to require `specApprovedForPlan` too.
 
-- [ ] **Step 5: Add approved Plan package handoff section**
+- [ ] **Step 5: Add approved Plan package handoff section and fix readiness copy**
 
 In the Work Item flow Plan section or readiness section, render:
 
@@ -983,6 +1058,18 @@ In the Work Item flow Plan section or readiness section, render:
 ```
 
 Do not use `current_revision_id` as fallback.
+
+Update the existing Planning readiness pills so they do not say `Ready for packages` merely because Spec and Plan records exist. Use strict approved Plan state:
+
+```tsx
+const planApprovedForPackages = isStrictlyApproved(viewModel.plan);
+
+<StatusPill tone={planApprovedForPackages ? 'success' : 'warning'}>
+  {planApprovedForPackages ? 'Ready for packages' : 'Planning in progress'}
+</StatusPill>
+```
+
+The Work Item scoped route must not show `Ready for packages` or `Continue to Packages` until the Plan is approved with `approved_revision_id`.
 
 - [ ] **Step 6: Run Work Item route test again**
 
