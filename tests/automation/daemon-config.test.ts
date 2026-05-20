@@ -28,13 +28,34 @@ describe('automation daemon generation config', () => {
     expect(config.generationPlanningExplicit).toBe(false);
   });
 
-  it('rejects app_server generation without a governed endpoint and artifact root', () => {
+  it('rejects app-server generation without a governed endpoint and artifact root', () => {
     expect(() =>
       loadAutomationDaemonConfig({
         ...baseEnv,
         FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
       }),
     ).toThrow(/app-server/i);
+  });
+
+  it('rejects app-server generation when only the artifact root is missing', () => {
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...baseEnv,
+        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+        FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT/);
+  });
+
+  it('rejects unsafe direct-spawn app-server endpoints at startup', () => {
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...baseEnv,
+        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+        FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'exec:codex app-server',
+        FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_APP_SERVER_ENDPOINT/);
   });
 
   it('maps legacy codex generation mode to the app_server generation driver when governed runtime config is present', () => {
@@ -82,5 +103,36 @@ describe('automation daemon generation config', () => {
     expect(config.generationPlanning.tasks.spec_draft.enabled).toBe(false);
     expect(config.generationPlanning.tasks.plan_draft.enabled).toBe(false);
     expect(config.generationPlanning.tasks.package_drafts.enabled).toBe(true);
+  });
+
+  it('parses positive generation runtime numeric limits', () => {
+    const config = loadAutomationDaemonConfig({
+      ...baseEnv,
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'fake',
+      FORGELOOP_CODEX_GENERATION_TURN_TIMEOUT_MS: '300000',
+      FORGELOOP_CODEX_GENERATION_OUTPUT_LIMIT_BYTES: '1048576',
+      FORGELOOP_CODEX_GENERATION_RAW_NOTIFICATION_LIMIT_BYTES: '4194304',
+      FORGELOOP_CODEX_GENERATION_MAX_CONCURRENCY: '2',
+    });
+
+    expect(config.generationTurnTimeoutMs).toBe(300_000);
+    expect(config.generationOutputLimitBytes).toBe(1_048_576);
+    expect(config.generationRawNotificationLimitBytes).toBe(4_194_304);
+    expect(config.generationMaxConcurrency).toBe(2);
+  });
+
+  it.each([
+    ['FORGELOOP_CODEX_GENERATION_TURN_TIMEOUT_MS', '0'],
+    ['FORGELOOP_CODEX_GENERATION_OUTPUT_LIMIT_BYTES', '-1'],
+    ['FORGELOOP_CODEX_GENERATION_RAW_NOTIFICATION_LIMIT_BYTES', '1.5'],
+    ['FORGELOOP_CODEX_GENERATION_MAX_CONCURRENCY', 'not-a-number'],
+  ])('rejects invalid generation runtime numeric limit %s=%s', (key, value) => {
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...baseEnv,
+        FORGELOOP_CODEX_GENERATION_DRIVER: 'fake',
+        [key]: value,
+      }),
+    ).toThrow(new RegExp(key));
   });
 });

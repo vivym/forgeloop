@@ -72,6 +72,8 @@ export class CodexAppServerEndpointTransport implements CodexAppServerTransport 
     const client = this.#client;
     this.#client = undefined;
     this.#initialized = false;
+    this.#initializePromise = undefined;
+    this.#receiveBuffer = '';
     client?.closeWithError(new Error('Codex app-server socket was closed.'));
     this.#socket?.end();
     this.#socket = undefined;

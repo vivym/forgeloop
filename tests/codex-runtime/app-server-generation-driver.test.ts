@@ -164,6 +164,28 @@ describe('AppServerGenerationDriver', () => {
     });
   });
 
+  it.each([
+    ['timeout', { timeoutMs: 0 }, /codex_generation_timeout_ms_invalid/],
+    ['output', { outputLimitBytes: 0 }, /codex_generation_output_limit_bytes_invalid/],
+    ['raw notification', { rawNotificationLimitBytes: -1 }, /codex_generation_raw_notification_limit_bytes_invalid/],
+  ] as const)('rejects non-positive %s limits before starting an app-server turn', async (_name, limits, expectedError) => {
+    const request = vi.fn(async () => ({ threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } }));
+    const driver = new AppServerGenerationDriver({
+      transport: { request },
+      runtimeSafety: fakeSafety(),
+    });
+
+    await expect(
+      driver.generate({
+        taskKind: 'plan_draft',
+        prompt: '{}',
+        outputSchemaVersion: 'plan_draft.v1',
+        ...limits,
+      }),
+    ).rejects.toThrow(expectedError);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('rejects unsafe turn/start effective config after safe thread/start response', async () => {
     const consumedMethods: string[] = [];
     const safety: CodexGenerationRuntimeSafety = {
@@ -483,6 +505,48 @@ describe('AppServerGenerationDriver', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('does not let a hanging interrupt request block timeout cleanup and close', async () => {
+    const consumedMethods: string[] = [];
+    const close = vi.fn(async () => {});
+    const safety: CodexGenerationRuntimeSafety = {
+      ...fakeSafety(),
+      async consumeGenerationCommand(input) {
+        consumedMethods.push(input.method);
+      },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') {
+        return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+      }
+      if (method === 'turn/start') {
+        return { turnId: 'turn-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+      }
+      if (method === 'turn/interrupt') {
+        await new Promise(() => undefined);
+      }
+      return {};
+    });
+    const driver = new AppServerGenerationDriver({
+      transport: {
+        request,
+        notifications: async function* () {
+          await new Promise(() => undefined);
+        },
+        close,
+      },
+      runtimeSafety: safety,
+    });
+
+    await expect(
+      withTestTimeout(
+        driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1', timeoutMs: 5 }),
+      ),
+    ).rejects.toThrow(/codex_generation_timeout/);
+    expect(consumedMethods).toEqual(['thread/start', 'turn/start', 'turn/interrupt']);
+    expect(request).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thread-1', turnId: 'turn-1' });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('does not send interrupt when cleanup lease consumption fails', async () => {
     const close = vi.fn(async () => {});
     const safety: CodexGenerationRuntimeSafety = {
@@ -522,9 +586,11 @@ describe('AppServerGenerationDriver', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it('allows explicit cancellation while collecting notifications', async () => {
+  it('records governed interruption consumption before explicit cancellation request', async () => {
+    const events: string[] = [];
     const close = vi.fn(async () => {});
     const request = vi.fn(async (method: string) => {
+      events.push(`request:${method}`);
       if (method === 'thread/start') {
         return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
       }
@@ -533,6 +599,12 @@ describe('AppServerGenerationDriver', () => {
       }
       return { acknowledged: true };
     });
+    const safety: CodexGenerationRuntimeSafety = {
+      ...fakeSafety(),
+      async consumeGenerationCommand(input) {
+        events.push(`consume:${input.method}`);
+      },
+    };
     const driver = new AppServerGenerationDriver({
       transport: {
         request,
@@ -541,7 +613,7 @@ describe('AppServerGenerationDriver', () => {
         },
         close,
       },
-      runtimeSafety: fakeSafety(),
+      runtimeSafety: safety,
     });
 
     const generation = driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1', timeoutMs: 500 });
@@ -550,6 +622,14 @@ describe('AppServerGenerationDriver', () => {
 
     await expect(withTestTimeout(generation)).rejects.toThrow(/codex_generation_cancelled/);
     expect(request).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thread-1', turnId: 'turn-1' });
+    expect(events).toEqual([
+      'consume:thread/start',
+      'request:thread/start',
+      'consume:turn/start',
+      'request:turn/start',
+      'consume:turn/interrupt',
+      'request:turn/interrupt',
+    ]);
     expect(close).toHaveBeenCalledTimes(1);
   });
 
@@ -601,6 +681,40 @@ describe('AppServerGenerationDriver', () => {
     await expect(
       driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
     ).rejects.toThrow(/codex_generation_raw_log_too_large/);
+  });
+
+  it('keeps raw app-server notification payloads out of thrown errors', async () => {
+    const rawPayload = 'raw prompt /Users/viv/private secret-claim-token';
+    const driver = new AppServerGenerationDriver({
+      transport: {
+        async request(method) {
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1"}', raw: rawPayload };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+      },
+      runtimeSafety: fakeSafety(),
+      limits: { rawNotificationLimitBytes: 64 },
+    });
+
+    let thrown: unknown;
+    try {
+      await driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain('codex_generation_raw_log_too_large');
+    expect(message).not.toContain('/Users/viv');
+    expect(message).not.toContain('secret-claim-token');
+    expect(message).not.toContain('raw prompt');
   });
 });
 

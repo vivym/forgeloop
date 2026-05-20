@@ -65,6 +65,12 @@ const digest = (value: unknown): string =>
 
 const byteLength = (value: string): number => Buffer.byteLength(value, 'utf8');
 
+const assertPositiveInt = (name: string, value: number): void => {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name}_invalid`);
+  }
+};
+
 const sandboxType = (config: CodexEffectiveConfig | undefined): string | undefined => {
   const sandbox = config?.sandboxPolicy ?? config?.sandbox;
   if (typeof sandbox === 'string') {
@@ -226,10 +232,17 @@ export class AppServerGenerationDriver {
     if (this.#generationActive) {
       throw new Error('codex_generation_concurrency_limit_exceeded');
     }
+    const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
+    const outputLimitBytes = input.outputLimitBytes ?? this.options.limits?.outputLimitBytes ?? defaultOutputLimitBytes;
+    const rawNotificationLimitBytes =
+      input.rawNotificationLimitBytes ?? this.options.limits?.rawNotificationLimitBytes ?? defaultRawNotificationLimitBytes;
+    assertPositiveInt('codex_generation_timeout_ms', timeoutMs);
+    assertPositiveInt('codex_generation_output_limit_bytes', outputLimitBytes);
+    assertPositiveInt('codex_generation_raw_notification_limit_bytes', rawNotificationLimitBytes);
+
     this.#generationActive = true;
     const now = this.options.now ?? (() => new Date().toISOString());
     const nonce = this.options.nonceFactory ?? (() => randomUUID());
-    const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
     const deadline = Date.now() + timeoutMs;
     this.#cleanupDone = false;
     this.#resetCancelState(input.signal);
@@ -253,11 +266,8 @@ export class AppServerGenerationDriver {
           sandboxPolicy: 'readOnly',
           writableRoots: [],
           timeoutMs,
-          outputLimitBytes: input.outputLimitBytes ?? this.options.limits?.outputLimitBytes ?? defaultOutputLimitBytes,
-          rawNotificationLimitBytes:
-            input.rawNotificationLimitBytes ??
-            this.options.limits?.rawNotificationLimitBytes ??
-            defaultRawNotificationLimitBytes,
+          outputLimitBytes,
+          rawNotificationLimitBytes,
           now: startTime,
           expiresAt: new Date(Date.parse(startTime) + timeoutMs).toISOString(),
         }),
@@ -302,11 +312,8 @@ export class AppServerGenerationDriver {
 
       const assistantText = await this.#withDeadline(
         this.#collectAssistantText({
-          outputLimitBytes: input.outputLimitBytes ?? this.options.limits?.outputLimitBytes ?? defaultOutputLimitBytes,
-          rawNotificationLimitBytes:
-            input.rawNotificationLimitBytes ??
-            this.options.limits?.rawNotificationLimitBytes ??
-            defaultRawNotificationLimitBytes,
+          outputLimitBytes,
+          rawNotificationLimitBytes,
         }),
         deadline,
       );
@@ -441,9 +448,16 @@ export class AppServerGenerationDriver {
           nonce: nonce(),
           now: now(),
         });
-        await this.options.transport.request('turn/interrupt', { threadId: session.threadId, turnId: session.turnId });
       } catch {
-        // Transport cleanup must still happen, but no app-server command is sent after lease validation fails.
+        await this.options.transport.close?.().catch(() => undefined);
+        return;
+      }
+      try {
+        void Promise.resolve(
+          this.options.transport.request('turn/interrupt', { threadId: session.threadId, turnId: session.turnId }),
+        ).catch(() => undefined);
+      } catch {
+        // Best-effort interrupt cleanup must never prevent closing the owned transport.
       }
     }
     await this.options.transport.close?.().catch(() => undefined);

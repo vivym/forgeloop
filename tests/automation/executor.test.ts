@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { automationPreconditionFingerprint, type AutomationPrecondition } from '../../packages/domain/src/index';
 import {
+  CodexGenerationError,
   createFakeSpecDraft,
   type CodexGenerationRuntime,
   type GeneratedPackageDraftSetV1,
@@ -826,6 +827,92 @@ describe('automation executor', () => {
       }),
     ]);
     expect(client.calls.map((call) => call.method)).not.toContain('blockAction');
+  });
+
+  it('uses public-safe Codex generation error details without leaking raw runtime data', async () => {
+    const client = new FakeAutomationClient();
+    client.planContext = validPlanGenerationContext();
+    const runtime: CodexGenerationRuntime = {
+      async generateSpecDraft() {
+        throw new Error('unexpected_spec_generation');
+      },
+      async generatePlanDraft() {
+        throw new CodexGenerationError('generated_output_schema_invalid', {
+          retryable: true,
+          publicResultJson: { status: 422, code: 'generated_output_schema_invalid' },
+        });
+      },
+      async generatePackageDrafts() {
+        throw new Error('unexpected_package_generation');
+      },
+    };
+
+    const result = await executeActionRun({
+      client,
+      action: claimedAction({ claimToken: 'secret-claim-token' }),
+      actorId: 'actor-automation',
+      daemonIdentity: 'daemon-main',
+      generationRuntime: runtime,
+      generationPlanning: planGenerationPlanning(),
+    });
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: true,
+      reasonCode: 'generated_output_schema_invalid',
+    });
+    const resultJson = client.calls.find((call) => call.method === 'failAction')?.args[1].result_json;
+    const serialized = JSON.stringify(resultJson);
+    expect(resultJson).toEqual({ status: 422, code: 'generated_output_schema_invalid' });
+    expect(serialized).not.toContain('/Users/viv');
+    expect(serialized).not.toContain('secret-claim-token');
+    expect(serialized).not.toContain('raw prompt');
+  });
+
+  it('honors structured Codex generation errors across package boundaries', async () => {
+    const client = new FakeAutomationClient();
+    client.planContext = validPlanGenerationContext();
+    const runtime: CodexGenerationRuntime = {
+      async generateSpecDraft() {
+        throw new Error('unexpected_spec_generation');
+      },
+      async generatePlanDraft() {
+        throw {
+          code: 'generated_output_too_large',
+          retryable: false,
+          publicResultJson: { status: 422, code: 'generated_output_too_large' },
+          message: 'generated_output_too_large',
+          name: 'CodexGenerationError',
+        };
+      },
+      async generatePackageDrafts() {
+        throw new Error('unexpected_package_generation');
+      },
+    };
+
+    const result = await executeActionRun({
+      client,
+      action: claimedAction(),
+      actorId: 'actor-automation',
+      daemonIdentity: 'daemon-main',
+      generationRuntime: runtime,
+      generationPlanning: planGenerationPlanning(),
+    });
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: false,
+      reasonCode: 'generated_output_too_large',
+    });
+    expect(client.calls.find((call) => call.method === 'failAction')?.args).toEqual([
+      'action-run-1',
+      expect.objectContaining({
+        retryable: false,
+        result_json: { status: 422, code: 'generated_output_too_large' },
+      }),
+    ]);
   });
 
   it('treats replayed succeeded actions as complete without claiming or re-entering commands', async () => {

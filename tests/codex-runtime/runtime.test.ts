@@ -99,7 +99,72 @@ describe('createCodexGenerationRuntime', () => {
       }),
     });
 
-    await expect(runtime.generatePlanDraft(planInput)).rejects.toThrow(/generated_output_schema_invalid/);
+    await expect(runtime.generatePlanDraft(planInput)).rejects.toMatchObject({
+      code: 'generated_output_schema_invalid',
+      retryable: true,
+      publicResultJson: { status: 422, code: 'generated_output_schema_invalid' },
+    });
+  });
+
+  it('maps ambiguous app-server JSON output to a public retryable generated output error', async () => {
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        async request(method) {
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield { type: 'assistant_message_delta', delta: '{"a":1}{"b":2}' };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    await expect(runtime.generatePlanDraft(planInput)).rejects.toMatchObject({
+      code: 'generated_output_ambiguous',
+      retryable: true,
+      publicResultJson: { status: 422, code: 'generated_output_ambiguous' },
+    });
+  });
+
+  it('maps deterministic app-server output limits to public non-retryable errors', async () => {
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 32,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        async request(method) {
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"' };
+          yield { type: 'assistant_message_delta', delta: 'x'.repeat(80) };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    await expect(runtime.generatePlanDraft(planInput)).rejects.toMatchObject({
+      code: 'generated_output_too_large',
+      retryable: false,
+      publicResultJson: { status: 422, code: 'generated_output_too_large' },
+    });
   });
 
   it('enforces runtime-level generation concurrency', async () => {

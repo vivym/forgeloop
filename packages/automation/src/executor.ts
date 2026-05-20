@@ -4,6 +4,7 @@ import {
   planDraftPromptVersion,
   specDraftOutputSchemaVersion,
   specDraftPromptVersion,
+  CodexGenerationError,
   validateGeneratedPackageDraftSet,
   validateGeneratedPlanDraft,
   validateGeneratedSpecDraft,
@@ -232,7 +233,33 @@ const generationTaskConfigFor = (
   return planning.tasks[task];
 };
 
+type StructuredCodexGenerationError = {
+  code: string;
+  retryable: boolean;
+  publicResultJson: Record<string, unknown>;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const structuredCodexGenerationError = (error: unknown): StructuredCodexGenerationError | undefined => {
+  if (error instanceof CodexGenerationError) {
+    return { code: error.code, retryable: error.retryable, publicResultJson: error.publicResultJson };
+  }
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  if (typeof error.code !== 'string' || typeof error.retryable !== 'boolean' || !isRecord(error.publicResultJson)) {
+    return undefined;
+  }
+  return { code: error.code, retryable: error.retryable, publicResultJson: error.publicResultJson };
+};
+
 const errorCode = (error: unknown): string | undefined => {
+  const structuredGenerationError = structuredCodexGenerationError(error);
+  if (structuredGenerationError !== undefined) {
+    return structuredGenerationError.code;
+  }
   if (error instanceof AutomationHttpError) {
     return error.code;
   }
@@ -241,8 +268,15 @@ const errorCode = (error: unknown): string | undefined => {
     'codex_generation_safety_unavailable',
     'codex_generation_sandbox_invalid',
     'codex_app_server_unavailable',
+    'codex_generation_timeout',
+    'codex_generation_cancelled',
+    'codex_generation_concurrency_limit_exceeded',
+    'codex_generation_raw_log_too_large',
+    'codex_generation_turn_failed',
     'generated_output_invalid_json',
+    'generated_output_ambiguous',
     'generated_output_schema_invalid',
+    'generated_output_too_large',
     'generated_package_dependency_invalid',
     'generated_package_manifest_invalid',
     'generated_package_policy_invalid',
@@ -259,8 +293,13 @@ const errorCode = (error: unknown): string | undefined => {
   return undefined;
 };
 
-const isRetryableTransportError = (error: unknown): boolean =>
-  !(error instanceof AutomationHttpError) || error.status >= 500 || error.status === 408 || error.status === 429;
+const isRetryableTransportError = (error: unknown): boolean => {
+  const structuredGenerationError = structuredCodexGenerationError(error);
+  if (structuredGenerationError !== undefined) {
+    return structuredGenerationError.retryable;
+  }
+  return !(error instanceof AutomationHttpError) || error.status >= 500 || error.status === 408 || error.status === 429;
+};
 
 const isStalePrecondition = (code: string | undefined): boolean =>
   code === 'automation_precondition_stale' || code === 'stale_execution_package_revision';
@@ -288,6 +327,10 @@ const isNonRetryableConflict = (code: string | undefined): boolean =>
   code === 'invalid_request_schema';
 
 const resultJsonForError = (error: unknown): Record<string, unknown> => {
+  const structuredGenerationError = structuredCodexGenerationError(error);
+  if (structuredGenerationError !== undefined) {
+    return structuredGenerationError.publicResultJson;
+  }
   if (error instanceof AutomationHttpError) {
     return {
       status: error.status,
@@ -301,8 +344,15 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
     code === 'codex_generation_sandbox_invalid' ||
     code === 'codex_generation_safety_unavailable' ||
     code === 'codex_app_server_unavailable' ||
+    code === 'codex_generation_timeout' ||
+    code === 'codex_generation_cancelled' ||
+    code === 'codex_generation_concurrency_limit_exceeded' ||
+    code === 'codex_generation_raw_log_too_large' ||
+    code === 'codex_generation_turn_failed' ||
     code === 'generated_output_invalid_json' ||
+    code === 'generated_output_ambiguous' ||
     code === 'generated_output_schema_invalid' ||
+    code === 'generated_output_too_large' ||
     code === 'generated_package_dependency_invalid' ||
     code === 'generated_package_manifest_invalid' ||
     code === 'generated_package_policy_invalid' ||

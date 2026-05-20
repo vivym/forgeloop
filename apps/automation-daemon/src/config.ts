@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { AutomationGenerationPlanningConfig } from '@forgeloop/automation';
+import { parseCodexAppServerEndpoint } from '@forgeloop/codex-runtime';
 
 export const DEFAULT_AUTOMATION_LOOP_INTERVAL_MS = 5_000;
 export const DEFAULT_AUTOMATION_NO_CLAIM_BACKOFF_MS = 10_000;
@@ -159,8 +160,15 @@ const assertAppServerRuntimeConfig = (env: EnvLike, mode: AutomationGenerationPl
   if (mode !== 'app_server') {
     return;
   }
-  if (optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT') === undefined) {
+  const endpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
+  if (endpoint === undefined) {
     throw new Error('Invalid automation daemon config: app-server generation requires FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
+  }
+  try {
+    parseCodexAppServerEndpoint(endpoint);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown';
+    throw new Error(`Invalid automation daemon config: FORGELOOP_CODEX_APP_SERVER_ENDPOINT is invalid: ${reason}`);
   }
   if (optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT') === undefined) {
     throw new Error('Invalid automation daemon config: app-server generation requires FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');

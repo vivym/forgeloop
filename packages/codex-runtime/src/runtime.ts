@@ -21,6 +21,35 @@ import type {
   GeneratedPackageDraftSetV1,
 } from './types.js';
 
+export type CodexGenerationErrorCode =
+  | 'codex_generation_disabled'
+  | 'codex_generation_safety_unavailable'
+  | 'codex_generation_sandbox_invalid'
+  | 'codex_app_server_unavailable'
+  | 'codex_generation_timeout'
+  | 'codex_generation_cancelled'
+  | 'codex_generation_concurrency_limit_exceeded'
+  | 'codex_generation_raw_log_too_large'
+  | 'codex_generation_turn_failed'
+  | 'generated_output_invalid_json'
+  | 'generated_output_ambiguous'
+  | 'generated_output_schema_invalid'
+  | 'generated_output_too_large';
+
+export class CodexGenerationError extends Error {
+  readonly code: CodexGenerationErrorCode;
+  readonly retryable: boolean;
+  readonly publicResultJson: Record<string, unknown>;
+
+  constructor(code: CodexGenerationErrorCode, options: { retryable: boolean; publicResultJson?: Record<string, unknown> }) {
+    super(code);
+    this.name = 'CodexGenerationError';
+    this.code = code;
+    this.retryable = options.retryable;
+    this.publicResultJson = options.publicResultJson ?? { status: 422, code };
+  }
+}
+
 export const createAppServerGenerationDriver = (input: {
   endpoint: string | undefined;
   taskKind: CodexGenerationTaskKind;
@@ -117,6 +146,38 @@ const validateAppServerOutput = <TGenerated>(
   }
 };
 
+const appServerRetryableCodes = new Set<CodexGenerationErrorCode>([
+  'codex_app_server_unavailable',
+  'codex_generation_timeout',
+  'codex_generation_cancelled',
+  'codex_generation_concurrency_limit_exceeded',
+  'codex_generation_turn_failed',
+  'generated_output_invalid_json',
+  'generated_output_ambiguous',
+  'generated_output_schema_invalid',
+]);
+
+const appServerNonRetryableCodes = new Set<CodexGenerationErrorCode>([
+  'codex_generation_safety_unavailable',
+  'codex_generation_sandbox_invalid',
+  'codex_generation_raw_log_too_large',
+  'generated_output_too_large',
+]);
+
+const toCodexGenerationError = (error: unknown): CodexGenerationError => {
+  if (error instanceof CodexGenerationError) {
+    return error;
+  }
+  const code = error instanceof Error ? error.message : undefined;
+  if (code !== undefined && appServerRetryableCodes.has(code as CodexGenerationErrorCode)) {
+    return new CodexGenerationError(code as CodexGenerationErrorCode, { retryable: true });
+  }
+  if (code !== undefined && appServerNonRetryableCodes.has(code as CodexGenerationErrorCode)) {
+    return new CodexGenerationError(code as CodexGenerationErrorCode, { retryable: false });
+  }
+  return new CodexGenerationError('codex_app_server_unavailable', { retryable: true });
+};
+
 export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfig): CodexGenerationRuntime => {
   assertPositiveInt('codex_generation_timeout_ms', config.timeoutMs);
   assertPositiveInt('codex_generation_output_limit_bytes', config.outputLimitBytes);
@@ -175,6 +236,8 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         generationArtifacts: output.rawArtifactRefs as CodexGenerationResult<TGenerated>['generationArtifacts'],
         publicSummary: 'Codex app-server draft generated.',
       };
+    }).catch((error: unknown) => {
+      throw toCodexGenerationError(error);
     });
 
   if (config.mode === 'fake') {
@@ -201,13 +264,13 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
 
   return {
     async generateSpecDraft() {
-      throw new Error('codex_generation_disabled');
+      throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
     },
     async generatePlanDraft() {
-      throw new Error('codex_generation_disabled');
+      throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
     },
     async generatePackageDrafts() {
-      throw new Error('codex_generation_disabled');
+      throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
     },
   };
 };
