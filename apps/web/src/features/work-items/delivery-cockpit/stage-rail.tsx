@@ -10,7 +10,7 @@ export interface DeliveryStageRailProps {
 
 export function DeliveryStageRail({ stages }: DeliveryStageRailProps) {
   return (
-    <nav aria-label="Delivery readiness stages" className="delivery-stage-rail">
+    <nav aria-label="Delivery readiness stages" className="delivery-stage-rail" data-testid="delivery-stage-rail">
       <ol className="delivery-stage-rail__list">
         {stages.map((stage) => (
           <li className="delivery-stage-rail__item" key={stage.id}>

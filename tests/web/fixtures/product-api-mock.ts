@@ -460,6 +460,15 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(workItem, [], 'reviewer'),
   },
+  [`GET /query/work-item-cockpit/${workItem.id}?lane=execution-owner`]: {
+    work_item: workItem,
+    current_spec: spec,
+    current_plan: plan,
+    packages: [executionPackage],
+    run_sessions: [runSession],
+    review_packets: [reviewPacket],
+    delivery_readiness: deliveryReadiness(workItem, [], 'execution-owner'),
+  },
   [`GET /query/work-item-cockpit/${routeWorkItem.id}`]: {
     work_item: routeWorkItem,
     current_spec: routeSpec,

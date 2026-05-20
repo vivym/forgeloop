@@ -20,11 +20,13 @@ export function DeliveryActionRail({ actions, activeLane, onCommandAction, proje
   const groups = groupDeliveryActionsByPriority(sanitizeDeliveryActionsForDisplay(actions, activeLane));
 
   return (
-    <SharedActionRail title={title}>
-      <ActionGroup actions={groups.primary} label="Primary" onCommandAction={onCommandAction} projectId={projectId} />
-      <ActionGroup actions={groups.secondary} label="Secondary" onCommandAction={onCommandAction} projectId={projectId} />
-      {groups.primary.length === 0 && groups.secondary.length === 0 ? <p className="empty">No delivery actions are available.</p> : null}
-    </SharedActionRail>
+    <div data-testid="delivery-action-rail">
+      <SharedActionRail title={title}>
+        <ActionGroup actions={groups.primary} label="Primary" onCommandAction={onCommandAction} projectId={projectId} />
+        <ActionGroup actions={groups.secondary} label="Secondary" onCommandAction={onCommandAction} projectId={projectId} />
+        {groups.primary.length === 0 && groups.secondary.length === 0 ? <p className="empty">No delivery actions are available.</p> : null}
+      </SharedActionRail>
+    </div>
   );
 }
 

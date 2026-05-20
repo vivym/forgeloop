@@ -2471,7 +2471,7 @@ git commit -m "feat: polish linked delivery detail pages"
 - Modify: `tests/web/fixtures/product-api-mock.ts`
 - Modify: `tests/web/fixtures/product-data.ts`
 
-- [ ] **Step 1: Write failing browser assertions**
+- [x] **Step 1: Write failing browser assertions**
 
 In `tests/e2e/web-product-routes.e2e.test.ts`:
 
@@ -2510,13 +2510,13 @@ expect(summaryTop).toBeLessThan(railTop);
 - Keep overflow assertions for `/packages/:id`, `/runs/:id`, `/reviews/:id`, `/releases/:id`.
 - Add `expect(await page.locator('body').innerText()).not.toContain('Workbench');`.
 
-- [ ] **Step 2: Run browser test and verify failure**
+- [x] **Step 2: Run browser test and verify failure**
 
 Run: `pnpm vitest run tests/e2e/web-product-routes.e2e.test.ts --pool=forks --no-file-parallelism --maxWorkers=1`
 
 Expected: FAIL until route migration and cockpit DOM/test ids are implemented.
 
-- [ ] **Step 3: Add stable test ids only where they represent layout landmarks**
+- [x] **Step 3: Add stable test ids only where they represent layout landmarks**
 
 In cockpit components, add:
 
@@ -2526,13 +2526,13 @@ In cockpit components, add:
 
 Do not add test ids for content that can be selected by role/text.
 
-- [ ] **Step 4: Run browser test**
+- [x] **Step 4: Run browser test**
 
 Run: `pnpm vitest run tests/e2e/web-product-routes.e2e.test.ts --pool=forks --no-file-parallelism --maxWorkers=1`
 
 Expected: PASS and screenshots written under `test-results/web-product-routes`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/e2e/web-product-routes.e2e.test.ts tests/web/fixtures/product-api-mock.ts tests/web/fixtures/product-data.ts apps/web/src/features/work-items/delivery-cockpit

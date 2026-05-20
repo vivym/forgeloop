@@ -15,7 +15,7 @@ export interface AppProvidersProps {
 }
 
 export function AppProviders({ children, queryClient: queryClientOverride, actor, project, runtimeFlags }: AppProvidersProps) {
-  const [queryClient] = useState(() => queryClientOverride ?? new QueryClient());
+  const [queryClient] = useState(() => queryClientOverride ?? createQueryClient());
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -26,4 +26,18 @@ export function AppProviders({ children, queryClient: queryClientOverride, actor
       </RuntimeFlagsProvider>
     </QueryClientProvider>
   );
+}
+
+function createQueryClient() {
+  if (import.meta.env.VITE_FORGELOOP_QUERY_RETRY !== 'false') {
+    return new QueryClient();
+  }
+
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
 }

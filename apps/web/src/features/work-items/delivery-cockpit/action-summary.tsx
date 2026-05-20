@@ -14,7 +14,7 @@ export function DeliveryActionSummary({ readiness }: DeliveryActionSummaryProps)
   const primaryAction = actionGroups.primary[0] ?? actionGroups.secondary[0];
 
   return (
-    <section aria-label="Delivery action summary" className="delivery-action-summary">
+    <section aria-label="Delivery action summary" className="delivery-action-summary" data-testid="delivery-action-summary">
       <div className="state-grid">
         <div className="metric">
           <span>Active lane</span>
