@@ -228,7 +228,13 @@ describe('review and release product routes', () => {
     });
 
     expect(await screen.findByRole('heading', { name: reviewPacket.summary })).toBeTruthy();
-    expect(screen.getByText('approved')).toBeTruthy();
+    expectPageHeaderText(/Review/i);
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expectStatusPillText(reviewPacket.decision);
+    expectActionRailBeforeDetailContent();
+    expectNoLegacyWorkbenchText();
+    expectNoNestedCards();
+    expect(screen.getAllByText('approved').length).toBeGreaterThan(0);
     expect(screen.getByText('apps/web/src/shared/api/hooks.ts')).toBeTruthy();
     expect(screen.getByText(reviewPacket.check_result_summary)).toBeTruthy();
     expect(screen.getByText(reviewPacket.self_review.summary)).toBeTruthy();
@@ -369,6 +375,12 @@ describe('review and release product routes', () => {
     });
 
     expect(await screen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expectPageHeaderText(/Release/i);
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeTruthy();
+    expectStatusPillText(release.phase);
+    expectActionRailBeforeDetailContent();
+    expectNoLegacyWorkbenchText();
+    expectNoNestedCards();
     expect(screen.getByText('fixture-release-ready')).toBeTruthy();
     expect(screen.getByText(release.scope_summary)).toBeTruthy();
     expect(screen.getByText(workItem.title)).toBeTruthy();
@@ -574,3 +586,29 @@ describe('review and release product routes', () => {
     });
   });
 });
+
+function expectStatusPillText(value: string) {
+  const statusPills = Array.from(document.body.querySelectorAll('.fl-status-pill'));
+  expect(statusPills.some((pill) => pill.textContent?.includes(value))).toBe(true);
+}
+
+function expectPageHeaderText(pattern: RegExp) {
+  expect(document.body.querySelector('.fl-page-header')?.textContent).toMatch(pattern);
+}
+
+function expectActionRailBeforeDetailContent() {
+  const rail = document.body.querySelector('.fl-detail-layout__rail');
+  const content = document.body.querySelector('.fl-detail-layout__content');
+  expect(rail).toBeTruthy();
+  expect(content).toBeTruthy();
+  if (rail === null || content === null) throw new Error('Detail layout did not render action rail and content regions.');
+  expect(rail.compareDocumentPosition(content)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
+function expectNoLegacyWorkbenchText() {
+  expect(document.body.textContent).not.toMatch(/Workbench/i);
+}
+
+function expectNoNestedCards() {
+  expect(document.body.querySelector('.fl-card .fl-card, .card .card')).toBeNull();
+}

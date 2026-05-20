@@ -2400,7 +2400,7 @@ git commit -m "feat: replace work item detail with delivery cockpit"
 - Modify: `tests/web/package-run-product-routes.test.tsx`
 - Modify: `tests/web/review-release-product-routes.test.tsx`
 
-- [ ] **Step 1: Write failing visual baseline tests**
+- [x] **Step 1: Write failing visual baseline tests**
 
 In `tests/web/package-run-product-routes.test.tsx`, add assertions for package and run detail pages:
 
@@ -2419,7 +2419,7 @@ In `tests/web/review-release-product-routes.test.tsx`, add equivalent review/rel
 - no color-only status (assert status text exists);
 - no nested card selector.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -2429,7 +2429,7 @@ pnpm vitest run tests/web/package-run-product-routes.test.tsx tests/web/review-r
 
 Expected: FAIL where pages still lack the baseline.
 
-- [ ] **Step 3: Update detail pages**
+- [x] **Step 3: Update detail pages**
 
 For each linked page:
 
@@ -2445,7 +2445,7 @@ For each linked page:
 - Ensure long IDs/log lines wrap or live in scroll-contained blocks that do not create document-level overflow.
 - Remove any `/workbench` links or labels.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -2455,7 +2455,7 @@ pnpm vitest run tests/web/package-run-product-routes.test.tsx tests/web/review-r
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/app/routes/packages/'$packageId.tsx' apps/web/src/features/execution-packages/execution-package-routes.tsx apps/web/src/app/routes/runs/'$runSessionId.tsx' apps/web/src/features/run-console/run-console-routes.tsx apps/web/src/app/routes/reviews/'$reviewPacketId.tsx' apps/web/src/features/review-packets/review-packet-routes.tsx apps/web/src/app/routes/releases/'$releaseId.tsx' apps/web/src/features/releases/release-routes.tsx tests/web/package-run-product-routes.test.tsx tests/web/review-release-product-routes.test.tsx

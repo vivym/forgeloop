@@ -121,7 +121,14 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
       actionRail={<ReleaseActionRail actorId={actorId} cockpit={cockpit} />}
       header={
         <PageHeader
-          eyebrow={`Phase ${release.phase} / Gate ${release.gate_state} / Resolution ${release.resolution}`}
+          eyebrow={
+            <span className="fl-inline-actions">
+              <span>Release</span>
+              <StatusPill tone={releaseStateTone(release.phase)}>{release.phase}</StatusPill>
+              <StatusPill tone={releaseStateTone(release.gate_state)}>{release.gate_state}</StatusPill>
+              <StatusPill tone={releaseStateTone(release.resolution)}>{release.resolution}</StatusPill>
+            </span>
+          }
           subtitle={`Owner ${release.release_owner_actor_id ?? 'unassigned'} / Blocker fingerprint ${cockpit.blocker_snapshot.blocker_fingerprint}`}
           title={release.title}
         />
@@ -939,4 +946,12 @@ function formatAge(value: string | undefined) {
   if (days === 0) return 'today';
   if (days === 1) return '1 day ago';
   return `${days} days ago`;
+}
+
+function releaseStateTone(value: string | undefined) {
+  const normalized = value?.toLowerCase() ?? '';
+  if (['approved', 'closed', 'completed', 'observing', 'released', 'resolved'].includes(normalized)) return 'success';
+  if (['blocked', 'cancelled', 'failed', 'rejected', 'rolled_back'].includes(normalized)) return 'danger';
+  if (['approval', 'open', 'pending', 'submitted'].includes(normalized)) return 'warning';
+  return 'info';
 }

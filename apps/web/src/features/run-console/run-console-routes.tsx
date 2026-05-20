@@ -91,7 +91,23 @@ function RunConsoleRoute({ runSessionId }: { runSessionId: string }) {
           <RunMetadata run={run} events={events} streamStatus={eventStream.streamStatus} />
         </ActionRail>
       }
-      header={<PageHeader subtitle={`${run.execution_package_id} / ${run.status}`} title="Run Console" />}
+      header={
+        <PageHeader
+          actions={
+            <Link className="fl-button fl-button--secondary" to={`/packages/${encodeURIComponent(run.execution_package_id)}`}>
+              Open Package
+            </Link>
+          }
+          eyebrow={
+            <span className="fl-inline-actions">
+              <span>Run</span>
+              <StatusPill tone={runStatusTone(run.status)}>{run.status}</StatusPill>
+            </span>
+          }
+          subtitle={`Package ${run.execution_package_id} / Executor ${run.executor_type ?? 'unknown'}`}
+          title="Run Console"
+        />
+      }
     >
       <RunConsole
         actorId={actorId}
@@ -174,14 +190,7 @@ function RunConsole({
     >
       <div className="fl-run-console" data-testid="run-console">
         {error ? <p className="empty">{error}</p> : null}
-        <div className="fl-run-console__events" data-testid="run-console-events">
-          {visibleEvents.length ? (
-            visibleEvents.map((event) => <RunEventRow event={event} key={event.id} />)
-          ) : (
-            <p className="empty">{events.length ? 'No visible run events yet.' : 'No run events loaded.'}</p>
-          )}
-        </div>
-        <form className="fl-run-console__controls" onSubmit={onSubmit}>
+        <form className="fl-run-console__controls" data-testid="run-console-controls" onSubmit={onSubmit}>
           <label className="field">
             Input as {actorId}
             <Textarea
@@ -214,6 +223,13 @@ function RunConsole({
             </Button>
           </div>
         </form>
+        <div className="fl-run-console__events" data-testid="run-console-events">
+          {visibleEvents.length ? (
+            visibleEvents.map((event) => <RunEventRow event={event} key={event.id} />)
+          ) : (
+            <p className="empty">{events.length ? 'No visible run events yet.' : 'No run events loaded.'}</p>
+          )}
+        </div>
       </div>
     </Section>
   );
@@ -585,6 +601,14 @@ function streamTone(streamStatus: string) {
   if (streamStatus === 'blocked') return 'danger';
   if (streamStatus === 'retrying') return 'warning';
   return 'neutral';
+}
+
+function runStatusTone(value: string | undefined) {
+  const normalized = value?.toLowerCase() ?? '';
+  if (['completed', 'passed', 'succeeded'].includes(normalized)) return 'success';
+  if (['cancelled', 'failed', 'timed_out'].includes(normalized)) return 'danger';
+  if (['pending', 'queued', 'running'].includes(normalized)) return 'warning';
+  return 'info';
 }
 
 function formatAge(value?: string) {
