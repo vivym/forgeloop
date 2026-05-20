@@ -147,14 +147,8 @@ export class SpecPlanService {
       approved_revision_id: spec.current_revision_id,
     };
     await this.repository.saveSpec(updated);
-    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId);
-    await this.repository.withObjectLock(`work-item:${updated.work_item_id}`, async (repository) => {
-      const workItem = this.requireFound(await repository.getWorkItem(updated.work_item_id), `WorkItem ${updated.work_item_id}`);
-      await repository.saveWorkItem({
-        ...workItem,
-        current_spec_revision_id: updated.approved_revision_id!,
-        updated_at: updated.updated_at,
-      });
+    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId, {
+      current_spec_revision_id: updated.approved_revision_id!,
     });
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
     await this.decision('spec', spec.id, actorOrSystem(actorId), 'approved', 'Spec approved.');
@@ -273,14 +267,8 @@ export class SpecPlanService {
       approved_revision_id: plan.current_revision_id,
     };
     await this.repository.savePlan(updated);
-    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId);
-    await this.repository.withObjectLock(`work-item:${updated.work_item_id}`, async (repository) => {
-      const workItem = this.requireFound(await repository.getWorkItem(updated.work_item_id), `WorkItem ${updated.work_item_id}`);
-      await repository.saveWorkItem({
-        ...workItem,
-        current_plan_revision_id: updated.approved_revision_id!,
-        updated_at: updated.updated_at,
-      });
+    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId, {
+      current_plan_revision_id: updated.approved_revision_id!,
     });
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
     await this.decision('plan', plan.id, actorOrSystem(actorId), 'approved', 'Plan approved.');
@@ -318,10 +306,14 @@ export class SpecPlanService {
       | 'approve_plan'
       | 'request_plan_changes',
     actorId: string | undefined,
+    revisionPointerUpdates: Partial<Pick<WorkItem, 'current_spec_revision_id' | 'current_plan_revision_id'>> = {},
   ): Promise<void> {
     await this.repository.withObjectLock(`work-item:${workItemId}`, async (repository) => {
       const workItem = this.requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
-      const updated = transitionWorkItem(workItem, { type, at: this.now() });
+      const updated = {
+        ...transitionWorkItem(workItem, { type, at: this.now() }),
+        ...revisionPointerUpdates,
+      };
       await repository.saveWorkItem(updated);
       await this.historyWithRepository(
         repository,

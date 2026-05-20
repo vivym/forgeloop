@@ -68,7 +68,7 @@ pnpm automation:dogfood
 The dogfood script boots an in-process in-memory control plane, seeds draft-only automation state, runs the daemon deterministically, and prints a public-safe summary. It exits nonzero unless all MVP conditions are met:
 
 - one Plan draft was created;
-- exactly one ExecutionPackage draft was created;
+- exactly two ExecutionPackage drafts were created by the deterministic fake 2B package generator;
 - the completed action types are exactly `ensure_plan_draft`, `ensure_package_drafts`, and `project_runtime_snapshot`;
 - restart recovery works through existing `automation_action_runs`;
 - no RunSession was enqueued.

@@ -14,6 +14,7 @@ export const expectedAutomationDogfoodActionTypes = [
   'ensure_plan_draft',
   'project_runtime_snapshot',
 ] as const;
+export const expectedAutomationDogfoodPackageDraftCount = 2;
 
 export interface AutomationDogfoodSummaryInput {
   planDraftCreated: boolean;
@@ -40,7 +41,7 @@ const automationDogfoodActionRunsPassed = (input: AutomationDogfoodSummaryInput)
 
 export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryInput): string => {
   const completedActionTypes = [...new Set(input.completedActionTypes)].sort();
-  const packageDraftPassed = input.packageDraftCount === 1;
+  const packageDraftPassed = input.packageDraftCount === expectedAutomationDogfoodPackageDraftCount;
   const actionRunsPassed = automationDogfoodActionRunsPassed(input);
   const runSessionLine =
     input.runSessionCount === 0
@@ -59,7 +60,7 @@ export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryIn
 
 export const automationDogfoodExitCode = (input: AutomationDogfoodSummaryInput): 0 | 1 =>
   input.planDraftCreated &&
-  input.packageDraftCount === 1 &&
+  input.packageDraftCount === expectedAutomationDogfoodPackageDraftCount &&
   automationDogfoodActionRunsPassed(input) &&
   input.runSessionCount === 0 &&
   input.restartRecoveredFromActionRuns

@@ -11,10 +11,12 @@ import { AutomationDaemon } from '../apps/automation-daemon/src/automation-daemo
 import { loadDaemonWorkflowPolicyDigest } from '../apps/automation-daemon/src/workflow-policy-loader';
 import {
   AutomationHttpClient,
+  type AutomationGenerationPlanningConfig,
   type AutomationActionResponse,
   type ClaimNextActionInput,
   type NextAction,
 } from '../packages/automation/src/index';
+import { createCodexGenerationRuntime } from '../packages/codex-runtime/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../packages/db/src/index';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
 import {
@@ -35,6 +37,14 @@ const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
 const expectedPendingBeforeRestartActionTypes = ['ensure_plan_draft', 'project_runtime_snapshot'] as const;
+const dogfoodGenerationPlanning: AutomationGenerationPlanningConfig = {
+  mode: 'fake',
+  tasks: {
+    spec_draft: { enabled: false, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+    plan_draft: { enabled: true, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+    package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+  },
+};
 
 const humanAdminHeaders = {
   'x-forgeloop-actor-id': actorOwner,
@@ -82,6 +92,8 @@ const createDaemon = (baseUrl: string, client = createAutomationClient(baseUrl))
     policyLoader: loadDaemonWorkflowPolicyDigest,
     loopIntervalMs: 1,
     noClaimBackoffMs: 1,
+    generationPlanning: dogfoodGenerationPlanning,
+    generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
   });
 
 const seedDraftOnlyApprovedSpec = async (
