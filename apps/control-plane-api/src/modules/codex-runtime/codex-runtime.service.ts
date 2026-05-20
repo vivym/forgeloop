@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import { BadRequestException, ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import {
   codexCanonicalDigest,
@@ -7,6 +9,7 @@ import {
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexLaunchTarget,
+  type CodexRuntimeNetworkPolicy,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
   type CodexRuntimeScope,
@@ -30,6 +33,31 @@ import type {
 } from './codex-runtime.dto';
 
 const unsafeDbCredentialStoreEnv = 'FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE';
+const workerSessionReplayWindowMs = 5 * 60 * 1000;
+
+type ActiveLaunchFence =
+  | {
+      kind: 'generation';
+      target_id: string;
+      action_claim_token: string;
+      action_type?: string;
+      action_attempt: number;
+      precondition_fingerprint: string;
+      project_id: string;
+      repo_id?: string;
+      snapshot: CodexLaunchFenceSnapshot;
+    }
+  | {
+      kind: 'run_execution';
+      run_session_id: string;
+      worker_id: string;
+      run_worker_lease_token: string;
+      execution_package_id: string;
+      run_session_status: string;
+      run_session_updated_at: string;
+      execution_package_version: number;
+      snapshot: CodexLaunchFenceSnapshot;
+    };
 
 const unsafeEvidenceTerms = [
   'secret',
@@ -46,12 +74,60 @@ const unsafeEvidenceTerms = [
 
 const nowIso = (): string => process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? new Date().toISOString();
 
+const launchLeaseTtlMs = 10 * 60 * 1000;
+const workerSessionTtlMs = 15 * 60 * 1000;
+
+const boundedFutureIso = (now: string, requestedExpiresAt: string, maxTtlMs: number, label: string): string => {
+  const nowMs = Date.parse(now);
+  const requestedMs = Date.parse(requestedExpiresAt);
+  const expiresMs = Math.min(nowMs + maxTtlMs, requestedMs);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(requestedMs) || expiresMs <= nowMs) {
+    throw new BadRequestException(`${label} expiry was rejected`);
+  }
+  return new Date(expiresMs).toISOString();
+};
+
+const boundedWorkerSessionExpiresAt = (now: string, publicKeyExpiresAt: string): string => {
+  return boundedFutureIso(now, publicKeyExpiresAt, workerSessionTtlMs, 'Worker session');
+};
+
+const boundedLaunchLeaseExpiresAt = (now: string, requestedExpiresAt: string): string =>
+  boundedFutureIso(now, requestedExpiresAt, launchLeaseTtlMs, 'Codex launch lease');
+
 const unsafeDbCredentialStoreEnabled = (): boolean => process.env[unsafeDbCredentialStoreEnv] === '1';
 
 const requireUnsafeDbCredentialStore = (): void => {
   if (!unsafeDbCredentialStoreEnabled()) {
     throw new ForbiddenException(`${unsafeDbCredentialStoreEnv}=1 is required for unsafe_db Codex credential material`);
   }
+};
+
+const generateWorkerSessionToken = (): string => `codex-worker-session-${randomBytes(32).toString('base64url')}`;
+
+const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
+const materializedAllowlistRules = (rules: CodexRuntimeNetworkPolicy & { mode: 'host_firewall' | 'docker_network_proxy' }) =>
+  [...rules.allowlist].sort((left, right) => compareCodeUnits(left.id, right.id));
+
+const materializedNetworkPolicy = (policy: CodexRuntimeNetworkPolicy) => {
+  if (policy.mode === 'disabled') {
+    return { mode: 'disabled' as const };
+  }
+  const provider = policy.mode;
+  const allowlistRules = materializedAllowlistRules(policy);
+  const egressAllowlistDigest = codexCanonicalDigest({ provider, allowlist_rules: allowlistRules });
+  const selfTestDigest =
+    policy.mode === 'docker_network_proxy'
+      ? policy.provider_config.self_test_image_digest
+      : codexCanonicalDigest({ provider, allowlist_rules: allowlistRules, self_test: 'host_firewall' });
+  return {
+    mode: 'egress_allowlist' as const,
+    provider,
+    allowlist_rules: allowlistRules,
+    ...(policy.mode === 'docker_network_proxy' ? { provider_config: policy.provider_config } : {}),
+    egress_allowlist_digest: egressAllowlistDigest,
+    self_test_digest: selfTestDigest,
+  };
 };
 
 const actorScopeMatchesTarget = (automationScope: string, projectId: string, repoId?: string): boolean => {
@@ -83,6 +159,14 @@ const hasUnsafeEvidence = (value: unknown): boolean => {
   return false;
 };
 
+const assertFreshWorkerNonceTimestamp = (nonceTimestamp: string, now: string): void => {
+  const nonceMs = Date.parse(nonceTimestamp);
+  const nowMs = Date.parse(now);
+  if (Number.isNaN(nonceMs) || Number.isNaN(nowMs) || Math.abs(nowMs - nonceMs) > workerSessionReplayWindowMs) {
+    throw new UnauthorizedException('Codex worker session nonce timestamp is stale or invalid');
+  }
+};
+
 const publicCredentialVersion = (version: CodexCredentialBindingVersion): CodexCredentialBindingVersion => ({
   id: version.id,
   binding_id: version.binding_id,
@@ -95,13 +179,12 @@ const publicCredentialVersion = (version: CodexCredentialBindingVersion): CodexC
 
 @Injectable()
 export class CodexRuntimeService {
-  private readonly leaseFences = new Map<string, CodexLaunchFenceSnapshot>();
-  private readonly leaseCredentialProviders = new Map<string, string>();
-
   constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
 
   async createProfile(input: CreateCodexRuntimeProfileDto) {
-    const revision = validateCodexRuntimeProfileRevision(input.revision as unknown as CodexRuntimeProfileRevision);
+    const revision = validateCodexRuntimeProfileRevision(input.revision as unknown as CodexRuntimeProfileRevision, {
+      strictRealDogfood: true,
+    });
     const profileRevision = await this.repository.createCodexRuntimeProfileWithRevision({
       profile: input.profile as CodexRuntimeProfile,
       revision,
@@ -110,9 +193,7 @@ export class CodexRuntimeService {
   }
 
   async createCredential(input: CreateCodexCredentialDto) {
-    if (input.binding.provider === 'unsafe_db') {
-      requireUnsafeDbCredentialStore();
-    }
+    requireUnsafeDbCredentialStore();
     const version = await this.repository.createCodexCredentialBindingWithVersion({
       binding: input.binding as CodexCredentialBinding,
       version: input.version as CodexCredentialBindingVersion,
@@ -162,13 +243,17 @@ export class CodexRuntimeService {
   }
 
   async registerWorker(input: RegisterCodexWorkerDto) {
+    const sessionToken = generateWorkerSessionToken();
+    const now = nowIso();
+    const sessionExpiresAt = boundedWorkerSessionExpiresAt(now, input.session_public_key_expires_at);
     const worker = await this.repository.upsertCodexWorkerRegistration({
       worker_id: input.worker_id,
       worker_identity: input.worker_identity,
       version: input.version,
       bootstrap_token_hash: codexCredentialPayloadDigest(input.bootstrap_token),
       bootstrap_token_version: input.bootstrap_token_version,
-      session_token: input.session_token,
+      session_token: sessionToken,
+      session_expires_at: sessionExpiresAt,
       status: input.status,
       control_channel_status: input.control_channel_status,
       allowed_scopes: input.allowed_scopes as readonly CodexRuntimeScope[],
@@ -187,12 +272,14 @@ export class CodexRuntimeService {
       session_public_key_algorithm: input.session_public_key_algorithm,
       session_public_key_material: input.session_public_key_material,
       session_public_key_expires_at: input.session_public_key_expires_at,
-      now: nowIso(),
+      now,
     });
-    return { worker, session_token: input.session_token };
+    return { worker, session_token: sessionToken, session_expires_at: sessionExpiresAt };
   }
 
   heartbeatWorker(workerId: string, input: HeartbeatCodexWorkerDto) {
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
     return this.repository
       .heartbeatCodexWorker({
         worker_id: workerId,
@@ -203,7 +290,7 @@ export class CodexRuntimeService {
         control_channel_status: input.control_channel_status,
         active_lease_count: input.active_lease_count,
         capabilities: input.capabilities as readonly CodexRuntimeTargetKind[],
-        now: nowIso(),
+        now,
       })
       .then((worker) => ({ worker }));
   }
@@ -224,6 +311,7 @@ export class CodexRuntimeService {
     const credential = await this.repository.getCodexCredentialBindingPublic(input.credential_binding_id);
     if (
       credential === undefined ||
+      credential.profile_id !== revision.profile_id ||
       credential.active_version_id !== input.credential_binding_version_id ||
       credential.active_payload_digest !== input.credential_payload_digest
     ) {
@@ -243,6 +331,7 @@ export class CodexRuntimeService {
       id: input.id,
       lease_request_id: input.lease_request_id,
       target,
+      launch_attempt: input.launch_attempt,
       worker_id: input.worker_id,
       runtime_profile_revision_id: input.runtime_profile_revision_id,
       runtime_profile_digest: revision.profile_digest,
@@ -255,20 +344,20 @@ export class CodexRuntimeService {
       launch_token: input.launch_token,
       ...(input.action_type === undefined ? {} : { action_type: input.action_type }),
       ...(input.action_attempt === undefined ? {} : { action_attempt: input.action_attempt }),
-      ...(fence.action_claim_token_hash === undefined ? {} : { action_claim_token_hash: fence.action_claim_token_hash }),
-      ...(fence.precondition_fingerprint === undefined ? {} : { precondition_fingerprint: fence.precondition_fingerprint }),
+      ...(fence.snapshot.action_claim_token_hash === undefined ? {} : { action_claim_token_hash: fence.snapshot.action_claim_token_hash }),
+      ...(fence.snapshot.precondition_fingerprint === undefined ? {} : { precondition_fingerprint: fence.snapshot.precondition_fingerprint }),
       ...(input.execution_package_id === undefined ? {} : { execution_package_id: input.execution_package_id }),
-      ...(fence.run_worker_lease_id === undefined ? {} : { run_worker_lease_id: fence.run_worker_lease_id }),
-      ...(fence.run_worker_lease_token_hash === undefined ? {} : { run_worker_lease_token_hash: fence.run_worker_lease_token_hash }),
+      ...(fence.snapshot.run_worker_lease_id === undefined ? {} : { run_worker_lease_id: fence.snapshot.run_worker_lease_id }),
+      ...(fence.snapshot.run_worker_lease_token_hash === undefined
+        ? {}
+        : { run_worker_lease_token_hash: fence.snapshot.run_worker_lease_token_hash }),
       ...(input.run_session_status === undefined ? {} : { run_session_status: input.run_session_status }),
       ...(input.run_session_updated_at === undefined ? {} : { run_session_updated_at: input.run_session_updated_at }),
       ...(input.execution_package_version === undefined ? {} : { execution_package_version: input.execution_package_version }),
-      expires_at: input.expires_at,
+      expires_at: boundedLaunchLeaseExpiresAt(now, input.expires_at),
       now,
     });
 
-    this.leaseFences.set(lease.id, fence);
-    this.leaseCredentialProviders.set(lease.id, credential.provider);
     return { lease, launch_token: lease.lease_token };
   }
 
@@ -282,11 +371,9 @@ export class CodexRuntimeService {
   }
 
   async materializeLaunchLease(workerId: string, leaseId: string, input: MaterializeCodexLaunchLeaseDto) {
-    const provider = this.leaseCredentialProviders.get(leaseId);
-    if ((provider === undefined || provider === 'unsafe_db') && !unsafeDbCredentialStoreEnabled()) {
-      requireUnsafeDbCredentialStore();
-    }
-    const activeFence = this.leaseFences.get(leaseId);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    requireUnsafeDbCredentialStore();
     const materialized = await this.repository.materializeCodexLaunchLease({
       lease_id: leaseId,
       worker_id: workerId,
@@ -295,34 +382,47 @@ export class CodexRuntimeService {
       nonce: input.nonce,
       nonce_timestamp: input.nonce_timestamp,
       materialization_request_hash: input.materialization_request_hash,
-      ...(activeFence === undefined ? {} : { active_fence: activeFence }),
-      now: nowIso(),
+      now,
     });
-    this.leaseFences.delete(leaseId);
-    this.leaseCredentialProviders.delete(leaseId);
+    const credential = materialized.resolved_credentials[0];
+    if (credential === undefined) {
+      throw new ForbiddenException('Codex launch lease credential material is unavailable');
+    }
     return {
       launch_target: materialized.launch_target,
       runtime_profile: {
-        id: materialized.profile_revision.id,
         profile_id: materialized.profile_revision.profile_id,
+        revision_id: materialized.profile_revision.id,
         profile_digest: materialized.profile_revision.profile_digest,
         target_kind: materialized.profile_revision.target_kind,
         source_access_mode: materialized.profile_revision.source_access_mode,
+        docker_image: materialized.profile_revision.docker_image,
         docker_image_digest: materialized.profile_revision.docker_image_digest,
-        network_policy: materialized.profile_revision.network_policy,
+        codex_config_toml: materialized.profile_revision.codex_config_toml,
+        codex_config_digest: materialized.profile_revision.codex_config_digest,
+        expected_effective_config_digest: materialized.profile_revision.expected_effective_config_digest,
+        effective_config_assertions: materialized.profile_revision.effective_config_assertions,
+        app_server_required: materialized.profile_revision.app_server_required,
+        resource_limits: materialized.profile_revision.resource_limits,
+        docker_policy: materialized.profile_revision.docker_policy,
+        network_policy: materializedNetworkPolicy(materialized.profile_revision.network_policy),
       },
-      credentials: materialized.resolved_credentials.map((credential) => ({
+      credential: {
         binding_id: credential.binding_id,
-        binding_version_id: credential.binding_version_id,
-        payload_digest: credential.payload_digest,
+        version_id: credential.binding_version_id,
+        secret_payload_kind: 'codex_auth_json',
+        secret_payload_digest: credential.payload_digest,
         secret_payload_json: credential.payload,
-      })),
+      },
       lease_id: materialized.lease_id,
+      expires_at: materialized.expires_at,
       materialized_at: materialized.materialized_at,
     };
   }
 
   terminalizeLaunchLease(workerId: string, leaseId: string, input: TerminalizeCodexLaunchLeaseDto) {
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
     if (input.evidence_summary !== undefined && hasUnsafeEvidence(input.evidence_summary)) {
       throw new BadRequestException('Codex launch terminal evidence summary cannot include raw secrets, tokens, paths, or logs');
     }
@@ -337,19 +437,16 @@ export class CodexRuntimeService {
       ...(input.evidence_summary === undefined ? {} : { evidence_summary: input.evidence_summary }),
       ...(input.runtime_job_id === undefined ? {} : { runtime_job_id: input.runtime_job_id }),
       idempotency_key: input.idempotency_key,
-      now: nowIso(),
+      now,
     });
   }
 
-  private async launchFenceFor(input: CreateCodexLaunchLeaseDto, now: string): Promise<CodexLaunchFenceSnapshot> {
+  private async launchFenceFor(input: CreateCodexLaunchLeaseDto, now: string): Promise<ActiveLaunchFence> {
     if (input.target.target_kind === 'generation') {
       if (input.action_claim_token === undefined || input.action_attempt === undefined || input.precondition_fingerprint === undefined) {
         throw new UnauthorizedException('Generation launch leases require an active action claim fence');
       }
-      const actionRun = await this.repository.getClaimedAutomationActionRun({
-        id: input.target.target_id,
-        claim_token: input.action_claim_token,
-      });
+      const actionRun = await this.getClaimedActionFence(input.target.target_id, input.action_claim_token, now);
       if (
         actionRun.attempt !== input.action_attempt ||
         actionRun.precondition_fingerprint !== input.precondition_fingerprint ||
@@ -359,21 +456,112 @@ export class CodexRuntimeService {
         throw new ForbiddenException('Generation launch lease action claim fence was rejected');
       }
       return {
-        action_claim_token_hash: codexCredentialPayloadDigest(input.action_claim_token),
+        kind: 'generation',
+        target_id: input.target.target_id,
+        action_claim_token: input.action_claim_token,
+        ...(input.action_type === undefined ? {} : { action_type: input.action_type }),
+        action_attempt: input.action_attempt,
         precondition_fingerprint: input.precondition_fingerprint,
+        project_id: input.target.project_id,
+        ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+        snapshot: {
+          action_claim_token_hash: codexCredentialPayloadDigest(input.action_claim_token),
+          precondition_fingerprint: input.precondition_fingerprint,
+        },
       };
     }
 
-    if (input.run_worker_lease_token === undefined || input.run_session_id === undefined) {
+    if (
+      input.run_worker_lease_token === undefined ||
+      input.run_session_id === undefined ||
+      input.run_worker_lease_id === undefined ||
+      input.execution_package_id === undefined ||
+      input.run_session_status === undefined ||
+      input.run_session_updated_at === undefined ||
+      input.execution_package_version === undefined
+    ) {
       throw new UnauthorizedException('Run execution launch leases require an active run worker lease fence');
     }
-    await this.repository.assertActiveRunWorkerLease(input.run_session_id, input.worker_id, input.run_worker_lease_token, now);
-    return {
-      run_worker_lease_id: input.run_worker_lease_id ?? input.run_session_id,
-      run_worker_lease_token_hash: codexCredentialPayloadDigest(input.run_worker_lease_token),
-      ...(input.run_session_status === undefined ? {} : { run_session_status: input.run_session_status }),
-      ...(input.run_session_updated_at === undefined ? {} : { run_session_updated_at: input.run_session_updated_at }),
-      ...(input.execution_package_version === undefined ? {} : { execution_package_version: input.execution_package_version }),
+    const activeRunLease = await this.repository.getRunWorkerLease(input.run_session_id);
+    if (
+      activeRunLease === undefined ||
+      activeRunLease.status !== 'active' ||
+      activeRunLease.lease_token !== input.run_worker_lease_token ||
+      activeRunLease.expires_at <= now
+    ) {
+      throw new ForbiddenException('Run execution launch lease worker fence was rejected');
+    }
+    if (input.run_worker_lease_id !== activeRunLease.id) {
+      throw new ForbiddenException('Run execution launch lease worker fence was rejected');
+    }
+    const target: CodexLaunchTarget = {
+      target_type: input.target.target_type,
+      target_id: input.target.target_id,
+      target_kind: input.target.target_kind,
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
     };
+    await this.assertRunSessionFence(
+      target,
+      input.run_session_id,
+      input.execution_package_id,
+      input.run_session_status,
+      input.run_session_updated_at,
+      input.execution_package_version,
+    );
+    return {
+      kind: 'run_execution',
+      run_session_id: input.run_session_id,
+      worker_id: input.worker_id,
+      run_worker_lease_token: input.run_worker_lease_token,
+      execution_package_id: input.execution_package_id,
+      run_session_status: input.run_session_status,
+      run_session_updated_at: input.run_session_updated_at,
+      execution_package_version: input.execution_package_version,
+      snapshot: {
+        run_worker_lease_id: activeRunLease.id,
+        run_worker_lease_token_hash: codexCredentialPayloadDigest(input.run_worker_lease_token),
+        run_session_status: input.run_session_status,
+        run_session_updated_at: input.run_session_updated_at,
+        execution_package_version: input.execution_package_version,
+      },
+    };
+  }
+
+  private async getClaimedActionFence(id: string, claimToken: string, now: string) {
+    try {
+      const actionRun = await this.repository.getClaimedAutomationActionRun({ id, claim_token: claimToken });
+      if (actionRun.locked_until === undefined || actionRun.locked_until <= now) {
+        throw new Error('stale action claim');
+      }
+      return actionRun;
+    } catch {
+      throw new ForbiddenException('Generation launch lease action claim fence was rejected');
+    }
+  }
+
+  private async assertRunSessionFence(
+    target: CodexLaunchTarget,
+    runSessionId: string,
+    executionPackageId: string,
+    expectedStatus: string,
+    expectedUpdatedAt: string,
+    executionPackageVersion: number,
+  ): Promise<void> {
+    const runSession = await this.repository.getRunSession(runSessionId);
+    const executionPackage = await this.repository.getExecutionPackage(executionPackageId);
+    if (
+      target.target_id !== runSessionId ||
+      runSession === undefined ||
+      runSession.execution_package_id !== executionPackageId ||
+      runSession.status !== expectedStatus ||
+      runSession.updated_at !== expectedUpdatedAt ||
+      executionPackage === undefined ||
+      executionPackage.project_id !== target.project_id ||
+      executionPackage.repo_id !== target.repo_id ||
+      executionPackage.version !== executionPackageVersion
+    ) {
+      throw new ForbiddenException('Run execution launch lease run session fence was rejected');
+    }
   }
 }

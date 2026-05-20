@@ -102,6 +102,7 @@ export interface ResolveCodexRuntimeForLaunchInput {
 export interface ResolveCodexCredentialForLaunchInput {
   credential_binding_id: string;
   target_kind: CodexRuntimeTargetKind;
+  runtime_profile_id?: string;
   project_id: string;
   repo_id?: string;
   required_payload_digest?: string;
@@ -138,8 +139,9 @@ export interface UpsertCodexWorkerRegistrationInput {
   bootstrap_token_hash: string;
   bootstrap_token_version: number;
   session_token: string;
-  status: CodexWorkerRegistration['status'] | 'online' | 'disabled';
-  control_channel_status: CodexWorkerRegistration['control_channel_status'] | 'local' | 'disconnected' | 'draining';
+  session_expires_at: string;
+  status: CodexWorkerRegistration['status'];
+  control_channel_status: CodexWorkerRegistration['control_channel_status'];
   allowed_scopes: readonly CodexRuntimeScope[];
   capabilities: readonly CodexRuntimeTargetKind[];
   docker_image_digests: readonly string[];
@@ -162,8 +164,8 @@ export interface HeartbeatCodexWorkerInput {
   session_token: string;
   nonce: string;
   nonce_timestamp: string;
-  status: CodexWorkerRegistration['status'] | 'online' | 'disabled';
-  control_channel_status: CodexWorkerRegistration['control_channel_status'] | 'local' | 'disconnected' | 'draining';
+  status: CodexWorkerRegistration['status'];
+  control_channel_status: CodexWorkerRegistration['control_channel_status'];
   active_lease_count: number;
   capabilities: readonly CodexRuntimeTargetKind[];
   now: string;
@@ -193,6 +195,7 @@ export interface CreateOrReplayCodexLaunchLeaseInput {
   id: string;
   lease_request_id: string;
   target: CodexLaunchTarget;
+  launch_attempt: number;
   worker_id: string;
   runtime_profile_revision_id: string;
   runtime_profile_digest: string;
@@ -235,7 +238,7 @@ export interface TerminalizeCodexLaunchLeaseInput {
   worker_session_token: string;
   nonce: string;
   nonce_timestamp: string;
-  terminal_status: Extract<CodexLaunchLease['status'], 'released' | 'expired'>;
+  terminal_status: Extract<CodexLaunchLease['status'], 'terminal'>;
   reason_code: string;
   evidence_summary?: Record<string, unknown>;
   runtime_job_id?: string;
@@ -255,6 +258,15 @@ export interface RecoverStaleCodexWorkerLeasesInput {
   now: string;
   worker_id?: string;
   reason_code: string;
+}
+
+export interface ConsumeCodexRuntimeSetupNonceInput {
+  setup_nonce_hash: string;
+  request_signature_hash: string;
+  actor_id: string;
+  actor_class: string;
+  created_at: string;
+  expires_at: string;
 }
 
 export interface CodexRuntimeRecoveryResult {
@@ -874,6 +886,7 @@ export interface DeliveryRepository {
   revokeCodexLaunchLease(input: RevokeCodexLaunchLeaseInput): Promise<CodexLaunchLease>;
   expireCodexLaunchLeases(now: string): Promise<number>;
   recoverStaleCodexWorkerLeases(input: RecoverStaleCodexWorkerLeasesInput): Promise<CodexRuntimeRecoveryResult>;
+  consumeCodexRuntimeSetupNonce(input: ConsumeCodexRuntimeSetupNonceInput): Promise<void>;
 
   saveOrganization(organization: Organization): Promise<void>;
   getOrganization(organizationId: string): Promise<Organization | undefined>;

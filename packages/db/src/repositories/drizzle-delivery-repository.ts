@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
@@ -72,6 +72,7 @@ import {
   codex_credential_bindings,
   codex_credential_binding_versions,
   codex_launch_leases,
+  codex_runtime_setup_nonces,
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
   codex_worker_bootstrap_tokens,
@@ -119,6 +120,7 @@ import type {
   CompleteExecutionPackageGenerationRunInput,
   CodexLaunchFenceSnapshot,
   CodexRuntimeRecoveryResult,
+  ConsumeCodexRuntimeSetupNonceInput,
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   CreateCodexWorkerBootstrapTokenInput,
@@ -268,6 +270,24 @@ const compareTimestamp = (left: string | undefined, right: string | undefined): 
   return (left ?? '').localeCompare(right ?? '');
 };
 
+const codexWorkerHeartbeatFreshMs = 5 * 60 * 1000;
+
+const codexWorkerHeartbeatIsFresh = (lastHeartbeatAt: string | undefined, now: string): boolean => {
+  const heartbeatMillis = timestampMillis(lastHeartbeatAt);
+  const nowMillis = timestampMillis(now);
+  if (heartbeatMillis === undefined || nowMillis === undefined || heartbeatMillis > nowMillis) {
+    return false;
+  }
+  return nowMillis - heartbeatMillis <= codexWorkerHeartbeatFreshMs;
+};
+
+const automationScopeMatchesCodexTarget = (automationScope: string, projectId: string, repoId?: string): boolean => {
+  if (repoId !== undefined) {
+    return automationScope === `repo:${projectId}:${repoId}`;
+  }
+  return automationScope === `project:${projectId}` || automationScope.startsWith(`repo:${projectId}:`);
+};
+
 const stablePolicyObservationIdentity = (actionInputJson: Record<string, unknown>): Record<string, unknown> => ({
   repo_id: actionInputJson.repo_id,
   policy_status: actionInputJson.policy_status,
@@ -306,6 +326,7 @@ type CodexWorkerRegistrationDbRecord = {
   version: string;
   control_channel_status: CodexWorkerRegistration['control_channel_status'];
   session_token_hash: string;
+  session_token_expires_at: string;
   bootstrap_token_hash?: string;
   bootstrap_token_version: number;
   allowed_scopes_json: readonly CodexRuntimeScope[];
@@ -334,6 +355,7 @@ type CodexLaunchLeaseDbRecord = {
   target_kind: CodexRuntimeTargetKind;
   project_id: string;
   repo_id?: string;
+  launch_attempt: number;
   action_type?: string;
   action_attempt?: number;
   action_claim_token_hash?: string;
@@ -361,34 +383,13 @@ type CodexLaunchLeaseDbRecord = {
   materialized_at?: string;
   terminalized_at?: string;
   terminal_reason_code?: string;
+  terminal_evidence_summary_json?: Record<string, unknown>;
+  terminal_runtime_job_id?: string;
+  terminal_idempotency_key?: string;
 };
 
 const codexDenied = (code: DomainErrorType['code'], message: string, details?: Record<string, unknown>): DomainErrorType =>
   new DomainError(code, message, details);
-
-const normalizeWorkerStatus = (
-  status: UpsertCodexWorkerRegistrationInput['status'] | HeartbeatCodexWorkerInput['status'],
-): CodexWorkerRegistration['status'] => {
-  if (status === 'online') {
-    return 'active';
-  }
-  if (status === 'disabled') {
-    return 'offline';
-  }
-  return status;
-};
-
-const normalizeControlChannelStatus = (
-  status: UpsertCodexWorkerRegistrationInput['control_channel_status'] | HeartbeatCodexWorkerInput['control_channel_status'],
-): CodexWorkerRegistration['control_channel_status'] => {
-  if (status === 'local' || status === 'connected') {
-    return 'connected';
-  }
-  if (status === 'disconnected' || status === 'draining') {
-    return 'stale';
-  }
-  return status;
-};
 
 const capabilityList = (capabilities: Record<string, unknown>, key: string): readonly string[] => {
   const value = capabilities[key];
@@ -403,12 +404,23 @@ const codexScope = (projectId: string, repoId?: string): CodexRuntimeScope => ({
   ...(repoId === undefined ? {} : { repo_id: repoId }),
 });
 
+const codexCredentialBindingVersionPublicColumns = {
+  id: codex_credential_binding_versions.id,
+  bindingId: codex_credential_binding_versions.bindingId,
+  versionNumber: codex_credential_binding_versions.versionNumber,
+  status: codex_credential_binding_versions.status,
+  payloadDigest: codex_credential_binding_versions.payloadDigest,
+  createdByActorId: codex_credential_binding_versions.createdByActorId,
+  createdAt: codex_credential_binding_versions.createdAt,
+};
+
 const registrationFromDbRecord = (record: CodexWorkerRegistrationDbRecord): CodexWorkerRegistration => ({
   id: record.id,
   worker_version: record.version,
   worker_identity: record.worker_identity,
   status: record.status,
   control_channel_status: record.control_channel_status,
+  session_expires_at: record.session_token_expires_at,
   ...(record.bootstrap_token_hash === undefined ? {} : { bootstrap_token_hash: record.bootstrap_token_hash }),
   capabilities: record.capabilities ?? (capabilityList(record.capabilities_json, 'target_kinds') as readonly CodexRuntimeTargetKind[]),
   uid: record.host_worker_uid,
@@ -429,16 +441,25 @@ const launchLeaseFromDbRecord = (record: CodexLaunchLeaseDbRecord): CodexLaunchL
     project_id: record.project_id,
     ...(record.repo_id === undefined ? {} : { repo_id: record.repo_id }),
   },
+  launch_attempt: record.launch_attempt,
   profile_revision_id: record.runtime_profile_revision_id,
   ...(record.worker_id === undefined ? {} : { worker_id: record.worker_id }),
   status: record.status,
   lease_token_hash: record.lease_token_hash,
   created_at: record.created_at,
   expires_at: record.expires_at,
+  ...(record.materialized_at === undefined ? {} : { materialized_at: record.materialized_at }),
+  ...(record.terminalized_at === undefined ? {} : { terminal_at: record.terminalized_at }),
+  ...(record.status === 'revoked' && record.terminalized_at !== undefined ? { revoked_at: record.terminalized_at } : {}),
+  ...(record.terminal_reason_code === undefined ? {} : { terminal_reason_code: record.terminal_reason_code }),
+  ...(record.terminal_evidence_summary_json === undefined ? {} : { terminal_evidence_summary: record.terminal_evidence_summary_json }),
+  ...(record.terminal_runtime_job_id === undefined ? {} : { terminal_runtime_job_id: record.terminal_runtime_job_id }),
+  ...(record.terminal_idempotency_key === undefined ? {} : { terminal_idempotency_key: record.terminal_idempotency_key }),
 });
 
 const launchReplayMatches = (record: CodexLaunchLeaseDbRecord, input: CreateOrReplayCodexLaunchLeaseInput): boolean =>
   valuesEqual(launchLeaseFromDbRecord(record).target, input.target) &&
+  record.launch_attempt === input.launch_attempt &&
   record.worker_id === input.worker_id &&
   record.runtime_profile_revision_id === input.runtime_profile_revision_id &&
   record.runtime_profile_digest === input.runtime_profile_digest &&
@@ -457,8 +478,7 @@ const launchReplayMatches = (record: CodexLaunchLeaseDbRecord, input: CreateOrRe
   record.run_worker_lease_token_hash === input.run_worker_lease_token_hash &&
   record.run_session_status === input.run_session_status &&
   record.run_session_updated_at === input.run_session_updated_at &&
-  record.execution_package_version === input.execution_package_version &&
-  record.expires_at === input.expires_at;
+  record.execution_package_version === input.execution_package_version;
 
 const runtimeSnapshotActionRunLookback = (targetCount: number): number =>
   Math.min(RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK, Math.max(RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK, targetCount * 20));
@@ -594,6 +614,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async createCodexCredentialBindingWithVersion(
     input: CreateCodexCredentialBindingWithVersionInput,
   ): Promise<CodexCredentialBindingVersion> {
+    if (input.binding.provider !== 'unsafe_db') {
+      throw codexDenied('codex_launch_lease_denied', 'Only unsafe_db Codex credential bindings are supported.');
+    }
     if (input.binding.active_version_id !== input.version.id || input.version.binding_id !== input.binding.id) {
       throw codexDenied('codex_launch_lease_denied', 'Credential binding active version fence was rejected.');
     }
@@ -713,14 +736,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (binding === undefined) {
       return undefined;
     }
-    const activeVersion =
+    const [activeVersionRow] =
       binding.active_version_id === undefined
-        ? undefined
-        : await this.getById<CodexCredentialBindingVersion>(
-            codex_credential_binding_versions,
-            codex_credential_binding_versions.id,
-            binding.active_version_id,
-          );
+        ? []
+        : await this.db
+            .select(codexCredentialBindingVersionPublicColumns)
+            .from(codex_credential_binding_versions)
+            .where(eq(codex_credential_binding_versions.id, binding.active_version_id))
+            .limit(1);
+    const activeVersion =
+      activeVersionRow === undefined ? undefined : fromDbRecord<CodexCredentialBindingVersion>(activeVersionRow);
     return {
       id: binding.id,
       profile_id: binding.profile_id,
@@ -748,14 +773,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       return undefined;
     }
     const profile = await this.getById<CodexRuntimeProfile>(codex_runtime_profiles, codex_runtime_profiles.id, binding.profile_id);
-    if (profile?.target_kind !== input.target_kind || binding.active_version_id === undefined) {
+    if (
+      (input.runtime_profile_id !== undefined && binding.profile_id !== input.runtime_profile_id) ||
+      profile?.target_kind !== input.target_kind ||
+      binding.active_version_id === undefined
+    ) {
       return undefined;
     }
-    const activeVersion = await this.getById<CodexCredentialBindingVersion>(
-      codex_credential_binding_versions,
-      codex_credential_binding_versions.id,
-      binding.active_version_id,
-    );
+    const [activeVersionRow] = await this.db
+      .select(codexCredentialBindingVersionPublicColumns)
+      .from(codex_credential_binding_versions)
+      .where(eq(codex_credential_binding_versions.id, binding.active_version_id))
+      .limit(1);
+    const activeVersion =
+      activeVersionRow === undefined ? undefined : fromDbRecord<CodexCredentialBindingVersion>(activeVersionRow);
     if (activeVersion === undefined || activeVersion.status !== 'active') {
       return undefined;
     }
@@ -784,7 +815,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       return undefined;
     }
     const profile = await this.getById<CodexRuntimeProfile>(codex_runtime_profiles, codex_runtime_profiles.id, binding.profile_id);
-    if (profile?.target_kind !== input.target_kind || binding.active_version_id === undefined) {
+    if (
+      (input.runtime_profile_id !== undefined && binding.profile_id !== input.runtime_profile_id) ||
+      profile?.target_kind !== input.target_kind ||
+      binding.active_version_id === undefined
+    ) {
       return undefined;
     }
     const [row] = await this.db
@@ -818,6 +853,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         : await this.getScopedCodexCredentialBindingPublic({
             credential_binding_id: input.credential_binding_id,
             target_kind: input.target_kind,
+            ...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
             project_id: input.project_id,
             ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
             now: input.now,
@@ -999,10 +1035,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .values({
           id: input.worker_id,
           workerIdentity: input.worker_identity,
-          status: normalizeWorkerStatus(input.status),
+          status: input.status,
           version: input.version,
-          controlChannelStatus: normalizeControlChannelStatus(input.control_channel_status),
+          controlChannelStatus: input.control_channel_status,
           sessionTokenHash: codexCredentialPayloadDigest(input.session_token),
+          sessionTokenExpiresAt: input.session_expires_at,
           bootstrapTokenHash: input.bootstrap_token_hash,
           bootstrapTokenVersion: input.bootstrap_token_version,
           allowedScopesJson: input.allowed_scopes,
@@ -1030,7 +1067,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration> {
-    await this.assertCodexWorkerSession(input.worker_id, input.session_token, 'codex_worker_registration_denied');
+    await this.assertCodexWorkerSession(input.worker_id, input.session_token, 'codex_worker_registration_denied', input.now, {
+      requireConnected: false,
+    });
     const [workerRow] = await this.db
       .select({
         capabilitiesJson: codex_worker_registrations.capabilitiesJson,
@@ -1047,7 +1086,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_worker_registration_denied', 'Worker heartbeat exceeds registered capability ceiling.');
     }
-    await this.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+    await this.recordCodexWorkerNonce(input.worker_id, input.session_token, input.nonce, input.nonce_timestamp, input.now);
     const activeCapabilitiesJson = {
       ...capabilityCeilingJson,
       target_kinds: input.capabilities,
@@ -1055,8 +1094,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const [row] = await this.db
       .update(codex_worker_registrations)
       .set({
-        status: normalizeWorkerStatus(input.status),
-        controlChannelStatus: normalizeControlChannelStatus(input.control_channel_status),
+        status: input.status,
+        controlChannelStatus: input.control_channel_status,
         capabilitiesJson: activeCapabilitiesJson,
         lastHeartbeatAt: input.now,
       } as never)
@@ -1072,12 +1111,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const rows = await this.db
       .select()
       .from(codex_worker_registrations)
-      .where(and(eq(codex_worker_registrations.status, 'active'), eq(codex_worker_registrations.controlChannelStatus, 'connected')))
+      .where(
+        and(
+          eq(codex_worker_registrations.status, 'online'),
+          eq(codex_worker_registrations.controlChannelStatus, 'connected'),
+          gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
+          isNotNull(codex_worker_registrations.lastHeartbeatAt),
+        ),
+      )
       .orderBy(asc(codex_worker_registrations.leaseCount), asc(codex_worker_registrations.id));
     const matched = rows
       .map((row) => fromDbRecord<CodexWorkerRegistrationDbRecord>(row))
       .find(
         (record) =>
+          codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
           record.lease_count < record.max_concurrency &&
           capabilityList(record.capabilities_json, 'target_kinds').includes(input.target_kind) &&
           codexRuntimeScopeMatches(record.allowed_scopes_json, codexScope(input.project_id, input.repo_id)) &&
@@ -1103,7 +1150,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           return undefined;
         }
         const existing = fromDbRecord<CodexLaunchLeaseDbRecord>(existingRow);
-        if (!launchReplayMatches(existing, input) || existing.lease_token_hash !== codexCredentialPayloadDigest(input.launch_token)) {
+        if (
+          existing.status !== 'active' ||
+          !launchReplayMatches(existing, input) ||
+          existing.lease_token_hash !== codexCredentialPayloadDigest(input.launch_token)
+        ) {
           throw codexDenied('codex_launch_lease_denied', 'Launch lease request id replay did not match original request.');
         }
         return { ...launchLeaseFromDbRecord(existing), lease_token: input.launch_token };
@@ -1112,6 +1163,23 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       const existing = await replayExisting();
       if (existing !== undefined) {
         return existing;
+      }
+      const [targetAttemptRow] = await tx
+        .select({ id: codex_launch_leases.id })
+        .from(codex_launch_leases)
+        .where(
+          and(
+            eq(codex_launch_leases.projectId, input.target.project_id),
+            input.target.repo_id === undefined ? isNull(codex_launch_leases.repoId) : eq(codex_launch_leases.repoId, input.target.repo_id),
+            eq(codex_launch_leases.targetType, input.target.target_type),
+            eq(codex_launch_leases.targetId, input.target.target_id),
+            eq(codex_launch_leases.targetKind, input.target.target_kind),
+            eq(codex_launch_leases.launchAttempt, input.launch_attempt),
+          ),
+        )
+        .limit(1);
+      if (targetAttemptRow !== undefined) {
+        throw codexDenied('codex_launch_lease_denied', 'Launch lease target attempt already has a lease.');
       }
 
       const profileRevision = await repository.getById<CodexRuntimeProfileRevision>(
@@ -1150,6 +1218,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       const credential = await repository.resolveCodexCredentialForLaunch({
         credential_binding_id: input.credential_binding_id,
         target_kind: input.target.target_kind,
+        runtime_profile_id: profileRevision.profile_id,
         project_id: input.target.project_id,
         ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
         required_payload_digest: input.credential_payload_digest,
@@ -1169,6 +1238,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           targetKind: input.target.target_kind,
           projectId: input.target.project_id,
           repoId: input.target.repo_id ?? null,
+          launchAttempt: input.launch_attempt,
           actionType: input.action_type ?? null,
           actionAttempt: input.action_attempt ?? null,
           actionClaimTokenHash: input.action_claim_token_hash ?? null,
@@ -1180,7 +1250,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           runSessionUpdatedAt: input.run_session_updated_at ?? null,
           executionPackageVersion: input.execution_package_version ?? null,
           workerId: input.worker_id,
-          status: 'leased',
+          status: 'active',
           leaseTokenHash: codexCredentialPayloadDigest(input.launch_token),
           runtimeProfileRevisionId: input.runtime_profile_revision_id,
           runtimeProfileDigest: input.runtime_profile_digest,
@@ -1209,7 +1279,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .where(
           and(
             eq(codex_worker_registrations.id, input.worker_id),
-            eq(codex_worker_registrations.status, 'active'),
+            eq(codex_worker_registrations.status, 'online'),
             eq(codex_worker_registrations.controlChannelStatus, 'connected'),
             sql`${codex_worker_registrations.leaseCount} < ${codex_worker_registrations.maxConcurrency}`,
           ),
@@ -1226,22 +1296,31 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async materializeCodexLaunchLease(input: MaterializeCodexLaunchLeaseInput): Promise<CodexLaunchMaterialization> {
     return this.db.transaction(async (tx) => {
       const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
-      await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_materialization_denied');
-      await repository.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+      await repository.assertCodexWorkerSession(
+        input.worker_id,
+        input.worker_session_token,
+        'codex_launch_materialization_denied',
+        input.now,
+      );
+      await repository.recordCodexWorkerNonce(input.worker_id, input.worker_session_token, input.nonce, input.nonce_timestamp, input.now);
 
       const materializationPredicate = and(
         eq(codex_launch_leases.id, input.lease_id),
         eq(codex_launch_leases.workerId, input.worker_id),
-        eq(codex_launch_leases.status, 'leased'),
+        eq(codex_launch_leases.status, 'active'),
         gt(codex_launch_leases.expiresAt, input.now),
         eq(codex_launch_leases.leaseTokenHash, codexCredentialPayloadDigest(input.launch_token)),
-        repository.codexFenceCondition(codex_launch_leases.actionClaimTokenHash, input.active_fence?.action_claim_token_hash),
-        repository.codexFenceCondition(codex_launch_leases.preconditionFingerprint, input.active_fence?.precondition_fingerprint),
-        repository.codexFenceCondition(codex_launch_leases.runWorkerLeaseId, input.active_fence?.run_worker_lease_id),
-        repository.codexFenceCondition(codex_launch_leases.runWorkerLeaseTokenHash, input.active_fence?.run_worker_lease_token_hash),
-        repository.codexFenceCondition(codex_launch_leases.runSessionStatus, input.active_fence?.run_session_status),
-        repository.codexFenceCondition(codex_launch_leases.runSessionUpdatedAt, input.active_fence?.run_session_updated_at),
-        repository.codexFenceCondition(codex_launch_leases.executionPackageVersion, input.active_fence?.execution_package_version),
+        ...(input.active_fence === undefined
+          ? []
+          : [
+              repository.codexFenceCondition(codex_launch_leases.actionClaimTokenHash, input.active_fence.action_claim_token_hash),
+              repository.codexFenceCondition(codex_launch_leases.preconditionFingerprint, input.active_fence.precondition_fingerprint),
+              repository.codexFenceCondition(codex_launch_leases.runWorkerLeaseId, input.active_fence.run_worker_lease_id),
+              repository.codexFenceCondition(codex_launch_leases.runWorkerLeaseTokenHash, input.active_fence.run_worker_lease_token_hash),
+              repository.codexFenceCondition(codex_launch_leases.runSessionStatus, input.active_fence.run_session_status),
+              repository.codexFenceCondition(codex_launch_leases.runSessionUpdatedAt, input.active_fence.run_session_updated_at),
+              repository.codexFenceCondition(codex_launch_leases.executionPackageVersion, input.active_fence.execution_package_version),
+            ]),
       );
 
       const [candidateRow] = await tx.select().from(codex_launch_leases).where(materializationPredicate).limit(1);
@@ -1249,6 +1328,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization was denied.');
       }
       const candidate = fromDbRecord<CodexLaunchLeaseDbRecord>(candidateRow);
+      if (!(await repository.codexLaunchFenceIsActive(candidate, input.now))) {
+        throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization was denied.');
+      }
       const profileRevision = await repository.getById<CodexRuntimeProfileRevision>(
         codex_runtime_profile_revisions,
         codex_runtime_profile_revisions.id,
@@ -1259,15 +1341,28 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .from(codex_credential_binding_versions)
         .where(eq(codex_credential_binding_versions.id, candidate.credential_binding_version_id))
         .limit(1);
-      if (profileRevision === undefined || credentialRow === undefined) {
+      const credentialBinding = await repository.getById<CodexCredentialBinding>(
+        codex_credential_bindings,
+        codex_credential_bindings.id,
+        candidate.credential_binding_id,
+      );
+      const [workerRow] = await tx
+        .select()
+        .from(codex_worker_registrations)
+        .where(eq(codex_worker_registrations.id, input.worker_id))
+        .limit(1);
+      if (profileRevision === undefined || credentialRow === undefined || credentialBinding === undefined || workerRow === undefined) {
         throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization dependencies were unavailable.');
       }
       const credentialRecord = fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(credentialRow);
+      const workerRecord = fromDbRecord<CodexWorkerRegistrationDbRecord>(workerRow as Record<string, unknown>);
       if (
         profileRevision.status !== 'active' ||
         profileRevision.profile_digest !== candidate.runtime_profile_digest ||
         credentialRecord.status !== 'active' ||
-        credentialRecord.payload_digest !== candidate.credential_payload_digest
+        credentialRecord.payload_digest !== candidate.credential_payload_digest ||
+        credentialBinding.profile_id !== profileRevision.profile_id ||
+        !repository.workerRecordMatchesLaunch(workerRecord, candidate, profileRevision)
       ) {
         throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization dependencies were unavailable.');
       }
@@ -1275,7 +1370,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       const [row] = await tx
         .update(codex_launch_leases)
         .set({
-          status: 'released',
+          status: 'materialized',
           materializationRequestHash: input.materialization_request_hash,
           materializedAt: input.now,
         } as never)
@@ -1284,11 +1379,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       if (row === undefined) {
         throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization was denied.');
       }
-      await tx
-        .update(codex_worker_registrations)
-        .set({ leaseCount: sql`greatest(${codex_worker_registrations.leaseCount} - 1, 0)` } as never)
-        .where(eq(codex_worker_registrations.id, input.worker_id));
-
       const record = fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>);
       return {
         launch_target: launchLeaseFromDbRecord(record).target,
@@ -1302,6 +1392,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           },
         ],
         lease_id: record.id,
+        expires_at: record.expires_at,
         materialized_at: input.now,
       };
     });
@@ -1310,20 +1401,33 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async terminalizeCodexLaunchLease(input: TerminalizeCodexLaunchLeaseInput): Promise<CodexLaunchLease> {
     return this.db.transaction(async (tx) => {
       const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
-      await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_lease_denied');
-      await repository.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+      await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_lease_denied', input.now, {
+        requireConnected: false,
+      });
+      await repository.recordCodexWorkerNonce(input.worker_id, input.worker_session_token, input.nonce, input.nonce_timestamp, input.now);
       const [row] = await tx
         .update(codex_launch_leases)
         .set({
-          status: input.terminal_status,
+          status: 'terminal',
           terminalizedAt: input.now,
           terminalReasonCode: input.reason_code,
+          terminalEvidenceSummaryJson: input.evidence_summary ?? null,
+          terminalRuntimeJobId: input.runtime_job_id ?? null,
+          terminalIdempotencyKey: input.idempotency_key,
         } as never)
-        .where(and(eq(codex_launch_leases.id, input.lease_id), eq(codex_launch_leases.workerId, input.worker_id), eq(codex_launch_leases.status, 'leased')))
+        .where(
+          and(
+            eq(codex_launch_leases.id, input.lease_id),
+            eq(codex_launch_leases.workerId, input.worker_id),
+            or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+            isNull(codex_launch_leases.terminalizedAt),
+          ),
+        )
         .returning();
       if (row !== undefined) {
+        const record = fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>);
         await repository.decrementCodexWorkerLeaseCounts(tx as ForgeloopDrizzleDatabase, [input.worker_id]);
-        return launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+        return launchLeaseFromDbRecord(record);
       }
       const [currentRow] = await tx
         .select()
@@ -1334,7 +1438,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization was denied.');
       }
       const current = fromDbRecord<CodexLaunchLeaseDbRecord>(currentRow as Record<string, unknown>);
-      if (current.status === 'released' || current.status === 'expired') {
+      if (
+        current.status === 'terminal' &&
+        current.terminal_idempotency_key !== undefined &&
+        current.terminal_idempotency_key !== input.idempotency_key
+      ) {
+        throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization idempotency key was rejected.');
+      }
+      if (current.status === 'terminal' || current.status === 'expired' || current.status === 'revoked') {
         return launchLeaseFromDbRecord(current);
       }
       throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization was denied.');
@@ -1346,28 +1457,32 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
       const [leasedRow] = await tx
         .update(codex_launch_leases)
-        .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
-        .where(and(eq(codex_launch_leases.id, input.lease_id), eq(codex_launch_leases.status, 'leased')))
+        .set({ status: 'revoked', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
+        .where(
+          and(
+            eq(codex_launch_leases.id, input.lease_id),
+            or(
+              eq(codex_launch_leases.status, 'active'),
+              and(
+                eq(codex_launch_leases.status, 'materialized'),
+                isNotNull(codex_launch_leases.materializedAt),
+                isNull(codex_launch_leases.terminalizedAt),
+              ),
+            ),
+          ),
+        )
         .returning();
       if (leasedRow !== undefined) {
         const record = fromDbRecord<CodexLaunchLeaseDbRecord>(leasedRow as Record<string, unknown>);
         await repository.decrementCodexWorkerLeaseCounts(tx as ForgeloopDrizzleDatabase, record.worker_id === undefined ? [] : [record.worker_id]);
         return launchLeaseFromDbRecord(record);
       }
-      const [queuedRow] = await tx
-        .update(codex_launch_leases)
-        .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
-        .where(and(eq(codex_launch_leases.id, input.lease_id), eq(codex_launch_leases.status, 'queued')))
-        .returning();
-      if (queuedRow !== undefined) {
-        return launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(queuedRow as Record<string, unknown>));
-      }
       const [currentRow] = await tx.select().from(codex_launch_leases).where(eq(codex_launch_leases.id, input.lease_id)).limit(1);
       if (currentRow === undefined) {
         throw codexDenied('codex_launch_lease_denied', 'Codex launch lease was not found.');
       }
       const current = fromDbRecord<CodexLaunchLeaseDbRecord>(currentRow as Record<string, unknown>);
-      if (current.status === 'released' || current.status === 'expired') {
+      if (current.status === 'terminal' || current.status === 'expired' || current.status === 'revoked') {
         return launchLeaseFromDbRecord(current);
       }
       throw codexDenied('codex_launch_lease_denied', 'Codex launch lease was not found.');
@@ -1377,31 +1492,21 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async expireCodexLaunchLeases(now: string): Promise<number> {
     return this.db.transaction(async (tx) => {
       const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
-      const leasedRows = await tx
+      const leaseRows = await tx
         .update(codex_launch_leases)
         .set({ status: 'expired', terminalizedAt: now, terminalReasonCode: 'codex_launch_lease_expired' } as never)
         .where(
           and(
-            eq(codex_launch_leases.status, 'leased'),
+            or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
             sql`${codex_launch_leases.expiresAt} <= ${now}`,
           ),
         )
         .returning();
       await repository.decrementCodexWorkerLeaseCounts(
         tx as ForgeloopDrizzleDatabase,
-        leasedRows.flatMap((row) => (row.workerId === null ? [] : [row.workerId])),
+        leaseRows.flatMap((row) => (row.workerId === null ? [] : [row.workerId])),
       );
-      const queuedRows = await tx
-        .update(codex_launch_leases)
-        .set({ status: 'expired', terminalizedAt: now, terminalReasonCode: 'codex_launch_lease_expired' } as never)
-        .where(
-          and(
-            eq(codex_launch_leases.status, 'queued'),
-            sql`${codex_launch_leases.expiresAt} <= ${now}`,
-          ),
-        )
-        .returning({ id: codex_launch_leases.id });
-      return leasedRows.length + queuedRows.length;
+      return leaseRows.length;
     });
   }
 
@@ -1421,12 +1526,37 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       return { recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] };
     }
     const rows = await this.db.transaction(async (tx) => {
+      await tx
+        .update(codex_worker_registrations)
+        .set({ status: 'offline', controlChannelStatus: 'disconnected' } as never)
+        .where(inArray(codex_worker_registrations.id, staleWorkerIds));
       const recoveredRows = await tx
         .update(codex_launch_leases)
         .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
-        .where(and(inArray(codex_launch_leases.workerId, staleWorkerIds), eq(codex_launch_leases.status, 'leased')))
+        .where(
+          and(
+            inArray(codex_launch_leases.workerId, staleWorkerIds),
+            or(
+              eq(codex_launch_leases.status, 'active'),
+              and(
+                eq(codex_launch_leases.status, 'materialized'),
+                isNotNull(codex_launch_leases.materializedAt),
+                isNull(codex_launch_leases.terminalizedAt),
+              ),
+            ),
+          ),
+        )
         .returning();
       const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      const recoveredRecords = recoveredRows.map((row) => fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+      for (const record of recoveredRecords) {
+        if (record.action_type !== undefined || record.target_type === 'automation_action_run') {
+          await repository.markCodexRecoveredAutomationAction(record.target_id, input.reason_code, input.now);
+        }
+        if (record.run_worker_lease_id !== undefined) {
+          await repository.markCodexRecoveredRunSession(record.run_worker_lease_id, input.reason_code, input.now);
+        }
+      }
       await repository.decrementCodexWorkerLeaseCounts(
         tx as ForgeloopDrizzleDatabase,
         recoveredRows.flatMap((row) => (row.workerId === null ? [] : [row.workerId])),
@@ -1437,7 +1567,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return {
       recovered_launch_leases: records.map(launchLeaseFromDbRecord),
       automation_action_transitions: records
-        .filter((record) => record.action_type !== undefined)
+        .filter((record) => record.action_type !== undefined || record.target_type === 'automation_action_run')
         .map((record) => ({
           ...(record.action_type === undefined ? {} : { action_type: record.action_type }),
           target_id: record.target_id,
@@ -1446,10 +1576,77 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       run_session_transitions: records
         .filter((record) => record.execution_package_id !== undefined || record.run_worker_lease_id !== undefined)
         .map((record) => ({
+          ...(record.run_worker_lease_id === undefined ? {} : { run_session_id: record.run_worker_lease_id.split(':')[0] }),
           ...(record.execution_package_id === undefined ? {} : { execution_package_id: record.execution_package_id }),
           reason_code: input.reason_code,
         })),
     };
+  }
+
+  private async markCodexRecoveredAutomationAction(actionRunId: string, reasonCode: string, now: string): Promise<void> {
+    const actionRun = await this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, actionRunId);
+    if (actionRun === undefined || actionRun.status !== 'running') {
+      return;
+    }
+    await this.upsert(automation_action_runs, automation_action_runs.id, {
+      ...actionRun,
+      status: 'gate_pending',
+      reason: reasonCode,
+      result_json: {
+        ...(actionRun.result_json ?? {}),
+        codex_runtime_blocker_code: reasonCode,
+      },
+      updated_at: now,
+    });
+  }
+
+  private async markCodexRecoveredRunSession(runWorkerLeaseId: string, reasonCode: string, now: string): Promise<void> {
+    const runWorkerLease = await this.getById<RunWorkerLease>(run_worker_leases, run_worker_leases.id, runWorkerLeaseId);
+    const runSessionId = runWorkerLease?.run_session_id ?? runWorkerLeaseId.split(':')[0];
+    if (runSessionId === undefined || runSessionId.length === 0) {
+      return;
+    }
+    const runSession = await this.getById<RunSession>(run_sessions, run_sessions.id, runSessionId);
+    if (runSession === undefined || !isActiveRunSessionStatus(runSession.status)) {
+      return;
+    }
+    await this.upsert(run_sessions, run_sessions.id, {
+      ...runSession,
+      status: 'stalled',
+      ...(runSession.runtime_metadata === undefined
+        ? {}
+        : {
+            runtime_metadata: {
+              ...runSession.runtime_metadata,
+              driver_status: 'stalled',
+              worker_lease_status: 'expired',
+            },
+          }),
+      failure_kind: 'executor_error',
+      failure_reason: reasonCode,
+      updated_at: now,
+    });
+  }
+
+  async consumeCodexRuntimeSetupNonce(input: ConsumeCodexRuntimeSetupNonceInput): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.delete(codex_runtime_setup_nonces).where(sql`${codex_runtime_setup_nonces.expiresAt} <= ${input.created_at}`);
+      const [row] = await tx
+        .insert(codex_runtime_setup_nonces)
+        .values({
+          setupNonceHash: input.setup_nonce_hash,
+          requestSignatureHash: input.request_signature_hash,
+          actorId: input.actor_id,
+          actorClass: input.actor_class,
+          createdAt: input.created_at,
+          expiresAt: input.expires_at,
+        })
+        .onConflictDoNothing({ target: codex_runtime_setup_nonces.setupNonceHash })
+        .returning({ setupNonceHash: codex_runtime_setup_nonces.setupNonceHash });
+      if (row === undefined) {
+        throw codexDenied('codex_worker_nonce_replay', 'Codex runtime setup nonce was already used.');
+      }
+    });
   }
 
   async saveOrganization(organization: Organization): Promise<void> {
@@ -2983,24 +3180,59 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     workerId: string,
     sessionToken: string,
     deniedCode: Extract<DomainErrorType['code'], 'codex_worker_registration_denied' | 'codex_launch_lease_denied' | 'codex_launch_materialization_denied'>,
+    now: string,
+    options: { requireConnected?: boolean } = {},
   ): Promise<void> {
+    const requireConnected = options.requireConnected ?? true;
     const [row] = await this.db
-      .select({ sessionTokenHash: codex_worker_registrations.sessionTokenHash })
+      .select({
+        sessionTokenHash: codex_worker_registrations.sessionTokenHash,
+        sessionTokenExpiresAt: codex_worker_registrations.sessionTokenExpiresAt,
+        status: codex_worker_registrations.status,
+        controlChannelStatus: codex_worker_registrations.controlChannelStatus,
+      })
       .from(codex_worker_registrations)
       .where(eq(codex_worker_registrations.id, workerId))
       .limit(1);
-    if (row === undefined || row.sessionTokenHash !== codexCredentialPayloadDigest(sessionToken)) {
+    if (
+      row === undefined ||
+      row.sessionTokenHash !== codexCredentialPayloadDigest(sessionToken) ||
+      row.sessionTokenExpiresAt <= now ||
+      (requireConnected && ((row.status !== 'online' && row.status !== 'draining') || row.controlChannelStatus !== 'connected'))
+    ) {
       throw codexDenied(deniedCode, 'Codex worker session proof was rejected.');
     }
   }
 
-  private async recordCodexWorkerNonce(workerId: string, nonce: string, nonceTimestamp: string, now: string): Promise<void> {
+  private workerRecordMatchesLaunch(
+    worker: CodexWorkerRegistrationDbRecord,
+    record: CodexLaunchLeaseDbRecord,
+    profileRevision: CodexRuntimeProfileRevision,
+  ): boolean {
+    return (
+      (worker.status === 'online' || worker.status === 'draining') &&
+      worker.control_channel_status === 'connected' &&
+      capabilityList(worker.capabilities_json, 'target_kinds').includes(record.target_kind) &&
+      codexRuntimeScopeMatches(worker.allowed_scopes_json, codexScope(record.project_id, record.repo_id)) &&
+      capabilityList(worker.capabilities_json, 'docker_image_digests').includes(record.docker_image_digest) &&
+      capabilityList(worker.capabilities_json, 'network_policy_digests').includes(record.network_policy_digest) &&
+      (record.network_provider_config_digest === undefined ||
+        capabilityList(worker.capabilities_json, 'network_provider_config_digests').includes(record.network_provider_config_digest)) &&
+      profileRevision.docker_image_digest === record.docker_image_digest &&
+      codexCanonicalDigest(profileRevision.network_policy) === record.network_policy_digest
+    );
+  }
+
+  private async recordCodexWorkerNonce(workerId: string, sessionToken: string, nonce: string, nonceTimestamp: string, now: string): Promise<void> {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
     const [row] = await this.db
       .insert(codex_worker_session_nonces)
       .values({
         id: randomUUID(),
         workerId,
-        nonce,
+        sessionTokenHash,
+        nonceHash,
         nonceTimestamp,
         createdAt: now,
       } as never)
@@ -3009,6 +3241,65 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (row === undefined) {
       throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
     }
+  }
+
+  private async codexLaunchFenceIsActive(record: CodexLaunchLeaseDbRecord, now: string): Promise<boolean> {
+    if (record.target_kind === 'generation') {
+      return this.codexGenerationFenceIsActive(record, now);
+    }
+    return this.codexRunExecutionFenceIsActive(record, now);
+  }
+
+  private async codexGenerationFenceIsActive(record: CodexLaunchLeaseDbRecord, now: string): Promise<boolean> {
+    const actionRun = await this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, record.target_id);
+    if (
+      actionRun === undefined ||
+      actionRun.status !== 'running' ||
+      actionRun.claim_token === undefined ||
+      actionRun.locked_until === undefined ||
+      actionRun.locked_until <= now ||
+      (record.action_claim_token_hash !== undefined &&
+        codexCredentialPayloadDigest(actionRun.claim_token) !== record.action_claim_token_hash) ||
+      (record.precondition_fingerprint !== undefined && actionRun.precondition_fingerprint !== record.precondition_fingerprint) ||
+      (record.action_type !== undefined && actionRun.action_type !== record.action_type) ||
+      (record.action_attempt !== undefined && actionRun.attempt !== record.action_attempt) ||
+      !automationScopeMatchesCodexTarget(actionRun.automation_scope, record.project_id, record.repo_id)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private async codexRunExecutionFenceIsActive(record: CodexLaunchLeaseDbRecord, now: string): Promise<boolean> {
+    const runWorkerLease =
+      record.run_worker_lease_id === undefined
+        ? undefined
+        : await this.getById<RunWorkerLease>(run_worker_leases, run_worker_leases.id, record.run_worker_lease_id);
+    const runSession =
+      runWorkerLease === undefined ? undefined : await this.getById<RunSession>(run_sessions, run_sessions.id, runWorkerLease.run_session_id);
+    const executionPackage =
+      record.execution_package_id === undefined
+        ? undefined
+        : await this.getById<ExecutionPackage>(execution_packages, execution_packages.id, record.execution_package_id);
+    if (
+      runWorkerLease === undefined ||
+      runWorkerLease.status !== 'active' ||
+      runWorkerLease.expires_at <= now ||
+      (record.run_worker_lease_token_hash !== undefined &&
+        codexCredentialPayloadDigest(runWorkerLease.lease_token) !== record.run_worker_lease_token_hash) ||
+      runSession === undefined ||
+      record.target_id !== runSession.id ||
+      runSession.execution_package_id !== record.execution_package_id ||
+      (record.run_session_status !== undefined && runSession.status !== record.run_session_status) ||
+      (record.run_session_updated_at !== undefined && runSession.updated_at !== record.run_session_updated_at) ||
+      executionPackage === undefined ||
+      executionPackage.project_id !== record.project_id ||
+      executionPackage.repo_id !== record.repo_id ||
+      (record.execution_package_version !== undefined && executionPackage.version !== record.execution_package_version)
+    ) {
+      return false;
+    }
+    return true;
   }
 
   private codexFenceCondition(column: AnyPgColumn, value: string | number | undefined) {

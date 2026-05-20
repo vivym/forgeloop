@@ -8,10 +8,12 @@ import {
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexDockerNetworkProxyConfig,
+  type ExecutionPackage,
   type CodexLaunchLeaseWithToken,
   type CodexLaunchTarget,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
+  type RunSession,
 } from '../../packages/domain/src/index';
 
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
@@ -21,6 +23,11 @@ const later = '2026-05-20T00:01:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
 
 const createRepository = (): DeliveryRepository => new InMemoryDeliveryRepository();
+const runtimeMetadata = {
+  durability_mode: 'durable',
+  recovery_attempt_count: 0,
+  effective_dangerous_mode: 'confirmed',
+} as const;
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
 
@@ -74,15 +81,14 @@ const profileRevision = (
         ? {
             target_kind: 'generation',
             approval_policy: 'never',
-            source_access_mode: 'artifact_only',
-            source_workspace_write_policy: 'none',
+            source_write_policy: 'artifact_only',
+            forbidden_writable_roots: ['workspace'],
           }
         : {
             target_kind: 'run_execution',
             approval_policy: 'never',
-            sandbox_mode: 'workspace-write',
-            writable_workspace: 'task',
-            source_workspace_write_policy: 'path_policy_scoped',
+            sandbox_type: 'danger-full-access',
+            writable_roots_policy: 'task_workspace_only',
           }),
     app_server_required: true,
     allowed_driver_kind: 'app_server',
@@ -147,7 +153,7 @@ const credential = (
     profile_id: overrides.profile_id ?? 'runtime-profile-generation',
     project_id: overrides.project_id ?? 'project-1',
     repo_id: overrides.repo_id ?? 'repo-1',
-    provider: overrides.provider ?? 'openai',
+    provider: overrides.provider ?? 'unsafe_db',
     purpose: overrides.purpose ?? 'model_provider',
     active_version_id: versionOverrides.id ?? 'credential-version-1',
     created_by_actor_id: overrides.created_by_actor_id ?? 'actor-admin',
@@ -168,11 +174,64 @@ const credential = (
 };
 
 const generationTarget = (overrides: Partial<CodexLaunchTarget> = {}): CodexLaunchTarget => ({
-  target_type: overrides.target_type ?? 'generation_request',
+  target_type: overrides.target_type ?? 'automation_action_run',
   target_id: overrides.target_id ?? 'generation-1',
   target_kind: overrides.target_kind ?? 'generation',
   project_id: overrides.project_id ?? 'project-1',
   repo_id: overrides.repo_id ?? 'repo-1',
+});
+
+const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
+  id: overrides.id ?? 'run-session-1',
+  execution_package_id: overrides.execution_package_id ?? 'execution-package-1',
+  requested_by_actor_id: overrides.requested_by_actor_id ?? 'actor-owner',
+  status: overrides.status ?? 'running',
+  changed_files: overrides.changed_files ?? [],
+  check_results: overrides.check_results ?? [],
+  artifacts: overrides.artifacts ?? [],
+  log_refs: overrides.log_refs ?? [],
+  runtime_metadata: overrides.runtime_metadata ?? runtimeMetadata,
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+  ...(overrides.executor_type !== undefined ? { executor_type: overrides.executor_type } : {}),
+  ...(overrides.executor_result !== undefined ? { executor_result: overrides.executor_result } : {}),
+  ...(overrides.run_spec !== undefined ? { run_spec: overrides.run_spec } : {}),
+  ...(overrides.summary !== undefined ? { summary: overrides.summary } : {}),
+  ...(overrides.failure_kind !== undefined ? { failure_kind: overrides.failure_kind } : {}),
+  ...(overrides.failure_reason !== undefined ? { failure_reason: overrides.failure_reason } : {}),
+  ...(overrides.started_at !== undefined ? { started_at: overrides.started_at } : {}),
+  ...(overrides.finished_at !== undefined ? { finished_at: overrides.finished_at } : {}),
+});
+
+const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+  id: overrides.id ?? 'execution-package-1',
+  work_item_id: overrides.work_item_id ?? 'work-item-1',
+  spec_id: overrides.spec_id ?? 'spec-1',
+  spec_revision_id: overrides.spec_revision_id ?? 'spec-revision-1',
+  plan_id: overrides.plan_id ?? 'plan-1',
+  plan_revision_id: overrides.plan_revision_id ?? 'plan-revision-1',
+  project_id: overrides.project_id ?? 'project-1',
+  repo_id: overrides.repo_id ?? 'repo-1',
+  objective: overrides.objective ?? 'Implement Codex runtime package execution.',
+  owner_actor_id: overrides.owner_actor_id ?? 'actor-owner',
+  reviewer_actor_id: overrides.reviewer_actor_id ?? 'actor-reviewer',
+  qa_owner_actor_id: overrides.qa_owner_actor_id ?? 'actor-qa',
+  phase: overrides.phase ?? 'execution',
+  activity_state: overrides.activity_state ?? 'idle',
+  gate_state: overrides.gate_state ?? 'none',
+  resolution: overrides.resolution ?? 'none',
+  required_checks: overrides.required_checks ?? [],
+  required_artifact_kinds: overrides.required_artifact_kinds ?? ['execution_summary'],
+  allowed_paths: overrides.allowed_paths ?? ['packages/**'],
+  forbidden_paths: overrides.forbidden_paths ?? [],
+  source_mutation_policy: overrides.source_mutation_policy ?? 'path_policy_scoped',
+  version: overrides.version ?? 1,
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+  ...(overrides.execution_package_set_id !== undefined ? { execution_package_set_id: overrides.execution_package_set_id } : {}),
+  ...(overrides.execution_package_version !== undefined ? { execution_package_version: overrides.execution_package_version } : {}),
+  ...(overrides.last_run_session_id !== undefined ? { last_run_session_id: overrides.last_run_session_id } : {}),
+  ...(overrides.current_run_session_id !== undefined ? { current_run_session_id: overrides.current_run_session_id } : {}),
 });
 
 const seedProfileAndCredential = async (repository: DeliveryRepository, targetKind: CodexLaunchTarget['target_kind'] = 'generation') => {
@@ -238,7 +297,8 @@ const seedWorker = async (
       bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
       bootstrap_token_version: 1,
       session_token: sessionToken,
-      status: 'active',
+      session_expires_at: expiresAt,
+      status: 'online',
       control_channel_status: 'connected',
       allowed_scopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
       capabilities,
@@ -266,7 +326,33 @@ const createLaunchLease = async (
 ): Promise<CodexLaunchLeaseWithToken> => {
   const target = overrides.target ?? generationTarget();
   const seeded = await seedProfileAndCredential(repository, target.target_kind);
-  const { worker } = await seedWorker(repository, { capabilities: [target.target_kind], ...workerOverrides });
+  const { worker, sessionToken } = await seedWorker(repository, { capabilities: [target.target_kind], ...workerOverrides });
+  await repository.heartbeatCodexWorker({
+    worker_id: worker.id,
+    session_token: sessionToken,
+    nonce: `launch-heartbeat-${overrides.id ?? 'launch-lease-1'}`,
+    nonce_timestamp: now,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: 0,
+    capabilities: [target.target_kind],
+    now,
+  });
+  const defaultActionClaimToken = 'action-claim-token-1';
+  const actionClaimTokenHash = overrides.action_claim_token_hash ?? tokenHash(defaultActionClaimToken);
+  if (target.target_kind === 'generation' && actionClaimTokenHash === tokenHash(defaultActionClaimToken)) {
+    try {
+      await repository.getClaimedAutomationActionRun({ id: target.target_id, claim_token: defaultActionClaimToken });
+    } catch {
+      await claimGenerationAction(repository, {
+        id: target.target_id,
+        action_type: overrides.action_type ?? 'codex_generation',
+        target_object_id: target.target_id,
+        claim_token: defaultActionClaimToken,
+        precondition_fingerprint: overrides.precondition_fingerprint ?? 'precondition-1',
+      });
+    }
+  }
 
   return repository.createOrReplayCodexLaunchLease({
     id: 'launch-lease-1',
@@ -282,6 +368,7 @@ const createLaunchLease = async (
     network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
     network_provider_config_digest: dockerProxyConfig().provider_config_digest,
     launch_token: 'launch-token-1',
+    launch_attempt: 1,
     action_type: 'codex_generation',
     action_attempt: 1,
     action_claim_token_hash: tokenHash('action-claim-token-1'),
@@ -291,6 +378,30 @@ const createLaunchLease = async (
     ...overrides,
   });
 };
+
+const claimGenerationAction = (
+  repository: DeliveryRepository,
+  overrides: Partial<Parameters<DeliveryRepository['claimAutomationActionRun']>[0]> = {},
+) =>
+  repository.claimAutomationActionRun({
+    id: 'generation-action-1',
+    action_type: 'codex_generation',
+    target_object_type: 'generation_request',
+    target_object_id: 'generation-1',
+    target_revision_id: 'spec-revision-1',
+    target_status: 'running',
+    target_version: 1,
+    idempotency_key: 'generation-action-1-idem',
+    automation_scope: 'repo:project-1:repo-1',
+    automation_settings_version: 1,
+    capability_fingerprint: 'capability-codex',
+    precondition_fingerprint: 'precondition-1',
+    action_input_json: { generation_id: 'generation-1' },
+    claim_token: 'generation-action-claim-1',
+    locked_until: expiresAt,
+    now,
+    ...overrides,
+  });
 
 describe('codex runtime repository behavior', () => {
   it('creates and reads active profile revisions by target kind and scope', async () => {
@@ -344,6 +455,7 @@ describe('codex runtime repository behavior', () => {
       repository.resolveCodexCredentialForLaunch({
         credential_binding_id: binding.id,
         target_kind: 'generation',
+        runtime_profile_id: binding.profile_id,
         project_id: 'project-1',
         repo_id: 'repo-1',
         required_payload_digest: version.payload_digest,
@@ -401,12 +513,24 @@ describe('codex runtime repository behavior', () => {
     await seedProfileAndCredential(repository);
     const { worker, sessionToken } = await seedWorker(repository);
 
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'generation',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision().revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now,
+      }),
+    ).resolves.toBeUndefined();
+
     const heartbeat = await repository.heartbeatCodexWorker({
       worker_id: worker.id,
       session_token: sessionToken,
       nonce: 'heartbeat-nonce-1',
       nonce_timestamp: later,
-      status: 'active',
+      status: 'online',
       control_channel_status: 'connected',
       active_lease_count: 0,
       capabilities: ['generation'],
@@ -424,7 +548,19 @@ describe('codex runtime repository behavior', () => {
         network_provider_config_digest: dockerProxyConfig().provider_config_digest,
         now: later,
       }),
-    ).resolves.toMatchObject({ id: worker.id, status: 'active' });
+    ).resolves.toMatchObject({ id: worker.id, status: 'online' });
+
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'generation',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision().revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now: '2026-05-20T00:07:00.000Z',
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it('rejects heartbeat capability escalation beyond registration capabilities', async () => {
@@ -438,7 +574,7 @@ describe('codex runtime repository behavior', () => {
         session_token: sessionToken,
         nonce: 'heartbeat-escalation-nonce',
         nonce_timestamp: later,
-        status: 'active',
+        status: 'online',
         control_channel_status: 'connected',
         active_lease_count: 0,
         capabilities: ['generation', 'run_execution'],
@@ -473,7 +609,7 @@ describe('codex runtime repository behavior', () => {
       session_token: sessionToken,
       nonce: 'heartbeat-downgrade-nonce',
       nonce_timestamp: later,
-      status: 'active',
+      status: 'online',
       control_channel_status: 'connected',
       active_lease_count: 0,
       capabilities: ['generation'],
@@ -585,6 +721,7 @@ describe('codex runtime repository behavior', () => {
       repository.resolveCodexCredentialForLaunch({
         credential_binding_id: binding.id,
         target_kind: 'generation',
+        runtime_profile_id: binding.profile_id,
         project_id: 'project-1',
         repo_id: 'repo-1',
         required_payload_digest: version.payload_digest,
@@ -644,7 +781,7 @@ describe('codex runtime repository behavior', () => {
         worker_identity: worker.worker_identity,
         bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
         bootstrap_token_version: 1,
-        status: 'active',
+        status: 'online',
         allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
         allowed_capabilities_json: {
           target_kinds: ['generation'],
@@ -704,7 +841,8 @@ describe('codex runtime repository behavior', () => {
         bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
         bootstrap_token_version: 1,
         session_token: 'replacement-session-token',
-        status: 'active',
+        session_expires_at: expiresAt,
+        status: 'online',
         control_channel_status: 'connected',
         allowed_scopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
         capabilities: ['generation'],
@@ -733,7 +871,7 @@ describe('codex runtime repository behavior', () => {
         session_token: sessionToken,
         nonce: 'original-session-still-valid-nonce',
         nonce_timestamp: later,
-        status: 'active',
+        status: 'online',
         control_channel_status: 'connected',
         active_lease_count: 0,
         capabilities: ['generation'],
@@ -750,7 +888,7 @@ describe('codex runtime repository behavior', () => {
       session_token: sessionToken,
       nonce: 'replayed-nonce',
       nonce_timestamp: later,
-      status: 'active' as const,
+      status: 'online' as const,
       control_channel_status: 'connected' as const,
       active_lease_count: 0,
       capabilities: ['generation' as const],
@@ -768,6 +906,7 @@ describe('codex runtime repository behavior', () => {
   it('replays launch leases idempotently for the same lease_request_id', async () => {
     const repository = createRepository();
     const first = await createLaunchLease(repository);
+    expect(first.status).toBe('active');
     const { revision } = profileRevision();
     const { binding, version } = credential();
     const second = await repository.createOrReplayCodexLaunchLease({
@@ -784,6 +923,7 @@ describe('codex runtime repository behavior', () => {
       network_policy_digest: codexCanonicalDigest(revision.network_policy),
       network_provider_config_digest: dockerProxyConfig().provider_config_digest,
       launch_token: 'launch-token-1',
+      launch_attempt: 1,
       action_type: 'codex_generation',
       action_attempt: 1,
       action_claim_token_hash: tokenHash('action-claim-token-1'),
@@ -791,8 +931,35 @@ describe('codex runtime repository behavior', () => {
       expires_at: expiresAt,
       now,
     });
-
     expect(second).toEqual(first);
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-duplicate-attempt',
+        lease_request_id: 'lease-request-duplicate-attempt',
+        target: generationTarget(),
+        worker_id: 'worker-1',
+        runtime_profile_revision_id: revision.id,
+        runtime_profile_digest: revision.profile_digest,
+        credential_binding_id: binding.id,
+        credential_binding_version_id: version.id,
+        credential_payload_digest: version.payload_digest,
+        docker_image_digest: revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-duplicate-attempt',
+        launch_attempt: 1,
+        action_type: 'codex_generation',
+        action_attempt: 1,
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+        expires_at: expiresAt,
+        now,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
   });
 
   it('rejects target kind mismatches', async () => {
@@ -855,6 +1022,207 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it('rejects launch leases whose credential binding does not belong to the selected profile', async () => {
+    const repository = createRepository();
+    const selected = await seedProfileAndCredential(repository);
+    const other = profileRevision({
+      id: 'runtime-profile-revision-other-credential',
+      profile_id: 'runtime-profile-other-credential',
+    });
+    await repository.createCodexRuntimeProfileWithRevision(other);
+    const otherCredential = credential(
+      {
+        id: 'credential-binding-other-profile',
+        profile_id: other.profile.id,
+      },
+      { id: 'credential-version-other-profile' },
+    );
+    await repository.createCodexCredentialBindingWithVersion({
+      binding: otherCredential.binding,
+      version: otherCredential.version,
+      secret_payload_json: otherCredential.secretPayload,
+    });
+    const { worker } = await seedWorker(repository);
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-profile-mismatch',
+        lease_request_id: 'lease-request-profile-mismatch',
+        target: generationTarget(),
+        worker_id: worker.id,
+        runtime_profile_revision_id: selected.revision.id,
+        runtime_profile_digest: selected.revision.profile_digest,
+        credential_binding_id: otherCredential.binding.id,
+        credential_binding_version_id: otherCredential.version.id,
+        credential_payload_digest: otherCredential.version.payload_digest,
+        docker_image_digest: selected.revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(selected.revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-profile-mismatch',
+        launch_attempt: 1,
+        action_type: 'codex_generation',
+        action_attempt: 1,
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+        expires_at: expiresAt,
+        now,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
+  });
+
+  it('rejects materialization when the bound worker session expired or capabilities no longer match', async () => {
+    const repository = createRepository();
+    const expiredLease = await createLaunchLease(repository, {}, { session_token: 'expired-session-token' });
+
+    await expect(
+      repository.materializeCodexLaunchLease({
+        lease_id: expiredLease.id,
+        worker_id: 'worker-1',
+        launch_token: expiredLease.lease_token,
+        worker_session_token: 'expired-session-token',
+        nonce: 'materialize-expired-session-nonce',
+        nonce_timestamp: later,
+        materialization_request_hash: tokenHash('materialize-expired-session-request'),
+        active_fence: {
+          action_claim_token_hash: tokenHash('action-claim-token-1'),
+          precondition_fingerprint: 'precondition-1',
+        },
+        now: '2026-05-20T00:11:00.000Z',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+
+    const repositoryWithDowngradedWorker = createRepository();
+    const downgradedLease = await createLaunchLease(repositoryWithDowngradedWorker);
+    await repositoryWithDowngradedWorker.heartbeatCodexWorker({
+      worker_id: 'worker-1',
+      session_token: 'session-token-1',
+      nonce: 'downgrade-before-materialize-nonce',
+      nonce_timestamp: later,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 1,
+      capabilities: [],
+      now: later,
+    });
+
+    await expect(
+      repositoryWithDowngradedWorker.materializeCodexLaunchLease({
+        lease_id: downgradedLease.id,
+        worker_id: 'worker-1',
+        launch_token: downgradedLease.lease_token,
+        worker_session_token: 'session-token-1',
+        nonce: 'materialize-downgraded-worker-nonce',
+        nonce_timestamp: later,
+        materialization_request_hash: tokenHash('materialize-downgraded-worker-request'),
+        active_fence: {
+          action_claim_token_hash: tokenHash('action-claim-token-1'),
+          precondition_fingerprint: 'precondition-1',
+        },
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+  });
+
+  it('rejects launch lease request replay after materialization', async () => {
+    const repository = createRepository();
+    const lease = await createLaunchLease(repository);
+    const { revision } = profileRevision();
+    const { binding, version } = credential();
+
+    await repository.materializeCodexLaunchLease({
+      lease_id: lease.id,
+      worker_id: 'worker-1',
+      launch_token: lease.lease_token,
+      worker_session_token: 'session-token-1',
+      nonce: 'materialize-before-replay-nonce',
+      nonce_timestamp: later,
+      materialization_request_hash: tokenHash('materialize-before-replay-request'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+      },
+      now: later,
+    });
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-1',
+        lease_request_id: 'lease-request-1',
+        target: generationTarget(),
+        worker_id: 'worker-1',
+        runtime_profile_revision_id: revision.id,
+        runtime_profile_digest: revision.profile_digest,
+        credential_binding_id: binding.id,
+        credential_binding_version_id: version.id,
+        credential_payload_digest: version.payload_digest,
+        docker_image_digest: revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-1',
+        launch_attempt: 1,
+        action_type: 'codex_generation',
+        action_attempt: 1,
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+        expires_at: expiresAt,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
+  });
+
+  it('does not stale-recover a materialized lease after worker terminalization', async () => {
+    const repository = createRepository();
+    const lease = await createLaunchLease(repository);
+
+    await repository.materializeCodexLaunchLease({
+      lease_id: lease.id,
+      worker_id: 'worker-1',
+      launch_token: lease.lease_token,
+      worker_session_token: 'session-token-1',
+      nonce: 'materialize-before-terminal-nonce',
+      nonce_timestamp: later,
+      materialization_request_hash: tokenHash('materialize-before-terminal-request'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+      },
+      now: later,
+    });
+    await expect(
+      repository.terminalizeCodexLaunchLease({
+        lease_id: lease.id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'terminalize-materialized-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'terminal',
+        reason_code: 'completed_after_materialization',
+        idempotency_key: 'terminalize-materialized',
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'terminal' });
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: later,
+        now: later,
+        reason_code: 'worker_stale_after_completion',
+      }),
+    ).resolves.toMatchObject({ recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] });
+  });
+
   it('rejects materialization when profile or credential digests drift from the lease fence', async () => {
     const repository = createRepository();
     const lease = await createLaunchLease(repository);
@@ -898,37 +1266,170 @@ describe('codex runtime repository behavior', () => {
     const first = await createLaunchLease(repository, {}, { max_concurrency: 1 });
     const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
 
+    await expect(
+      repository.terminalizeCodexLaunchLease({
+        lease_id: first.id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'terminalize-release-capacity-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'terminal',
+        reason_code: 'completed_without_materialization',
+        idempotency_key: 'terminalize-release-capacity',
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'terminal' });
+
+    const secondLeaseInput = {
+      id: 'launch-lease-2',
+      lease_request_id: 'lease-request-2',
+      target: generationTarget({ target_id: 'generation-2' }),
+      worker_id: 'worker-1',
+      runtime_profile_revision_id: seeded.revision.id,
+      runtime_profile_digest: seeded.revision.profile_digest,
+      credential_binding_id: seeded.binding.id,
+      credential_binding_version_id: seeded.version.id,
+      credential_payload_digest: seeded.version.payload_digest,
+      docker_image_digest: seeded.revision.docker_image_digest,
+      network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+      network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+      launch_token: 'launch-token-2',
+      launch_attempt: 1,
+      expires_at: expiresAt,
+      now: later,
+    };
+
+    await expect(repository.createOrReplayCodexLaunchLease(secondLeaseInput)).resolves.toMatchObject({
+      id: 'launch-lease-2',
+      worker_id: 'worker-1',
+    });
+  });
+
+  it('persists terminal evidence and replays terminal idempotency keys', async () => {
+    const repository = createRepository();
+    const first = await createLaunchLease(repository, {}, { max_concurrency: 1 });
+
+    await expect(
+      repository.terminalizeCodexLaunchLease({
+        lease_id: first.id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'terminalize-evidence-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'terminal',
+        reason_code: 'completed_with_evidence',
+        evidence_summary: { cleanup: 'ok', docker_policy_digest: `sha256:${'1'.repeat(64)}` },
+        runtime_job_id: 'runtime-job-1',
+        idempotency_key: 'terminalize-evidence',
+        now: later,
+      }),
+    ).resolves.toMatchObject({
+      status: 'terminal',
+      terminal_reason_code: 'completed_with_evidence',
+      terminal_evidence_summary: { cleanup: 'ok', docker_policy_digest: `sha256:${'1'.repeat(64)}` },
+      terminal_runtime_job_id: 'runtime-job-1',
+      terminal_idempotency_key: 'terminalize-evidence',
+    });
+
+    await expect(
+      repository.terminalizeCodexLaunchLease({
+        lease_id: first.id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'terminalize-evidence-replay-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'terminal',
+        reason_code: 'completed_with_evidence',
+        evidence_summary: { cleanup: 'ok', docker_policy_digest: `sha256:${'1'.repeat(64)}` },
+        runtime_job_id: 'runtime-job-1',
+        idempotency_key: 'terminalize-evidence',
+        now: later,
+      }),
+    ).resolves.toMatchObject({
+      status: 'terminal',
+      terminal_evidence_summary: { cleanup: 'ok', docker_policy_digest: `sha256:${'1'.repeat(64)}` },
+      terminal_runtime_job_id: 'runtime-job-1',
+      terminal_idempotency_key: 'terminalize-evidence',
+    });
+
+    await expect(
+      repository.terminalizeCodexLaunchLease({
+        lease_id: first.id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'terminalize-evidence-conflict-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'terminal',
+        reason_code: 'conflicting_terminal',
+        idempotency_key: 'terminalize-evidence-conflict',
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
+  });
+
+  it('keeps worker capacity occupied after materialization until terminalization', async () => {
+    const repository = createRepository();
+    const first = await createLaunchLease(repository, {}, { max_concurrency: 1 });
+    const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
+
+    await repository.materializeCodexLaunchLease({
+      lease_id: first.id,
+      worker_id: 'worker-1',
+      launch_token: first.lease_token,
+      worker_session_token: 'session-token-1',
+      nonce: 'materialize-capacity-held-nonce',
+      nonce_timestamp: later,
+      materialization_request_hash: tokenHash('materialize-capacity-held-request'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+      },
+      now: later,
+    });
+
+    const secondLeaseInput = {
+      id: 'launch-lease-2',
+      lease_request_id: 'lease-request-2',
+      target: generationTarget({ target_id: 'generation-2' }),
+      worker_id: 'worker-1',
+      runtime_profile_revision_id: seeded.revision.id,
+      runtime_profile_digest: seeded.revision.profile_digest,
+      credential_binding_id: seeded.binding.id,
+      credential_binding_version_id: seeded.version.id,
+      credential_payload_digest: seeded.version.payload_digest,
+      docker_image_digest: seeded.revision.docker_image_digest,
+      network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+      network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+      launch_token: 'launch-token-2',
+      launch_attempt: 1,
+      expires_at: expiresAt,
+      now: later,
+    };
+
+    await expect(repository.createOrReplayCodexLaunchLease(secondLeaseInput)).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
+
     await repository.terminalizeCodexLaunchLease({
       lease_id: first.id,
       worker_id: 'worker-1',
       worker_session_token: 'session-token-1',
-      nonce: 'terminalize-release-capacity-nonce',
+      nonce: 'terminalize-capacity-held-nonce',
       nonce_timestamp: later,
-      terminal_status: 'released',
-      reason_code: 'completed_without_materialization',
-      idempotency_key: 'terminalize-release-capacity',
+      terminal_status: 'terminal',
+      reason_code: 'completed_after_materialization',
+      idempotency_key: 'terminalize-capacity-held',
       now: later,
     });
 
-    await expect(
-      repository.createOrReplayCodexLaunchLease({
-        id: 'launch-lease-2',
-        lease_request_id: 'lease-request-2',
-        target: generationTarget({ target_id: 'generation-2' }),
-        worker_id: 'worker-1',
-        runtime_profile_revision_id: seeded.revision.id,
-        runtime_profile_digest: seeded.revision.profile_digest,
-        credential_binding_id: seeded.binding.id,
-        credential_binding_version_id: seeded.version.id,
-        credential_payload_digest: seeded.version.payload_digest,
-        docker_image_digest: seeded.revision.docker_image_digest,
-        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
-        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
-        launch_token: 'launch-token-2',
-        expires_at: expiresAt,
-        now: later,
-      }),
-    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+    await expect(repository.createOrReplayCodexLaunchLease(secondLeaseInput)).resolves.toMatchObject({
+      id: 'launch-lease-2',
+      worker_id: 'worker-1',
+    });
   });
 
   it('does not let heartbeat under-reporting free an occupied worker slot', async () => {
@@ -941,7 +1442,7 @@ describe('codex runtime repository behavior', () => {
       session_token: 'session-token-1',
       nonce: 'heartbeat-underreported-lease-count-nonce',
       nonce_timestamp: later,
-      status: 'active',
+      status: 'online',
       control_channel_status: 'connected',
       active_lease_count: 0,
       capabilities: ['generation'],
@@ -963,6 +1464,7 @@ describe('codex runtime repository behavior', () => {
         network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
         network_provider_config_digest: dockerProxyConfig().provider_config_digest,
         launch_token: 'launch-token-2',
+        launch_attempt: 1,
         expires_at: expiresAt,
         now: later,
       }),
@@ -977,38 +1479,46 @@ describe('codex runtime repository behavior', () => {
     const first = await createLaunchLease(repository, {}, { max_concurrency: 1 });
     const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
 
-    await repository.revokeCodexLaunchLease({
-      lease_id: first.id,
-      reason_code: 'revoked_by_controller',
-      idempotency_key: 'revoke-release-capacity',
-      now: later,
-    });
-    await repository.revokeCodexLaunchLease({
-      lease_id: first.id,
-      reason_code: 'revoked_by_controller',
-      idempotency_key: 'revoke-release-capacity-replay',
-      now: later,
-    });
-
     await expect(
-      repository.createOrReplayCodexLaunchLease({
-        id: 'launch-lease-2',
-        lease_request_id: 'lease-request-2',
-        target: generationTarget({ target_id: 'generation-2' }),
-        worker_id: 'worker-1',
-        runtime_profile_revision_id: seeded.revision.id,
-        runtime_profile_digest: seeded.revision.profile_digest,
-        credential_binding_id: seeded.binding.id,
-        credential_binding_version_id: seeded.version.id,
-        credential_payload_digest: seeded.version.payload_digest,
-        docker_image_digest: seeded.revision.docker_image_digest,
-        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
-        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
-        launch_token: 'launch-token-2',
-        expires_at: expiresAt,
+      repository.revokeCodexLaunchLease({
+        lease_id: first.id,
+        reason_code: 'revoked_by_controller',
+        idempotency_key: 'revoke-release-capacity',
         now: later,
       }),
-    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+    ).resolves.toMatchObject({ status: 'revoked' });
+    await expect(
+      repository.revokeCodexLaunchLease({
+        lease_id: first.id,
+        reason_code: 'revoked_by_controller',
+        idempotency_key: 'revoke-release-capacity-replay',
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'revoked' });
+
+    const secondLeaseInput = {
+      id: 'launch-lease-2',
+      lease_request_id: 'lease-request-2',
+      target: generationTarget({ target_id: 'generation-2' }),
+      worker_id: 'worker-1',
+      runtime_profile_revision_id: seeded.revision.id,
+      runtime_profile_digest: seeded.revision.profile_digest,
+      credential_binding_id: seeded.binding.id,
+      credential_binding_version_id: seeded.version.id,
+      credential_payload_digest: seeded.version.payload_digest,
+      docker_image_digest: seeded.revision.docker_image_digest,
+      network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+      network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+      launch_token: 'launch-token-2',
+      launch_attempt: 1,
+      expires_at: expiresAt,
+      now: later,
+    };
+
+    await expect(repository.createOrReplayCodexLaunchLease(secondLeaseInput)).resolves.toMatchObject({
+      id: 'launch-lease-2',
+      worker_id: 'worker-1',
+    });
   });
 
   it('releases worker capacity when a leased launch expires', async () => {
@@ -1019,25 +1529,146 @@ describe('codex runtime repository behavior', () => {
     await expect(repository.expireCodexLaunchLeases('2026-05-20T00:11:00.000Z')).resolves.toBe(1);
     await expect(repository.expireCodexLaunchLeases('2026-05-20T00:11:00.000Z')).resolves.toBe(0);
 
-    await expect(
-      repository.createOrReplayCodexLaunchLease({
-        id: 'launch-lease-2',
-        lease_request_id: 'lease-request-2',
-        target: generationTarget({ target_id: 'generation-2' }),
-        worker_id: 'worker-1',
-        runtime_profile_revision_id: seeded.revision.id,
-        runtime_profile_digest: seeded.revision.profile_digest,
-        credential_binding_id: seeded.binding.id,
-        credential_binding_version_id: seeded.version.id,
-        credential_payload_digest: seeded.version.payload_digest,
-        docker_image_digest: seeded.revision.docker_image_digest,
-        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
-        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
-        launch_token: 'launch-token-2',
-        expires_at: expiresAt,
-        now: later,
+    const secondLeaseInput = {
+      id: 'launch-lease-2',
+      lease_request_id: 'lease-request-2',
+      target: generationTarget({ target_id: 'generation-2' }),
+      worker_id: 'worker-1',
+      runtime_profile_revision_id: seeded.revision.id,
+      runtime_profile_digest: seeded.revision.profile_digest,
+      credential_binding_id: seeded.binding.id,
+      credential_binding_version_id: seeded.version.id,
+      credential_payload_digest: seeded.version.payload_digest,
+      docker_image_digest: seeded.revision.docker_image_digest,
+      network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+      network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+      launch_token: 'launch-token-2',
+      launch_attempt: 1,
+      expires_at: expiresAt,
+      now: later,
+    };
+
+    await expect(repository.createOrReplayCodexLaunchLease(secondLeaseInput)).resolves.toMatchObject({
+      id: 'launch-lease-2',
+      worker_id: 'worker-1',
+    });
+  });
+
+  it('stalls owning run sessions when stale worker recovery expires run-execution leases', async () => {
+    const repository = createRepository();
+    const run = runSession({
+      id: 'run-session-stale-codex',
+      execution_package_id: 'execution-package-stale-codex',
+      runtime_metadata: {
+        ...runtimeMetadata,
+        driver_status: 'running',
+        worker_lease_status: 'active',
+      },
+    });
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-1',
+      lease_token: 'run-worker-token-1',
+      now,
+      expires_at: expiresAt,
+    });
+
+    await createLaunchLease(repository, {
+      id: 'launch-lease-run-execution',
+      lease_request_id: 'lease-request-run-execution',
+      target: generationTarget({
+        target_type: 'run_session',
+        target_kind: 'run_execution',
+        target_id: run.id,
       }),
-    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+      action_type: undefined,
+      action_attempt: undefined,
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+      execution_package_id: run.execution_package_id,
+      run_worker_lease_id: runWorkerLease.id,
+      run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
+      run_session_status: 'running',
+      run_session_updated_at: now,
+      execution_package_version: 1,
+    });
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: later,
+        now: later,
+        reason_code: 'codex_worker_stale_run_execution',
+      }),
+    ).resolves.toMatchObject({
+      recovered_launch_leases: [{ id: 'launch-lease-run-execution', status: 'expired' }],
+      run_session_transitions: [
+        {
+          run_session_id: run.id,
+          execution_package_id: run.execution_package_id,
+          reason_code: 'codex_worker_stale_run_execution',
+        },
+      ],
+    });
+    await expect(repository.getRunSession(run.id)).resolves.toMatchObject({
+      id: run.id,
+      status: 'stalled',
+      failure_kind: 'executor_error',
+      failure_reason: 'codex_worker_stale_run_execution',
+      runtime_metadata: expect.objectContaining({
+        driver_status: 'stalled',
+        worker_lease_status: 'expired',
+      }),
+    });
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: later,
+        now: later,
+        reason_code: 'codex_worker_stale_run_execution',
+      }),
+    ).resolves.toMatchObject({ recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] });
+  });
+
+  it('moves owning generation actions to gate pending even when launch lease action_type is absent', async () => {
+    const repository = createRepository();
+    const action = await claimGenerationAction(repository);
+
+    await createLaunchLease(repository, {
+      target: generationTarget({ target_id: action.id }),
+      action_type: undefined,
+      action_claim_token_hash: tokenHash('generation-action-claim-1'),
+    });
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: later,
+        now: later,
+        reason_code: 'codex_worker_stale_generation',
+      }),
+    ).resolves.toMatchObject({
+      recovered_launch_leases: [{ id: 'launch-lease-1', status: 'expired' }],
+      automation_action_transitions: [
+        {
+          target_id: action.id,
+          reason_code: 'codex_worker_stale_generation',
+        },
+      ],
+    });
+
+    await expect(
+      repository.claimNextAutomationActionRun({
+        now: later,
+        claim_token: 'generation-action-claim-2',
+        locked_until: expiresAt,
+        limit: 1,
+        action_type: action.action_type,
+      }),
+    ).resolves.toMatchObject({
+      id: action.id,
+      status: 'running',
+      attempt: 2,
+    });
   });
 
   it('releases worker capacity when stale worker lease recovery expires a lease', async () => {
@@ -1060,25 +1691,82 @@ describe('codex runtime repository behavior', () => {
       }),
     ).resolves.toMatchObject({ recovered_launch_leases: [] });
 
+    const secondLeaseInput = {
+      id: 'launch-lease-2',
+      lease_request_id: 'lease-request-2',
+      target: generationTarget({ target_id: 'generation-2' }),
+      worker_id: 'worker-1',
+      runtime_profile_revision_id: seeded.revision.id,
+      runtime_profile_digest: seeded.revision.profile_digest,
+      credential_binding_id: seeded.binding.id,
+      credential_binding_version_id: seeded.version.id,
+      credential_payload_digest: seeded.version.payload_digest,
+      docker_image_digest: seeded.revision.docker_image_digest,
+      network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+      network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+      launch_token: 'launch-token-2',
+      launch_attempt: 1,
+      expires_at: expiresAt,
+      now: later,
+    };
+
+    await expect(repository.createOrReplayCodexLaunchLease(secondLeaseInput)).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
+
+    await repository.heartbeatCodexWorker({
+      worker_id: 'worker-1',
+      session_token: 'session-token-1',
+      nonce: 'heartbeat-after-stale-recovery',
+      nonce_timestamp: later,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now: later,
+    });
+
+    await expect(repository.createOrReplayCodexLaunchLease(secondLeaseInput)).resolves.toMatchObject({
+      id: 'launch-lease-2',
+      worker_id: 'worker-1',
+    });
+  });
+
+  it('does not let a late terminal report undo stale recovery expiration', async () => {
+    const repository = createRepository();
+    await createLaunchLease(repository);
+
+    await repository.recoverStaleCodexWorkerLeases({
+      stale_before: later,
+      now: later,
+      reason_code: 'worker_stale_before_terminal',
+    });
+
     await expect(
-      repository.createOrReplayCodexLaunchLease({
-        id: 'launch-lease-2',
-        lease_request_id: 'lease-request-2',
-        target: generationTarget({ target_id: 'generation-2' }),
+      repository.terminalizeCodexLaunchLease({
+        lease_id: 'launch-lease-1',
         worker_id: 'worker-1',
-        runtime_profile_revision_id: seeded.revision.id,
-        runtime_profile_digest: seeded.revision.profile_digest,
-        credential_binding_id: seeded.binding.id,
-        credential_binding_version_id: seeded.version.id,
-        credential_payload_digest: seeded.version.payload_digest,
-        docker_image_digest: seeded.revision.docker_image_digest,
-        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
-        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
-        launch_token: 'launch-token-2',
-        expires_at: expiresAt,
+        worker_session_token: 'session-token-1',
+        nonce: 'late-terminal-after-recovery-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'terminal',
+        reason_code: 'late_success_after_recovery',
+        idempotency_key: 'late-terminal-after-recovery',
         now: later,
       }),
-    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+    ).resolves.toMatchObject({
+      id: 'launch-lease-1',
+      status: 'expired',
+    });
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: later,
+        now: later,
+        reason_code: 'worker_stale_before_terminal',
+      }),
+    ).resolves.toMatchObject({ recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] });
   });
 
   it('rejects materialization by the wrong worker', async () => {
@@ -1135,9 +1823,9 @@ describe('codex runtime repository behavior', () => {
     const repository = createRepository();
     const lease = await createLaunchLease(repository, {
       target: generationTarget({
-        target_type: 'execution_package',
+        target_type: 'run_session',
         target_kind: 'run_execution',
-        target_id: 'execution-package-1',
+        target_id: 'run-session-1',
       }),
       run_worker_lease_id: 'run-worker-lease-1',
       run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
@@ -1159,6 +1847,60 @@ describe('codex runtime repository behavior', () => {
         active_fence: {
           run_worker_lease_id: 'run-worker-lease-1',
           run_worker_lease_token_hash: tokenHash('stale-run-worker-token'),
+          run_session_status: 'running',
+          run_session_updated_at: now,
+        },
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+  });
+
+  it('rejects run-execution materialization when target scope does not match the execution package', async () => {
+    const repository = createRepository();
+    const packageRecord = executionPackage({ project_id: 'project-cross-scope' });
+    const run = runSession({ execution_package_id: packageRecord.id });
+    await repository.saveExecutionPackage(packageRecord);
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-1',
+      lease_token: 'run-worker-token-1',
+      now,
+      expires_at: expiresAt,
+    });
+    const lease = await createLaunchLease(repository, {
+      target: generationTarget({
+        target_type: 'run_session',
+        target_kind: 'run_execution',
+        target_id: run.id,
+      }),
+      action_type: undefined,
+      action_attempt: undefined,
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+      execution_package_id: packageRecord.id,
+      run_worker_lease_id: runWorkerLease.id,
+      run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
+      run_session_status: 'running',
+      run_session_updated_at: now,
+      execution_package_version: 1,
+    });
+
+    await expect(
+      repository.materializeCodexLaunchLease({
+        lease_id: lease.id,
+        worker_id: 'worker-1',
+        launch_token: lease.lease_token,
+        worker_session_token: 'session-token-1',
+        nonce: 'cross-scope-run-fence-nonce',
+        nonce_timestamp: later,
+        materialization_request_hash: tokenHash('cross-scope-run-fence-request'),
+        active_fence: {
+          run_worker_lease_id: runWorkerLease.id,
+          run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
           run_session_status: 'running',
           run_session_updated_at: now,
         },

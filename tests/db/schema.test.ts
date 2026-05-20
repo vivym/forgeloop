@@ -45,6 +45,7 @@ import {
   codex_credential_bindings,
   codex_credential_binding_versions,
   codex_launch_leases,
+  codex_runtime_setup_nonces,
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
   codex_worker_bootstrap_tokens,
@@ -81,6 +82,7 @@ const requiredTables = {
   codex_worker_registrations,
   codex_worker_session_nonces,
   codex_launch_leases,
+  codex_runtime_setup_nonces,
   automation_project_settings,
   manual_path_holds,
   manual_path_hold_idempotency_records,
@@ -157,6 +159,14 @@ const hasUniqueIndex = (table: ConfiguredTable, indexName: string, columnNames: 
   );
 };
 
+const uniqueIndexColumns = (table: ConfiguredTable, indexName: string) => {
+  const index = getTableConfig(table).indexes.find((candidate) => candidate.config.name === indexName);
+  if (index === undefined || index.config.unique !== true) {
+    throw new Error(`Missing unique index ${indexName}`);
+  }
+  return index.config.columns;
+};
+
 describe('P1 core schema release flow Drizzle schema', () => {
   it('exports every required delivery table', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
@@ -171,6 +181,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'codex_launch_leases',
         'codex_runtime_profiles',
         'codex_runtime_profile_revisions',
+        'codex_runtime_setup_nonces',
         'codex_worker_bootstrap_tokens',
         'codex_worker_registrations',
         'codex_worker_session_nonces',
@@ -401,7 +412,18 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(codex_credential_bindings, 'repoId')).toBe('PgText');
     expect(columnType(codex_launch_leases, 'repoId')).toBe('PgText');
     expect(columnType(codex_launch_leases, 'targetId')).toBe('PgText');
+    expect(columnNotNull(codex_launch_leases, 'launchAttempt')).toBe(true);
     expect(columnType(codex_launch_leases, 'runWorkerLeaseId')).toBe('PgText');
+    expect(columnType(codex_launch_leases, 'terminalEvidenceSummaryJson')).toBe('PgJsonb');
+    expect(columnType(codex_launch_leases, 'terminalRuntimeJobId')).toBe('PgText');
+    expect(columnType(codex_launch_leases, 'terminalIdempotencyKey')).toBe('PgText');
+    expect(columnType(codex_worker_session_nonces, 'nonceHash')).toBe('PgText');
+    expect(columnNotNull(codex_worker_registrations, 'sessionTokenExpiresAt')).toBe(true);
+    expect(columnNotNull(codex_worker_session_nonces, 'sessionTokenHash')).toBe(true);
+    expect(Object.keys(getTableColumns(codex_worker_session_nonces))).not.toContain('nonce');
+    expect(Object.keys(getTableColumns(codex_worker_session_nonces))).not.toContain('sessionToken');
+    expect(columnType(codex_runtime_setup_nonces, 'setupNonceHash')).toBe('PgText');
+    expect(columnNotNull(codex_runtime_setup_nonces, 'requestSignatureHash')).toBe(true);
     expect(columnType(codex_worker_registrations, 'capabilityCeilingJson')).toBe('PgJsonb');
     expect(columnNotNull(codex_worker_registrations, 'capabilityCeilingJson')).toBe(true);
     expect(columnType(project_repos, 'project_id')).toBe('PgUUID');
@@ -415,6 +437,18 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(execution_packages, 'required_checks')).toBe('PgJsonb');
     expect(columnType(execution_packages, 'required_test_gates')).toBe('PgJsonb');
     expect(columnType(release_evidences, 'object_ref')).toBe('PgJsonb');
+  });
+
+  it('uses a null-safe target attempt uniqueness key for Codex launch leases', () => {
+    const targetAttemptColumns = uniqueIndexColumns(codex_launch_leases, 'codex_launch_leases_target_attempt_idx');
+
+    expect(targetAttemptColumns.map((indexColumn) => (indexColumn as { name?: string }).name)).toEqual([
+      'project_id',
+      undefined,
+      'target_type',
+      'target_id',
+      'launch_attempt',
+    ]);
   });
 
   it('defines release uniqueness and evidence contract constraints', () => {

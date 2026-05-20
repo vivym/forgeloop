@@ -69,15 +69,14 @@ export type CodexEffectiveConfigAssertions =
   | {
       target_kind: 'generation';
       approval_policy: 'never';
-      source_access_mode: 'artifact_only';
-      source_workspace_write_policy: 'none';
+      source_write_policy: 'artifact_only';
+      forbidden_writable_roots: readonly ['workspace'];
     }
   | {
       target_kind: 'run_execution';
       approval_policy: 'never';
-      sandbox_mode: 'workspace-write';
-      writable_workspace: 'task';
-      source_workspace_write_policy: 'path_policy_scoped';
+      sandbox_type: 'danger-full-access' | 'dangerFullAccess';
+      writable_roots_policy: 'task_workspace_only';
     };
 
 export interface CodexRuntimeProfile {
@@ -121,7 +120,7 @@ export interface CodexCredentialBinding {
   profile_id: string;
   project_id: string;
   repo_id?: string;
-  provider: string;
+  provider: 'unsafe_db';
   purpose: 'model_provider' | 'package_registry' | 'git_remote' | 'other';
   active_version_id?: string;
   created_by_actor_id: string;
@@ -170,9 +169,10 @@ export interface CodexWorkerRegistration {
   id: string;
   worker_version: string;
   worker_identity: string;
-  status: 'registered' | 'active' | 'draining' | 'offline';
-  control_channel_status: 'not_connected' | 'connected' | 'stale';
+  status: 'online' | 'offline' | 'draining' | 'disabled';
+  control_channel_status: 'connected' | 'disconnected';
   session_id?: string;
+  session_expires_at?: IsoDateTime;
   bootstrap_token_hash?: string;
   capabilities: readonly CodexRuntimeTargetKind[];
   uid: number;
@@ -185,7 +185,7 @@ export interface CodexWorkerRegistration {
 }
 
 export interface CodexLaunchTarget {
-  target_type: 'generation_request' | 'execution_package';
+  target_type: 'automation_action_run' | 'run_session';
   target_id: string;
   target_kind: CodexRuntimeTargetKind;
   project_id: string;
@@ -195,12 +195,20 @@ export interface CodexLaunchTarget {
 export interface CodexLaunchLease {
   id: string;
   target: CodexLaunchTarget;
+  launch_attempt: number;
   profile_revision_id: string;
   worker_id?: string;
-  status: 'queued' | 'leased' | 'released' | 'expired';
+  status: 'active' | 'materialized' | 'expired' | 'revoked' | 'terminal';
   lease_token_hash: string;
   created_at: IsoDateTime;
   expires_at: IsoDateTime;
+  materialized_at?: IsoDateTime;
+  terminal_at?: IsoDateTime;
+  revoked_at?: IsoDateTime;
+  terminal_reason_code?: string;
+  terminal_evidence_summary?: Record<string, unknown>;
+  terminal_runtime_job_id?: string;
+  terminal_idempotency_key?: string;
 }
 
 export interface CodexLaunchLeaseWithToken extends CodexLaunchLease {
@@ -212,6 +220,7 @@ export interface CodexLaunchMaterialization {
   profile_revision: CodexRuntimeProfileRevision;
   resolved_credentials: readonly ResolvedCodexCredential[];
   lease_id: string;
+  expires_at: IsoDateTime;
   materialized_at: IsoDateTime;
 }
 
@@ -422,8 +431,8 @@ export const validateCodexLaunchTargetKind = (
   targetKind: CodexRuntimeTargetKind,
 ): void => {
   const valid =
-    (targetType === 'generation_request' && targetKind === 'generation') ||
-    (targetType === 'execution_package' && targetKind === 'run_execution');
+    (targetType === 'automation_action_run' && targetKind === 'generation') ||
+    (targetType === 'run_session' && targetKind === 'run_execution');
   if (!valid) {
     throw invalidProfile(`Launch target type ${targetType} cannot use Codex runtime target kind ${targetKind}.`);
   }
@@ -481,8 +490,9 @@ export const validateCodexRuntimeProfileRevision = (
       if (
         revision.source_access_mode !== 'artifact_only' ||
         revision.effective_config_assertions.target_kind !== 'generation' ||
-        revision.effective_config_assertions.source_access_mode !== 'artifact_only' ||
-        revision.effective_config_assertions.source_workspace_write_policy !== 'none'
+        revision.effective_config_assertions.source_write_policy !== 'artifact_only' ||
+        revision.effective_config_assertions.forbidden_writable_roots.length !== 1 ||
+        revision.effective_config_assertions.forbidden_writable_roots[0] !== 'workspace'
       ) {
         throw invalidProfile('Strict generation profiles must assert artifact-only source access and no source workspace writes.');
       }
@@ -491,9 +501,8 @@ export const validateCodexRuntimeProfileRevision = (
       if (
         revision.source_access_mode !== 'path_policy_scoped' ||
         revision.effective_config_assertions.target_kind !== 'run_execution' ||
-        revision.effective_config_assertions.sandbox_mode !== 'workspace-write' ||
-        revision.effective_config_assertions.writable_workspace !== 'task' ||
-        revision.effective_config_assertions.source_workspace_write_policy !== 'path_policy_scoped'
+        !['danger-full-access', 'dangerFullAccess'].includes(revision.effective_config_assertions.sandbox_type) ||
+        revision.effective_config_assertions.writable_roots_policy !== 'task_workspace_only'
       ) {
         throw invalidProfile('Strict run-execution profiles must assert task-workspace-only sandbox access.');
       }

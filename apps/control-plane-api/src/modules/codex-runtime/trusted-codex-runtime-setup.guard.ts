@@ -1,12 +1,18 @@
-import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import {
   automationActorClassHeaderName,
   automationActorIdHeaderName,
+  automationActorTimestampHeaderName,
   automationDaemonIdentityHeaderName,
+  automationActorSignatureHeaderName,
   verifyAutomationRequestSignature,
 } from '@forgeloop/automation';
 import type { AutomationActorClass } from '@forgeloop/domain';
+import { codexCredentialPayloadDigest } from '@forgeloop/domain';
+import type { DeliveryRepository } from '@forgeloop/db';
+
+import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 
 type CodexSetupRequest = {
   method: string;
@@ -19,9 +25,9 @@ type CodexSetupRequest = {
 
 const trustedActorHeaderSecretEnv = 'FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET';
 export const codexRuntimeSetupNonceHeaderName = 'X-Forgeloop-Setup-Nonce';
+const replayWindowMs = 5 * 60 * 1000;
 
 const allowedSetupActorClasses = new Set<AutomationActorClass>(['system_bootstrap', 'human_admin']);
-const seenSetupNonces = new Set<string>();
 
 const firstHeaderValue = (headers: Record<string, string | string[] | undefined>, name: string): string | undefined => {
   const direct = headers[name];
@@ -63,9 +69,19 @@ const bodyActorIds = (body: unknown): string[] => {
   return actorIds;
 };
 
+const bodySetupNonce = (body: unknown): string | undefined => {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return undefined;
+  }
+  const value = (body as Record<string, unknown>).setup_nonce;
+  return typeof value === 'string' ? value : undefined;
+};
+
 @Injectable()
 export class TrustedCodexRuntimeSetupGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
+  constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<CodexSetupRequest>();
     const secret = process.env[trustedActorHeaderSecretEnv]?.trim();
     if (secret === undefined || secret.length === 0) {
@@ -76,17 +92,26 @@ export class TrustedCodexRuntimeSetupGuard implements CanActivate {
     if (setupNonce === undefined || setupNonce.length === 0) {
       throw new UnauthorizedException('Codex runtime setup nonce is required');
     }
+    if (bodySetupNonce(request.body) !== setupNonce) {
+      throw new UnauthorizedException('Codex runtime setup nonce must be bound to the signed request body');
+    }
 
     const actorId = firstHeaderValue(request.headers, automationActorIdHeaderName)?.trim();
     const actorClass = firstHeaderValue(request.headers, automationActorClassHeaderName)?.trim();
     const daemonIdentity = firstHeaderValue(request.headers, automationDaemonIdentityHeaderName)?.trim();
+    const timestamp = firstHeaderValue(request.headers, automationActorTimestampHeaderName)?.trim();
+    const signature = firstHeaderValue(request.headers, automationActorSignatureHeaderName)?.trim();
     if (
       actorId === undefined ||
       actorId.length === 0 ||
       actorClass === undefined ||
       actorClass.length === 0 ||
       daemonIdentity === undefined ||
-      daemonIdentity.length === 0
+      daemonIdentity.length === 0 ||
+      timestamp === undefined ||
+      timestamp.length === 0 ||
+      signature === undefined ||
+      signature.length === 0
     ) {
       throw new UnauthorizedException('Codex runtime setup request signature is invalid');
     }
@@ -117,10 +142,19 @@ export class TrustedCodexRuntimeSetupGuard implements CanActivate {
       throw new ForbiddenException('Codex runtime setup body actor does not match signed actor');
     }
 
-    if (seenSetupNonces.has(setupNonce)) {
+    const nowMs = Date.now();
+    try {
+      await this.repository.consumeCodexRuntimeSetupNonce({
+        setup_nonce_hash: codexCredentialPayloadDigest(setupNonce),
+        request_signature_hash: codexCredentialPayloadDigest(signature),
+        actor_id: actorId,
+        actor_class: actorClass,
+        created_at: new Date(nowMs).toISOString(),
+        expires_at: new Date(nowMs + replayWindowMs).toISOString(),
+      });
+    } catch {
       throw new UnauthorizedException('Codex runtime setup nonce was already used');
     }
-    seenSetupNonces.add(setupNonce);
 
     return true;
   }

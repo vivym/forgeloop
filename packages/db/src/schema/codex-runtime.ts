@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type {
   CodexCredentialBinding,
@@ -130,6 +131,7 @@ export const codex_worker_registrations = pgTable(
     version: text('version').notNull(),
     controlChannelStatus: text('control_channel_status').notNull(),
     sessionTokenHash: text('session_token_hash').notNull(),
+    sessionTokenExpiresAt: timestampColumn('session_token_expires_at').notNull(),
     bootstrapTokenHash: text('bootstrap_token_hash').notNull(),
     bootstrapTokenVersion: integer('bootstrap_token_version').notNull(),
     allowedScopesJson: jsonb('allowed_scopes_json').$type<readonly CodexRuntimeScope[]>().notNull(),
@@ -161,11 +163,25 @@ export const codex_worker_session_nonces = pgTable(
     workerId: uuid('worker_id')
       .notNull()
       .references(() => codex_worker_registrations.id, { onDelete: 'cascade' }),
-    nonce: text('nonce').notNull(),
+    sessionTokenHash: text('session_token_hash').notNull(),
+    nonceHash: text('nonce_hash').notNull(),
     nonceTimestamp: timestampColumn('nonce_timestamp').notNull(),
     createdAt: timestampColumn('created_at').notNull(),
   },
-  (table) => [uniqueIndex('codex_worker_session_nonces_worker_nonce_idx').on(table.workerId, table.nonce)],
+  (table) => [uniqueIndex('codex_worker_session_nonces_worker_session_nonce_idx').on(table.workerId, table.sessionTokenHash, table.nonceHash)],
+);
+
+export const codex_runtime_setup_nonces = pgTable(
+  'codex_runtime_setup_nonces',
+  {
+    setupNonceHash: text('setup_nonce_hash').primaryKey(),
+    requestSignatureHash: text('request_signature_hash').notNull(),
+    actorId: text('actor_id').notNull(),
+    actorClass: text('actor_class').notNull(),
+    createdAt: timestampColumn('created_at').notNull(),
+    expiresAt: timestampColumn('expires_at').notNull(),
+  },
+  (table) => [index('codex_runtime_setup_nonces_expires_at_idx').on(table.expiresAt)],
 );
 
 export const codex_launch_leases = pgTable(
@@ -178,6 +194,7 @@ export const codex_launch_leases = pgTable(
     targetKind: text('target_kind').$type<CodexRuntimeTargetKind>().notNull(),
     projectId: uuid('project_id').notNull(),
     repoId: text('repo_id'),
+    launchAttempt: integer('launch_attempt').notNull(),
     actionType: text('action_type'),
     actionAttempt: integer('action_attempt'),
     actionClaimTokenHash: text('action_claim_token_hash'),
@@ -211,9 +228,19 @@ export const codex_launch_leases = pgTable(
     materializedAt: timestampColumn('materialized_at'),
     terminalizedAt: timestampColumn('terminalized_at'),
     terminalReasonCode: text('terminal_reason_code'),
+    terminalEvidenceSummaryJson: jsonb('terminal_evidence_summary_json').$type<Record<string, unknown>>(),
+    terminalRuntimeJobId: text('terminal_runtime_job_id'),
+    terminalIdempotencyKey: text('terminal_idempotency_key'),
   },
   (table) => [
     uniqueIndex('codex_launch_leases_request_idx').on(table.leaseRequestId),
+    uniqueIndex('codex_launch_leases_target_attempt_idx').on(
+      table.projectId,
+      sql`coalesce(${table.repoId}, '')`,
+      table.targetType,
+      table.targetId,
+      table.launchAttempt,
+    ),
     index('codex_launch_leases_worker_status_idx').on(table.workerId, table.status),
     index('codex_launch_leases_target_fence_idx').on(table.targetType, table.targetId, table.targetKind),
   ],

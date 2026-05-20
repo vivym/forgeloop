@@ -87,8 +87,8 @@ const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRunti
     effective_config_assertions: {
       target_kind: 'generation',
       approval_policy: 'never',
-      source_access_mode: 'artifact_only',
-      source_workspace_write_policy: 'none',
+      source_write_policy: 'artifact_only',
+      forbidden_writable_roots: ['workspace'],
     },
     app_server_required: true,
     allowed_driver_kind: 'app_server',
@@ -147,7 +147,12 @@ const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRunti
 
 const seedRuntime = async (
   repository: DeliveryRepository,
-  options: { capabilities?: readonly CodexRuntimeProfileRevision['target_kind'][]; maxConcurrency?: number } = {},
+  options: {
+    capabilities?: readonly CodexRuntimeProfileRevision['target_kind'][];
+    maxConcurrency?: number;
+    heartbeat?: boolean;
+    createInitialLease?: boolean;
+  } = {},
 ) => {
   const { profile, revision } = profileRevision();
   const secretPayload = {
@@ -160,7 +165,7 @@ const seedRuntime = async (
     profile_id: profile.id,
     project_id: revision.allowed_scopes[0]!.project_id,
     repo_id: revision.allowed_scopes[0]!.repo_id,
-    provider: 'openai',
+    provider: 'unsafe_db',
     purpose: 'model_provider',
     active_version_id: randomUUID(),
     created_by_actor_id: revision.created_by_actor_id,
@@ -205,7 +210,8 @@ const seedRuntime = async (
     bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
     bootstrap_token_version: 1,
     session_token: sessionToken,
-    status: 'active',
+    session_expires_at: expiresAt,
+    status: 'online',
     control_channel_status: 'connected',
     allowed_scopes: revision.allowed_scopes,
     capabilities: options.capabilities ?? ['generation'],
@@ -223,34 +229,68 @@ const seedRuntime = async (
     session_public_key_expires_at: expiresAt,
     now,
   });
-
-  const lease = await repository.createOrReplayCodexLaunchLease({
+  if (options.heartbeat ?? true) {
+    await repository.heartbeatCodexWorker({
+      worker_id: workerId,
+      session_token: sessionToken,
+      nonce: `seed-runtime-heartbeat-${workerId}`,
+      nonce_timestamp: now,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: options.capabilities ?? ['generation'],
+      now,
+    });
+  }
+  const generationAction = await repository.claimAutomationActionRun({
     id: randomUUID(),
-    lease_request_id: `lease-request-${randomUUID()}`,
-    target: {
-      target_type: 'generation_request',
-      target_id: randomUUID(),
-      target_kind: 'generation',
-      project_id: binding.project_id,
-      repo_id: binding.repo_id,
-    },
-    worker_id: workerId,
-    runtime_profile_revision_id: revision.id,
-    runtime_profile_digest: revision.profile_digest,
-    credential_binding_id: binding.id,
-    credential_binding_version_id: version.id,
-    credential_payload_digest: version.payload_digest,
-    docker_image_digest: revision.docker_image_digest,
-    network_policy_digest: codexCanonicalDigest(revision.network_policy),
-    network_provider_config_digest: dockerProxyConfig().provider_config_digest,
-    launch_token: 'launch-token-1',
-    action_claim_token_hash: tokenHash('action-claim-token-1'),
+    action_type: 'codex_generation',
+    target_object_type: 'generation_request',
+    target_object_id: 'generation-drizzle',
+    target_status: 'running',
+    target_version: 1,
+    idempotency_key: `generation-action-${randomUUID()}`,
+    automation_scope: `repo:${binding.project_id}:${binding.repo_id}`,
+    automation_settings_version: 1,
+    capability_fingerprint: 'capability-codex',
     precondition_fingerprint: 'precondition-1',
-    expires_at: expiresAt,
+    action_input_json: { generation_id: 'generation-drizzle' },
+    claim_token: 'action-claim-token-1',
+    locked_until: expiresAt,
     now,
   });
 
-  return { lease, workerId, sessionToken, secretPayload, profile, revision, binding, version };
+  const lease =
+    options.createInitialLease === false
+      ? undefined
+      : await repository.createOrReplayCodexLaunchLease({
+          id: randomUUID(),
+          lease_request_id: `lease-request-${randomUUID()}`,
+          target: {
+            target_type: 'automation_action_run',
+            target_id: generationAction.id,
+            target_kind: 'generation',
+            project_id: binding.project_id,
+            repo_id: binding.repo_id,
+          },
+          worker_id: workerId,
+          runtime_profile_revision_id: revision.id,
+          runtime_profile_digest: revision.profile_digest,
+          credential_binding_id: binding.id,
+          credential_binding_version_id: version.id,
+          credential_payload_digest: version.payload_digest,
+          docker_image_digest: revision.docker_image_digest,
+          network_policy_digest: codexCanonicalDigest(revision.network_policy),
+          network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+          launch_token: 'launch-token-1',
+          launch_attempt: 1,
+          action_claim_token_hash: tokenHash('action-claim-token-1'),
+          precondition_fingerprint: 'precondition-1',
+          expires_at: expiresAt,
+          now,
+        });
+
+  return { lease: lease!, workerId, sessionToken, secretPayload, profile, revision, binding, version };
 };
 
 const createLaunchLease = async (
@@ -263,7 +303,7 @@ const createLaunchLease = async (
     id: randomUUID(),
     lease_request_id: `lease-request-${suffix}-${randomUUID()}`,
     target: {
-      target_type: 'generation_request',
+      target_type: 'automation_action_run',
       target_id: randomUUID(),
       target_kind: 'generation',
       project_id: seed.binding.project_id,
@@ -279,6 +319,7 @@ const createLaunchLease = async (
     network_policy_digest: codexCanonicalDigest(seed.revision.network_policy),
     network_provider_config_digest: dockerProxyConfig().provider_config_digest,
     launch_token: `launch-token-${suffix}`,
+    launch_attempt: 1,
     action_claim_token_hash: tokenHash(`action-claim-token-${suffix}`),
     precondition_fingerprint: `precondition-${suffix}`,
     expires_at: overrides.expiresAt ?? expiresAt,
@@ -434,7 +475,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           .where(eq(codex_launch_leases.id, lease.id))
           .limit(1);
         expect(row).toEqual({
-          status: 'released',
+          status: 'materialized',
           materializationRequestHash: expectedHash,
         });
       } finally {
@@ -483,7 +524,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           .where(eq(codex_launch_leases.id, lease.id))
           .limit(1);
         expect(row).toEqual({
-          status: 'leased',
+          status: 'active',
           materializationRequestHash: null,
         });
       } finally {
@@ -556,6 +597,57 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
       }
     });
 
+    it('requires a fresh heartbeat before selecting a registered worker', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { workerId, sessionToken, revision, binding } = await seedRuntime(repository, {
+          heartbeat: false,
+          createInitialLease: false,
+          maxConcurrency: 1,
+        });
+
+        await expect(
+          repository.findAvailableCodexWorker({
+            project_id: binding.project_id,
+            repo_id: binding.repo_id,
+            target_kind: 'generation',
+            docker_image_digest: revision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(revision.network_policy),
+            network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+            now,
+          }),
+        ).resolves.toBeUndefined();
+
+        await repository.heartbeatCodexWorker({
+          worker_id: workerId,
+          session_token: sessionToken,
+          nonce: 'drizzle-fresh-heartbeat-nonce',
+          nonce_timestamp: later,
+          status: 'online',
+          control_channel_status: 'connected',
+          active_lease_count: 0,
+          capabilities: ['generation'],
+          now: later,
+        });
+
+        await expect(
+          repository.findAvailableCodexWorker({
+            project_id: binding.project_id,
+            repo_id: binding.repo_id,
+            target_kind: 'generation',
+            docker_image_digest: revision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(revision.network_policy),
+            network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+            now: later,
+          }),
+        ).resolves.toMatchObject({ id: workerId });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
     it('uses active heartbeat capabilities instead of the registration ceiling for scheduling', async () => {
       await resetForgeloopDatabase(usableDatabaseUrl);
       const client = createDbClient({ connectionString: usableDatabaseUrl });
@@ -570,7 +662,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           session_token: sessionToken,
           nonce: 'heartbeat-capability-downgrade-nonce',
           nonce_timestamp: later,
-          status: 'active',
+          status: 'online',
           control_channel_status: 'connected',
           active_lease_count: 0,
           capabilities: ['generation'],
@@ -634,6 +726,31 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
       }
     });
 
+    it('rejects credential resolution when the binding is outside the requested runtime profile', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { binding, version } = await seedRuntime(repository);
+        const projectB = profileRevision();
+        await repository.createCodexRuntimeProfileWithRevision(projectB);
+
+        await expect(
+          repository.resolveCodexCredentialForLaunch({
+            credential_binding_id: binding.id,
+            target_kind: 'generation',
+            runtime_profile_id: projectB.profile.id,
+            project_id: binding.project_id,
+            repo_id: binding.repo_id,
+            required_payload_digest: version.payload_digest,
+            now: later,
+          }),
+        ).resolves.toBeUndefined();
+      } finally {
+        await client.pool.end();
+      }
+    });
+
     it('rejects inconsistent runtime profile and credential creates without partial writes', async () => {
       await resetForgeloopDatabase(usableDatabaseUrl);
       const client = createDbClient({ connectionString: usableDatabaseUrl });
@@ -663,7 +780,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           profile_id: profile.id,
           project_id: revision.allowed_scopes[0]!.project_id,
           repo_id: revision.allowed_scopes[0]!.repo_id,
-          provider: 'openai',
+          provider: 'unsafe_db',
           purpose: 'model_provider',
           active_version_id: randomUUID(),
           created_by_actor_id: revision.created_by_actor_id,
@@ -715,7 +832,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           session_token: sessionToken,
           nonce: 'heartbeat-underreported-lease-count-nonce',
           nonce_timestamp: later,
-          status: 'active',
+          status: 'online',
           control_channel_status: 'connected',
           active_lease_count: 0,
           capabilities: ['generation'],
@@ -727,7 +844,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             id: randomUUID(),
             lease_request_id: `lease-request-underreported-${randomUUID()}`,
             target: {
-              target_type: 'generation_request',
+              target_type: 'automation_action_run',
               target_id: randomUUID(),
               target_kind: 'generation',
               project_id: binding.project_id,
@@ -743,6 +860,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             network_policy_digest: codexCanonicalDigest(revision.network_policy),
             network_provider_config_digest: dockerProxyConfig().provider_config_digest,
             launch_token: 'launch-token-underreported',
+            launch_attempt: 1,
             expires_at: expiresAt,
             now: later,
           }),
@@ -750,6 +868,53 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           name: 'DomainError',
           code: 'codex_launch_lease_denied',
         });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('keeps worker capacity occupied after materialization until terminalization', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const seed = await seedRuntime(repository, { maxConcurrency: 1 });
+
+        await repository.materializeCodexLaunchLease({
+          lease_id: seed.lease.id,
+          worker_id: seed.workerId,
+          launch_token: seed.lease.lease_token,
+          worker_session_token: seed.sessionToken,
+          nonce: 'materialize-capacity-held-nonce',
+          nonce_timestamp: later,
+          materialization_request_hash: tokenHash('materialize-capacity-held-request'),
+          active_fence: {
+            action_claim_token_hash: tokenHash('action-claim-token-1'),
+            precondition_fingerprint: 'precondition-1',
+          },
+          now: later,
+        });
+
+        await expectWorkerLeaseCount(client, seed.workerId, 1);
+        await expect(createLaunchLease(repository, seed, 'capacity-held')).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_launch_lease_denied',
+        });
+
+        await repository.terminalizeCodexLaunchLease({
+          lease_id: seed.lease.id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'terminalize-capacity-held-nonce',
+          nonce_timestamp: later,
+          terminal_status: 'terminal',
+          reason_code: 'completed_after_materialization',
+          idempotency_key: 'terminalize-capacity-held',
+          now: later,
+        });
+
+        await expectWorkerLeaseCount(client, seed.workerId, 0);
+        await expect(createLaunchLease(repository, seed, 'capacity-released')).resolves.toMatchObject({ worker_id: seed.workerId });
       } finally {
         await client.pool.end();
       }
@@ -780,7 +945,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             id: randomUUID(),
             lease_request_id: `lease-request-after-revoke-${randomUUID()}`,
             target: {
-              target_type: 'generation_request',
+              target_type: 'automation_action_run',
               target_id: randomUUID(),
               target_kind: 'generation',
               project_id: binding.project_id,
@@ -796,6 +961,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             network_policy_digest: codexCanonicalDigest(revision.network_policy),
             network_provider_config_digest: dockerProxyConfig().provider_config_digest,
             launch_token: 'launch-token-after-revoke',
+            launch_attempt: 1,
             expires_at: expiresAt,
             now: later,
           }),
@@ -831,7 +997,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             worker_session_token: seed.sessionToken,
             nonce: 'terminalize-race-nonce-1',
             nonce_timestamp: later,
-            terminal_status: 'released',
+            terminal_status: 'terminal',
             reason_code: 'completed_without_materialization',
             idempotency_key: 'terminalize-race-1',
             now: later,
@@ -842,7 +1008,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             worker_session_token: seed.sessionToken,
             nonce: 'terminalize-race-nonce-2',
             nonce_timestamp: later,
-            terminal_status: 'released',
+            terminal_status: 'terminal',
             reason_code: 'completed_without_materialization',
             idempotency_key: 'terminalize-race-2',
             now: later,
@@ -963,7 +1129,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           id: randomUUID(),
           lease_request_id: `lease-request-${suffix}-${randomUUID()}`,
           target: {
-            target_type: 'generation_request' as const,
+            target_type: 'automation_action_run' as const,
             target_id: randomUUID(),
             target_kind: 'generation' as const,
             project_id: binding.project_id,
@@ -979,6 +1145,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           network_policy_digest: codexCanonicalDigest(revision.network_policy),
           network_provider_config_digest: dockerProxyConfig().provider_config_digest,
           launch_token: `launch-token-${suffix}`,
+          launch_attempt: 1,
           expires_at: expiresAt,
           now,
         });
