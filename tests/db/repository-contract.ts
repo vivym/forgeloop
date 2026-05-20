@@ -730,6 +730,19 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     specRevisionWorkItemId: '33333333-3333-4333-8333-333333333354',
   });
 
+  const legacySpecPointerMissing = {
+    workItemId: '33333333-3333-4333-8333-333333333358',
+    specId: '44444444-4444-4444-8444-4444444444ca',
+    approvedRevisionId: '44444444-4444-4444-8444-4444444444cb',
+  };
+  await saveApprovedSpecProjectionCandidate(repository, {
+    ...legacySpecPointerMissing,
+    title: 'Legacy Spec pointer missing should plan',
+    goal: 'Keep approved legacy Specs eligible for generated Plan drafts.',
+    successCriteria: ['Missing WorkItem Spec revision pointer falls back to approved Spec revision.'],
+    workItemSpecRevisionId: null,
+  });
+
   const planDrift = {
     workItemId: '33333333-3333-4333-8333-333333333342',
     specId: '44444444-4444-4444-8444-444444444491',
@@ -854,7 +867,29 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     planBasedOnSpecRevisionId: planAncestryDrift.staleSpecRevisionId,
   });
 
+  const legacyPackagePointersMissing = {
+    workItemId: '33333333-3333-4333-8333-333333333359',
+    specId: '44444444-4444-4444-8444-4444444444cc',
+    approvedSpecRevisionId: '44444444-4444-4444-8444-4444444444cd',
+    planId: '55555555-5555-4555-8555-5555555555cd',
+    approvedPlanRevisionId: '55555555-5555-4555-8555-5555555555ce',
+  };
+  await saveApprovedPlanProjectionCandidate(repository, {
+    ...legacyPackagePointersMissing,
+    title: 'Legacy package pointers missing should package',
+    goal: 'Keep approved legacy Plans eligible for generated Package drafts.',
+    successCriteria: ['Missing WorkItem revision pointers fall back to approved Spec/Plan revisions.'],
+    workItemSpecRevisionId: null,
+    workItemPlanRevisionId: null,
+  });
+
   const driftSnapshot = await repository.getRuntimeSnapshotData();
+  expect(driftSnapshot.work_items_requiring_plan).toContainEqual(
+    expect.objectContaining({
+      target_object_id: legacySpecPointerMissing.workItemId,
+      target_revision_id: legacySpecPointerMissing.approvedRevisionId,
+    }),
+  );
   expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
     expect.objectContaining({ target_object_id: specDrift.workItemId }),
   );
@@ -893,6 +928,12 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   );
   expect(driftSnapshot.plan_revisions_requiring_packages).not.toContainEqual(
     expect.objectContaining({ target_object_id: planAncestryDrift.approvedPlanRevisionId }),
+  );
+  expect(driftSnapshot.plan_revisions_requiring_packages).toContainEqual(
+    expect.objectContaining({
+      target_object_id: legacyPackagePointersMissing.approvedPlanRevisionId,
+      target_revision_id: `default:${legacyPackagePointersMissing.approvedPlanRevisionId}`,
+    }),
   );
 
   const specNeededWorkItem: WorkItem = {
@@ -1929,7 +1970,7 @@ type ApprovedSpecProjectionCandidate = {
   goal: string;
   successCriteria: string[];
   specCurrentRevisionId?: string;
-  workItemSpecRevisionId?: string;
+  workItemSpecRevisionId?: string | null;
 };
 
 const saveApprovedSpecProjectionCandidate = async (
@@ -1951,7 +1992,9 @@ const saveApprovedSpecProjectionCandidate = async (
     gate_state: 'none',
     resolution: 'none',
     current_spec_id: input.specId,
-    current_spec_revision_id: input.workItemSpecRevisionId ?? input.approvedRevisionId,
+    ...(input.workItemSpecRevisionId === null
+      ? {}
+      : { current_spec_revision_id: input.workItemSpecRevisionId ?? input.approvedRevisionId }),
     created_at: at,
     updated_at: at,
   });
@@ -2006,7 +2049,8 @@ type ApprovedPlanProjectionCandidate = {
   goal: string;
   successCriteria: string[];
   workItemPlanId?: string;
-  workItemPlanRevisionId?: string;
+  workItemSpecRevisionId?: string | null;
+  workItemPlanRevisionId?: string | null;
   planCurrentRevisionId?: string;
   planBasedOnSpecRevisionId?: string;
 };
@@ -2030,9 +2074,13 @@ const saveApprovedPlanProjectionCandidate = async (
     gate_state: 'none',
     resolution: 'none',
     current_spec_id: input.specId,
-    current_spec_revision_id: input.approvedSpecRevisionId,
+    ...(input.workItemSpecRevisionId === null
+      ? {}
+      : { current_spec_revision_id: input.workItemSpecRevisionId ?? input.approvedSpecRevisionId }),
     current_plan_id: input.workItemPlanId ?? input.planId,
-    current_plan_revision_id: input.workItemPlanRevisionId ?? input.approvedPlanRevisionId,
+    ...(input.workItemPlanRevisionId === null
+      ? {}
+      : { current_plan_revision_id: input.workItemPlanRevisionId ?? input.approvedPlanRevisionId }),
     created_at: at,
     updated_at: at,
   });

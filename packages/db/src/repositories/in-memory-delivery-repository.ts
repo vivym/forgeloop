@@ -1832,7 +1832,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         spec.resolution !== 'approved' ||
         spec.approved_revision_id === undefined ||
         spec.current_revision_id !== spec.approved_revision_id ||
-        workItem.current_spec_revision_id !== spec.approved_revision_id
+        (workItem.current_spec_revision_id !== undefined && workItem.current_spec_revision_id !== spec.approved_revision_id)
       ) {
         continue;
       }
@@ -1921,10 +1921,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       if (plan.work_item_id !== workItem.id || planRevision.plan_id !== plan.id) {
         continue;
       }
-      if (workItem.current_plan_id !== plan.id || workItem.current_plan_revision_id !== planRevisionId) {
+      if (
+        workItem.current_plan_id !== plan.id ||
+        (workItem.current_plan_revision_id !== undefined && workItem.current_plan_revision_id !== planRevisionId)
+      ) {
         continue;
       }
-      if (workItem.current_spec_id === undefined || workItem.current_spec_revision_id === undefined) {
+      if (workItem.current_spec_id === undefined) {
         continue;
       }
       const spec = this.specs.get(workItem.current_spec_id);
@@ -1935,7 +1938,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         spec.resolution !== 'approved' ||
         spec.approved_revision_id === undefined ||
         spec.current_revision_id !== spec.approved_revision_id ||
-        workItem.current_spec_revision_id !== spec.approved_revision_id ||
+        (workItem.current_spec_revision_id !== undefined && workItem.current_spec_revision_id !== spec.approved_revision_id) ||
         planRevision.based_on_spec_revision_id !== spec.approved_revision_id
       ) {
         continue;

@@ -363,6 +363,24 @@ describe('internal automation runtime snapshot', () => {
       });
   });
 
+  it('lists legacy approved specs without WorkItem revision pointers for plan drafts', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository, { item: { current_spec_revision_id: undefined } });
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).toContainEqual(
+          expect.objectContaining({
+            target_object_type: 'work_item',
+            target_object_id: 'work-item-1',
+            target_revision_id: 'spec-revision-1',
+            target_status: 'approved',
+          }),
+        );
+      });
+  });
+
   it('does not list approved specs without approved current revisions for plan drafts', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedSpec(repository);
@@ -528,6 +546,32 @@ describe('internal automation runtime snapshot', () => {
             project_id: 'project-1',
             repo_id: 'repo-1',
             generation_key: 'default:plan-revision-1',
+          }),
+        );
+      });
+  });
+
+  it('lists legacy approved plans without WorkItem revision pointers for package generation', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.saveWorkItem(
+      workItem({
+        phase: 'plan',
+        current_plan_id: 'plan-1',
+        current_plan_revision_id: undefined,
+        current_spec_revision_id: undefined,
+      }),
+    );
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).toContainEqual(
+          expect.objectContaining({
+            target_object_type: 'plan_revision',
+            target_object_id: 'plan-revision-1',
+            target_revision_id: 'default:plan-revision-1',
+            target_status: 'approved',
           }),
         );
       });
