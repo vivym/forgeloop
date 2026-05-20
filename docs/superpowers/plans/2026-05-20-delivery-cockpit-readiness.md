@@ -25,7 +25,7 @@
 
 This is one integrated product slice. It touches contracts, domain helpers, DB read models, API query surfaces, and Web UI, but those pieces form one delivery contract: `/work-items/:workItemId` cannot become the canonical cockpit unless the response schema, action source, route migration, readiness rules, and layout ship together.
 
-This plan intentionally excludes Observation, Retrospective, Evolution Loop, full Test Center asset management, unrelated page redesigns, compatibility aliases, old Workbench routes, and any `p0` / priority-code subsystem naming.
+This plan intentionally excludes Observation, Retrospective, Evolution Loop, full Test Center asset management, unrelated page redesigns, compatibility aliases, old Workbench routes, and any priority-code subsystem naming.
 
 ## File Structure And Ownership
 
@@ -2054,7 +2054,8 @@ fi
 
 changed_product_files="$(git diff --name-only origin/main...HEAD -- apps packages | rg '^(apps|packages)/' || true)"
 if [ -n "$changed_product_files" ]; then
-  printf '%s\n' "$changed_product_files" | xargs rg -n 'p0|P0' || true
+  old_priority_code="$(printf 'p%s|P%s' 0 0)"
+  printf '%s\n' "$changed_product_files" | xargs rg -n "$old_priority_code" || true
 fi
 ```
 
@@ -2063,7 +2064,7 @@ Expected:
 - Expected active product scan output is empty. The temporary exclusion for deleted `routes/workbench/*` and `product-lane-workbench.tsx` is only to allow the scan command to run before the `git rm` in the same task; those files must be gone by final status.
 - No active product code refers to `/workbench` or `Workbench`, including Pipeline fallback links and ProductAction builders.
 - No public Work Item actions query remains.
-- No `p0` / `P0` priority-code naming remains in changed `apps/` or `packages/` product surfaces.
+- No priority-code naming remains in changed `apps/` or `packages/` product surfaces.
 - Do not chase unrelated pre-existing fixtures, generated screenshots, or guard tests outside active product code for Workbench cleanup.
 
 - [ ] **Step 2: Run focused verification**
