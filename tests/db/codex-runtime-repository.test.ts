@@ -662,6 +662,36 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it('replays identical active bootstrap token creates', async () => {
+    const repository = createRepository();
+    const input = {
+      id: 'bootstrap-token-duplicate-active',
+      worker_identity: 'local-worker-duplicate-active',
+      bootstrap_token_hash: tokenHash('bootstrap-token-duplicate-active-raw'),
+      bootstrap_token_version: 1,
+      status: 'active' as const,
+      allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      allowed_capabilities_json: {
+        target_kinds: ['generation'],
+        docker_image_digests: [`sha256:${'a'.repeat(64)}`],
+        network_policy_digests: [codexCanonicalDigest(profileRevision().revision.network_policy)],
+        network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+      },
+      created_by_actor_id: 'actor-admin',
+      created_at: now,
+      expires_at: expiresAt,
+    };
+
+    await expect(repository.createCodexWorkerBootstrapToken(input)).resolves.toMatchObject({
+      id: input.id,
+      token_hash: input.bootstrap_token_hash,
+    });
+    await expect(repository.createCodexWorkerBootstrapToken(input)).resolves.toMatchObject({
+      id: input.id,
+      token_hash: input.bootstrap_token_hash,
+    });
+  });
+
   it('rejects bootstrap token replay from replacing an existing worker session', async () => {
     const repository = createRepository();
     const { sessionToken, worker } = await seedWorker(repository);

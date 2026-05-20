@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -253,12 +253,114 @@ const seedRuntime = async (
   return { lease, workerId, sessionToken, secretPayload, profile, revision, binding, version };
 };
 
+const createLaunchLease = async (
+  repository: DeliveryRepository,
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  suffix: string,
+  overrides: { expiresAt?: string } = {},
+) =>
+  repository.createOrReplayCodexLaunchLease({
+    id: randomUUID(),
+    lease_request_id: `lease-request-${suffix}-${randomUUID()}`,
+    target: {
+      target_type: 'generation_request',
+      target_id: randomUUID(),
+      target_kind: 'generation',
+      project_id: seed.binding.project_id,
+      repo_id: seed.binding.repo_id,
+    },
+    worker_id: seed.workerId,
+    runtime_profile_revision_id: seed.revision.id,
+    runtime_profile_digest: seed.revision.profile_digest,
+    credential_binding_id: seed.binding.id,
+    credential_binding_version_id: seed.version.id,
+    credential_payload_digest: seed.version.payload_digest,
+    docker_image_digest: seed.revision.docker_image_digest,
+    network_policy_digest: codexCanonicalDigest(seed.revision.network_policy),
+    network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+    launch_token: `launch-token-${suffix}`,
+    action_claim_token_hash: tokenHash(`action-claim-token-${suffix}`),
+    precondition_fingerprint: `precondition-${suffix}`,
+    expires_at: overrides.expiresAt ?? expiresAt,
+    now,
+  });
+
+const expectWorkerLeaseCount = async (client: ReturnType<typeof createDbClient>, workerId: string, leaseCount: number) => {
+  const [workerRow] = await client.db
+    .select({ leaseCount: codex_worker_registrations.leaseCount })
+    .from(codex_worker_registrations)
+    .where(eq(codex_worker_registrations.id, workerId))
+    .limit(1);
+  expect(workerRow).toEqual({ leaseCount });
+};
+
+const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbClient>, leaseId: string) => {
+  await client.db.execute(sql.raw(`
+    create or replace function codex_test_delay_launch_lease_update()
+    returns trigger
+    language plpgsql
+    as $$
+    begin
+      if old.id = '${leaseId}'::uuid then
+        perform pg_sleep(0.1);
+      end if;
+      return new;
+    end;
+    $$;
+  `));
+  await client.db.execute(sql.raw(`
+    drop trigger if exists codex_test_delay_launch_lease_update_trigger on codex_launch_leases;
+    create trigger codex_test_delay_launch_lease_update_trigger
+    before update on codex_launch_leases
+    for each row execute function codex_test_delay_launch_lease_update();
+  `));
+};
+
 describe('Codex runtime Drizzle materialization concurrency', () => {
   const usableDatabaseUrl = assertUsableDatabaseUrl();
 
   if (usableDatabaseUrl === undefined) {
     it.skip('skips concurrency test because no safe resettable database URL is configured', () => {});
   } else {
+    it('replays concurrent identical bootstrap token creates', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db);
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db);
+        const input = {
+          id: randomUUID(),
+          worker_identity: 'local-worker-bootstrap-race',
+          bootstrap_token_hash: tokenHash('bootstrap-token-race-raw'),
+          bootstrap_token_version: 1,
+          status: 'active' as const,
+          allowed_scopes_json: [{ project_id: randomUUID(), repo_id: randomUUID() }],
+          allowed_capabilities_json: {
+            target_kinds: ['generation'],
+            docker_image_digests: [`sha256:${'a'.repeat(64)}`],
+            network_policy_digests: [codexCanonicalDigest(profileRevision().revision.network_policy)],
+            network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+          },
+          created_by_actor_id: randomUUID(),
+          created_at: now,
+          expires_at: expiresAt,
+        };
+
+        const results = await Promise.allSettled([
+          firstRepository.createCodexWorkerBootstrapToken(input),
+          secondRepository.createCodexWorkerBootstrapToken(input),
+        ]);
+
+        expect(results).toEqual([
+          expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ id: input.id }) }),
+          expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ id: input.id }) }),
+        ]);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
     it('allows exactly one concurrent materialization of a launch lease', async () => {
       await resetForgeloopDatabase(usableDatabaseUrl);
       const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
@@ -707,6 +809,144 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         expect(workerRow).toEqual({ leaseCount: 1 });
       } finally {
         await client.pool.end();
+      }
+    });
+
+    it('does not double-release capacity when terminalizing the same leased launch concurrently', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db);
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db);
+        const seed = await seedRuntime(firstRepository, { maxConcurrency: 2 });
+        await createLaunchLease(firstRepository, seed, 'terminalize-still-active');
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 2);
+        await installLaunchLeaseUpdateDelay(firstClient, seed.lease.id);
+
+        await Promise.allSettled([
+          firstRepository.terminalizeCodexLaunchLease({
+            lease_id: seed.lease.id,
+            worker_id: seed.workerId,
+            worker_session_token: seed.sessionToken,
+            nonce: 'terminalize-race-nonce-1',
+            nonce_timestamp: later,
+            terminal_status: 'released',
+            reason_code: 'completed_without_materialization',
+            idempotency_key: 'terminalize-race-1',
+            now: later,
+          }),
+          secondRepository.terminalizeCodexLaunchLease({
+            lease_id: seed.lease.id,
+            worker_id: seed.workerId,
+            worker_session_token: seed.sessionToken,
+            nonce: 'terminalize-race-nonce-2',
+            nonce_timestamp: later,
+            terminal_status: 'released',
+            reason_code: 'completed_without_materialization',
+            idempotency_key: 'terminalize-race-2',
+            now: later,
+          }),
+        ]);
+
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('does not double-release capacity when revoking the same leased launch concurrently', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db);
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db);
+        const seed = await seedRuntime(firstRepository, { maxConcurrency: 2 });
+        await createLaunchLease(firstRepository, seed, 'revoke-still-active');
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 2);
+        await installLaunchLeaseUpdateDelay(firstClient, seed.lease.id);
+
+        await Promise.allSettled([
+          firstRepository.revokeCodexLaunchLease({
+            lease_id: seed.lease.id,
+            reason_code: 'revoked_by_controller',
+            idempotency_key: 'revoke-race-1',
+            now: later,
+          }),
+          secondRepository.revokeCodexLaunchLease({
+            lease_id: seed.lease.id,
+            reason_code: 'revoked_by_controller',
+            idempotency_key: 'revoke-race-2',
+            now: later,
+          }),
+        ]);
+
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('does not double-release capacity when expiring leased launches concurrently', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db);
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db);
+        const seed = await seedRuntime(firstRepository, { maxConcurrency: 2 });
+        await createLaunchLease(firstRepository, seed, 'expire-still-active', { expiresAt: '2026-05-20T00:20:00.000Z' });
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 2);
+        await installLaunchLeaseUpdateDelay(firstClient, seed.lease.id);
+
+        await Promise.allSettled([
+          firstRepository.expireCodexLaunchLeases('2026-05-20T00:11:00.000Z'),
+          secondRepository.expireCodexLaunchLeases('2026-05-20T00:11:00.000Z'),
+        ]);
+
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('does not double-release capacity when recovering stale worker leases concurrently', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db);
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db);
+        const seed = await seedRuntime(firstRepository, { maxConcurrency: 1 });
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
+        await installLaunchLeaseUpdateDelay(firstClient, seed.lease.id);
+
+        const results = await Promise.allSettled([
+          firstRepository.recoverStaleCodexWorkerLeases({
+            stale_before: later,
+            now: later,
+            reason_code: 'worker_stale',
+            worker_id: seed.workerId,
+          }),
+          secondRepository.recoverStaleCodexWorkerLeases({
+            stale_before: later,
+            now: later,
+            reason_code: 'worker_stale',
+            worker_id: seed.workerId,
+          }),
+        ]);
+
+        const recoveredCount = results.reduce((count, result) => {
+          if (result.status === 'rejected') {
+            throw result.reason;
+          }
+          return count + result.value.recovered_launch_leases.length;
+        }, 0);
+        expect(recoveredCount).toBe(1);
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 0);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
       }
     });
 
