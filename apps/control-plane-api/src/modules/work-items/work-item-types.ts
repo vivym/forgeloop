@@ -5,7 +5,6 @@ export interface WorkItemTypeMetadata {
   label: string;
   description: string;
   required_fields: string[];
-  default_priority: string;
   default_risk: string;
   spec_guidance: string;
   plan_guidance: string;
@@ -26,7 +25,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     label: 'Initiative',
     description: 'A larger product or business outcome.',
     required_fields: requiredFields,
-    default_priority: 'P1',
     default_risk: 'medium',
     spec_guidance: 'Define outcome, scope, and success criteria.',
     plan_guidance: 'Split into independently verifiable packages.',
@@ -37,7 +35,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     label: 'Requirement',
     description: 'A concrete product or engineering requirement.',
     required_fields: requiredFields,
-    default_priority: 'P1',
     default_risk: 'medium',
     spec_guidance: 'Make acceptance criteria testable.',
     plan_guidance: 'Map implementation steps to checks.',
@@ -48,7 +45,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     label: 'Bug',
     description: 'A defect or regression needing diagnosis and fix.',
     required_fields: requiredFields,
-    default_priority: 'P0',
     default_risk: 'high',
     spec_guidance: 'Describe impact, reproduction, and expected behavior.',
     plan_guidance: 'Include regression coverage.',
@@ -59,7 +55,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     label: 'Tech Debt',
     description: 'A maintainability or architecture improvement.',
     required_fields: requiredFields,
-    default_priority: 'P2',
     default_risk: 'medium',
     spec_guidance: 'State current cost and desired invariant.',
     plan_guidance: 'Keep migration steps reversible.',

@@ -55,7 +55,7 @@ function ProductLaneRouteContent({ laneId }: { laneId: NonNullable<ReturnType<ty
       actionRail={
         <ActionRail title="Selected item actions">
           <div aria-label="Selected item product actions">
-            <ProductActionList actions={selectedItem?.actions ?? []} projectId={projectId} />
+            <ProductActionList actions={selectedItem?.actions ?? []} activeLane={laneId} projectId={projectId} />
           </div>
         </ActionRail>
       }

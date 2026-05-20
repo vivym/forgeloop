@@ -64,7 +64,9 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const api = {
     getProductLane: async (laneId: ProductLaneId, query: ProductLaneQuery) =>
       productLaneResponseSchema.parse(
-        await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
+        hardenManagerProductLaneActions(
+          await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
+        ),
       ) as ProductLaneResponse,
     getWorkItemCockpit: async (workItemId: string, options: { lane?: ProductLaneId } = {}) =>
       workItemCockpitResponseSchema.parse(
@@ -108,6 +110,24 @@ function hardenManagerCockpitActions(response: unknown): unknown {
       ...response.delivery_readiness,
       next_actions: rawActions.flatMap((action) => hardenManagerAction(action)),
     },
+  };
+}
+
+function hardenManagerProductLaneActions(response: unknown): unknown {
+  if (!isRecord(response) || response.lane_id !== 'manager' || !Array.isArray(response.items)) {
+    return response;
+  }
+
+  return {
+    ...response,
+    items: response.items.map((item) => {
+      if (!isRecord(item) || !Array.isArray(item.actions)) return item;
+
+      return {
+        ...item,
+        actions: item.actions.flatMap((action) => hardenManagerAction(action)),
+      };
+    }),
   };
 }
 

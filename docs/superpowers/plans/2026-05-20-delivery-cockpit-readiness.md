@@ -2547,7 +2547,7 @@ git commit -m "test: add delivery cockpit viewport coverage"
 - Modify only files required by failed verification.
 - No new feature files unless verification exposes a real missing path.
 
-- [ ] **Step 1: Run no-legacy scans**
+- [x] **Step 1: Run no-legacy scans**
 
 Run:
 
@@ -2567,7 +2567,7 @@ do
   test ! -e "$legacy_file" || { echo "legacy file remains: $legacy_file"; exit 1; }
 done
 
-changed_product_files="$(git diff --name-only origin/main...HEAD -- apps packages | rg '^(apps|packages)/' || true)"
+changed_product_files="$(git diff --name-only origin/main...HEAD -- apps packages | while IFS= read -r f; do test -f "$f" && printf '%s\n' "$f"; done | rg '^(apps|packages)/' || true)"
 if [ -n "$changed_product_files" ]; then
   old_priority_code="$(printf 'p%s|P%s' 0 0)"
   priority_matches="$(printf '%s\n' "$changed_product_files" | xargs rg -n "$old_priority_code" || true)"
@@ -2590,7 +2590,7 @@ Expected:
 - No priority-code naming remains in changed `apps/` or `packages/` product surfaces.
 - Do not chase unrelated pre-existing fixtures, generated screenshots, or guard tests outside active product code for Workbench cleanup.
 
-- [ ] **Step 2: Run focused verification**
+- [x] **Step 2: Run focused verification**
 
 Run:
 
@@ -2606,6 +2606,7 @@ pnpm vitest run \
   tests/api/query-module.test.ts \
   tests/api/delivery-flow.test.ts \
   tests/api/product-lanes.test.ts \
+  tests/api/work-items.test.ts \
   tests/web/api.test.ts \
   tests/web/api-hooks.test.tsx \
   tests/web/product-lanes-route.test.tsx \
@@ -2620,7 +2621,7 @@ pnpm vitest run \
 
 Expected: PASS.
 
-- [ ] **Step 3: Run package builds**
+- [x] **Step 3: Run package builds**
 
 Run:
 
@@ -2634,7 +2635,7 @@ pnpm --filter @forgeloop/web typecheck
 
 Expected: PASS.
 
-- [ ] **Step 4: Run broader safety tests**
+- [x] **Step 4: Run broader safety tests**
 
 Run:
 
@@ -2644,7 +2645,7 @@ pnpm test
 
 Expected: PASS. If this is too slow for the environment, run the affected package test set plus document exactly which broader command was not run and why.
 
-- [ ] **Step 5: Final commit**
+- [x] **Step 5: Final commit**
 
 If verification required fixes, commit the actual fixed file list:
 
@@ -2659,38 +2660,38 @@ Replace the `git add` path above with the implementation files that were actuall
 
 ## Final Delivery Checklist
 
-- [ ] `/work-items/:workItemId` returns and renders `delivery_readiness`.
-- [ ] Work Item cockpit response has no top-level `next_actions`.
-- [ ] Web fixtures and strict consumers parse Work Item cockpit data only through `delivery_readiness`, including Spec/Plan route tests.
-- [ ] Work Item cockpit query cache keys include active lane and shared mutation helpers invalidate/update all lane variants when lane is unknown.
-- [ ] When the URL omits `lane`, Web passes no lane, backend resolves the Work Item kind default, and UI renders from `delivery_readiness.active_lane`.
-- [ ] `/query/work-items/:workItemId/actions` is gone.
-- [ ] Product Lane actions use `/lanes/:laneId`, never `/workbench/:laneId`.
-- [ ] Active Web product code has no `/workbench` fallback links, including Pipeline representative item fallbacks.
-- [ ] Readiness is derived in backend query logic, not React.
-- [ ] Spec/Plan strict approved revision checks are enforced.
-- [ ] Current package set excludes stale/archived/deleted packages.
-- [ ] Selected run/review precedence is deterministic.
-- [ ] Shared Review Packet contract parses and persists `independent_ai_review` and `test_mapping`.
-- [ ] Review cannot pass without self-review and independent AI Review evidence.
-- [ ] Review cannot pass when the Review Packet is stale, unmapped to approved revisions, missing test mapping, or missing explicit risk notes.
-- [ ] Quality Gate cannot pass with missing, failing, or unknown `required_test_gates`.
-- [ ] Required test gates cannot pass from package metadata alone; they require matching run, review, or pre-release Test/Acceptance evidence.
-- [ ] Execution is blocked by missing or failed selected-run required checks.
-- [ ] Bug and Tech Debt backend applicability rules are tested, not only rendered as UI labels.
-- [ ] Integration Readiness requires full dimension evidence when applicable.
-- [ ] Integration Readiness correctly handles `running`, `failed`, and unknown statuses, including `unknown_integration_readiness_status`.
-- [ ] Package dependencies are fetched by the Work Item cockpit query and make Integration Readiness required.
-- [ ] Downstream read failures populate stable `delivery_readiness.degraded_sources` and block affected stages without failing the whole cockpit response.
-- [ ] Release Readiness is pre-release only and excludes Observation blockers.
-- [ ] Release Readiness consumes explicit release blockers, Release Test/Acceptance evidence, release evidence, decisions, and matching fingerprints.
-- [ ] Responsibility lanes produce tested lane-aware next actions for Spec Approver, Execution Owner, Reviewer, QA/Test Owner, and Release Owner.
-- [ ] Manager lane actions are read-only.
-- [ ] Manager-perspective UI hides or downgrades mutating actions even if bad backend data slips through.
-- [ ] Initiative Work Items without direct packages show child-work aggregation or an explicit unavailable state, never false releasable readiness from empty package data.
-- [ ] Degraded readiness sources are visible in the cockpit and cannot render ready/pass copy for affected stages.
-- [ ] Mobile/tablet Action Summary appears before the Stage Rail.
-- [ ] Stage rail supports keyboard activation, hash/scroll, and focus movement.
-- [ ] Package mobile cards follow the curated hierarchy and do not overflow.
-- [ ] Linked package/run/review/release pages meet the visual clarity baseline.
-- [ ] Focused tests, browser viewport tests, package builds, and legacy scans pass.
+- [x] `/work-items/:workItemId` returns and renders `delivery_readiness`.
+- [x] Work Item cockpit response has no top-level `next_actions`.
+- [x] Web fixtures and strict consumers parse Work Item cockpit data only through `delivery_readiness`, including Spec/Plan route tests.
+- [x] Work Item cockpit query cache keys include active lane and shared mutation helpers invalidate/update all lane variants when lane is unknown.
+- [x] When the URL omits `lane`, Web passes no lane, backend resolves the Work Item kind default, and UI renders from `delivery_readiness.active_lane`.
+- [x] `/query/work-items/:workItemId/actions` is gone.
+- [x] Product Lane actions use `/lanes/:laneId`, never `/workbench/:laneId`.
+- [x] Active Web product code has no `/workbench` fallback links, including Pipeline representative item fallbacks.
+- [x] Readiness is derived in backend query logic, not React.
+- [x] Spec/Plan strict approved revision checks are enforced.
+- [x] Current package set excludes stale/archived/deleted packages.
+- [x] Selected run/review precedence is deterministic.
+- [x] Shared Review Packet contract parses and persists `independent_ai_review` and `test_mapping`.
+- [x] Review cannot pass without self-review and independent AI Review evidence.
+- [x] Review cannot pass when the Review Packet is stale, unmapped to approved revisions, missing test mapping, or missing explicit risk notes.
+- [x] Quality Gate cannot pass with missing, failing, or unknown `required_test_gates`.
+- [x] Required test gates cannot pass from package metadata alone; they require matching run, review, or pre-release Test/Acceptance evidence.
+- [x] Execution is blocked by missing or failed selected-run required checks.
+- [x] Bug and Tech Debt backend applicability rules are tested, not only rendered as UI labels.
+- [x] Integration Readiness requires full dimension evidence when applicable.
+- [x] Integration Readiness correctly handles `running`, `failed`, and unknown statuses, including `unknown_integration_readiness_status`.
+- [x] Package dependencies are fetched by the Work Item cockpit query and make Integration Readiness required.
+- [x] Downstream read failures populate stable `delivery_readiness.degraded_sources` and block affected stages without failing the whole cockpit response.
+- [x] Release Readiness is pre-release only and excludes Observation blockers.
+- [x] Release Readiness consumes explicit release blockers, Release Test/Acceptance evidence, release evidence, decisions, and matching fingerprints.
+- [x] Responsibility lanes produce tested lane-aware next actions for Spec Approver, Execution Owner, Reviewer, QA/Test Owner, and Release Owner.
+- [x] Manager lane actions are read-only.
+- [x] Manager-perspective UI hides or downgrades mutating actions even if bad backend data slips through.
+- [x] Initiative Work Items without direct packages show child-work aggregation or an explicit unavailable state, never false releasable readiness from empty package data.
+- [x] Degraded readiness sources are visible in the cockpit and cannot render ready/pass copy for affected stages.
+- [x] Mobile/tablet Action Summary appears before the Stage Rail.
+- [x] Stage rail supports keyboard activation, hash/scroll, and focus movement.
+- [x] Package mobile cards follow the curated hierarchy and do not overflow.
+- [x] Linked package/run/review/release pages meet the visual clarity baseline.
+- [x] Focused tests, browser viewport tests, package builds, and legacy scans pass.

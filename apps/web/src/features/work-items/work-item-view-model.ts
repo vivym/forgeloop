@@ -4,9 +4,7 @@ import type {
   DeliveryStageState,
   ExecutionPackage,
   ProductAction,
-  ProductCommandAction,
   ProductLaneId,
-  ProductNavigateAction,
   ReviewPacket,
   RunSession,
   SpecPlan,
@@ -14,6 +12,7 @@ import type {
   WorkItem,
   WorkItemDeliveryReadiness,
 } from '../../shared/api/types';
+import { sanitizeProductActionsForDisplay } from '../product-actions/product-actions';
 
 export type DeliveryStatusTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 type DeliveryObjectRef = WorkItemDeliveryReadiness['stages'][number]['object_refs'][number];
@@ -101,50 +100,8 @@ export function sortDeliveryActions(actions: readonly ProductAction[]) {
     .map(({ action }) => action);
 }
 
-type ProductObjectActionTarget = Extract<ProductNavigateAction['target'], { kind: 'object' }>;
-
-function objectTypeActionLabel(objectType: ProductObjectActionTarget['object_type']) {
-  switch (objectType) {
-    case 'execution_package':
-      return 'Open package';
-    case 'run_session':
-      return 'Open run';
-    case 'review_packet':
-      return 'Open review';
-    case 'work_item':
-      return 'Open work item';
-    default:
-      return `Open ${formatValue(objectType).toLowerCase()}`;
-  }
-}
-
-function commandActionToManagerDrillDown(action: ProductCommandAction): ProductNavigateAction | undefined {
-  const target = action.target;
-  if (target?.kind !== 'object') return undefined;
-
-  return {
-    id: `${action.id}-drill-down`,
-    lane_id: 'manager',
-    priority: 'secondary',
-    label: objectTypeActionLabel(target.object_type),
-    description: action.description,
-    enabled: true,
-    kind: 'navigate',
-    target,
-  };
-}
-
 export function sanitizeDeliveryActionsForDisplay(actions: readonly ProductAction[], activeLane: ProductLaneId) {
-  if (activeLane !== 'manager') return sortDeliveryActions(actions);
-
-  const managerSafeActions = actions.flatMap((action): ProductAction[] => {
-    if (action.kind === 'navigate') return [action];
-
-    const drillDown = commandActionToManagerDrillDown(action);
-    return drillDown === undefined ? [] : [drillDown];
-  });
-
-  return sortDeliveryActions(managerSafeActions);
+  return sortDeliveryActions(sanitizeProductActionsForDisplay(actions, activeLane));
 }
 
 export function groupDeliveryActionsByPriority(actions: readonly ProductAction[]): DeliveryActionGroups {

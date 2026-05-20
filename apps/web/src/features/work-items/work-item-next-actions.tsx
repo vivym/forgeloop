@@ -40,7 +40,7 @@ export function WorkItemNextActions({
       ) : actions.length === 0 ? (
         <p className="empty">No actions for {lane.label} lane.</p>
       ) : (
-        <ProductActionList actions={actions} projectId={projectId} />
+        <ProductActionList actions={actions} activeLane={activeLane} projectId={projectId} />
       )}
     </ActionRail>
   );

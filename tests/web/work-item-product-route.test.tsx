@@ -8,7 +8,7 @@ import WorkItemDetailRoute from '../../apps/web/src/app/routes/work-items/$workI
 import { ProductActionList } from '../../apps/web/src/features/product-actions/product-action-list';
 import { WorkItemNextActions } from '../../apps/web/src/features/work-items/work-item-next-actions';
 import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
-import type { ProductAction } from '../../apps/web/src/shared/api/types';
+import type { ProductAction, ProductLaneId } from '../../apps/web/src/shared/api/types';
 import { renderRoute } from './router-test-utils';
 import {
   cockpitFixtureWithDegradedRunSource,
@@ -330,6 +330,20 @@ describe('ProductActionList', () => {
     expect(rtlScreen.getByRole('link', { name: 'Open Run package' }).getAttribute('href')).toBe('/packages/package-product-action');
   });
 
+  it('downgrades manager command actions to read-only drill-down links', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderProductActions([runPackageAction('run-package', 'Run package')], { activeLane: 'manager' });
+
+    expect(rtlScreen.queryByRole('button', { name: 'Run package' })).toBeNull();
+    const link = rtlScreen.getByRole('link', { name: 'Open package' });
+    expect(link.getAttribute('href')).toBe('/packages/package-product-action');
+
+    await user.click(link);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('renders navigate actions as links using the backend target href directly', () => {
     renderProductActions([
       {
@@ -372,14 +386,14 @@ describe('ProductActionList', () => {
   });
 });
 
-function renderProductActions(actions: ProductAction[], options: { actorId?: string } = {}) {
+function renderProductActions(actions: ProductAction[], options: { actorId?: string; activeLane?: ProductLaneId } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
   render(
     <QueryClientProvider client={queryClient}>
       <ActorProvider value={options.actorId ? { actorId: options.actorId } : undefined}>
         <MemoryRouter initialEntries={['/work-items/wi-1']}>
-          <ProductActionList actions={actions} projectId="project-web-product" />
+          <ProductActionList actions={actions} activeLane={options.activeLane} projectId="project-web-product" />
           <LocationProbe />
         </MemoryRouter>
       </ActorProvider>

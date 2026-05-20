@@ -50,6 +50,7 @@ describe('Work Item product API', () => {
       'tech_debt',
     ]);
     expect(response.body.every((item: Record<string, unknown>) => !('recommended_next_actions' in item))).toBe(true);
+    expect(response.body.every((item: Record<string, unknown>) => !('default_priority' in item))).toBe(true);
   });
 
   it('creates and updates initiative readiness fields', async () => {

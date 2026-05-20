@@ -86,6 +86,31 @@ describe('Product Lanes route', () => {
     expect(screen.getByRole('button', { name: 'Run package' })).toBeTruthy();
   });
 
+  it('downgrades manager lane command actions to read-only drill-down links', async () => {
+    const screen = await renderRoute(`/lanes/manager?project_id=${projectId}&selected=manager-item`, {
+      apiOverrides: {
+        [`GET /query/product-lanes/manager?project_id=${projectId}`]: {
+          lane_id: 'manager',
+          label: 'Manager',
+          description: 'Read-only delivery health and bottleneck drill-down.',
+          unsupported_filters: [],
+          summary: { total: 1, blocked: 0, high_risk: 0, stale: 0 },
+          items: [
+            {
+              ...laneItem('manager-item', 'Manager health'),
+              actions: [productCommandAction('run-package', 'Run package')],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /manager/i })).toBeTruthy();
+    const link = await screen.findByRole('link', { name: 'Open package' });
+    expect(screen.queryByRole('button', { name: 'Run package' })).toBeNull();
+    expect(link.getAttribute('href')).toBe('/packages/package-product-action');
+  });
+
   it('renders unknown lanes locally without fetching', async () => {
     const screen = await renderRoute(`/lanes/not-a-lane?project_id=${projectId}`);
 
@@ -181,6 +206,30 @@ function productNavigateAction(id: string, priority: ProductAction['priority'], 
       object_type: 'work_item',
       object_id: id,
       href,
+    },
+  };
+}
+
+function productCommandAction(id: string, label: string): ProductAction {
+  return {
+    id,
+    lane_id: 'execution-owner',
+    priority: 'primary',
+    label,
+    enabled: true,
+    kind: 'command',
+    command: {
+      type: 'run_package',
+      object_type: 'execution_package',
+      object_id: 'package-product-action',
+      work_item_id: 'wi-1',
+      package_id: 'package-product-action',
+    },
+    target: {
+      kind: 'object',
+      object_type: 'execution_package',
+      object_id: 'package-product-action',
+      href: '/packages/package-product-action',
     },
   };
 }
