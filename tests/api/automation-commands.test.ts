@@ -2087,7 +2087,10 @@ describe('automation command boundaries', () => {
       generation_artifacts: planGenerationArtifacts,
     }).expect(201);
 
-    expect(await service.listPlanRevisions((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id ?? '')).toHaveLength(1);
+    const workItem = await repository.getWorkItem(ctx.workItem.id);
+    const revisions = await service.listPlanRevisions(workItem?.current_plan_id ?? '');
+    expect(revisions).toHaveLength(1);
+    expect(workItem?.current_plan_revision_id).toBe(revisions[0]!.id);
   });
 
   it('accepts claimed plan draft actions with generation prompt identity fields', async () => {

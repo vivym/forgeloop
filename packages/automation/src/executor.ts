@@ -4,6 +4,7 @@ import {
   planDraftPromptVersion,
   specDraftOutputSchemaVersion,
   specDraftPromptVersion,
+  validateGeneratedPackageDraftSet,
   validateGeneratedPlanDraft,
   validateGeneratedSpecDraft,
   type CodexGenerationRuntime,
@@ -242,6 +243,9 @@ const errorCode = (error: unknown): string | undefined => {
     'codex_app_server_unavailable',
     'generated_output_invalid_json',
     'generated_output_schema_invalid',
+    'generated_package_dependency_invalid',
+    'generated_package_manifest_invalid',
+    'generated_package_policy_invalid',
     'generated_spec_draft_invalid',
     'generated_plan_draft_invalid',
     'generated_payload_idempotency_drift',
@@ -267,6 +271,9 @@ const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'codex_generation_safety_unavailable' ||
   code === 'codex_generation_sandbox_invalid' ||
   code === 'generated_spec_draft_invalid' ||
+  code === 'generated_package_dependency_invalid' ||
+  code === 'generated_package_manifest_invalid' ||
+  code === 'generated_package_policy_invalid' ||
   (code === 'generated_plan_draft_invalid' && error instanceof AutomationHttpError && error.status < 500) ||
   code === 'generated_payload_idempotency_drift' ||
   code === 'manual_path_hold_active' ||
@@ -296,6 +303,9 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
     code === 'codex_app_server_unavailable' ||
     code === 'generated_output_invalid_json' ||
     code === 'generated_output_schema_invalid' ||
+    code === 'generated_package_dependency_invalid' ||
+    code === 'generated_package_manifest_invalid' ||
+    code === 'generated_package_policy_invalid' ||
     code === 'generated_spec_draft_invalid' ||
     code === 'generated_plan_draft_invalid' ||
     code === 'generated_payload_idempotency_drift'
@@ -440,18 +450,54 @@ const executeCommand = async (
   if (action.actionType === 'ensure_package_drafts') {
     const actionInput = parseEnsurePackageDraftsInput(action);
     const taskConfig = generationTaskConfigFor(input.generationPlanning, 'package_drafts', {
-      enabled: true,
+      enabled: input.generationRuntime !== undefined,
       promptVersion: actionInput.promptVersion ?? 'package-drafts.fake.v1',
       outputSchemaVersion: actionInput.outputSchemaVersion ?? 'package_drafts.v1',
     });
-    if (!taskConfig.enabled) {
+    const runtime = input.generationRuntime;
+    if (!taskConfig.enabled || runtime === undefined) {
       throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Package draft generation is disabled');
     }
-    throw new AutomationHttpError(
-      422,
-      { code: 'package_generation_runtime_not_wired' },
-      'Package draft runtime wiring is not enabled in this task slice.',
-    );
+    const context = await client.packageDraftsGenerationContext(actionInput.planRevisionId, {
+      generationKey: actionInput.generationKey,
+      actionRunId: action.id,
+      claimToken: action.claimToken ?? '',
+    });
+    const generated = await runtime.generatePackageDrafts({
+      actionRunId: action.id,
+      projectId: context.work_item.project_id,
+      repoIds: context.repos.map((repo) => repo.repo_id),
+      context: context as unknown as Record<string, unknown>,
+      promptVersion: actionInput.promptVersion ?? taskConfig.promptVersion,
+      outputSchemaVersion: actionInput.outputSchemaVersion ?? taskConfig.outputSchemaVersion,
+      policyDigests: Object.fromEntries(
+        context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
+      ),
+    });
+    let generatedPackageDrafts;
+    try {
+      generatedPackageDrafts = validateGeneratedPackageDraftSet(generated.generated);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : undefined;
+      if (
+        code === 'generated_package_dependency_invalid' ||
+        code === 'generated_package_manifest_invalid' ||
+        code === 'generated_package_policy_invalid'
+      ) {
+        throw new AutomationHttpError(422, { code }, 'Generated Package drafts are invalid');
+      }
+      throw error;
+    }
+    await client.ensurePackageDrafts(actionInput.planRevisionId, {
+      action_run_id: action.id,
+      ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
+      idempotency_key: action.idempotencyKey,
+      automation_precondition: precondition,
+      generation_key: actionInput.generationKey,
+      generated_package_drafts: generatedPackageDrafts,
+      generation_artifacts: generated.generationArtifacts,
+    });
+    return;
   }
 
   if (action.actionType === 'request_manual_path') {

@@ -1543,6 +1543,15 @@ export class AutomationCommandService {
       plan_id: updated.id,
       spec_revision_id: specRevision.id,
     });
+    const currentWorkItem = this.requireFound(await repository.getWorkItem(workItem.id), `WorkItem ${workItem.id}`);
+    if (currentWorkItem.current_plan_id !== updated.id) {
+      throw new ConflictException('WorkItem current plan changed before plan draft could be attached');
+    }
+    await repository.saveWorkItem({
+      ...currentWorkItem,
+      current_plan_revision_id: revision.id,
+      updated_at: updated.updated_at,
+    });
 
     return {
       plan_id: updated.id,

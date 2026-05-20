@@ -426,6 +426,7 @@ describe('HTTP automation daemon integration', () => {
 
     const workItem = await repository.getWorkItem(seeded.workItem.id);
     expect(workItem?.current_plan_id).toEqual(expect.any(String));
+    expect(workItem?.current_plan_revision_id).toBe(planContext.revision.id);
     const plan = (await repository.getPlan(workItem!.current_plan_id!))!;
     expect(plan).toMatchObject({
       id: workItem!.current_plan_id,
@@ -457,6 +458,66 @@ describe('HTTP automation daemon integration', () => {
     });
     expect(packagesAfterRestart).toHaveLength(0);
     expect(actionRunsAfterRestart).toHaveLength(actionRunCount);
+  });
+
+  it('2B generates Package drafts from a human-approved generated Plan when explicitly enabled without enqueueing run sessions', async () => {
+    const { app, repository } = await bootAutomationApp();
+    const seeded = await seedDraftOnlyApprovedSpec(app);
+    const generationPlanning = fakeGenerationPlanning({
+      package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+    });
+    const daemon = createDaemon(app, createAutomationClient(app), { generationPlanning });
+
+    await runUntil(
+      daemon,
+      async () => (await repository.getWorkItem(seeded.workItem.id))?.current_plan_id !== undefined,
+      '2b_plan_draft_created',
+    );
+    const planContext = await approveCurrentPlan(app, repository, seeded.workItem.id);
+    await runUntil(
+      daemon,
+      async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length === 2,
+      '2b_package_drafts_created',
+    );
+    await drainDaemon(daemon, '2b_daemon_drained');
+
+    const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
+    expect(packages.map((item) => item.package_key)).toEqual(['api', 'tests']);
+    expect(packages.map((item) => item.sequence)).toEqual([0, 1]);
+    expect(packages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          work_item_id: seeded.workItem.id,
+          plan_revision_id: planContext.revision.id,
+          generation_key: `default:${planContext.revision.id}`,
+          package_key: 'api',
+          phase: 'draft',
+        }),
+        expect.objectContaining({
+          work_item_id: seeded.workItem.id,
+          plan_revision_id: planContext.revision.id,
+          generation_key: `default:${planContext.revision.id}`,
+          package_key: 'tests',
+          phase: 'draft',
+        }),
+      ]),
+    );
+    await expect(repository.listRunSessions(seeded.project.id)).resolves.toEqual([]);
+    for (const executionPackage of packages) {
+      await expect(repository.listRunSessionsForPackage(executionPackage.id)).resolves.toEqual([]);
+    }
+
+    const completedActionRuns = await actionRuns(repository);
+    expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
+    expect(sortedActionTypes(completedActionRuns)).toEqual([
+      'ensure_package_drafts',
+      'ensure_plan_draft',
+      'project_runtime_snapshot',
+    ]);
+    expectSucceededActionLifecycle(completedActionRuns, 'ensure_plan_draft');
+    expectSucceededActionLifecycle(completedActionRuns, 'ensure_package_drafts');
+    expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
+    expect(completedActionRuns.map((actionRun) => actionRun.action_type)).not.toContain('enqueue_package_run');
   });
 
   it('daemon never submits or approves Spec or Plan during generation', async () => {

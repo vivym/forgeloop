@@ -148,6 +148,14 @@ export class SpecPlanService {
     };
     await this.repository.saveSpec(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId);
+    await this.repository.withObjectLock(`work-item:${updated.work_item_id}`, async (repository) => {
+      const workItem = this.requireFound(await repository.getWorkItem(updated.work_item_id), `WorkItem ${updated.work_item_id}`);
+      await repository.saveWorkItem({
+        ...workItem,
+        current_spec_revision_id: updated.approved_revision_id!,
+        updated_at: updated.updated_at,
+      });
+    });
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
     await this.decision('spec', spec.id, actorOrSystem(actorId), 'approved', 'Spec approved.');
     return updated;
@@ -266,6 +274,14 @@ export class SpecPlanService {
     };
     await this.repository.savePlan(updated);
     await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId);
+    await this.repository.withObjectLock(`work-item:${updated.work_item_id}`, async (repository) => {
+      const workItem = this.requireFound(await repository.getWorkItem(updated.work_item_id), `WorkItem ${updated.work_item_id}`);
+      await repository.saveWorkItem({
+        ...workItem,
+        current_plan_revision_id: updated.approved_revision_id!,
+        updated_at: updated.updated_at,
+      });
+    });
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
     await this.decision('plan', plan.id, actorOrSystem(actorId), 'approved', 'Plan approved.');
     return updated;
