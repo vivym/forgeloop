@@ -127,6 +127,40 @@ describe('Work Item delivery readiness contracts', () => {
     expect(workItemCockpitResponseSchema.parse(cockpitResponse())).toMatchObject({ delivery_readiness: readiness });
   });
 
+  it('preserves review packet AI review and test mapping evidence in cockpit responses', () => {
+    const parsed = workItemCockpitResponseSchema.parse(
+      cockpitResponse({
+        review_packets: [
+          {
+            id: 'review-1',
+            run_session_id: 'run-1',
+            execution_package_id: 'pkg-1',
+            reviewer_actor_id: 'actor-1',
+            status: 'completed',
+            decision: 'approved',
+            independent_ai_review: {
+              status: 'approved',
+              summary: 'Independent review passed.',
+              run_session_id: 'run-1',
+              execution_package_id: 'pkg-1',
+              risk_notes: [],
+            },
+            test_mapping: [{ gate_id: 'regression', result: 'passed', evidence_ref: 'run-check:regression' }],
+          },
+        ],
+      }),
+    );
+
+    expect(parsed.review_packets[0]?.independent_ai_review).toMatchObject({
+      status: 'approved',
+      run_session_id: 'run-1',
+      execution_package_id: 'pkg-1',
+    });
+    expect(parsed.review_packets[0]?.test_mapping).toEqual([
+      expect.objectContaining({ gate_id: 'regression', result: 'passed' }),
+    ]);
+  });
+
   it('rejects the old public next_actions array on cockpit responses', () => {
     const result = workItemCockpitResponseSchema.safeParse(
       cockpitResponse({

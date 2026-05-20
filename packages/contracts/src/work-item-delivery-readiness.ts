@@ -3,7 +3,12 @@ import { z } from 'zod';
 import { productActionSchema, productLaneIdSchema, productObjectTypeSchema } from './api.js';
 import { artifactKindSchema, jsonObjectSchema } from './executor.js';
 import { publicArtifactRefSchema } from './public-artifacts.js';
-import { reviewDecisionSchema, reviewPacketStatusSchema } from './review.js';
+import {
+  independentAiReviewResultSchema,
+  reviewDecisionSchema,
+  reviewPacketStatusSchema,
+  reviewPacketTestMappingSchema,
+} from './review.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const nonEmpty = z.string().trim().min(1);
@@ -374,6 +379,8 @@ const cockpitReviewPacketSchema = z
     changed_files: z.array(publicCockpitChangedFileSchema).optional(),
     check_result_summary: z.string().optional(),
     self_review: publicCockpitSelfReviewResultSchema.optional(),
+    independent_ai_review: independentAiReviewResultSchema.optional(),
+    test_mapping: z.array(reviewPacketTestMappingSchema).optional(),
     risk_notes: z.array(z.string()).optional(),
     requested_changes: z.array(publicCockpitRequestedChangeSchema).optional(),
     reviewed_by_actor_id: z.string().optional(),
