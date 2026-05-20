@@ -6,6 +6,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import WorkItemDetailRoute from '../../apps/web/src/app/routes/work-items/$workItemId';
 import { ProductActionList } from '../../apps/web/src/features/product-actions/product-action-list';
+import { WorkItemNextActions } from '../../apps/web/src/features/work-items/work-item-next-actions';
 import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
 import type { ProductAction } from '../../apps/web/src/shared/api/types';
 import { renderRoute } from './router-test-utils';
@@ -34,6 +35,19 @@ describe('Work Item product route', () => {
       expect.objectContaining({ method: 'GET' }),
     );
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
+  });
+
+  it('renders the Work Item next actions rail as a presentational component', () => {
+    render(
+      <WorkItemNextActions
+        actions={[]}
+        activeLane="requirements"
+        projectId="project-web-product"
+        workItemId="wi-1"
+      />,
+    );
+
+    expect(rtlScreen.getByText('No actions for Requirements lane.')).toBeTruthy();
   });
 
   it('labels empty Work Item action states by lane', async () => {

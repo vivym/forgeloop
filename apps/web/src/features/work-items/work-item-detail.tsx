@@ -13,6 +13,7 @@ export function WorkItemDetail() {
   const workItemId = params.workItemId;
   const requestedLane = searchParams.get('lane');
   const cockpitLane = parseProductLaneId(requestedLane ?? undefined);
+  const unsupportedLane = requestedLane !== null && cockpitLane === undefined;
   const cockpit = useWorkItemCockpitQuery(workItemId, cockpitLane);
   const replay = useWorkItemReplayQuery(workItemId);
   const viewModel = createWorkItemDetailViewModel(cockpit.data, replay.data);
@@ -62,7 +63,14 @@ export function WorkItemDetail() {
     <DetailLayout
       actionRail={
         cockpit.data?.delivery_readiness === undefined ? undefined : (
-          <WorkItemNextActions readiness={cockpit.data.delivery_readiness} workItem={workItem} />
+          <WorkItemNextActions
+            actions={cockpit.data.delivery_readiness.next_actions}
+            activeLane={cockpit.data.delivery_readiness.active_lane}
+            projectId={workItem.project_id}
+            unsupportedLane={unsupportedLane}
+            workItemId={workItem.id}
+            {...(cockpitLane === undefined ? {} : { requestedLane: cockpitLane })}
+          />
         )
       }
       header={
