@@ -110,7 +110,7 @@ describe('codex runtime domain contracts', () => {
     expect(assertCodexRuntimeTypeExports()).toBeUndefined();
   });
 
-  it('matches only explicit project and repo scope tuples', () => {
+  it('treats project-only scope as project-wide while repo scope is repo-specific', () => {
     expect(codexRuntimeScopeMatches([{ project_id: 'project-1' }], { project_id: 'project-1', repo_id: 'repo-1' })).toBe(true);
     expect(codexRuntimeScopeMatches([{ project_id: 'project-1', repo_id: 'repo-1' }], { project_id: 'project-1', repo_id: 'repo-1' })).toBe(
       true,
@@ -192,6 +192,12 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it.each(['secret_key = "x"', 'auth_token = "x"'])('rejects secret-looking Codex config key %s', (codexConfigToml) => {
+    expect(() =>
+      validateCodexRuntimeProfileRevision(baseRevision({ codex_config_toml: codexConfigToml }), { strictRealDogfood: true }),
+    ).toThrow(/secret-looking keys/);
+  });
+
   it('redacts launch materialization without leaking raw secret payloads', () => {
     const payload = { api_key: 'super-secret-key', token: 'raw-token' };
     const materialization = {
@@ -249,6 +255,16 @@ describe('codex runtime domain contracts', () => {
 
     expect(() =>
       validateCodexDockerRuntimeEvidence({
+        runtime_profile_id: '550e8400-e29b-41d4-a716-446655440000',
+        runtime_profile_revision_id: '018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
+        credential_binding_id: 'credential-binding-550e8400-e29b-41d4-a716-446655440000',
+        credential_binding_version_id: 'credential-version-018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
+        launch_lease_id: 'lease-550e8400-e29b-41d4-a716-446655440000',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateCodexDockerRuntimeEvidence({
         runtime_profile_id: 'profile-1',
         docker_image_digest: digestA,
         container_id: '4f1e2d3c',
@@ -257,5 +273,14 @@ describe('codex runtime domain contracts', () => {
         secret_token: 'raw-secret',
       }),
     ).toThrow(/public-safe Docker runtime evidence/);
+
+    for (const unsafePublicId of ['/var/lib/forgeloop/workspaces/package-1', 'http://127.0.0.1:4555', '4f1e2d3c4f1e']) {
+      expect(() =>
+        validateCodexDockerRuntimeEvidence({
+          runtime_profile_id: unsafePublicId,
+          docker_image_digest: digestA,
+        }),
+      ).toThrow(/public-safe Docker runtime evidence/);
+    }
   });
 });

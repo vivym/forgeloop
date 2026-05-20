@@ -254,7 +254,7 @@ export type CodexPublicBlockerCode = (typeof codexPublicBlockerCodes)[number];
 type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[] | { [key: string]: CanonicalJsonValue };
 
 const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
-const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b(api_key|token|secret|auth)\b)/i;
+const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[_-]?key|token|secret|auth)[A-Za-z0-9_.-]*\b)/i;
 const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|credential|payload|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
@@ -296,6 +296,8 @@ const canonicalize = (value: unknown): CanonicalJsonValue | undefined => {
 const stableJson = (value: unknown): string => JSON.stringify(canonicalize(value));
 
 const isSha256Digest = (value: unknown): value is string => typeof value === 'string' && sha256DigestPattern.test(value);
+
+const isRawPathEndpointOrContainerId = (value: string): boolean => /^\/|https?:\/\//i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);
 
 const assertSha256Digest = (value: unknown, label: string): void => {
   if (!isSha256Digest(value)) {
@@ -504,7 +506,7 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
         field: key,
       });
     }
-    if (/(^\/|https?:\/\/|[A-Fa-f0-9]{12,})/.test(value) && !key.endsWith('_digest')) {
+    if (isRawPathEndpointOrContainerId(value) && !key.endsWith('_digest')) {
       throw new DomainError('CODEX_RUNTIME_EVIDENCE_INVALID', 'Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {
         field: key,
       });
