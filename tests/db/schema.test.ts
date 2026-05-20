@@ -402,6 +402,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(codex_launch_leases, 'repoId')).toBe('PgText');
     expect(columnType(codex_launch_leases, 'targetId')).toBe('PgText');
     expect(columnType(codex_launch_leases, 'runWorkerLeaseId')).toBe('PgText');
+    expect(columnType(codex_worker_registrations, 'capabilityCeilingJson')).toBe('PgJsonb');
+    expect(columnNotNull(codex_worker_registrations, 'capabilityCeilingJson')).toBe(true);
     expect(columnType(project_repos, 'project_id')).toBe('PgUUID');
     expect(columnType(projects, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(work_items, 'owner_actor_id')).toBe('PgUUID');

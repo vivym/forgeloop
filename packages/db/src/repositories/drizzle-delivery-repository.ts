@@ -311,6 +311,7 @@ type CodexWorkerRegistrationDbRecord = {
   allowed_scopes_json: readonly CodexRuntimeScope[];
   capabilities?: readonly CodexRuntimeTargetKind[];
   capabilities_json: Record<string, unknown>;
+  capability_ceiling_json?: Record<string, unknown>;
   host_worker_uid: number;
   host_worker_gid: number;
   lease_count: number;
@@ -477,8 +478,19 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     input: CreateCodexRuntimeProfileWithRevisionInput,
   ): Promise<CodexRuntimeProfileRevision> {
     validateCodexRuntimeProfileRevision(input.revision);
+    const existingRevision = await this.getById<CodexRuntimeProfileRevision>(
+      codex_runtime_profile_revisions,
+      codex_runtime_profile_revisions.id,
+      input.revision.id,
+    );
+    if (existingRevision !== undefined) {
+      if (!valuesEqual(existingRevision, input.revision)) {
+        throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision is immutable.');
+      }
+      return existingRevision;
+    }
     await this.upsert(codex_runtime_profiles, codex_runtime_profiles.id, input.profile);
-    await this.upsert(codex_runtime_profile_revisions, codex_runtime_profile_revisions.id, input.revision);
+    await this.db.insert(codex_runtime_profile_revisions).values(toDbRecord(input.revision, codex_runtime_profile_revisions) as never);
     return input.revision;
   }
 
@@ -509,6 +521,19 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (payloadDigest !== input.version.payload_digest) {
       throw codexDenied('codex_launch_lease_denied', 'Credential payload digest does not match secret payload.');
     }
+    const [existingVersionRow] = await this.db
+      .select()
+      .from(codex_credential_binding_versions)
+      .where(eq(codex_credential_binding_versions.id, input.version.id))
+      .limit(1);
+    if (existingVersionRow !== undefined) {
+      const existingVersion = fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(existingVersionRow);
+      const { secret_payload_json: existingSecretPayload, ...existingPublicVersion } = existingVersion;
+      if (!valuesEqual(existingPublicVersion, input.version) || !valuesEqual(existingSecretPayload, input.secret_payload_json)) {
+        throw codexDenied('codex_launch_lease_denied', 'Credential binding version is immutable.');
+      }
+      return existingPublicVersion;
+    }
     await this.upsert(codex_credential_bindings, codex_credential_bindings.id, input.binding);
     await this.db
       .insert(codex_credential_binding_versions)
@@ -516,13 +541,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         ...toDbRecord(input.version, codex_credential_binding_versions),
         secretPayloadJson: input.secret_payload_json,
       } as never)
-      .onConflictDoUpdate({
-        target: codex_credential_binding_versions.id,
-        set: {
-          ...toDbRecord(input.version, codex_credential_binding_versions),
-          secretPayloadJson: input.secret_payload_json,
-        } as never,
-      });
+      .onConflictDoNothing();
     return input.version;
   }
 
@@ -635,6 +654,51 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken> {
+    const [existingRow] = await this.db
+      .select()
+      .from(codex_worker_bootstrap_tokens)
+      .where(eq(codex_worker_bootstrap_tokens.id, input.id))
+      .limit(1);
+    if (existingRow !== undefined) {
+      const existing = fromDbRecord<{
+        id: string;
+        worker_identity: string;
+        bootstrap_token_hash: string;
+        bootstrap_token_version: number;
+        status: CreateCodexWorkerBootstrapTokenInput['status'];
+        allowed_scopes_json: readonly CodexRuntimeScope[];
+        allowed_capabilities_json: Record<string, unknown>;
+        created_by_actor_id: string;
+        created_at: string;
+        expires_at: string;
+        consumed_at?: string;
+        revoked_at?: string;
+      }>(existingRow as Record<string, unknown>);
+      const expected = {
+        id: input.id,
+        worker_identity: input.worker_identity,
+        bootstrap_token_hash: input.bootstrap_token_hash,
+        bootstrap_token_version: input.bootstrap_token_version,
+        status: input.status,
+        allowed_scopes_json: input.allowed_scopes_json,
+        allowed_capabilities_json: input.allowed_capabilities_json,
+        created_by_actor_id: input.created_by_actor_id,
+        created_at: input.created_at,
+        expires_at: input.expires_at,
+        ...(input.revoked_at === undefined ? {} : { revoked_at: input.revoked_at }),
+      };
+      const { consumed_at: _consumedAt, ...existingCreationFields } = existing;
+      if (!valuesEqual(existingCreationFields, expected)) {
+        throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token already exists with different immutable fields.');
+      }
+      return {
+        id: existing.id,
+        token_hash: existing.bootstrap_token_hash,
+        expires_at: existing.expires_at,
+        ...(existing.consumed_at === undefined ? {} : { consumed_at: existing.consumed_at }),
+        created_at: existing.created_at,
+      };
+    }
     const [row] = await this.db
       .insert(codex_worker_bootstrap_tokens)
       .values({
@@ -650,22 +714,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         expiresAt: input.expires_at,
         revokedAt: input.revoked_at ?? null,
       } as never)
-      .onConflictDoUpdate({
-        target: codex_worker_bootstrap_tokens.id,
-        set: {
-          workerIdentity: input.worker_identity,
-          bootstrapTokenHash: input.bootstrap_token_hash,
-          bootstrapTokenVersion: input.bootstrap_token_version,
-          status: input.status,
-          allowedScopesJson: input.allowed_scopes_json,
-          allowedCapabilitiesJson: input.allowed_capabilities_json,
-          createdByActorId: input.created_by_actor_id,
-          createdAt: input.created_at,
-          expiresAt: input.expires_at,
-          revokedAt: input.revoked_at ?? null,
-        } as never,
-      })
+      .onConflictDoNothing()
       .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token already exists with different immutable fields.');
+    }
     const token = fromDbRecord<{
       id: string;
       bootstrap_token_hash: string;
@@ -738,6 +791,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           bootstrapTokenVersion: input.bootstrap_token_version,
           allowedScopesJson: input.allowed_scopes,
           capabilitiesJson,
+          capabilityCeilingJson: capabilitiesJson,
           hostWorkerUid: input.host_worker_uid,
           hostWorkerGid: input.host_worker_gid,
           leaseCount: input.lease_count,
@@ -762,22 +816,32 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration> {
     await this.assertCodexWorkerSession(input.worker_id, input.session_token, 'codex_worker_registration_denied');
     const [workerRow] = await this.db
-      .select({ capabilitiesJson: codex_worker_registrations.capabilitiesJson })
+      .select({
+        capabilitiesJson: codex_worker_registrations.capabilitiesJson,
+        capabilityCeilingJson: codex_worker_registrations.capabilityCeilingJson,
+      })
       .from(codex_worker_registrations)
       .where(eq(codex_worker_registrations.id, input.worker_id))
       .limit(1);
+    const capabilityCeilingJson = (workerRow?.capabilityCeilingJson ?? workerRow?.capabilitiesJson) as Record<string, unknown> | undefined;
     if (
       workerRow === undefined ||
-      !includesAll(capabilityList(workerRow.capabilitiesJson as Record<string, unknown>, 'target_kinds'), input.capabilities)
+      capabilityCeilingJson === undefined ||
+      !includesAll(capabilityList(capabilityCeilingJson, 'target_kinds'), input.capabilities)
     ) {
       throw codexDenied('codex_worker_registration_denied', 'Worker heartbeat exceeds registered capability ceiling.');
     }
     await this.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+    const activeCapabilitiesJson = {
+      ...capabilityCeilingJson,
+      target_kinds: input.capabilities,
+    };
     const [row] = await this.db
       .update(codex_worker_registrations)
       .set({
         status: normalizeWorkerStatus(input.status),
         controlChannelStatus: normalizeControlChannelStatus(input.control_channel_status),
+        capabilitiesJson: activeCapabilitiesJson,
         leaseCount: input.active_lease_count,
         lastHeartbeatAt: input.now,
       } as never)
@@ -984,7 +1048,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization dependencies were unavailable.');
       }
       const credentialRecord = fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(credentialRow);
-      if (credentialRecord.status !== 'active') {
+      if (
+        profileRevision.status !== 'active' ||
+        profileRevision.profile_digest !== candidate.runtime_profile_digest ||
+        credentialRecord.status !== 'active' ||
+        credentialRecord.payload_digest !== candidate.credential_payload_digest
+      ) {
         throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization dependencies were unavailable.');
       }
 
@@ -1024,47 +1093,96 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async terminalizeCodexLaunchLease(input: TerminalizeCodexLaunchLeaseInput): Promise<CodexLaunchLease> {
-    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_lease_denied');
-    await this.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
-    const [row] = await this.db
-      .update(codex_launch_leases)
-      .set({
-        status: input.terminal_status,
-        terminalizedAt: input.now,
-        terminalReasonCode: input.reason_code,
-      } as never)
-      .where(and(eq(codex_launch_leases.id, input.lease_id), eq(codex_launch_leases.workerId, input.worker_id)))
-      .returning();
-    if (row === undefined) {
-      throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization was denied.');
-    }
-    return launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_lease_denied');
+      await repository.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+      const [currentRow] = await tx
+        .select()
+        .from(codex_launch_leases)
+        .where(and(eq(codex_launch_leases.id, input.lease_id), eq(codex_launch_leases.workerId, input.worker_id)))
+        .limit(1);
+      if (currentRow === undefined) {
+        throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization was denied.');
+      }
+      const current = fromDbRecord<CodexLaunchLeaseDbRecord>(currentRow);
+      const [row] = await tx
+        .update(codex_launch_leases)
+        .set({
+          status: input.terminal_status,
+          terminalizedAt: input.now,
+          terminalReasonCode: input.reason_code,
+        } as never)
+        .where(and(eq(codex_launch_leases.id, input.lease_id), eq(codex_launch_leases.workerId, input.worker_id)))
+        .returning();
+      if (row === undefined) {
+        throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization was denied.');
+      }
+      if (current.status === 'leased') {
+        await tx
+          .update(codex_worker_registrations)
+          .set({ leaseCount: sql`greatest(${codex_worker_registrations.leaseCount} - 1, 0)` } as never)
+          .where(eq(codex_worker_registrations.id, input.worker_id));
+      }
+      return launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+    });
   }
 
   async revokeCodexLaunchLease(input: RevokeCodexLaunchLeaseInput): Promise<CodexLaunchLease> {
-    const [row] = await this.db
-      .update(codex_launch_leases)
-      .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
-      .where(eq(codex_launch_leases.id, input.lease_id))
-      .returning();
-    if (row === undefined) {
-      throw codexDenied('codex_launch_lease_denied', 'Codex launch lease was not found.');
-    }
-    return launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+    return this.db.transaction(async (tx) => {
+      const [currentRow] = await tx.select().from(codex_launch_leases).where(eq(codex_launch_leases.id, input.lease_id)).limit(1);
+      if (currentRow === undefined) {
+        throw codexDenied('codex_launch_lease_denied', 'Codex launch lease was not found.');
+      }
+      const current = fromDbRecord<CodexLaunchLeaseDbRecord>(currentRow);
+      const [row] = await tx
+        .update(codex_launch_leases)
+        .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
+        .where(eq(codex_launch_leases.id, input.lease_id))
+        .returning();
+      if (row === undefined) {
+        throw codexDenied('codex_launch_lease_denied', 'Codex launch lease was not found.');
+      }
+      if (current.status === 'leased' && current.worker_id !== undefined) {
+        await tx
+          .update(codex_worker_registrations)
+          .set({ leaseCount: sql`greatest(${codex_worker_registrations.leaseCount} - 1, 0)` } as never)
+          .where(eq(codex_worker_registrations.id, current.worker_id));
+      }
+      return launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+    });
   }
 
   async expireCodexLaunchLeases(now: string): Promise<number> {
-    const rows = await this.db
-      .update(codex_launch_leases)
-      .set({ status: 'expired', terminalizedAt: now, terminalReasonCode: 'codex_launch_lease_expired' } as never)
-      .where(
-        and(
-          inArray(codex_launch_leases.status, ['queued', 'leased']),
-          sql`${codex_launch_leases.expiresAt} <= ${now}`,
-        ),
-      )
-      .returning({ id: codex_launch_leases.id });
-    return rows.length;
+    return this.db.transaction(async (tx) => {
+      const currentRows = await tx
+        .select({
+          id: codex_launch_leases.id,
+          status: codex_launch_leases.status,
+          workerId: codex_launch_leases.workerId,
+        })
+        .from(codex_launch_leases)
+        .where(
+          and(
+            inArray(codex_launch_leases.status, ['queued', 'leased']),
+            sql`${codex_launch_leases.expiresAt} <= ${now}`,
+          ),
+        );
+      if (currentRows.length === 0) {
+        return 0;
+      }
+      await tx
+        .update(codex_launch_leases)
+        .set({ status: 'expired', terminalizedAt: now, terminalReasonCode: 'codex_launch_lease_expired' } as never)
+        .where(inArray(codex_launch_leases.id, currentRows.map((row) => row.id)));
+      for (const workerId of currentRows.flatMap((row) => (row.status === 'leased' && row.workerId !== null ? [row.workerId] : []))) {
+        await tx
+          .update(codex_worker_registrations)
+          .set({ leaseCount: sql`greatest(${codex_worker_registrations.leaseCount} - 1, 0)` } as never)
+          .where(eq(codex_worker_registrations.id, workerId));
+      }
+      return currentRows.length;
+    });
   }
 
   async recoverStaleCodexWorkerLeases(input: RecoverStaleCodexWorkerLeasesInput): Promise<CodexRuntimeRecoveryResult> {
@@ -1082,11 +1200,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (staleWorkerIds.length === 0) {
       return { recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] };
     }
-    const rows = await this.db
-      .update(codex_launch_leases)
-      .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
-      .where(and(inArray(codex_launch_leases.workerId, staleWorkerIds), eq(codex_launch_leases.status, 'leased')))
-      .returning();
+    const rows = await this.db.transaction(async (tx) => {
+      const recoveredRows = await tx
+        .update(codex_launch_leases)
+        .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
+        .where(and(inArray(codex_launch_leases.workerId, staleWorkerIds), eq(codex_launch_leases.status, 'leased')))
+        .returning();
+      for (const workerId of recoveredRows.flatMap((row) => (row.workerId === null ? [] : [row.workerId]))) {
+        await tx
+          .update(codex_worker_registrations)
+          .set({ leaseCount: sql`greatest(${codex_worker_registrations.leaseCount} - 1, 0)` } as never)
+          .where(eq(codex_worker_registrations.id, workerId));
+      }
+      return recoveredRows;
+    });
     const records = rows.map((row) => fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
     return {
       recovered_launch_leases: records.map(launchLeaseFromDbRecord),

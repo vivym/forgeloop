@@ -17,6 +17,8 @@ import {
   assertResettableDatabaseUrl,
   codex_credential_binding_versions,
   codex_launch_leases,
+  codex_runtime_profile_revisions,
+  codex_worker_registrations,
   createDbClient,
   DrizzleDeliveryRepository,
   resetForgeloopDatabase,
@@ -141,7 +143,10 @@ const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRunti
   return { profile, revision };
 };
 
-const seedRuntime = async (repository: DeliveryRepository) => {
+const seedRuntime = async (
+  repository: DeliveryRepository,
+  options: { capabilities?: readonly CodexRuntimeProfileRevision['target_kind'][]; maxConcurrency?: number } = {},
+) => {
   const { profile, revision } = profileRevision();
   const secretPayload = {
     env: {
@@ -182,7 +187,7 @@ const seedRuntime = async (repository: DeliveryRepository) => {
     status: 'active',
     allowed_scopes_json: revision.allowed_scopes,
     allowed_capabilities_json: {
-      target_kinds: ['generation'],
+      target_kinds: options.capabilities ?? ['generation'],
       docker_image_digests: [revision.docker_image_digest],
       network_policy_digests: [codexCanonicalDigest(revision.network_policy)],
       network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
@@ -201,14 +206,14 @@ const seedRuntime = async (repository: DeliveryRepository) => {
     status: 'active',
     control_channel_status: 'connected',
     allowed_scopes: revision.allowed_scopes,
-    capabilities: ['generation'],
+    capabilities: options.capabilities ?? ['generation'],
     docker_image_digests: [revision.docker_image_digest],
     network_policy_digests: [codexCanonicalDigest(revision.network_policy)],
     network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
     host_worker_uid: 501,
     host_worker_gid: 20,
     lease_count: 0,
-    max_concurrency: 2,
+    max_concurrency: options.maxConcurrency ?? 2,
     labels: {},
     session_public_key_id: 'session-key-1',
     session_public_key_algorithm: 'x25519',
@@ -377,6 +382,176 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           status: 'leased',
           materializationRequestHash: null,
         });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('rejects materialization when persisted dependency digests drift from the lease fence', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { lease, workerId, sessionToken, revision, version } = await seedRuntime(repository);
+
+        await client.db
+          .update(codex_runtime_profile_revisions)
+          .set({ profileDigest: `sha256:${'d'.repeat(64)}` } as never)
+          .where(eq(codex_runtime_profile_revisions.id, revision.id));
+
+        await expect(
+          repository.materializeCodexLaunchLease({
+            lease_id: lease.id,
+            worker_id: workerId,
+            launch_token: lease.lease_token,
+            worker_session_token: sessionToken,
+            nonce: 'profile-digest-drift-nonce',
+            nonce_timestamp: later,
+            materialization_request_hash: tokenHash('profile-digest-drift-request'),
+            active_fence: {
+              action_claim_token_hash: tokenHash('action-claim-token-1'),
+              precondition_fingerprint: 'precondition-1',
+            },
+            now: later,
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_launch_materialization_denied',
+        });
+
+        await client.db
+          .update(codex_runtime_profile_revisions)
+          .set({ profileDigest: revision.profile_digest } as never)
+          .where(eq(codex_runtime_profile_revisions.id, revision.id));
+        await client.db
+          .update(codex_credential_binding_versions)
+          .set({ payloadDigest: `sha256:${'e'.repeat(64)}` } as never)
+          .where(eq(codex_credential_binding_versions.id, version.id));
+
+        await expect(
+          repository.materializeCodexLaunchLease({
+            lease_id: lease.id,
+            worker_id: workerId,
+            launch_token: lease.lease_token,
+            worker_session_token: sessionToken,
+            nonce: 'credential-digest-drift-nonce',
+            nonce_timestamp: later,
+            materialization_request_hash: tokenHash('credential-digest-drift-request'),
+            active_fence: {
+              action_claim_token_hash: tokenHash('action-claim-token-1'),
+              precondition_fingerprint: 'precondition-1',
+            },
+            now: later,
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_launch_materialization_denied',
+        });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('uses active heartbeat capabilities instead of the registration ceiling for scheduling', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { workerId, sessionToken, revision, binding } = await seedRuntime(repository, {
+          capabilities: ['generation', 'run_execution'],
+        });
+
+        await repository.heartbeatCodexWorker({
+          worker_id: workerId,
+          session_token: sessionToken,
+          nonce: 'heartbeat-capability-downgrade-nonce',
+          nonce_timestamp: later,
+          status: 'active',
+          control_channel_status: 'connected',
+          active_lease_count: 0,
+          capabilities: ['generation'],
+          now: later,
+        });
+
+        await expect(
+          repository.findAvailableCodexWorker({
+            project_id: binding.project_id,
+            repo_id: binding.repo_id,
+            target_kind: 'run_execution',
+            docker_image_digest: revision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(revision.network_policy),
+            network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+            now: later,
+          }),
+        ).resolves.toBeUndefined();
+        await expect(
+          repository.findAvailableCodexWorker({
+            project_id: binding.project_id,
+            repo_id: binding.repo_id,
+            target_kind: 'generation',
+            docker_image_digest: revision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(revision.network_policy),
+            network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+            now: later,
+          }),
+        ).resolves.toMatchObject({ id: workerId, capabilities: ['generation'] });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('releases worker capacity when a leased launch is revoked', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { lease, workerId, revision, binding, version } = await seedRuntime(repository, { maxConcurrency: 1 });
+
+        await repository.revokeCodexLaunchLease({
+          lease_id: lease.id,
+          reason_code: 'revoked_by_controller',
+          idempotency_key: 'drizzle-revoke-release-capacity',
+          now: later,
+        });
+        await repository.revokeCodexLaunchLease({
+          lease_id: lease.id,
+          reason_code: 'revoked_by_controller',
+          idempotency_key: 'drizzle-revoke-release-capacity-replay',
+          now: later,
+        });
+
+        await expect(
+          repository.createOrReplayCodexLaunchLease({
+            id: randomUUID(),
+            lease_request_id: `lease-request-after-revoke-${randomUUID()}`,
+            target: {
+              target_type: 'generation_request',
+              target_id: randomUUID(),
+              target_kind: 'generation',
+              project_id: binding.project_id,
+              repo_id: binding.repo_id,
+            },
+            worker_id: workerId,
+            runtime_profile_revision_id: revision.id,
+            runtime_profile_digest: revision.profile_digest,
+            credential_binding_id: binding.id,
+            credential_binding_version_id: version.id,
+            credential_payload_digest: version.payload_digest,
+            docker_image_digest: revision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(revision.network_policy),
+            network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+            launch_token: 'launch-token-after-revoke',
+            expires_at: expiresAt,
+            now: later,
+          }),
+        ).resolves.toMatchObject({ worker_id: workerId });
+
+        const [workerRow] = await client.db
+          .select({ leaseCount: codex_worker_registrations.leaseCount })
+          .from(codex_worker_registrations)
+          .where(eq(codex_worker_registrations.id, workerId))
+          .limit(1);
+        expect(workerRow).toEqual({ leaseCount: 1 });
       } finally {
         await client.pool.end();
       }

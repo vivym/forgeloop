@@ -191,7 +191,12 @@ const seedProfileAndCredential = async (repository: DeliveryRepository, targetKi
 
 const seedWorker = async (
   repository: DeliveryRepository,
-  overrides: { worker_id?: string; session_token?: string; capabilities?: readonly CodexLaunchTarget['target_kind'][] } = {},
+  overrides: {
+    worker_id?: string;
+    session_token?: string;
+    capabilities?: readonly CodexLaunchTarget['target_kind'][];
+    max_concurrency?: number;
+  } = {},
 ) => {
   const workerId = overrides.worker_id ?? 'worker-1';
   const sessionToken = overrides.session_token ?? 'session-token-1';
@@ -233,7 +238,7 @@ const seedWorker = async (
       host_worker_uid: 501,
       host_worker_gid: 20,
       lease_count: 0,
-      max_concurrency: 2,
+      max_concurrency: overrides.max_concurrency ?? 2,
       labels: { host: 'test-host' },
       session_public_key_id: 'session-key-1',
       session_public_key_algorithm: 'x25519',
@@ -247,10 +252,11 @@ const seedWorker = async (
 const createLaunchLease = async (
   repository: DeliveryRepository,
   overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexLaunchLease']>[0]> = {},
+  workerOverrides: Parameters<typeof seedWorker>[1] = {},
 ): Promise<CodexLaunchLeaseWithToken> => {
   const target = overrides.target ?? generationTarget();
   const seeded = await seedProfileAndCredential(repository, target.target_kind);
-  const { worker } = await seedWorker(repository, { capabilities: [target.target_kind] });
+  const { worker } = await seedWorker(repository, { capabilities: [target.target_kind], ...workerOverrides });
 
   return repository.createOrReplayCodexLaunchLease({
     id: 'launch-lease-1',
@@ -418,6 +424,141 @@ describe('codex runtime repository behavior', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('uses heartbeat-downgraded capabilities for worker availability', async () => {
+    const repository = createRepository();
+    await seedProfileAndCredential(repository, 'generation');
+    await seedProfileAndCredential(repository, 'run_execution');
+    const { worker, sessionToken } = await seedWorker(repository, { capabilities: ['generation', 'run_execution'] });
+
+    await repository.heartbeatCodexWorker({
+      worker_id: worker.id,
+      session_token: sessionToken,
+      nonce: 'heartbeat-downgrade-nonce',
+      nonce_timestamp: later,
+      status: 'active',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now: later,
+    });
+
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'run_execution',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision({ target_kind: 'run_execution' }).revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now: later,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'generation',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision().revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: worker.id, capabilities: ['generation'] });
+  });
+
+  it('keeps runtime profile revisions immutable on duplicate create', async () => {
+    const repository = createRepository();
+    const { profile, revision } = profileRevision();
+
+    await expect(repository.createCodexRuntimeProfileWithRevision({ profile, revision })).resolves.toEqual(revision);
+    await expect(repository.createCodexRuntimeProfileWithRevision({ profile, revision })).resolves.toEqual(revision);
+
+    const changed = profileRevision({
+      id: revision.id,
+      profile_id: profile.id,
+      codex_config_toml: 'model = "gpt-5-mini"\napproval_policy = "never"\n',
+    });
+    await expect(repository.createCodexRuntimeProfileWithRevision(changed)).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+    await expect(
+      repository.getActiveCodexRuntimeProfileRevision({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'generation',
+        runtime_profile_id: profile.id,
+        now,
+      }),
+    ).resolves.toEqual(revision);
+  });
+
+  it('keeps credential versions immutable on duplicate create', async () => {
+    const repository = createRepository();
+    const { profile, revision } = profileRevision();
+    const { binding, version, secretPayload } = credential({ profile_id: profile.id });
+
+    await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+    await expect(
+      repository.createCodexCredentialBindingWithVersion({ binding, version, secret_payload_json: secretPayload }),
+    ).resolves.toEqual(version);
+    await expect(
+      repository.createCodexCredentialBindingWithVersion({ binding, version, secret_payload_json: secretPayload }),
+    ).resolves.toEqual(version);
+
+    const changedPayload = { env: { OPENAI_API_KEY: 'sk-replaced-key' } };
+    const changedVersion = {
+      ...version,
+      payload_digest: codexCredentialPayloadDigest(changedPayload),
+    };
+    await expect(
+      repository.createCodexCredentialBindingWithVersion({
+        binding,
+        version: changedVersion,
+        secret_payload_json: changedPayload,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+    await expect(
+      repository.resolveCodexCredentialForLaunch({
+        credential_binding_id: binding.id,
+        target_kind: 'generation',
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        required_payload_digest: version.payload_digest,
+        now,
+      }),
+    ).resolves.toMatchObject({ payload: secretPayload, payload_digest: version.payload_digest });
+  });
+
+  it('keeps consumed bootstrap tokens immutable on duplicate create', async () => {
+    const repository = createRepository();
+    const { worker } = await seedWorker(repository);
+
+    await expect(
+      repository.createCodexWorkerBootstrapToken({
+        id: 'bootstrap-token-1',
+        worker_identity: worker.worker_identity,
+        bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
+        bootstrap_token_version: 1,
+        status: 'active',
+        allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+        allowed_capabilities_json: {
+          target_kinds: ['generation'],
+          docker_image_digests: [`sha256:${'a'.repeat(64)}`],
+          network_policy_digests: [codexCanonicalDigest(profileRevision().revision.network_policy)],
+          network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+        },
+        created_by_actor_id: 'actor-admin',
+        created_at: now,
+        expires_at: expiresAt,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
+  });
+
   it('rejects bootstrap token replay from replacing an existing worker session', async () => {
     const repository = createRepository();
     const { sessionToken, worker } = await seedWorker(repository);
@@ -579,6 +720,191 @@ describe('codex runtime repository behavior', () => {
       name: 'DomainError',
       code: 'codex_launch_materialization_denied',
     });
+  });
+
+  it('rejects materialization when profile or credential digests drift from the lease fence', async () => {
+    const repository = createRepository();
+    const lease = await createLaunchLease(repository);
+    const changedPayload = { env: { OPENAI_API_KEY: 'sk-replaced-key' } };
+
+    await expect(
+      repository.createCodexCredentialBindingWithVersion({
+        binding: credential().binding,
+        version: {
+          ...credential().version,
+          payload_digest: codexCredentialPayloadDigest(changedPayload),
+        },
+        secret_payload_json: changedPayload,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+
+    await expect(
+      repository.materializeCodexLaunchLease({
+        lease_id: lease.id,
+        worker_id: 'worker-1',
+        launch_token: lease.lease_token,
+        worker_session_token: 'session-token-1',
+        nonce: 'materialize-digest-fence-nonce',
+        nonce_timestamp: later,
+        materialization_request_hash: tokenHash('materialize-digest-fence-request'),
+        active_fence: {
+          action_claim_token_hash: tokenHash('action-claim-token-1'),
+          precondition_fingerprint: 'precondition-1',
+        },
+        now: later,
+      }),
+    ).resolves.toMatchObject({
+      resolved_credentials: [{ payload: credential().secretPayload, payload_digest: credential().version.payload_digest }],
+    });
+  });
+
+  it('releases worker capacity when a leased launch is terminalized', async () => {
+    const repository = createRepository();
+    const first = await createLaunchLease(repository, {}, { max_concurrency: 1 });
+    const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
+
+    await repository.terminalizeCodexLaunchLease({
+      lease_id: first.id,
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'terminalize-release-capacity-nonce',
+      nonce_timestamp: later,
+      terminal_status: 'released',
+      reason_code: 'completed_without_materialization',
+      idempotency_key: 'terminalize-release-capacity',
+      now: later,
+    });
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-2',
+        lease_request_id: 'lease-request-2',
+        target: generationTarget({ target_id: 'generation-2' }),
+        worker_id: 'worker-1',
+        runtime_profile_revision_id: seeded.revision.id,
+        runtime_profile_digest: seeded.revision.profile_digest,
+        credential_binding_id: seeded.binding.id,
+        credential_binding_version_id: seeded.version.id,
+        credential_payload_digest: seeded.version.payload_digest,
+        docker_image_digest: seeded.revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-2',
+        expires_at: expiresAt,
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+  });
+
+  it('releases worker capacity when a leased launch is revoked', async () => {
+    const repository = createRepository();
+    const first = await createLaunchLease(repository, {}, { max_concurrency: 1 });
+    const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
+
+    await repository.revokeCodexLaunchLease({
+      lease_id: first.id,
+      reason_code: 'revoked_by_controller',
+      idempotency_key: 'revoke-release-capacity',
+      now: later,
+    });
+    await repository.revokeCodexLaunchLease({
+      lease_id: first.id,
+      reason_code: 'revoked_by_controller',
+      idempotency_key: 'revoke-release-capacity-replay',
+      now: later,
+    });
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-2',
+        lease_request_id: 'lease-request-2',
+        target: generationTarget({ target_id: 'generation-2' }),
+        worker_id: 'worker-1',
+        runtime_profile_revision_id: seeded.revision.id,
+        runtime_profile_digest: seeded.revision.profile_digest,
+        credential_binding_id: seeded.binding.id,
+        credential_binding_version_id: seeded.version.id,
+        credential_payload_digest: seeded.version.payload_digest,
+        docker_image_digest: seeded.revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-2',
+        expires_at: expiresAt,
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+  });
+
+  it('releases worker capacity when a leased launch expires', async () => {
+    const repository = createRepository();
+    await createLaunchLease(repository, {}, { max_concurrency: 1 });
+    const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
+
+    await expect(repository.expireCodexLaunchLeases('2026-05-20T00:11:00.000Z')).resolves.toBe(1);
+    await expect(repository.expireCodexLaunchLeases('2026-05-20T00:11:00.000Z')).resolves.toBe(0);
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-2',
+        lease_request_id: 'lease-request-2',
+        target: generationTarget({ target_id: 'generation-2' }),
+        worker_id: 'worker-1',
+        runtime_profile_revision_id: seeded.revision.id,
+        runtime_profile_digest: seeded.revision.profile_digest,
+        credential_binding_id: seeded.binding.id,
+        credential_binding_version_id: seeded.version.id,
+        credential_payload_digest: seeded.version.payload_digest,
+        docker_image_digest: seeded.revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-2',
+        expires_at: expiresAt,
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+  });
+
+  it('releases worker capacity when stale worker lease recovery expires a lease', async () => {
+    const repository = createRepository();
+    await createLaunchLease(repository, {}, { max_concurrency: 1 });
+    const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: later,
+        now: later,
+        reason_code: 'worker_stale',
+      }),
+    ).resolves.toMatchObject({ recovered_launch_leases: [{ id: 'launch-lease-1', status: 'expired' }] });
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: later,
+        now: later,
+        reason_code: 'worker_stale',
+      }),
+    ).resolves.toMatchObject({ recovered_launch_leases: [] });
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-2',
+        lease_request_id: 'lease-request-2',
+        target: generationTarget({ target_id: 'generation-2' }),
+        worker_id: 'worker-1',
+        runtime_profile_revision_id: seeded.revision.id,
+        runtime_profile_digest: seeded.revision.profile_digest,
+        credential_binding_id: seeded.binding.id,
+        credential_binding_version_id: seeded.version.id,
+        credential_payload_digest: seeded.version.payload_digest,
+        docker_image_digest: seeded.revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-2',
+        expires_at: expiresAt,
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
   });
 
   it('rejects materialization by the wrong worker', async () => {

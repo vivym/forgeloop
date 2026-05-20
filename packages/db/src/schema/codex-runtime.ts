@@ -134,6 +134,7 @@ export const codex_worker_registrations = pgTable(
     bootstrapTokenVersion: integer('bootstrap_token_version').notNull(),
     allowedScopesJson: jsonb('allowed_scopes_json').$type<readonly CodexRuntimeScope[]>().notNull(),
     capabilitiesJson: jsonb('capabilities_json').$type<Record<string, unknown>>().notNull(),
+    capabilityCeilingJson: jsonb('capability_ceiling_json').$type<Record<string, unknown>>().notNull(),
     hostWorkerUid: integer('host_worker_uid').notNull(),
     hostWorkerGid: integer('host_worker_gid').notNull(),
     leaseCount: integer('lease_count').notNull(),

@@ -379,6 +379,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     input: CreateCodexRuntimeProfileWithRevisionInput,
   ): Promise<CodexRuntimeProfileRevision> {
     validateCodexRuntimeProfileRevision(input.revision);
+    const existingRevision = this.codexRuntimeProfileRevisions.get(input.revision.id);
+    if (existingRevision !== undefined) {
+      if (!valuesEqual(existingRevision, input.revision)) {
+        throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision is immutable.');
+      }
+      return clone(existingRevision);
+    }
     this.codexRuntimeProfiles.set(input.profile.id, clone(input.profile));
     this.codexRuntimeProfileRevisions.set(input.revision.id, clone(input.revision));
     return clone(input.revision);
@@ -406,6 +413,16 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const payloadDigest = codexCredentialPayloadDigest(input.secret_payload_json);
     if (payloadDigest !== input.version.payload_digest) {
       throw codexDenied('codex_launch_lease_denied', 'Credential payload digest does not match secret payload.');
+    }
+    const existingVersion = this.codexCredentialBindingVersions.get(input.version.id);
+    if (existingVersion !== undefined) {
+      if (
+        !valuesEqual(existingVersion.version, input.version) ||
+        !valuesEqual(existingVersion.secret_payload_json, input.secret_payload_json)
+      ) {
+        throw codexDenied('codex_launch_lease_denied', 'Credential binding version is immutable.');
+      }
+      return clone(existingVersion.version);
     }
     this.codexCredentialBindings.set(input.binding.id, clone(input.binding));
     this.codexCredentialBindingVersions.set(input.version.id, {
@@ -508,6 +525,32 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken> {
+    const existing = this.codexWorkerBootstrapTokens.get(input.id);
+    if (existing !== undefined) {
+      const expected: CodexWorkerBootstrapTokenRecord = {
+        id: input.id,
+        token_hash: input.bootstrap_token_hash,
+        worker_identity: input.worker_identity,
+        bootstrap_token_version: input.bootstrap_token_version,
+        status: input.status,
+        allowed_scopes_json: clone(input.allowed_scopes_json),
+        allowed_capabilities_json: clone(input.allowed_capabilities_json),
+        created_by_actor_id: input.created_by_actor_id,
+        expires_at: input.expires_at,
+        created_at: input.created_at,
+        ...(input.revoked_at !== undefined ? { revoked_at: input.revoked_at } : {}),
+      };
+      if (!valuesEqual(existing, expected)) {
+        throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token already exists with different immutable fields.');
+      }
+      return {
+        id: existing.id,
+        token_hash: existing.token_hash,
+        expires_at: existing.expires_at,
+        ...(existing.consumed_at === undefined ? {} : { consumed_at: existing.consumed_at }),
+        created_at: existing.created_at,
+      };
+    }
     const token: CodexWorkerBootstrapTokenRecord = {
       id: input.id,
       token_hash: input.bootstrap_token_hash,
@@ -745,7 +788,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
     const profileRevision = this.codexRuntimeProfileRevisions.get(record.lease.profile_revision_id);
     const credentialRecord = this.codexCredentialBindingVersions.get(record.credential_binding_version_id);
-    if (profileRevision === undefined || credentialRecord === undefined || credentialRecord.version.status !== 'active') {
+    if (
+      profileRevision === undefined ||
+      profileRevision.status !== 'active' ||
+      profileRevision.profile_digest !== record.runtime_profile_digest ||
+      credentialRecord === undefined ||
+      credentialRecord.version.status !== 'active' ||
+      credentialRecord.version.payload_digest !== record.credential_payload_digest
+    ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization dependencies were unavailable.');
     }
     const materializedRecord: CodexLaunchLeasePrivateRecord = {
@@ -780,12 +830,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (record === undefined || record.lease.worker_id !== input.worker_id) {
       throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization was denied.');
     }
+    const worker = this.codexWorkerRegistrations.get(input.worker_id);
     const terminal = {
       ...record,
       lease: { ...record.lease, status: input.terminal_status },
       terminal_reason_code: input.reason_code,
     };
     this.codexLaunchLeases.set(input.lease_id, clone(terminal));
+    if (record.lease.status === 'leased' && worker !== undefined) {
+      worker.registration.active_lease_count = Math.max(0, worker.registration.active_lease_count - 1);
+      this.codexWorkerRegistrations.set(input.worker_id, clone(worker));
+    }
     return clone(terminal.lease);
   }
 
@@ -794,12 +849,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (record === undefined) {
       throw codexDenied('codex_launch_lease_denied', 'Codex launch lease was not found.');
     }
+    const worker = record.lease.worker_id === undefined ? undefined : this.codexWorkerRegistrations.get(record.lease.worker_id);
     const revoked = {
       ...record,
       lease: { ...record.lease, status: 'expired' as const },
       terminal_reason_code: input.reason_code,
     };
     this.codexLaunchLeases.set(input.lease_id, clone(revoked));
+    if (record.lease.status === 'leased' && record.lease.worker_id !== undefined && worker !== undefined) {
+      worker.registration.active_lease_count = Math.max(0, worker.registration.active_lease_count - 1);
+      this.codexWorkerRegistrations.set(record.lease.worker_id, clone(worker));
+    }
     return clone(revoked.lease);
   }
 
@@ -808,6 +868,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     for (const [id, record] of this.codexLaunchLeases.entries()) {
       if ((record.lease.status === 'leased' || record.lease.status === 'queued') && record.lease.expires_at <= now) {
         this.codexLaunchLeases.set(id, clone({ ...record, lease: { ...record.lease, status: 'expired' as const } }));
+        if (record.lease.status === 'leased' && record.lease.worker_id !== undefined) {
+          const worker = this.codexWorkerRegistrations.get(record.lease.worker_id);
+          if (worker !== undefined) {
+            worker.registration.active_lease_count = Math.max(0, worker.registration.active_lease_count - 1);
+            this.codexWorkerRegistrations.set(record.lease.worker_id, clone(worker));
+          }
+        }
         count += 1;
       }
     }
@@ -831,6 +898,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       if (record.lease.worker_id !== undefined && staleWorkerIds.has(record.lease.worker_id) && record.lease.status === 'leased') {
         const expired = { ...record, lease: { ...record.lease, status: 'expired' as const }, terminal_reason_code: input.reason_code };
         this.codexLaunchLeases.set(id, clone(expired));
+        const worker = this.codexWorkerRegistrations.get(record.lease.worker_id);
+        if (worker !== undefined) {
+          worker.registration.active_lease_count = Math.max(0, worker.registration.active_lease_count - 1);
+          this.codexWorkerRegistrations.set(record.lease.worker_id, clone(worker));
+        }
         recovered.push(clone(expired.lease));
         if (record.action_type !== undefined) {
           automation_action_transitions.push({
