@@ -1268,6 +1268,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       repoRecords,
       workItemRecords,
       specRecords,
+      specRevisionRecords,
       planRecords,
       planRevisionRecords,
       generationRunRecords,
@@ -1285,6 +1286,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           .orderBy(asc(project_repos.createdAt), asc(project_repos.id)),
         this.db.select().from(work_items).orderBy(asc(work_items.createdAt), asc(work_items.id)),
         this.db.select().from(specs),
+        this.db.select().from(spec_revisions),
         this.db.select().from(plans).orderBy(asc(plans.createdAt), asc(plans.id)),
         this.db.select().from(plan_revisions),
         this.db.select().from(execution_package_generation_runs),
@@ -1352,6 +1354,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         return [record.id, record] as const;
       }),
     );
+    const specRevisionsById = new Map(
+      specRevisionRecords.map((row) => {
+        const record = fromDbRecord<SpecRevision>(row);
+        return [record.id, record] as const;
+      }),
+    );
     const planRevisionsById = new Map(
       planRevisionRecords.map((row) => {
         const record = fromDbRecord<PlanRevision>(row);
@@ -1378,6 +1386,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       workItemRows,
       repoRows,
       specsById,
+      specRevisionsById,
       holds,
       settingsByScope,
     );
@@ -1386,6 +1395,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       repoRows,
       planRevisionsById,
       workItemsById,
+      specsById,
+      specRevisionsById,
       generationRuns,
       holds,
       settingsByScope,
@@ -2310,6 +2321,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     workItems: WorkItem[],
     repos: ProjectRepo[],
     specsById: Map<string, Spec>,
+    specRevisionsById: Map<string, SpecRevision>,
     holds: ManualPathHold[],
     settingsByScope: Map<string, AutomationProjectSettings>,
   ): Promise<RuntimeSnapshotTargetRow[]> {
@@ -2319,8 +2331,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         continue;
       }
       const spec = specsById.get(workItem.current_spec_id);
-      const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id ?? workItem.current_spec_revision_id;
-      if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
+      if (
+        spec === undefined ||
+        spec.work_item_id !== workItem.id ||
+        spec.status !== 'approved' ||
+        spec.resolution !== 'approved' ||
+        spec.approved_revision_id === undefined ||
+        spec.current_revision_id !== spec.approved_revision_id ||
+        workItem.current_spec_revision_id !== spec.approved_revision_id
+      ) {
+        continue;
+      }
+      const specRevisionId = spec.approved_revision_id;
+      const specRevision = specRevisionsById.get(specRevisionId);
+      if (specRevision === undefined || specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
         continue;
       }
       const targetScope = this.runtimeSnapshotDraftTargetScope(
@@ -2391,22 +2415,55 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     repos: ProjectRepo[],
     planRevisionsById: Map<string, PlanRevision>,
     workItemsById: Map<string, WorkItem>,
+    specsById: Map<string, Spec>,
+    specRevisionsById: Map<string, SpecRevision>,
     generationRuns: ExecutionPackageGenerationRun[],
     holds: ManualPathHold[],
     settingsByScope: Map<string, AutomationProjectSettings>,
   ): Promise<RuntimeSnapshotTargetRow[]> {
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const plan of plansToEvaluate) {
-      if (plan.status !== 'approved') {
+      if (
+        plan.status !== 'approved' ||
+        plan.resolution !== 'approved' ||
+        plan.approved_revision_id === undefined ||
+        plan.current_revision_id !== plan.approved_revision_id
+      ) {
         continue;
       }
-      const planRevisionId = plan.approved_revision_id ?? plan.current_revision_id;
-      if (planRevisionId === undefined || this.hasCurrentPackageGeneration(generationRuns, planRevisionId)) {
+      const planRevisionId = plan.approved_revision_id;
+      if (this.hasCurrentPackageGeneration(generationRuns, planRevisionId)) {
         continue;
       }
       const planRevision = planRevisionsById.get(planRevisionId);
       const workItem = planRevision === undefined ? undefined : workItemsById.get(planRevision.work_item_id);
       if (planRevision === undefined || workItem === undefined || isWorkItemAutomationTerminal(workItem)) {
+        continue;
+      }
+      if (plan.work_item_id !== workItem.id || planRevision.plan_id !== plan.id) {
+        continue;
+      }
+      if (workItem.current_plan_id !== plan.id || workItem.current_plan_revision_id !== planRevisionId) {
+        continue;
+      }
+      if (workItem.current_spec_id === undefined || workItem.current_spec_revision_id === undefined) {
+        continue;
+      }
+      const spec = specsById.get(workItem.current_spec_id);
+      if (
+        spec === undefined ||
+        spec.work_item_id !== workItem.id ||
+        spec.status !== 'approved' ||
+        spec.resolution !== 'approved' ||
+        spec.approved_revision_id === undefined ||
+        spec.current_revision_id !== spec.approved_revision_id ||
+        workItem.current_spec_revision_id !== spec.approved_revision_id ||
+        planRevision.based_on_spec_revision_id !== spec.approved_revision_id
+      ) {
+        continue;
+      }
+      const specRevision = specRevisionsById.get(spec.approved_revision_id);
+      if (specRevision === undefined || specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
         continue;
       }
       const targetScope = this.runtimeSnapshotDraftTargetScope(

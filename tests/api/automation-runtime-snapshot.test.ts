@@ -363,6 +363,90 @@ describe('internal automation runtime snapshot', () => {
       });
   });
 
+  it('does not target Plan generation when Spec current revision differs from approved revision', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository, {
+      item: {
+        current_spec_revision_id: 'spec-revision-2',
+      },
+    });
+    await repository.saveSpec(
+      spec({
+        current_revision_id: 'spec-revision-2',
+        approved_revision_id: 'spec-revision-1',
+      }),
+    );
+    await repository.saveSpecRevision(specRevision({ id: 'spec-revision-2', revision_number: 2, summary: 'Unapproved draft spec' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
+        );
+      });
+  });
+
+  it('does not target Plan generation when WorkItem current Spec revision differs from approved revision', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository, {
+      item: {
+        current_spec_revision_id: 'spec-revision-2',
+      },
+    });
+    await repository.saveSpecRevision(specRevision({ id: 'spec-revision-2', revision_number: 2, summary: 'Unapproved draft spec' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
+        );
+      });
+  });
+
+  it('does not target Plan generation when current Spec belongs to a different WorkItem', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.saveSpec(spec({ work_item_id: 'work-item-other' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
+        );
+      });
+  });
+
+  it('does not target Plan generation when approved Spec revision belongs to a different Spec', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.saveSpecRevision(specRevision({ spec_id: 'spec-other' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
+        );
+      });
+  });
+
+  it('does not target Plan generation when approved Spec revision belongs to a different WorkItem', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.saveSpecRevision(specRevision({ work_item_id: 'work-item-other' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
+        );
+      });
+  });
+
   it('preserves project scope for approved specs when multiple active repos can draft plans', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedSpec(repository);
@@ -431,6 +515,131 @@ describe('internal automation runtime snapshot', () => {
             repo_id: 'repo-1',
             generation_key: 'default:plan-revision-1',
           }),
+        );
+      });
+  });
+
+  it('does not target Package generation when Plan current revision differs from approved revision', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.saveWorkItem(workItem({ phase: 'plan', current_plan_id: 'plan-1', current_plan_revision_id: 'plan-revision-2' }));
+    await repository.savePlan(
+      plan({
+        current_revision_id: 'plan-revision-2',
+        approved_revision_id: 'plan-revision-1',
+      }),
+    );
+    await repository.savePlanRevision(
+      planRevision({ id: 'plan-revision-2', revision_number: 2, summary: 'Unapproved draft plan' }),
+    );
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
+        );
+      });
+  });
+
+  it('does not target Package generation when WorkItem current Plan revision differs from approved revision', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.savePlanRevision(
+      planRevision({ id: 'plan-revision-2', revision_number: 2, summary: 'Unapproved draft plan' }),
+    );
+    await repository.saveWorkItem(workItem({ phase: 'plan', current_plan_id: 'plan-1', current_plan_revision_id: 'plan-revision-2' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
+        );
+      });
+  });
+
+  it('does not target Package generation when WorkItem current Plan id differs from approved Plan', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.saveWorkItem(workItem({ phase: 'plan', current_plan_id: 'plan-2', current_plan_revision_id: 'plan-revision-1' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
+        );
+      });
+  });
+
+  it('does not target Package generation when approved Plan belongs to a different WorkItem', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.savePlan(plan({ work_item_id: 'work-item-other' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
+        );
+      });
+  });
+
+  it('does not target Package generation when approved Plan revision belongs to a different Plan', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.savePlanRevision(planRevision({ plan_id: 'plan-other' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
+        );
+      });
+  });
+
+  it('does not target Package generation when approved Spec revision belongs to a different Spec', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.saveSpecRevision(specRevision({ spec_id: 'spec-other' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
+        );
+      });
+  });
+
+  it('does not target Package generation when approved Spec revision belongs to a different WorkItem', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.saveSpecRevision(specRevision({ work_item_id: 'work-item-other' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
+        );
+      });
+  });
+
+  it('does not target Package generation when approved Plan revision is based on a stale Spec revision', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.saveSpecRevision(specRevision({ id: 'spec-revision-old', revision_number: 0, summary: 'Stale approved spec' }));
+    await repository.savePlanRevision(planRevision({ based_on_spec_revision_id: 'spec-revision-old' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
         );
       });
   });
