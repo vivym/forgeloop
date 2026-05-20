@@ -4,6 +4,7 @@ export default [
   layout('./routes/_layout.tsx', [
     index('./routes/workbench/index.tsx', { id: 'routes/workbench/_index' }),
     route('workbench', './routes/workbench/index.tsx'),
+    route('workbench/:laneId', './routes/workbench/$laneId.tsx'),
     route('pipeline', './routes/pipeline/index.tsx'),
     ...prefix('work-items', [
       index('./routes/work-items/index.tsx'),

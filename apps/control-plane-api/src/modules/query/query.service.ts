@@ -4,14 +4,9 @@ import {
   type DeliveryRepository,
   getPlanReplayTimeline,
   getProductPipeline,
-  getExecutionOwnerWorkbench,
-  getIntakeWorkbench,
-  getManagerHealthWorkbench,
   getObjectReplayTimeline,
-  getQaTestOwnerWorkbench,
+  getProductLane as getProductLaneQuery,
   getReleaseCockpit as getReleaseCockpitQuery,
-  getReleaseOwnerWorkbench,
-  getReviewerWorkbench,
   getSpecReplayTimeline,
   listProductExecutionPackages,
   listProductPlans,
@@ -19,27 +14,21 @@ import {
   listProductRuns,
   listProductSpecs,
   listProductWorkItems,
-  getSpecApproverWorkbench,
   getWorkItemCockpit,
-  type RoleWorkbenchFilters,
+  getWorkItemActions as getWorkItemActionsQuery,
 } from '@forgeloop/db';
-import type { ProductListQuery } from '@forgeloop/contracts';
+import { productLaneResponseSchema, workItemActionsResponseSchema, type ProductListQuery } from '@forgeloop/contracts';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
 import { ReviewEvidenceService } from '../review-evidence/review-evidence.service';
+import {
+  parseProductLaneIdOrThrowBadRequest,
+  parseProductLaneQuery,
+  parseWorkItemActionsQuery,
+  type RawQuery,
+} from './product-lane-query-parser';
 import { PublicRunSessionProjection } from './public-run-session-projection';
-
-type RoleWorkbenchId =
-  | 'intake'
-  | 'spec-approver'
-  | 'execution-owner'
-  | 'reviewer'
-  | 'qa-test-owner'
-  | 'release-owner'
-  | 'manager-health';
-
-type QueryParams = Record<string, string | string[] | undefined>;
 
 const supportedReplayObjectTypes = new Set(['work_item', 'execution_package', 'review_packet', 'release']);
 
@@ -140,62 +129,21 @@ export class QueryService {
     return this.reviewEvidenceService.getReviewPacket(reviewPacketId);
   }
 
-  async getRoleWorkbench(workbenchId: RoleWorkbenchId, query: QueryParams) {
-    const filters = this.parseWorkbenchFilters(query);
-
-    switch (workbenchId) {
-      case 'intake':
-        return getIntakeWorkbench(this.repository, filters);
-      case 'spec-approver':
-        return getSpecApproverWorkbench(this.repository, filters);
-      case 'execution-owner':
-        return getExecutionOwnerWorkbench(this.repository, filters);
-      case 'reviewer':
-        return getReviewerWorkbench(this.repository, filters);
-      case 'qa-test-owner':
-        return getQaTestOwnerWorkbench(this.repository, filters);
-      case 'release-owner':
-        return getReleaseOwnerWorkbench(this.repository, filters);
-      case 'manager-health':
-        return getManagerHealthWorkbench(this.repository, filters);
-    }
+  async getProductLane(laneId: string, rawQuery: RawQuery) {
+    const parsedLaneId = parseProductLaneIdOrThrowBadRequest(laneId);
+    const filters = parseProductLaneQuery(parsedLaneId, rawQuery);
+    return productLaneResponseSchema.parse(await getProductLaneQuery(this.repository, parsedLaneId, filters));
   }
 
-  private parseWorkbenchFilters(query: QueryParams): RoleWorkbenchFilters {
-    return {
-      project_id: this.first(query.project_id),
-      actor_id: this.first(query.actor_id),
-      kind: this.first(query.kind),
-      cursor: this.first(query.cursor),
-      phase: this.first(query.phase),
-      status: this.first(query.status),
-      risk: this.first(query.risk),
-      limit: this.parseLimit(this.first(query.limit)),
-    };
-  }
-
-  private first(value: string | string[] | undefined): string | undefined {
-    if (Array.isArray(value)) {
-      return value[0];
+  async getWorkItemActions(workItemId: string, rawQuery: RawQuery) {
+    const query = parseWorkItemActionsQuery(rawQuery);
+    const response = await getWorkItemActionsQuery(this.repository, workItemId, query.lane, {
+      cockpit: { run_session_metadata_fallback: this.initialRuntimeMetadata() },
+    });
+    if (response === undefined) {
+      throw new NotFoundException(`WorkItem ${workItemId} not found`);
     }
-    return value;
-  }
-
-  private parseLimit(value: string | undefined): number | undefined {
-    if (value === undefined) {
-      return undefined;
-    }
-    const parsed = Number(value);
-    if (!Number.isInteger(parsed)) {
-      throw new BadRequestException('limit must be an integer');
-    }
-    if (parsed < 1) {
-      return 1;
-    }
-    if (parsed > 100) {
-      return 100;
-    }
-    return parsed;
+    return workItemActionsResponseSchema.parse(response);
   }
 
   private initialRuntimeMetadata(): RunRuntimeMetadata {

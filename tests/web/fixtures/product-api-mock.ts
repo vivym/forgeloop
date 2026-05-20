@@ -5,6 +5,7 @@ import {
   executionPackage,
   plan,
   planRevision,
+  productLaneFixtureItemsByLane,
   projectId,
   release,
   reviewPacket,
@@ -14,6 +15,7 @@ import {
   timeline,
   workItem,
 } from './product-data';
+import type { ProductLaneId, ProductLaneItem, ProductLaneResponse } from '@forgeloop/contracts';
 
 export type ProductApiMockHandler = (request: { input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
 export type ProductApiResponseMap = Record<string, unknown | ProductApiMockHandler>;
@@ -42,6 +44,94 @@ const routeExecutionPackage = {
   work_item_id: routeWorkItem.id,
   objective: 'Improve release cockpit planning flow',
 };
+
+const routeProductActions = [
+  {
+    id: 'open-route-work-item',
+    lane_id: 'requirements',
+    priority: 'primary',
+    label: 'Open work item',
+    enabled: true,
+    kind: 'navigate',
+    target: {
+      kind: 'object',
+      object_type: 'work_item',
+      object_id: routeWorkItem.id,
+      href: `/work-items/${routeWorkItem.id}`,
+    },
+  },
+  {
+    id: 'run-route-package',
+    lane_id: 'requirements',
+    priority: 'secondary',
+    label: 'Run package',
+    description: 'Run the linked package from this lane.',
+    enabled: true,
+    kind: 'command',
+    command: {
+      type: 'run_package',
+      object_type: 'execution_package',
+      object_id: routeExecutionPackage.id,
+      work_item_id: routeWorkItem.id,
+      package_id: routeExecutionPackage.id,
+    },
+    target: {
+      kind: 'object',
+      object_type: 'execution_package',
+      object_id: routeExecutionPackage.id,
+      href: `/packages/${routeExecutionPackage.id}`,
+    },
+  },
+] as const;
+
+const routeProductLaneItem = {
+  id: routeWorkItem.id,
+  title: routeWorkItem.title,
+  object: { type: 'work_item', id: routeWorkItem.id },
+  kind: routeWorkItem.kind,
+  phase: routeWorkItem.phase,
+  status: routeWorkItem.activity_state,
+  gate_state: routeWorkItem.gate_state,
+  resolution: routeWorkItem.resolution,
+  risk: routeWorkItem.risk,
+  updated_at: routeWorkItem.updated_at ?? '2026-05-18T00:00:00.000Z',
+  actions: routeProductActions,
+};
+
+const productLaneMetadata = {
+  requirements: { label: 'Requirements', description: 'Requirement intake and planning progression.' },
+  bugs: { label: 'Bugs', description: 'Bug triage, repair planning, verification, and regression follow-up.' },
+  'tech-debt': { label: 'Tech Debt', description: 'Debt scoping, refactor planning, risk control, and validation.' },
+  initiatives: { label: 'Initiatives', description: 'Strategic work intake and requirement breakdown readiness.' },
+  'spec-approver': { label: 'Spec Approver', description: 'Spec and Plan approval attention.' },
+  'execution-owner': { label: 'Execution Owner', description: 'Package readiness, runs, and package blockers.' },
+  reviewer: { label: 'Reviewer', description: 'Review packet decisions and evidence gaps.' },
+  'qa-test-owner': { label: 'QA / Test Owner', description: 'Test strategy gaps, QA gates, and acceptance.' },
+  'release-owner': { label: 'Release Owner', description: 'Release readiness, blockers, and gates.' },
+  manager: { label: 'Manager', description: 'Read-only delivery health and bottleneck drill-down.' },
+} satisfies Record<ProductLaneId, { label: string; description: string }>;
+
+const productLaneResponse = (laneId: ProductLaneId, unsupportedFilters: string[] = []): ProductLaneResponse => {
+  const baseItems = laneId === 'requirements' ? [routeProductLaneItem] : [];
+  const items = [...baseItems, ...productLaneFixtureItemsByLane[laneId]].map((item) => itemForLane(item, laneId));
+  const blocked = items.filter((item) => item.actions.some((action) => action.blocked_reason !== undefined)).length;
+  const highRisk = items.filter((item) => item.risk === 'high').length;
+  const metadata = productLaneMetadata[laneId];
+
+  return {
+    lane_id: laneId,
+    label: metadata.label,
+    description: metadata.description,
+    unsupported_filters: unsupportedFilters,
+    summary: { total: items.length, blocked, high_risk: highRisk, stale: 0 },
+    items,
+  };
+};
+
+const itemForLane = (item: ProductLaneItem, laneId: ProductLaneId): ProductLaneItem => ({
+  ...item,
+  actions: item.actions.map((action) => ({ ...action, lane_id: laneId })),
+});
 
 const routeTimeline = timeline.map((entry) => ({
   ...entry,
@@ -230,20 +320,33 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     ],
     degraded_sources: [],
   },
-  [`GET /query/workbenches/intake?project_id=${projectId}`]: {
-    summary: { role: 'intake', project_id: projectId, actor_id: actorId, total: 1 },
-    items: [
-      {
-        ...routeWorkItem,
-        object: { type: 'work_item', id: routeWorkItem.id, title: routeWorkItem.title },
-        package_state: { work_item_id: routeWorkItem.id, surface_type: 'release_cockpit' },
-        actions: [
-          { label: 'Open cockpit', method: 'GET', path: `/query/work-item-cockpit/${routeWorkItem.id}`, enabled: true },
-          { label: 'Edit work item', method: 'PATCH', path: `/work-items/${routeWorkItem.id}`, enabled: false },
-          { label: 'Create spec', method: 'POST', path: `/work-items/${routeWorkItem.id}/specs`, enabled: true },
-        ],
-      },
-    ],
+  [`GET /query/product-lanes/requirements?project_id=${projectId}`]: productLaneResponse('requirements'),
+  [`GET /query/product-lanes/requirements?project_id=${projectId}&status=active&blocked=true`]:
+    productLaneResponse('requirements'),
+  [`GET /query/product-lanes/requirements?project_id=${projectId}&phase=planning`]: productLaneResponse(
+    'requirements',
+    ['phase'],
+  ),
+  [`GET /query/product-lanes/bugs?project_id=${projectId}`]: productLaneResponse('bugs'),
+  [`GET /query/product-lanes/tech-debt?project_id=${projectId}`]: productLaneResponse('tech-debt'),
+  [`GET /query/product-lanes/initiatives?project_id=${projectId}`]: productLaneResponse('initiatives'),
+  [`GET /query/product-lanes/spec-approver?project_id=${projectId}`]: productLaneResponse('spec-approver'),
+  [`GET /query/product-lanes/execution-owner?project_id=${projectId}`]: productLaneResponse('execution-owner'),
+  [`GET /query/product-lanes/reviewer?project_id=${projectId}`]: productLaneResponse('reviewer'),
+  [`GET /query/product-lanes/qa-test-owner?project_id=${projectId}`]: productLaneResponse('qa-test-owner'),
+  [`GET /query/product-lanes/release-owner?project_id=${projectId}`]: productLaneResponse('release-owner'),
+  [`GET /query/product-lanes/manager?project_id=${projectId}`]: productLaneResponse('manager'),
+  [`GET /query/work-items/${routeWorkItem.id}/actions?lane=requirements`]: {
+    work_item_id: routeWorkItem.id,
+    lane_id: 'requirements',
+    default_lane_id: 'requirements',
+    actions: routeProductActions,
+  },
+  [`GET /query/work-items/${routeWorkItem.id}/actions?lane=bugs`]: {
+    work_item_id: routeWorkItem.id,
+    lane_id: 'bugs',
+    default_lane_id: 'requirements',
+    actions: routeProductActions.map((action) => ({ ...action, lane_id: 'bugs' })),
   },
   [`GET /query/specs?project_id=${projectId}`]: {
     items: [productListItem(spec, workItem, 'spec')],

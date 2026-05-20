@@ -69,10 +69,15 @@ export function DataTable<T>({ ariaLabel, columns, rows, getRowKey, emptyMessage
           )}
         </TableBody>
       </Table>
-      <div aria-label={ariaLabel ? `${ariaLabel} cards` : undefined} className="fl-responsive-card-list" data-responsive-card-list="">
+      <div
+        aria-label={ariaLabel ? `${ariaLabel} cards` : undefined}
+        className="fl-responsive-card-list"
+        data-responsive-card-list=""
+        role="list"
+      >
         {renderResponsiveCards && rows.length ? (
           rows.map((row, index) => (
-            <article className="fl-responsive-card-list__item" key={getRowKey(row, index)}>
+            <article className="fl-responsive-card-list__item" key={getRowKey(row, index)} role="listitem">
               {columns.map((column) => (
                 <div className="fl-responsive-card-list__field" key={column.key}>
                   <span className="fl-responsive-card-list__label">{column.header}</span>

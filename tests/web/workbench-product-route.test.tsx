@@ -1,35 +1,198 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import type { ProductAction } from '../../apps/web/src/shared/api/types';
+import { primaryActionForItem, sortProductActions } from '../../apps/web/src/features/product-actions/product-actions';
 import { renderRoute } from './router-test-utils';
+import { projectId } from './fixtures/product-data';
 
 describe('Workbench product route', () => {
-  it('renders Work Item Owner role queue with object kinds and no Intake copy', async () => {
-    const screen = await renderRoute('/workbench?project_id=project-web-product');
-    expect(screen.getByRole('heading', { name: /workbench/i })).toBeTruthy();
-    expect(screen.getByText('Work Item Owner')).toBeTruthy();
-    expect((await screen.findAllByText('Requirement')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/release cockpit/i).length).toBeGreaterThan(0);
-    const openWorkItem = screen.getByRole('link', { name: 'Open work item' });
-    expect(openWorkItem.getAttribute('href')).toBe('/work-items/wi-1');
-    expect(screen.queryByText('Owner queue')).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Open cockpit' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Edit work item' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Create spec' })).toBeNull();
-    expect(screen.queryByText('Intake')).toBeNull();
+  it('redirects /workbench to Requirements while preserving supported filters and stripping old state', async () => {
+    const screen = await renderRoute(
+      '/workbench?project_id=project-web-product&kind=bug&status=active&blocked=true&unsupported_view=old',
+    );
+
+    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'http://localhost:3000/query/product-lanes/requirements?project_id=project-web-product&status=active&blocked=true',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(screen.getByRole('link', { name: /bugs/i }).getAttribute('href')).toBe(
+      '/workbench/bugs?project_id=project-web-product&status=active&blocked=true',
+    );
+    expect(screen.queryByText(/unsupported_view/i)).toBeNull();
   });
 
-  it('renders empty queue state without fabricated work items', async () => {
-    const screen = await renderRoute('/workbench?project_id=project-web-product', {
+  it('renders all canonical lane navigation entries as enabled links', async () => {
+    const screen = await renderRoute(`/workbench/bugs?project_id=${projectId}`);
+
+    expect(await screen.findByRole('heading', { name: /bugs/i })).toBeTruthy();
+    for (const lane of [
+      'Requirements',
+      'Bugs',
+      'Tech Debt',
+      'Initiatives',
+      'Spec Approver',
+      'Execution Owner',
+      'Reviewer',
+      'QA / Test Owner',
+      'Release Owner',
+      'Manager',
+    ]) {
+      const link = screen.getByRole('link', { name: lane });
+      expect(link.getAttribute('aria-disabled')).not.toBe('true');
+      expect(link.getAttribute('href')).toMatch(/^\/workbench\//);
+    }
+  });
+
+  it('drops kind filters when linking into Work Item type lanes', async () => {
+    const screen = await renderRoute(`/workbench/spec-approver?project_id=${projectId}&kind=bug&status=active`, {
       apiOverrides: {
-        'GET /query/workbenches/intake?project_id=project-web-product': {
-          summary: { role: 'intake', project_id: 'project-web-product', actor_id: 'actor-owner', total: 0 },
+        [`GET /query/product-lanes/spec-approver?project_id=${projectId}&kind=bug&status=active`]: {
+          lane_id: 'spec-approver',
+          label: 'Spec Approver',
+          description: 'Spec and Plan approval attention.',
+          unsupported_filters: [],
+          summary: { total: 0, blocked: 0, high_risk: 0, stale: 0 },
           items: [],
         },
       },
     });
 
-    expect(await screen.findByText('No owned work items match the current product filters.')).toBeTruthy();
-    expect(screen.queryByText('Improve release cockpit')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Open work item' })).toBeNull();
+    expect(await screen.findByRole('heading', { name: /spec approver/i })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Requirements' }).getAttribute('href')).toBe(
+      `/workbench/requirements?project_id=${projectId}&status=active`,
+    );
+    expect(screen.getByRole('link', { name: 'Bugs' }).getAttribute('href')).toBe(
+      `/workbench/bugs?project_id=${projectId}&status=active`,
+    );
+    expect(screen.getByRole('link', { name: 'Reviewer' }).getAttribute('href')).toBe(
+      `/workbench/reviewer?project_id=${projectId}&kind=bug&status=active`,
+    );
+  });
+
+  it('uses Product Lane API paths and renders unsupported filter notices plus selected actions', async () => {
+    const screen = await renderRoute(`/workbench/requirements?project_id=${projectId}&selected=wi-1&phase=planning`);
+
+    expect(await screen.findByText('Unsupported filters: phase')).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `http://localhost:3000/query/product-lanes/requirements?project_id=${projectId}&phase=planning`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(screen.getByRole('link', { name: 'Open work item' }).getAttribute('href')).toBe('/work-items/wi-1');
+    expect(screen.getByRole('button', { name: 'Run package' })).toBeTruthy();
+  });
+
+  it('renders unknown lanes locally without fetching', async () => {
+    const screen = await renderRoute(`/workbench/not-a-lane?project_id=${projectId}`);
+
+    expect(screen.getByRole('heading', { name: /lane unavailable/i })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /open requirements/i }).getAttribute('href')).toBe('/workbench/requirements');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
+      expect.stringContaining('/query/product-lanes/not-a-lane'),
+      expect.anything(),
+    );
+  });
+
+  it('resolves selection by selected param, click, current item id, and clears the action rail when selected item disappears', async () => {
+    const user = userEvent.setup();
+    let requestCount = 0;
+    const screen = await renderRoute(`/workbench/requirements?project_id=${projectId}&selected=wi-1`, {
+      apiOverrides: {
+        [`GET /query/product-lanes/requirements?project_id=${projectId}`]: () => {
+          requestCount += 1;
+          return {
+            lane_id: 'requirements',
+            label: 'Requirements',
+            description: 'Requirement intake and planning progression.',
+            unsupported_filters: [],
+            summary: { total: requestCount === 1 ? 2 : 0, blocked: requestCount === 1 ? 1 : 0, high_risk: 0, stale: 0 },
+            items: requestCount === 1 ? [laneItem('wi-1', 'Improve release cockpit'), laneItem('wi-2', 'Second requirement')] : [],
+          };
+        },
+      },
+    });
+
+    expect((await screen.findByRole('button', { name: /Improve release cockpit/ })).getAttribute('aria-pressed')).toBe('true');
+
+    await user.click(screen.getByRole('button', { name: /Second requirement/ }));
+    expect(screen.getByRole('button', { name: /Second requirement/ }).getAttribute('aria-pressed')).toBe('true');
+
+    await user.click(screen.getByRole('button', { name: 'Refresh lane' }));
+    expect(await screen.findByText('No product actions are available.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Open work item' })).toBeNull();
+  });
+
+  it('does not nest action cards inside the mobile table card list', async () => {
+    const screen = await renderRoute(`/workbench/requirements?project_id=${projectId}`);
+
+    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+    const actionRail = screen.getByLabelText('Selected item product actions');
+    expect(actionRail.closest('[data-responsive-card-list]')).toBeNull();
   });
 });
+
+describe('ProductAction view model helpers', () => {
+  it('sorts ProductActions by priority while preserving backend order within each priority', () => {
+    const actions = [
+      productNavigateAction('secondary-first', 'secondary', '/work-items/wi-1'),
+      productNavigateAction('tertiary-first', 'tertiary', '/work-items/wi-2'),
+      productNavigateAction('primary-first', 'primary', '/work-items/wi-3'),
+      productNavigateAction('secondary-second', 'secondary', '/work-items/wi-4'),
+      productNavigateAction('primary-second', 'primary', '/work-items/wi-5'),
+    ];
+
+    expect(sortProductActions(actions).map((action) => action.id)).toEqual([
+      'primary-first',
+      'primary-second',
+      'secondary-first',
+      'secondary-second',
+      'tertiary-first',
+    ]);
+  });
+
+  it('keeps a blocked primary action as the first visible CTA', () => {
+    const blockedPrimary = {
+      ...productNavigateAction('blocked-primary', 'primary', '/work-items/wi-1'),
+      enabled: false,
+      disabled_reason: 'Waiting on approval.',
+      blocked_reason: 'Plan has unresolved review comments.',
+    };
+    const secondary = productNavigateAction('secondary', 'secondary', '/work-items/wi-2');
+
+    expect(primaryActionForItem({ actions: [secondary, blockedPrimary] })?.id).toBe('blocked-primary');
+  });
+});
+
+function productNavigateAction(id: string, priority: ProductAction['priority'], href: string): ProductAction {
+  return {
+    id,
+    lane_id: 'requirements',
+    priority,
+    label: id,
+    enabled: true,
+    kind: 'navigate',
+    target: {
+      kind: 'object',
+      object_type: 'work_item',
+      object_id: id,
+      href,
+    },
+  };
+}
+
+function laneItem(id: string, title: string) {
+  return {
+    id,
+    object: { type: 'work_item', id },
+    title,
+    kind: 'requirement',
+    status: 'active',
+    phase: 'planning',
+    gate_state: 'open',
+    resolution: 'unresolved',
+    risk: 'medium',
+    updated_at: '2026-05-18T00:00:00.000Z',
+    actions: [productNavigateAction(`open-${id}`, 'primary', `/work-items/${id}`)],
+  };
+}

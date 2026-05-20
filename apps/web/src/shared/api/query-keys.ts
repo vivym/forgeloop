@@ -1,34 +1,23 @@
-import type { ListProductQuery, RoleWorkbenchQuery } from './types';
+import type { ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
 
-export interface WorkbenchQueryKeyInput {
-  role: 'work-item-owner' | string;
-  projectId?: string | undefined;
-  actorId?: string | undefined;
-  query?: RoleWorkbenchQuery | undefined;
-  filters?: Omit<RoleWorkbenchQuery, 'project_id' | 'actor_id'> | undefined;
-}
-
-export const workbenchIdForProductRole = (role: 'work-item-owner' | string) => (role === 'work-item-owner' ? 'intake' : role);
-
-export const normalizeWorkbenchQuery = (input: Omit<WorkbenchQueryKeyInput, 'role'> = {}): RoleWorkbenchQuery => {
-  const query: RoleWorkbenchQuery = {
-    ...input.query,
-    ...input.filters,
-    ...(input.projectId === undefined ? {} : { project_id: input.projectId }),
-    ...(input.actorId === undefined ? {} : { actor_id: input.actorId }),
-  };
-
-  return {
-    ...(query.project_id === undefined ? {} : { project_id: query.project_id }),
-    ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
-    ...(query.kind === undefined ? {} : { kind: query.kind }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.phase === undefined ? {} : { phase: query.phase }),
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.risk === undefined ? {} : { risk: query.risk }),
-  };
-};
+export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
+  project_id: query.project_id,
+  ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
+  ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
+  ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
+  ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
+  ...(query.release_owner_actor_id === undefined ? {} : { release_owner_actor_id: query.release_owner_actor_id }),
+  ...(query.kind === undefined ? {} : { kind: query.kind }),
+  ...(query.phase === undefined ? {} : { phase: query.phase }),
+  ...(query.status === undefined ? {} : { status: query.status }),
+  ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
+  ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
+  ...(query.risk === undefined ? {} : { risk: query.risk }),
+  ...(query.blocked === undefined ? {} : { blocked: query.blocked }),
+  ...(query.stale === undefined ? {} : { stale: query.stale }),
+  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
 
 export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProductQuery => ({
   project_id: query.project_id,
@@ -61,10 +50,11 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
 });
 
 export const queryKeys = {
-  workbench: (input: WorkbenchQueryKeyInput) => [
-    'workbench',
-    workbenchIdForProductRole(input.role),
-    normalizeWorkbenchQuery(input),
+  productLane: (laneId: ProductLaneId, query: ProductLaneQuery) => ['product-lanes', laneId, normalizeProductLaneQuery(query)],
+  workItemActions: (workItemId: string, laneId?: ProductLaneId) => [
+    'work-item-actions',
+    workItemId,
+    laneId === undefined ? {} : { lane: laneId },
   ],
   pipeline: (projectId: string) => ['pipeline', { projectId }],
   workItems: (projectId: string) => ['work-items', { projectId }],
