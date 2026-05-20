@@ -40,7 +40,8 @@ This plan intentionally excludes Observation, Retrospective, Evolution Loop, ful
   - Export inferred types for DB and Web.
 - Modify `packages/contracts/src/review.ts`
   - Add independent AI Review evidence to the shared Review Packet contract.
-  - If no full Review Packet Zod schema exists yet, create and export `reviewPacketSchema` in this module so API/cockpit schemas can parse and preserve `independent_ai_review`.
+  - Add selected-run test mapping evidence to the shared Review Packet contract.
+  - If no full Review Packet Zod schema exists yet, create and export `reviewPacketSchema` in this module so API/cockpit schemas can parse and preserve `independent_ai_review` and `test_mapping`.
 - Modify `packages/contracts/src/index.ts`
   - Export the new readiness module.
 - Tests:
@@ -62,6 +63,7 @@ This plan intentionally excludes Observation, Retrospective, Evolution Loop, ful
 - Modify `packages/domain/src/types.ts`
   - Add or expose the Review Packet independent AI Review evidence field if needed.
   - Prefer a focused optional field such as `independent_ai_review?: IndependentAiReviewResult` over overloading `self_review`.
+  - Add or expose `test_mapping?: ReviewPacketTestMapping[]` on `ReviewPacket`; Review/Quality Gate helpers must block when it is missing or empty.
 - Modify `packages/domain/src/index.ts`
   - Export the new helpers.
 - Tests:
@@ -69,6 +71,18 @@ This plan intentionally excludes Observation, Retrospective, Evolution Loop, ful
 
 ### DB Read Models
 
+- Modify `packages/db/src/schema/review-packet.ts`
+  - Add `independentAiReview` JSONB column typed as `ReviewPacket['independent_ai_review']`.
+  - Add `testMapping` JSONB column typed as `ReviewPacket['test_mapping']`.
+  - Preserve optional field semantics for existing rows.
+- Modify `packages/db/src/repositories/drizzle-delivery-repository.ts`
+  - Ensure `saveReviewPacket`, `getReviewPacket`, and list methods round-trip `independent_ai_review` and `test_mapping` through `toDbRecord`/`fromDbRecord`.
+- Modify `tests/db/schema.test.ts`
+  - Assert the Review Packet independent AI review and test mapping columns are JSONB.
+- Modify `tests/db/repository.test.ts`
+  - Assert the Drizzle row mapper preserves `independent_ai_review` and `test_mapping`.
+- Modify `tests/db/repository-contract.ts`
+  - Add `independent_ai_review` and `test_mapping` to the canonical Review Packet contract fixture.
 - Create `packages/db/src/queries/work-item-delivery-selection.ts`
   - Select current approved-plan packages.
   - Select Work Item authoritative run: `current_run_session_id`, then `last_run_session_id`, then latest `created_at`.
@@ -90,7 +104,13 @@ This plan intentionally excludes Observation, Retrospective, Evolution Loop, ful
 - Modify `packages/db/src/queries/work-item-action-queries.ts`
   - Delete the public query path or reduce to private action helper functions imported by `work-item-delivery-readiness.ts`.
   - Do not export `getWorkItemActions` as a public DB query.
+- Modify `packages/db/src/index.ts`
+  - Remove the public export for `./queries/work-item-action-queries`.
+  - Export the new delivery readiness/selection/release readiness query modules needed by API code.
 - Tests:
+  - Modify `tests/db/schema.test.ts`.
+  - Modify `tests/db/repository.test.ts`.
+  - Modify `tests/db/repository-contract.ts`.
   - Create `tests/db/work-item-delivery-selection.test.ts`.
   - Create `tests/db/work-item-release-readiness.test.ts`.
   - Create `tests/db/work-item-delivery-readiness.test.ts`.
@@ -105,8 +125,11 @@ This plan intentionally excludes Observation, Retrospective, Evolution Loop, ful
 - Modify `apps/control-plane-api/src/modules/query/query.service.ts`
   - Pass active lane into `getWorkItemCockpit`.
   - Remove public `getWorkItemActions` service method or make it unreachable.
+- Modify `apps/control-plane-api/src/modules/query/product-lane-query-parser.ts`
+  - Remove `parseWorkItemActionsQuery`; the endpoint it served is gone.
 - Tests:
   - Modify `tests/api/query-module.test.ts`.
+  - Modify `tests/api/delivery-flow.test.ts`.
   - Modify `tests/api/product-lanes.test.ts`.
 
 ### Web API And Routing
@@ -120,8 +143,12 @@ This plan intentionally excludes Observation, Retrospective, Evolution Loop, ful
   - Remove `getWorkItemActions` and the `workItemActionsResponseSchema` import.
 - Modify `apps/web/src/shared/api/hooks.ts`
   - Make `useWorkItemCockpitQuery(workItemId, laneId)` request `/query/work-item-cockpit/:id?lane=...`.
+  - Use lane-aware cache keys for Work Item cockpit queries; different active lanes must never share cached readiness/actions.
+  - When command mutations update a Work Item cockpit without knowing the active lane, update or invalidate every cached lane variant for that Work Item.
   - Remove `useWorkItemActionsQuery`.
   - Stop invalidating `['work-item-actions', id]`.
+- Modify `apps/web/src/shared/api/query-keys.ts`
+  - Change `workItemCockpit` from an id-only key to an id-plus-lane key factory.
 - Modify `apps/web/src/app/routes.ts`
   - Replace `workbench` routes with `lanes` routes.
   - Remove old Workbench route aliases and redirects.
@@ -168,8 +195,15 @@ This plan intentionally excludes Observation, Retrospective, Evolution Loop, ful
   - Keep object route links to package/run/review/release details.
   - Add mobile/tablet Action Summary before the Stage Rail.
   - Make stage targets focusable and hash-addressable.
+- Modify `apps/web/src/features/spec-plan/spec-plan-work-item-flow.tsx`
+  - Keep using the Work Item cockpit query for planning flow data, but parse the strict shared cockpit response and request a deterministic planning/default lane when needed.
+- Modify `tests/web/fixtures/product-api-mock.ts`
+  - Update every mocked `GET /query/work-item-cockpit/*` response to include `delivery_readiness` and remove top-level `next_actions`.
+- Modify `tests/web/spec-plan-product-route.test.tsx`
+  - Update inline Work Item cockpit fixtures to the strict shared response shape.
 - Tests:
   - Modify `tests/web/work-item-product-route.test.tsx`.
+  - Modify `tests/web/spec-plan-product-route.test.tsx`.
   - Create `tests/web/work-item-delivery-cockpit.test.tsx`.
 
 ### Linked Delivery Page Visual Baseline
@@ -573,6 +607,11 @@ git commit -m "feat: add work item delivery readiness contracts"
 - Modify: `packages/domain/src/types.ts`
 - Modify: `packages/domain/src/index.ts`
 - Modify: `packages/contracts/src/review.ts`
+- Modify: `packages/db/src/schema/review-packet.ts`
+- Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
+- Test: `tests/db/schema.test.ts`
+- Test: `tests/db/repository.test.ts`
+- Test: `tests/db/repository-contract.ts`
 - Test: `tests/domain/work-item-delivery-readiness.test.ts`
 - Test: `tests/contracts/work-item-delivery-readiness.test.ts`
 - Test: `tests/contracts/review-packet.test.ts`
@@ -686,6 +725,44 @@ describe('Work Item delivery readiness domain helpers', () => {
     ).toMatchObject({ state: 'passed', blockers: [] });
   });
 
+  it('normalizes running, failed, and unknown Integration Readiness records', () => {
+    expect(
+      normalizeIntegrationReadiness({
+        status: 'validating',
+        contract: { status: 'frozen' },
+        mock_fixture: { status: 'ready' },
+        environment: { status: 'ready' },
+        dependencies: { status: 'ready' },
+        cross_end_validation: { status: 'validating' },
+        blockers: [],
+      }),
+    ).toMatchObject({ state: 'running', blockers: [] });
+
+    expect(
+      normalizeIntegrationReadiness({
+        status: 'failed',
+        contract: { status: 'failed' },
+        mock_fixture: { status: 'ready' },
+        environment: { status: 'ready' },
+        dependencies: { status: 'ready' },
+        cross_end_validation: { status: 'validated' },
+        blockers: [],
+      }),
+    ).toMatchObject({ state: 'failed', blockers: expect.arrayContaining(['failed_contract_readiness']) });
+
+    expect(
+      normalizeIntegrationReadiness({
+        status: 'mystery',
+        contract: { status: 'frozen' },
+        mock_fixture: { status: 'ready' },
+        environment: { status: 'ready' },
+        dependencies: { status: 'ready' },
+        cross_end_validation: { status: 'validated' },
+        blockers: [],
+      }),
+    ).toMatchObject({ state: 'blocked', blockers: expect.arrayContaining(['unknown_integration_readiness_status']) });
+  });
+
   it('marks Initiative child aggregation unavailable when no child readiness evidence exists', () => {
     expect(deriveInitiativeAggregationState({ kind: 'initiative', currentPackages: [], childReadiness: undefined })).toEqual({
       mode: 'unavailable',
@@ -716,6 +793,7 @@ describe('Review Packet contract', () => {
       check_result_summary: 'All checks passed',
       self_review: { status: 'succeeded', summary: 'ok', spec_plan_alignment: 'ok', test_assessment: 'ok', risk_notes: [], follow_up_questions: [] },
       independent_ai_review: { status: 'approved', run_session_id: 'run-1', execution_package_id: 'pkg-1', summary: 'independent ok', risk_notes: [] },
+      test_mapping: [{ gate_id: 'regression', result: 'passed', evidence_ref: 'run-check:regression' }],
       risk_notes: [],
       requested_changes: [],
       created_at: '2026-05-20T00:00:00.000Z',
@@ -727,6 +805,9 @@ describe('Review Packet contract', () => {
       run_session_id: 'run-1',
       execution_package_id: 'pkg-1',
     });
+    expect(parsed.test_mapping).toEqual([
+      expect.objectContaining({ gate_id: 'regression', result: 'passed' }),
+    ]);
   });
 });
 ```
@@ -735,13 +816,23 @@ describe('Review Packet contract', () => {
 
 Run: `pnpm vitest run tests/domain/work-item-delivery-readiness.test.ts tests/contracts/review-packet.test.ts --pool=forks --no-file-parallelism --maxWorkers=1`
 
-Expected: FAIL because helpers and `reviewPacketSchema.independent_ai_review` support do not exist.
+Expected: FAIL because helpers and `reviewPacketSchema.independent_ai_review` / `reviewPacketSchema.test_mapping` support do not exist.
 
 - [ ] **Step 3: Add independent AI review contract**
 
 In `packages/contracts/src/review.ts`, add:
 
 ```ts
+export const reviewPacketTestMappingSchema = z
+  .object({
+    gate_id: z.string().min(1),
+    result: z.enum(['passed', 'failed', 'not_required']),
+    evidence_ref: z.string().min(1).optional(),
+    rationale: z.string().min(1).optional(),
+  })
+  .strict();
+export type ReviewPacketTestMapping = z.infer<typeof reviewPacketTestMappingSchema>;
+
 export const independentAiReviewResultSchema = z
   .object({
     status: z.enum(['approved', 'changes_requested', 'failed']),
@@ -759,17 +850,46 @@ In `packages/domain/src/types.ts`, add it to `ReviewPacket`:
 
 ```ts
 independent_ai_review?: IndependentAiReviewResult;
+test_mapping?: ReviewPacketTestMapping[];
 ```
 
 In the shared Review Packet schema in `packages/contracts/src/review.ts`, add:
 
 ```ts
 independent_ai_review: independentAiReviewResultSchema.optional(),
+test_mapping: z.array(reviewPacketTestMappingSchema).optional(),
 ```
 
-If `reviewPacketSchema` does not exist, create and export it in `review.ts` using the current `ReviewPacket` public shape. Include `self_review: selfReviewResultSchema`, `independent_ai_review`, `risk_notes`, `requested_changes`, timestamps, run/package/spec/plan revision ids, status, and decision. Update any Work Item cockpit response schema from Task 2 so `review_packets` parse through `z.array(reviewPacketSchema)` or a compatible strict public Review Packet schema that preserves `independent_ai_review`.
+If `reviewPacketSchema` does not exist, create and export it in `review.ts` using the current `ReviewPacket` public shape. Include `self_review: selfReviewResultSchema`, `independent_ai_review`, `test_mapping`, `risk_notes`, `requested_changes`, timestamps, run/package/spec/plan revision ids, status, and decision. Update any Work Item cockpit response schema from Task 2 so `review_packets` parse through `z.array(reviewPacketSchema)` or a compatible strict public Review Packet schema that preserves `independent_ai_review` and `test_mapping`.
 
 - [ ] **Step 4: Implement pure helper functions**
+
+Before implementing the helper functions, update Review Packet DB persistence:
+
+- In `packages/db/src/schema/review-packet.ts`, add:
+
+```ts
+independentAiReview: jsonb('independent_ai_review').$type<ReviewPacket['independent_ai_review']>(),
+testMapping: jsonb('test_mapping').$type<ReviewPacket['test_mapping']>(),
+```
+
+- In `tests/db/schema.test.ts`, add:
+
+```ts
+expect(columnType(review_packets, 'independentAiReview')).toBe('PgJsonb');
+expect(columnType(review_packets, 'testMapping')).toBe('PgJsonb');
+```
+
+- In `tests/db/repository.test.ts`, update the `reviewPacket` fixture and `reviewPacketRow` mapper fixture with `independent_ai_review` / `independentAiReview` and `test_mapping` / `testMapping`, then assert:
+
+```ts
+expect(mappedReviewPacket?.independent_ai_review).toEqual(reviewPacket.independent_ai_review);
+expect(mappedReviewPacket?.test_mapping).toEqual(reviewPacket.test_mapping);
+```
+
+- In `tests/db/repository-contract.ts`, add `independent_ai_review` and `test_mapping` to the canonical `ReviewPacket` fixture so both in-memory and Drizzle repositories must round-trip both evidence fields.
+
+Because `DrizzleDeliveryRepository` uses `toDbRecord`/`fromDbRecord`, adding the schema columns should be enough for save/get/list round-trips. If the implementation finds custom row mapping for Review Packets, update it explicitly. Do not leave independent AI Review or test mapping as contract-only data.
 
 Create `packages/domain/src/work-item-delivery-readiness.ts`:
 
@@ -799,6 +919,9 @@ Rules:
 - Review evidence must include implementer self-review, independent AI review, test mapping, and a `risk_notes` property even when it is an empty array.
 - Stale or release-scoped Review Packets that do not match the selected Work Item run block Review.
 - Top-level integration status is summary only.
+- Integration Readiness returns `running` when any required dimension is in progress and no dimension has failed or is missing.
+- Integration Readiness returns `failed` when any required dimension reports a failed/invalid/rejected status.
+- Unknown summary or dimension statuses block with `unknown_integration_readiness_status`.
 - Missing contract/mock/environment/dependency/cross-end evidence returns specific blockers.
 - Empty explicit `blockers` is required for integration pass.
 - Initiative child aggregation is explicit: if no child readiness evidence is available in this slice, return `unavailable`; never infer aggregate readiness from an empty package list.
@@ -816,9 +939,10 @@ export * from './work-item-delivery-readiness.js';
 Run:
 
 ```bash
-pnpm vitest run tests/domain/work-item-delivery-readiness.test.ts tests/contracts/review-packet.test.ts tests/contracts/work-item-delivery-readiness.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/domain/work-item-delivery-readiness.test.ts tests/contracts/review-packet.test.ts tests/contracts/work-item-delivery-readiness.test.ts tests/db/schema.test.ts tests/db/repository.test.ts tests/db/repository-contract.ts --pool=forks --no-file-parallelism --maxWorkers=1
 pnpm --filter @forgeloop/domain build
 pnpm --filter @forgeloop/contracts build
+pnpm --filter @forgeloop/db build
 ```
 
 Expected: PASS.
@@ -826,7 +950,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add packages/contracts/src/review.ts packages/domain/src/types.ts packages/domain/src/work-item-delivery-readiness.ts packages/domain/src/index.ts tests/domain/work-item-delivery-readiness.test.ts tests/contracts/review-packet.test.ts tests/contracts/work-item-delivery-readiness.test.ts
+git add packages/contracts/src/review.ts packages/domain/src/types.ts packages/domain/src/work-item-delivery-readiness.ts packages/domain/src/index.ts packages/db/src/schema/review-packet.ts packages/db/src/repositories/drizzle-delivery-repository.ts tests/domain/work-item-delivery-readiness.test.ts tests/contracts/review-packet.test.ts tests/contracts/work-item-delivery-readiness.test.ts tests/db/schema.test.ts tests/db/repository.test.ts tests/db/repository-contract.ts
 git commit -m "feat: add delivery readiness domain gates"
 ```
 
@@ -1074,10 +1198,14 @@ git commit -m "feat: add work item pre-release readiness"
 - Create: `packages/db/src/queries/work-item-delivery-readiness.ts`
 - Modify: `packages/db/src/queries/work-item-cockpit-queries.ts`
 - Modify: `packages/db/src/queries/work-item-action-queries.ts`
+- Modify: `packages/db/src/index.ts`
 - Modify: `apps/control-plane-api/src/modules/query/query.controller.ts`
 - Modify: `apps/control-plane-api/src/modules/query/query.service.ts`
+- Modify: `apps/control-plane-api/src/modules/query/product-lane-query-parser.ts`
 - Test: `tests/db/work-item-delivery-readiness.test.ts`
 - Test: `tests/api/query-module.test.ts`
+- Test: `tests/api/delivery-flow.test.ts`
+- Test: `tests/api/product-lanes.test.ts`
 
 - [ ] **Step 1: Write failing read model tests**
 
@@ -1107,12 +1235,100 @@ describe('Work Item delivery readiness', () => {
     expect(readiness.stages.find((stage) => stage.id === 'packages')).toMatchObject({ state: 'not_applicable' });
   });
 
+  it('marks Requirement integration readiness not applicable for simple single-package scope', () => {
+    const readiness = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        kind: 'requirement',
+        risk: 'medium',
+        packages: [packageFixture({ integration_readiness: undefined })],
+        packageDependencies: [],
+      }),
+    );
+    expect(readiness.stages.find((stage) => stage.id === 'integration_readiness')).toMatchObject({
+      state: 'not_applicable',
+    });
+    expect(readiness.stages.find((stage) => stage.id === 'quality_gate')).not.toMatchObject({
+      blockers: [expect.objectContaining({ code: 'missing_integration_readiness' })],
+    });
+  });
+
+  it('requires Requirement integration readiness for high-risk or multi-package scope', () => {
+    const highRisk = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        kind: 'requirement',
+        risk: 'high',
+        packages: [packageFixture({ integration_readiness: undefined })],
+        packageDependencies: [],
+      }),
+    );
+    expect(highRisk.stages.find((stage) => stage.id === 'integration_readiness')).toMatchObject({
+      state: 'missing',
+      blockers: [expect.objectContaining({ code: 'missing_integration_readiness' })],
+    });
+
+    const multiPackage = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        kind: 'requirement',
+        risk: 'medium',
+        packages: [packageFixture({ id: 'pkg-1' }), packageFixture({ id: 'pkg-2' })],
+        packageDependencies: [],
+      }),
+    );
+    expect(multiPackage.stages.find((stage) => stage.id === 'integration_readiness')).toMatchObject({
+      state: 'missing',
+      blockers: [expect.objectContaining({ code: 'missing_integration_readiness' })],
+    });
+  });
+
+  it('marks Bug integration readiness not applicable unless regression or cross-end evidence requires it', () => {
+    const simpleBug = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        kind: 'bug',
+        risk: 'medium',
+        packages: [packageFixture({ integration_readiness: undefined })],
+        packageDependencies: [],
+      }),
+    );
+    expect(simpleBug.stages.find((stage) => stage.id === 'integration_readiness')).toMatchObject({
+      state: 'not_applicable',
+    });
+
+    const crossEndBug = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        kind: 'bug',
+        packages: [packageFixture({ integration_readiness: { status: 'required', surface: 'regression_cross_end' } })],
+      }),
+    );
+    expect(crossEndBug.stages.find((stage) => stage.id === 'integration_readiness')).toMatchObject({
+      state: 'blocked',
+      blockers: [expect.objectContaining({ code: 'missing_contract_readiness' })],
+    });
+  });
+
   it('keeps Bug delivery validation stages required', () => {
     const readiness = deriveWorkItemDeliveryReadiness(readyInput({ kind: 'bug', packages: [] }));
     expect(readiness.stages.find((stage) => stage.id === 'packages')).toMatchObject({ state: 'missing' });
     expect(readiness.stages.find((stage) => stage.id === 'execution')).toMatchObject({ state: 'blocked' });
     expect(readiness.stages.find((stage) => stage.id === 'review')).toMatchObject({ state: 'blocked' });
     expect(readiness.stages.find((stage) => stage.id === 'quality_gate')).toMatchObject({ state: 'blocked' });
+  });
+
+  it('reaches ready for release only when all required stages and linked release readiness pass', () => {
+    const readiness = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        kind: 'requirement',
+        risk: 'medium',
+        packages: [packageFixture({ integration_readiness: undefined })],
+        packageDependencies: [],
+        linkedRelease: releaseFixture({ id: 'rel-ready', execution_package_ids: ['pkg-1'] }),
+        releaseBlockers: [],
+        releaseTestAcceptance: [releaseTestAcceptanceFixture({ package_id: 'pkg-1', state: 'passed' })],
+        releaseEvidence: [releaseEvidenceFixture({ package_id: 'pkg-1', kind: 'pre_release_validation' })],
+      }),
+    );
+    expect(readiness.stages.find((stage) => stage.id === 'integration_readiness')).toMatchObject({ state: 'not_applicable' });
+    expect(readiness.stages.find((stage) => stage.id === 'release_readiness')).toMatchObject({ state: 'ready' });
+    expect(readiness.overall_state).toBe('ready_for_release');
   });
 
   it('requires Tech Debt integration readiness for shared or migration-sensitive packages', () => {
@@ -1209,6 +1425,27 @@ describe('Work Item delivery readiness', () => {
     expect(readiness.stages.find((stage) => stage.id === 'release_readiness')).toMatchObject({ state: 'blocked' });
   });
 
+  it('requires package dependencies to trigger Integration Readiness even when packages have no inline integration record', () => {
+    const readiness = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        kind: 'requirement',
+        risk: 'medium',
+        packages: [packageFixture({ id: 'pkg-1', integration_readiness: undefined })],
+        packageDependencies: [
+          dependencyFixture({
+            execution_package_id: 'pkg-1',
+            depends_on_package_id: 'pkg-shared-api',
+          }),
+        ],
+      }),
+    );
+    expect(readiness.stages.find((stage) => stage.id === 'integration_readiness')).toMatchObject({
+      state: 'missing',
+      blockers: [expect.objectContaining({ code: 'missing_integration_readiness' })],
+    });
+    expect(readiness.stages.find((stage) => stage.id === 'quality_gate')).toMatchObject({ state: 'blocked' });
+  });
+
   it('turns consumed degraded sources into stage blockers instead of ready states', () => {
     const readiness = deriveWorkItemDeliveryReadiness(
       readyInput({ degradedSources: ['package_dependencies', 'integration_readiness', 'release_scope', 'release_blockers', 'release_test_acceptance'] }),
@@ -1247,8 +1484,51 @@ describe('Work Item delivery readiness', () => {
       );
     }
   });
+
+  it('returns package generation as delivery_readiness next action only after approved Plan revision exists', () => {
+    const readiness = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        packages: [],
+        currentPlan: planFixture({ approved_revision_id: 'plan-r1', current_revision_id: 'plan-r1' }),
+        approvedPlanRevision: planRevisionFixture({ id: 'plan-r1' }),
+        activeLane: 'requirements',
+      }),
+    );
+    expect(readiness.next_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'command',
+          command: expect.objectContaining({
+            type: 'generate_packages',
+            plan_revision_id: 'plan-r1',
+          }),
+        }),
+      ]),
+    );
+    expect(readiness.next_actions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ command: expect.objectContaining({ type: expect.stringContaining('create') }) }),
+      ]),
+    );
+
+    const missingApprovedRevision = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        packages: [],
+        currentPlan: planFixture({ approved_revision_id: undefined, current_revision_id: 'plan-r1' }),
+        approvedPlanRevision: planRevisionFixture({ id: 'plan-r1' }),
+        activeLane: 'requirements',
+      }),
+    );
+    expect(missingApprovedRevision.next_actions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ command: expect.objectContaining({ type: 'generate_packages' }) }),
+      ]),
+    );
+  });
 });
 ```
+
+Keep fixture helpers local to this test file. Include only fields consumed by `deriveWorkItemDeliveryReadiness`; add small helpers for package dependencies, release Test/Acceptance evidence, release evidence, and decisions when the relevant assertions need them.
 
 - [ ] **Step 2: Run read model tests and verify failure**
 
@@ -1265,7 +1545,7 @@ Use pure input/output first:
 ```ts
 export interface WorkItemDeliveryReadinessInput {
   workItem: WorkItem;
-  activeLane: ProductLaneId;
+  activeLane?: ProductLaneId;
   currentSpec: Spec | null;
   currentSpecRevision: SpecRevision | null;
   approvedSpecRevision: SpecRevision | null;
@@ -1293,11 +1573,12 @@ Implementation requirements:
 - Use Task 4 selection helpers.
 - Use Task 3 normalizers.
 - Use Task 5 Release Readiness helper.
-- If no active lane is provided, derive the default lane from Work Item kind: `requirement -> requirements`, `bug -> bugs`, `tech_debt -> tech-debt`, `initiative -> initiatives`.
+- If no active lane is provided, derive the default lane from Work Item kind inside the backend readiness aggregator: `requirement -> requirements`, `bug -> bugs`, `tech_debt -> tech-debt`, `initiative -> initiatives`.
+- Always set the resolved lane on `delivery_readiness.active_lane`; callers should render from that value rather than duplicating default-lane logic.
 - Apply Work Item kind applicability for all four kinds in backend readiness, not only UI labels:
-  - Requirement uses the full delivery mainline.
-  - Bug keeps Spec/Plan, Packages, Execution, Review, and Quality Gate required for fix validation and regression safety.
-  - Tech Debt keeps the same required delivery stages and requires Integration Readiness when the package touches shared contracts, migrations, dependencies, multiple packages, or explicit package `integration_readiness`.
+  - Requirement uses the full delivery mainline, but Integration Readiness is required only when the Work Item is high risk, has more than one current package, has package dependencies, or any current package has non-empty `integration_readiness`; otherwise the Integration Readiness stage is `not_applicable`.
+  - Bug keeps Spec/Plan, Packages, Execution, Review, and Quality Gate required for fix validation and regression safety, but follows the same Integration Readiness requirement rule as Requirement. Regression or cross-end impact recorded in package `integration_readiness` makes Integration Readiness required; a simple single-package Bug without those signals must show Integration Readiness as `not_applicable`.
+  - Tech Debt keeps the same required delivery stages and requires Integration Readiness when the package touches shared contracts, migrations, dependencies, multiple packages, or explicit package `integration_readiness`; otherwise Integration Readiness is `not_applicable`.
   - Initiative without direct packages marks Packages through Release Readiness `not_applicable` and emits explicit aggregation-unavailable evidence when child links are not available.
 - Execution must evaluate required blocking checks on the selected run; missing or failed required check results make Execution `blocked`, and downstream Quality Gate and Release Readiness inherit that blocker.
 - Review must use selected-run-aware evidence validation: the selected Review Packet must match the selected run, package id, approved Spec revision, and approved Plan revision, and must include self-review, independent AI review, test mapping, and risk notes.
@@ -1331,8 +1612,19 @@ In `packages/db/src/queries/work-item-cockpit-queries.ts`:
 - Remove `completion_state` and top-level `next_actions`.
 - Add active lane to options or argument.
 - Fetch current/approved `SpecRevision` and `PlanRevision` records for the current Spec/Plan. If an approved revision id is set but the revision record is missing, pass `null` and let the readiness aggregator block the relevant stage.
+- Fetch package dependencies for every current approved-plan package with `repository.listExecutionPackageDependencies(package.id)` and pass the flattened result into `deriveWorkItemDeliveryReadiness`.
 - Query releases linked to Work Item/package ids.
 - Query or derive the strict pre-release release inputs needed by `deriveWorkItemPreReleaseReadiness`: release blockers, release Test/Acceptance evidence, release evidence, decisions/override decisions, and scope fingerprints for linked Work Item/package scope.
+- Wrap non-authoritative downstream reads in a stable degraded-source collector:
+  - `listExecutionPackagesForWorkItem` failure adds `execution_packages` and passes `[]`;
+  - `listExecutionPackageDependencies` failure adds `package_dependencies` and passes `[]`;
+  - package `integration_readiness` lookup/parsing failure adds `integration_readiness`;
+  - run-session reads failure adds `run_sessions`;
+  - Review Packet reads failure adds `review_packets`;
+  - linked release scope reads failure adds `release_scope`;
+  - release blocker reads failure adds `release_blockers`;
+  - release Test/Acceptance reads failure adds `release_test_acceptance`.
+- Do not swallow missing Work Item/project base data; return the existing not-found behavior for absent canonical Work Item records. Degraded sources are for partial downstream readiness reads only.
 - Attach `delivery_readiness`.
 - Parse with `workItemCockpitResponseSchema`.
 
@@ -1349,18 +1641,63 @@ In `apps/control-plane-api/src/modules/query/query.service.ts`:
 
 - Change `getWorkItemCockpit(workItemId)` to `getWorkItemCockpit(workItemId, options?: { lane?: ProductLaneId })`.
 - Pass `options?.lane` into `packages/db/src/queries/work-item-cockpit-queries.ts`.
+- Preserve `undefined` when no lane query parameter is supplied; do not compute the default lane in the controller, service, or Web client.
 
 Do not wait until the Web hook task for this; the API tests in this task must prove the lane query works end to end.
 
 - [ ] **Step 6: Remove public Work Item actions query**
 
+In `apps/control-plane-api/src/modules/query/query.controller.ts`, remove:
+
+```ts
+@Get('work-items/:workItemId/actions')
+getWorkItemActions(...)
+```
+
+In `apps/control-plane-api/src/modules/query/query.service.ts`, remove the corresponding `getWorkItemActions` service method and imports.
+
+In `apps/control-plane-api/src/modules/query/product-lane-query-parser.ts`, remove `parseWorkItemActionsQuery`.
+
 In `packages/db/src/queries/work-item-action-queries.ts`:
 
-- Delete `getWorkItemActions` export or replace the file with private helpers only.
-- If helpers remain, rename exports to internal builder names consumed by `work-item-delivery-readiness.ts`.
+- Delete the file if the action builders have moved into `work-item-delivery-readiness.ts`.
+- If helper code remains useful, move it into a non-legacy file name such as `work-item-delivery-action-builders.ts`.
+- Rename exports to internal builder names consumed by `work-item-delivery-readiness.ts`.
 - Do not return `WorkItemActionsResponse` from this file.
+- Do not leave a file named `work-item-action-queries.ts` in active product code.
+
+In `packages/db/src/index.ts`:
+
+- Remove `export * from './queries/work-item-action-queries';`.
+- Add exports for the new public read model helpers required by the API:
+
+```ts
+export * from './queries/work-item-delivery-selection';
+export * from './queries/work-item-release-readiness';
+export * from './queries/work-item-delivery-readiness';
+```
+
+Do not keep a public DB export whose name exposes `work-item-action-queries`.
 
 - [ ] **Step 7: Update API query tests**
+
+In `tests/api/product-lanes.test.ts`, update the old Work Item actions coverage in this backend task, because the endpoint/service and DB export are removed here:
+
+- Remove `getWorkItemActions` from the `../../packages/db/src/index` import.
+- Rename `serves Product Lane and Work Item actions endpoints and removes old workbench routes` to `serves Product Lane endpoints without Work Item action endpoint compatibility`.
+- Keep Product Lane response assertions.
+- Replace the old actions endpoint `200` assertion with:
+
+```ts
+await request(app.getHttpServer()).get(`/query/work-items/${workItem.id}/actions?lane=bugs`).expect(404);
+```
+
+- In `rejects invalid Product Lane and Work Item actions query parameters`, delete all invalid-query assertions for `/query/work-items/:id/actions`; because the endpoint is gone, query-shape validation there is no longer a public behavior.
+- Delete or port the direct DB action tests:
+  - `returns lane-aware Work Item actions without legacy create aliases`;
+  - `returns package generation actions only after an approved Plan revision exists`;
+  - `does not create package generation actions from approved Plans without approved revisions`.
+- Port the behavior that still matters to `delivery_readiness.next_actions` assertions in `tests/db/work-item-delivery-readiness.test.ts` or `tests/api/query-module.test.ts`.
 
 In `tests/api/query-module.test.ts`, change cockpit assertions:
 
@@ -1384,13 +1721,63 @@ await request(app.getHttpServer())
   });
 ```
 
+Add invalid lane validation:
+
+```ts
+await request(app.getHttpServer())
+  .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=unknown`)
+  .expect(400);
+```
+
+Add query-level degraded-source coverage by stubbing the same test repository instance used by the app so `listExecutionPackageDependencies` throws for the selected package:
+
+```ts
+vi.spyOn(repo, 'listExecutionPackageDependencies').mockRejectedValueOnce(new Error('dependency read failed'));
+
+const degraded = await request(app.getHttpServer())
+  .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+  .expect(200);
+expect(degraded.body.delivery_readiness.degraded_sources).toContain('package_dependencies');
+expect(degraded.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'integration_readiness')).toMatchObject({
+  state: 'blocked',
+});
+```
+
+Use the existing test setup style in `tests/api/query-module.test.ts`; the point is to prove the cockpit query returns a partial response with stable `degraded_sources` instead of failing the request or marking Integration Readiness ready.
+
+Add a second query-level degraded-source case for package reads:
+
+```ts
+vi.spyOn(repo, 'listExecutionPackagesForWorkItem').mockRejectedValueOnce(new Error('package read failed'));
+
+const degradedPackages = await request(app.getHttpServer())
+  .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+  .expect(200);
+expect(degradedPackages.body.delivery_readiness.degraded_sources).toContain('execution_packages');
+expect(degradedPackages.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'packages')).toMatchObject({
+  state: 'blocked',
+});
+```
+
+In `tests/api/delivery-flow.test.ts`, update any Work Item cockpit assertions that still expect `completion_state` or top-level `next_actions`:
+
+```ts
+expect(cockpit.body.delivery_readiness).toMatchObject({
+  work_item_id: workItem.id,
+});
+expect(cockpit.body).not.toHaveProperty('completion_state');
+expect(cockpit.body).not.toHaveProperty('next_actions');
+expect(cockpit.body.delivery_readiness.next_actions).toEqual(expect.any(Array));
+```
+
 - [ ] **Step 8: Run focused tests**
 
 Run:
 
 ```bash
-pnpm vitest run tests/db/work-item-delivery-readiness.test.ts tests/api/query-module.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/db/work-item-delivery-readiness.test.ts tests/api/query-module.test.ts tests/api/delivery-flow.test.ts tests/api/product-lanes.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 pnpm --filter @forgeloop/db build
+pnpm --filter @forgeloop/control-plane-api build
 ```
 
 Expected: PASS.
@@ -1398,7 +1785,8 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add packages/db/src/queries/work-item-delivery-readiness.ts packages/db/src/queries/work-item-cockpit-queries.ts packages/db/src/queries/work-item-action-queries.ts apps/control-plane-api/src/modules/query/query.controller.ts apps/control-plane-api/src/modules/query/query.service.ts tests/db/work-item-delivery-readiness.test.ts tests/api/query-module.test.ts
+git add packages/db/src/queries/work-item-delivery-readiness.ts packages/db/src/queries/work-item-cockpit-queries.ts packages/db/src/queries/work-item-delivery-action-builders.ts packages/db/src/index.ts apps/control-plane-api/src/modules/query/query.controller.ts apps/control-plane-api/src/modules/query/query.service.ts apps/control-plane-api/src/modules/query/product-lane-query-parser.ts tests/db/work-item-delivery-readiness.test.ts tests/api/query-module.test.ts tests/api/delivery-flow.test.ts tests/api/product-lanes.test.ts
+git rm packages/db/src/queries/work-item-action-queries.ts
 git commit -m "feat: add work item delivery readiness read model"
 ```
 
@@ -1407,46 +1795,74 @@ git commit -m "feat: add work item delivery readiness read model"
 ### Task 7: Remove Public Work Item Actions API And Update Web API Hooks
 
 **Files:**
-- Modify: `apps/control-plane-api/src/modules/query/query.controller.ts`
-- Modify: `apps/control-plane-api/src/modules/query/query.service.ts`
+- Modify: `packages/contracts/src/api.ts`
 - Modify: `apps/web/src/shared/api/query.ts`
 - Modify: `apps/web/src/shared/api/hooks.ts`
 - Modify: `apps/web/src/shared/api/query-keys.ts`
 - Modify: `apps/web/src/shared/api/types.ts`
-- Test: `tests/api/product-lanes.test.ts`
+- Modify: `apps/web/src/features/spec-plan/spec-plan-work-item-flow.tsx`
+- Modify: `apps/web/src/features/work-items/work-item-detail.tsx`
+- Modify: `apps/web/src/features/work-items/work-item-next-actions.tsx`
+- Modify: `tests/web/fixtures/product-data.ts`
+- Modify: `tests/web/fixtures/product-api-mock.ts`
+- Test: `tests/contracts/product-actions.test.ts`
 - Test: `tests/web/api.test.ts`
 - Test: `tests/web/api-hooks.test.tsx`
+- Test: `tests/web/work-item-product-route.test.tsx`
+- Test: `tests/web/spec-plan-product-route.test.tsx`
 
-- [ ] **Step 1: Write failing API removal test**
+- [ ] **Step 1: Write failing contract and Web hook tests**
 
-In `tests/api/product-lanes.test.ts`, update the current Work Item actions endpoint test:
+In `tests/web/api-hooks.test.tsx`, also assert the no-lane key remains the backend-default query key:
 
 ```ts
-await request(app.getHttpServer()).get(`/query/work-items/${workItem.id}/actions?lane=bugs`).expect(404);
+expect(queryKeys.workItemCockpit('wi-1')).toEqual(['work-item-cockpit', 'wi-1']);
 ```
-
-Add cockpit lane coverage there or keep it in `tests/api/query-module.test.ts`.
-
-- [ ] **Step 2: Write failing Web hook tests**
 
 In `tests/web/api-hooks.test.tsx`, assert:
 
 ```ts
+it('uses lane-aware Work Item cockpit cache keys', () => {
+  expect(queryKeys.workItemCockpit('wi-1', 'execution-owner')).toEqual([
+    'work-item-cockpit',
+    'wi-1',
+    { lane: 'execution-owner' },
+  ]);
+  expect(queryKeys.workItemCockpit('wi-1', 'reviewer')).not.toEqual(
+    queryKeys.workItemCockpit('wi-1', 'execution-owner'),
+  );
+});
+
 it('loads Work Item cockpit with active lane and no separate actions query', async () => {
-  server.use(
-    http.get(`${apiUrl}/query/work-item-cockpit/wi-1`, ({ request }) => {
-      expect(new URL(request.url).searchParams.get('lane')).toBe('execution-owner');
-      return HttpResponse.json(cockpitFixture);
-    }),
+  const fetchMock = installProductApiMock({
+    [`GET /query/work-item-cockpit/${workItem.id}?lane=execution-owner`]: cockpitFixture,
+  });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 
-  renderHookWithClient(() => useWorkItemCockpitQuery('wi-1', 'execution-owner'));
-  await waitFor(() => expect(screen.queryByText(/loading/i)).not.toBeInTheDocument());
-  expect(unhandledRequests).not.toContain('/query/work-items/wi-1/actions');
+  const { result, unmount } = renderHook(() => useWorkItemCockpitQuery(workItem.id, 'execution-owner'), { wrapper });
+
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    `http://localhost:3000/query/work-item-cockpit/${workItem.id}?lane=execution-owner`,
+    expect.objectContaining({ method: 'GET' }),
+  );
+  expect(fetchMock).not.toHaveBeenCalledWith(
+    `http://localhost:3000/query/work-items/${workItem.id}/actions?lane=execution-owner`,
+    expect.anything(),
+  );
+
+  unmount();
+  queryClient.clear();
 });
 ```
 
-Use existing test utilities in the file; do not introduce a second mock stack.
+Use the existing `installProductApiMock`/`vi.stubGlobal('fetch', ...)` style already present in the file; do not introduce MSW or another mock stack.
+
+Add a mutation/cache test that seeds at least two cached lane variants, runs an update/invalidation path used by command mutations, and proves both lane caches are updated or invalidated. The stale-cache failure to prevent is `manager` still rendering old actions after `execution-owner` was refreshed.
 
 In `tests/web/api.test.ts`:
 
@@ -1455,28 +1871,46 @@ In `tests/web/api.test.ts`:
 - Remove `getWorkItemActions` from the query API method surface expectation.
 - Keep command API expectations unchanged.
 
-- [ ] **Step 3: Run tests and verify failure**
+In `tests/web/spec-plan-product-route.test.tsx`, update every inline `GET /query/work-item-cockpit/*` fixture:
+
+- include a minimal valid `delivery_readiness`;
+- remove top-level `next_actions`;
+- assert the Spec/Plan flow still renders its Work Item planning content after strict parsing.
+
+In `tests/web/work-item-product-route.test.tsx`, update the current Work Item detail route tests so the active page consumes cockpit actions directly:
+
+- mock `GET /query/work-item-cockpit/wi-1?lane=requirements` and `?lane=reviewer` with strict responses containing `delivery_readiness.next_actions`;
+- remove `GET /query/work-items/wi-1/actions?...` overrides;
+- assert the expected action labels still render from `delivery_readiness.next_actions`;
+- assert the old actions endpoint is not fetched:
+
+```ts
+expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
+  expect.stringContaining('/query/work-items/wi-1/actions'),
+  expect.anything(),
+);
+```
+
+In `tests/contracts/product-actions.test.ts`, remove tests that validate `workItemActionsResponseSchema`; replace them with assertions that the contract module no longer exports `workItemActionsResponseSchema` or `WorkItemActionsResponse`.
+
+- [ ] **Step 2: Run tests and verify failure**
 
 Run:
 
 ```bash
-pnpm vitest run tests/api/product-lanes.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/contracts/product-actions.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/work-item-product-route.test.tsx tests/web/spec-plan-product-route.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
-Expected: FAIL because endpoint/hook still exist.
+Expected: FAIL because Web hooks, Work Item detail, and contract exports still expose the old Work Item actions surface.
 
-- [ ] **Step 4: Remove controller/service endpoint**
+- [ ] **Step 3: Remove shared contract and Web client APIs**
 
-In `apps/control-plane-api/src/modules/query/query.controller.ts`, remove:
+In `packages/contracts/src/api.ts`:
 
-```ts
-@Get('work-items/:workItemId/actions')
-getWorkItemActions(...)
-```
-
-In `apps/control-plane-api/src/modules/query/query.service.ts`, remove the corresponding service method and imports.
-
-- [ ] **Step 5: Update Web hooks**
+- Delete `workItemActionsResponseSchema`.
+- Delete `WorkItemActionsResponse`.
+- Delete any helper schema that exists only for the removed Work Item actions response.
+- Keep `ProductAction` and command/target schemas; they are still used by `delivery_readiness.next_actions`.
 
 In `apps/web/src/shared/api/query.ts`:
 
@@ -1498,24 +1932,61 @@ In `apps/web/src/shared/api/hooks.ts`:
 - Call `queryApi.getWorkItemCockpit(id, { lane })`.
 - Remove `useWorkItemActionsQuery`.
 - Remove invalidation of `['work-item-actions', objectId]`.
+- Replace id-only Work Item cockpit updates with lane-aware policy:
 
-In `apps/web/src/shared/api/query-keys.ts`, remove old Work Item actions key helpers if present.
+```ts
+queryClient.setQueriesData(
+  { queryKey: ['work-item-cockpit', workItemId] },
+  (current: CockpitResponse | undefined) => (current ? applyCockpitUpdate(current, update) : current),
+);
+```
 
-- [ ] **Step 6: Run tests**
+Use `setQueriesData` or `invalidateQueries` with the `['work-item-cockpit', workItemId]` prefix when the active lane is unknown. If the caller knows the active lane, it may use `queryKeys.workItemCockpit(workItemId, lane)` for the exact query, but shared mutation helpers must not leave other lane variants stale.
+
+In `apps/web/src/shared/api/query-keys.ts`, remove old Work Item actions key helpers if present and define:
+
+```ts
+workItemCockpit: (workItemId: string, lane?: ProductLaneId) =>
+  lane === undefined ? ['work-item-cockpit', workItemId] : ['work-item-cockpit', workItemId, { lane }],
+```
+
+- [ ] **Step 4: Move current Work Item detail off the old actions hook**
+
+In `apps/web/src/features/work-items/work-item-next-actions.tsx`:
+
+- Remove `useWorkItemActionsQuery`.
+- Convert the component into a pure presentational action list that receives `actions: ProductAction[]`, `activeLane`, and loading/error display props from its parent.
+- Do not fetch `/query/work-items/:id/actions`.
+
+In `apps/web/src/features/work-items/work-item-detail.tsx`:
+
+- Parse the `lane` query param. If the URL has no valid lane, pass `undefined`; do not infer a Work Item kind default in Web before fetching.
+- Call `useWorkItemCockpitQuery(workItemId, parsedLane)`.
+- Render lane label/actions from `cockpit.delivery_readiness.active_lane`.
+- Pass `cockpit.delivery_readiness.next_actions` into `WorkItemNextActions`.
+- Preserve the existing non-cockpit summary layout in this task; the full visual replacement happens in Task 10.
+- Do not import or call `useWorkItemActionsQuery`.
+
+In `apps/web/src/features/spec-plan/spec-plan-work-item-flow.tsx`, keep the planning flow on the cockpit query, but pass a deterministic lane or no-lane default consistently with the backend query. Do not add a fallback parser for old top-level `next_actions`.
+
+In `tests/web/fixtures/product-api-mock.ts` and `tests/web/spec-plan-product-route.test.tsx`, update every mocked Work Item cockpit response to the strict shared shape. The public action source is always `delivery_readiness.next_actions`.
+
+- [ ] **Step 5: Run tests**
 
 Run:
 
 ```bash
-pnpm vitest run tests/api/product-lanes.test.ts tests/api/query-module.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/contracts/product-actions.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/work-item-product-route.test.tsx tests/web/spec-plan-product-route.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm --filter @forgeloop/contracts build
 pnpm --filter @forgeloop/web typecheck
 ```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/control-plane-api/src/modules/query/query.controller.ts apps/control-plane-api/src/modules/query/query.service.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/hooks.ts apps/web/src/shared/api/query-keys.ts apps/web/src/shared/api/types.ts tests/api/product-lanes.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx
+git add packages/contracts/src/api.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/hooks.ts apps/web/src/shared/api/query-keys.ts apps/web/src/shared/api/types.ts apps/web/src/features/spec-plan/spec-plan-work-item-flow.tsx apps/web/src/features/work-items/work-item-detail.tsx apps/web/src/features/work-items/work-item-next-actions.tsx tests/contracts/product-actions.test.ts tests/web/api.test.ts tests/web/api-hooks.test.tsx tests/web/work-item-product-route.test.tsx tests/web/spec-plan-product-route.test.tsx tests/web/fixtures/product-data.ts tests/web/fixtures/product-api-mock.ts
 git commit -m "feat: remove separate work item action query"
 ```
 
@@ -1686,12 +2157,25 @@ Create `tests/web/work-item-delivery-cockpit.test.tsx`:
 ```tsx
 it('renders all eight stages with keyboard anchor behavior', async () => {
   const user = userEvent.setup();
-  render(<DeliveryStageRail stages={readinessFixture.stages} />);
+  render(
+    <>
+      <DeliveryStageRail stages={readinessFixture.stages} />
+      {readinessFixture.stages.map((stage) => (
+        <section key={stage.id} id={`delivery-stage-${stage.id}`} tabIndex={-1}>
+          <h2>{stage.label}</h2>
+        </section>
+      ))}
+    </>,
+  );
   const execution = screen.getByRole('link', { name: /Execution passed/i });
   expect(execution).toHaveAttribute('href', '#delivery-stage-execution');
-  await user.tab();
+  execution.focus();
   await user.keyboard('{Enter}');
   expect(document.activeElement).toHaveAttribute('id', 'delivery-stage-execution');
+  const qualityGate = screen.getByRole('link', { name: /Quality Gate/i });
+  qualityGate.focus();
+  await user.keyboard(' ');
+  expect(document.activeElement).toHaveAttribute('id', 'delivery-stage-quality_gate');
 });
 
 it('renders mobile action summary data before the stage rail', () => {
@@ -1793,6 +2277,8 @@ git commit -m "feat: add delivery cockpit components"
 - Modify: `tests/web/fixtures/product-data.ts`
 - Modify: `tests/web/fixtures/product-api-mock.ts`
 - Modify: `tests/web/work-item-product-route.test.tsx`
+- Modify: `tests/web/spec-plan-product-route.test.tsx`
+- Modify: `tests/web/review-release-product-routes.test.tsx`
 - Test: `tests/e2e/web-product-routes.e2e.test.ts`
 
 - [ ] **Step 1: Update fixtures with delivery readiness**
@@ -1800,6 +2286,8 @@ git commit -m "feat: add delivery cockpit components"
 In `tests/web/fixtures/product-data.ts`, add `deliveryReadiness` with all eight stages and `next_actions`.
 
 In `tests/web/fixtures/product-api-mock.ts`, update `GET /query/work-item-cockpit/wi-1` fixture to include `delivery_readiness` and remove top-level `next_actions`.
+
+Before adding new cockpit variants, run `rg -n "GET /query/work-item-cockpit|next_actions|delivery_readiness" tests/web apps/web/src/features/spec-plan apps/web/src/features/work-items` and update every Work Item cockpit fixture found in route tests or MSW fixtures. Every mocked cockpit response must include `delivery_readiness`, and no mocked cockpit response may expose top-level `next_actions`.
 
 Add fixtures for:
 
@@ -1817,7 +2305,10 @@ expect(screen.getByText('Integration Readiness')).toBeInTheDocument();
 expect(screen.getByText('Quality Gate')).toBeInTheDocument();
 expect(screen.getByText('Release Readiness')).toBeInTheDocument();
 expect(screen.getByText(/Execution Owner/i)).toBeInTheDocument();
-expect(server.requests()).not.toContain('/query/work-items/wi-1/actions');
+expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
+  expect.stringContaining('/query/work-items/wi-1/actions'),
+  expect.anything(),
+);
 ```
 
 Add kind-specific brief assertions for Requirement, Bug, Tech Debt, and Initiative fixtures.
@@ -1855,15 +2346,15 @@ expect(screen.queryByText(/Ready for release/i)).not.toBeInTheDocument();
 
 Run: `pnpm vitest run tests/web/work-item-product-route.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1`
 
-Expected: FAIL because current page is still the generic summary and still uses `WorkItemNextActions` query.
+Expected: FAIL because current page is still the generic summary and does not render the full Delivery Cockpit layout.
 
 - [ ] **Step 4: Replace Work Item detail composition**
 
 In `work-item-detail.tsx`:
 
-- Resolve active lane from `lane` query param.
-- If the URL has no `lane` query param, use the same Work Item kind default lane as the backend: `requirement -> requirements`, `bug -> bugs`, `tech_debt -> tech-debt`, `initiative -> initiatives`.
-- Call `useWorkItemCockpitQuery(workItemId, activeLane)`.
+- Parse active lane from the `lane` query param. If absent, pass `undefined` to `useWorkItemCockpitQuery`; the backend returns the resolved default in `delivery_readiness.active_lane`.
+- Call `useWorkItemCockpitQuery(workItemId, parsedLane)`.
+- Render lane labels and action sanitization from `delivery_readiness.active_lane`.
 - Render skeletons for stage rail, action summary, and matrices while loading.
 - Render Context Header, mobile Action Summary, Stage Rail, main sections, desktop Action Rail.
 - Render a clear degraded-source notice when `delivery_readiness.degraded_sources` is non-empty; affected stages must not display ready/pass copy.
@@ -1874,14 +2365,14 @@ In `work-item-detail.tsx`:
 
 In `work-item-next-actions.tsx`:
 
-- Replace with a pure compatibility-free presentational component or delete in favor of `delivery-cockpit/action-rail.tsx`.
+- Reuse the pure presentational component from Task 7, refine it to match the cockpit visual baseline, or delete it in favor of `delivery-cockpit/action-rail.tsx`.
 
 - [ ] **Step 5: Run route tests**
 
 Run:
 
 ```bash
-pnpm vitest run tests/web/work-item-product-route.test.tsx tests/web/work-item-delivery-cockpit.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/web/work-item-product-route.test.tsx tests/web/work-item-delivery-cockpit.test.tsx tests/web/spec-plan-product-route.test.tsx tests/web/review-release-product-routes.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -1889,7 +2380,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/features/work-items/work-item-detail.tsx apps/web/src/features/work-items/work-item-next-actions.tsx tests/web/fixtures/product-data.ts tests/web/fixtures/product-api-mock.ts tests/web/work-item-product-route.test.tsx
+git add apps/web/src/features/work-items/work-item-detail.tsx apps/web/src/features/work-items/work-item-next-actions.tsx tests/web/fixtures/product-data.ts tests/web/fixtures/product-api-mock.ts tests/web/work-item-product-route.test.tsx tests/web/spec-plan-product-route.test.tsx tests/web/review-release-product-routes.test.tsx
 git commit -m "feat: replace work item detail with delivery cockpit"
 ```
 
@@ -1899,9 +2390,13 @@ git commit -m "feat: replace work item detail with delivery cockpit"
 
 **Files:**
 - Modify: `apps/web/src/app/routes/packages/$packageId.tsx`
+- Modify: `apps/web/src/features/execution-packages/execution-package-routes.tsx`
 - Modify: `apps/web/src/app/routes/runs/$runSessionId.tsx`
+- Modify: `apps/web/src/features/run-console/run-console-routes.tsx`
 - Modify: `apps/web/src/app/routes/reviews/$reviewPacketId.tsx`
+- Modify: `apps/web/src/features/review-packets/review-packet-routes.tsx`
 - Modify: `apps/web/src/app/routes/releases/$releaseId.tsx`
+- Modify: `apps/web/src/features/releases/release-routes.tsx`
 - Modify: `tests/web/package-run-product-routes.test.tsx`
 - Modify: `tests/web/review-release-product-routes.test.tsx`
 
@@ -1938,6 +2433,11 @@ Expected: FAIL where pages still lack the baseline.
 
 For each linked page:
 
+- Treat route wrapper files as wiring only. The actual page UI lives in:
+  - `apps/web/src/features/execution-packages/execution-package-routes.tsx` for package detail;
+  - `apps/web/src/features/run-console/run-console-routes.tsx` for run detail;
+  - `apps/web/src/features/review-packets/review-packet-routes.tsx` for review detail;
+  - `apps/web/src/features/releases/release-routes.tsx` for release detail.
 - Use `PageHeader` with object title/state.
 - Keep primary action or terminal state near top.
 - Use `StatusPill` with visible text.
@@ -1958,7 +2458,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/app/routes/packages/'$packageId.tsx' apps/web/src/app/routes/runs/'$runSessionId.tsx' apps/web/src/app/routes/reviews/'$reviewPacketId.tsx' apps/web/src/app/routes/releases/'$releaseId.tsx' tests/web/package-run-product-routes.test.tsx tests/web/review-release-product-routes.test.tsx
+git add apps/web/src/app/routes/packages/'$packageId.tsx' apps/web/src/features/execution-packages/execution-package-routes.tsx apps/web/src/app/routes/runs/'$runSessionId.tsx' apps/web/src/features/run-console/run-console-routes.tsx apps/web/src/app/routes/reviews/'$reviewPacketId.tsx' apps/web/src/features/review-packets/review-packet-routes.tsx apps/web/src/app/routes/releases/'$releaseId.tsx' apps/web/src/features/releases/release-routes.tsx tests/web/package-run-product-routes.test.tsx tests/web/review-release-product-routes.test.tsx
 git commit -m "feat: polish linked delivery detail pages"
 ```
 
@@ -1992,11 +2492,16 @@ await expectPage(page.getByRole('link', { name: /Execution/i })).toBeVisible();
 await page.getByRole('link', { name: /Quality Gate/i }).press('Enter');
 await expectPage(page).toHaveURL(/#delivery-stage-quality_gate$/);
 expect(await page.evaluate(() => document.activeElement?.id)).toBe('delivery-stage-quality_gate');
+await page.getByRole('link', { name: /Release Readiness/i }).press('Space');
+await expectPage(page).toHaveURL(/#delivery-stage-release_readiness$/);
+expect(await page.evaluate(() => document.activeElement?.id)).toBe('delivery-stage-release_readiness');
 ```
 
 - Add ordering check:
 
 ```ts
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto(`${web.url}/work-items/${workItem.id}?lane=execution-owner`);
 const summaryTop = await page.getByTestId('delivery-action-summary').evaluate((node) => node.getBoundingClientRect().top);
 const railTop = await page.getByTestId('delivery-stage-rail').evaluate((node) => node.getBoundingClientRect().top);
 expect(summaryTop).toBeLessThan(railTop);
@@ -2049,14 +2554,27 @@ Run:
 ```bash
 active_product_files="$(rg --files apps/web/src apps/control-plane-api/src packages/contracts/src packages/db/src packages/domain/src | rg -v '(^apps/web/src/app/routes/workbench/|product-lane-workbench\\.tsx$)' || true)"
 if [ -n "$active_product_files" ]; then
-  printf '%s\n' "$active_product_files" | xargs rg -n '/workbench|Workbench|work-item-actions|next_actions: string\\[\\]|Role Workbench|Work Item Owner' || true
+  active_matches="$(printf '%s\n' "$active_product_files" | xargs rg -n '/workbench|Workbench|work-item-actions|work-item-action-queries|WorkItemActions|workItemActions|workItemActionsResponseSchema|useWorkItemActionsQuery|getWorkItemActions|parseWorkItemActionsQuery|next_actions: string\\[\\]|Role Workbench|Work Item Owner' || true)"
+  test -z "$active_matches" || { printf '%s\n' "$active_matches"; exit 1; }
 fi
+
+for legacy_file in \
+  apps/web/src/app/routes/workbench/index.tsx \
+  apps/web/src/app/routes/workbench/'$laneId.tsx' \
+  apps/web/src/features/product-lanes/product-lane-workbench.tsx \
+  tests/web/workbench-product-route.test.tsx
+do
+  test ! -e "$legacy_file" || { echo "legacy file remains: $legacy_file"; exit 1; }
+done
 
 changed_product_files="$(git diff --name-only origin/main...HEAD -- apps packages | rg '^(apps|packages)/' || true)"
 if [ -n "$changed_product_files" ]; then
   old_priority_code="$(printf 'p%s|P%s' 0 0)"
-  printf '%s\n' "$changed_product_files" | xargs rg -n "$old_priority_code" || true
+  priority_matches="$(printf '%s\n' "$changed_product_files" | xargs rg -n "$old_priority_code" || true)"
+  test -z "$priority_matches" || { printf '%s\n' "$priority_matches"; exit 1; }
 fi
+
+rg -n "GET /query/work-item-cockpit|next_actions|delivery_readiness" tests/web apps/web/src/features/spec-plan apps/web/src/features/work-items
 ```
 
 Expected:
@@ -2064,6 +2582,11 @@ Expected:
 - Expected active product scan output is empty. The temporary exclusion for deleted `routes/workbench/*` and `product-lane-workbench.tsx` is only to allow the scan command to run before the `git rm` in the same task; those files must be gone by final status.
 - No active product code refers to `/workbench` or `Workbench`, including Pipeline fallback links and ProductAction builders.
 - No public Work Item actions query remains.
+- `packages/contracts/src/api.ts` does not export `workItemActionsResponseSchema`, `WorkItemActionsResponse`, or any `WorkItemActions` public type.
+- `packages/db/src/index.ts` does not export `work-item-action-queries`.
+- Deleted Workbench route/component/test files do not exist on disk.
+- Every mocked Work Item cockpit response under `tests/web` includes `delivery_readiness`.
+- No mocked Work Item cockpit response exposes a top-level `next_actions`; action fixtures live under `delivery_readiness.next_actions`.
 - No priority-code naming remains in changed `apps/` or `packages/` product surfaces.
 - Do not chase unrelated pre-existing fixtures, generated screenshots, or guard tests outside active product code for Workbench cleanup.
 
@@ -2081,10 +2604,12 @@ pnpm vitest run \
   tests/db/work-item-release-readiness.test.ts \
   tests/db/work-item-delivery-readiness.test.ts \
   tests/api/query-module.test.ts \
+  tests/api/delivery-flow.test.ts \
   tests/api/product-lanes.test.ts \
   tests/web/api.test.ts \
   tests/web/api-hooks.test.tsx \
   tests/web/product-lanes-route.test.tsx \
+  tests/web/spec-plan-product-route.test.tsx \
   tests/web/work-item-delivery-cockpit.test.tsx \
   tests/web/work-item-product-route.test.tsx \
   tests/web/package-run-product-routes.test.tsx \
@@ -2103,6 +2628,7 @@ Run:
 pnpm --filter @forgeloop/contracts build
 pnpm --filter @forgeloop/domain build
 pnpm --filter @forgeloop/db build
+pnpm --filter @forgeloop/control-plane-api build
 pnpm --filter @forgeloop/web typecheck
 ```
 
@@ -2135,6 +2661,9 @@ Replace the `git add` path above with the implementation files that were actuall
 
 - [ ] `/work-items/:workItemId` returns and renders `delivery_readiness`.
 - [ ] Work Item cockpit response has no top-level `next_actions`.
+- [ ] Web fixtures and strict consumers parse Work Item cockpit data only through `delivery_readiness`, including Spec/Plan route tests.
+- [ ] Work Item cockpit query cache keys include active lane and shared mutation helpers invalidate/update all lane variants when lane is unknown.
+- [ ] When the URL omits `lane`, Web passes no lane, backend resolves the Work Item kind default, and UI renders from `delivery_readiness.active_lane`.
 - [ ] `/query/work-items/:workItemId/actions` is gone.
 - [ ] Product Lane actions use `/lanes/:laneId`, never `/workbench/:laneId`.
 - [ ] Active Web product code has no `/workbench` fallback links, including Pipeline representative item fallbacks.
@@ -2142,7 +2671,7 @@ Replace the `git add` path above with the implementation files that were actuall
 - [ ] Spec/Plan strict approved revision checks are enforced.
 - [ ] Current package set excludes stale/archived/deleted packages.
 - [ ] Selected run/review precedence is deterministic.
-- [ ] Shared Review Packet contract parses and preserves `independent_ai_review`.
+- [ ] Shared Review Packet contract parses and persists `independent_ai_review` and `test_mapping`.
 - [ ] Review cannot pass without self-review and independent AI Review evidence.
 - [ ] Review cannot pass when the Review Packet is stale, unmapped to approved revisions, missing test mapping, or missing explicit risk notes.
 - [ ] Quality Gate cannot pass with missing, failing, or unknown `required_test_gates`.
@@ -2150,6 +2679,9 @@ Replace the `git add` path above with the implementation files that were actuall
 - [ ] Execution is blocked by missing or failed selected-run required checks.
 - [ ] Bug and Tech Debt backend applicability rules are tested, not only rendered as UI labels.
 - [ ] Integration Readiness requires full dimension evidence when applicable.
+- [ ] Integration Readiness correctly handles `running`, `failed`, and unknown statuses, including `unknown_integration_readiness_status`.
+- [ ] Package dependencies are fetched by the Work Item cockpit query and make Integration Readiness required.
+- [ ] Downstream read failures populate stable `delivery_readiness.degraded_sources` and block affected stages without failing the whole cockpit response.
 - [ ] Release Readiness is pre-release only and excludes Observation blockers.
 - [ ] Release Readiness consumes explicit release blockers, Release Test/Acceptance evidence, release evidence, decisions, and matching fingerprints.
 - [ ] Responsibility lanes produce tested lane-aware next actions for Spec Approver, Execution Owner, Reviewer, QA/Test Owner, and Release Owner.
