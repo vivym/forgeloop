@@ -1,11 +1,25 @@
-import { useParams, useSearchParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 
+import type { DeliveryStage, SpecPlan, WorkItemDeliveryReadiness } from '../../shared/api/types';
 import { useWorkItemCockpitQuery, useWorkItemReplayQuery } from '../../shared/api/hooks';
-import { DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, StatusPill } from '../../shared/ui';
-import { WorkItemNextActions } from './work-item-next-actions';
-import { createWorkItemDetailViewModel, formatValue } from './work-item-view-model';
-import { parseProductLaneId } from '../product-lanes/product-lanes';
+import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
+import { Badge, Skeleton, StatusPill } from '../../shared/ui';
+import {
+  DeliveryActionRail,
+  DeliveryActionSummary,
+  DeliveryStageRail,
+  EvidenceTimeline,
+  ExecutionSummary,
+  InitiativeBreakdown,
+  IntegrationReadinessPanel,
+  PackageMatrix,
+  QualityGatePanel,
+  ReleaseReadinessPanel,
+  ReviewSummary,
+  TypedBrief,
+} from './delivery-cockpit';
+import { createWorkItemDetailViewModel, deliveryStageTargetId, deliveryStageTone, formatValue } from './work-item-view-model';
+import { parseProductLaneId, productLaneDefinition } from '../product-lanes/product-lanes';
 
 export function WorkItemDetail() {
   const params = useParams();
@@ -17,7 +31,7 @@ export function WorkItemDetail() {
   const cockpit = useWorkItemCockpitQuery(workItemId, cockpitLane);
   const replay = useWorkItemReplayQuery(workItemId);
   const viewModel = createWorkItemDetailViewModel(cockpit.data, replay.data);
-  const { workItem } = viewModel;
+  const { deliveryReadiness, workItem } = viewModel;
 
   if (workItemId === undefined) {
     return (
@@ -30,13 +44,7 @@ export function WorkItemDetail() {
   }
 
   if (cockpit.status === 'pending') {
-    return (
-      <DetailLayout header={<PageHeader subtitle="Loading work item context." title="Work Item" />}>
-        <Section title="Loading">
-          <p className="empty">Loading work item.</p>
-        </Section>
-      </DetailLayout>
-    );
+    return <DeliveryCockpitSkeleton />;
   }
 
   if (cockpit.isError) {
@@ -49,7 +57,7 @@ export function WorkItemDetail() {
     );
   }
 
-  if (workItem === null) {
+  if (workItem === null || deliveryReadiness === null) {
     return (
       <DetailLayout header={<PageHeader subtitle="No work item was found for this route." title="Work Item" />}>
         <Section title="Empty">
@@ -59,98 +67,186 @@ export function WorkItemDetail() {
     );
   }
 
+  const stage = stageFinder(deliveryReadiness);
+  const lane = productLaneDefinition(deliveryReadiness.active_lane);
+
   return (
     <DetailLayout
       actionRail={
-        cockpit.data?.delivery_readiness === undefined ? undefined : (
-          <WorkItemNextActions
-            actions={cockpit.data.delivery_readiness.next_actions}
-            activeLane={cockpit.data.delivery_readiness.active_lane}
+        unsupportedLane ? (
+          <UnsupportedLaneActionRail activeLane={deliveryReadiness.active_lane} workItemId={workItem.id} />
+        ) : (
+          <DeliveryActionRail
+            actions={deliveryReadiness.next_actions}
+            activeLane={deliveryReadiness.active_lane}
             projectId={workItem.project_id}
-            unsupportedLane={unsupportedLane}
-            workItemId={workItem.id}
-            {...(cockpitLane === undefined ? {} : { requestedLane: cockpitLane })}
           />
         )
       }
       header={
         <PageHeader
-          eyebrow={`${formatValue(workItem.kind)} / ${workItem.priority}`}
-          subtitle={workItem.goal}
-          title={workItem.title}
+          eyebrow={`${formatValue(workItem.kind)} / ${lane.label}`}
+          subtitle={workItem.title}
+          title="Delivery Cockpit"
         />
       }
     >
-      <Section title="Overview">
-        <div className="state-grid">
-          <Metric label="Phase" value={formatValue(workItem.phase)} />
-          <Metric label="Risk" value={formatValue(workItem.risk)} />
-          <Metric label="Gate" value={formatValue(workItem.gate_state)} />
-          <Metric label="Resolution" value={formatValue(workItem.resolution)} />
-        </div>
+      <DeliveryActionSummary readiness={deliveryReadiness} />
+      <DeliveryStageRail stages={deliveryReadiness.stages} />
+      <DeliveryDegradedNotice readiness={deliveryReadiness} />
+      <TypedBrief workItem={workItem} />
+      <ArtifactStageSection artifact={viewModel.spec} description="Approved product intent and acceptance criteria." fallbackId="spec" stage={stage('spec')} />
+      <ArtifactStageSection
+        artifact={viewModel.plan}
+        description="Approved implementation plan and package split."
+        fallbackId="plan"
+        stage={stage('plan')}
+      />
+      <PackageMatrix packages={viewModel.packageRows} />
+      {workItem.kind === 'initiative' && viewModel.packages.length === 0 ? (
+        <InitiativeBreakdown aggregation={{ mode: 'unavailable', label: initiativeUnavailableLabel(deliveryReadiness) }} />
+      ) : null}
+      <ExecutionSummary runCount={viewModel.runs.length} {...stageProp(stage('execution'))} />
+      <ReviewSummary reviewCount={viewModel.reviews.length} {...stageProp(stage('review'))} />
+      <IntegrationReadinessPanel {...stageProp(stage('integration_readiness'))} />
+      <QualityGatePanel {...stageProp(stage('quality_gate'))} />
+      <ReleaseReadinessPanel {...stageProp(stage('release_readiness'))} />
+      <EvidenceTimeline evidence={deliveryReadiness.evidence} />
+      <ActivityTimeline isError={replay.isError} timeline={viewModel.timeline} />
+    </DetailLayout>
+  );
+}
+
+function DeliveryCockpitSkeleton() {
+  return (
+    <DetailLayout
+      actionRail={
+        <ActionRail title="Delivery actions">
+          <Skeleton lines={4} />
+        </ActionRail>
+      }
+      header={<PageHeader subtitle="Loading work item context." title="Work Item" />}
+    >
+      <Section title="Delivery action summary">
+        <Skeleton lines={4} />
       </Section>
-      <Section description="Owner request, goal, and success criteria for this product work." title="Brief / Intake">
-        <div className="detail-block">
-          <strong>{workItem.goal}</strong>
-          <ul>
-            {workItem.success_criteria.map((criterion) => (
-              <li key={criterion}>{criterion}</li>
-            ))}
-          </ul>
-        </div>
+      <Section title="Delivery readiness stages">
+        <Skeleton lines={8} />
       </Section>
-      <Section title="Spec & Plan summary">
-        <div className="state-grid">
-          <Metric label="Spec" value={viewModel.spec ? formatValue(viewModel.spec.status) : 'Not created'} />
-          <Metric label="Plan" value={viewModel.plan ? formatValue(viewModel.plan.status) : 'Not created'} />
-        </div>
-      </Section>
-      <Section title="Packages summary">
-        {viewModel.packages.length ? (
-          <div className="artifact-list">
-            {viewModel.packages.map((executionPackage) => (
-              <span key={executionPackage.id}>{executionPackage.objective}</span>
-            ))}
-          </div>
-        ) : (
-          <p className="empty">No execution packages have been generated for this work item.</p>
-        )}
-      </Section>
-      <Section title="Validation">
-        <div className="pill-list">
-          <Badge tone="info">{viewModel.runs.length} runs</Badge>
-          <Badge tone="success">{viewModel.reviews.length} reviews</Badge>
-          <StatusPill tone={workItem.gate_state === 'open' ? 'warning' : 'success'}>{formatValue(workItem.gate_state)}</StatusPill>
-        </div>
-      </Section>
-      <Section title="Timeline">
-        {replay.isError ? (
-          <p className="empty">Timeline is temporarily unavailable.</p>
-        ) : viewModel.timeline.length ? (
-          <div className="timeline-list">
-            {viewModel.timeline.map((entry) => (
-              <div className="timeline-entry" key={entry.id}>
-                <strong>{entry.summary}</strong>
-                <time>{entry.created_at}</time>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="empty">No timeline events have been published for this product view.</p>
-        )}
-      </Section>
-      <Section title="Evidence">
-        <p className="status-line">Evidence is summarized from runs, reviews, and release readiness records.</p>
+      <Section title="Package matrix">
+        <Skeleton lines={4} />
       </Section>
     </DetailLayout>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function UnsupportedLaneActionRail({ activeLane, workItemId }: { activeLane: WorkItemDeliveryReadiness['active_lane']; workItemId: string }) {
   return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <ActionRail title="Delivery actions">
+      <p className="empty">This lane is not available for this Work Item.</p>
+      <Link className="fl-button fl-button--primary" to={`/work-items/${encodeURIComponent(workItemId)}?lane=${activeLane}`}>
+        <span className="fl-button__label">Open default lane</span>
+      </Link>
+    </ActionRail>
+  );
+}
+
+function DeliveryDegradedNotice({ readiness }: { readiness: WorkItemDeliveryReadiness }) {
+  if (readiness.degraded_sources.length === 0) return null;
+
+  return (
+    <Section
+      description="Some delivery evidence sources could not be loaded, so readiness is intentionally conservative."
+      title="Delivery readiness degraded"
+    >
+      <div className="pill-list">
+        {readiness.degraded_sources.map((source) => (
+          <Badge key={source} tone="warning">
+            {source}
+          </Badge>
+        ))}
+      </div>
+      {readiness.blockers.length === 0 ? null : (
+        <ul>
+          {readiness.blockers.map((blocker) => (
+            <li key={blocker.id}>{blocker.label}</li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function ArtifactStageSection({
+  artifact,
+  description,
+  fallbackId,
+  stage,
+}: {
+  artifact: SpecPlan | null;
+  description: string;
+  fallbackId: 'spec' | 'plan';
+  stage: DeliveryStage | undefined;
+}) {
+  const targetId = deliveryStageTargetId({ id: stage?.id ?? fallbackId });
+
+  return (
+    <Section id={targetId} tabIndex={-1} title={stage?.label ?? formatValue(fallbackId)} description={description}>
+      <div className="pill-list">
+        <StatusPill tone={stage === undefined ? 'neutral' : deliveryStageTone(stage.state)}>{formatValue(stage?.state, 'Unavailable')}</StatusPill>
+        <Badge tone={artifact === null ? 'warning' : 'info'}>{artifact === null ? 'Missing artifact' : formatValue(artifact.status)}</Badge>
+        {artifact?.gate_state === undefined ? null : <Badge>{formatValue(artifact.gate_state)}</Badge>}
+      </div>
+      <ArtifactStageBlockers stage={stage} fallbackLabel={`No ${formatValue(fallbackId).toLowerCase()} blockers reported.`} />
+    </Section>
+  );
+}
+
+function ArtifactStageBlockers({ fallbackLabel, stage }: { fallbackLabel: string; stage: DeliveryStage | undefined }) {
+  if (stage === undefined || stage.blockers.length === 0) return <p className="empty">{fallbackLabel}</p>;
+
+  return (
+    <ul>
+      {stage.blockers.map((blocker) => (
+        <li key={blocker.id}>{blocker.label}</li>
+      ))}
+    </ul>
+  );
+}
+
+function ActivityTimeline({ isError, timeline }: { isError: boolean; timeline: readonly { id: string; summary: string; created_at: string }[] }) {
+  return (
+    <Section title="Activity timeline">
+      {isError ? (
+        <p className="empty">Timeline is temporarily unavailable.</p>
+      ) : timeline.length ? (
+        <div className="timeline-list">
+          {timeline.map((entry) => (
+            <div className="timeline-entry" key={entry.id}>
+              <strong>{entry.summary}</strong>
+              <time>{entry.created_at}</time>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="empty">No timeline events have been published for this product view.</p>
+      )}
+    </Section>
+  );
+}
+
+function stageFinder(readiness: WorkItemDeliveryReadiness) {
+  return (stageId: DeliveryStage['id']) => readiness.stages.find((stage) => stage.id === stageId);
+}
+
+function stageProp(stage: DeliveryStage | undefined): { stage: DeliveryStage } | Record<string, never> {
+  return stage === undefined ? {} : { stage };
+}
+
+function initiativeUnavailableLabel(readiness: WorkItemDeliveryReadiness) {
+  return (
+    readiness.stages
+      .find((stage) => stage.id === 'packages')
+      ?.blockers.find((blocker) => blocker.label.trim().length > 0)?.label ?? 'Child-work aggregation unavailable'
   );
 }

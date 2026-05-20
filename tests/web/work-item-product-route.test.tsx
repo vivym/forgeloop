@@ -10,14 +10,33 @@ import { WorkItemNextActions } from '../../apps/web/src/features/work-items/work
 import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
 import type { ProductAction } from '../../apps/web/src/shared/api/types';
 import { renderRoute } from './router-test-utils';
+import {
+  cockpitFixtureWithDegradedRunSource,
+  cockpitFixtureWithManagerCommandAction,
+  deliveryReadiness,
+  executionPackage,
+  initiativeWithoutPackagesCockpitFixture,
+  plan,
+  productActionFixtures,
+  reviewPacket,
+  runSession,
+  spec,
+  workItem,
+  workItemKindCockpitFixtures,
+} from './fixtures/product-data';
 
 describe('Work Item product route', () => {
-  it('renders Work Item detail with Brief / Intake and Validation sections', async () => {
-    const screen = await renderRoute('/work-items/wi-1');
-    expect(await screen.findByRole('heading', { name: /improve release cockpit/i })).toBeTruthy();
-    expect(screen.getByText('Brief / Intake')).toBeTruthy();
-    expect(screen.getByText('Validation')).toBeTruthy();
-    expect(await screen.findByRole('link', { name: 'Open work item' })).toBeTruthy();
+  it('renders the typed Delivery Cockpit from Work Item readiness', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=execution-owner');
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getAllByText('Integration Readiness').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Quality Gate').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Release Readiness').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Execution Owner/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /Spec ready/i }).getAttribute('href')).toBe('#delivery-stage-spec');
+    expect(screen.getByRole('link', { name: /Plan ready/i }).getAttribute('href')).toBe('#delivery-stage-plan');
+    expect(document.getElementById('delivery-stage-spec')).toBeTruthy();
+    expect(document.getElementById('delivery-stage-plan')).toBeTruthy();
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
     expect(screen.queryByRole('button', { name: ['Update', 'brief'].join(' ') })).toBeNull();
     expect(screen.queryByRole('button', { name: ['Attach', 'evidence'].join(' ') })).toBeNull();
@@ -29,7 +48,8 @@ describe('Work Item product route', () => {
   it('uses cockpit readiness as the Work Item action source', async () => {
     const screen = await renderRoute('/work-items/wi-1?lane=reviewer');
 
-    expect(await screen.findByText('No actions for Reviewer lane.')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getAllByText(/Reviewer/i).length).toBeGreaterThan(0);
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       'http://localhost:3000/query/work-item-cockpit/wi-1?lane=reviewer',
       expect.objectContaining({ method: 'GET' }),
@@ -57,6 +77,96 @@ describe('Work Item product route', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       'http://localhost:3000/query/work-item-cockpit/wi-1?lane=requirements',
       expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it.each([
+    ['requirement', workItemKindCockpitFixtures.requirement, /Requirement/i],
+    ['bug', workItemKindCockpitFixtures.bug, /Bug/i],
+    ['tech debt', workItemKindCockpitFixtures.techDebt, /Tech Debt/i],
+    ['initiative', workItemKindCockpitFixtures.initiative, /Initiative/i],
+  ])('renders a kind-specific typed brief for %s work items', async (_label, cockpit, expectedKind) => {
+    const lane = cockpit.delivery_readiness.active_lane;
+    const screen = await renderRoute(`/work-items/${cockpit.work_item.id}?lane=${lane}`, {
+      apiOverrides: {
+        [`GET /query/work-item-cockpit/${cockpit.work_item.id}?lane=${lane}`]: cockpit,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getByText(cockpit.work_item.title)).toBeTruthy();
+    expect(screen.getAllByText(expectedKind).length).toBeGreaterThan(0);
+  });
+
+  it('renders Initiative breakdown without release-ready copy when no packages exist', async () => {
+    const cockpit = initiativeWithoutPackagesCockpitFixture;
+    const screen = await renderRoute(`/work-items/${cockpit.work_item.id}?lane=initiatives`, {
+      apiOverrides: {
+        [`GET /query/work-item-cockpit/${cockpit.work_item.id}?lane=initiatives`]: cockpit,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getByText(/Initiative breakdown/i)).toBeTruthy();
+    expect(screen.getByText(/Child-work aggregation unavailable/i)).toBeTruthy();
+    expect(screen.queryByText(/Ready for release/i)).toBeNull();
+  });
+
+  it('hardens manager lane actions by converting mutating commands to drill-down links', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=manager', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1?lane=manager': cockpitFixtureWithManagerCommandAction,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Run package/i })).toBeNull();
+    expect(screen.getAllByRole('link', { name: /Open package/i }).length).toBeGreaterThan(0);
+  });
+
+  it('renders degraded delivery readiness without release-ready copy', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=execution-owner', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1?lane=execution-owner': cockpitFixtureWithDegradedRunSource,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getByText(/Delivery readiness degraded/i)).toBeTruthy();
+    expect(screen.getByText(/run_sessions/i)).toBeTruthy();
+    expect(screen.queryByText(/Ready for release/i)).toBeNull();
+  });
+
+  it('executes non-manager cockpit command actions from the delivery action rail', async () => {
+    const user = userEvent.setup();
+    const commandAction = productActionFixtures.commandTargetFollowUp;
+    const screen = await renderRoute(`/work-items/${workItem.id}?lane=execution-owner`, {
+      actorId: 'actor-cockpit-command',
+      apiOverrides: {
+        [`GET /query/work-item-cockpit/${workItem.id}?lane=execution-owner`]: {
+          work_item: workItem,
+          current_spec: spec,
+          current_plan: plan,
+          packages: [executionPackage],
+          run_sessions: [runSession],
+          review_packets: [reviewPacket],
+          delivery_readiness: deliveryReadiness(workItem, [commandAction], 'execution-owner'),
+        },
+        [`POST /execution-packages/${executionPackage.id}/run`]: {},
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Run package/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/execution-packages/${executionPackage.id}/run`,
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-cockpit-command' }),
+        }),
+      ),
     );
   });
 

@@ -4,7 +4,7 @@ import { createForgeloopCommandApi } from '../../apps/web/src/shared/api/command
 import { ForgeloopApiError } from '../../apps/web/src/shared/api/common';
 import { createForgeloopQueryApi } from '../../apps/web/src/shared/api/query';
 import type { ProductLaneId, WorkItemDeliveryReadiness } from '@forgeloop/contracts';
-import { executionPackage, plan, reviewPacket, runSession, spec, workItem } from './fixtures/product-data';
+import { executionPackage, plan, productActionFixtures, reviewPacket, runSession, spec, workItem } from './fixtures/product-data';
 
 const cockpitReadiness = (lane: ProductLaneId = 'requirements'): WorkItemDeliveryReadiness => ({
   work_item_id: workItem.id,
@@ -423,7 +423,6 @@ describe('Forgeloop web API client', () => {
           packages: [executionPackage],
           run_sessions: [runSession],
           review_packets: [reviewPacket],
-          next_actions: [],
           completion_state: {},
         }),
         { status: 200 },
@@ -432,6 +431,27 @@ describe('Forgeloop web API client', () => {
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
     await expect(queryApi.getWorkItemCockpit(workItem.id)).rejects.toThrow();
+  });
+
+  it('hardens bad manager cockpit command actions before strict response parsing', async () => {
+    const response = cockpitResponse('manager');
+    response.delivery_readiness.next_actions = [productActionFixtures.commandTargetFollowUp];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    const cockpit = await queryApi.getWorkItemCockpit(workItem.id, { lane: 'manager' });
+
+    expect(cockpit.delivery_readiness.next_actions).toEqual([
+      expect.objectContaining({
+        enabled: true,
+        kind: 'navigate',
+        label: 'Open package',
+        lane_id: 'manager',
+        priority: 'secondary',
+        target: productActionFixtures.commandTargetFollowUp.target,
+      }),
+    ]);
+    expect('command' in cockpit.delivery_readiness.next_actions[0]!).toBe(false);
   });
 
   it('routes release command methods through the release API', async () => {

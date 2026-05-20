@@ -68,7 +68,9 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ) as ProductLaneResponse,
     getWorkItemCockpit: async (workItemId: string, options: { lane?: ProductLaneId } = {}) =>
       workItemCockpitResponseSchema.parse(
-        await request<unknown>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}${queryString(options)}`),
+        hardenManagerCockpitActions(
+          await request<unknown>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}${queryString(options)}`),
+        ),
       ) as CockpitResponse,
     getWorkItemReplay: (workItemId: string) =>
       request<TimelineEntry[]>(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
@@ -91,3 +93,64 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
 }
 
 export type ForgeloopQueryApi = ReturnType<typeof createForgeloopQueryApi>;
+
+function hardenManagerCockpitActions(response: unknown): unknown {
+  if (!isRecord(response) || !isRecord(response.delivery_readiness) || response.delivery_readiness.active_lane !== 'manager') {
+    return response;
+  }
+
+  const rawActions = response.delivery_readiness.next_actions;
+  if (!Array.isArray(rawActions)) return response;
+
+  return {
+    ...response,
+    delivery_readiness: {
+      ...response.delivery_readiness,
+      next_actions: rawActions.flatMap((action) => hardenManagerAction(action)),
+    },
+  };
+}
+
+function hardenManagerAction(action: unknown): unknown[] {
+  if (!isRecord(action)) return [];
+
+  if (action.kind === 'navigate') {
+    return [{ ...action, lane_id: 'manager' }];
+  }
+
+  if (action.kind !== 'command' || !isRecord(action.target) || action.target.kind !== 'object') {
+    return [];
+  }
+
+  return [
+    {
+      id: `${String(action.id)}-drill-down`,
+      lane_id: 'manager',
+      priority: 'secondary',
+      label: managerObjectActionLabel(action.target.object_type),
+      ...(typeof action.description === 'string' ? { description: action.description } : {}),
+      enabled: true,
+      kind: 'navigate',
+      target: action.target,
+    },
+  ];
+}
+
+function managerObjectActionLabel(objectType: unknown) {
+  switch (objectType) {
+    case 'execution_package':
+      return 'Open package';
+    case 'run_session':
+      return 'Open run';
+    case 'review_packet':
+      return 'Open review';
+    case 'work_item':
+      return 'Open work item';
+    default:
+      return 'Open detail';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

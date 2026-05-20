@@ -53,7 +53,17 @@ const readinessFixture: WorkItemDeliveryReadiness = {
   ],
   blockers: [],
   evidence: [],
-  next_actions: [],
+  next_actions: [
+    {
+      id: 'run-package',
+      lane_id: 'execution-owner',
+      priority: 'primary',
+      label: 'Run package',
+      enabled: true,
+      kind: 'navigate',
+      target: { kind: 'object', object_type: 'execution_package', object_id: 'pkg-1', href: '/packages/pkg-1' },
+    },
+  ],
   degraded_sources: [],
 };
 
@@ -124,6 +134,41 @@ describe('Delivery Cockpit presentational components', () => {
 
     expect(screen.getByText(/Execution Owner/i)).toBeTruthy();
     expect(screen.getByText(/0 blockers/i)).toBeTruthy();
+    expect(screen.getByText('Primary action')).toBeTruthy();
+    expect(screen.getByText('Run package')).toBeTruthy();
+    expect(screen.getByText('Available')).toBeTruthy();
+  });
+
+  it('hardens manager mobile action summary to a read-only primary drill-down', () => {
+    render(
+      <DeliveryActionSummary
+        readiness={{
+          ...readinessFixture,
+          active_lane: 'manager',
+          next_actions: [
+            {
+              id: 'bad-command',
+              lane_id: 'execution-owner',
+              priority: 'primary',
+              label: 'Run package',
+              enabled: true,
+              kind: 'command',
+              command: {
+                type: 'run_package',
+                object_type: 'execution_package',
+                object_id: 'pkg-1',
+                work_item_id: 'wi-1',
+                package_id: 'pkg-1',
+              },
+              target: { kind: 'object', object_type: 'execution_package', object_id: 'pkg-1', href: '/packages/pkg-1' },
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Open package')).toBeTruthy();
+    expect(screen.queryByText('Run package')).toBeNull();
   });
 
   it('renders package mobile card hierarchy and hides empty blocker rows', () => {

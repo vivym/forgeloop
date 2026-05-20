@@ -9,7 +9,6 @@ export interface WorkItemTypeMetadata {
   default_risk: string;
   spec_guidance: string;
   plan_guidance: string;
-  recommended_next_actions: string[];
   role_hints: {
     approver?: string;
     execution_owner?: string;
@@ -31,7 +30,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     default_risk: 'medium',
     spec_guidance: 'Define outcome, scope, and success criteria.',
     plan_guidance: 'Split into independently verifiable packages.',
-    recommended_next_actions: ['create_spec', 'generate_spec_draft'],
     role_hints: {},
   },
   {
@@ -43,7 +41,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     default_risk: 'medium',
     spec_guidance: 'Make acceptance criteria testable.',
     plan_guidance: 'Map implementation steps to checks.',
-    recommended_next_actions: ['create_spec', 'generate_spec_draft'],
     role_hints: {},
   },
   {
@@ -55,7 +52,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     default_risk: 'high',
     spec_guidance: 'Describe impact, reproduction, and expected behavior.',
     plan_guidance: 'Include regression coverage.',
-    recommended_next_actions: ['create_spec', 'generate_spec_draft'],
     role_hints: { qa_owner: 'QA/Test Owner should confirm regression coverage.' },
   },
   {
@@ -67,7 +63,6 @@ export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
     default_risk: 'medium',
     spec_guidance: 'State current cost and desired invariant.',
     plan_guidance: 'Keep migration steps reversible.',
-    recommended_next_actions: ['create_spec', 'generate_spec_draft'],
     role_hints: { reviewer: 'Reviewer should focus on behavior preservation.' },
   },
 ];

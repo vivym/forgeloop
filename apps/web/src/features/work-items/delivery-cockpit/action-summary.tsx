@@ -1,7 +1,7 @@
-import type { WorkItemDeliveryReadiness } from '../../../shared/api/types';
+import type { ProductAction, WorkItemDeliveryReadiness } from '../../../shared/api/types';
 import { Badge, StatusPill } from '../../../shared/ui';
 import { productLaneDefinition } from '../../product-lanes/product-lanes';
-import { deliveryOverallLabel, formatValue } from '../work-item-view-model';
+import { deliveryOverallLabel, formatValue, groupDeliveryActionsByPriority, sanitizeDeliveryActionsForDisplay } from '../work-item-view-model';
 
 export interface DeliveryActionSummaryProps {
   readiness: WorkItemDeliveryReadiness;
@@ -10,6 +10,8 @@ export interface DeliveryActionSummaryProps {
 export function DeliveryActionSummary({ readiness }: DeliveryActionSummaryProps) {
   const lane = productLaneDefinition(readiness.active_lane);
   const blockerCount = readiness.blockers.length;
+  const actionGroups = groupDeliveryActionsByPriority(sanitizeDeliveryActionsForDisplay(readiness.next_actions, readiness.active_lane));
+  const primaryAction = actionGroups.primary[0] ?? actionGroups.secondary[0];
 
   return (
     <section aria-label="Delivery action summary" className="delivery-action-summary">
@@ -28,10 +30,27 @@ export function DeliveryActionSummary({ readiness }: DeliveryActionSummaryProps)
           <strong>{`${blockerCount} ${blockerCount === 1 ? 'blocker' : 'blockers'}`}</strong>
         </div>
         <div className="metric">
+          <span>Primary action</span>
+          <strong>{primaryAction?.label ?? 'No primary action'}</strong>
+          <PrimaryActionState action={primaryAction} />
+        </div>
+        <div className="metric">
           <span>Work type</span>
           <Badge tone="info">{formatValue(readiness.work_item_kind)}</Badge>
         </div>
       </div>
     </section>
   );
+}
+
+function PrimaryActionState({ action }: { action: ProductAction | undefined }) {
+  if (action === undefined) {
+    return <p className="empty">No lane action is available.</p>;
+  }
+
+  if (!action.enabled) {
+    return <p className="empty">{action.disabled_reason ?? action.blocked_reason ?? 'Disabled'}</p>;
+  }
+
+  return <p className="empty">Available</p>;
 }

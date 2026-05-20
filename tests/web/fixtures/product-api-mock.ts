@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 
 import {
   actorId,
+  deliveryReadiness,
   executionPackage,
   plan,
   planRevision,
@@ -15,7 +16,7 @@ import {
   timeline,
   workItem,
 } from './product-data';
-import type { ProductLaneId, ProductLaneItem, ProductLaneResponse, WorkItemDeliveryReadiness } from '@forgeloop/contracts';
+import type { ProductLaneId, ProductLaneItem, ProductLaneResponse } from '@forgeloop/contracts';
 
 export type ProductApiMockHandler = (request: { input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
 export type ProductApiResponseMap = Record<string, unknown | ProductApiMockHandler>;
@@ -131,38 +132,6 @@ const productLaneResponse = (laneId: ProductLaneId, unsupportedFilters: string[]
 const itemForLane = (item: ProductLaneItem, laneId: ProductLaneId): ProductLaneItem => ({
   ...item,
   actions: item.actions.map((action) => ({ ...action, lane_id: laneId })),
-});
-
-const deliveryReadiness = (
-  item: typeof workItem,
-  actions = routeProductActions,
-  activeLane: ProductLaneId = 'requirements',
-): WorkItemDeliveryReadiness => ({
-  work_item_id: item.id,
-  work_item_kind: item.kind,
-  active_lane: activeLane,
-  overall_state: 'in_progress',
-  stages: [
-    'spec',
-    'plan',
-    'packages',
-    'execution',
-    'review',
-    'integration_readiness',
-    'quality_gate',
-    'release_readiness',
-  ].map((id) => ({
-    id: id as WorkItemDeliveryReadiness['stages'][number]['id'],
-    label: id === 'quality_gate' ? 'Quality Gate' : id.replaceAll('_', ' '),
-    state: id === 'integration_readiness' ? 'not_applicable' : 'ready',
-    object_refs: [],
-    blockers: [],
-    evidence_refs: [],
-  })),
-  blockers: [],
-  evidence: [],
-  next_actions: actions,
-  degraded_sources: [],
 });
 
 const routeTimeline = timeline.map((entry) => ({
@@ -517,6 +486,15 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(routeWorkItem, [], 'reviewer'),
+  },
+  [`GET /query/work-item-cockpit/${routeWorkItem.id}?lane=execution-owner`]: {
+    work_item: routeWorkItem,
+    current_spec: routeSpec,
+    current_plan: routePlan,
+    packages: [routeExecutionPackage],
+    run_sessions: [runSession],
+    review_packets: [reviewPacket],
+    delivery_readiness: deliveryReadiness(routeWorkItem, [], 'execution-owner'),
   },
   [`POST /work-items/${routeWorkItem.id}/specs`]: routeSpec,
   [`POST /work-items/${routeWorkItem.id}/plans`]: routePlan,

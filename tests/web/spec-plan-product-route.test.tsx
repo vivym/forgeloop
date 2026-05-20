@@ -670,9 +670,12 @@ describe('Work Item scoped Spec & Plan route', () => {
 
   it('does not open revision history when work item planning data is unavailable', async () => {
     const user = userEvent.setup();
+    const unavailableCockpitPath = '/query/work-item-cockpit/wi-1';
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
-        'GET /query/work-item-cockpit/wi-1': {},
+        [`GET ${unavailableCockpitPath}`]: async () => {
+          throw new Error('Work Item cockpit unavailable.');
+        },
       },
     });
 

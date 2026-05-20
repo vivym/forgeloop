@@ -2281,7 +2281,7 @@ git commit -m "feat: add delivery cockpit components"
 - Modify: `tests/web/review-release-product-routes.test.tsx`
 - Test: `tests/e2e/web-product-routes.e2e.test.ts`
 
-- [ ] **Step 1: Update fixtures with delivery readiness**
+- [x] **Step 1: Update fixtures with delivery readiness**
 
 In `tests/web/fixtures/product-data.ts`, add `deliveryReadiness` with all eight stages and `next_actions`.
 
@@ -2295,7 +2295,7 @@ Add fixtures for:
 - `cockpitFixtureWithManagerCommandAction`, used only to prove the UI hardens a bad manager-perspective response containing a mutating command before rendering commands.
 - a cockpit response with `delivery_readiness.degraded_sources = ['run_sessions']` and an Execution stage blocker.
 
-- [ ] **Step 2: Write failing Work Item route tests**
+- [x] **Step 2: Write failing Work Item route tests**
 
 In `tests/web/work-item-product-route.test.tsx`, assert:
 
@@ -2342,13 +2342,13 @@ expect(screen.getByText(/run_sessions/i)).toBeInTheDocument();
 expect(screen.queryByText(/Ready for release/i)).not.toBeInTheDocument();
 ```
 
-- [ ] **Step 3: Run route tests and verify failure**
+- [x] **Step 3: Run route tests and verify failure**
 
 Run: `pnpm vitest run tests/web/work-item-product-route.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1`
 
 Expected: FAIL because current page is still the generic summary and does not render the full Delivery Cockpit layout.
 
-- [ ] **Step 4: Replace Work Item detail composition**
+- [x] **Step 4: Replace Work Item detail composition**
 
 In `work-item-detail.tsx`:
 
@@ -2367,7 +2367,7 @@ In `work-item-next-actions.tsx`:
 
 - Reuse the pure presentational component from Task 7, refine it to match the cockpit visual baseline, or delete it in favor of `delivery-cockpit/action-rail.tsx`.
 
-- [ ] **Step 5: Run route tests**
+- [x] **Step 5: Run route tests**
 
 Run:
 
@@ -2377,7 +2377,7 @@ pnpm vitest run tests/web/work-item-product-route.test.tsx tests/web/work-item-d
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/src/features/work-items/work-item-detail.tsx apps/web/src/features/work-items/work-item-next-actions.tsx tests/web/fixtures/product-data.ts tests/web/fixtures/product-api-mock.ts tests/web/work-item-product-route.test.tsx tests/web/spec-plan-product-route.test.tsx tests/web/review-release-product-routes.test.tsx
