@@ -43,7 +43,10 @@ export type DomainErrorCode =
   | 'AUTOMATION_CAPABILITY_REJECTED'
   | 'MANUAL_PATH_SCOPE_INVALID'
   | 'EXECUTION_PACKAGE_VERSION_INVALID'
-  | 'EXECUTION_PACKAGE_POLICY_INVALID';
+  | 'EXECUTION_PACKAGE_POLICY_INVALID'
+  | 'CODEX_RUNTIME_POLICY_INVALID'
+  | 'CODEX_RUNTIME_EVIDENCE_INVALID'
+  | 'codex_worker_docker_policy_unavailable';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
@@ -354,6 +357,23 @@ export interface RunRuntimeMetadata {
   source_repo_path?: string;
   source_repo_before_status?: string;
   source_repo_before_dirty_fingerprint?: string;
+  runtime_profile_id?: string;
+  runtime_profile_revision_id?: string;
+  runtime_profile_digest?: string;
+  runtime_target_kind?: 'generation' | 'run_execution';
+  source_access_mode?: 'artifact_only' | 'path_policy_scoped';
+  environment?: 'local_dogfood' | 'test';
+  credential_binding_id?: string;
+  credential_binding_version_id?: string;
+  credential_payload_digest?: string;
+  launch_lease_id?: string;
+  docker_image_digest?: string;
+  container_id_digest?: string;
+  app_server_effective_config_digest?: string;
+  network_policy_digest?: string;
+  network_policy_self_test_digest?: string;
+  docker_policy_self_check_digest?: string;
+  workspace_isolation_digest?: string;
 }
 
 export interface RunSession {
