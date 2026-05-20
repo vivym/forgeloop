@@ -12,12 +12,12 @@ import {
   parseProductLaneId,
   productLaneDefinition,
   productLanes,
-  supportedWorkbenchSearchParams,
+  supportedProductLaneSearchParams,
 } from './product-lanes';
 import { ProductLaneTable } from './product-lane-table';
 import { createProductLaneViewModel } from './product-lane-view-model';
 
-export function ProductLaneWorkbench() {
+export function ProductLaneRoute() {
   const params = useParams();
   const laneId = parseProductLaneId(params.laneId);
 
@@ -25,10 +25,10 @@ export function ProductLaneWorkbench() {
     return <UnknownProductLane />;
   }
 
-  return <ProductLaneWorkbenchContent laneId={laneId} />;
+  return <ProductLaneRouteContent laneId={laneId} />;
 }
 
-function ProductLaneWorkbenchContent({ laneId }: { laneId: NonNullable<ReturnType<typeof parseProductLaneId>> }) {
+function ProductLaneRouteContent({ laneId }: { laneId: NonNullable<ReturnType<typeof parseProductLaneId>> }) {
   const { projectId: contextProjectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const projectId = searchParams.get('project_id')?.trim() || contextProjectId;
@@ -73,7 +73,7 @@ function ProductLaneWorkbenchContent({ laneId }: { laneId: NonNullable<ReturnTyp
       }
     >
       <Section title="Lanes">
-        <nav aria-label="Workbench lanes" className="pill-list">
+        <nav aria-label="Product lanes" className="pill-list">
           {productLanes.map((candidate) => (
             <Link
               aria-current={candidate.id === laneId ? 'page' : undefined}
@@ -120,7 +120,7 @@ function UnknownProductLane() {
   return (
     <DetailLayout header={<PageHeader subtitle="This Product Lane is not available." title="Lane unavailable" />}>
       <Section title="Open a canonical lane">
-        <Link className="fl-button fl-button--primary" to={`/workbench/${defaultProductLaneId}`}>
+        <Link className="fl-button fl-button--primary" to={`/lanes/${defaultProductLaneId}`}>
           Open Requirements
         </Link>
       </Section>
@@ -154,7 +154,7 @@ const workItemTypeLaneIds = new Set<ProductLaneId>(['requirements', 'bugs', 'tec
 function laneHref(laneId: ProductLaneId, searchParams: URLSearchParams, projectId: string) {
   const next = new URLSearchParams();
   next.set('project_id', projectId);
-  for (const key of supportedWorkbenchSearchParams) {
+  for (const key of supportedProductLaneSearchParams) {
     if (key === 'project_id' || (key === 'kind' && workItemTypeLaneIds.has(laneId))) {
       continue;
     }
@@ -164,7 +164,7 @@ function laneHref(laneId: ProductLaneId, searchParams: URLSearchParams, projectI
     }
   }
   const encoded = next.toString();
-  return `/workbench/${laneId}${encoded ? `?${encoded}` : ''}`;
+  return `/lanes/${laneId}${encoded ? `?${encoded}` : ''}`;
 }
 
 function stringParam(searchParams: URLSearchParams, key: keyof ProductLaneQuery) {

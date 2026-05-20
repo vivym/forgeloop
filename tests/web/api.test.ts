@@ -53,7 +53,7 @@ describe('Forgeloop web API client', () => {
 
   it('sends JSON bodies to normalized endpoint URLs', async () => {
     const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ id: 'work-item-1', title: 'Ship workbench' }), {
+      new Response(JSON.stringify({ id: 'work-item-1', title: 'Ship release cockpit' }), {
         status: 201,
         headers: { 'content-type': 'application/json' },
       }),
@@ -64,7 +64,7 @@ describe('Forgeloop web API client', () => {
     const result = await api.createWorkItem({
       project_id: 'project-1',
       kind: 'requirement',
-      title: 'Ship workbench',
+      title: 'Ship release cockpit',
       goal: 'Operate delivery from the browser',
       success_criteria: ['Create and run a package'],
       priority: 'P0',
@@ -79,7 +79,7 @@ describe('Forgeloop web API client', () => {
       body: JSON.stringify({
         project_id: 'project-1',
         kind: 'requirement',
-        title: 'Ship workbench',
+        title: 'Ship release cockpit',
         goal: 'Operate delivery from the browser',
         success_criteria: ['Create and run a package'],
         priority: 'P0',

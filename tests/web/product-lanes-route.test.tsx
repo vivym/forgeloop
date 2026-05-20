@@ -3,13 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { ProductAction } from '../../apps/web/src/shared/api/types';
 import { primaryActionForItem, sortProductActions } from '../../apps/web/src/features/product-actions/product-actions';
+import { deletedProductLaneRoot } from './deleted-route-guards';
 import { renderRoute } from './router-test-utils';
 import { projectId } from './fixtures/product-data';
 
-describe('Workbench product route', () => {
-  it('redirects /workbench to Requirements while preserving supported filters and stripping old state', async () => {
+describe('Product Lanes route', () => {
+  it('redirects /lanes to Requirements while preserving supported filters and stripping old state', async () => {
     const screen = await renderRoute(
-      '/workbench?project_id=project-web-product&kind=bug&status=active&blocked=true&unsupported_view=old',
+      '/lanes?project_id=project-web-product&kind=bug&status=active&blocked=true&unsupported_view=old',
     );
 
     expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
@@ -18,13 +19,14 @@ describe('Workbench product route', () => {
       expect.objectContaining({ method: 'GET' }),
     );
     expect(screen.getByRole('link', { name: /bugs/i }).getAttribute('href')).toBe(
-      '/workbench/bugs?project_id=project-web-product&status=active&blocked=true',
+      '/lanes/bugs?project_id=project-web-product&status=active&blocked=true',
     );
     expect(screen.queryByText(/unsupported_view/i)).toBeNull();
+    expect(document.body.innerHTML).not.toContain(deletedProductLaneRoot);
   });
 
   it('renders all canonical lane navigation entries as enabled links', async () => {
-    const screen = await renderRoute(`/workbench/bugs?project_id=${projectId}`);
+    const screen = await renderRoute(`/lanes/bugs?project_id=${projectId}`);
 
     expect(await screen.findByRole('heading', { name: /bugs/i })).toBeTruthy();
     for (const lane of [
@@ -41,12 +43,13 @@ describe('Workbench product route', () => {
     ]) {
       const link = screen.getByRole('link', { name: lane });
       expect(link.getAttribute('aria-disabled')).not.toBe('true');
-      expect(link.getAttribute('href')).toMatch(/^\/workbench\//);
+      expect(link.getAttribute('href')).toMatch(/^\/lanes\//);
     }
+    expect(document.body.innerHTML).not.toContain(deletedProductLaneRoot);
   });
 
   it('drops kind filters when linking into Work Item type lanes', async () => {
-    const screen = await renderRoute(`/workbench/spec-approver?project_id=${projectId}&kind=bug&status=active`, {
+    const screen = await renderRoute(`/lanes/spec-approver?project_id=${projectId}&kind=bug&status=active`, {
       apiOverrides: {
         [`GET /query/product-lanes/spec-approver?project_id=${projectId}&kind=bug&status=active`]: {
           lane_id: 'spec-approver',
@@ -61,18 +64,18 @@ describe('Workbench product route', () => {
 
     expect(await screen.findByRole('heading', { name: /spec approver/i })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Requirements' }).getAttribute('href')).toBe(
-      `/workbench/requirements?project_id=${projectId}&status=active`,
+      `/lanes/requirements?project_id=${projectId}&status=active`,
     );
     expect(screen.getByRole('link', { name: 'Bugs' }).getAttribute('href')).toBe(
-      `/workbench/bugs?project_id=${projectId}&status=active`,
+      `/lanes/bugs?project_id=${projectId}&status=active`,
     );
     expect(screen.getByRole('link', { name: 'Reviewer' }).getAttribute('href')).toBe(
-      `/workbench/reviewer?project_id=${projectId}&kind=bug&status=active`,
+      `/lanes/reviewer?project_id=${projectId}&kind=bug&status=active`,
     );
   });
 
   it('uses Product Lane API paths and renders unsupported filter notices plus selected actions', async () => {
-    const screen = await renderRoute(`/workbench/requirements?project_id=${projectId}&selected=wi-1&phase=planning`);
+    const screen = await renderRoute(`/lanes/requirements?project_id=${projectId}&selected=wi-1&phase=planning`);
 
     expect(await screen.findByText('Unsupported filters: phase')).toBeTruthy();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
@@ -84,10 +87,10 @@ describe('Workbench product route', () => {
   });
 
   it('renders unknown lanes locally without fetching', async () => {
-    const screen = await renderRoute(`/workbench/not-a-lane?project_id=${projectId}`);
+    const screen = await renderRoute(`/lanes/not-a-lane?project_id=${projectId}`);
 
     expect(screen.getByRole('heading', { name: /lane unavailable/i })).toBeTruthy();
-    expect(screen.getByRole('link', { name: /open requirements/i }).getAttribute('href')).toBe('/workbench/requirements');
+    expect(screen.getByRole('link', { name: /open requirements/i }).getAttribute('href')).toBe('/lanes/requirements');
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
       expect.stringContaining('/query/product-lanes/not-a-lane'),
       expect.anything(),
@@ -97,7 +100,7 @@ describe('Workbench product route', () => {
   it('resolves selection by selected param, click, current item id, and clears the action rail when selected item disappears', async () => {
     const user = userEvent.setup();
     let requestCount = 0;
-    const screen = await renderRoute(`/workbench/requirements?project_id=${projectId}&selected=wi-1`, {
+    const screen = await renderRoute(`/lanes/requirements?project_id=${projectId}&selected=wi-1`, {
       apiOverrides: {
         [`GET /query/product-lanes/requirements?project_id=${projectId}`]: () => {
           requestCount += 1;
@@ -124,11 +127,12 @@ describe('Workbench product route', () => {
   });
 
   it('does not nest action cards inside the mobile table card list', async () => {
-    const screen = await renderRoute(`/workbench/requirements?project_id=${projectId}`);
+    const screen = await renderRoute(`/lanes/requirements?project_id=${projectId}`);
 
     expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
     const actionRail = screen.getByLabelText('Selected item product actions');
     expect(actionRail.closest('[data-responsive-card-list]')).toBeNull();
+    expect(document.body.innerHTML).not.toContain(deletedProductLaneRoot);
   });
 });
 

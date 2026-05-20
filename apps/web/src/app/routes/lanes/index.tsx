@@ -1,11 +1,11 @@
 import { Navigate, useSearchParams } from 'react-router';
-import { supportedWorkbenchSearchParams } from '../../../features/product-lanes/product-lanes';
+import { supportedProductLaneSearchParams } from '../../../features/product-lanes/product-lanes';
 
-export default function WorkbenchRoute() {
+export default function ProductLanesRoute() {
   const [searchParams] = useSearchParams();
   const targetParams = new URLSearchParams();
 
-  for (const key of supportedWorkbenchSearchParams) {
+  for (const key of supportedProductLaneSearchParams) {
     if (key === 'kind') {
       continue;
     }
@@ -16,5 +16,5 @@ export default function WorkbenchRoute() {
   }
 
   const encoded = targetParams.toString();
-  return <Navigate replace to={`/workbench/requirements${encoded ? `?${encoded}` : ''}`} />;
+  return <Navigate replace to={`/lanes/requirements${encoded ? `?${encoded}` : ''}`} />;
 }

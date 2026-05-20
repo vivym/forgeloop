@@ -12,8 +12,8 @@ import { defaultProductApiResponses, type ProductApiResponseMap } from '../web/f
 import { executionPackage, projectId, release, reviewPacket, runSession, workItem } from '../web/fixtures/product-data';
 
 const routes = [
-  '/workbench',
-  '/workbench/requirements',
+  '/lanes',
+  '/lanes/requirements',
   '/pipeline',
   '/work-items',
   '/work-items/wi-1',
@@ -237,8 +237,8 @@ function routeName(route: string): string {
 }
 
 async function assertPopulatedRoute(page: Awaited<ReturnType<Browser['newPage']>>, route: string) {
-  if (route === '/workbench') {
-    await expectPage(page).toHaveURL(/\/workbench\/requirements$/);
+  if (route === '/lanes') {
+    await expectPage(page).toHaveURL(/\/lanes\/requirements$/);
   }
   const expectation = populatedRouteText(route);
   await expectPage(
@@ -249,8 +249,8 @@ async function assertPopulatedRoute(page: Awaited<ReturnType<Browser['newPage']>
 
 function populatedRouteText(route: string): string | RegExp {
   switch (route) {
-    case '/workbench':
-    case '/workbench/requirements':
+    case '/lanes':
+    case '/lanes/requirements':
       return 'Improve release cockpit';
     case '/pipeline':
       return 'Release cockpit frontend waits on contract fixture parity.';

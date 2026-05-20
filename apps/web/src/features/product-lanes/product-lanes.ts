@@ -25,7 +25,7 @@ export const productLaneIds = productLanes.map((lane) => lane.id);
 
 const productLaneIdSet = new Set<string>(productLaneIds);
 
-export const supportedWorkbenchSearchParams = [
+export const supportedProductLaneSearchParams = [
   'project_id',
   'actor_id',
   'owner_actor_id',
