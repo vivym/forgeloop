@@ -14,9 +14,11 @@ import {
   type CodexRuntimeProfileRevision,
 } from '../../packages/domain/src/index';
 import {
+  codex_credential_bindings,
   assertResettableDatabaseUrl,
   codex_credential_binding_versions,
   codex_launch_leases,
+  codex_runtime_profiles,
   codex_runtime_profile_revisions,
   codex_worker_registrations,
   createDbClient,
@@ -495,6 +497,157 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             now: later,
           }),
         ).resolves.toMatchObject({ id: workerId, capabilities: ['generation'] });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('does not project credential metadata outside the requested runtime scope', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { binding } = await seedRuntime(repository);
+        const projectB = profileRevision();
+        await repository.createCodexRuntimeProfileWithRevision(projectB);
+
+        const status = await repository.getCodexRuntimeStatus({
+          project_id: projectB.revision.allowed_scopes[0]!.project_id,
+          repo_id: projectB.revision.allowed_scopes[0]!.repo_id,
+          target_kind: 'generation',
+          credential_binding_id: binding.id,
+          now: later,
+        });
+
+        expect(status).toMatchObject({
+          runtime_profile_id: projectB.profile.id,
+          runtime_profile_revision_id: projectB.revision.id,
+          blocker_codes: [],
+        });
+        expect(status).not.toHaveProperty('credential_binding_id');
+        expect(status).not.toHaveProperty('credential_binding_version_id');
+        expect(status).not.toHaveProperty('credential_payload_digest');
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('rejects inconsistent runtime profile and credential creates without partial writes', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { profile, revision } = profileRevision();
+
+        await expect(
+          repository.createCodexRuntimeProfileWithRevision({
+            profile: { ...profile, active_revision_id: randomUUID() },
+            revision,
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError' });
+        await expect(client.db.select().from(codex_runtime_profiles)).resolves.toEqual([]);
+
+        await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+        const duplicateRevisionId = randomUUID();
+        const duplicate = {
+          profile: { ...profile, active_revision_id: duplicateRevisionId, updated_at: later },
+          revision: { ...revision, id: duplicateRevisionId },
+        };
+        await expect(repository.createCodexRuntimeProfileWithRevision(duplicate)).rejects.toMatchObject({ name: 'DomainError' });
+
+        const secretPayload = { env: { OPENAI_API_KEY: 'sk-test-private-key' } };
+        const binding: CodexCredentialBinding = {
+          id: randomUUID(),
+          profile_id: profile.id,
+          project_id: revision.allowed_scopes[0]!.project_id,
+          repo_id: revision.allowed_scopes[0]!.repo_id,
+          provider: 'openai',
+          purpose: 'model_provider',
+          active_version_id: randomUUID(),
+          created_by_actor_id: revision.created_by_actor_id,
+          created_at: now,
+          updated_at: now,
+        };
+        const version: CodexCredentialBindingVersion = {
+          id: binding.active_version_id!,
+          binding_id: binding.id,
+          version_number: 1,
+          status: 'active',
+          payload_digest: codexCredentialPayloadDigest(secretPayload),
+          created_by_actor_id: revision.created_by_actor_id,
+          created_at: now,
+        };
+
+        await expect(
+          repository.createCodexCredentialBindingWithVersion({
+            binding: { ...binding, active_version_id: randomUUID() },
+            version,
+            secret_payload_json: secretPayload,
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError' });
+        await expect(client.db.select().from(codex_credential_bindings)).resolves.toEqual([]);
+
+        await repository.createCodexCredentialBindingWithVersion({ binding, version, secret_payload_json: secretPayload });
+        const duplicateVersionId = randomUUID();
+        await expect(
+          repository.createCodexCredentialBindingWithVersion({
+            binding: { ...binding, active_version_id: duplicateVersionId, updated_at: later },
+            version: { ...version, id: duplicateVersionId },
+            secret_payload_json: secretPayload,
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError' });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('does not let heartbeat under-reporting free an occupied worker slot', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { workerId, sessionToken, revision, binding, version } = await seedRuntime(repository, { maxConcurrency: 1 });
+
+        await repository.heartbeatCodexWorker({
+          worker_id: workerId,
+          session_token: sessionToken,
+          nonce: 'heartbeat-underreported-lease-count-nonce',
+          nonce_timestamp: later,
+          status: 'active',
+          control_channel_status: 'connected',
+          active_lease_count: 0,
+          capabilities: ['generation'],
+          now: later,
+        });
+
+        await expect(
+          repository.createOrReplayCodexLaunchLease({
+            id: randomUUID(),
+            lease_request_id: `lease-request-underreported-${randomUUID()}`,
+            target: {
+              target_type: 'generation_request',
+              target_id: randomUUID(),
+              target_kind: 'generation',
+              project_id: binding.project_id,
+              repo_id: binding.repo_id,
+            },
+            worker_id: workerId,
+            runtime_profile_revision_id: revision.id,
+            runtime_profile_digest: revision.profile_digest,
+            credential_binding_id: binding.id,
+            credential_binding_version_id: version.id,
+            credential_payload_digest: version.payload_digest,
+            docker_image_digest: revision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(revision.network_policy),
+            network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+            launch_token: 'launch-token-underreported',
+            expires_at: expiresAt,
+            now: later,
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_launch_lease_denied',
+        });
       } finally {
         await client.pool.end();
       }

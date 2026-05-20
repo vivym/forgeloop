@@ -379,16 +379,60 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     input: CreateCodexRuntimeProfileWithRevisionInput,
   ): Promise<CodexRuntimeProfileRevision> {
     validateCodexRuntimeProfileRevision(input.revision);
+    if (input.profile.active_revision_id !== input.revision.id || input.revision.profile_id !== input.profile.id) {
+      throw codexDenied('codex_launch_lease_denied', 'Runtime profile active revision fence was rejected.');
+    }
     const existingRevision = this.codexRuntimeProfileRevisions.get(input.revision.id);
-    if (existingRevision !== undefined) {
-      if (!valuesEqual(existingRevision, input.revision)) {
-        throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision is immutable.');
+    const existingProfile = this.codexRuntimeProfiles.get(input.profile.id);
+    const existingRevisionByNumber = valuesFor(this.codexRuntimeProfileRevisions).find(
+      (revision) => revision.profile_id === input.revision.profile_id && revision.revision_number === input.revision.revision_number,
+    );
+    if (existingProfile !== undefined || existingRevision !== undefined || existingRevisionByNumber !== undefined) {
+      if (
+        existingProfile !== undefined &&
+        existingRevision !== undefined &&
+        existingRevisionByNumber?.id === existingRevision.id &&
+        valuesEqual(existingProfile, input.profile) &&
+        valuesEqual(existingRevision, input.revision)
+      ) {
+        return clone(existingRevision);
       }
-      return clone(existingRevision);
+      throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision is immutable.');
+    }
+    if (input.profile.target_kind !== input.revision.target_kind || input.profile.environment !== input.revision.environment) {
+      throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision does not match parent profile.');
     }
     this.codexRuntimeProfiles.set(input.profile.id, clone(input.profile));
     this.codexRuntimeProfileRevisions.set(input.revision.id, clone(input.revision));
     return clone(input.revision);
+  }
+
+  private getScopedCodexCredentialBindingPublic(input: ResolveCodexCredentialForLaunchInput): CodexCredentialBindingPublic | undefined {
+    const binding = this.codexCredentialBindings.get(input.credential_binding_id);
+    if (binding === undefined || binding.project_id !== input.project_id) {
+      return undefined;
+    }
+    if (binding.repo_id !== undefined && binding.repo_id !== input.repo_id) {
+      return undefined;
+    }
+    const profile = this.codexRuntimeProfiles.get(binding.profile_id);
+    if (profile?.target_kind !== input.target_kind || binding.active_version_id === undefined) {
+      return undefined;
+    }
+    const activeVersion = this.codexCredentialBindingVersions.get(binding.active_version_id)?.version;
+    if (activeVersion === undefined || activeVersion.status !== 'active') {
+      return undefined;
+    }
+    return {
+      id: binding.id,
+      profile_id: binding.profile_id,
+      project_id: binding.project_id,
+      ...(binding.repo_id !== undefined ? { repo_id: binding.repo_id } : {}),
+      provider: binding.provider,
+      purpose: binding.purpose,
+      active_version_id: activeVersion.id,
+      active_payload_digest: activeVersion.payload_digest,
+    };
   }
 
   async getActiveCodexRuntimeProfileRevision(
@@ -410,19 +454,31 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async createCodexCredentialBindingWithVersion(
     input: CreateCodexCredentialBindingWithVersionInput,
   ): Promise<CodexCredentialBindingVersion> {
+    if (input.binding.active_version_id !== input.version.id || input.version.binding_id !== input.binding.id) {
+      throw codexDenied('codex_launch_lease_denied', 'Credential binding active version fence was rejected.');
+    }
     const payloadDigest = codexCredentialPayloadDigest(input.secret_payload_json);
     if (payloadDigest !== input.version.payload_digest) {
       throw codexDenied('codex_launch_lease_denied', 'Credential payload digest does not match secret payload.');
     }
+    const existingBinding = this.codexCredentialBindings.get(input.binding.id);
     const existingVersion = this.codexCredentialBindingVersions.get(input.version.id);
-    if (existingVersion !== undefined) {
+    const existingVersionByNumber = valuesFor(this.codexCredentialBindingVersions).find(
+      (record) =>
+        record.version.binding_id === input.version.binding_id && record.version.version_number === input.version.version_number,
+    );
+    if (existingBinding !== undefined || existingVersion !== undefined || existingVersionByNumber !== undefined) {
       if (
-        !valuesEqual(existingVersion.version, input.version) ||
-        !valuesEqual(existingVersion.secret_payload_json, input.secret_payload_json)
+        existingBinding !== undefined &&
+        existingVersion !== undefined &&
+        existingVersionByNumber?.version.id === existingVersion.version.id &&
+        valuesEqual(existingBinding, input.binding) &&
+        valuesEqual(existingVersion.version, input.version) &&
+        valuesEqual(existingVersion.secret_payload_json, input.secret_payload_json)
       ) {
-        throw codexDenied('codex_launch_lease_denied', 'Credential binding version is immutable.');
+        return clone(existingVersion.version);
       }
-      return clone(existingVersion.version);
+      throw codexDenied('codex_launch_lease_denied', 'Credential binding version is immutable.');
     }
     this.codexCredentialBindings.set(input.binding.id, clone(input.binding));
     this.codexCredentialBindingVersions.set(input.version.id, {
@@ -482,7 +538,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
     const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
     const credential =
-      input.credential_binding_id !== undefined ? await this.getCodexCredentialBindingPublic(input.credential_binding_id) : undefined;
+      input.credential_binding_id !== undefined
+        ? this.getScopedCodexCredentialBindingPublic({
+            credential_binding_id: input.credential_binding_id,
+            target_kind: input.target_kind,
+            project_id: input.project_id,
+            ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+            now: input.now,
+          })
+        : undefined;
     const worker =
       profileRevision !== undefined
         ? await this.findAvailableCodexWorker({
@@ -649,7 +713,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       status: normalizeWorkerStatus(input.status),
       control_channel_status: normalizeControlChannelStatus(input.control_channel_status),
       capabilities: clone(input.capabilities),
-      active_lease_count: input.active_lease_count,
       last_heartbeat_at: input.now,
     };
     this.codexWorkerRegistrations.set(input.worker_id, clone(worker));

@@ -478,20 +478,97 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     input: CreateCodexRuntimeProfileWithRevisionInput,
   ): Promise<CodexRuntimeProfileRevision> {
     validateCodexRuntimeProfileRevision(input.revision);
-    const existingRevision = await this.getById<CodexRuntimeProfileRevision>(
-      codex_runtime_profile_revisions,
-      codex_runtime_profile_revisions.id,
-      input.revision.id,
-    );
-    if (existingRevision !== undefined) {
-      if (!valuesEqual(existingRevision, input.revision)) {
+    if (input.profile.active_revision_id !== input.revision.id || input.revision.profile_id !== input.profile.id) {
+      throw codexDenied('codex_launch_lease_denied', 'Runtime profile active revision fence was rejected.');
+    }
+    if (input.profile.target_kind !== input.revision.target_kind || input.profile.environment !== input.revision.environment) {
+      throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision does not match parent profile.');
+    }
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      const existingProfile = await repository.getById<CodexRuntimeProfile>(
+        codex_runtime_profiles,
+        codex_runtime_profiles.id,
+        input.profile.id,
+      );
+      const existingRevision = await repository.getById<CodexRuntimeProfileRevision>(
+        codex_runtime_profile_revisions,
+        codex_runtime_profile_revisions.id,
+        input.revision.id,
+      );
+      const [existingRevisionByNumberRow] = await tx
+        .select()
+        .from(codex_runtime_profile_revisions)
+        .where(
+          and(
+            eq(codex_runtime_profile_revisions.profileId, input.revision.profile_id),
+            eq(codex_runtime_profile_revisions.revisionNumber, input.revision.revision_number),
+          ),
+        )
+        .limit(1);
+      const existingRevisionByNumber =
+        existingRevisionByNumberRow === undefined
+          ? undefined
+          : fromDbRecord<CodexRuntimeProfileRevision>(existingRevisionByNumberRow);
+      if (existingProfile !== undefined || existingRevision !== undefined || existingRevisionByNumber !== undefined) {
+        if (
+          existingProfile !== undefined &&
+          existingRevision !== undefined &&
+          existingRevisionByNumber?.id === existingRevision.id &&
+          valuesEqual(existingProfile, input.profile) &&
+          valuesEqual(existingRevision, input.revision)
+        ) {
+          return existingRevision;
+        }
         throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision is immutable.');
       }
-      return existingRevision;
-    }
-    await this.upsert(codex_runtime_profiles, codex_runtime_profiles.id, input.profile);
-    await this.db.insert(codex_runtime_profile_revisions).values(toDbRecord(input.revision, codex_runtime_profile_revisions) as never);
-    return input.revision;
+      const [insertedProfile] = await tx
+        .insert(codex_runtime_profiles)
+        .values(toDbRecord(input.profile, codex_runtime_profiles) as never)
+        .onConflictDoNothing()
+        .returning({ id: codex_runtime_profiles.id });
+      if (insertedProfile === undefined) {
+        const racedProfile = await repository.getById<CodexRuntimeProfile>(
+          codex_runtime_profiles,
+          codex_runtime_profiles.id,
+          input.profile.id,
+        );
+        if (!valuesEqual(racedProfile, input.profile)) {
+          throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision is immutable.');
+        }
+      }
+      const [insertedRevision] = await tx
+        .insert(codex_runtime_profile_revisions)
+        .values(toDbRecord(input.revision, codex_runtime_profile_revisions) as never)
+        .onConflictDoNothing()
+        .returning({ id: codex_runtime_profile_revisions.id });
+      if (insertedRevision === undefined) {
+        const racedRevision = await repository.getById<CodexRuntimeProfileRevision>(
+          codex_runtime_profile_revisions,
+          codex_runtime_profile_revisions.id,
+          input.revision.id,
+        );
+        const [racedRevisionByNumberRow] = await tx
+          .select()
+          .from(codex_runtime_profile_revisions)
+          .where(
+            and(
+              eq(codex_runtime_profile_revisions.profileId, input.revision.profile_id),
+              eq(codex_runtime_profile_revisions.revisionNumber, input.revision.revision_number),
+            ),
+          )
+          .limit(1);
+        const racedRevisionByNumber =
+          racedRevisionByNumberRow === undefined
+            ? undefined
+            : fromDbRecord<CodexRuntimeProfileRevision>(racedRevisionByNumberRow);
+        if (racedRevision !== undefined && racedRevisionByNumber?.id === racedRevision.id && valuesEqual(racedRevision, input.revision)) {
+          return racedRevision;
+        }
+        throw codexDenied('codex_launch_lease_denied', 'Runtime profile revision is immutable.');
+      }
+      return input.revision;
+    });
   }
 
   async getActiveCodexRuntimeProfileRevision(
@@ -517,32 +594,118 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async createCodexCredentialBindingWithVersion(
     input: CreateCodexCredentialBindingWithVersionInput,
   ): Promise<CodexCredentialBindingVersion> {
+    if (input.binding.active_version_id !== input.version.id || input.version.binding_id !== input.binding.id) {
+      throw codexDenied('codex_launch_lease_denied', 'Credential binding active version fence was rejected.');
+    }
     const payloadDigest = codexCredentialPayloadDigest(input.secret_payload_json);
     if (payloadDigest !== input.version.payload_digest) {
       throw codexDenied('codex_launch_lease_denied', 'Credential payload digest does not match secret payload.');
     }
-    const [existingVersionRow] = await this.db
-      .select()
-      .from(codex_credential_binding_versions)
-      .where(eq(codex_credential_binding_versions.id, input.version.id))
-      .limit(1);
-    if (existingVersionRow !== undefined) {
-      const existingVersion = fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(existingVersionRow);
-      const { secret_payload_json: existingSecretPayload, ...existingPublicVersion } = existingVersion;
-      if (!valuesEqual(existingPublicVersion, input.version) || !valuesEqual(existingSecretPayload, input.secret_payload_json)) {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      const existingBinding = await repository.getById<CodexCredentialBinding>(
+        codex_credential_bindings,
+        codex_credential_bindings.id,
+        input.binding.id,
+      );
+      const [existingVersionRow] = await tx
+        .select()
+        .from(codex_credential_binding_versions)
+        .where(eq(codex_credential_binding_versions.id, input.version.id))
+        .limit(1);
+      const existingVersion =
+        existingVersionRow === undefined
+          ? undefined
+          : fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(existingVersionRow);
+      const [existingVersionByNumberRow] = await tx
+        .select()
+        .from(codex_credential_binding_versions)
+        .where(
+          and(
+            eq(codex_credential_binding_versions.bindingId, input.version.binding_id),
+            eq(codex_credential_binding_versions.versionNumber, input.version.version_number),
+          ),
+        )
+        .limit(1);
+      const existingVersionByNumber =
+        existingVersionByNumberRow === undefined
+          ? undefined
+          : fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(existingVersionByNumberRow);
+
+      if (existingBinding !== undefined || existingVersion !== undefined || existingVersionByNumber !== undefined) {
+        const { secret_payload_json: existingSecretPayload, ...existingPublicVersion } = existingVersion ?? {};
+        if (
+          existingBinding !== undefined &&
+          existingVersion !== undefined &&
+          existingVersionByNumber?.id === existingVersion.id &&
+          valuesEqual(existingBinding, input.binding) &&
+          valuesEqual(existingPublicVersion, input.version) &&
+          valuesEqual(existingSecretPayload, input.secret_payload_json)
+        ) {
+          return existingPublicVersion as CodexCredentialBindingVersion;
+        }
         throw codexDenied('codex_launch_lease_denied', 'Credential binding version is immutable.');
       }
-      return existingPublicVersion;
-    }
-    await this.upsert(codex_credential_bindings, codex_credential_bindings.id, input.binding);
-    await this.db
-      .insert(codex_credential_binding_versions)
-      .values({
-        ...toDbRecord(input.version, codex_credential_binding_versions),
-        secretPayloadJson: input.secret_payload_json,
-      } as never)
-      .onConflictDoNothing();
-    return input.version;
+      const [insertedBinding] = await tx
+        .insert(codex_credential_bindings)
+        .values(toDbRecord(input.binding, codex_credential_bindings) as never)
+        .onConflictDoNothing()
+        .returning({ id: codex_credential_bindings.id });
+      if (insertedBinding === undefined) {
+        const racedBinding = await repository.getById<CodexCredentialBinding>(
+          codex_credential_bindings,
+          codex_credential_bindings.id,
+          input.binding.id,
+        );
+        if (!valuesEqual(racedBinding, input.binding)) {
+          throw codexDenied('codex_launch_lease_denied', 'Credential binding version is immutable.');
+        }
+      }
+      const [insertedVersion] = await tx
+        .insert(codex_credential_binding_versions)
+        .values({
+          ...toDbRecord(input.version, codex_credential_binding_versions),
+          secretPayloadJson: input.secret_payload_json,
+        } as never)
+        .onConflictDoNothing()
+        .returning({ id: codex_credential_binding_versions.id });
+      if (insertedVersion === undefined) {
+        const [racedVersionRow] = await tx
+          .select()
+          .from(codex_credential_binding_versions)
+          .where(eq(codex_credential_binding_versions.id, input.version.id))
+          .limit(1);
+        const racedVersion =
+          racedVersionRow === undefined
+            ? undefined
+            : fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(racedVersionRow);
+        const [racedVersionByNumberRow] = await tx
+          .select()
+          .from(codex_credential_binding_versions)
+          .where(
+            and(
+              eq(codex_credential_binding_versions.bindingId, input.version.binding_id),
+              eq(codex_credential_binding_versions.versionNumber, input.version.version_number),
+            ),
+          )
+          .limit(1);
+        const racedVersionByNumber =
+          racedVersionByNumberRow === undefined
+            ? undefined
+            : fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(racedVersionByNumberRow);
+        const { secret_payload_json: racedSecretPayload, ...racedPublicVersion } = racedVersion ?? {};
+        if (
+          racedVersion !== undefined &&
+          racedVersionByNumber?.id === racedVersion.id &&
+          valuesEqual(racedPublicVersion, input.version) &&
+          valuesEqual(racedSecretPayload, input.secret_payload_json)
+        ) {
+          return racedPublicVersion as CodexCredentialBindingVersion;
+        }
+        throw codexDenied('codex_launch_lease_denied', 'Credential binding version is immutable.');
+      }
+      return input.version;
+    });
   }
 
   async getCodexCredentialBindingPublic(id: string): Promise<CodexCredentialBindingPublic | undefined> {
@@ -567,6 +730,44 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       purpose: binding.purpose,
       ...(binding.active_version_id === undefined ? {} : { active_version_id: binding.active_version_id }),
       ...(activeVersion?.payload_digest === undefined ? {} : { active_payload_digest: activeVersion.payload_digest }),
+    };
+  }
+
+  private async getScopedCodexCredentialBindingPublic(
+    input: ResolveCodexCredentialForLaunchInput,
+  ): Promise<CodexCredentialBindingPublic | undefined> {
+    const binding = await this.getById<CodexCredentialBinding>(
+      codex_credential_bindings,
+      codex_credential_bindings.id,
+      input.credential_binding_id,
+    );
+    if (binding === undefined || binding.project_id !== input.project_id) {
+      return undefined;
+    }
+    if (binding.repo_id !== undefined && binding.repo_id !== input.repo_id) {
+      return undefined;
+    }
+    const profile = await this.getById<CodexRuntimeProfile>(codex_runtime_profiles, codex_runtime_profiles.id, binding.profile_id);
+    if (profile?.target_kind !== input.target_kind || binding.active_version_id === undefined) {
+      return undefined;
+    }
+    const activeVersion = await this.getById<CodexCredentialBindingVersion>(
+      codex_credential_binding_versions,
+      codex_credential_binding_versions.id,
+      binding.active_version_id,
+    );
+    if (activeVersion === undefined || activeVersion.status !== 'active') {
+      return undefined;
+    }
+    return {
+      id: binding.id,
+      profile_id: binding.profile_id,
+      project_id: binding.project_id,
+      ...(binding.repo_id === undefined ? {} : { repo_id: binding.repo_id }),
+      provider: binding.provider,
+      purpose: binding.purpose,
+      active_version_id: activeVersion.id,
+      active_payload_digest: activeVersion.payload_digest,
     };
   }
 
@@ -612,7 +813,15 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
     const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
     const credential =
-      input.credential_binding_id === undefined ? undefined : await this.getCodexCredentialBindingPublic(input.credential_binding_id);
+      input.credential_binding_id === undefined
+        ? undefined
+        : await this.getScopedCodexCredentialBindingPublic({
+            credential_binding_id: input.credential_binding_id,
+            target_kind: input.target_kind,
+            project_id: input.project_id,
+            ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+            now: input.now,
+          });
     const worker =
       profileRevision === undefined
         ? undefined
@@ -842,7 +1051,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         status: normalizeWorkerStatus(input.status),
         controlChannelStatus: normalizeControlChannelStatus(input.control_channel_status),
         capabilitiesJson: activeCapabilitiesJson,
-        leaseCount: input.active_lease_count,
         lastHeartbeatAt: input.now,
       } as never)
       .where(eq(codex_worker_registrations.id, input.worker_id))

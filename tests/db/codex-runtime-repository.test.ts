@@ -177,7 +177,17 @@ const generationTarget = (overrides: Partial<CodexLaunchTarget> = {}): CodexLaun
 
 const seedProfileAndCredential = async (repository: DeliveryRepository, targetKind: CodexLaunchTarget['target_kind'] = 'generation') => {
   const { profile, revision } = profileRevision({ target_kind: targetKind });
-  const { binding, version, secretPayload } = credential({ profile_id: profile.id });
+  const credentialIds =
+    targetKind === 'generation'
+      ? {}
+      : {
+          binding: { id: `credential-binding-${targetKind}` },
+          version: { id: `credential-version-${targetKind}` },
+        };
+  const { binding, version, secretPayload } = credential(
+    { profile_id: profile.id, ...credentialIds.binding },
+    credentialIds.version,
+  );
 
   await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
   await repository.createCodexCredentialBindingWithVersion({
@@ -358,6 +368,34 @@ describe('codex runtime repository behavior', () => {
     expect(JSON.stringify(status)).not.toContain('must-stay-private');
   });
 
+  it('does not project credential metadata outside the requested runtime scope', async () => {
+    const repository = createRepository();
+    const { binding } = await seedProfileAndCredential(repository);
+    const projectB = profileRevision({
+      id: 'runtime-profile-revision-project-2',
+      profile_id: 'runtime-profile-project-2',
+      allowed_scopes: [{ project_id: 'project-2', repo_id: 'repo-2' }],
+    });
+    await repository.createCodexRuntimeProfileWithRevision(projectB);
+
+    const status = await repository.getCodexRuntimeStatus({
+      project_id: 'project-2',
+      repo_id: 'repo-2',
+      target_kind: 'generation',
+      credential_binding_id: binding.id,
+      now,
+    });
+
+    expect(status).toMatchObject({
+      runtime_profile_id: projectB.profile.id,
+      runtime_profile_revision_id: projectB.revision.id,
+      blocker_codes: [],
+    });
+    expect(status).not.toHaveProperty('credential_binding_id');
+    expect(status).not.toHaveProperty('credential_binding_version_id');
+    expect(status).not.toHaveProperty('credential_payload_digest');
+  });
+
   it('registers workers and heartbeat updates availability', async () => {
     const repository = createRepository();
     await seedProfileAndCredential(repository);
@@ -492,6 +530,30 @@ describe('codex runtime repository behavior', () => {
     ).resolves.toEqual(revision);
   });
 
+  it('rejects runtime profile creates with inconsistent active revision or duplicate revision number', async () => {
+    const repository = createRepository();
+    const { profile, revision } = profileRevision();
+
+    await expect(
+      repository.createCodexRuntimeProfileWithRevision({
+        profile: { ...profile, active_revision_id: 'runtime-profile-revision-missing' },
+        revision,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+
+    await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+    const duplicate = profileRevision({
+      id: 'runtime-profile-revision-duplicate',
+      profile_id: profile.id,
+      revision_number: revision.revision_number,
+    });
+    await expect(repository.createCodexRuntimeProfileWithRevision(duplicate)).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+  });
+
   it('keeps credential versions immutable on duplicate create', async () => {
     const repository = createRepository();
     const { profile, revision } = profileRevision();
@@ -529,6 +591,47 @@ describe('codex runtime repository behavior', () => {
         now,
       }),
     ).resolves.toMatchObject({ payload: secretPayload, payload_digest: version.payload_digest });
+  });
+
+  it('rejects credential binding creates with inconsistent active version or duplicate version number', async () => {
+    const repository = createRepository();
+    const { profile, revision } = profileRevision();
+    const { binding, version, secretPayload } = credential({ profile_id: profile.id });
+
+    await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+    await expect(
+      repository.createCodexCredentialBindingWithVersion({
+        binding: { ...binding, active_version_id: 'credential-version-missing' },
+        version,
+        secret_payload_json: secretPayload,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+    await expect(
+      repository.createCodexCredentialBindingWithVersion({
+        binding,
+        version: { ...version, binding_id: 'credential-binding-missing' },
+        secret_payload_json: secretPayload,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+
+    await repository.createCodexCredentialBindingWithVersion({ binding, version, secret_payload_json: secretPayload });
+    const duplicateVersion = {
+      ...version,
+      id: 'credential-version-duplicate',
+    };
+    await expect(
+      repository.createCodexCredentialBindingWithVersion({
+        binding: { ...binding, active_version_id: duplicateVersion.id },
+        version: duplicateVersion,
+        secret_payload_json: secretPayload,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
   });
 
   it('keeps consumed bootstrap tokens immutable on duplicate create', async () => {
@@ -796,6 +899,47 @@ describe('codex runtime repository behavior', () => {
         now: later,
       }),
     ).resolves.toMatchObject({ id: 'launch-lease-2', worker_id: 'worker-1' });
+  });
+
+  it('does not let heartbeat under-reporting free an occupied worker slot', async () => {
+    const repository = createRepository();
+    await createLaunchLease(repository, {}, { max_concurrency: 1 });
+    const seeded = { revision: profileRevision().revision, binding: credential().binding, version: credential().version };
+
+    await repository.heartbeatCodexWorker({
+      worker_id: 'worker-1',
+      session_token: 'session-token-1',
+      nonce: 'heartbeat-underreported-lease-count-nonce',
+      nonce_timestamp: later,
+      status: 'active',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now: later,
+    });
+
+    await expect(
+      repository.createOrReplayCodexLaunchLease({
+        id: 'launch-lease-2',
+        lease_request_id: 'lease-request-2',
+        target: generationTarget({ target_id: 'generation-2' }),
+        worker_id: 'worker-1',
+        runtime_profile_revision_id: seeded.revision.id,
+        runtime_profile_digest: seeded.revision.profile_digest,
+        credential_binding_id: seeded.binding.id,
+        credential_binding_version_id: seeded.version.id,
+        credential_payload_digest: seeded.version.payload_digest,
+        docker_image_digest: seeded.revision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        launch_token: 'launch-token-2',
+        expires_at: expiresAt,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
   });
 
   it('releases worker capacity when a leased launch is revoked', async () => {
