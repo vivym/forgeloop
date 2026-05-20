@@ -15,6 +15,7 @@ import {
 } from '../../packages/domain/src/index';
 import {
   assertResettableDatabaseUrl,
+  codex_credential_binding_versions,
   codex_launch_leases,
   createDbClient,
   DrizzleDeliveryRepository,
@@ -242,7 +243,7 @@ const seedRuntime = async (repository: DeliveryRepository) => {
     now,
   });
 
-  return { lease, workerId, sessionToken, secretPayload };
+  return { lease, workerId, sessionToken, secretPayload, profile, revision, binding, version };
 };
 
 describe('Codex runtime Drizzle materialization concurrency', () => {
@@ -326,6 +327,108 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         expect(row).toEqual({
           status: 'released',
           materializationRequestHash: expectedHash,
+        });
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('does not consume a launch lease when materialization dependencies are unavailable', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const repository = new DrizzleDeliveryRepository(client.db);
+        const { lease, workerId, sessionToken, version } = await seedRuntime(repository);
+
+        await client.db
+          .update(codex_credential_binding_versions)
+          .set({ status: 'revoked' } as never)
+          .where(eq(codex_credential_binding_versions.id, version.id));
+
+        await expect(
+          repository.materializeCodexLaunchLease({
+            lease_id: lease.id,
+            worker_id: workerId,
+            launch_token: lease.lease_token,
+            worker_session_token: sessionToken,
+            nonce: 'dependency-failure-nonce',
+            nonce_timestamp: later,
+            materialization_request_hash: tokenHash('dependency-failure-request'),
+            active_fence: {
+              action_claim_token_hash: tokenHash('action-claim-token-1'),
+              precondition_fingerprint: 'precondition-1',
+            },
+            now: later,
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_launch_materialization_denied',
+        });
+
+        const [row] = await client.db
+          .select({
+            status: codex_launch_leases.status,
+            materializationRequestHash: codex_launch_leases.materializationRequestHash,
+          })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, lease.id))
+          .limit(1);
+        expect(row).toEqual({
+          status: 'leased',
+          materializationRequestHash: null,
+        });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('allows only one concurrent launch lease to claim the final worker slot', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db);
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db);
+        const { workerId, revision, binding, version } = await seedRuntime(firstRepository);
+
+        const leaseInput = (suffix: string) => ({
+          id: randomUUID(),
+          lease_request_id: `lease-request-${suffix}-${randomUUID()}`,
+          target: {
+            target_type: 'generation_request' as const,
+            target_id: randomUUID(),
+            target_kind: 'generation' as const,
+            project_id: binding.project_id,
+            repo_id: binding.repo_id,
+          },
+          worker_id: workerId,
+          runtime_profile_revision_id: revision.id,
+          runtime_profile_digest: revision.profile_digest,
+          credential_binding_id: binding.id,
+          credential_binding_version_id: version.id,
+          credential_payload_digest: version.payload_digest,
+          docker_image_digest: revision.docker_image_digest,
+          network_policy_digest: codexCanonicalDigest(revision.network_policy),
+          network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+          launch_token: `launch-token-${suffix}`,
+          expires_at: expiresAt,
+          now,
+        });
+
+        const [first, second] = await Promise.allSettled([
+          firstRepository.createOrReplayCodexLaunchLease(leaseInput('overbook-1')),
+          secondRepository.createOrReplayCodexLaunchLease(leaseInput('overbook-2')),
+        ]);
+
+        const successes = [first, second].filter((result) => result.status === 'fulfilled');
+        const failures = [first, second].filter((result) => result.status === 'rejected');
+        expect(successes).toHaveLength(1);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({
+          reason: {
+            name: 'DomainError',
+            code: 'codex_launch_lease_denied',
+          },
         });
       } finally {
         await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);

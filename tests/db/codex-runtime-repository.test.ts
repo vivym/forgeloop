@@ -383,6 +383,91 @@ describe('codex runtime repository behavior', () => {
     ).resolves.toMatchObject({ id: worker.id, status: 'active' });
   });
 
+  it('rejects heartbeat capability escalation beyond registration capabilities', async () => {
+    const repository = createRepository();
+    await seedProfileAndCredential(repository, 'run_execution');
+    const { worker, sessionToken } = await seedWorker(repository, { capabilities: ['generation'] });
+
+    await expect(
+      repository.heartbeatCodexWorker({
+        worker_id: worker.id,
+        session_token: sessionToken,
+        nonce: 'heartbeat-escalation-nonce',
+        nonce_timestamp: later,
+        status: 'active',
+        control_channel_status: 'connected',
+        active_lease_count: 0,
+        capabilities: ['generation', 'run_execution'],
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
+
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'run_execution',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision({ target_kind: 'run_execution' }).revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now: later,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects bootstrap token replay from replacing an existing worker session', async () => {
+    const repository = createRepository();
+    const { sessionToken, worker } = await seedWorker(repository);
+
+    await expect(
+      repository.upsertCodexWorkerRegistration({
+        worker_id: 'worker-2',
+        worker_identity: worker.worker_identity,
+        version: '0.1.0',
+        bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
+        bootstrap_token_version: 1,
+        session_token: 'replacement-session-token',
+        status: 'active',
+        control_channel_status: 'connected',
+        allowed_scopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+        capabilities: ['generation'],
+        docker_image_digests: [`sha256:${'a'.repeat(64)}`],
+        network_policy_digests: [codexCanonicalDigest(profileRevision().revision.network_policy)],
+        network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+        host_worker_uid: 501,
+        host_worker_gid: 20,
+        lease_count: 0,
+        max_concurrency: 2,
+        labels: { host: 'test-host' },
+        session_public_key_id: 'session-key-2',
+        session_public_key_algorithm: 'x25519',
+        session_public_key_material: 'replacement-public-key-material',
+        session_public_key_expires_at: expiresAt,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
+
+    await expect(
+      repository.heartbeatCodexWorker({
+        worker_id: worker.id,
+        session_token: sessionToken,
+        nonce: 'original-session-still-valid-nonce',
+        nonce_timestamp: later,
+        status: 'active',
+        control_channel_status: 'connected',
+        active_lease_count: 0,
+        capabilities: ['generation'],
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: worker.id });
+  });
+
   it('rejects nonce replay for worker session operations', async () => {
     const repository = createRepository();
     const { worker, sessionToken } = await seedWorker(repository);
@@ -409,7 +494,29 @@ describe('codex runtime repository behavior', () => {
   it('replays launch leases idempotently for the same lease_request_id', async () => {
     const repository = createRepository();
     const first = await createLaunchLease(repository);
-    const second = await createLaunchLease(repository);
+    const { revision } = profileRevision();
+    const { binding, version } = credential();
+    const second = await repository.createOrReplayCodexLaunchLease({
+      id: 'launch-lease-1',
+      lease_request_id: 'lease-request-1',
+      target: generationTarget(),
+      worker_id: 'worker-1',
+      runtime_profile_revision_id: revision.id,
+      runtime_profile_digest: revision.profile_digest,
+      credential_binding_id: binding.id,
+      credential_binding_version_id: version.id,
+      credential_payload_digest: version.payload_digest,
+      docker_image_digest: revision.docker_image_digest,
+      network_policy_digest: codexCanonicalDigest(revision.network_policy),
+      network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+      launch_token: 'launch-token-1',
+      action_type: 'codex_generation',
+      action_attempt: 1,
+      action_claim_token_hash: tokenHash('action-claim-token-1'),
+      precondition_fingerprint: 'precondition-1',
+      expires_at: expiresAt,
+      now,
+    });
 
     expect(second).toEqual(first);
   });

@@ -235,6 +235,7 @@ interface CodexWorkerRegistrationPrivateRecord {
   session_token_hash: string;
   bootstrap_token_version: number;
   allowed_scopes: readonly CodexRuntimeScope[];
+  target_kind_capability_ceiling: readonly CodexRuntimeTargetKind[];
   docker_image_digests: readonly string[];
   network_policy_digests: readonly string[];
   network_provider_config_digests: readonly string[];
@@ -543,6 +544,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token proof was rejected.');
     }
     if (
+      this.codexWorkerRegistrations.has(input.worker_id) ||
+      [...this.codexWorkerRegistrations.values()].some((worker) => worker.registration.worker_identity === input.worker_identity)
+    ) {
+      throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token was already consumed.');
+    }
+    if (
       !input.allowed_scopes.every((scope) => codexRuntimeScopeMatches(bootstrap.allowed_scopes_json, scope)) ||
       !includesAll(capabilityList(bootstrap.allowed_capabilities_json, 'target_kinds'), input.capabilities) ||
       !includesAll(capabilityList(bootstrap.allowed_capabilities_json, 'docker_image_digests'), input.docker_image_digests) ||
@@ -554,6 +561,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_worker_registration_denied', 'Worker registration exceeds bootstrap token trust root.');
     }
+    this.codexWorkerBootstrapTokens.set(bootstrap.id, {
+      ...clone(bootstrap),
+      status: 'consumed',
+      consumed_at: input.now,
+    });
     const registration: CodexWorkerRegistration = {
       id: input.worker_id,
       worker_version: input.version,
@@ -574,6 +586,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       session_token_hash: codexCredentialPayloadDigest(input.session_token),
       bootstrap_token_version: input.bootstrap_token_version,
       allowed_scopes: clone(input.allowed_scopes),
+      target_kind_capability_ceiling: clone(input.capabilities),
       docker_image_digests: clone(input.docker_image_digests),
       network_policy_digests: clone(input.network_policy_digests),
       network_provider_config_digests: clone(input.network_provider_config_digests ?? []),
@@ -584,6 +597,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration> {
     const worker = this.assertWorkerSession(input.worker_id, input.session_token);
+    if (!includesAll(worker.target_kind_capability_ceiling, input.capabilities)) {
+      throw codexDenied('codex_worker_registration_denied', 'Worker heartbeat exceeds registered capability ceiling.');
+    }
     this.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
     worker.registration = {
       ...worker.registration,
