@@ -130,6 +130,7 @@ describe('SpecPlanService delivery API', () => {
       phase: 'plan',
       gate_state: 'none',
       current_spec_id: spec.id,
+      current_spec_revision_id: specRevision.id,
     });
 
     const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
@@ -163,6 +164,7 @@ describe('SpecPlanService delivery API', () => {
       phase: 'execution',
       gate_state: 'none',
       current_plan_id: plan.id,
+      current_plan_revision_id: planRevision.id,
     });
   });
 

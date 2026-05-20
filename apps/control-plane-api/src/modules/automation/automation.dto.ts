@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { generatedPackageDraftSetSchema, generatedPlanDraftSchema } from '@forgeloop/codex-runtime';
 import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
@@ -35,12 +36,16 @@ const ensurePlanDraftActionInputSchema = z
   .object({
     work_item_id: nonBlankString,
     spec_revision_id: nonBlankString,
+    prompt_version: nonBlankString.optional(),
+    output_schema_version: z.literal('plan_draft.v1').optional(),
   })
   .strict();
 
 const ensureSpecDraftActionInputSchema = z
   .object({
     work_item_id: nonBlankString,
+    prompt_version: nonBlankString.optional(),
+    output_schema_version: z.literal('spec_draft.v1').optional(),
   })
   .strict();
 
@@ -48,6 +53,8 @@ const ensurePackageDraftsActionInputSchema = z
   .object({
     plan_revision_id: nonBlankString,
     generation_key: nonBlankString,
+    prompt_version: nonBlankString.optional(),
+    output_schema_version: z.literal('package_drafts.v1').optional(),
   })
   .strict();
 
@@ -139,6 +146,9 @@ export const claimNextAutomationActionRunSchema = z
     claim_token: nonBlankString,
     lease_ms: z.number().int().positive().max(60 * 60 * 1000).optional(),
     limit: z.number().int().min(1).max(100).default(1),
+    action_type: z
+      .enum(['ensure_spec_draft', 'ensure_plan_draft', 'ensure_package_drafts', 'request_manual_path', 'project_runtime_snapshot'])
+      .optional(),
     project_id: nonBlankString.optional(),
     repo_id: nonBlankString.optional(),
     automation_scope: automationScopeSchema.optional(),
@@ -229,6 +239,8 @@ export const ensurePlanDraftCommandSchema = z
   .object({
     ...internalCommandBaseShape,
     spec_revision_id: nonBlankString,
+    generated_plan_draft: generatedPlanDraftSchema,
+    generation_artifacts: z.array(artifactRefSchema).default([]),
   })
   .strict();
 
@@ -259,7 +271,9 @@ export const ensureSpecDraftCommandSchema = z
 export const ensurePackageDraftsCommandSchema = z
   .object({
     ...internalCommandBaseShape,
-    generation_key: nonBlankString.optional(),
+    generation_key: nonBlankString,
+    generated_package_drafts: generatedPackageDraftSetSchema,
+    generation_artifacts: z.array(artifactRefSchema),
     regeneration_approval: z
       .object({
         superseded_generation_key: nonBlankString,
@@ -293,6 +307,22 @@ export const generationContextQuerySchema = z
   })
   .strict();
 
+export const planGenerationContextQuerySchema = z
+  .object({
+    spec_revision_id: nonBlankString,
+    action_run_id: nonBlankString,
+    claim_token: nonBlankString,
+  })
+  .strict();
+
+export const packageGenerationContextQuerySchema = z
+  .object({
+    generation_key: nonBlankString,
+    action_run_id: nonBlankString,
+    claim_token: nonBlankString,
+  })
+  .strict();
+
 export type CreateAutomationActionRunDto = z.infer<typeof createAutomationActionRunSchema>;
 export type ClaimNextAutomationActionRunDto = z.infer<typeof claimNextAutomationActionRunSchema>;
 export type CompleteAutomationActionRunDto = z.infer<typeof completeAutomationActionRunSchema>;
@@ -304,6 +334,8 @@ export type EnsurePlanDraftCommandDto = z.infer<typeof ensurePlanDraftCommandSch
 export type EnsureSpecDraftCommandDto = z.infer<typeof ensureSpecDraftCommandSchema>;
 export type EnsurePackageDraftsCommandDto = z.infer<typeof ensurePackageDraftsCommandSchema>;
 export type GenerationContextQueryDto = z.infer<typeof generationContextQuerySchema>;
+export type PlanGenerationContextQueryDto = z.infer<typeof planGenerationContextQuerySchema>;
+export type PackageGenerationContextQueryDto = z.infer<typeof packageGenerationContextQuerySchema>;
 export type RequestManualPathCommandDto = z.infer<typeof requestManualPathCommandSchema>;
 
 export interface AutomationGenerationRepoContextV1 {
@@ -331,6 +363,64 @@ export interface AutomationGenerationWorkItemContextV1 {
     kind?: string;
   };
   repos: AutomationGenerationRepoContextV1[];
+}
+
+export interface AutomationGenerationPlanContextV1 {
+  context_version: 'generation_context.plan.v1';
+  action_run_id: string;
+  work_item: {
+    id: string;
+    project_id: string;
+    title: string;
+    goal: string;
+    success_criteria: string[];
+    risk?: string;
+    priority?: string;
+    kind?: string;
+  };
+  spec_revision: {
+    id: string;
+    spec_id: string;
+    summary: string;
+    content: string;
+    background: string;
+    goals: string[];
+    scope_in: string[];
+    scope_out: string[];
+    acceptance_criteria: string[];
+    risk_notes: string[];
+    test_strategy_summary: string;
+    structured_document?: Record<string, unknown>;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+}
+
+export interface AutomationGenerationPackageContextV1 {
+  context_version: 'generation_context.package.v1';
+  action_run_id: string;
+  generation_key: string;
+  work_item: AutomationGenerationPlanContextV1['work_item'];
+  spec_revision: AutomationGenerationPlanContextV1['spec_revision'];
+  plan_revision: {
+    id: string;
+    plan_id: string;
+    summary: string;
+    content: string;
+    implementation_summary: string;
+    split_strategy: string;
+    dependency_order: string[];
+    test_matrix: string[];
+    risk_mitigations: string[];
+    rollback_notes: string;
+    structured_document?: Record<string, unknown>;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+  package_policy: {
+    allowed_repo_ids: string[];
+    path_policy_summary: string;
+    required_check_policy_summary: string;
+    source_mutation_policy_default: 'path_policy_scoped' | 'no_source_changes';
+  };
 }
 
 export interface AutomationRuntimeSnapshotDto {

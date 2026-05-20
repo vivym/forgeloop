@@ -1,7 +1,8 @@
-import { AutomationHttpClient, createFakeSpecDraftGenerator, disabledSpecDraftGenerator } from '@forgeloop/automation';
+import { AutomationHttpClient } from '@forgeloop/automation';
 
 import { AutomationDaemon } from './automation-daemon.js';
-import { loadAutomationDaemonConfig } from './config.js';
+import { generationPlanningForDaemon, loadAutomationDaemonConfig } from './config.js';
+import { createAutomationDaemonGenerationRuntime } from './generation-runtime.js';
 import { loadDaemonWorkflowPolicyDigest } from './workflow-policy-loader.js';
 
 const config = loadAutomationDaemonConfig();
@@ -11,8 +12,8 @@ const client = new AutomationHttpClient({
   daemonIdentity: config.daemonIdentity,
   secret: config.trustedActorHeaderSecret,
 });
-const specDraftGenerator =
-  config.codexAutomationGeneration === 'fake' ? createFakeSpecDraftGenerator() : disabledSpecDraftGenerator;
+const generationRuntime = createAutomationDaemonGenerationRuntime(config);
+const generationPlanning = generationPlanningForDaemon(config);
 const daemon = new AutomationDaemon({
   client,
   actorId: config.actorId,
@@ -22,8 +23,8 @@ const daemon = new AutomationDaemon({
   policyLoader: loadDaemonWorkflowPolicyDigest,
   loopIntervalMs: config.loopIntervalMs,
   noClaimBackoffMs: config.noClaimBackoffMs,
-  specDraftGenerationMode: config.codexAutomationGeneration,
-  specDraftGenerator,
+  ...(generationPlanning === undefined ? {} : { generationPlanning }),
+  ...(generationRuntime === undefined ? {} : { generationRuntime }),
   onIterationError: (error) => {
     console.error(error instanceof Error ? error.message : error);
   },

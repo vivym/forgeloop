@@ -141,6 +141,7 @@ export interface ClaimExecutionPackageGenerationRunInput {
   manifest_digest?: string;
   expected_package_count?: number;
   expected_package_keys?: string[];
+  evidence_refs?: Artifact['ref'][];
   claim_token: string;
   now: string;
   locked_until: string;
@@ -240,6 +241,7 @@ export interface ClaimNextAutomationActionRunInput {
   claim_token: string;
   locked_until: string;
   limit: number;
+  action_type?: AutomationActionRun['action_type'];
   project_id?: string;
   repo_id?: string;
   automation_scope?: AutomationScope;

@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -11,12 +11,18 @@ import { AutomationDaemon } from '../apps/automation-daemon/src/automation-daemo
 import { loadDaemonWorkflowPolicyDigest } from '../apps/automation-daemon/src/workflow-policy-loader';
 import {
   AutomationHttpClient,
+  type AutomationGenerationPlanningConfig,
   type AutomationActionResponse,
   type ClaimNextActionInput,
   type NextAction,
 } from '../packages/automation/src/index';
+import {
+  createCodexGenerationRuntime,
+  parseCodexAppServerEndpoint,
+  type CodexGenerationRuntime,
+} from '../packages/codex-runtime/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../packages/db/src/index';
-import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
+import type { AutomationActionRun, Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
 import {
   automationDogfoodExitCode,
   renderAutomationDogfoodSummary,
@@ -27,6 +33,14 @@ interface AutomationDogfoodResult extends AutomationDogfoodSummaryInput {
   exitCode: number;
 }
 
+type EnvLike = Record<string, string | undefined>;
+
+export interface DogfoodGenerationRuntimeConfig {
+  planning: AutomationGenerationPlanningConfig;
+  runtime?: CodexGenerationRuntime;
+  appServerDogfood: AutomationDogfoodSummaryInput['appServerDogfood'];
+}
+
 const automationSecret = process.env.FORGELOOP_AUTOMATION_DOGFOOD_SECRET ?? 'automation-dogfood-secret';
 const automationActorId = process.env.FORGELOOP_AUTOMATION_ACTOR_ID ?? 'automation-dogfood-actor';
 const automationDaemonIdentity = process.env.FORGELOOP_AUTOMATION_DAEMON_IDENTITY ?? 'automation-dogfood-daemon';
@@ -35,6 +49,118 @@ const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
 const expectedPendingBeforeRestartActionTypes = ['ensure_plan_draft', 'project_runtime_snapshot'] as const;
+
+const createDogfoodGenerationPlanning = (
+  mode: AutomationGenerationPlanningConfig['mode'],
+): AutomationGenerationPlanningConfig => ({
+  mode,
+  tasks: {
+    spec_draft: { enabled: false, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+    plan_draft: { enabled: mode !== 'disabled', promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+    package_drafts: { enabled: mode !== 'disabled', promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+  },
+});
+
+const optionalNonBlankEnv = (env: EnvLike, key: string): string | undefined => {
+  const value = env[key];
+  if (value === undefined || value.trim().length === 0) {
+    return undefined;
+  }
+  return value.trim();
+};
+
+const optionalPositiveIntEnv = (env: EnvLike, key: string): number | undefined => {
+  const raw = optionalNonBlankEnv(env, key);
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${key}_invalid`);
+  }
+  return value;
+};
+
+export const requestedGenerationMode = (env: EnvLike = process.env): AutomationGenerationPlanningConfig['mode'] => {
+  const explicitLegacyMode = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_AUTOMATION_GENERATION');
+  const legacyMode = explicitLegacyMode ?? 'fake';
+  const driver = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_DRIVER');
+  const mode = legacyMode === 'codex' ? 'app_server' : legacyMode;
+  if (driver !== undefined) {
+    if (driver === 'cli' || driver === 'exec' || driver === 'exec_fallback' || driver === 'codex_exec') {
+      throw new Error(`FORGELOOP_CODEX_GENERATION_DRIVER_${driver}_not_allowed`);
+    }
+    if (driver !== 'fake' && driver !== 'app_server') {
+      throw new Error('FORGELOOP_CODEX_GENERATION_DRIVER_must_be_fake_or_app_server');
+    }
+    if (explicitLegacyMode !== undefined && mode !== driver) {
+      throw new Error('FORGELOOP_CODEX_GENERATION_DRIVER_conflicts_with_FORGELOOP_CODEX_AUTOMATION_GENERATION');
+    }
+    return driver;
+  }
+  if (mode === 'fake' || mode === 'app_server' || mode === 'disabled') {
+    return mode;
+  }
+  throw new Error('FORGELOOP_CODEX_AUTOMATION_GENERATION_invalid');
+};
+
+const preflightSkippedGeneration = (reasonCode: string): DogfoodGenerationRuntimeConfig => ({
+  planning: createDogfoodGenerationPlanning('app_server'),
+  appServerDogfood: { status: 'skipped', reasonCode },
+});
+
+export const loadDogfoodGenerationRuntimeConfig = (env: EnvLike = process.env): DogfoodGenerationRuntimeConfig => {
+  const mode = requestedGenerationMode(env);
+  if (mode === 'disabled') {
+    return {
+      planning: createDogfoodGenerationPlanning('disabled'),
+      appServerDogfood: { status: 'skipped', reasonCode: 'generation_disabled' },
+    };
+  }
+
+  if (mode === 'app_server') {
+    const endpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
+    if (endpoint === undefined) {
+      return preflightSkippedGeneration('app_server_endpoint_missing');
+    }
+    try {
+      parseCodexAppServerEndpoint(endpoint);
+    } catch {
+      return preflightSkippedGeneration('app_server_endpoint_invalid');
+    }
+    const artifactRoot = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
+    if (artifactRoot === undefined) {
+      return preflightSkippedGeneration('app_server_artifact_root_missing');
+    }
+    if (!isAbsolute(artifactRoot)) {
+      return preflightSkippedGeneration('app_server_artifact_root_invalid');
+    }
+    const timeoutMs = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_TURN_TIMEOUT_MS');
+    const outputLimitBytes = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_OUTPUT_LIMIT_BYTES');
+    const rawNotificationLimitBytes = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_RAW_NOTIFICATION_LIMIT_BYTES');
+    const maxConcurrency = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_MAX_CONCURRENCY');
+    return {
+      planning: createDogfoodGenerationPlanning('app_server'),
+      runtime: createCodexGenerationRuntime({
+        mode: 'app_server',
+        appServerEndpoint: endpoint,
+        artifactRoot,
+        workspaceRoot: repoPath,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(outputLimitBytes === undefined ? {} : { outputLimitBytes }),
+        ...(rawNotificationLimitBytes === undefined ? {} : { rawNotificationLimitBytes }),
+        ...(maxConcurrency === undefined ? {} : { maxConcurrency }),
+      }),
+      appServerDogfood: { status: 'passed' },
+    };
+  }
+
+  return {
+    planning: createDogfoodGenerationPlanning('fake'),
+    runtime: createCodexGenerationRuntime({ mode: 'fake' }),
+    appServerDogfood: { status: 'skipped', reasonCode: 'fake_generation_mode' },
+  };
+};
 
 const humanAdminHeaders = {
   'x-forgeloop-actor-id': actorOwner,
@@ -72,7 +198,11 @@ const createAutomationClient = (baseUrl: string): AutomationHttpClient =>
     secret: automationSecret,
   });
 
-const createDaemon = (baseUrl: string, client = createAutomationClient(baseUrl)): AutomationDaemon =>
+const createDaemon = (
+  baseUrl: string,
+  generation: DogfoodGenerationRuntimeConfig,
+  client = createAutomationClient(baseUrl),
+): AutomationDaemon =>
   new AutomationDaemon({
     client,
     actorId: automationActorId,
@@ -82,6 +212,8 @@ const createDaemon = (baseUrl: string, client = createAutomationClient(baseUrl))
     policyLoader: loadDaemonWorkflowPolicyDigest,
     loopIntervalMs: 1,
     noClaimBackoffMs: 1,
+    generationPlanning: generation.planning,
+    ...(generation.runtime === undefined ? {} : { generationRuntime: generation.runtime }),
   });
 
 const seedDraftOnlyApprovedSpec = async (
@@ -204,15 +336,123 @@ class RestartBeforeClaimClient extends AutomationHttpClient {
 
 const sortedActionTypes = (runs: { action_type: string }[]): string[] => runs.map((actionRun) => actionRun.action_type).sort();
 
+const publicDogfoodErrorCodes = new Set([
+  'codex_generation_disabled',
+  'codex_generation_safety_unavailable',
+  'codex_generation_sandbox_invalid',
+  'codex_app_server_unavailable',
+  'codex_generation_timeout',
+  'codex_generation_cancelled',
+  'codex_generation_concurrency_limit_exceeded',
+  'codex_generation_raw_log_too_large',
+  'codex_generation_turn_failed',
+  'generated_output_invalid_json',
+  'generated_output_ambiguous',
+  'generated_output_schema_invalid',
+  'generated_output_too_large',
+  'generated_package_dependency_invalid',
+  'generated_package_manifest_invalid',
+  'generated_package_policy_invalid',
+  'generated_spec_draft_invalid',
+  'generated_plan_draft_invalid',
+  'generated_payload_idempotency_drift',
+]);
+
+const publicDogfoodErrorCode = (code: string | undefined): string | undefined => {
+  if (code === undefined) {
+    return undefined;
+  }
+  return publicDogfoodErrorCodes.has(code) ? code : undefined;
+};
+
+const publicReasonForActionRun = (actionRun: AutomationActionRun): string | undefined => {
+  const resultCode = actionRun.result_json?.code;
+  return (
+    publicDogfoodErrorCode(actionRun.error_code) ??
+    publicDogfoodErrorCode(actionRun.reason) ??
+    (typeof resultCode === 'string' ? publicDogfoodErrorCode(resultCode) : undefined)
+  );
+};
+
+const appServerDogfoodStatusForActionRuns = (
+  actionRuns: AutomationActionRun[],
+  fallbackReasonCode: string,
+): AutomationDogfoodSummaryInput['appServerDogfood'] => {
+  const blocked = actionRuns.find((actionRun) => actionRun.status === 'blocked');
+  if (blocked !== undefined) {
+    return { status: 'blocked', reasonCode: publicReasonForActionRun(blocked) ?? fallbackReasonCode };
+  }
+  const failed = actionRuns.find((actionRun) => actionRun.status === 'failed');
+  if (failed !== undefined) {
+    return { status: 'failed', reasonCode: publicReasonForActionRun(failed) ?? fallbackReasonCode };
+  }
+  return { status: 'failed', reasonCode: fallbackReasonCode };
+};
+
+const summaryFromRepository = async (input: {
+  repository: DeliveryRepository;
+  workItemId?: string;
+  restartRecoveredFromActionRuns: boolean;
+  appServerDogfood: AutomationDogfoodSummaryInput['appServerDogfood'];
+}): Promise<AutomationDogfoodSummaryInput> => {
+  const packages = input.workItemId === undefined ? [] : await input.repository.listExecutionPackagesForWorkItem(input.workItemId);
+  const runSessions = (await Promise.all(packages.map((item) => input.repository.listRunSessionsForPackage(item.id)))).flat();
+  const actionRuns = (await input.repository.getRuntimeSnapshotData()).recent_action_runs;
+  const completedActionTypes = actionRuns
+    .filter((actionRun) => actionRun.status === 'succeeded')
+    .map((actionRun) => actionRun.action_type);
+  return {
+    planDraftCreated:
+      input.workItemId === undefined ? false : (await input.repository.getWorkItem(input.workItemId))?.current_plan_id !== undefined,
+    packageDraftCount: packages.length,
+    completedActionTypes,
+    actionRunCount: actionRuns.length,
+    nonSucceededActionRunCount: actionRuns.filter((actionRun) => actionRun.status !== 'succeeded').length,
+    runSessionCount: runSessions.length,
+    restartRecoveredFromActionRuns: input.restartRecoveredFromActionRuns,
+    appServerDogfood: input.appServerDogfood,
+  };
+};
+
+const errorReasonCode = (error: unknown): string => {
+  if (error instanceof Error && error.message.length > 0) {
+    return publicDogfoodErrorCode(error.message) ?? 'automation_dogfood_failed';
+  }
+  return 'automation_dogfood_failed';
+};
+
+const resultWithExitCode = (summary: AutomationDogfoodSummaryInput): AutomationDogfoodResult => ({
+  ...summary,
+  exitCode: automationDogfoodExitCode(summary),
+});
+
 const runDogfood = async (): Promise<AutomationDogfoodResult> => {
+  const generation = loadDogfoodGenerationRuntimeConfig();
+  if (generation.runtime === undefined) {
+    return resultWithExitCode({
+      planDraftCreated: false,
+      packageDraftCount: 0,
+      completedActionTypes: [],
+      actionRunCount: 0,
+      nonSucceededActionRunCount: 0,
+      runSessionCount: 0,
+      restartRecoveredFromActionRuns: false,
+      appServerDogfood: generation.appServerDogfood,
+    });
+  }
+
   const previousSecret = process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
   process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = automationSecret;
   let app: INestApplication | undefined;
+  let repository: DeliveryRepository | undefined;
+  let seeded: { workItem: WorkItem } | undefined;
+  let restartRecoveredFromActionRuns = false;
   try {
     const booted = await bootControlPlane();
     app = booted.app;
-    const { repository, baseUrl } = booted;
-    const seeded = await seedDraftOnlyApprovedSpec(app);
+    repository = booted.repository;
+    const { baseUrl } = booted;
+    seeded = await seedDraftOnlyApprovedSpec(app);
     const interruptedClient = new RestartBeforeClaimClient({
       baseUrl,
       actorId: automationActorId,
@@ -221,7 +461,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     });
 
     try {
-      await createDaemon(baseUrl, interruptedClient).runOnce();
+      await createDaemon(baseUrl, generation, interruptedClient).runOnce();
       throw new Error('automation_dogfood_expected_restart_before_claim');
     } catch (error) {
       if (!(error instanceof Error) || error.message !== 'automation_dogfood_simulated_restart_before_claim') {
@@ -235,7 +475,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     const pendingBeforeRestartIds = new Set(pendingBeforeRestart.map((actionRun) => actionRun.id));
     const pendingBeforeRestartKeys = new Set(pendingBeforeRestart.map((actionRun) => actionRun.idempotency_key));
     const pendingBeforeRestartActionTypes = sortedActionTypes(pendingBeforeRestart);
-    const daemon = createDaemon(baseUrl);
+    const daemon = createDaemon(baseUrl, generation);
 
     await runUntil(
       daemon,
@@ -258,6 +498,16 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
       .map((actionRun) => actionRun.action_type);
     const recoveredPendingRuns = actionRuns.filter((actionRun) => pendingBeforeRestartIds.has(actionRun.id));
     const pendingKeyOccurrences = actionRuns.filter((actionRun) => pendingBeforeRestartKeys.has(actionRun.idempotency_key));
+    restartRecoveredFromActionRuns =
+      pendingBeforeRestart.length > 0 &&
+      pendingBeforeRestart.length === expectedPendingBeforeRestartActionTypes.length &&
+      pendingBeforeRestartActionTypes.every((actionType, index) => actionType === expectedPendingBeforeRestartActionTypes[index]) &&
+      interruptedClient.createOrReplayActions.length === pendingBeforeRestart.length &&
+      pendingBeforeRestartIds.size === pendingBeforeRestart.length &&
+      pendingBeforeRestartKeys.size === pendingBeforeRestart.length &&
+      recoveredPendingRuns.length === pendingBeforeRestart.length &&
+      recoveredPendingRuns.every((actionRun) => actionRun.status === 'succeeded') &&
+      pendingKeyOccurrences.length === pendingBeforeRestart.length;
     const summary: AutomationDogfoodSummaryInput = {
       planDraftCreated: (await repository.getWorkItem(seeded.workItem.id))?.current_plan_id !== undefined,
       packageDraftCount: packages.length,
@@ -265,18 +515,22 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
       actionRunCount: actionRuns.length,
       nonSucceededActionRunCount: actionRuns.filter((actionRun) => actionRun.status !== 'succeeded').length,
       runSessionCount: runSessions.length,
-      restartRecoveredFromActionRuns:
-        pendingBeforeRestart.length > 0 &&
-        pendingBeforeRestart.length === expectedPendingBeforeRestartActionTypes.length &&
-        pendingBeforeRestartActionTypes.every((actionType, index) => actionType === expectedPendingBeforeRestartActionTypes[index]) &&
-        interruptedClient.createOrReplayActions.length === pendingBeforeRestart.length &&
-        pendingBeforeRestartIds.size === pendingBeforeRestart.length &&
-        pendingBeforeRestartKeys.size === pendingBeforeRestart.length &&
-        recoveredPendingRuns.length === pendingBeforeRestart.length &&
-        recoveredPendingRuns.every((actionRun) => actionRun.status === 'succeeded') &&
-        pendingKeyOccurrences.length === pendingBeforeRestart.length,
+      restartRecoveredFromActionRuns,
+      appServerDogfood: generation.appServerDogfood.status === 'passed' ? { status: 'passed' } : generation.appServerDogfood,
     };
-    return { ...summary, exitCode: automationDogfoodExitCode(summary) };
+    return resultWithExitCode(summary);
+  } catch (error) {
+    if (generation.planning.mode === 'app_server' && repository !== undefined) {
+      const actionRuns = (await repository.getRuntimeSnapshotData()).recent_action_runs;
+      const summary = await summaryFromRepository({
+        repository,
+        workItemId: seeded?.workItem.id,
+        restartRecoveredFromActionRuns,
+        appServerDogfood: appServerDogfoodStatusForActionRuns(actionRuns, errorReasonCode(error)),
+      });
+      return resultWithExitCode(summary);
+    }
+    throw error;
   } finally {
     if (app !== undefined) {
       await app.close();

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { INestApplication } from '@nestjs/common';
@@ -20,6 +21,7 @@ import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-p
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import { signAutomationRequest } from '../../packages/automation/src/index';
 import type { ArtifactRef } from '../../packages/contracts/src/index';
+import type { GeneratedPackageDraftSetV1 } from '../../packages/codex-runtime/src/index';
 import {
   automationPreconditionFingerprint,
   buildManualScopeKey,
@@ -93,13 +95,17 @@ type AutomationCommandTestService = AutomationCommandService & {
     specRevisionId: string,
     automationPrecondition: AutomationPrecondition,
     idempotencyKey: string,
-  ): Promise<{ plan_id: string; plan_revision_id: string; status: 'created' | 'existing' }>;
+    generated: typeof generatedPlanDraft,
+    generationArtifacts: ArtifactRef[],
+  ): Promise<{ plan_id: string; plan_revision_id: string; status: 'created' | 'existing'; generated_payload_digest?: string }>;
   ensureExecutionPackageDraftsForPlanRevision(input: {
     planRevisionId: string;
     automationPrecondition: AutomationPrecondition;
     actorContext: { authenticatedActorId?: string; actorClass?: string; daemonIdentity?: string };
     idempotencyKey: string;
     generationKey?: string;
+    generated: GeneratedPackageDraftSetV1;
+    generationArtifacts: ArtifactRef[];
     regenerationApproval?: {
       supersededGenerationKey: string;
       supersededExecutionPackageSetId: string;
@@ -148,6 +154,25 @@ class OverlapDetectingRepository extends InMemoryDeliveryRepository {
     } finally {
       this.activeRunChecksInFlight -= 1;
     }
+  }
+}
+
+class HideCurrentPlanOnceRepository extends InMemoryDeliveryRepository {
+  hideCurrentPlanForWorkItemId?: string;
+  private hiddenCurrentPlan = false;
+
+  override async getWorkItem(id: string) {
+    const workItem = await super.getWorkItem(id);
+    if (
+      workItem !== undefined &&
+      this.hideCurrentPlanForWorkItemId === id &&
+      this.hiddenCurrentPlan === false
+    ) {
+      this.hiddenCurrentPlan = true;
+      const { current_plan_id: _currentPlanId, ...withoutCurrentPlan } = workItem;
+      return withoutCurrentPlan as WorkItem;
+    }
+    return workItem;
   }
 }
 
@@ -420,7 +445,10 @@ const seedApprovedSpec = async (app: INestApplication): Promise<ApprovedSpecCont
   return { project, workItem: updatedWorkItem, spec, specRevisionId };
 };
 
-const seedApprovedPlan = async (app: INestApplication): Promise<ApprovedSpecContext & { plan: Plan; planRevisionId: string }> => {
+const seedApprovedPlan = async (
+  app: INestApplication,
+  options: { dependencyOrder?: string[] } = {},
+): Promise<ApprovedSpecContext & { plan: Plan; planRevisionId: string }> => {
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const ctx = await seedApprovedSpec(app);
   const planRevisionId = nextSeedId('plan-revision');
@@ -449,7 +477,7 @@ const seedApprovedPlan = async (app: INestApplication): Promise<ApprovedSpecCont
     content: 'Plan body',
     implementation_summary: 'Exercise automation command boundaries.',
     split_strategy: 'Single automation command fixture.',
-    dependency_order: [],
+    dependency_order: options.dependencyOrder ?? [],
     test_matrix: ['pnpm vitest run tests/api/automation-commands.test.ts'],
     risk_mitigations: [],
     rollback_notes: 'Discard fixture records.',
@@ -618,6 +646,8 @@ const packageDraftActionBody = (
     action_input_json: {
       plan_revision_id: ctx.planRevisionId,
       generation_key: generationKey,
+      prompt_version: 'package-drafts.fake.v1',
+      output_schema_version: 'package_drafts.v1',
     },
     ...overrides,
   };
@@ -637,6 +667,19 @@ const generatedSpecDraft = {
   structured_document: { source: 'test' },
 };
 
+const generatedPlanDraft = {
+  schema_version: 'plan_draft.v1',
+  summary: 'Generated Plan summary',
+  content: 'Generated Plan content',
+  implementation_summary: 'Implement the approved Spec through automation command boundaries.',
+  split_strategy: 'Create one API package and one test package.',
+  dependency_order: ['api', 'tests'],
+  test_matrix: ['pnpm test tests/api', 'pnpm test tests/automation'],
+  risk_mitigations: ['Keep the generated Plan draft scoped to draft creation.'],
+  rollback_notes: 'Discard the generated Plan draft.',
+  structured_document: { source: 'generated-plan-test' },
+};
+
 const generationArtifacts: ArtifactRef[] = [
   {
     kind: 'raw_metadata',
@@ -645,6 +688,135 @@ const generationArtifacts: ArtifactRef[] = [
     local_ref: 'artifact://spec/raw-output.json',
   },
 ];
+
+const planGenerationArtifacts: ArtifactRef[] = [
+  {
+    kind: 'logs',
+    name: 'plan-generation.json',
+    content_type: 'application/json',
+    storage_uri: 'artifact://plan-generation.json',
+    digest: 'sha256:plan-generation',
+  },
+];
+
+const packageGenerationArtifacts: ArtifactRef[] = [
+  {
+    kind: 'logs',
+    name: 'package-generation.json',
+    content_type: 'application/json',
+    storage_uri: 'artifact://package-generation.json',
+    digest: 'sha256:package-generation',
+  },
+];
+
+const validGeneratedPackageDraftSet = (
+  options: { dependencyOrder?: string[]; objectiveSuffix?: string } = {},
+): GeneratedPackageDraftSetV1 => {
+  const dependencyOrder = options.dependencyOrder ?? ['api', 'tests'];
+  return {
+    schema_version: 'package_drafts.v1',
+    manifest: {
+      manifest_version: 'execution_package_manifest.v1',
+      package_set_key: `set-${dependencyOrder.join('-')}`,
+      package_count: dependencyOrder.length,
+      dependency_order: dependencyOrder,
+    },
+    packages: dependencyOrder.map((packageKey) => ({
+      package_key: packageKey,
+      repo_id: 'repo-1',
+      objective: `Implement ${packageKey} package${options.objectiveSuffix === undefined ? '' : ` ${options.objectiveSuffix}`}.`,
+      required_checks: [
+        {
+          check_id: `${packageKey}-unit`,
+          display_name: `${packageKey} unit tests`,
+          command: packageKey === 'tests' ? 'pnpm test tests/api' : 'pnpm test tests/api',
+          timeout_seconds: 120,
+          blocks_review: true,
+        },
+      ],
+      required_artifact_kinds: ['execution_summary'],
+      allowed_paths: packageKey === 'tests' ? ['tests/api/**'] : ['apps/control-plane-api/**'],
+      forbidden_paths: ['packages/db/**'],
+      source_mutation_policy: 'path_policy_scoped',
+      required_test_gates: [],
+      validation_strategy: 'checks_required',
+      structured_document: { package_key: packageKey },
+    })),
+    dependencies: dependencyOrder.includes('api') && dependencyOrder.includes('tests')
+      ? [
+          {
+            package_key: 'tests',
+            depends_on_package_key: 'api',
+            dependency_type: 'blocks_release',
+            reason: 'API package must exist before generated tests.',
+            metadata: { generated: true },
+          },
+        ]
+      : [],
+    structured_document: { source: 'generated-package-test' },
+  };
+};
+
+const testStableJson = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => testStableJson(entry)).join(',')}]`;
+  }
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${testStableJson(entry)}`)
+    .join(',')}}`;
+};
+
+const testStripUndefined = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => testStripUndefined(entry));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, testStripUndefined(entry)]),
+    );
+  }
+  return value;
+};
+
+const testGeneratedPayloadDigest = (value: unknown): string =>
+  `sha256:${createHash('sha256').update(testStableJson(testStripUndefined(value))).digest('hex')}`;
+
+const testPublicArtifactIdentity = (artifacts: ArtifactRef[]): Array<Record<string, unknown>> =>
+  artifacts.map((artifact) =>
+    testStripUndefined({
+      kind: artifact.kind,
+      name: artifact.name,
+      content_type: artifact.content_type,
+      storage_uri: artifact.storage_uri,
+      digest: artifact.digest,
+    }) as Record<string, unknown>,
+  );
+
+const testPlanCommandPrecondition = (
+  precondition: AutomationPrecondition,
+  generated: typeof generatedPlanDraft,
+  artifacts: ArtifactRef[],
+): { json: Record<string, unknown>; fingerprint: string } => {
+  const generatedPayloadDigest = testGeneratedPayloadDigest({
+    generated_plan_draft: generated,
+    generation_artifacts: testPublicArtifactIdentity(artifacts),
+  });
+  const json = {
+    automation_precondition: precondition,
+    generated_payload_digest: generatedPayloadDigest,
+    generation_artifact_identity: testPublicArtifactIdentity(artifacts),
+  };
+  return {
+    json,
+    fingerprint: testGeneratedPayloadDigest(json),
+  };
+};
 
 const specDraftActionBody = (
   ctx: { project: { id: string }; workItem: WorkItem },
@@ -750,6 +922,45 @@ const seedClaimedSpecDraftAction = async (
   };
 };
 
+const seedCompletedPolicyProjectionAction = async (
+  repository: DeliveryRepository,
+  ctx: Pick<ClaimedSpecDraftActionContext, 'project' | 'precondition'>,
+): Promise<void> => {
+  const actionId = `projection-${ctx.project.id}`;
+  const idempotencyKey = `${actionId}-idempotency`;
+  const claimToken = `${actionId}-claim`;
+  const projectionInput = {
+    repo_id: 'repo-1',
+    policy_status: 'loaded',
+    policy_digest: 'sha256:workflow-policy-digest',
+    parser_version: 'workflow-md-parser:v1',
+  };
+  await repository.claimAutomationActionRun({
+    id: actionId,
+    action_type: 'project_runtime_snapshot',
+    target_object_type: 'repo',
+    target_object_id: 'repo-1',
+    target_status: 'loaded',
+    idempotency_key: idempotencyKey,
+    automation_scope: ctx.precondition.automation_scope,
+    automation_settings_version: ctx.precondition.automation_settings_version,
+    capability_fingerprint: ctx.precondition.capability_fingerprint,
+    precondition_fingerprint: `${actionId}-precondition`,
+    action_input_json: projectionInput,
+    claim_token: claimToken,
+    locked_until: '2026-05-05T00:10:00.000Z',
+    now: '2026-05-05T00:00:00.000Z',
+  });
+  await repository.completeAutomationActionRun({
+    id: actionId,
+    idempotency_key: idempotencyKey,
+    claim_token: claimToken,
+    status: 'succeeded',
+    result_json: projectionInput,
+    finished_at: '2026-05-05T00:00:01.000Z',
+  });
+};
+
 const seedClaimedPlanDraftAction = async (
   app: INestApplication,
   repository: DeliveryRepository,
@@ -801,8 +1012,25 @@ const seedClaimedPlanDraftAction = async (
       spec_revision_id: ctx.specRevisionId,
       idempotency_key: `${actionId}-idempotency`,
       automation_precondition: precondition,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
     },
   };
+};
+
+const seedApprovedSpecAndClaimedPlanAction = async (
+  app: INestApplication,
+  repository: DeliveryRepository,
+  overrides: { approvedRevisionId?: string; actionOverrides?: Record<string, unknown> } = {},
+): Promise<ClaimedPlanDraftActionContext> => {
+  const ctx = await seedClaimedPlanDraftAction(app, repository, overrides.actionOverrides);
+  if ('approvedRevisionId' in overrides) {
+    await repository.saveSpec({
+      ...ctx.spec,
+      approved_revision_id: overrides.approvedRevisionId,
+    });
+  }
+  return ctx;
 };
 
 const seedClaimedPackageDraftAction = async (
@@ -810,7 +1038,7 @@ const seedClaimedPackageDraftAction = async (
   repository: DeliveryRepository,
   overrides: Record<string, unknown> = {},
 ): Promise<ClaimedPackageDraftActionContext> => {
-  const ctx = await seedApprovedPlan(app);
+  const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
   const settings = await repository.setAutomationProjectSettings({
     id: `automation-settings-package-claim-binding-${overrides.id ?? 'default'}`,
     project_id: ctx.project.id,
@@ -853,9 +1081,85 @@ const seedClaimedPackageDraftAction = async (
       claim_token: claimToken,
       idempotency_key: `${actionId}-idempotency`,
       automation_precondition: precondition,
+      generation_key: `default:${ctx.planRevisionId}`,
+      generated_package_drafts: validGeneratedPackageDraftSet({ dependencyOrder: ['api'] }),
+      generation_artifacts: packageGenerationArtifacts,
     },
   };
 };
+
+const seedApprovedPlanAndClaimedPackageAction = async (
+  app: INestApplication,
+  repository: DeliveryRepository,
+  options: { dependencyOrder?: string[]; actionId?: string } = {},
+): Promise<ClaimedPackageDraftActionContext> => {
+  const ctx = await seedApprovedPlan(app, { dependencyOrder: options.dependencyOrder ?? ['api', 'tests'] });
+  const settings = await repository.setAutomationProjectSettings({
+    id: `automation-settings-generated-package-${options.actionId ?? ctx.planRevisionId}`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    scope_type: 'repo',
+    preset: 'draft_only',
+    expected_version: 0,
+    reason: 'enable generated Package draft tests',
+    evidence_refs: [],
+    actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+    now: '2026-05-05T00:00:00.000Z',
+  });
+  const precondition: AutomationPrecondition = {
+    automation_scope: `repo:${ctx.project.id}:repo-1`,
+    project_id: ctx.project.id,
+    repo_id: 'repo-1',
+    automation_settings_version: settings.version,
+    capability_fingerprint: settings.capability_fingerprint,
+    required_capability: 'canGeneratePackageDrafts',
+    actor_class: 'automation_daemon',
+    daemon_identity: automationDaemonIdentity,
+  };
+  const actionId = options.actionId ?? `action-generated-package-${ctx.planRevisionId}`;
+  const generationKey = `default:${ctx.planRevisionId}`;
+  await signedAutomationPost(app, '/internal/automation/actions', packageDraftActionBody(ctx, precondition, actionId)).expect(201);
+  const claimToken = `claim-${actionId}`;
+  await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+    claim_token: claimToken,
+    lease_ms: 10 * 60 * 1000,
+    limit: 1,
+  }).expect(200);
+
+  return {
+    ...ctx,
+    precondition,
+    actionId,
+    claimToken,
+    commandBody: {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+      generation_key: generationKey,
+      generated_package_drafts: validGeneratedPackageDraftSet({ dependencyOrder: options.dependencyOrder ?? ['api', 'tests'] }),
+      generation_artifacts: packageGenerationArtifacts,
+    },
+  };
+};
+
+const postGeneratedPackages = (
+  app: INestApplication,
+  ctx: ClaimedPackageDraftActionContext,
+  generatedPackageDrafts: GeneratedPackageDraftSetV1,
+  overrides: Record<string, unknown> = {},
+) =>
+  signedAutomationPost(app, `/internal/automation/plan-revisions/${ctx.planRevisionId}/ensure-package-drafts`, {
+    ...ctx.commandBody,
+    generated_package_drafts: generatedPackageDrafts,
+    generation_artifacts: packageGenerationArtifacts,
+    ...overrides,
+  });
+
+const generatedPackageCommandFields = (options: { dependencyOrder?: string[]; objectiveSuffix?: string } = {}) => ({
+  generated: validGeneratedPackageDraftSet({ dependencyOrder: options.dependencyOrder ?? ['api'], objectiveSuffix: options.objectiveSuffix }),
+  generationArtifacts: packageGenerationArtifacts,
+});
 
 const seedClaimedManualPathAction = async (
   app: INestApplication,
@@ -1265,6 +1569,62 @@ describe('automation command boundaries', () => {
       });
   });
 
+  it('accepts claimed spec draft actions with generation prompt identity fields', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedProjectRepoWorkItem(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-versioned-spec-claim-binding',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable versioned spec claim binding test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGenerateSpecDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    };
+    const actionId = 'action-versioned-spec-claim-binding';
+    await signedAutomationPost(app, '/internal/automation/actions', specDraftActionBody(ctx, precondition, actionId, {
+      action_input_json: {
+        work_item_id: ctx.workItem.id,
+        prompt_version: 'spec-draft.fake.v2',
+        output_schema_version: 'spec_draft.v1',
+      },
+    })).expect(201);
+    const claimToken = `claim-${actionId}`;
+    await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+      claim_token: claimToken,
+      lease_ms: 10 * 60 * 1000,
+      limit: 1,
+    }).expect(200);
+    const commandBody = {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+      generated_spec_draft: generatedSpecDraft,
+      generation_artifacts: generationArtifacts,
+    };
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`, commandBody)
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ status: 'created' });
+      });
+  });
+
   it('rejects Spec draft commands when the WorkItem already has a current Spec revision', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
@@ -1367,6 +1727,7 @@ describe('automation command boundaries', () => {
     const project = await repository.getProject(ctx.project.id);
     expect(project).toBeDefined();
     await seedProjectRepo(repository, project!, { repo_id: 'repo-2', name: 'secondary-repo' });
+    await seedCompletedPolicyProjectionAction(repository, ctx);
 
     await signedAutomationGet(
       app,
@@ -1392,7 +1753,9 @@ describe('automation command boundaries', () => {
               project_id: ctx.workItem.project_id,
               repo_id: 'repo-1',
               default_branch: 'main',
-              policy_status: 'missing',
+              policy_status: 'loaded',
+              policy_digest: 'sha256:workflow-policy-digest',
+              parser_version: 'workflow-md-parser:v1',
             }),
           ],
         });
@@ -1400,6 +1763,148 @@ describe('automation command boundaries', () => {
         expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
         expect(JSON.stringify(body)).not.toContain('repo-2');
       });
+  });
+
+  it('returns Plan generation context for an active claimed ensure_plan_draft action', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository);
+    const specRevision = await repository.getSpecRevision(ctx.specRevisionId);
+    expect(specRevision).toBeDefined();
+    await repository.saveSpecRevision({
+      ...specRevision!,
+      structured_document: { sections: ['goals', 'scope'] },
+    });
+    await seedCompletedPolicyProjectionAction(repository, ctx);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          context_version: 'generation_context.plan.v1',
+          action_run_id: ctx.actionId,
+          work_item: { id: ctx.workItem.id },
+          spec_revision: {
+            id: ctx.specRevisionId,
+            spec_id: ctx.spec.id,
+            structured_document: { sections: ['goals', 'scope'] },
+          },
+          repos: [
+            expect.objectContaining({
+              project_id: ctx.workItem.project_id,
+              repo_id: 'repo-1',
+              default_branch: 'main',
+              policy_status: 'loaded',
+              policy_digest: 'sha256:workflow-policy-digest',
+              parser_version: 'workflow-md-parser:v1',
+            }),
+          ],
+        });
+        expect(body.spec_revision).not.toHaveProperty('work_item_id');
+        expect(body.spec_revision).not.toHaveProperty('artifact_refs');
+        expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
+      });
+  });
+
+  it.each([
+    { name: 'missing', approvedRevisionId: undefined },
+    { name: 'stale', approvedRevisionId: 'spec-revision-stale' },
+  ])('rejects Plan generation context when Spec approved_revision_id is $name', async ({ approvedRevisionId }) => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, { approvedRevisionId });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    ).expect(409);
+  });
+
+  it.each([
+    { name: 'missing', targetRevisionId: undefined },
+    { name: 'mismatched', targetRevisionId: 'spec-revision-other' },
+  ])('rejects Plan generation context when action target_revision_id is $name', async ({ targetRevisionId }) => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: {
+        ...(targetRevisionId === undefined ? { target_revision_id: undefined } : { target_revision_id: targetRevisionId }),
+      },
+    });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    ).expect(409);
+  });
+
+  it('returns Package generation context for an approved PlanRevision and active claim', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedPackageDraftAction(app, repository);
+    const generationKey = `default:${ctx.planRevisionId}`;
+    const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
+    expect(planRevision).toBeDefined();
+    await repository.savePlanRevision({
+      ...planRevision!,
+      structured_document: { sections: ['split', 'tests'] },
+    });
+    await seedCompletedPolicyProjectionAction(repository, ctx);
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/plan-revisions/${ctx.planRevisionId}/package-drafts?generation_key=${generationKey}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    )
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          context_version: 'generation_context.package.v1',
+          action_run_id: ctx.actionId,
+          generation_key: generationKey,
+          work_item: { id: ctx.workItem.id },
+          spec_revision: { id: ctx.specRevisionId, spec_id: ctx.spec.id },
+          plan_revision: {
+            id: ctx.planRevisionId,
+            plan_id: ctx.plan.id,
+            summary: 'Approved automation command plan',
+            dependency_order: ['api'],
+            test_matrix: ['pnpm vitest run tests/api/automation-commands.test.ts'],
+            structured_document: { sections: ['split', 'tests'] },
+          },
+          repos: [
+            expect.objectContaining({
+              project_id: ctx.workItem.project_id,
+              repo_id: 'repo-1',
+              default_branch: 'main',
+              policy_status: 'loaded',
+              policy_digest: 'sha256:workflow-policy-digest',
+              parser_version: 'workflow-md-parser:v1',
+            }),
+          ],
+        });
+        expect(body.plan_revision).not.toHaveProperty('work_item_id');
+        expect(body.plan_revision).not.toHaveProperty('artifact_refs');
+        expect(JSON.stringify(body)).not.toContain(ctx.claimToken);
+      });
+  });
+
+  it('rejects Package generation context when Plan approved_revision_id is stale', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedClaimedPackageDraftAction(app, repository);
+    const generationKey = `default:${ctx.planRevisionId}`;
+    await repository.savePlan({
+      ...ctx.plan,
+      approved_revision_id: 'plan-revision-stale',
+    });
+
+    await signedAutomationGet(
+      app,
+      `/internal/automation/generation-context/plan-revisions/${ctx.planRevisionId}/package-drafts?generation_key=${generationKey}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+    ).expect(409);
   });
 
   it('rejects Spec draft generation context when the claim token is wrong', async () => {
@@ -1578,9 +2083,585 @@ describe('automation command boundaries', () => {
       spec_revision_id: ctx.specRevisionId,
       idempotency_key: `${actionId}-idempotency`,
       automation_precondition: precondition,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
+    }).expect(201);
+
+    const workItem = await repository.getWorkItem(ctx.workItem.id);
+    const revisions = await service.listPlanRevisions(workItem?.current_plan_id ?? '');
+    expect(revisions).toHaveLength(1);
+    expect(workItem?.current_plan_revision_id).toBe(revisions[0]!.id);
+  });
+
+  it('accepts claimed plan draft actions with generation prompt identity fields', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-versioned-plan-claim-binding',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable versioned plan claim binding test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      target_object_type: 'work_item',
+      target_object_id: ctx.workItem.id,
+      target_revision_id: ctx.specRevisionId,
+      target_status: 'approved',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+    } as AutomationPrecondition;
+    const actionId = `action-versioned-plan-claim-binding-${ctx.workItem.id}`;
+    const actionInputJson = {
+      work_item_id: ctx.workItem.id,
+      spec_revision_id: ctx.specRevisionId,
+      prompt_version: 'plan-draft.fake.v2',
+      output_schema_version: 'plan_draft.v1',
+    };
+
+    await signedAutomationPost(
+      app,
+      '/internal/automation/actions',
+      planDraftActionBody(ctx, precondition, actionId, { action_input_json: actionInputJson }),
+    ).expect(201);
+    const claimToken = `claim-${actionId}`;
+    await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+      claim_token: claimToken,
+      lease_ms: 10 * 60 * 1000,
+      limit: 1,
+    }).expect(200);
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      spec_revision_id: ctx.specRevisionId,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
     }).expect(201);
 
     expect(await service.listPlanRevisions((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id ?? '')).toHaveLength(1);
+  });
+
+  it('daemon ensure-plan-draft requires generated Plan payload', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-required' },
+    });
+    const { generated_plan_draft: _generatedPlanDraft, ...bodyWithoutGeneratedPlanDraft } = ctx.commandBody;
+
+    await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      bodyWithoutGeneratedPlanDraft,
+    ).expect(400);
+  });
+
+  it('persists generated Plan fields and generation artifacts', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-persisted' },
+    });
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...ctx.commandBody,
+      generated_plan_draft: {
+        ...generatedPlanDraft,
+        summary: 'Generated summary',
+        structured_document: { sections: ['generated-plan'] },
+      },
+      generation_artifacts: planGenerationArtifacts,
+    }).expect(201);
+
+    const workItem = await repository.getWorkItem(ctx.workItem.id);
+    const revisions = await service.listPlanRevisions(workItem?.current_plan_id ?? '');
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]).toMatchObject({
+      summary: 'Generated summary',
+      content: generatedPlanDraft.content,
+      implementation_summary: generatedPlanDraft.implementation_summary,
+      split_strategy: generatedPlanDraft.split_strategy,
+      dependency_order: generatedPlanDraft.dependency_order,
+      test_matrix: generatedPlanDraft.test_matrix,
+      risk_mitigations: generatedPlanDraft.risk_mitigations,
+      rollback_notes: generatedPlanDraft.rollback_notes,
+      structured_document: { sections: ['generated-plan'] },
+      artifact_refs: planGenerationArtifacts,
+    });
+  });
+
+  it('blocks idempotency key reuse with a different generated Plan payload digest', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-drift' },
+    });
+    const body = {
+      ...ctx.commandBody,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: planGenerationArtifacts,
+    };
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, body).expect(201);
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...body,
+      generated_plan_draft: { ...generatedPlanDraft, summary: 'Generated Plan summary changed' },
+    })
+      .expect(409)
+      .expect(({ body: responseBody }) => {
+        expect(responseBody).toMatchObject({ code: 'generated_payload_idempotency_drift' });
+      });
+  });
+
+  it('rejects generated Plan artifact refs with local paths before persistence', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-local-artifact' },
+    });
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...ctx.commandBody,
+      generated_plan_draft: generatedPlanDraft,
+      generation_artifacts: [
+        {
+          kind: 'logs',
+          name: 'raw-plan-output',
+          content_type: 'application/json',
+          local_ref: '/tmp/forgeloop/raw-plan-output.json',
+        },
+      ],
+    })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'generation_artifact_unsafe' });
+      });
+
+    await expectNoPlanDraftCommandWrites(service, repository, ctx);
+  });
+
+  it.each(['artifact:///tmp/raw-plan-output.json', 'artifact:///Users/viv/raw-plan-output.json'])(
+    'rejects generated Plan artifact storage URI that embeds a local path: %s',
+    async (storageUri) => {
+      const { app, repository, service } = await createTestApp();
+      apps.push(app);
+      const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+        actionOverrides: { id: `action-generated-plan-local-uri-${storageUri.includes('tmp') ? 'tmp' : 'users'}` },
+      });
+
+      await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+        ...ctx.commandBody,
+        generated_plan_draft: generatedPlanDraft,
+        generation_artifacts: [
+          {
+            kind: 'logs',
+            name: 'plan-generation.json',
+            content_type: 'application/json',
+            storage_uri: storageUri,
+            digest: 'sha256:plan-generation',
+          },
+        ],
+      })
+        .expect(400)
+        .expect(({ body }) => {
+          expect(body).toMatchObject({ code: 'generation_artifact_unsafe' });
+        });
+
+      await expectNoPlanDraftCommandWrites(service, repository, ctx);
+    },
+  );
+
+  it('rejects generated Plan payloads that fail runtime validation before persistence', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-invalid-runtime-payload' },
+    });
+
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      ...ctx.commandBody,
+      generated_plan_draft: {
+        ...generatedPlanDraft,
+        dependency_order: ['api', 'api'],
+      },
+      generation_artifacts: planGenerationArtifacts,
+    })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'generated_plan_draft_invalid' });
+      });
+
+    await expectNoPlanDraftCommandWrites(service, repository, ctx);
+  });
+
+  it('persists generated Package drafts, generation run evidence refs, dependencies, and digests', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-persisted',
+      dependencyOrder: ['api', 'tests'],
+    });
+
+    const response = await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ dependencyOrder: ['api', 'tests'] })).expect(201);
+
+    expect(response.body).toMatchObject({
+      execution_package_set_id: expect.any(String),
+      package_ids: expect.arrayContaining([expect.any(String)]),
+      status: 'created',
+      task_kind: 'package_drafts',
+      prompt_version: 'package-drafts.fake.v1',
+      output_schema_version: 'package_drafts.v1',
+      manifest_digest: expect.stringMatching(/^sha256:/),
+      generated_payload_digest: expect.stringMatching(/^sha256:/),
+      package_keys: ['api', 'tests'],
+      generation_artifacts: packageGenerationArtifacts,
+    });
+    expect(response.body.package_ids).toHaveLength(2);
+    const generationRun = await repository.getExecutionPackageGenerationRun({
+      plan_revision_id: ctx.planRevisionId,
+      generation_key: `default:${ctx.planRevisionId}`,
+    });
+    expect(generationRun).toMatchObject({
+      status: 'succeeded',
+      expected_package_keys: ['api', 'tests'],
+      evidence_refs: packageGenerationArtifacts,
+      manifest_digest: expect.stringMatching(/^sha256:/),
+      result_json: {
+        task_kind: 'package_drafts',
+        prompt_version: 'package-drafts.fake.v1',
+        output_schema_version: 'package_drafts.v1',
+        generated_payload_digest: expect.stringMatching(/^sha256:/),
+        package_keys: ['api', 'tests'],
+        generation_artifacts: packageGenerationArtifacts,
+      },
+    });
+    const packages = await service.listExecutionPackages(ctx.workItem.id);
+    expect(packages.map((executionPackage) => executionPackage.package_key)).toEqual(['api', 'tests']);
+    expect(packages.map((executionPackage) => executionPackage.manifest_digest)).toEqual([
+      response.body.manifest_digest,
+      response.body.manifest_digest,
+    ]);
+    const dependencies = await repository.listExecutionPackageDependencies(response.body.package_ids[1]);
+    expect(dependencies).toHaveLength(1);
+    expect(dependencies[0]).toMatchObject({
+      package_id: response.body.package_ids[1],
+      depends_on_package_id: response.body.package_ids[0],
+      dependency_type: 'blocks_release',
+    });
+  });
+
+  it('blocks generated Package payloads whose manifest differs from approved Plan dependency_order', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-manifest-drift',
+      dependencyOrder: ['api', 'tests'],
+    });
+
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ dependencyOrder: ['api'] }))
+      .expect(422)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'generated_package_manifest_invalid' });
+      });
+    await expectNoPackageDraftCommandWrites(service, ctx);
+  });
+
+  it('blocks generated Package command idempotency drift for changed generated payload digest', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-idempotency-drift',
+      dependencyOrder: ['api', 'tests'],
+    });
+
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ objectiveSuffix: 'first' })).expect(201);
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ objectiveSuffix: 'second' }))
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'generated_payload_idempotency_drift' });
+      });
+  });
+
+  it('revalidates the approved Plan boundary before replaying generated Package command results', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-replay-stale-plan',
+      dependencyOrder: ['api', 'tests'],
+    });
+
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ dependencyOrder: ['api', 'tests'] })).expect(201);
+    await repository.savePlan({
+      ...ctx.plan,
+      current_revision_id: `${ctx.planRevisionId}-new-draft`,
+    });
+
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ dependencyOrder: ['api', 'tests'] }))
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.message).toContain('not current approved revision');
+      });
+  });
+
+  it('blocks generated Package identity drift across distinct command idempotency keys', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-generation-drift',
+      dependencyOrder: ['api', 'tests'],
+    });
+    const automationService = service as AutomationCommandTestService;
+    const actorContext = { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon' as const, daemonIdentity: 'daemon-1' };
+
+    await automationService.ensureExecutionPackageDraftsForPlanRevision({
+      planRevisionId: ctx.planRevisionId,
+      automationPrecondition: ctx.precondition,
+      actorContext,
+      idempotencyKey: 'idem-generated-package-generation-drift-first',
+      generated: validGeneratedPackageDraftSet({ objectiveSuffix: 'first' }),
+      generationArtifacts: packageGenerationArtifacts,
+    });
+
+    await expect(
+      automationService.ensureExecutionPackageDraftsForPlanRevision({
+        planRevisionId: ctx.planRevisionId,
+        automationPrecondition: ctx.precondition,
+        actorContext,
+        idempotencyKey: 'idem-generated-package-generation-drift-second',
+        generated: validGeneratedPackageDraftSet({ objectiveSuffix: 'second' }),
+        generationArtifacts: packageGenerationArtifacts,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'generated_payload_idempotency_drift' }),
+    });
+  });
+
+  it('rejects generated Package artifact refs with local paths before persistence', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlanAndClaimedPackageAction(app, repository, {
+      actionId: 'action-generated-package-local-artifact',
+      dependencyOrder: ['api', 'tests'],
+    });
+
+    await postGeneratedPackages(app, ctx, validGeneratedPackageDraftSet({ dependencyOrder: ['api', 'tests'] }), {
+      generation_artifacts: [
+        {
+          kind: 'logs',
+          name: 'raw.log',
+          content_type: 'text/plain',
+          local_ref: '/home/runner/raw.log',
+        },
+      ],
+    })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({ code: 'generation_artifact_unsafe' });
+      });
+
+    await expectNoPackageDraftCommandWrites(service, ctx);
+  });
+
+  it('includes generated payload digest when reusing an existing generated Plan revision', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-generated-plan-existing-digest',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable generated plan existing digest test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    } as AutomationPrecondition;
+    const automationService = service as AutomationCommandTestService;
+
+    const first = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-existing-digest-first',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+    const second = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-existing-digest-second',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+
+    expect(second).toMatchObject({
+      plan_revision_id: first.plan_revision_id,
+      status: 'existing',
+      generated_payload_digest: expect.stringMatching(/^sha256:/),
+    });
+  });
+
+  it('includes generated payload digest when replaying the same generated Plan command idempotency key', async () => {
+    const { app, repository } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
+      actionOverrides: { id: 'action-generated-plan-replay-digest' },
+    });
+
+    const first = await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      ctx.commandBody,
+    ).expect(201);
+    const replay = await signedAutomationPost(
+      app,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      ctx.commandBody,
+    ).expect(201);
+
+    expect(first.body).toMatchObject({ generated_payload_digest: expect.stringMatching(/^sha256:/) });
+    expect(replay.body).toMatchObject({
+      plan_revision_id: first.body.plan_revision_id,
+      status: 'existing',
+      generated_payload_digest: first.body.generated_payload_digest,
+    });
+  });
+
+  it('includes generated payload digest when an existing Plan revision appears during attach', async () => {
+    const repository = new HideCurrentPlanOnceRepository();
+    const { app, service } = await createTestApp(repository);
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-generated-plan-race-digest',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable generated plan race digest test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    } as AutomationPrecondition;
+    const automationService = service as AutomationCommandTestService;
+    const first = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-race-digest-first',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+    repository.hideCurrentPlanForWorkItemId = ctx.workItem.id;
+
+    const second = await automationService.ensurePlanDraftForApprovedSpec(
+      ctx.workItem.id,
+      ctx.specRevisionId,
+      precondition,
+      'idem-plan-draft-race-digest-second',
+      generatedPlanDraft,
+      planGenerationArtifacts,
+    );
+
+    expect(second).toMatchObject({
+      plan_revision_id: first.plan_revision_id,
+      status: 'existing',
+      generated_payload_digest: expect.stringMatching(/^sha256:/),
+    });
+  });
+
+  it('reports active generated Plan idempotency claims without labeling them as payload drift', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedSpec(app);
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-generated-plan-active-command',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable generated plan active command conflict test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePlanDraft',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    } as AutomationPrecondition;
+    const commandPrecondition = testPlanCommandPrecondition(precondition, generatedPlanDraft, planGenerationArtifacts);
+    await repository.claimCommandIdempotency({
+      id: 'command-idem-active-generated-plan',
+      command_name: 'ensure_plan_draft_for_approved_spec',
+      idempotency_key: 'idem-plan-draft-active-generated-plan',
+      target_object_type: 'work_item',
+      target_object_id: ctx.workItem.id,
+      target_revision_id: ctx.specRevisionId,
+      precondition_json: commandPrecondition.json,
+      precondition_fingerprint: commandPrecondition.fingerprint,
+      actor_scope: `automation_daemon:${automationDaemonIdentity}`,
+      claim_token: 'claim-active-generated-plan',
+      locked_until: '2026-05-05T00:05:00.000Z',
+      now: '2026-05-05T00:00:00.000Z',
+    });
+
+    await expect(
+      (service as AutomationCommandTestService).ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-active-generated-plan',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'command_idempotency_conflict' }),
+    });
   });
 
   it('rejects internal package draft commands before execution package writes on claim binding mismatch', async () => {
@@ -1602,6 +2683,66 @@ describe('automation command boundaries', () => {
 
     expect([409, 422]).toContain(response.status);
     await expectNoPackageDraftCommandWrites(service, ctx);
+  });
+
+  it('accepts claimed package draft actions with generation prompt identity fields', async () => {
+    const { app, repository, service } = await createTestApp();
+    apps.push(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
+    const settings = await repository.setAutomationProjectSettings({
+      id: 'automation-settings-versioned-package-claim-binding',
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      scope_type: 'repo',
+      preset: 'draft_only',
+      expected_version: 0,
+      reason: 'enable versioned package claim binding test',
+      evidence_refs: [],
+      actor: { actor_id: actorOwner, actor_class: 'human_admin' },
+      now: '2026-05-05T00:00:00.000Z',
+    });
+    const precondition: AutomationPrecondition = {
+      automation_scope: `repo:${ctx.project.id}:repo-1`,
+      project_id: ctx.project.id,
+      repo_id: 'repo-1',
+      automation_settings_version: settings.version,
+      capability_fingerprint: settings.capability_fingerprint,
+      required_capability: 'canGeneratePackageDrafts',
+      actor_class: 'automation_daemon',
+      daemon_identity: automationDaemonIdentity,
+    };
+    const actionId = 'action-versioned-package-claim-binding';
+    await signedAutomationPost(app, '/internal/automation/actions', packageDraftActionBody(ctx, precondition, actionId, {
+      action_input_json: {
+        plan_revision_id: ctx.planRevisionId,
+        generation_key: `default:${ctx.planRevisionId}`,
+        prompt_version: 'package-drafts.fake.v2',
+        output_schema_version: 'package_drafts.v1',
+      },
+    })).expect(201);
+    const claimToken = `claim-${actionId}`;
+    await signedAutomationPost(app, '/internal/automation/actions:claim-next', {
+      claim_token: claimToken,
+      lease_ms: 10 * 60 * 1000,
+      limit: 1,
+    }).expect(200);
+    const commandBody = {
+      action_run_id: actionId,
+      claim_token: claimToken,
+      idempotency_key: `${actionId}-idempotency`,
+      automation_precondition: precondition,
+      generation_key: `default:${ctx.planRevisionId}`,
+      generated_package_drafts: validGeneratedPackageDraftSet({ dependencyOrder: ['api'] }),
+      generation_artifacts: packageGenerationArtifacts,
+    };
+
+    await signedAutomationPost(
+      app,
+      `/internal/automation/plan-revisions/${ctx.planRevisionId}/ensure-package-drafts`,
+      commandBody,
+    ).expect(201);
+
+    await expect(service.listExecutionPackages(ctx.workItem.id)).resolves.toHaveLength(1);
   });
 
   it('rejects internal manual path commands before manual hold writes on claim binding mismatch', async () => {
@@ -1777,8 +2918,22 @@ describe('automation command boundaries', () => {
     const automationService = service as AutomationCommandTestService;
 
     const [first, second] = await Promise.all([
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-1'),
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-1'),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-1',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-1',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
     ]);
 
     expect(first.plan_revision_id).toBe(second.plan_revision_id);
@@ -1819,8 +2974,22 @@ describe('automation command boundaries', () => {
     const automationService = service as AutomationCommandTestService;
 
     const [first, second] = await Promise.all([
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-target-a'),
-      automationService.ensurePlanDraftForApprovedSpec(ctx.workItem.id, ctx.specRevisionId, precondition, 'idem-plan-draft-target-b'),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-target-a',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
+      automationService.ensurePlanDraftForApprovedSpec(
+        ctx.workItem.id,
+        ctx.specRevisionId,
+        precondition,
+        'idem-plan-draft-target-b',
+        generatedPlanDraft,
+        planGenerationArtifacts,
+      ),
     ]);
 
     expect(second.plan_revision_id).toBe(first.plan_revision_id);
@@ -1880,6 +3049,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-malformed-replay',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toThrow(/idempotency/i);
     expect((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id).toBeUndefined();
@@ -1938,6 +3109,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-blocked-replay',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toThrow(/idempotency/i);
     expect((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id).toBeUndefined();
@@ -2005,6 +3178,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-current-spec-race',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toThrow(/current spec changed/i);
     expect((await repository.getWorkItem(ctx.workItem.id))?.current_spec_id).toBe(concurrentSpec.id);
@@ -2047,6 +3222,8 @@ describe('automation command boundaries', () => {
         ctx.specRevisionId,
         precondition,
         'idem-plan-draft-repo-moved',
+        generatedPlanDraft,
+        planGenerationArtifacts,
       ),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'automation_precondition_stale' }),
@@ -2352,7 +3529,7 @@ describe('automation command boundaries', () => {
   it('ensures one execution package draft set for an approved plan revision under duplicate commands', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-draft',
       project_id: ctx.project.id,
@@ -2383,12 +3560,14 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-draft-1',
+        ...generatedPackageCommandFields(),
       }),
       automationService.ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-draft-1',
+        ...generatedPackageCommandFields(),
       }),
     ]);
 
@@ -2402,7 +3581,7 @@ describe('automation command boundaries', () => {
   it('allows project-scoped package draft automation for repos in the project', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-project-scope',
       project_id: ctx.project.id,
@@ -2430,6 +3609,7 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-project-scope',
+        ...generatedPackageCommandFields(),
       }),
     ).resolves.toMatchObject({ status: 'created', package_ids: [expect.any(String)] });
   });
@@ -2437,7 +3617,7 @@ describe('automation command boundaries', () => {
   it('blocks project-scoped package draft automation when multiple repos make the package repo ambiguous', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const project = await repository.getProject(ctx.project.id);
     if (project === undefined) {
       throw new Error(`Missing seeded project ${ctx.project.id}`);
@@ -2471,22 +3651,27 @@ describe('automation command boundaries', () => {
       daemon_identity: 'daemon-1',
     };
 
+    const generatedOutsideProject = validGeneratedPackageDraftSet({ dependencyOrder: ['api'] });
+    generatedOutsideProject.packages[0] = { ...generatedOutsideProject.packages[0]!, repo_id: 'repo-missing' };
+
     await expect(
       (service as AutomationCommandTestService).ensureExecutionPackageDraftsForPlanRevision({
         planRevisionId: ctx.planRevisionId,
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-project-scope-ambiguous',
+        generated: generatedOutsideProject,
+        generationArtifacts: packageGenerationArtifacts,
       }),
     ).rejects.toMatchObject({
-      response: expect.objectContaining({ code: 'automation_gate_blocked' }),
+      response: expect.objectContaining({ code: 'generated_package_policy_invalid' }),
     });
   });
 
   it('rejects manual mark-ready when the package plan revision has no frozen spec revision target', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-mark-ready-missing-spec-target',
       project_id: ctx.project.id,
@@ -2513,6 +3698,7 @@ describe('automation command boundaries', () => {
       },
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       idempotencyKey: 'idem-package-mark-ready-missing-spec-target',
+      ...generatedPackageCommandFields(),
     });
     const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
     expect(planRevision).toBeDefined();
@@ -2530,7 +3716,7 @@ describe('automation command boundaries', () => {
   it('rejects manual mark-ready when the package version is stale', async () => {
     const { app } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const executionPackage = (await request(app.getHttpServer())
       .post(`/plan-revisions/${ctx.planRevisionId}/execution-packages`)
       .send({
@@ -2572,7 +3758,7 @@ describe('automation command boundaries', () => {
   it('rejects stale package generation supersede versions', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-supersede-version',
       project_id: ctx.project.id,
@@ -2602,6 +3788,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
       idempotencyKey: 'idem-package-supersede-version-default',
+      ...generatedPackageCommandFields(),
     });
 
     await expect(
@@ -2620,7 +3807,7 @@ describe('automation command boundaries', () => {
   it('rejects non-default package regeneration when the supersede approval reference does not match', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-regeneration-approval',
       project_id: ctx.project.id,
@@ -2649,6 +3836,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
       idempotencyKey: 'idem-package-regeneration-default',
+      ...generatedPackageCommandFields(),
     });
     const supersede = await automationService.supersedeExecutionPackageGenerationRun({
       planRevisionId: ctx.planRevisionId,
@@ -2672,6 +3860,7 @@ describe('automation command boundaries', () => {
           supersededExecutionPackageSetId: `${defaultGeneration.execution_package_set_id}:wrong`,
           supersedeCommandId: supersede.supersede_command_id,
         },
+        ...generatedPackageCommandFields(),
       }),
     ).rejects.toThrow(/supersede approval|approval/i);
 
@@ -2686,6 +3875,7 @@ describe('automation command boundaries', () => {
         supersededExecutionPackageSetId: defaultGeneration.execution_package_set_id,
         supersedeCommandId: supersede.supersede_command_id,
       },
+      ...generatedPackageCommandFields(),
     });
     expect(regenerated).toMatchObject({
       status: 'created',
@@ -2696,7 +3886,7 @@ describe('automation command boundaries', () => {
   it('persists package generation supersede evidence refs', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-regeneration-evidence',
       project_id: ctx.project.id,
@@ -2724,6 +3914,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
       idempotencyKey: 'idem-package-regeneration-evidence-default',
+      ...generatedPackageCommandFields(),
     });
     const evidenceRefs: ArtifactRef[] = [
       {
@@ -2752,7 +3943,7 @@ describe('automation command boundaries', () => {
   it('rejects package generation when a package-generation manual hold is active', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-generation-hold',
       project_id: ctx.project.id,
@@ -2796,6 +3987,7 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-generation-held',
+        ...generatedPackageCommandFields(),
       }),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'manual_path_hold_active' }),
@@ -2805,7 +3997,7 @@ describe('automation command boundaries', () => {
   it('rejects package regeneration when the same idempotency key is reused for a different generation key', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const settings = await repository.setAutomationProjectSettings({
       id: 'automation-settings-package-generation-idem-key',
       project_id: ctx.project.id,
@@ -2833,6 +4025,7 @@ describe('automation command boundaries', () => {
       automationPrecondition: precondition,
       actorContext: { authenticatedActorId: actorReviewer, actorClass: 'human_admin' },
       idempotencyKey: 'idem-package-generation-cross-key',
+      ...generatedPackageCommandFields(),
     });
     const supersede = await automationService.supersedeExecutionPackageGenerationRun({
       planRevisionId: ctx.planRevisionId,
@@ -2856,14 +4049,17 @@ describe('automation command boundaries', () => {
           supersededExecutionPackageSetId: defaultGeneration.execution_package_set_id,
           supersedeCommandId: supersede.supersede_command_id,
         },
+        ...generatedPackageCommandFields(),
       }),
-    ).rejects.toThrow(/idempotency identity|fingerprint changed/i);
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'generated_payload_idempotency_drift' }),
+    });
   });
 
   it('rejects package generation for plan revisions without a frozen spec revision target', async () => {
     const { app, repository, service } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedPlan(app);
+    const ctx = await seedApprovedPlan(app, { dependencyOrder: ['api'] });
     const planRevision = await repository.getPlanRevision(ctx.planRevisionId);
     expect(planRevision).toBeDefined();
     await repository.savePlanRevision({
@@ -2899,6 +4095,7 @@ describe('automation command boundaries', () => {
         automationPrecondition: precondition,
         actorContext: { authenticatedActorId: 'daemon-1', actorClass: 'automation_daemon', daemonIdentity: 'daemon-1' },
         idempotencyKey: 'idem-package-missing-spec-target',
+        ...generatedPackageCommandFields(),
       }),
     ).rejects.toThrow(/based on/i);
   });

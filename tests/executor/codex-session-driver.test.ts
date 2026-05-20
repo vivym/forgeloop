@@ -162,6 +162,15 @@ class RecordingGovernor implements ResourceGovernor {
   }
 }
 
+class InterruptRejectingGovernor extends RecordingGovernor {
+  override async consumeLeaseCommandInvocation(input: LeaseCommandInvocationInput): Promise<{ ok: true }> {
+    if (input.expected.commandId === 'app_server:turn/interrupt') {
+      throw Object.assign(new Error('resource_governor_lease_invalid'), { code: 'resource_governor_lease_invalid' });
+    }
+    return super.consumeLeaseCommandInvocation(input);
+  }
+}
+
 class RecordingArtifactWriter {
   readonly writes: Array<Parameters<ArtifactWriter['writeText']>[0]> = [];
 
@@ -788,6 +797,92 @@ describe('codex app-server driver input routing', () => {
       input: [{ type: 'text', text: 'next turn', text_elements: [] }],
       threadId: 'thread-1',
     });
+  });
+
+  it('consumes the app-server lease before cancelling an active turn', async () => {
+    const governor = new RecordingGovernor();
+    const runtimeSafety = fallbackRuntimeSafety({ runGovernor: governor });
+    let nonce = 0;
+    const request = vi.fn(async (method: string) =>
+      method === 'thread/start'
+        ? {
+            response: {
+              thread_id: 'thread-1',
+              approvalPolicy: 'never',
+              sandbox: { type: 'dangerFullAccess' },
+            },
+          }
+        : { response: { turn_id: 'turn-1' } },
+    );
+    const driver = createGovernedAppServerDriverForTest(
+      {
+        request,
+        notifications: async function* () {
+          yield {
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread-1',
+              turn: { id: 'turn-1', status: 'completed', error: null },
+            },
+          };
+        },
+      },
+      { runtimeSafety, nonceFactory: () => `nonce-${++nonce}` },
+    );
+    await collectUntilTerminal(driver.startRun({ runSpec: createRunSpec(), workspacePath: tmpdir() }));
+    request.mockClear();
+
+    await expect(
+      driver.cancelRun({
+        runtimeMetadata: runtimeMetadata({ codex_thread_id: 'thread-1', active_turn_id: 'turn-1' }),
+      }),
+    ).resolves.toMatchObject({ acknowledged: true, threadId: 'thread-1', turnId: 'turn-1' });
+
+    expect(governor.leaseInvocations.map((input) => input.expected.commandId)).toEqual([
+      'app_server:thread/start',
+      'app_server:turn/start',
+      'app_server:turn/interrupt',
+    ]);
+    expect(request).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thread-1', turnId: 'turn-1' });
+  });
+
+  it('does not send app-server cancel when turn interrupt lease consumption fails', async () => {
+    const governor = new InterruptRejectingGovernor();
+    const runtimeSafety = fallbackRuntimeSafety({ runGovernor: governor });
+    let nonce = 0;
+    const request = vi.fn(async (method: string) =>
+      method === 'thread/start'
+        ? {
+            thread: { id: 'thread-1' },
+            approvalPolicy: 'never',
+            sandbox: { type: 'dangerFullAccess' },
+          }
+        : { turn: { id: 'turn-1' } },
+    );
+    const driver = createGovernedAppServerDriverForTest(
+      {
+        request,
+        notifications: async function* () {
+          yield {
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread-1',
+              turn: { id: 'turn-1', status: 'completed', error: null },
+            },
+          };
+        },
+      },
+      { runtimeSafety, nonceFactory: () => `nonce-${++nonce}` },
+    );
+    await collectUntilTerminal(driver.startRun({ runSpec: createRunSpec(), workspacePath: tmpdir() }));
+    request.mockClear();
+
+    await expect(
+      driver.cancelRun({
+        runtimeMetadata: runtimeMetadata({ codex_thread_id: 'thread-1', active_turn_id: 'turn-1' }),
+      }),
+    ).rejects.toThrow(/resource_governor_lease_invalid/);
+    expect(request).not.toHaveBeenCalledWith('turn/interrupt', expect.anything());
   });
 
   it('terminates startRun when a turn/completed notification reports completion', async () => {

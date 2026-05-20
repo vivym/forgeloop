@@ -2,16 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import {
   mutatingActionIdempotencyKey,
+  planNextActions,
   projectRuntimeSnapshotIdempotencyKey,
   type AutomationExecutorResult,
   type AutomationPlannerInput,
   type MutatingActionIdentity,
   type NoAction,
+  type RuntimeSnapshot,
   type StablePolicyObservationIdentity,
   type WorkflowPolicyDigestStatus,
 } from '../../packages/automation/src/index';
 
 describe('automation idempotency helpers', () => {
+  const repoScope = 'repo:project-1:repo-1' as const;
   const base = {
     actionType: 'ensure_package_drafts',
     targetObjectType: 'plan_revision',
@@ -33,6 +36,71 @@ describe('automation idempotency helpers', () => {
     parserVersion: 'workflow-md-parser:v1',
     reasonCode: 'loaded',
   } satisfies StablePolicyObservationIdentity;
+
+  const runtimeSnapshot = (): RuntimeSnapshot => ({
+    generatedAt: '2026-05-15T00:00:00.000Z',
+    projects: [],
+    repos: [
+      {
+        projectId: 'project-1',
+        repoId: 'repo-1',
+        automationScope: repoScope,
+        automationSettingsVersion: 3,
+        capabilityFingerprint: 'capability-1',
+        daemonInternalLocalPath: '/repo-1',
+      },
+    ],
+    workItemsRequiringSpec: [],
+    workItemsRequiringPlan: [
+      {
+        targetObjectType: 'work_item',
+        targetObjectId: 'work-item-1',
+        targetRevisionId: 'spec-revision-1',
+        targetStatus: 'approved',
+        projectId: 'project-1',
+        repoId: 'repo-1',
+        automationScope: repoScope,
+      },
+    ],
+    planRevisionsRequiringPackages: [
+      {
+        targetObjectType: 'plan_revision',
+        targetObjectId: 'plan-revision-1',
+        targetRevisionId: 'default:plan-revision-1',
+        targetStatus: 'approved',
+        projectId: 'project-1',
+        repoId: 'repo-1',
+        automationScope: repoScope,
+        generationKey: 'default:plan-revision-1',
+      },
+    ],
+    recentActionRuns: [],
+    runEnqueueDisabledReason: 'run_enqueue_disabled_by_scope',
+  });
+
+  const generationPlanning = (overrides: {
+    planDraftPromptVersion?: string;
+    packageDraftsPromptVersion?: string;
+  } = {}) => ({
+    mode: 'fake',
+    tasks: {
+      spec_draft: {
+        enabled: false,
+        promptVersion: 'spec-draft.fake.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+      },
+      plan_draft: {
+        enabled: true,
+        promptVersion: overrides.planDraftPromptVersion ?? 'plan-draft.fake.v1',
+        outputSchemaVersion: 'plan_draft.v1',
+      },
+      package_drafts: {
+        enabled: true,
+        promptVersion: overrides.packageDraftsPromptVersion ?? 'package-drafts.fake.v1',
+        outputSchemaVersion: 'package_drafts.v1',
+      },
+    },
+  } as const);
 
   it('builds stable mutating action keys from durable command identity', () => {
     expect(mutatingActionIdempotencyKey(base)).toBe(mutatingActionIdempotencyKey(base));
@@ -116,6 +184,23 @@ describe('automation idempotency helpers', () => {
     );
     expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
       mutatingActionIdempotencyKey({ ...specDraftBase, outputSchemaVersion: 'spec_draft.v2' }),
+    );
+  });
+
+  it('includes Plan and package draft generation prompt identity in planned action keys', () => {
+    const baseline = planNextActions(runtimeSnapshot(), { generation: generationPlanning() });
+    const changedSchema = planNextActions(runtimeSnapshot(), {
+      generation: generationPlanning({
+        planDraftPromptVersion: 'plan-draft.fake.v2',
+        packageDraftsPromptVersion: 'package-drafts.fake.v2',
+      }),
+    });
+
+    expect(changedSchema.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey).not.toBe(
+      baseline.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey,
+    );
+    expect(changedSchema.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
+      baseline.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,
     );
   });
 

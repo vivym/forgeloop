@@ -1,4 +1,5 @@
 import type { ArtifactRef } from '@forgeloop/contracts';
+import type { GeneratedPackageDraftSetV1, GeneratedPlanDraftV1 } from '@forgeloop/codex-runtime';
 import type { AutomationActorClass, AutomationActionRunStatus, AutomationPrecondition, AutomationScope } from '@forgeloop/domain';
 
 export type AutomationActionType =
@@ -37,6 +38,27 @@ export interface MutatingActionIdentity {
   manualPathScopeKey?: string;
   manualPathReasonCode?: string;
   policyDigest?: string;
+}
+
+export interface AutomationGenerationPlanningConfig {
+  mode: 'disabled' | 'fake' | 'app_server';
+  tasks: {
+    spec_draft: {
+      enabled: boolean;
+      promptVersion: string;
+      outputSchemaVersion: 'spec_draft.v1';
+    };
+    plan_draft: {
+      enabled: boolean;
+      promptVersion: string;
+      outputSchemaVersion: 'plan_draft.v1';
+    };
+    package_drafts: {
+      enabled: boolean;
+      promptVersion: string;
+      outputSchemaVersion: 'package_drafts.v1';
+    };
+  };
 }
 
 export type WorkflowPolicyDigestStatus =
@@ -96,6 +118,64 @@ export interface AutomationGenerationWorkItemContextV1 {
     kind?: string;
   };
   repos: AutomationGenerationRepoContextV1[];
+}
+
+export interface AutomationGenerationPlanContextV1 {
+  context_version: 'generation_context.plan.v1';
+  action_run_id: string;
+  work_item: {
+    id: string;
+    project_id: string;
+    title: string;
+    goal: string;
+    success_criteria: string[];
+    risk?: string;
+    priority?: string;
+    kind?: string;
+  };
+  spec_revision: {
+    id: string;
+    spec_id: string;
+    summary: string;
+    content: string;
+    background: string;
+    goals: string[];
+    scope_in: string[];
+    scope_out: string[];
+    acceptance_criteria: string[];
+    risk_notes: string[];
+    test_strategy_summary: string;
+    structured_document?: Record<string, unknown>;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+}
+
+export interface AutomationGenerationPackageContextV1 {
+  context_version: 'generation_context.package.v1';
+  action_run_id: string;
+  generation_key: string;
+  work_item: AutomationGenerationPlanContextV1['work_item'];
+  spec_revision: AutomationGenerationPlanContextV1['spec_revision'];
+  plan_revision: {
+    id: string;
+    plan_id: string;
+    summary: string;
+    content: string;
+    implementation_summary: string;
+    split_strategy: string;
+    dependency_order: string[];
+    test_matrix: string[];
+    risk_mitigations: string[];
+    rollback_notes: string;
+    structured_document?: Record<string, unknown>;
+  };
+  repos: AutomationGenerationRepoContextV1[];
+  package_policy: {
+    allowed_repo_ids: string[];
+    path_policy_summary: string;
+    required_check_policy_summary: string;
+    source_mutation_policy_default: 'path_policy_scoped' | 'no_source_changes';
+  };
 }
 
 export interface RuntimePolicyProjection extends StablePolicyObservationIdentity {
@@ -265,6 +345,7 @@ export interface ClaimNextActionInput {
   claimToken: string;
   leaseMs?: number;
   limit?: number;
+  actionType?: AutomationActionType;
   projectId?: string;
   repoId?: string;
   automationScope?: AutomationScope | string;
@@ -306,6 +387,8 @@ export interface EnsurePlanDraftCommandInput {
   idempotency_key: string;
   automation_precondition: AutomationPrecondition;
   spec_revision_id: string;
+  generated_plan_draft: GeneratedPlanDraftV1;
+  generation_artifacts: ArtifactRef[];
 }
 
 export interface EnsureSpecDraftCommandInput {
@@ -322,7 +405,9 @@ export interface EnsurePackageDraftsCommandInput {
   claim_token?: string;
   idempotency_key: string;
   automation_precondition: AutomationPrecondition;
-  generation_key?: string;
+  generation_key: string;
+  generated_package_drafts: GeneratedPackageDraftSetV1;
+  generation_artifacts: ArtifactRef[];
 }
 
 export interface RequestManualPathCommandInput {
@@ -352,6 +437,14 @@ export interface AutomationExecutorClient {
     workItemId: string,
     input: { actionRunId: string; claimToken: string },
   ): Promise<AutomationGenerationWorkItemContextV1>;
+  planDraftGenerationContext(
+    workItemId: string,
+    input: { specRevisionId: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPlanContextV1>;
+  packageDraftsGenerationContext(
+    planRevisionId: string,
+    input: { generationKey: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPackageContextV1>;
   ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown>;
   ensurePlanDraft(workItemId: string, input: EnsurePlanDraftCommandInput): Promise<unknown>;
   ensurePackageDrafts(planRevisionId: string, input: EnsurePackageDraftsCommandInput): Promise<unknown>;

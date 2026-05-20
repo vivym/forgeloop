@@ -1,16 +1,18 @@
 import {
-  disabledSpecDraftGenerator,
   executeActionRun,
   planNextActions,
+  specDraftOutputSchemaVersion,
+  specDraftPromptVersion,
   type AutomationGenerationMode,
+  type AutomationGenerationPlanningConfig,
   type AutomationExecutorClient,
   type AutomationExecutorResult,
   type RuntimePolicyProjection,
   type RuntimeSnapshot,
   type RuntimeSnapshotRepo,
-  type SpecDraftGenerator,
   type WorkflowPolicyDigestStatus,
 } from '@forgeloop/automation';
+import type { CodexGenerationRuntime } from '@forgeloop/codex-runtime';
 
 export interface AutomationDaemonClient extends AutomationExecutorClient {
   runtimeSnapshot(): Promise<RuntimeSnapshot>;
@@ -35,8 +37,9 @@ export interface AutomationDaemonOptions {
   policyLoader: AutomationDaemonPolicyLoader;
   loopIntervalMs: number;
   noClaimBackoffMs: number;
+  generationPlanning?: AutomationGenerationPlanningConfig;
   specDraftGenerationMode?: AutomationGenerationMode;
-  specDraftGenerator?: SpecDraftGenerator;
+  generationRuntime?: CodexGenerationRuntime;
   claimToken?: string;
   sleep?: (ms: number) => Promise<void>;
   onIterationError?: (error: unknown) => void;
@@ -60,6 +63,39 @@ const policyProjectionFor = (
   ...('reasonCode' in digest && digest.reasonCode !== undefined ? { reasonCode: digest.reasonCode } : {}),
   ...(digest.observedAt === undefined ? {} : { observedAt: digest.observedAt }),
 });
+
+const legacyGenerationPlanningFor = (
+  mode: AutomationGenerationMode | undefined,
+): AutomationGenerationPlanningConfig => {
+  const effectiveMode = mode === 'app_server' ? 'app_server' : mode === 'fake' ? 'fake' : 'disabled';
+  return {
+    mode: effectiveMode,
+    tasks: {
+      spec_draft: {
+        enabled: mode !== undefined && mode !== 'disabled',
+        promptVersion: specDraftPromptVersion,
+        outputSchemaVersion: specDraftOutputSchemaVersion,
+      },
+      plan_draft: {
+        enabled: false,
+        promptVersion: 'plan-draft.fake.v1',
+        outputSchemaVersion: 'plan_draft.v1',
+      },
+      package_drafts: {
+        enabled: false,
+        promptVersion: 'package-drafts.fake.v1',
+        outputSchemaVersion: 'package_drafts.v1',
+      },
+    },
+  };
+};
+
+const openProjectionStatuses = new Set(['pending', 'running']);
+
+const hasOpenProjectRuntimeSnapshotAction = (snapshot: RuntimeSnapshot): boolean =>
+  snapshot.recentActionRuns.some(
+    (actionRun) => actionRun.actionType === 'project_runtime_snapshot' && openProjectionStatuses.has(actionRun.status),
+  );
 
 export class AutomationDaemon {
   private readonly stopWaiters = new Set<() => void>();
@@ -99,18 +135,27 @@ export class AutomationDaemon {
 
   async runOnce(): Promise<AutomationDaemonRunOnceResult> {
     const snapshot = await this.snapshotWithPolicyDigests(await this.options.client.runtimeSnapshot());
-    const actions = planNextActions(snapshot, {
-      specDraftGenerationMode: this.options.specDraftGenerationMode ?? 'disabled',
-    });
-    for (const action of actions) {
+    const generationPlanning =
+      this.options.generationPlanning ?? legacyGenerationPlanningFor(this.options.specDraftGenerationMode);
+    const actions = planNextActions(snapshot, { generation: generationPlanning });
+    const shouldClaimProjectionFirst =
+      generationPlanning.mode === 'app_server' &&
+      (actions.some((action) => action.actionType === 'project_runtime_snapshot') || hasOpenProjectRuntimeSnapshotAction(snapshot));
+    const actionsToCreate =
+      shouldClaimProjectionFirst ? actions.filter((action) => action.actionType === 'project_runtime_snapshot') : actions;
+    for (const action of actionsToCreate) {
       await this.options.client.createOrReplayAction(action);
     }
 
     const claimToken = this.nextClaimToken();
-    const claim = await this.options.client.claimNextAction({ claimToken, limit: 1 });
+    const claim = await this.options.client.claimNextAction({
+      claimToken,
+      limit: 1,
+      ...(shouldClaimProjectionFirst ? { actionType: 'project_runtime_snapshot' as const } : {}),
+    });
     if (claim.action === null) {
       return {
-        plannedActionCount: actions.length,
+        plannedActionCount: actionsToCreate.length,
         backoffMs: this.options.noClaimBackoffMs,
         executed: {
           actionRunId: claimToken,
@@ -122,13 +167,14 @@ export class AutomationDaemon {
     }
 
     return {
-      plannedActionCount: actions.length,
+      plannedActionCount: actionsToCreate.length,
       executed: await executeActionRun({
         client: this.options.client,
         action: claim.action,
         actorId: this.options.actorId,
         daemonIdentity: this.options.daemonIdentity,
-        specDraftGenerator: this.options.specDraftGenerator ?? disabledSpecDraftGenerator,
+        ...(this.options.generationRuntime === undefined ? {} : { generationRuntime: this.options.generationRuntime }),
+        generationPlanning,
       }),
     };
   }

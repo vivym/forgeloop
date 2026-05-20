@@ -13,10 +13,14 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import {
+  createCodexGenerationRuntime,
+  type CodexGenerationRuntime,
+} from '../../packages/codex-runtime/src/index';
+import {
   AutomationHttpClient,
-  createFakeSpecDraftGenerator,
   type AutomationActionResponse,
   type AutomationFetch,
+  type AutomationGenerationPlanningConfig,
   type ClaimNextActionInput,
   type NextAction,
 } from '../../packages/automation/src/index';
@@ -32,7 +36,6 @@ const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const now = '2026-05-16T00:00:00.000Z';
 const expectedCompletedActionTypes = [
-  'ensure_package_drafts',
   'ensure_plan_draft',
   'project_runtime_snapshot',
 ] as const;
@@ -105,10 +108,27 @@ const createAutomationClient = (app: INestApplication): AutomationHttpClient =>
     now: () => new Date().toISOString(),
   });
 
+const fakeGenerationPlanning = (
+  overrides: Partial<AutomationGenerationPlanningConfig['tasks']> = {},
+): AutomationGenerationPlanningConfig => ({
+  mode: 'fake',
+  tasks: {
+    spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+    plan_draft: { enabled: true, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+    package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+    ...overrides,
+  },
+});
+
 const createDaemon = (
   app: INestApplication,
   client: AutomationDaemonClient = createAutomationClient(app),
-  options: Partial<Pick<ConstructorParameters<typeof AutomationDaemon>[0], 'specDraftGenerationMode' | 'specDraftGenerator'>> = {},
+  options: Partial<
+    Pick<
+      ConstructorParameters<typeof AutomationDaemon>[0],
+      'generationPlanning' | 'generationRuntime' | 'specDraftGenerationMode'
+    >
+  > = {},
 ): AutomationDaemon =>
   new AutomationDaemon({
     client,
@@ -119,6 +139,8 @@ const createDaemon = (
     policyLoader: loadDaemonWorkflowPolicyDigest,
     loopIntervalMs: 1,
     noClaimBackoffMs: 1,
+    generationPlanning: fakeGenerationPlanning(),
+    generationRuntime: createCodexGenerationRuntime({ mode: 'fake' }),
     ...options,
   });
 
@@ -325,13 +347,34 @@ afterEach(async () => {
 });
 
 describe('HTTP automation daemon integration', () => {
-  it('creates a fake Spec draft through signed HTTP actions without generating downstream drafts', async () => {
+  it('creates a fake Spec draft through the shared generation runtime without generating downstream drafts', async () => {
     const { app, repository } = await bootAutomationApp();
     const seeded = await seedDraftOnlyWorkItemWithoutSpec(app);
-    const daemon = createDaemon(app, createAutomationClient(app), {
-      specDraftGenerationMode: 'fake',
-      specDraftGenerator: createFakeSpecDraftGenerator(),
-    });
+    const generationRuntime: CodexGenerationRuntime = {
+      ...createCodexGenerationRuntime({ mode: 'fake' }),
+      async generateSpecDraft(input) {
+        return {
+          taskKind: 'spec_draft',
+          promptVersion: input.promptVersion,
+          outputSchemaVersion: input.outputSchemaVersion,
+          generated: {
+            schema_version: 'spec_draft.v1',
+            summary: 'Runtime-generated Spec draft',
+            content: 'Runtime-generated Spec content.',
+            background: 'Runtime context was used.',
+            goals: ['Use the shared generation runtime'],
+            scope_in: ['Spec generation runtime integration'],
+            scope_out: ['Separate automation-owned Spec generator'],
+            acceptance_criteria: ['Daemon creates a draft Spec revision.'],
+            risk_notes: ['Keep human approval gates intact.'],
+            test_strategy_summary: 'Verify the daemon uses generationRuntime.generateSpecDraft.',
+          },
+          generationArtifacts: [],
+          publicSummary: 'Spec generated.',
+        };
+      },
+    };
+    const daemon = createDaemon(app, createAutomationClient(app), { generationRuntime });
 
     const result = await daemon.runOnce();
 
@@ -353,8 +396,8 @@ describe('HTTP automation daemon integration', () => {
     expect(revisions).toHaveLength(1);
     expect(revisions[0]).toMatchObject({
       id: spec.current_revision_id,
-      summary: 'Draft spec for Ship fake Spec draft automation',
-      content: expect.stringContaining('Generate a Spec draft through the automation daemon.'),
+      summary: 'Runtime-generated Spec draft',
+      content: 'Runtime-generated Spec content.',
       acceptance_criteria: ['Daemon creates a draft Spec revision.'],
     });
     await expect(repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).resolves.toEqual([]);
@@ -368,7 +411,7 @@ describe('HTTP automation daemon integration', () => {
     expectSucceededActionLifecycle(runs, 'ensure_spec_draft');
   });
 
-  it('creates plan and package drafts through signed HTTP actions and recovers from action runs after restart', async () => {
+  it('2A generates a Plan draft from an approved Spec and suppresses Package generation after human Plan approval', async () => {
     const { app, repository } = await bootAutomationApp();
     const seeded = await seedDraftOnlyApprovedSpec(app);
     const daemon = createDaemon(app);
@@ -379,37 +422,29 @@ describe('HTTP automation daemon integration', () => {
       'plan_draft_created',
     );
     const planContext = await approveCurrentPlan(app, repository, seeded.workItem.id);
-
-    await runUntil(
-      daemon,
-      async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length > 0,
-      'package_drafts_created',
-    );
     await drainDaemon(daemon, 'daemon_drained');
 
-    const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
-    expect(packages).toHaveLength(1);
-    expect(packages[0]).toMatchObject({
-      work_item_id: seeded.workItem.id,
-      plan_revision_id: planContext.revision.id,
-      generation_key: `default:${planContext.revision.id}`,
-      repo_id: 'repo-1',
+    const workItem = await repository.getWorkItem(seeded.workItem.id);
+    expect(workItem?.current_plan_id).toEqual(expect.any(String));
+    expect(workItem?.current_plan_revision_id).toBe(planContext.revision.id);
+    const plan = (await repository.getPlan(workItem!.current_plan_id!))!;
+    expect(plan).toMatchObject({
+      id: workItem!.current_plan_id,
+      status: 'approved',
+      approved_revision_id: planContext.revision.id,
     });
-    await expect(repository.listRunSessionsForPackage(packages[0]!.id)).resolves.toEqual([]);
+    const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
+    expect(packages).toHaveLength(0);
 
     const completedActionRuns = await actionRuns(repository);
     expect(completedActionRuns).toHaveLength(expectedCompletedActionTypes.length);
     expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
     expect(sortedActionTypes(completedActionRuns)).toEqual([...expectedCompletedActionTypes]);
     const planAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_plan_draft');
-    const packageAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_package_drafts');
     expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
     expect(new Set(completedActionRuns.map((actionRun) => actionRun.idempotency_key)).size).toBe(completedActionRuns.length);
     expect(planAction.action_input_json).toMatchObject({ work_item_id: seeded.workItem.id, spec_revision_id: seeded.specRevisionId });
-    expect(packageAction.action_input_json).toMatchObject({
-      plan_revision_id: planContext.revision.id,
-      generation_key: `default:${planContext.revision.id}`,
-    });
+    expect(completedActionRuns.map((actionRun) => actionRun.action_type)).not.toContain('ensure_package_drafts');
     const actionRunCount = completedActionRuns.length;
 
     const restarted = createDaemon(app);
@@ -421,9 +456,92 @@ describe('HTTP automation daemon integration', () => {
       plannedActionCount: 0,
       executed: { status: 'skipped', reasonCode: 'no_claimable_action' },
     });
-    expect(packagesAfterRestart).toHaveLength(1);
+    expect(packagesAfterRestart).toHaveLength(0);
     expect(actionRunsAfterRestart).toHaveLength(actionRunCount);
-    await expect(repository.listRunSessionsForPackage(packagesAfterRestart[0]!.id)).resolves.toEqual([]);
+  });
+
+  it('2B generates Package drafts from a human-approved generated Plan when explicitly enabled without enqueueing run sessions', async () => {
+    const { app, repository } = await bootAutomationApp();
+    const seeded = await seedDraftOnlyApprovedSpec(app);
+    const generationPlanning = fakeGenerationPlanning({
+      package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+    });
+    const daemon = createDaemon(app, createAutomationClient(app), { generationPlanning });
+
+    await runUntil(
+      daemon,
+      async () => (await repository.getWorkItem(seeded.workItem.id))?.current_plan_id !== undefined,
+      '2b_plan_draft_created',
+    );
+    const planContext = await approveCurrentPlan(app, repository, seeded.workItem.id);
+    await runUntil(
+      daemon,
+      async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length === 2,
+      '2b_package_drafts_created',
+    );
+    await drainDaemon(daemon, '2b_daemon_drained');
+
+    const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
+    expect(packages.map((item) => item.package_key)).toEqual(['api', 'tests']);
+    expect(packages.map((item) => item.sequence)).toEqual([0, 1]);
+    expect(packages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          work_item_id: seeded.workItem.id,
+          plan_revision_id: planContext.revision.id,
+          generation_key: `default:${planContext.revision.id}`,
+          package_key: 'api',
+          phase: 'draft',
+        }),
+        expect.objectContaining({
+          work_item_id: seeded.workItem.id,
+          plan_revision_id: planContext.revision.id,
+          generation_key: `default:${planContext.revision.id}`,
+          package_key: 'tests',
+          phase: 'draft',
+        }),
+      ]),
+    );
+    await expect(repository.listRunSessions(seeded.project.id)).resolves.toEqual([]);
+    for (const executionPackage of packages) {
+      await expect(repository.listRunSessionsForPackage(executionPackage.id)).resolves.toEqual([]);
+    }
+
+    const completedActionRuns = await actionRuns(repository);
+    expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
+    expect(sortedActionTypes(completedActionRuns)).toEqual([
+      'ensure_package_drafts',
+      'ensure_plan_draft',
+      'project_runtime_snapshot',
+    ]);
+    expectSucceededActionLifecycle(completedActionRuns, 'ensure_plan_draft');
+    expectSucceededActionLifecycle(completedActionRuns, 'ensure_package_drafts');
+    expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
+    expect(completedActionRuns.map((actionRun) => actionRun.action_type)).not.toContain('enqueue_package_run');
+  });
+
+  it('daemon never submits or approves Spec or Plan during generation', async () => {
+    const { app, repository } = await bootAutomationApp();
+    const specSeed = await seedDraftOnlyWorkItemWithoutSpec(app);
+    await createDaemon(app).runOnce();
+
+    const workItemWithSpec = await repository.getWorkItem(specSeed.workItem.id);
+    const generatedSpec = (await repository.getSpec(workItemWithSpec!.current_spec_id!))!;
+    expect(generatedSpec.status).toBe('draft');
+    expect(generatedSpec.approved_revision_id).toBeUndefined();
+    expect(generatedSpec.submitted_at).toBeUndefined();
+
+    const planSeed = await seedDraftOnlyApprovedSpec(app);
+    await runUntil(
+      createDaemon(app),
+      async () => (await repository.getWorkItem(planSeed.workItem.id))?.current_plan_id !== undefined,
+      'plan_draft_created_without_human_gate_mutation',
+    );
+    const workItemWithPlan = await repository.getWorkItem(planSeed.workItem.id);
+    const generatedPlan = (await repository.getPlan(workItemWithPlan!.current_plan_id!))!;
+    expect(generatedPlan.status).toBe('draft');
+    expect(generatedPlan.approved_revision_id).toBeUndefined();
+    expect(generatedPlan.submitted_at).toBeUndefined();
   });
 
   it('continues from pending automation_action_runs after daemon restart without duplicating actions', async () => {
