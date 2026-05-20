@@ -4,6 +4,14 @@ const disposableNamePattern = /(?:test|tmp|forgeloop_dev)/i;
 const localHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 const resettableTables = [
+  'codex_worker_session_nonces',
+  'codex_launch_leases',
+  'codex_worker_registrations',
+  'codex_worker_bootstrap_tokens',
+  'codex_credential_binding_versions',
+  'codex_credential_bindings',
+  'codex_runtime_profile_revisions',
+  'codex_runtime_profiles',
   'automation_action_runs',
   'execution_package_generation_packages',
   'execution_package_generation_runs',

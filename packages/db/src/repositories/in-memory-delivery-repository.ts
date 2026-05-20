@@ -3,6 +3,19 @@ import type {
   AutomationProjectSettings,
   Artifact,
   Actor,
+  CodexCredentialBinding,
+  CodexCredentialBindingPublic,
+  CodexCredentialBindingVersion,
+  CodexLaunchLease,
+  CodexLaunchLeaseWithToken,
+  CodexLaunchMaterialization,
+  CodexRuntimeProfile,
+  CodexRuntimeProfileRevision,
+  CodexRuntimeScope,
+  CodexRuntimeStatusProjection,
+  CodexRuntimeTargetKind,
+  CodexWorkerBootstrapToken,
+  CodexWorkerRegistration,
   CommandIdempotencyRecord,
   Decision,
   DomainError as DomainErrorType,
@@ -25,6 +38,7 @@ import type {
   RunEvent,
   RunSession,
   RunWorkerLease,
+  ResolvedCodexCredential,
   Spec,
   SpecRevision,
   StatusHistory,
@@ -36,6 +50,11 @@ import {
   assertCanonicalManualScopeKey,
   automationCapabilitiesForPreset,
   capabilityFingerprint,
+  codexCanonicalDigest,
+  codexCredentialPayloadDigest,
+  codexRuntimeScopeMatches,
+  validateCodexLaunchTargetKind,
+  validateCodexRuntimeProfileRevision,
   isActiveRunSessionStatus,
   isOpenReviewPacketStatus,
   isWorkItemAutomationTerminal,
@@ -49,16 +68,30 @@ import type {
   ClaimExecutionPackageGenerationRunInput,
   CompleteAutomationActionRunInput,
   CompleteExecutionPackageGenerationRunInput,
+  CodexLaunchFenceSnapshot,
+  CodexRuntimeRecoveryResult,
+  CreateCodexCredentialBindingWithVersionInput,
+  CreateCodexRuntimeProfileWithRevisionInput,
+  CreateCodexWorkerBootstrapTokenInput,
+  CreateOrReplayCodexLaunchLeaseInput,
   CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
   ExecutionPackageGenerationPackageRecord,
   FinishCommandIdempotencyInput,
+  FindAvailableCodexWorkerInput,
   GetClaimedAutomationActionRunInput,
+  GetCodexRuntimeStatusInput,
+  HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
+  MaterializeCodexLaunchLeaseInput,
   DeliveryRepository,
+  RecoverStaleCodexWorkerLeasesInput,
+  ResolveCodexCredentialForLaunchInput,
+  ResolveCodexRuntimeForLaunchInput,
+  RevokeCodexLaunchLeaseInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
   RenewCommandIdempotencyInput,
@@ -68,9 +101,11 @@ import type {
   SaveExecutionPackageGenerationPackageInput,
   SetAutomationProjectSettingsInput,
   SupersedeExecutionPackageGenerationRunInput,
+  TerminalizeCodexLaunchLeaseInput,
   TraceArtifactRefRecord,
   TraceEventRecord,
   TraceLinkRecord,
+  UpsertCodexWorkerRegistrationInput,
 } from './delivery-repository';
 import {
   runtimeSnapshotBlockerFieldsFor,
@@ -180,6 +215,97 @@ const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
 const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
 
+interface CodexCredentialBindingVersionPrivateRecord {
+  version: CodexCredentialBindingVersion;
+  secret_payload_json: unknown;
+}
+
+interface CodexWorkerBootstrapTokenRecord extends CodexWorkerBootstrapToken {
+  worker_identity: string;
+  bootstrap_token_version: number;
+  status: CreateCodexWorkerBootstrapTokenInput['status'];
+  allowed_scopes_json: readonly CodexRuntimeScope[];
+  allowed_capabilities_json: Record<string, unknown>;
+  created_by_actor_id: string;
+  revoked_at?: string;
+}
+
+interface CodexWorkerRegistrationPrivateRecord {
+  registration: CodexWorkerRegistration;
+  session_token_hash: string;
+  bootstrap_token_version: number;
+  allowed_scopes: readonly CodexRuntimeScope[];
+  docker_image_digests: readonly string[];
+  network_policy_digests: readonly string[];
+  network_provider_config_digests: readonly string[];
+  labels: Record<string, unknown>;
+}
+
+interface CodexLaunchLeasePrivateRecord {
+  lease: CodexLaunchLease;
+  lease_request_id: string;
+  runtime_profile_digest: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  credential_payload_digest: string;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+  action_type?: string;
+  action_attempt?: number;
+  action_claim_token_hash?: string;
+  precondition_fingerprint?: string;
+  execution_package_id?: string;
+  run_worker_lease_id?: string;
+  run_worker_lease_token_hash?: string;
+  run_session_status?: string;
+  run_session_updated_at?: string;
+  execution_package_version?: number;
+  materialization_request_hash?: string;
+  materialized_at?: string;
+  terminal_reason_code?: string;
+}
+
+const codexDenied = (code: DomainErrorType['code'], message: string, details?: Record<string, unknown>): DomainErrorType =>
+  new DomainError(code, message, details);
+
+const normalizeWorkerStatus = (
+  status: UpsertCodexWorkerRegistrationInput['status'] | HeartbeatCodexWorkerInput['status'],
+): CodexWorkerRegistration['status'] => {
+  if (status === 'online') {
+    return 'active';
+  }
+  if (status === 'disabled') {
+    return 'offline';
+  }
+  return status;
+};
+
+const normalizeControlChannelStatus = (
+  status: UpsertCodexWorkerRegistrationInput['control_channel_status'] | HeartbeatCodexWorkerInput['control_channel_status'],
+): CodexWorkerRegistration['control_channel_status'] => {
+  if (status === 'local' || status === 'connected') {
+    return 'connected';
+  }
+  if (status === 'disconnected' || status === 'draining') {
+    return 'stale';
+  }
+  return status;
+};
+
+const capabilityList = (capabilities: Record<string, unknown>, key: string): readonly string[] => {
+  const value = capabilities[key];
+  return Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string') ? value : [];
+};
+
+const includesAll = (allowed: readonly string[], requested: readonly string[]): boolean =>
+  requested.every((entry) => allowed.includes(entry));
+
+const codexScope = (projectId: string, repoId?: string): CodexRuntimeScope => ({
+  project_id: projectId,
+  ...(repoId === undefined ? {} : { repo_id: repoId }),
+});
+
 export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly objectLocks = new ObjectLockManager();
   private readonly organizations = new Map<string, Organization>();
@@ -220,6 +346,18 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly executionPackageGenerationPackages = new Map<string, ExecutionPackageGenerationPackageRecord>();
   private readonly automationActionRuns = new Map<string, AutomationActionRun>();
   private readonly automationActionRunIdempotency = new Map<string, string>();
+  private readonly codexRuntimeProfiles = new Map<string, CodexRuntimeProfile>();
+  private readonly codexRuntimeProfileRevisions = new Map<string, CodexRuntimeProfileRevision>();
+  private readonly codexCredentialBindings = new Map<string, CodexCredentialBinding>();
+  private readonly codexCredentialBindingVersions = new Map<string, CodexCredentialBindingVersionPrivateRecord>();
+  private readonly codexWorkerBootstrapTokens = new Map<string, CodexWorkerBootstrapTokenRecord>();
+  private readonly codexWorkerRegistrations = new Map<string, CodexWorkerRegistrationPrivateRecord>();
+  private readonly codexWorkerSessionNonces = new Map<
+    string,
+    { worker_id: string; nonce: string; nonce_timestamp: string; created_at: string }
+  >();
+  private readonly codexLaunchLeases = new Map<string, CodexLaunchLeasePrivateRecord>();
+  private readonly codexLaunchLeaseRequestIds = new Map<string, string>();
 
   async withDeliveryTransaction<T>(write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
     return this.objectLocks.withLock('delivery-transaction', async () => {
@@ -234,6 +372,466 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
     return this.objectLocks.withLock(key, () => write(this));
+  }
+
+  async createCodexRuntimeProfileWithRevision(
+    input: CreateCodexRuntimeProfileWithRevisionInput,
+  ): Promise<CodexRuntimeProfileRevision> {
+    validateCodexRuntimeProfileRevision(input.revision);
+    this.codexRuntimeProfiles.set(input.profile.id, clone(input.profile));
+    this.codexRuntimeProfileRevisions.set(input.revision.id, clone(input.revision));
+    return clone(input.revision);
+  }
+
+  async getActiveCodexRuntimeProfileRevision(
+    input: ResolveCodexRuntimeForLaunchInput,
+  ): Promise<CodexRuntimeProfileRevision | undefined> {
+    const revisions = valuesFor(this.codexRuntimeProfileRevisions)
+      .filter(
+        (revision) =>
+          revision.status === 'active' &&
+          revision.target_kind === input.target_kind &&
+          (input.runtime_profile_id === undefined || revision.profile_id === input.runtime_profile_id) &&
+          codexRuntimeScopeMatches(revision.allowed_scopes, codexScope(input.project_id, input.repo_id)),
+      )
+      .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.revision_number - left.revision_number);
+
+    return this.cloneMaybe(revisions[0]);
+  }
+
+  async createCodexCredentialBindingWithVersion(
+    input: CreateCodexCredentialBindingWithVersionInput,
+  ): Promise<CodexCredentialBindingVersion> {
+    const payloadDigest = codexCredentialPayloadDigest(input.secret_payload_json);
+    if (payloadDigest !== input.version.payload_digest) {
+      throw codexDenied('codex_launch_lease_denied', 'Credential payload digest does not match secret payload.');
+    }
+    this.codexCredentialBindings.set(input.binding.id, clone(input.binding));
+    this.codexCredentialBindingVersions.set(input.version.id, {
+      version: clone(input.version),
+      secret_payload_json: clone(input.secret_payload_json),
+    });
+    return clone(input.version);
+  }
+
+  async getCodexCredentialBindingPublic(id: string): Promise<CodexCredentialBindingPublic | undefined> {
+    const binding = this.codexCredentialBindings.get(id);
+    if (binding === undefined) {
+      return undefined;
+    }
+    const activeVersion =
+      binding.active_version_id !== undefined ? this.codexCredentialBindingVersions.get(binding.active_version_id)?.version : undefined;
+    return {
+      id: binding.id,
+      profile_id: binding.profile_id,
+      project_id: binding.project_id,
+      ...(binding.repo_id !== undefined ? { repo_id: binding.repo_id } : {}),
+      provider: binding.provider,
+      purpose: binding.purpose,
+      ...(binding.active_version_id !== undefined ? { active_version_id: binding.active_version_id } : {}),
+      ...(activeVersion?.payload_digest !== undefined ? { active_payload_digest: activeVersion.payload_digest } : {}),
+    };
+  }
+
+  async resolveCodexCredentialForLaunch(input: ResolveCodexCredentialForLaunchInput): Promise<ResolvedCodexCredential | undefined> {
+    const binding = this.codexCredentialBindings.get(input.credential_binding_id);
+    if (binding === undefined || binding.project_id !== input.project_id) {
+      return undefined;
+    }
+    if (binding.repo_id !== undefined && binding.repo_id !== input.repo_id) {
+      return undefined;
+    }
+    const profile = this.codexRuntimeProfiles.get(binding.profile_id);
+    if (profile?.target_kind !== input.target_kind) {
+      return undefined;
+    }
+    const version =
+      binding.active_version_id !== undefined ? this.codexCredentialBindingVersions.get(binding.active_version_id) : undefined;
+    if (version === undefined || version.version.status !== 'active') {
+      return undefined;
+    }
+    if (input.required_payload_digest !== undefined && version.version.payload_digest !== input.required_payload_digest) {
+      return undefined;
+    }
+    return {
+      binding_id: binding.id,
+      binding_version_id: version.version.id,
+      payload: clone(version.secret_payload_json),
+      payload_digest: version.version.payload_digest,
+    };
+  }
+
+  async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
+    const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
+    const credential =
+      input.credential_binding_id !== undefined ? await this.getCodexCredentialBindingPublic(input.credential_binding_id) : undefined;
+    const worker =
+      profileRevision !== undefined
+        ? await this.findAvailableCodexWorker({
+            project_id: input.project_id,
+            ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+            target_kind: input.target_kind,
+            docker_image_digest: profileRevision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(profileRevision.network_policy),
+            ...(profileRevision.network_policy.mode === 'docker_network_proxy'
+              ? { network_provider_config_digest: profileRevision.network_policy.provider_config.provider_config_digest }
+              : {}),
+            now: input.now,
+          })
+        : undefined;
+
+    return {
+      ...(profileRevision !== undefined
+        ? {
+            runtime_profile_id: profileRevision.profile_id,
+            runtime_profile_revision_id: profileRevision.id,
+            runtime_profile_digest: profileRevision.profile_digest,
+            runtime_target_kind: profileRevision.target_kind,
+            source_access_mode: profileRevision.source_access_mode,
+            environment: profileRevision.environment,
+            docker_image_digest: profileRevision.docker_image_digest,
+            network_policy_digest: codexCanonicalDigest(profileRevision.network_policy),
+            profile_status: profileRevision.status,
+          }
+        : {}),
+      ...(credential !== undefined
+        ? {
+            credential_binding_id: credential.id,
+            credential_binding_version_id: credential.active_version_id,
+            credential_payload_digest: credential.active_payload_digest,
+          }
+        : {}),
+      ...(worker !== undefined ? { worker_status: worker.status } : {}),
+      blocker_codes: profileRevision === undefined ? ['codex_runtime_profile_invalid'] : [],
+    };
+  }
+
+  async createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken> {
+    const token: CodexWorkerBootstrapTokenRecord = {
+      id: input.id,
+      token_hash: input.bootstrap_token_hash,
+      worker_identity: input.worker_identity,
+      bootstrap_token_version: input.bootstrap_token_version,
+      status: input.status,
+      allowed_scopes_json: clone(input.allowed_scopes_json),
+      allowed_capabilities_json: clone(input.allowed_capabilities_json),
+      created_by_actor_id: input.created_by_actor_id,
+      expires_at: input.expires_at,
+      created_at: input.created_at,
+      ...(input.revoked_at !== undefined ? { revoked_at: input.revoked_at } : {}),
+    };
+    this.codexWorkerBootstrapTokens.set(input.id, clone(token));
+    return {
+      id: token.id,
+      token_hash: token.token_hash,
+      expires_at: token.expires_at,
+      created_at: token.created_at,
+    };
+  }
+
+  async upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration> {
+    const bootstrap = [...this.codexWorkerBootstrapTokens.values()].find(
+      (token) =>
+        token.worker_identity === input.worker_identity &&
+        token.token_hash === input.bootstrap_token_hash &&
+        token.bootstrap_token_version === input.bootstrap_token_version &&
+        token.status === 'active' &&
+        token.revoked_at === undefined &&
+        token.expires_at > input.now,
+    );
+    if (bootstrap === undefined) {
+      throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token proof was rejected.');
+    }
+    if (
+      !input.allowed_scopes.every((scope) => codexRuntimeScopeMatches(bootstrap.allowed_scopes_json, scope)) ||
+      !includesAll(capabilityList(bootstrap.allowed_capabilities_json, 'target_kinds'), input.capabilities) ||
+      !includesAll(capabilityList(bootstrap.allowed_capabilities_json, 'docker_image_digests'), input.docker_image_digests) ||
+      !includesAll(capabilityList(bootstrap.allowed_capabilities_json, 'network_policy_digests'), input.network_policy_digests) ||
+      !includesAll(
+        capabilityList(bootstrap.allowed_capabilities_json, 'network_provider_config_digests'),
+        input.network_provider_config_digests ?? [],
+      )
+    ) {
+      throw codexDenied('codex_worker_registration_denied', 'Worker registration exceeds bootstrap token trust root.');
+    }
+    const registration: CodexWorkerRegistration = {
+      id: input.worker_id,
+      worker_version: input.version,
+      worker_identity: input.worker_identity,
+      status: normalizeWorkerStatus(input.status),
+      control_channel_status: normalizeControlChannelStatus(input.control_channel_status),
+      bootstrap_token_hash: input.bootstrap_token_hash,
+      capabilities: clone(input.capabilities),
+      uid: input.host_worker_uid,
+      gid: input.host_worker_gid,
+      active_lease_count: input.lease_count,
+      max_concurrency: input.max_concurrency,
+      session_public_key: input.session_public_key_material,
+      registered_at: input.now,
+    };
+    this.codexWorkerRegistrations.set(input.worker_id, {
+      registration: clone(registration),
+      session_token_hash: codexCredentialPayloadDigest(input.session_token),
+      bootstrap_token_version: input.bootstrap_token_version,
+      allowed_scopes: clone(input.allowed_scopes),
+      docker_image_digests: clone(input.docker_image_digests),
+      network_policy_digests: clone(input.network_policy_digests),
+      network_provider_config_digests: clone(input.network_provider_config_digests ?? []),
+      labels: clone(input.labels ?? {}),
+    });
+    return clone(registration);
+  }
+
+  async heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration> {
+    const worker = this.assertWorkerSession(input.worker_id, input.session_token);
+    this.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+    worker.registration = {
+      ...worker.registration,
+      status: normalizeWorkerStatus(input.status),
+      control_channel_status: normalizeControlChannelStatus(input.control_channel_status),
+      capabilities: clone(input.capabilities),
+      active_lease_count: input.active_lease_count,
+      last_heartbeat_at: input.now,
+    };
+    this.codexWorkerRegistrations.set(input.worker_id, clone(worker));
+    return clone(worker.registration);
+  }
+
+  async findAvailableCodexWorker(input: FindAvailableCodexWorkerInput): Promise<CodexWorkerRegistration | undefined> {
+    const worker = valuesFor(this.codexWorkerRegistrations)
+      .filter(
+        (record) =>
+          record.registration.status === 'active' &&
+          record.registration.control_channel_status === 'connected' &&
+          record.registration.active_lease_count < record.registration.max_concurrency &&
+          record.registration.capabilities.includes(input.target_kind) &&
+          codexRuntimeScopeMatches(record.allowed_scopes, codexScope(input.project_id, input.repo_id)) &&
+          record.docker_image_digests.includes(input.docker_image_digest) &&
+          record.network_policy_digests.includes(input.network_policy_digest) &&
+          (input.network_provider_config_digest === undefined ||
+            record.network_provider_config_digests.includes(input.network_provider_config_digest)),
+      )
+      .sort((left, right) => left.registration.active_lease_count - right.registration.active_lease_count)[0];
+    return this.cloneMaybe(worker?.registration);
+  }
+
+  async createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLeaseWithToken> {
+    validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
+    const existingId = this.codexLaunchLeaseRequestIds.get(input.lease_request_id);
+    if (existingId !== undefined) {
+      const existing = this.codexLaunchLeases.get(existingId);
+      if (existing === undefined) {
+        throw codexDenied('codex_launch_lease_denied', 'Launch lease idempotency record is inconsistent.');
+      }
+      const expectedHash = codexCredentialPayloadDigest(input.launch_token);
+      if (!this.launchReplayMatches(existing, input) || existing.lease.lease_token_hash !== expectedHash) {
+        throw codexDenied('codex_launch_lease_denied', 'Launch lease request id replay did not match original request.');
+      }
+      return { ...clone(existing.lease), lease_token: input.launch_token };
+    }
+
+    const profileRevision = this.codexRuntimeProfileRevisions.get(input.runtime_profile_revision_id);
+    if (
+      profileRevision === undefined ||
+      profileRevision.status !== 'active' ||
+      profileRevision.target_kind !== input.target.target_kind ||
+      profileRevision.profile_digest !== input.runtime_profile_digest ||
+      !codexRuntimeScopeMatches(profileRevision.allowed_scopes, codexScope(input.target.project_id, input.target.repo_id)) ||
+      profileRevision.docker_image_digest !== input.docker_image_digest ||
+      codexCanonicalDigest(profileRevision.network_policy) !== input.network_policy_digest ||
+      (profileRevision.network_policy.mode === 'docker_network_proxy' &&
+        profileRevision.network_policy.provider_config.provider_config_digest !== input.network_provider_config_digest)
+    ) {
+      throw codexDenied('codex_launch_lease_denied', 'Launch lease runtime profile fence was rejected.');
+    }
+    const worker = this.codexWorkerRegistrations.get(input.worker_id);
+    if (
+      worker === undefined ||
+      (await this.findAvailableCodexWorker({
+        project_id: input.target.project_id,
+        ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+        target_kind: input.target.target_kind,
+        docker_image_digest: input.docker_image_digest,
+        network_policy_digest: input.network_policy_digest,
+        ...(input.network_provider_config_digest === undefined
+          ? {}
+          : { network_provider_config_digest: input.network_provider_config_digest }),
+        now: input.now,
+      }))?.id !== input.worker_id
+    ) {
+      throw codexDenied('codex_launch_lease_denied', 'Launch lease worker fence was rejected.');
+    }
+    const credential = await this.resolveCodexCredentialForLaunch({
+      credential_binding_id: input.credential_binding_id,
+      target_kind: input.target.target_kind,
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      required_payload_digest: input.credential_payload_digest,
+      now: input.now,
+    });
+    if (credential?.binding_version_id !== input.credential_binding_version_id) {
+      throw codexDenied('codex_launch_lease_denied', 'Launch lease credential fence was rejected.');
+    }
+
+    const lease: CodexLaunchLease = {
+      id: input.id,
+      target: clone(input.target),
+      profile_revision_id: input.runtime_profile_revision_id,
+      worker_id: input.worker_id,
+      status: 'leased',
+      lease_token_hash: codexCredentialPayloadDigest(input.launch_token),
+      created_at: input.now,
+      expires_at: input.expires_at,
+    };
+    const privateRecord: CodexLaunchLeasePrivateRecord = {
+      lease,
+      lease_request_id: input.lease_request_id,
+      runtime_profile_digest: input.runtime_profile_digest,
+      credential_binding_id: input.credential_binding_id,
+      credential_binding_version_id: input.credential_binding_version_id,
+      credential_payload_digest: input.credential_payload_digest,
+      docker_image_digest: input.docker_image_digest,
+      network_policy_digest: input.network_policy_digest,
+      ...(input.network_provider_config_digest !== undefined
+        ? { network_provider_config_digest: input.network_provider_config_digest }
+        : {}),
+      ...(input.action_type !== undefined ? { action_type: input.action_type } : {}),
+      ...(input.action_attempt !== undefined ? { action_attempt: input.action_attempt } : {}),
+      ...(input.action_claim_token_hash !== undefined ? { action_claim_token_hash: input.action_claim_token_hash } : {}),
+      ...(input.precondition_fingerprint !== undefined ? { precondition_fingerprint: input.precondition_fingerprint } : {}),
+      ...(input.execution_package_id !== undefined ? { execution_package_id: input.execution_package_id } : {}),
+      ...(input.run_worker_lease_id !== undefined ? { run_worker_lease_id: input.run_worker_lease_id } : {}),
+      ...(input.run_worker_lease_token_hash !== undefined ? { run_worker_lease_token_hash: input.run_worker_lease_token_hash } : {}),
+      ...(input.run_session_status !== undefined ? { run_session_status: input.run_session_status } : {}),
+      ...(input.run_session_updated_at !== undefined ? { run_session_updated_at: input.run_session_updated_at } : {}),
+      ...(input.execution_package_version !== undefined ? { execution_package_version: input.execution_package_version } : {}),
+    };
+    this.codexLaunchLeases.set(input.id, clone(privateRecord));
+    this.codexLaunchLeaseRequestIds.set(input.lease_request_id, input.id);
+    worker.registration.active_lease_count += 1;
+    this.codexWorkerRegistrations.set(input.worker_id, clone(worker));
+    return { ...clone(lease), lease_token: input.launch_token };
+  }
+
+  async materializeCodexLaunchLease(input: MaterializeCodexLaunchLeaseInput): Promise<CodexLaunchMaterialization> {
+    const worker = this.assertWorkerSession(input.worker_id, input.worker_session_token);
+    this.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+    const record = this.codexLaunchLeases.get(input.lease_id);
+    if (
+      record === undefined ||
+      record.lease.worker_id !== input.worker_id ||
+      record.lease.status !== 'leased' ||
+      record.lease.expires_at <= input.now ||
+      record.lease.lease_token_hash !== codexCredentialPayloadDigest(input.launch_token) ||
+      !this.codexLaunchFenceMatches(record, input.active_fence)
+    ) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization was denied.');
+    }
+    const profileRevision = this.codexRuntimeProfileRevisions.get(record.lease.profile_revision_id);
+    const credentialRecord = this.codexCredentialBindingVersions.get(record.credential_binding_version_id);
+    if (profileRevision === undefined || credentialRecord === undefined || credentialRecord.version.status !== 'active') {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch lease materialization dependencies were unavailable.');
+    }
+    const materializedRecord: CodexLaunchLeasePrivateRecord = {
+      ...record,
+      lease: { ...record.lease, status: 'released' },
+      materialization_request_hash: input.materialization_request_hash,
+      materialized_at: input.now,
+    };
+    this.codexLaunchLeases.set(input.lease_id, clone(materializedRecord));
+    worker.registration.active_lease_count = Math.max(0, worker.registration.active_lease_count - 1);
+    this.codexWorkerRegistrations.set(input.worker_id, clone(worker));
+    return {
+      launch_target: clone(record.lease.target),
+      profile_revision: clone(profileRevision),
+      resolved_credentials: [
+        {
+          binding_id: record.credential_binding_id,
+          binding_version_id: credentialRecord.version.id,
+          payload: clone(credentialRecord.secret_payload_json),
+          payload_digest: credentialRecord.version.payload_digest,
+        },
+      ],
+      lease_id: record.lease.id,
+      materialized_at: input.now,
+    };
+  }
+
+  async terminalizeCodexLaunchLease(input: TerminalizeCodexLaunchLeaseInput): Promise<CodexLaunchLease> {
+    this.assertWorkerSession(input.worker_id, input.worker_session_token);
+    this.recordCodexWorkerNonce(input.worker_id, input.nonce, input.nonce_timestamp, input.now);
+    const record = this.codexLaunchLeases.get(input.lease_id);
+    if (record === undefined || record.lease.worker_id !== input.worker_id) {
+      throw codexDenied('codex_launch_lease_denied', 'Codex launch lease terminalization was denied.');
+    }
+    const terminal = {
+      ...record,
+      lease: { ...record.lease, status: input.terminal_status },
+      terminal_reason_code: input.reason_code,
+    };
+    this.codexLaunchLeases.set(input.lease_id, clone(terminal));
+    return clone(terminal.lease);
+  }
+
+  async revokeCodexLaunchLease(input: RevokeCodexLaunchLeaseInput): Promise<CodexLaunchLease> {
+    const record = this.codexLaunchLeases.get(input.lease_id);
+    if (record === undefined) {
+      throw codexDenied('codex_launch_lease_denied', 'Codex launch lease was not found.');
+    }
+    const revoked = {
+      ...record,
+      lease: { ...record.lease, status: 'expired' as const },
+      terminal_reason_code: input.reason_code,
+    };
+    this.codexLaunchLeases.set(input.lease_id, clone(revoked));
+    return clone(revoked.lease);
+  }
+
+  async expireCodexLaunchLeases(now: string): Promise<number> {
+    let count = 0;
+    for (const [id, record] of this.codexLaunchLeases.entries()) {
+      if ((record.lease.status === 'leased' || record.lease.status === 'queued') && record.lease.expires_at <= now) {
+        this.codexLaunchLeases.set(id, clone({ ...record, lease: { ...record.lease, status: 'expired' as const } }));
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async recoverStaleCodexWorkerLeases(input: RecoverStaleCodexWorkerLeasesInput): Promise<CodexRuntimeRecoveryResult> {
+    const staleWorkerIds = new Set(
+      valuesFor(this.codexWorkerRegistrations)
+        .filter(
+          (worker) =>
+            (input.worker_id === undefined || worker.registration.id === input.worker_id) &&
+            (worker.registration.last_heartbeat_at === undefined || worker.registration.last_heartbeat_at < input.stale_before),
+        )
+        .map((worker) => worker.registration.id),
+    );
+    const recovered: CodexLaunchLease[] = [];
+    const automation_action_transitions: CodexRuntimeRecoveryResult['automation_action_transitions'] = [];
+    const run_session_transitions: CodexRuntimeRecoveryResult['run_session_transitions'] = [];
+    for (const [id, record] of this.codexLaunchLeases.entries()) {
+      if (record.lease.worker_id !== undefined && staleWorkerIds.has(record.lease.worker_id) && record.lease.status === 'leased') {
+        const expired = { ...record, lease: { ...record.lease, status: 'expired' as const }, terminal_reason_code: input.reason_code };
+        this.codexLaunchLeases.set(id, clone(expired));
+        recovered.push(clone(expired.lease));
+        if (record.action_type !== undefined) {
+          automation_action_transitions.push({
+            action_type: record.action_type,
+            target_id: record.lease.target.target_id,
+            reason_code: input.reason_code,
+          });
+        }
+        if (record.execution_package_id !== undefined || record.run_worker_lease_id !== undefined) {
+          run_session_transitions.push({
+            ...(record.execution_package_id === undefined ? {} : { execution_package_id: record.execution_package_id }),
+            reason_code: input.reason_code,
+          });
+        }
+      }
+    }
+    return { recovered_launch_leases: recovered, automation_action_transitions, run_session_transitions };
   }
 
   async saveOrganization(organization: Organization): Promise<void> {
@@ -2232,6 +2830,68 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return clone(actionRun);
   }
 
+  private assertWorkerSession(workerId: string, sessionToken: string): CodexWorkerRegistrationPrivateRecord {
+    const worker = this.codexWorkerRegistrations.get(workerId);
+    if (worker === undefined || worker.session_token_hash !== codexCredentialPayloadDigest(sessionToken)) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex worker session proof was rejected.');
+    }
+    return clone(worker);
+  }
+
+  private recordCodexWorkerNonce(workerId: string, nonce: string, nonceTimestamp: string, now: string): void {
+    const key = `${workerId}:${nonce}`;
+    if (this.codexWorkerSessionNonces.has(key)) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
+    }
+    this.codexWorkerSessionNonces.set(key, {
+      worker_id: workerId,
+      nonce,
+      nonce_timestamp: nonceTimestamp,
+      created_at: now,
+    });
+  }
+
+  private launchReplayMatches(record: CodexLaunchLeasePrivateRecord, input: CreateOrReplayCodexLaunchLeaseInput): boolean {
+    return (
+      valuesEqual(record.lease.target, input.target) &&
+      record.lease.worker_id === input.worker_id &&
+      record.lease.profile_revision_id === input.runtime_profile_revision_id &&
+      record.runtime_profile_digest === input.runtime_profile_digest &&
+      record.credential_binding_id === input.credential_binding_id &&
+      record.credential_binding_version_id === input.credential_binding_version_id &&
+      record.credential_payload_digest === input.credential_payload_digest &&
+      record.docker_image_digest === input.docker_image_digest &&
+      record.network_policy_digest === input.network_policy_digest &&
+      record.network_provider_config_digest === input.network_provider_config_digest &&
+      record.action_type === input.action_type &&
+      record.action_attempt === input.action_attempt &&
+      record.action_claim_token_hash === input.action_claim_token_hash &&
+      record.precondition_fingerprint === input.precondition_fingerprint &&
+      record.execution_package_id === input.execution_package_id &&
+      record.run_worker_lease_id === input.run_worker_lease_id &&
+      record.run_worker_lease_token_hash === input.run_worker_lease_token_hash &&
+      record.run_session_status === input.run_session_status &&
+      record.run_session_updated_at === input.run_session_updated_at &&
+      record.execution_package_version === input.execution_package_version &&
+      record.lease.expires_at === input.expires_at
+    );
+  }
+
+  private codexLaunchFenceMatches(record: CodexLaunchLeasePrivateRecord, activeFence: CodexLaunchFenceSnapshot | undefined): boolean {
+    const check = <T>(stored: T | undefined, current: T | undefined): boolean =>
+      stored === undefined || (current !== undefined && current === stored);
+
+    return (
+      check(record.action_claim_token_hash, activeFence?.action_claim_token_hash) &&
+      check(record.precondition_fingerprint, activeFence?.precondition_fingerprint) &&
+      check(record.run_worker_lease_id, activeFence?.run_worker_lease_id) &&
+      check(record.run_worker_lease_token_hash, activeFence?.run_worker_lease_token_hash) &&
+      check(record.run_session_status, activeFence?.run_session_status) &&
+      check(record.run_session_updated_at, activeFence?.run_session_updated_at) &&
+      check(record.execution_package_version, activeFence?.execution_package_version)
+    );
+  }
+
   private snapshotTransactionalMaps(): Array<readonly [Map<string, unknown>, Map<string, unknown>]> {
     return this.transactionalMaps().map((records) => [
       records,
@@ -2335,6 +2995,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.executionPackageGenerationPackages,
       this.automationActionRuns,
       this.automationActionRunIdempotency,
+      this.codexRuntimeProfiles,
+      this.codexRuntimeProfileRevisions,
+      this.codexCredentialBindings,
+      this.codexCredentialBindingVersions,
+      this.codexWorkerBootstrapTokens,
+      this.codexWorkerRegistrations,
+      this.codexWorkerSessionNonces,
+      this.codexLaunchLeases,
+      this.codexLaunchLeaseRequestIds,
     ] as Array<Map<string, unknown>>;
   }
 

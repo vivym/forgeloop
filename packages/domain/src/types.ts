@@ -47,7 +47,11 @@ export type DomainErrorCode =
   | 'codex_runtime_profile_invalid'
   | 'codex_worker_docker_policy_unavailable'
   | 'codex_docker_runtime_evidence_unsafe'
-  | 'codex_app_server_effective_config_mismatch';
+  | 'codex_app_server_effective_config_mismatch'
+  | 'codex_worker_nonce_replay'
+  | 'codex_worker_registration_denied'
+  | 'codex_launch_lease_denied'
+  | 'codex_launch_materialization_denied';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
