@@ -255,7 +255,7 @@ describe('product lane projections', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('serves Product Lane and Work Item actions endpoints and removes old workbench routes', async () => {
+  it('serves Product Lane endpoints without Workbench action targets', async () => {
     const { app } = await track(createTestApp());
     const { project, workItem } = await seedDraftWorkItem(app);
 
@@ -273,6 +273,8 @@ describe('product lane projections', () => {
       lane_id: 'bugs',
       default_lane_id: 'bugs',
     });
+    expect(JSON.stringify(laneResponse.body)).not.toContain('/workbench');
+    expect(JSON.stringify(actionsResponse.body)).not.toContain('/workbench');
 
     const removedEndpoint = `/query/${'work'}${'benches'}/spec-approver?project_id=${project.id}`;
     await request(app.getHttpServer()).get(removedEndpoint).expect(404);

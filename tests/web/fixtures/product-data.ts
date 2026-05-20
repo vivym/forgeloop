@@ -294,7 +294,7 @@ export const productActionFixtures = {
     target: {
       kind: 'lane',
       lane_id: 'reviewer',
-      href: `/workbench/reviewer?project_id=${projectId}`,
+      href: `/lanes/reviewer?project_id=${projectId}`,
     },
   },
   commandTargetFollowUp: {

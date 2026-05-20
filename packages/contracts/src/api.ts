@@ -126,7 +126,7 @@ export const productObjectTypeSchema = z.enum([
 export type ProductObjectType = z.infer<typeof productObjectTypeSchema>;
 
 const productHrefPrefixes = [
-  '/workbench',
+  '/lanes',
   '/work-items',
   '/specs',
   '/plans',
@@ -303,7 +303,7 @@ const productActionLaneTargetSchema = z
     }
 
     const pathname = decodeProductPathname(url.pathname);
-    if (pathname === undefined || pathname !== `/workbench/${target.lane_id}`) {
+    if (pathname === undefined || pathname !== `/lanes/${target.lane_id}`) {
       ctx.addIssue({
         code: 'custom',
         path: ['href'],
