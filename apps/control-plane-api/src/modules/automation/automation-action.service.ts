@@ -88,6 +88,7 @@ export class AutomationActionService {
       claim_token: input.claim_token,
       locked_until: lockedUntilFor(input, now),
       limit: input.limit,
+      ...(input.action_type === undefined ? {} : { action_type: input.action_type }),
       ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
       ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
       ...(input.automation_scope === undefined ? {} : { automation_scope: input.automation_scope }),

@@ -20,6 +20,8 @@ import {
   failAutomationActionRunSchema,
   generationContextQuerySchema,
   gatePendingAutomationActionRunSchema,
+  packageGenerationContextQuerySchema,
+  planGenerationContextQuerySchema,
   requestManualPathCommandSchema,
   type AutomationActionResponseDto,
   type AutomationRuntimeSnapshotDto,
@@ -33,6 +35,8 @@ import {
   type FailAutomationActionRunDto,
   type GenerationContextQueryDto,
   type GatePendingAutomationActionRunDto,
+  type PackageGenerationContextQueryDto,
+  type PlanGenerationContextQueryDto,
   type RequestManualPathCommandDto,
 } from './automation.dto';
 import { AutomationGenerationContextService } from './automation-generation-context.service';
@@ -85,6 +89,22 @@ export class AutomationController {
     @Query(new ZodValidationPipe(generationContextQuerySchema)) query: GenerationContextQueryDto,
   ) {
     return this.automationGenerationContextService.getSpecDraftContext(workItemId, query);
+  }
+
+  @Get('generation-context/work-items/:workItemId/plan-draft')
+  planDraftGenerationContext(
+    @Param('workItemId') workItemId: string,
+    @Query(new ZodValidationPipe(planGenerationContextQuerySchema)) query: PlanGenerationContextQueryDto,
+  ) {
+    return this.automationGenerationContextService.getPlanDraftContext(workItemId, query);
+  }
+
+  @Get('generation-context/plan-revisions/:planRevisionId/package-drafts')
+  packageDraftsGenerationContext(
+    @Param('planRevisionId') planRevisionId: string,
+    @Query(new ZodValidationPipe(packageGenerationContextQuerySchema)) query: PackageGenerationContextQueryDto,
+  ) {
+    return this.automationGenerationContextService.getPackageDraftsContext(planRevisionId, query);
   }
 
   @Post('actions')

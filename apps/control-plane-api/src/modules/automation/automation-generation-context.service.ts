@@ -3,7 +3,17 @@ import type { DeliveryRepository } from '@forgeloop/db';
 import { DomainError } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
-import type { AutomationGenerationWorkItemContextV1, GenerationContextQueryDto } from './automation.dto';
+import type {
+  AutomationGenerationPackageContextV1,
+  AutomationGenerationPlanContextV1,
+  AutomationGenerationRepoContextV1,
+  AutomationGenerationWorkItemContextV1,
+  GenerationContextQueryDto,
+  PackageGenerationContextQueryDto,
+  PlanGenerationContextQueryDto,
+} from './automation.dto';
+import { assertNoActiveHolds } from './automation-command-helpers';
+import { policyProjectionsByRepoScopeFor } from './policy-projection';
 
 const claimConflictBody = {
   code: 'automation_action_claim_conflict',
@@ -30,6 +40,20 @@ const repoIdFromAutomationScope = (automationScope: string): string | undefined 
   return scopeType === 'repo' && repoId !== undefined && extra === undefined ? repoId : undefined;
 };
 
+const projectIdFromAutomationScope = (automationScope: string): string | undefined => {
+  const [scopeType, projectId, , extra] = automationScope.split(':');
+  return (scopeType === 'project' || scopeType === 'repo') && projectId !== undefined && extra === undefined
+    ? projectId
+    : undefined;
+};
+
+const isTerminalWorkItem = (workItem: { phase: string; resolution: string; archived_at?: string; deleted_at?: string }): boolean =>
+  workItem.phase === 'done' ||
+  workItem.phase === 'closed' ||
+  workItem.resolution === 'completed' ||
+  workItem.archived_at !== undefined ||
+  workItem.deleted_at !== undefined;
+
 @Injectable()
 export class AutomationGenerationContextService {
   constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
@@ -54,14 +78,7 @@ export class AutomationGenerationContextService {
     }
 
     const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
-    const repos = (await this.repository.listProjectRepos(workItem.project_id))
-      .filter((repo) => repo.status === 'active' && (scopedRepoId === undefined || repo.repo_id === scopedRepoId))
-      .map((repo) => ({
-        project_id: repo.project_id,
-        repo_id: repo.repo_id,
-        default_branch: repo.default_branch,
-        policy_status: 'missing' as const,
-      }));
+    const repos = await this.repoContextsFor(workItem.project_id, scopedRepoId);
     if (scopedRepoId !== undefined && repos.length === 0) {
       throw new ConflictException(claimConflictBody);
     }
@@ -81,6 +98,260 @@ export class AutomationGenerationContextService {
       },
       repos,
     };
+  }
+
+  async getPlanDraftContext(
+    workItemId: string,
+    query: PlanGenerationContextQueryDto,
+  ): Promise<AutomationGenerationPlanContextV1> {
+    const action = await this.getActiveClaim(query.action_run_id, query.claim_token);
+    const mismatched =
+      action.action_type !== 'ensure_plan_draft' ||
+      action.target_object_type !== 'work_item' ||
+      action.target_object_id !== workItemId ||
+      action.target_revision_id !== query.spec_revision_id ||
+      action.action_input_json.work_item_id !== workItemId ||
+      action.action_input_json.spec_revision_id !== query.spec_revision_id;
+    if (mismatched) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const workItem = await this.repository.getWorkItem(workItemId);
+    if (workItem === undefined) {
+      throw new NotFoundException(`WorkItem ${workItemId}`);
+    }
+    const scopedProjectId = projectIdFromAutomationScope(action.automation_scope);
+    if (scopedProjectId !== undefined && workItem.project_id !== scopedProjectId) {
+      throw new ConflictException(claimConflictBody);
+    }
+    if (isTerminalWorkItem(workItem)) {
+      throw new ConflictException(claimConflictBody);
+    }
+    if (workItem.current_spec_id === undefined) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const spec = await this.repository.getSpec(workItem.current_spec_id);
+    if (
+      spec === undefined ||
+      spec.work_item_id !== workItem.id ||
+      spec.status !== 'approved' ||
+      spec.resolution !== 'approved' ||
+      spec.approved_revision_id === undefined ||
+      spec.current_revision_id !== spec.approved_revision_id ||
+      query.spec_revision_id !== spec.approved_revision_id
+    ) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const specRevision = await this.repository.getSpecRevision(query.spec_revision_id);
+    if (specRevision === undefined) {
+      throw new NotFoundException(`SpecRevision ${query.spec_revision_id}`);
+    }
+    if (specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
+    const repos = await this.repoContextsFor(workItem.project_id, scopedRepoId);
+    if (scopedRepoId !== undefined && repos.length === 0) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    await assertNoActiveHolds(this.repository, [
+      { object_type: 'work_item', object_id: workItem.id },
+      { object_type: 'spec_revision', object_id: specRevision.id },
+    ]);
+
+    return {
+      context_version: 'generation_context.plan.v1',
+      action_run_id: action.id,
+      work_item: {
+        id: workItem.id,
+        project_id: workItem.project_id,
+        title: workItem.title,
+        goal: workItem.goal,
+        success_criteria: workItem.success_criteria,
+        risk: workItem.risk,
+        priority: workItem.priority,
+        kind: workItem.kind,
+      },
+      spec_revision: {
+        id: specRevision.id,
+        spec_id: specRevision.spec_id,
+        summary: specRevision.summary,
+        content: specRevision.content,
+        background: specRevision.background,
+        goals: specRevision.goals,
+        scope_in: specRevision.scope_in,
+        scope_out: specRevision.scope_out,
+        acceptance_criteria: specRevision.acceptance_criteria,
+        risk_notes: specRevision.risk_notes,
+        test_strategy_summary: specRevision.test_strategy_summary,
+        ...(specRevision.structured_document === undefined
+          ? {}
+          : { structured_document: specRevision.structured_document }),
+      },
+      repos,
+    };
+  }
+
+  async getPackageDraftsContext(
+    planRevisionId: string,
+    query: PackageGenerationContextQueryDto,
+  ): Promise<AutomationGenerationPackageContextV1> {
+    const action = await this.getActiveClaim(query.action_run_id, query.claim_token);
+    const mismatched =
+      action.action_type !== 'ensure_package_drafts' ||
+      action.target_object_type !== 'plan_revision' ||
+      action.target_object_id !== planRevisionId ||
+      action.target_revision_id !== query.generation_key ||
+      action.action_input_json.plan_revision_id !== planRevisionId ||
+      action.action_input_json.generation_key !== query.generation_key;
+    if (mismatched) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const planRevision = await this.repository.getPlanRevision(planRevisionId);
+    if (planRevision === undefined) {
+      throw new NotFoundException(`PlanRevision ${planRevisionId}`);
+    }
+    const plan = await this.repository.getPlan(planRevision.plan_id);
+    if (
+      plan === undefined ||
+      plan.work_item_id !== planRevision.work_item_id ||
+      plan.status !== 'approved' ||
+      plan.resolution !== 'approved' ||
+      plan.approved_revision_id === undefined ||
+      plan.approved_revision_id !== planRevision.id ||
+      plan.current_revision_id !== plan.approved_revision_id
+    ) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const workItem = await this.repository.getWorkItem(plan.work_item_id);
+    if (workItem === undefined) {
+      throw new NotFoundException(`WorkItem ${plan.work_item_id}`);
+    }
+    const scopedProjectId = projectIdFromAutomationScope(action.automation_scope);
+    if (scopedProjectId !== undefined && workItem.project_id !== scopedProjectId) {
+      throw new ConflictException(claimConflictBody);
+    }
+    if (
+      isTerminalWorkItem(workItem) ||
+      workItem.current_plan_id !== plan.id ||
+      workItem.current_plan_revision_id !== planRevision.id ||
+      workItem.current_spec_id === undefined
+    ) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const spec = await this.repository.getSpec(workItem.current_spec_id);
+    if (
+      spec === undefined ||
+      spec.work_item_id !== workItem.id ||
+      spec.status !== 'approved' ||
+      spec.resolution !== 'approved' ||
+      spec.approved_revision_id === undefined ||
+      spec.current_revision_id !== spec.approved_revision_id ||
+      workItem.current_spec_revision_id !== spec.approved_revision_id ||
+      planRevision.based_on_spec_revision_id !== spec.approved_revision_id
+    ) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const specRevision = await this.repository.getSpecRevision(spec.approved_revision_id);
+    if (specRevision === undefined) {
+      throw new NotFoundException(`SpecRevision ${spec.approved_revision_id}`);
+    }
+    if (specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
+    const repos = await this.repoContextsFor(workItem.project_id, scopedRepoId);
+    if (scopedRepoId !== undefined && repos.length === 0) {
+      throw new ConflictException(claimConflictBody);
+    }
+
+    await assertNoActiveHolds(this.repository, [
+      { object_type: 'work_item', object_id: workItem.id },
+      { object_type: 'spec_revision', object_id: specRevision.id },
+      { object_type: 'plan_revision', object_id: planRevision.id },
+      { object_type: 'package_generation', object_id: planRevision.id, generation_key: query.generation_key },
+    ]);
+
+    return {
+      context_version: 'generation_context.package.v1',
+      action_run_id: action.id,
+      generation_key: query.generation_key,
+      work_item: {
+        id: workItem.id,
+        project_id: workItem.project_id,
+        title: workItem.title,
+        goal: workItem.goal,
+        success_criteria: workItem.success_criteria,
+        risk: workItem.risk,
+        priority: workItem.priority,
+        kind: workItem.kind,
+      },
+      spec_revision: {
+        id: specRevision.id,
+        spec_id: specRevision.spec_id,
+        summary: specRevision.summary,
+        content: specRevision.content,
+        background: specRevision.background,
+        goals: specRevision.goals,
+        scope_in: specRevision.scope_in,
+        scope_out: specRevision.scope_out,
+        acceptance_criteria: specRevision.acceptance_criteria,
+        risk_notes: specRevision.risk_notes,
+        test_strategy_summary: specRevision.test_strategy_summary,
+        ...(specRevision.structured_document === undefined
+          ? {}
+          : { structured_document: specRevision.structured_document }),
+      },
+      plan_revision: {
+        id: planRevision.id,
+        plan_id: planRevision.plan_id,
+        summary: planRevision.summary,
+        content: planRevision.content,
+        implementation_summary: planRevision.implementation_summary,
+        split_strategy: planRevision.split_strategy,
+        dependency_order: planRevision.dependency_order,
+        test_matrix: planRevision.test_matrix,
+        risk_mitigations: planRevision.risk_mitigations,
+        rollback_notes: planRevision.rollback_notes,
+        ...(planRevision.structured_document === undefined
+          ? {}
+          : { structured_document: planRevision.structured_document }),
+      },
+      repos,
+      package_policy: {
+        allowed_repo_ids: repos.map((repo) => repo.repo_id),
+        path_policy_summary: 'Generated packages must stay within their package allowed_paths and active repository scope.',
+        required_check_policy_summary: 'Generated packages must declare required checks for implementation and review gates.',
+        source_mutation_policy_default: 'path_policy_scoped',
+      },
+    };
+  }
+
+  private async repoContextsFor(projectId: string, scopedRepoId: string | undefined): Promise<AutomationGenerationRepoContextV1[]> {
+    const runtimeSnapshot = await this.repository.getRuntimeSnapshotData();
+    const policyProjectionsByRepoScope = policyProjectionsByRepoScopeFor(runtimeSnapshot.policy_projection_action_runs);
+    return (await this.repository.listProjectRepos(projectId))
+      .filter((repo) => repo.status === 'active' && (scopedRepoId === undefined || repo.repo_id === scopedRepoId))
+      .map((repo) => {
+        const policyProjection = policyProjectionsByRepoScope.get(`repo:${repo.project_id}:${repo.repo_id}`);
+        return {
+          project_id: repo.project_id,
+          repo_id: repo.repo_id,
+          default_branch: repo.default_branch,
+          policy_status: policyProjection?.policy_status ?? 'missing',
+          ...(policyProjection?.policy_digest === undefined ? {} : { policy_digest: policyProjection.policy_digest }),
+          ...(policyProjection?.parser_version === undefined ? {} : { parser_version: policyProjection.parser_version }),
+        };
+      });
   }
 
   private async getActiveClaim(actionRunId: string, claimToken: string) {

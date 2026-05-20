@@ -3,6 +3,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import {
+  appServerResultFromResponse,
+  CodexAppServerJsonRpcClient,
+  effectiveConfigFromResponse,
+  isRecord,
+  textInput,
+  type CodexAppServerTransport,
+  type CodexEffectiveConfig,
+} from '@forgeloop/codex-runtime';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { normalizeCodexAppServerNotification } from './codex-event-normalizer.js';
@@ -14,20 +23,6 @@ import type {
 } from './codex-session-driver.js';
 import type { LocalCodexRuntimeSafety } from './local-codex-preflight.js';
 import { ResourceGovernorError, type RunGovernorBindings, type SandboxLease } from './resource-governor.js';
-
-type SandboxConfig = { type: string } | string | null | undefined;
-
-export interface CodexEffectiveConfig {
-  approvalPolicy?: string | null | undefined;
-  sandbox?: SandboxConfig;
-}
-
-export interface CodexAppServerTransport {
-  initialize?(): Promise<void>;
-  request(method: string, params: Record<string, unknown>): Promise<unknown>;
-  notifications?(): AsyncIterable<unknown>;
-  close?(): Promise<void>;
-}
 
 export interface CodexAppServerDriverOptions {
   transport: CodexAppServerTransport;
@@ -44,8 +39,6 @@ export interface CodexAppServerProcessTransportOptions {
   allowUnsafeDirectSpawn?: boolean;
 }
 
-const textInput = (message: string): Array<Record<string, unknown>> => [{ type: 'text', text: message, text_elements: [] }];
-
 type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[] | { [key: string]: CanonicalJsonValue };
 
 interface AppServerLeaseState {
@@ -55,9 +48,6 @@ interface AppServerLeaseState {
   runSpecDigest: string;
   nextCommandSequence: number;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const primaryGovernorUnavailableError = (): Error =>
   new Error('primary_executor_governor_unavailable: Codex app-server execution requires a runtime safety lease.');
@@ -246,23 +236,6 @@ const notificationStreamEndedTerminal = (error?: unknown): CodexDriverStreamItem
   };
 };
 
-const responseConfig = (response: unknown): CodexEffectiveConfig => {
-  if (response !== null && typeof response === 'object') {
-    const record = response as Record<string, unknown>;
-    const config: CodexEffectiveConfig = {};
-    if (typeof record.approvalPolicy === 'string') {
-      config.approvalPolicy = record.approvalPolicy;
-    }
-    if ('sandbox' in record) {
-      config.sandbox = record.sandbox as SandboxConfig;
-    }
-
-    return config;
-  }
-
-  return {};
-};
-
 export const resolveEffectiveDangerousMode = (config: CodexEffectiveConfig): RunRuntimeMetadata['effective_dangerous_mode'] => {
   const sandbox = config.sandbox;
 
@@ -286,32 +259,36 @@ export const confirmAppServerDangerousMode = async (
 };
 
 const extractThreadId = (response: unknown): string | undefined => {
-  if (response !== null && typeof response === 'object') {
-    const record = response as Record<string, unknown>;
-    if (typeof record.threadId === 'string') {
-      return record.threadId;
-    }
-
-    const thread = record.thread;
-    if (thread !== null && typeof thread === 'object' && typeof (thread as Record<string, unknown>).id === 'string') {
-      return (thread as Record<string, unknown>).id as string;
-    }
+  const record = appServerResultFromResponse(response);
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  if (typeof record.threadId === 'string') {
+    return record.threadId;
+  }
+  if (typeof record.thread_id === 'string') {
+    return record.thread_id;
+  }
+  if (isRecord(record.thread) && typeof record.thread.id === 'string') {
+    return record.thread.id;
   }
 
   return undefined;
 };
 
 const extractTurnId = (response: unknown): string | undefined => {
-  if (response !== null && typeof response === 'object') {
-    const record = response as Record<string, unknown>;
-    if (typeof record.turnId === 'string') {
-      return record.turnId;
-    }
-
-    const turn = record.turn;
-    if (turn !== null && typeof turn === 'object' && typeof (turn as Record<string, unknown>).id === 'string') {
-      return (turn as Record<string, unknown>).id as string;
-    }
+  const record = appServerResultFromResponse(response);
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  if (typeof record.turnId === 'string') {
+    return record.turnId;
+  }
+  if (typeof record.turn_id === 'string') {
+    return record.turn_id;
+  }
+  if (isRecord(record.turn) && typeof record.turn.id === 'string') {
+    return record.turn.id;
   }
 
   return undefined;
@@ -347,7 +324,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
       });
-      await confirmAppServerDangerousMode(responseConfig(threadResponse));
+      await confirmAppServerDangerousMode(effectiveConfigFromResponse(threadResponse) ?? {});
 
       const threadId = extractThreadId(threadResponse);
       if (threadId === undefined) {
@@ -453,7 +430,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
       });
-      await confirmAppServerDangerousMode(responseConfig(response));
+      await confirmAppServerDangerousMode(effectiveConfigFromResponse(response) ?? {});
 
       yield {
         kind: 'event',
@@ -539,6 +516,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       return { acknowledged: false, reason: 'missing_thread_or_turn' };
     }
 
+    await this.#consumeLeaseCommand(this.#requireExistingLease(), 'turn/interrupt', JSON.stringify({ threadId, turnId }));
     const response = await this.#transport.request('turn/interrupt', { threadId, turnId });
     return {
       acknowledged: true,
@@ -670,16 +648,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
 
 export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   readonly #child: ChildProcessWithoutNullStreams;
-  readonly #pending = new Map<
-    number,
-    {
-      resolve: (value: unknown) => void;
-      reject: (reason?: unknown) => void;
-    }
-  >();
-  readonly #notificationQueue: unknown[] = [];
-  #requestId = 0;
-  #closed = false;
+  readonly #client: CodexAppServerJsonRpcClient;
   #processError: Error | undefined = undefined;
   #initialized = false;
   #initializePromise: Promise<void> | undefined = undefined;
@@ -696,9 +665,27 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
     this.#child = spawn(options.codexBinary ?? 'codex', options.args ?? ['app-server'], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    this.#client = new CodexAppServerJsonRpcClient({
+      writeLine: async (line) => {
+        if (this.#processError !== undefined) {
+          throw this.#processError;
+        }
+        await new Promise<void>((resolve) => {
+          this.#child.stdin.write(`${line}\n`, (error) => {
+            if (error !== null && error !== undefined && this.#processError !== undefined) {
+              this.#closeWithError(this.#processError);
+            }
+            resolve();
+          });
+        });
+      },
+      close: async () => {
+        this.#child.stdin.end();
+      },
+    });
 
     createInterface({ input: this.#child.stdout }).on('line', (line) => {
-      this.#handleLine(line);
+      this.#client.acceptLine(line);
     });
     this.#child.once('error', (error) => {
       this.#closeWithError(error);
@@ -742,56 +729,15 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
   }
 
   async request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    if (this.#closed) {
-      throw this.#processError ?? new Error('Codex app-server process is closed.');
-    }
-
-    const id = ++this.#requestId;
-    const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
-    const response = new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
-    });
-    this.#child.stdin.write(`${payload}\n`, (error) => {
-      if (error !== null && error !== undefined) {
-        const pending = this.#pending.get(id);
-        this.#pending.delete(id);
-        pending?.reject(error);
-      }
-    });
-    return response;
+    return this.#client.request(method, params);
   }
 
   async #sendNotification(method: string): Promise<void> {
-    if (this.#closed) {
-      throw this.#processError ?? new Error('Codex app-server process is closed.');
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      this.#child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method })}\n`, (error) => {
-        if (error !== null && error !== undefined) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      });
-    });
+    await this.#client.sendNotification(method);
   }
 
   async *notifications(): AsyncIterable<unknown> {
-    while (!this.#closed || this.#notificationQueue.length > 0) {
-      const notification = this.#notificationQueue.shift();
-      if (notification !== undefined) {
-        yield notification;
-        continue;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-
-    if (this.#processError !== undefined) {
-      throw this.#processError;
-    }
+    yield* this.#client.notifications();
   }
 
   async close(): Promise<void> {
@@ -806,45 +752,11 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
     }
   }
 
-  #handleLine(line: string): void {
-    let message: unknown;
-    try {
-      message = JSON.parse(line) as unknown;
-    } catch {
-      return;
-    }
-
-    if (message !== null && typeof message === 'object') {
-      const record = message as Record<string, unknown>;
-      if (typeof record.id === 'number') {
-        const pending = this.#pending.get(record.id);
-        if (pending === undefined) {
-          return;
-        }
-        this.#pending.delete(record.id);
-
-        if (record.error !== undefined) {
-          pending.reject(record.error);
-          return;
-        }
-
-        pending.resolve(record.result);
-        return;
-      }
-    }
-
-    this.#notificationQueue.push(message);
-  }
-
   #closeWithError(error: Error): void {
     if (this.#processError === undefined) {
       this.#processError = error;
     }
-    this.#closed = true;
-    for (const pending of this.#pending.values()) {
-      pending.reject(error);
-    }
-    this.#pending.clear();
+    this.#client.closeWithError(error);
   }
 }
 

@@ -154,7 +154,9 @@ export class SpecPlanService {
       approved_by_actor_id: actorId,
     };
     await this.repository.saveSpec(updated);
-    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId);
+    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_spec', actorId, {
+      current_spec_revision_id: updated.approved_revision_id!,
+    });
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
     await this.decision('spec', spec.id, actorId, 'approved', dto.rationale ?? 'Spec approved.');
     return updated;
@@ -278,7 +280,9 @@ export class SpecPlanService {
       approved_by_actor_id: actorId,
     };
     await this.repository.savePlan(updated);
-    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId);
+    await this.updateWorkItemForSpecPlan(updated.work_item_id, 'approve_plan', actorId, {
+      current_plan_revision_id: updated.approved_revision_id!,
+    });
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
     await this.decision('plan', plan.id, actorId, 'approved', dto.rationale ?? 'Plan approved.');
     return updated;
@@ -325,10 +329,14 @@ export class SpecPlanService {
       | 'request_plan_changes'
       | 'resubmit_plan',
     actorId: string | undefined,
+    revisionPointerUpdates: Partial<Pick<WorkItem, 'current_spec_revision_id' | 'current_plan_revision_id'>> = {},
   ): Promise<void> {
     await this.repository.withObjectLock(`work-item:${workItemId}`, async (repository) => {
       const workItem = this.requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
-      const updated = transitionWorkItem(workItem, { type, at: this.now() });
+      const updated = {
+        ...transitionWorkItem(workItem, { type, at: this.now() }),
+        ...revisionPointerUpdates,
+      };
       await repository.saveWorkItem(updated);
       await this.historyWithRepository(
         repository,

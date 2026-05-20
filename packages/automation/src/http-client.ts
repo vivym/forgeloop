@@ -9,6 +9,8 @@ import type {
   CompleteActionInput,
   FailActionInput,
   GatePendingActionInput,
+  AutomationGenerationPackageContextV1,
+  AutomationGenerationPlanContextV1,
   AutomationGenerationWorkItemContextV1,
   EnsurePlanDraftCommandInput,
   EnsurePackageDraftsCommandInput,
@@ -275,6 +277,7 @@ export class AutomationHttpClient {
         claim_token: input.claimToken,
         ...(input.leaseMs === undefined ? {} : { lease_ms: input.leaseMs }),
         limit: input.limit ?? 1,
+        ...(input.actionType === undefined ? {} : { action_type: input.actionType }),
         ...(input.projectId === undefined ? {} : { project_id: input.projectId }),
         ...(input.repoId === undefined ? {} : { repo_id: input.repoId }),
         ...(input.automationScope === undefined ? {} : { automation_scope: input.automationScope }),
@@ -307,6 +310,36 @@ export class AutomationHttpClient {
       'GET',
       `/internal/automation/generation-context/work-items/${workItemId}/spec-draft?${query.toString()}`,
     ) as Promise<AutomationGenerationWorkItemContextV1>;
+  }
+
+  async planDraftGenerationContext(
+    workItemId: string,
+    input: { specRevisionId: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPlanContextV1> {
+    const query = new URLSearchParams({
+      spec_revision_id: input.specRevisionId,
+      action_run_id: input.actionRunId,
+      claim_token: input.claimToken,
+    });
+    return this.request(
+      'GET',
+      `/internal/automation/generation-context/work-items/${workItemId}/plan-draft?${query.toString()}`,
+    ) as Promise<AutomationGenerationPlanContextV1>;
+  }
+
+  async packageDraftsGenerationContext(
+    planRevisionId: string,
+    input: { generationKey: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPackageContextV1> {
+    const query = new URLSearchParams({
+      generation_key: input.generationKey,
+      action_run_id: input.actionRunId,
+      claim_token: input.claimToken,
+    });
+    return this.request(
+      'GET',
+      `/internal/automation/generation-context/plan-revisions/${planRevisionId}/package-drafts?${query.toString()}`,
+    ) as Promise<AutomationGenerationPackageContextV1>;
   }
 
   async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {

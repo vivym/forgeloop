@@ -9,10 +9,10 @@ import { mutatingActionIdempotencyKey, projectRuntimeSnapshotIdempotencyKey } fr
 import {
   specDraftOutputSchemaVersion,
   specDraftPromptVersion,
-  type AutomationGenerationMode,
 } from './spec-draft-generation.js';
 import type {
   ActionInputJson,
+  AutomationGenerationPlanningConfig,
   AutomationActionType,
   NextAction,
   RuntimePolicyProjection,
@@ -25,11 +25,57 @@ import type {
 const suppressingStatuses = new Set(['pending', 'running', 'succeeded']);
 
 export interface AutomationPlannerOptions {
-  specDraftGenerationMode?: AutomationGenerationMode;
+  generation?: AutomationGenerationPlanningConfig;
 }
 
-const specDraftGenerationModeFor = (options?: AutomationPlannerOptions): AutomationGenerationMode =>
-  options?.specDraftGenerationMode ?? 'disabled';
+const freezeGenerationPlanningConfig = (config: AutomationGenerationPlanningConfig): AutomationGenerationPlanningConfig => {
+  Object.freeze(config.tasks.spec_draft);
+  Object.freeze(config.tasks.plan_draft);
+  Object.freeze(config.tasks.package_drafts);
+  Object.freeze(config.tasks);
+  return Object.freeze(config);
+};
+
+export const defaultGenerationPlanningConfig: AutomationGenerationPlanningConfig = freezeGenerationPlanningConfig({
+  mode: 'disabled',
+  tasks: {
+    spec_draft: {
+      enabled: false,
+      promptVersion: specDraftPromptVersion,
+      outputSchemaVersion: specDraftOutputSchemaVersion,
+    },
+    plan_draft: {
+      enabled: false,
+      promptVersion: 'plan-draft.fake.v1',
+      outputSchemaVersion: 'plan_draft.v1',
+    },
+    package_drafts: {
+      enabled: false,
+      promptVersion: 'package-drafts.fake.v1',
+      outputSchemaVersion: 'package_drafts.v1',
+    },
+  },
+});
+
+type GenerationTaskName = keyof AutomationGenerationPlanningConfig['tasks'];
+type GenerationTaskConfig = AutomationGenerationPlanningConfig['tasks'][GenerationTaskName];
+
+const generationPlanningFor = (options?: AutomationPlannerOptions): AutomationGenerationPlanningConfig =>
+  options?.generation ?? defaultGenerationPlanningConfig;
+
+const generationTaskFor = (
+  config: AutomationGenerationPlanningConfig,
+  task: GenerationTaskName,
+): GenerationTaskConfig => (config.mode === 'disabled' ? { ...config.tasks[task], enabled: false } : config.tasks[task]);
+
+const generationTaskNameForAction = (
+  actionType: Extract<AutomationActionType, 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts'>,
+): GenerationTaskName =>
+  actionType === 'ensure_spec_draft'
+    ? 'spec_draft'
+    : actionType === 'ensure_plan_draft'
+      ? 'plan_draft'
+      : 'package_drafts';
 
 const projectIdFromScope = (automationScope: AutomationScope): string => {
   const [, projectId] = automationScope.split(':');
@@ -180,7 +226,7 @@ const mutatingActionForTarget = (
   target: RuntimeSnapshotTarget,
   actionType: Extract<AutomationActionType, 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts'>,
   requiredCapability: AutomationPreconditionCapability,
-  options: AutomationPlannerOptions = {},
+  generation: AutomationGenerationPlanningConfig,
 ): NextAction | undefined => {
   if (target.activeHoldFingerprint !== undefined) {
     return undefined;
@@ -209,19 +255,26 @@ const mutatingActionForTarget = (
     ...(generationKey === undefined ? {} : { commandConcurrencyToken: generationKey }),
   });
   const preconditionFingerprint = automationPreconditionFingerprint(precondition);
+  const generationTask = generationTaskFor(generation, generationTaskNameForAction(actionType));
   const actionInputJson =
     actionType === 'ensure_spec_draft'
       ? ({
           work_item_id: target.targetObjectId,
+          prompt_version: generationTask.promptVersion,
+          output_schema_version: generationTask.outputSchemaVersion,
         } satisfies ActionInputJson)
       : actionType === 'ensure_plan_draft'
       ? ({
           work_item_id: target.targetObjectId,
           spec_revision_id: target.targetRevisionId ?? '',
+          prompt_version: generationTask.promptVersion,
+          output_schema_version: generationTask.outputSchemaVersion,
         } satisfies ActionInputJson)
       : ({
           plan_revision_id: target.targetObjectId,
           generation_key: generationKey ?? '',
+          prompt_version: generationTask.promptVersion,
+          output_schema_version: generationTask.outputSchemaVersion,
         } satisfies ActionInputJson);
   const idempotencyKey = mutatingActionIdempotencyKey({
     actionType,
@@ -234,13 +287,9 @@ const mutatingActionForTarget = (
     capabilityFingerprint: repo.capabilityFingerprint,
     preconditionFingerprint,
     ...(generationKey === undefined ? {} : { generationKey }),
-    ...(actionType === 'ensure_spec_draft'
-      ? {
-          generationMode: specDraftGenerationModeFor(options),
-          promptVersion: specDraftPromptVersion,
-          outputSchemaVersion: specDraftOutputSchemaVersion,
-        }
-      : {}),
+    generationMode: generation.mode,
+    promptVersion: generationTask.promptVersion,
+    outputSchemaVersion: generationTask.outputSchemaVersion,
   });
   if (hasSuppressingAction(snapshot, idempotencyKey)) {
     return undefined;
@@ -311,38 +360,55 @@ const projectRuntimeSnapshotAction = (snapshot: RuntimeSnapshot, repo: RuntimeSn
 
 export const planNextActions = (snapshot: RuntimeSnapshot, options: AutomationPlannerOptions = {}): NextAction[] => {
   const actions: NextAction[] = [];
+  const generation = generationPlanningFor(options);
+  const appendProjectRuntimeSnapshotActions = (): void => {
+    for (const repo of snapshot.repos) {
+      const action = projectRuntimeSnapshotAction(snapshot, repo);
+      if (action !== undefined) {
+        actions.push(action);
+      }
+    }
+  };
 
-  const specDraftGenerationMode = specDraftGenerationModeFor(options);
-  if (specDraftGenerationMode !== 'disabled') {
+  if (generation.mode === 'app_server') {
+    appendProjectRuntimeSnapshotActions();
+  }
+
+  if (generationTaskFor(generation, 'spec_draft').enabled) {
     for (const target of snapshot.workItemsRequiringSpec) {
-      const action = mutatingActionForTarget(snapshot, target, 'ensure_spec_draft', 'canGenerateSpecDraft', {
-        specDraftGenerationMode,
-      });
+      const action = mutatingActionForTarget(snapshot, target, 'ensure_spec_draft', 'canGenerateSpecDraft', generation);
       if (action !== undefined) {
         actions.push(action);
       }
     }
   }
 
-  for (const target of snapshot.workItemsRequiringPlan) {
-    const action = mutatingActionForTarget(snapshot, target, 'ensure_plan_draft', 'canGeneratePlanDraft');
-    if (action !== undefined) {
-      actions.push(action);
+  if (generationTaskFor(generation, 'plan_draft').enabled) {
+    for (const target of snapshot.workItemsRequiringPlan) {
+      const action = mutatingActionForTarget(snapshot, target, 'ensure_plan_draft', 'canGeneratePlanDraft', generation);
+      if (action !== undefined) {
+        actions.push(action);
+      }
     }
   }
 
-  for (const target of snapshot.planRevisionsRequiringPackages) {
-    const action = mutatingActionForTarget(snapshot, target, 'ensure_package_drafts', 'canGeneratePackageDrafts');
-    if (action !== undefined) {
-      actions.push(action);
+  if (generationTaskFor(generation, 'package_drafts').enabled) {
+    for (const target of snapshot.planRevisionsRequiringPackages) {
+      const action = mutatingActionForTarget(
+        snapshot,
+        target,
+        'ensure_package_drafts',
+        'canGeneratePackageDrafts',
+        generation,
+      );
+      if (action !== undefined) {
+        actions.push(action);
+      }
     }
   }
 
-  for (const repo of snapshot.repos) {
-    const action = projectRuntimeSnapshotAction(snapshot, repo);
-    if (action !== undefined) {
-      actions.push(action);
-    }
+  if (generation.mode !== 'app_server') {
+    appendProjectRuntimeSnapshotActions();
   }
 
   return actions;

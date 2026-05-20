@@ -117,12 +117,18 @@ importers:
       '@forgeloop/automation':
         specifier: workspace:*
         version: link:../../packages/automation
+      '@forgeloop/codex-runtime':
+        specifier: workspace:*
+        version: link:../../packages/codex-runtime
 
   apps/control-plane-api:
     dependencies:
       '@forgeloop/automation':
         specifier: workspace:*
         version: link:../../packages/automation
+      '@forgeloop/codex-runtime':
+        specifier: workspace:*
+        version: link:../../packages/codex-runtime
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -331,12 +337,24 @@ importers:
 
   packages/automation:
     dependencies:
+      '@forgeloop/codex-runtime':
+        specifier: workspace:*
+        version: link:../codex-runtime
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../contracts
       '@forgeloop/domain':
         specifier: workspace:*
         version: link:../domain
+
+  packages/codex-runtime:
+    dependencies:
+      '@forgeloop/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/contracts:
     dependencies:
@@ -377,6 +395,9 @@ importers:
 
   packages/executor:
     dependencies:
+      '@forgeloop/codex-runtime':
+        specifier: workspace:*
+        version: link:../codex-runtime
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../contracts
