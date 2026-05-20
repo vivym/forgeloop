@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ExecutionPackage, ExecutionPackageDependency, ReviewPacket, RunSession, SpecRevision } from '@forgeloop/domain';
+import type { ExecutionPackage, ExecutionPackageDependency, Release, ReviewPacket, RunSession, SpecRevision } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -405,6 +405,24 @@ describe('product lane projections', () => {
     await repo.saveExecutionPackageDependency(dependency);
     const { reviewPacket } = await saveReviewPacket(repo, executionPackage);
     const release = await seedLinkedRelease(app, executionPackage);
+    const olderRelease: Release = {
+      ...release,
+      id: 'release-product-lane-older',
+      title: 'Older Product Lane Release',
+      updated_at: '2026-05-04T00:00:00.000Z',
+    };
+    const newerRelease: Release = {
+      ...release,
+      id: 'release-product-lane-newer',
+      title: 'Newer Product Lane Release',
+      updated_at: '2026-05-06T00:00:00.000Z',
+    };
+    await repo.saveRelease({
+      ...release,
+      updated_at: '2026-05-05T00:00:00.000Z',
+    });
+    await repo.saveRelease(olderRelease);
+    await repo.saveRelease(newerRelease);
     const secondaryQaOwner = 'actor-qa-secondary';
     const secondaryQaPackage: ExecutionPackage = {
       ...executionPackage,
@@ -523,6 +541,14 @@ describe('product lane projections', () => {
         }),
       ]),
     );
+    const firstReleasePage = await getProductLane(
+      repo,
+      'release-owner',
+      resolveLaneFilters('release-owner', { project_id: executionPackage.project_id, release_owner_actor_id: actorOwner, limit: 1 }),
+    );
+    expect(firstReleasePage.items).toHaveLength(1);
+    expect(firstReleasePage.items[0]?.object).toEqual({ type: 'release', id: newerRelease.id });
+    expect(firstReleasePage.next_cursor).toBe(newerRelease.id);
 
     const managerLane = await getProductLane(
       repo,

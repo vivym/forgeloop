@@ -518,7 +518,8 @@ const loadProductLaneCandidates = async (
   }
 
   if (laneId === 'release-owner') {
-    return Promise.all((await repository.listReleases(filters.project_id)).map((release) => releaseItem(repository, laneId, release)));
+    const rows = await Promise.all((await repository.listReleases(filters.project_id)).map((release) => releaseItem(repository, laneId, release)));
+    return rows.sort(byUpdatedAtDesc);
   }
   throw new Error(`Unsupported product lane candidate loader: ${laneId}`);
 };
