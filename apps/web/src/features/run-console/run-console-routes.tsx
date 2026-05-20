@@ -22,6 +22,7 @@ const emptyRunEvents: RunEvent[] = [];
 const supportedRunFilters = ['status', 'execution_package_id', 'run_session_id', 'executor_type', 'cursor', 'limit'] as const;
 type RunFilterKey = (typeof supportedRunFilters)[number];
 type RunFilters = Partial<Record<Exclude<RunFilterKey, 'limit'>, string>> & { limit?: number };
+type RunRuntimeMetadata = NonNullable<RunSession['runtime_metadata']>;
 
 export function RunsRegistry() {
   const { projectId } = useProjectContext();
@@ -150,7 +151,7 @@ function RunConsole({
   const cancelRun = useCancelRunMutation(run.id);
   const resumeRun = useResumeRunMutation(run.id);
   const [input, setInput] = useState('');
-  const latestTurnId = latestActiveTurnId(run, events);
+  const latestTurnId = latestActiveTurnId(events);
   const visibleEvents = productRunEvents(events);
 
   function onSubmit(event: FormEvent) {
@@ -228,13 +229,14 @@ function RunMetadata({
   streamStatus: string;
 }) {
   const metadata = run.runtime_metadata;
-  const lastEventAt = events.at(-1)?.created_at ?? metadata?.last_event_at ?? run.updated_at;
-  const currentPlanStep = latestPlanStep(events) ?? latestPayloadString(events, ['current_plan_step']) ?? metadataText(metadata, 'current_plan_step');
+  const lastEventAt = events.at(-1)?.created_at ?? metadataText(metadata, 'last_event_at') ?? run.updated_at;
+  const currentPlanStep = latestPlanStep(events) ?? latestPayloadString(events, ['current_plan_step']);
+  const executor = run.executor_type ?? metadataText(metadata, 'driver_kind') ?? 'unknown';
 
   return (
     <dl className="fl-metadata-grid">
       <Metadata label="Package" value={run.execution_package_id} />
-      <Metadata label="Executor" value={run.executor_type ?? metadata?.driver_kind ?? 'unknown'} />
+      <Metadata label="Executor" value={executor} />
       <Metadata label="Status" value={run.status} />
       <Metadata label="Stream" value={streamStatus} />
       <Metadata label="Last event" value={formatAge(lastEventAt)} />
@@ -245,7 +247,7 @@ function RunMetadata({
 }
 
 function RunEvidencePanel({ run }: { run: RunSession }) {
-  const failedChecks = (run.check_results ?? []).filter((check) => check.status !== 'passed');
+  const failedChecks = (run.check_results ?? []).filter((check) => check.status !== 'succeeded');
   const visibleArtifacts = visibleRunArtifacts(run.artifacts ?? []);
 
   return (
@@ -537,7 +539,7 @@ function isInternalRunEventType(eventType: string) {
   return eventType.startsWith('thread_') || eventType.startsWith('turn_');
 }
 
-function visibleRunArtifacts<T extends { kind?: string; raw_ref?: unknown }>(artifacts: T[]): T[] {
+function visibleRunArtifacts<T extends { kind?: string | undefined; raw_ref?: unknown }>(artifacts: T[]): T[] {
   return artifacts.filter((artifact) => artifact.kind !== 'logs' && artifact.raw_ref === undefined);
 }
 
@@ -550,15 +552,15 @@ function latestPlanStep(events: Array<{ event_type?: string; payload?: Record<st
   return payloadText(planEvent?.payload ?? {}, ['current_step', 'plan_step', 'step', 'status']);
 }
 
-function metadataText(metadata: RunSession['runtime_metadata'] | undefined, key: string) {
-  const value = (metadata as Record<string, unknown> | undefined)?.[key];
+function metadataText(metadata: RunRuntimeMetadata | undefined, key: keyof RunRuntimeMetadata) {
+  const value = metadata?.[key];
   if (typeof value === 'string' && value.trim()) return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return undefined;
 }
 
-function latestActiveTurnId(run: RunSession, events: RunEvent[]) {
-  return run.runtime_metadata?.active_turn_id ?? latestPayloadString(events, ['active_turn_id', 'turn_id', 'turnId']);
+function latestActiveTurnId(events: RunEvent[]): string | undefined {
+  return latestPayloadString(events, ['active_turn_id', 'turn_id', 'turnId']);
 }
 
 function latestPayloadString(events: RunEvent[], keys: string[]) {

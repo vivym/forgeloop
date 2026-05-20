@@ -640,6 +640,10 @@ const executionPackageListItem = async (
       plan_revision_id: executionPackage.plan_revision_id,
       blocked_reason: executionPackage.blocked_reason,
       last_run_session_id: executionPackage.last_run_session_id,
+      current_run_session_id: executionPackage.current_run_session_id,
+      current_review_packet_id: executionPackage.current_review_packet_id,
+      integration_readiness: executionPackage.integration_readiness,
+      required_test_gates: executionPackage.required_test_gates ?? [],
     },
     counts: {
       required_checks: executionPackage.required_checks.length,

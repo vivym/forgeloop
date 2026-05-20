@@ -334,14 +334,36 @@ describe('query module', () => {
   });
 
   it('serves product list read models for specs, plans, packages, runs, and reviews', async () => {
-    const { app } = await track(createTestApp());
+    const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
     const projectId = executionPackage.project_id;
+    await repo.saveExecutionPackage({
+      ...executionPackage,
+      current_run_session_id: 'run-session-product-list-current',
+      current_review_packet_id: 'review-packet-product-list-current',
+      integration_readiness: { status: 'ready' },
+      required_test_gates: [{ gate_id: 'regression' }],
+      updated_at: later,
+    });
 
     await request(app.getHttpServer()).get('/query/work-items').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/specs').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/plans').query({ project_id: projectId }).expect(200);
-    await request(app.getHttpServer()).get('/query/execution-packages').query({ project_id: projectId }).expect(200);
+    const packageResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId })
+      .expect(200);
+    expect(packageResponse.body.items).toContainEqual(
+      expect.objectContaining({
+        id: executionPackage.id,
+        package_state: expect.objectContaining({
+          current_run_session_id: 'run-session-product-list-current',
+          current_review_packet_id: 'review-packet-product-list-current',
+          integration_readiness: { status: 'ready' },
+          required_test_gates: [{ gate_id: 'regression' }],
+        }),
+      }),
+    );
     await request(app.getHttpServer()).get('/query/runs').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/review-packets').query({ project_id: projectId }).expect(200);
   });

@@ -296,7 +296,11 @@ function CommandFeedback({ messages }: { messages: Array<string | null> }) {
   );
 }
 
-function PlanPackageHandoff({ plan }: { plan: { status?: string; approved_revision_id?: string } | null }) {
+function PlanPackageHandoff({
+  plan,
+}: {
+  plan: { status?: string | undefined; approved_revision_id?: string | undefined } | null;
+}) {
   if (plan?.status !== 'approved') {
     return null;
   }
