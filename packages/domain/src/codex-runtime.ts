@@ -457,6 +457,13 @@ export const validateCodexRuntimeProfileRevision = (
 
   const strict = options.strictRealDogfood === true;
   if (strict) {
+    if (revision.network_policy.mode === 'disabled') {
+      throw dockerPolicyUnavailable('Strict real dogfood profiles require a model_provider egress allowlist network policy.');
+    }
+    if (revision.docker_policy.network_disabled === true) {
+      throw dockerPolicyUnavailable('Strict real dogfood profiles must not disable Docker networking when using an egress allowlist network policy.');
+    }
+
     if (
       revision.docker_policy.app_server_only !== true ||
       revision.docker_policy.rootless !== true ||
@@ -491,11 +498,9 @@ export const validateCodexRuntimeProfileRevision = (
         throw invalidProfile('Strict run-execution profiles must assert task-workspace-only sandbox access.');
       }
     }
-  }
 
-  if (revision.network_policy.mode !== 'disabled') {
     const hasModelProvider = revision.network_policy.allowlist.some((rule) => rule.purpose === 'model_provider');
-    if (strict && !hasModelProvider) {
+    if (!hasModelProvider) {
       throw dockerPolicyUnavailable('Strict real dogfood egress allowlist profiles require a model_provider allowlist rule.');
     }
   }

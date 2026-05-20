@@ -276,6 +276,39 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('rejects strict real dogfood profiles with disabled network policy', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            network_policy: {
+              mode: 'disabled',
+            },
+          }),
+          { strictRealDogfood: true },
+        ),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it('rejects strict real dogfood allowlist profiles with Docker network disabled', () => {
+    const validRevision = baseRevision();
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            docker_policy: {
+              ...validRevision.docker_policy,
+              network_disabled: true,
+            },
+          }),
+          { strictRealDogfood: true },
+        ),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
   it.each([
     ['app_server_only', { app_server_only: false }],
     ['rootless', { rootless: false }],
