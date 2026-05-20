@@ -18,6 +18,20 @@ export interface WorkItemActionQueryOptions {
   cockpit: WorkItemCockpitOptions;
 }
 
+const hasApprovedCurrentRevision = (artifact: {
+  status: string;
+  resolution: string;
+  current_revision_id?: string;
+  approved_revision_id?: string;
+}): boolean =>
+  artifact.status === 'approved' &&
+  artifact.resolution === 'approved' &&
+  artifact.approved_revision_id !== undefined &&
+  artifact.current_revision_id === artifact.approved_revision_id;
+
+const approvedRevisionId = (artifact: { status: string; resolution: string; approved_revision_id?: string }): string | undefined =>
+  artifact.status === 'approved' && artifact.resolution === 'approved' ? artifact.approved_revision_id : undefined;
+
 const openWorkItemAction = (laneId: ProductLaneId, cockpit: WorkItemCockpitResponse): ProductAction =>
   navigateAction({
     id: `open-work-item-${cockpit.work_item.id}`,
@@ -138,9 +152,7 @@ const buildActionsForWorkItemLane = (
     );
   }
 
-  const specApproved =
-    cockpit.current_spec !== null &&
-    (cockpit.current_spec.gate_state === 'approved' || cockpit.current_spec.approved_revision_id !== undefined);
+  const specApproved = cockpit.current_spec !== null && hasApprovedCurrentRevision(cockpit.current_spec);
   if (cockpit.current_spec !== null && !specApproved) {
     actions.push(
       navigateAction({
@@ -168,8 +180,7 @@ const buildActionsForWorkItemLane = (
   }
 
   const currentPlan = cockpit.current_plan;
-  const approvedPlanRevisionId =
-    currentPlan?.approved_revision_id ?? (currentPlan?.gate_state === 'approved' ? currentPlan.current_revision_id : undefined);
+  const approvedPlanRevisionId = currentPlan === null ? undefined : approvedRevisionId(currentPlan);
   if (currentPlan !== null && approvedPlanRevisionId !== undefined && cockpit.packages.length === 0) {
     actions.push(
       generatePackagesAction({

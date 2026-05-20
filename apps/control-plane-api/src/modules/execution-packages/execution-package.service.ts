@@ -224,7 +224,12 @@ export class ExecutionPackageService {
   async packageContextFromRepository(repository: DeliveryRepository, planRevisionId: string): Promise<PackageContext> {
     const planRevision = this.requireFound(await repository.getPlanRevision(planRevisionId), `PlanRevision ${planRevisionId}`);
     const plan = this.requireFound(await repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
-    if (plan.status !== 'approved' || plan.current_revision_id !== planRevisionId) {
+    if (
+      plan.status !== 'approved' ||
+      plan.resolution !== 'approved' ||
+      plan.approved_revision_id !== planRevisionId ||
+      plan.current_revision_id !== planRevisionId
+    ) {
       throw new BadRequestException(`PlanRevision ${planRevisionId} is not current approved revision`);
     }
     const workItem = this.requireFound(await repository.getWorkItem(plan.work_item_id), `WorkItem ${plan.work_item_id}`);
@@ -254,7 +259,12 @@ export class ExecutionPackageService {
       throw new BadRequestException(`WorkItem ${workItem.id} has no current spec`);
     }
     const spec = this.requireFound(await repository.getSpec(workItem.current_spec_id), `Spec ${workItem.current_spec_id}`);
-    if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id === undefined) {
+    if (
+      spec.status !== 'approved' ||
+      spec.resolution !== 'approved' ||
+      spec.approved_revision_id === undefined ||
+      spec.current_revision_id !== spec.approved_revision_id
+    ) {
       throw new BadRequestException(`Spec ${spec.id} is not approved`);
     }
     return spec;
@@ -278,13 +288,23 @@ export class ExecutionPackageService {
       stale(`ExecutionPackage ${executionPackage.id} plan_id ${executionPackage.plan_id} is not the WorkItem current plan`);
     }
     const spec = this.requireFound(await repository.getSpec(executionPackage.spec_id), `Spec ${executionPackage.spec_id}`);
-    if (spec.status !== 'approved' || spec.resolution !== 'approved' || spec.current_revision_id !== executionPackage.spec_revision_id) {
+    if (
+      spec.status !== 'approved' ||
+      spec.resolution !== 'approved' ||
+      spec.approved_revision_id !== executionPackage.spec_revision_id ||
+      spec.current_revision_id !== executionPackage.spec_revision_id
+    ) {
       stale(
         `ExecutionPackage ${executionPackage.id} spec_revision_id ${executionPackage.spec_revision_id} is not current approved revision ${spec.current_revision_id ?? 'none'}`,
       );
     }
     const plan = this.requireFound(await repository.getPlan(executionPackage.plan_id), `Plan ${executionPackage.plan_id}`);
-    if (plan.status !== 'approved' || plan.resolution !== 'approved' || plan.current_revision_id !== executionPackage.plan_revision_id) {
+    if (
+      plan.status !== 'approved' ||
+      plan.resolution !== 'approved' ||
+      plan.approved_revision_id !== executionPackage.plan_revision_id ||
+      plan.current_revision_id !== executionPackage.plan_revision_id
+    ) {
       stale(
         `ExecutionPackage ${executionPackage.id} plan_revision_id ${executionPackage.plan_revision_id} is not current approved revision ${plan.current_revision_id ?? 'none'}`,
       );

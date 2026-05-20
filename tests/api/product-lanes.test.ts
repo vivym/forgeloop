@@ -664,4 +664,31 @@ describe('product lane projections', () => {
       ]),
     );
   });
+
+  it('does not create package generation actions from approved Plans without approved revisions', async () => {
+    const { app, repo } = await track(createTestApp());
+    const { workItem, planRevision } = await seedApprovedPlanWithoutPackages(app);
+    const plan = await repo.getPlan(planRevision.plan_id);
+    expect(plan).toBeDefined();
+    await repo.savePlan({
+      ...plan!,
+      approved_revision_id: undefined,
+      approved_at: undefined,
+      approved_by_actor_id: undefined,
+    });
+
+    const response = await getWorkItemActions(repo, workItem.id, undefined, { cockpit: cockpitOptions });
+
+    expect(response?.actions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'command',
+          command: expect.objectContaining({
+            type: 'generate_packages',
+            plan_revision_id: planRevision.id,
+          }),
+        }),
+      ]),
+    );
+  });
 });

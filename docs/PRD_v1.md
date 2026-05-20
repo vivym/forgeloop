@@ -119,8 +119,14 @@ AI-native 研发执行与进化系统
 
 ### 5.1 角色定义
 
-#### 5.1.1 Work Item Owner
-负责提出或推进 Work Item，定义业务目标、优先级与成功标准。
+#### 5.1.1 Work Item Drivers（按类型拆分）
+Work Item 不是单一职责角色，而是 Initiative、Requirement、Bug、Tech Debt 等不同信息类型的统一抽象。系统应按 Work Item 类型和当前阶段分配推进责任，而不是暴露一个粗粒度的单一 Owner 工作台。
+
+- **Initiative Driver**：负责业务目标、范围边界、里程碑和价值排序。
+- **Requirement Driver**：负责需求背景、成功标准、验收范围和 Spec 推进。
+- **Bug Driver**：负责影响范围、复现信息、修复优先级、验证路径和回归闭环。
+- **Tech Debt Driver**：负责技术风险、偿还策略、影响面和工程健康收益。
+- **Cross-item Coordinator**：当一个 Work Item 横跨多个端、多个包或多个 Release 时，负责跨对象依赖与推进节奏。
 
 #### 5.1.2 Spec Approver
 通常为架构师、技术负责人、模块 Owner。负责审批 Spec 的正确性、边界清晰度与方案合理性。
@@ -360,7 +366,7 @@ AI-native 研发执行与进化系统
 ## 9. 核心用户故事
 
 ### 9.1 新功能需求
-作为 Work Item Owner，我提交一个新功能 Work Item 后，希望系统自动生成 Work Item Brief 和 Spec 草案，并在 Spec 通过后进一步生成 Implementation Plan、Execution Packages、测试策略和执行建议，使整个交付链路结构化推进。
+作为 Requirement Driver，我提交一个新功能 Work Item 后，希望系统自动生成 Work Item Brief 和 Spec 草案，并在 Spec 通过后进一步生成 Implementation Plan、Execution Packages、测试策略和执行建议，使整个交付链路结构化推进。
 
 ### 9.2 缺陷修复
 作为团队成员，当线上出现 Bug 时，我希望系统能自动完成初步分诊、关联可能影响的 Work Item / 改动 / 测试资产，并生成修复路径、验证方案和复盘入口，帮助我们快速修复并沉淀经验。
@@ -495,17 +501,20 @@ AI-native 研发执行与进化系统
 - 联调检查表与跨端验证记录
 - 版本窗口、灰度窗口与发版协同
 
-### 10.11 Role-based Workbench
-用于为不同角色提供默认工作入口、优先级队列与待办视图。
+### 10.11 Product Lanes / Workbench Lanes
+用于按 Work Item 类型、审批责任、执行责任、质量责任、发布责任和管理视角提供默认工作入口、优先级队列与待办视图。Product Lanes 不是历史的角色工作台别名，也不以单一 Owner 粒度组织信息。
 
 核心能力：
-- Work Item Owner 工作台：Work Item 池、待确认 Brief、待推进 Spec
-- Spec Approver 工作台：待评审 Spec、风险需求、测试策略缺口
-- Execution Owner 工作台：Execution Packages、依赖、blocker、联调 readiness
-- Reviewer 工作台：待审 Review Packet、风险优先队列、超 SLA 审查
-- QA / Test Owner 工作台：测试策略、质量门禁、联调验证、回归风险
-- Release Owner 工作台：候选 Release、发布风险、灰度与回滚决策
-- Manager 工作台：项目健康度、流程瓶颈、复盘洞察、绩效参考摘要
+- Requirements Lane：需求池、待确认 Brief、待推进 Spec、待补充成功标准
+- Bugs Lane：缺陷分诊、影响范围、修复路径、回归验证和复盘入口
+- Tech Debt Lane：技术债识别、偿还优先级、影响面和工程健康证据
+- Initiatives Lane：业务目标、范围拆解、里程碑、跨 Work Item 聚合
+- Spec Approver Lane：待评审 Spec、风险需求、测试策略缺口
+- Execution Owner Lane：Execution Packages、依赖、blocker、联调 readiness
+- Reviewer Lane：待审 Review Packet、风险优先队列、超 SLA 审查
+- QA / Test Owner Lane：测试策略、质量门禁、联调验证、回归风险
+- Release Owner Lane：候选 Release、发布风险、灰度与回滚决策
+- Manager Lane：项目健康度、流程瓶颈、复盘洞察、绩效参考摘要
 
 ---
 
@@ -874,7 +883,7 @@ AI-native 研发执行与进化系统
 ## 16.6 信息架构补充要求
 - 系统应同时提供对象视图、角色视图与流程视图三类信息架构入口。
 - 对象视图围绕 Project / Work Item / Execution Package / Release / Incident 展开。
-- 角色视图围绕不同角色的默认工作台与待办队列展开。
+- Product Lane 视图围绕 Work Item 类型、审批责任、执行责任、质量责任、发布责任和管理视角展开。
 - 流程视图围绕交付主线、进化主线、多端依赖图与联调 readiness 展开。
 - 任一视图中的关键对象都应支持一键切换到 Replay、证据、依赖和复盘视图。
 
@@ -1071,7 +1080,7 @@ stateDiagram-v2
 - Work Item ID:
 - 类型: Requirement / Bug / Tech Debt / Initiative
 - Project / Stream:
-- Work Item Owner:
+- Work Item Driver（Requirement / Bug / Tech Debt / Initiative）:
 - Spec Approver:
 - QA / Test Owner:
 - 优先级:

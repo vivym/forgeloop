@@ -161,7 +161,7 @@ export function SpecPlanWorkItemFlow() {
             <div className="state-grid">
               <Metric label="Kind" value={formatValue(viewModel.workItem.kind)} />
               <Metric label="Risk" value={formatValue(viewModel.workItem.risk)} />
-              <Metric label="Owner" value="Work Item Owner" />
+              <Metric label="Driver" value={`${formatValue(viewModel.workItem.kind)} Driver`} />
               <Metric label="Phase" value={formatValue(viewModel.workItem.phase)} />
             </div>
           </Section>
