@@ -1,8 +1,9 @@
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 
 import { useWorkItemCockpitQuery, useWorkItemReplayQuery } from '../../shared/api/hooks';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, StatusPill } from '../../shared/ui';
+import { DetailLayout, PageHeader, Section } from '../../shared/layout';
+import { Badge, StatusPill } from '../../shared/ui';
+import { WorkItemNextActions } from './work-item-next-actions';
 import { createWorkItemDetailViewModel, formatValue } from './work-item-view-model';
 
 export function WorkItemDetail() {
@@ -55,22 +56,7 @@ export function WorkItemDetail() {
 
   return (
     <DetailLayout
-      actionRail={
-        <ActionRail title="Work item actions">
-          <div className="stack-form compact">
-            <Link className="fl-button fl-button--primary" to={`/work-items/${encodeURIComponent(workItem.id)}/spec-plan`}>
-              Open Spec & Plan
-            </Link>
-            <Button disabled title="Available after a draft exists." variant="secondary">
-              Update brief
-            </Button>
-            <Button disabled title="Evidence attachment is not available for this work item yet." variant="secondary">
-              Attach evidence
-            </Button>
-            <p className="status-line">Available after a draft exists.</p>
-          </div>
-        </ActionRail>
-      }
+      actionRail={<WorkItemNextActions workItem={workItem} />}
       header={
         <PageHeader
           eyebrow={`${formatValue(workItem.kind)} / ${workItem.priority}`}

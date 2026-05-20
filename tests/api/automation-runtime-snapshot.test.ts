@@ -363,6 +363,20 @@ describe('internal automation runtime snapshot', () => {
       });
   });
 
+  it('does not list approved specs without approved current revisions for plan drafts', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.saveSpec(spec({ approved_revision_id: undefined, approved_at: undefined, approved_by_actor_id: undefined }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
+        );
+      });
+  });
+
   it('does not target Plan generation when Spec current revision differs from approved revision', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedSpec(repository, {
@@ -515,6 +529,20 @@ describe('internal automation runtime snapshot', () => {
             repo_id: 'repo-1',
             generation_key: 'default:plan-revision-1',
           }),
+        );
+      });
+  });
+
+  it('does not list approved plans without approved revisions for package generation', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.savePlan(plan({ approved_revision_id: undefined, approved_at: undefined, approved_by_actor_id: undefined }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ target_object_id: 'plan-revision-1' })]),
         );
       });
   });

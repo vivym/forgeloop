@@ -151,7 +151,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     expect(await screen.findByRole('button', { name: 'Generate spec draft' })).toBeTruthy();
   });
 
-  it('runs create plan only after a spec exists', async () => {
+  it('runs create plan only after the current spec revision is approved', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
@@ -176,10 +176,12 @@ describe('Work Item scoped Spec & Plan route', () => {
             id: 'spec-1',
             work_item_id: 'wi-1',
             entity_type: 'spec',
-            status: 'draft',
-            editing_state: 'editable',
-            gate_state: 'open',
-            resolution: 'unresolved',
+            status: 'approved',
+            editing_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'approved',
+            current_revision_id: 'spec-rev-approved',
+            approved_revision_id: 'spec-rev-approved',
           },
           current_plan: null,
           packages: [],
@@ -193,9 +195,9 @@ describe('Work Item scoped Spec & Plan route', () => {
           work_item_id: 'wi-1',
           entity_type: 'plan',
           status: 'draft',
-          editing_state: 'editable',
-          gate_state: 'open',
-          resolution: 'unresolved',
+          editing_state: 'idle',
+          gate_state: 'not_submitted',
+          resolution: 'none',
         },
       },
     });
@@ -214,7 +216,333 @@ describe('Work Item scoped Spec & Plan route', () => {
     );
   });
 
-  it('generates drafts only for existing artifacts and keeps approval commands deferred', async () => {
+  it('keeps plan creation blocked until spec approval is strict', async () => {
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': {
+          work_item: {
+            id: 'wi-1',
+            project_id: 'project-web-product',
+            kind: 'requirement',
+            title: 'Improve release cockpit',
+            goal: 'Improve release readiness visibility.',
+            success_criteria: ['Planning artifacts are visible'],
+            priority: 'P0',
+            risk: 'medium',
+            owner_actor_id: 'actor-owner',
+            phase: 'planning',
+            activity_state: 'active',
+            gate_state: 'open',
+            resolution: 'unresolved',
+            current_spec_id: 'spec-1',
+          },
+          current_spec: {
+            id: 'spec-1',
+            work_item_id: 'wi-1',
+            entity_type: 'spec',
+            status: 'approved',
+            editing_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'approved',
+            current_revision_id: 'spec-rev-current',
+            approved_revision_id: 'spec-rev-approved',
+          },
+          current_plan: null,
+          packages: [],
+          run_sessions: [],
+          review_packets: [],
+          next_actions: [],
+          completion_state: {},
+        },
+      },
+    });
+
+    expect(await screen.findByText('Create Plan unlocks after the current Spec revision is approved.')).toBeTruthy();
+    const createPlan = screen.getByRole('button', { name: 'Create Plan' }) as HTMLButtonElement;
+
+    expect(createPlan.disabled).toBe(true);
+    expect(screen.queryByText('Ready for packages')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Continue to Packages' })).toBeNull();
+  });
+
+  it('keeps plan creation blocked when approved spec metadata is missing', async () => {
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': {
+          work_item: {
+            id: 'wi-1',
+            project_id: 'project-web-product',
+            kind: 'requirement',
+            title: 'Improve release cockpit',
+            goal: 'Improve release readiness visibility.',
+            success_criteria: ['Planning artifacts are visible'],
+            priority: 'P0',
+            risk: 'medium',
+            owner_actor_id: 'actor-owner',
+            phase: 'planning',
+            activity_state: 'active',
+            gate_state: 'open',
+            resolution: 'unresolved',
+            current_spec_id: 'spec-1',
+          },
+          current_spec: {
+            id: 'spec-1',
+            work_item_id: 'wi-1',
+            entity_type: 'spec',
+            status: 'approved',
+            editing_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'approved',
+            current_revision_id: 'spec-rev-current',
+          },
+          current_plan: null,
+          packages: [],
+          run_sessions: [],
+          review_packets: [],
+          next_actions: [],
+          completion_state: {},
+        },
+      },
+    });
+
+    expect(await screen.findByText('Create Plan unlocks after the current Spec revision is approved.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Create Plan' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('completes Spec approval, Plan creation, Plan approval, and approved package handoff from the Work Item flow', async () => {
+    const user = userEvent.setup();
+    const workItemState = {
+      id: 'wi-1',
+      project_id: 'project-web-product',
+      kind: 'requirement',
+      title: 'Improve release cockpit',
+      goal: 'Improve release readiness visibility.',
+      success_criteria: ['Planning artifacts are visible'],
+      priority: 'P0',
+      risk: 'medium',
+      owner_actor_id: 'actor-owner',
+      phase: 'planning',
+      activity_state: 'active',
+      gate_state: 'open',
+      resolution: 'unresolved',
+      current_spec_id: 'spec-1',
+      current_plan_id: undefined as string | undefined,
+    };
+    let currentSpec = {
+      id: 'spec-1',
+      work_item_id: 'wi-1',
+      entity_type: 'spec',
+      status: 'draft',
+      editing_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      current_revision_id: 'spec-rev-approved',
+    };
+    let currentPlan: Record<string, unknown> | null = null;
+    const cockpitResponse = () => ({
+      work_item: workItemState,
+      current_spec: currentSpec,
+      current_plan: currentPlan,
+      packages: [],
+      run_sessions: [],
+      review_packets: [],
+      next_actions: [],
+      completion_state: {},
+    });
+
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      actorId: 'actor-reviewer',
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': cockpitResponse,
+        'POST /specs/spec-1/submit-for-approval': () => {
+          currentSpec = {
+            ...currentSpec,
+            status: 'in_review',
+            gate_state: 'awaiting_approval',
+            resolution: 'none',
+          };
+          return currentSpec;
+        },
+        'POST /specs/spec-1/approve': () => {
+          currentSpec = {
+            ...currentSpec,
+            status: 'approved',
+            gate_state: 'approved',
+            resolution: 'approved',
+            approved_revision_id: 'spec-rev-approved',
+          };
+          return currentSpec;
+        },
+        'POST /work-items/wi-1/plans': () => {
+          workItemState.current_plan_id = 'plan-1';
+          currentPlan = {
+            id: 'plan-1',
+            work_item_id: 'wi-1',
+            entity_type: 'plan',
+            status: 'draft',
+            editing_state: 'idle',
+            gate_state: 'not_submitted',
+            resolution: 'none',
+            current_revision_id: 'plan-rev-approved',
+          };
+          return currentPlan;
+        },
+        'POST /plans/plan-1/submit-for-approval': () => {
+          currentPlan = {
+            ...currentPlan,
+            status: 'in_review',
+            gate_state: 'awaiting_approval',
+            resolution: 'none',
+          };
+          return currentPlan;
+        },
+        'POST /plans/plan-1/approve': () => {
+          currentPlan = {
+            ...currentPlan,
+            status: 'approved',
+            gate_state: 'approved',
+            resolution: 'approved',
+            approved_revision_id: 'plan-rev-approved',
+          };
+          return currentPlan;
+        },
+      },
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Submit Spec for approval' }));
+    await user.type(await screen.findByLabelText('Spec approval rationale'), 'Spec is ready.');
+    await user.click(screen.getByRole('button', { name: 'Approve Spec' }));
+
+    const createPlan = (await screen.findByRole('button', { name: 'Create Plan' })) as HTMLButtonElement;
+    await waitFor(() => expect(createPlan.disabled).toBe(false));
+    await user.click(createPlan);
+    await user.click(await screen.findByRole('button', { name: 'Submit Plan for approval' }));
+    await user.click(await screen.findByRole('button', { name: 'Approve Plan' }));
+
+    expect((await screen.findByRole('link', { name: 'Continue to Packages' })).getAttribute('href')).toBe(
+      '/packages?plan_revision_id=plan-rev-approved',
+    );
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'http://localhost:3000/plans/plan-1/approve',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('links package handoff by approved Plan revision only', async () => {
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': {
+          work_item: {
+            id: 'wi-1',
+            project_id: 'project-web-product',
+            kind: 'requirement',
+            title: 'Improve release cockpit',
+            goal: 'Improve release readiness visibility.',
+            success_criteria: ['Planning artifacts are visible'],
+            priority: 'P0',
+            risk: 'medium',
+            owner_actor_id: 'actor-owner',
+            phase: 'planning',
+            activity_state: 'active',
+            gate_state: 'open',
+            resolution: 'unresolved',
+            current_spec_id: 'spec-1',
+            current_plan_id: 'plan-1',
+          },
+          current_spec: {
+            id: 'spec-1',
+            work_item_id: 'wi-1',
+            entity_type: 'spec',
+            status: 'approved',
+            editing_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'approved',
+            current_revision_id: 'spec-rev-approved',
+            approved_revision_id: 'spec-rev-approved',
+          },
+          current_plan: {
+            id: 'plan-1',
+            work_item_id: 'wi-1',
+            entity_type: 'plan',
+            status: 'approved',
+            editing_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'approved',
+            current_revision_id: 'plan-rev-current',
+            approved_revision_id: 'plan-rev-approved',
+          },
+          packages: [],
+          run_sessions: [],
+          review_packets: [],
+          next_actions: [],
+          completion_state: {},
+        },
+      },
+    });
+
+    expect((await screen.findByRole('link', { name: 'Continue to Packages' })).getAttribute('href')).toBe(
+      '/packages?plan_revision_id=plan-rev-approved',
+    );
+    expect(screen.queryByText('/packages?plan_revision_id=plan-rev-current')).toBeNull();
+    expect(screen.queryByText('Ready for packages')).toBeNull();
+  });
+
+  it('falls back to package inventory when an approved Plan has no approved revision id', async () => {
+    const screen = await renderRoute('/work-items/wi-1/spec-plan', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1': {
+          work_item: {
+            id: 'wi-1',
+            project_id: 'project-web-product',
+            kind: 'requirement',
+            title: 'Improve release cockpit',
+            goal: 'Improve release readiness visibility.',
+            success_criteria: ['Planning artifacts are visible'],
+            priority: 'P0',
+            risk: 'medium',
+            owner_actor_id: 'actor-owner',
+            phase: 'planning',
+            activity_state: 'active',
+            gate_state: 'open',
+            resolution: 'unresolved',
+            current_spec_id: 'spec-1',
+            current_plan_id: 'plan-1',
+          },
+          current_spec: {
+            id: 'spec-1',
+            work_item_id: 'wi-1',
+            entity_type: 'spec',
+            status: 'approved',
+            editing_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'approved',
+            current_revision_id: 'spec-rev-approved',
+            approved_revision_id: 'spec-rev-approved',
+          },
+          current_plan: {
+            id: 'plan-1',
+            work_item_id: 'wi-1',
+            entity_type: 'plan',
+            status: 'approved',
+            editing_state: 'idle',
+            gate_state: 'approved',
+            resolution: 'approved',
+            current_revision_id: 'plan-rev-current',
+          },
+          packages: [],
+          run_sessions: [],
+          review_packets: [],
+          next_actions: [],
+          completion_state: {},
+        },
+      },
+    });
+
+    expect((await screen.findByRole('link', { name: 'View package inventory' })).getAttribute('href')).toBe('/packages');
+    expect(screen.queryByRole('link', { name: 'Continue to Packages' })).toBeNull();
+  });
+
+  it('generates drafts only for existing artifacts and uses product lifecycle actions', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute('/work-items/wi-1/spec-plan');
 
@@ -222,10 +550,9 @@ describe('Work Item scoped Spec & Plan route', () => {
     const generatePlan = screen.getByRole('button', { name: 'Generate plan draft' }) as HTMLButtonElement;
     expect(generateSpec.disabled).toBe(false);
     expect(generatePlan.disabled).toBe(false);
-    expect((screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Request changes' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Approval controls will be available in the dedicated approval flow.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit for approval' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull();
     expect(screen.queryByText('Available after planning artifacts are ready.')).toBeNull();
     expect(screen.queryByText(new RegExp(`Pending command ${'wir'}${'ing'}`, 'i'))).toBeNull();
     expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();

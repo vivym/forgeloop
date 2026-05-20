@@ -22,6 +22,7 @@ import SpecDetailRoute from '../../apps/web/src/app/routes/specs/$specId';
 import SpecRevisionRoute from '../../apps/web/src/app/routes/specs/$specId/revisions/$revisionId';
 import SpecsRoute from '../../apps/web/src/app/routes/specs';
 import WorkbenchRoute from '../../apps/web/src/app/routes/workbench';
+import WorkbenchLaneRoute from '../../apps/web/src/app/routes/workbench/$laneId';
 import WorkItemDetailRoute from '../../apps/web/src/app/routes/work-items/$workItemId';
 import WorkItemSpecPlanRoute from '../../apps/web/src/app/routes/work-items/$workItemId/spec-plan';
 import WorkItemsRoute from '../../apps/web/src/app/routes/work-items';
@@ -38,6 +39,7 @@ const productRoutes: RouteObject[] = [
     children: [
       { index: true, Component: WorkbenchRoute },
       { path: 'workbench', Component: WorkbenchRoute },
+      { path: 'workbench/:laneId', Component: WorkbenchLaneRoute },
       { path: 'pipeline', Component: PipelineRoute },
       { path: 'work-items', Component: WorkItemsRoute },
       { path: 'work-items/new', Component: NewWorkItemRoute },

@@ -5,6 +5,7 @@ import { createServer as createNetServer } from 'node:net';
 import { join } from 'node:path';
 
 import { chromium, expect as expectPage, type Browser } from '@playwright/test';
+import type { ProductLaneItem, ProductLaneResponse } from '@forgeloop/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { defaultProductApiResponses, type ProductApiResponseMap } from '../web/fixtures/product-api-mock';
@@ -12,6 +13,7 @@ import { executionPackage, projectId, release, reviewPacket, runSession, workIte
 
 const routes = [
   '/workbench',
+  '/workbench/requirements',
   '/pipeline',
   '/work-items',
   '/work-items/wi-1',
@@ -79,6 +81,7 @@ describe('web product routes visual smoke', () => {
       }
 
       expect(api.unhandledRequests).toEqual([]);
+      expect(api.handledRequests).toContain(`GET /query/product-lanes/requirements?project_id=${projectId}`);
     },
     120_000,
   );
@@ -138,9 +141,10 @@ async function startReactRouterWeb(apiUrl: string): Promise<{ process: ChildProc
 
 async function startProductApiMockServer(
   overrides: ProductApiResponseMap = {},
-): Promise<{ server: Server; unhandledRequests: string[]; url: string }> {
+): Promise<{ handledRequests: string[]; server: Server; unhandledRequests: string[]; url: string }> {
   const port = await freePort();
   const responses = { ...defaultProductApiResponses, ...overrides };
+  const handledRequests: string[] = [];
   const unhandledRequests: string[] = [];
   const server = createHttpServer(async (request, response) => {
     response.setHeader('access-control-allow-origin', '*');
@@ -174,6 +178,7 @@ async function startProductApiMockServer(
       response.end(JSON.stringify({ message: `Unhandled product API request: ${key}` }));
       return;
     }
+    handledRequests.push(key);
 
     const body =
       typeof fixture === 'function'
@@ -188,7 +193,7 @@ async function startProductApiMockServer(
     server.listen(port, '127.0.0.1', () => resolve());
   });
 
-  return { server, unhandledRequests, url: `http://127.0.0.1:${port}` };
+  return { handledRequests, server, unhandledRequests, url: `http://127.0.0.1:${port}` };
 }
 
 async function stopProcess(child: ChildProcess): Promise<void> {
@@ -232,6 +237,9 @@ function routeName(route: string): string {
 }
 
 async function assertPopulatedRoute(page: Awaited<ReturnType<Browser['newPage']>>, route: string) {
+  if (route === '/workbench') {
+    await expectPage(page).toHaveURL(/\/workbench\/requirements$/);
+  }
   const expectation = populatedRouteText(route);
   await expectPage(
     page.getByRole('main').getByText(expectation).filter({ visible: true }).first(),
@@ -242,6 +250,7 @@ async function assertPopulatedRoute(page: Awaited<ReturnType<Browser['newPage']>
 function populatedRouteText(route: string): string | RegExp {
   switch (route) {
     case '/workbench':
+    case '/workbench/requirements':
       return 'Improve release cockpit';
     case '/pipeline':
       return 'Release cockpit frontend waits on contract fixture parity.';
@@ -275,9 +284,7 @@ function highDensityProductApiResponses(): ProductApiResponseMap {
   const pipeline = responseFor<{ stages: Array<Record<string, unknown>>; degraded_sources: string[] }>(
     `GET /query/pipeline?project_id=${projectId}`,
   );
-  const workbench = responseFor<{ summary: Record<string, unknown>; items: Array<Record<string, unknown>> }>(
-    `GET /query/workbenches/intake?project_id=${projectId}`,
-  );
+  const requirementsLane = responseFor<ProductLaneResponse>(`GET /query/product-lanes/requirements?project_id=${projectId}`);
   const runs = responseFor<{ items: Array<Record<string, unknown>>; degraded_sources: string[] }>(
     `GET /query/runs?project_id=${projectId}&limit=100`,
   );
@@ -309,10 +316,10 @@ function highDensityProductApiResponses(): ProductApiResponseMap {
         };
       }),
     },
-    [`GET /query/workbenches/intake?project_id=${projectId}`]: {
-      ...workbench,
-      summary: { ...workbench.summary, total: 6 },
-      items: duplicateWorkbenchItems(workbench.items[0], 6),
+    [`GET /query/product-lanes/requirements?project_id=${projectId}`]: {
+      ...requirementsLane,
+      summary: { ...requirementsLane.summary, total: 6 },
+      items: duplicateProductLaneItems(requirementsLane.items[0], 6),
     },
     [`GET /query/runs?project_id=${projectId}&limit=100`]: {
       ...runs,
@@ -342,17 +349,26 @@ function responseFor<T>(key: string): T {
   return response as T;
 }
 
-function duplicateWorkbenchItems(item: Record<string, unknown>, count: number) {
-  return Array.from({ length: count }, (_, index) => ({
-    ...item,
-    id: index === 0 ? item.id : `wi-density-${index}`,
-    title: index === 0 ? item.title : `High-density work item ${index}`,
-    object: {
-      ...(item.object as Record<string, unknown>),
-      id: index === 0 ? (item.object as Record<string, unknown>).id : `wi-density-${index}`,
-      title: index === 0 ? (item.object as Record<string, unknown>).title : `High-density work item ${index}`,
-    },
-  }));
+function duplicateProductLaneItems(item: ProductLaneItem | undefined, count: number): ProductLaneItem[] {
+  if (item === undefined) return [];
+  return Array.from({ length: count }, (_, index) => {
+    if (index === 0) return item;
+
+    const id = `${item.id}-density-${index}`;
+    const title = `${item.title} ${index + 1}`;
+    const object = item.object.type === 'lane_summary' ? { ...item.object, id } : { ...item.object, id };
+
+    return {
+      ...item,
+      id,
+      title,
+      object,
+      actions: item.actions.map((action, actionIndex) => ({
+        ...action,
+        id: `${action.id}-density-${index}-${actionIndex}`,
+      })),
+    };
+  });
 }
 
 function duplicateProductItems(item: Record<string, unknown>, count: number) {

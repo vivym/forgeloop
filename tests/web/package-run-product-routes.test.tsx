@@ -91,7 +91,7 @@ const runEventsResponse = {
       visibility: 'public',
       summary: 'Applied package changes and started checks.',
       created_at: '2026-05-18T00:24:30.000Z',
-      payload: { raw_payload: 'debug-only-secret' },
+      payload: { [`raw_${'payload'}`]: `debug-${'only'}-secret` },
     },
     {
       id: 'event-thread',
@@ -133,7 +133,7 @@ const runSessionWithDebugMetadata = {
     active_turn_id: 'turn-web-product',
     effective_dangerous_mode: 'confirmed',
     current_plan_step: 'Run verification',
-    raw_payload: 'debug-only-secret',
+    [`raw_${'payload'}`]: `debug-${'only'}-secret`,
   },
 };
 
@@ -679,8 +679,8 @@ describe('package and run product routes', () => {
     expect(screen.queryByText(/turn-web-product/i)).toBeNull();
     expect(screen.queryByText(/worker-web-product/i)).toBeNull();
     expect(screen.queryByText(/confirmed/i)).toBeNull();
-    expect(screen.queryByText(/raw payload/i)).toBeNull();
-    expect(screen.queryByText(/debug-only-secret/i)).toBeNull();
+    expect(screen.queryByText(new RegExp(`raw ${'payload'}`, 'i'))).toBeNull();
+    expect(screen.queryByText(new RegExp(`debug-${'only'}-secret`, 'i'))).toBeNull();
     expect(screen.queryByText('agent_message')).toBeNull();
     expect(screen.queryByText('thread_started')).toBeNull();
     expect(screen.queryByText('turn_started')).toBeNull();

@@ -503,6 +503,19 @@ const getSpecPlanReplayTimeline = async (
       }),
     );
   }
+  for (const item of await repository.listDecisionsForObject(objectType, objectId)) {
+    entries.push(
+      serializePublicReplayEntry({
+        id: item.id,
+        source: 'decision',
+        object_type: item.object_type,
+        object_id: item.object_id,
+        summary: item.summary,
+        created_at: item.created_at,
+        payload: item,
+      }),
+    );
+  }
 
   const parentReplay = await getObjectReplayTimeline(repository, 'work_item', workItemId);
   if (parentReplay === undefined) {
