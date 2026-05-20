@@ -260,37 +260,63 @@ const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|credential
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
-const canonicalize = (value: unknown): CanonicalJsonValue | undefined => {
+const invalidProfile = (message: string, details?: Record<string, unknown>): DomainError =>
+  new DomainError('codex_runtime_profile_invalid', message, details);
+
+const dockerPolicyUnavailable = (message: string, details?: Record<string, unknown>): DomainError =>
+  new DomainError('codex_worker_docker_policy_unavailable', `codex_worker_docker_policy_unavailable: ${message}`, details);
+
+const unsafeDockerRuntimeEvidence = (message: string, details?: Record<string, unknown>): DomainError =>
+  new DomainError('codex_docker_runtime_evidence_unsafe', message, details);
+
+const unsupportedJsonValue = (): DomainError => invalidProfile('Codex canonical digest input must be JSON-compatible.');
+
+const canonicalize = (value: unknown, allowUndefinedObjectField = false): CanonicalJsonValue | undefined => {
   if (value === undefined) {
-    return undefined;
+    if (allowUndefinedObjectField) {
+      return undefined;
+    }
+    throw unsupportedJsonValue();
   }
   if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return value;
   }
+  if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol') {
+    throw unsupportedJsonValue();
+  }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new DomainError('CODEX_RUNTIME_POLICY_INVALID', 'Codex runtime canonical digest cannot include non-finite numbers.');
+      throw unsupportedJsonValue();
     }
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map(canonicalize).filter((entry): entry is CanonicalJsonValue => entry !== undefined);
+    return value.map((entry) => {
+      const canonicalEntry = canonicalize(entry);
+      if (canonicalEntry === undefined) {
+        throw unsupportedJsonValue();
+      }
+      return canonicalEntry;
+    });
   }
   if (isPlainObject(value)) {
     return Object.entries(value)
       .filter(([, entry]) => entry !== undefined)
       .sort(([left], [right]) => compareCodeUnits(left, right))
       .reduce<Record<string, CanonicalJsonValue>>((accumulator, [key, entry]) => {
-        const canonicalEntry = canonicalize(entry);
+        const canonicalEntry = canonicalize(entry, true);
         if (canonicalEntry !== undefined) {
           accumulator[key] = canonicalEntry;
         }
         return accumulator;
       }, {});
   }
-  return null;
+  throw unsupportedJsonValue();
 };
 
 const stableJson = (value: unknown): string => JSON.stringify(canonicalize(value));
@@ -299,9 +325,9 @@ const isSha256Digest = (value: unknown): value is string => typeof value === 'st
 
 const isRawPathEndpointOrContainerId = (value: string): boolean => /^\/|https?:\/\//i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);
 
-const assertSha256Digest = (value: unknown, label: string): void => {
+const assertSha256Digest = (value: unknown, label: string, error: (message: string) => DomainError = invalidProfile): void => {
   if (!isSha256Digest(value)) {
-    throw new DomainError('CODEX_RUNTIME_POLICY_INVALID', `${label} must be a pinned sha256 digest.`);
+    throw error(`${label} must be a pinned sha256 digest.`);
   }
 };
 
@@ -327,12 +353,6 @@ const normalizedNetworkPolicy = (policy: CodexRuntimeNetworkPolicy): CodexRuntim
   }
   return { ...policy, allowlist: sortedAllowlist(policy.allowlist) };
 };
-
-const invalidProfile = (message: string, details?: Record<string, unknown>): DomainError =>
-  new DomainError('CODEX_RUNTIME_POLICY_INVALID', message, details);
-
-const dockerPolicyUnavailable = (message: string, details?: Record<string, unknown>): DomainError =>
-  new DomainError('codex_worker_docker_policy_unavailable', `codex_worker_docker_policy_unavailable: ${message}`, details);
 
 export const codexCanonicalDigest = (value: unknown): string =>
   `sha256:${createHash('sha256').update(stableJson(value)).digest('hex')}`;
@@ -366,8 +386,8 @@ export const codexRuntimeProfileRevisionDigest = (revision: CodexRuntimeProfileR
   });
 
 export const validateCodexDockerNetworkProxyConfig = (config: CodexDockerNetworkProxyConfig): CodexDockerNetworkProxyConfig => {
-  assertSha256Digest(config.proxy_image_digest, 'Docker proxy image digest');
-  assertSha256Digest(config.self_test_image_digest, 'Docker proxy self-test image digest');
+  assertSha256Digest(config.proxy_image_digest, 'Docker proxy image digest', dockerPolicyUnavailable);
+  assertSha256Digest(config.self_test_image_digest, 'Docker proxy self-test image digest', dockerPolicyUnavailable);
 
   const expectedDigest = codexCanonicalDigest(dockerNetworkProxyConfigDigestInput(config));
   if (config.provider_config_digest !== expectedDigest) {
@@ -417,6 +437,16 @@ export const validateCodexRuntimeProfileRevision = (
   assertSha256Digest(revision.codex_config_digest, 'Codex config digest');
   assertSha256Digest(revision.expected_effective_config_digest, 'Expected effective config digest');
 
+  const expectedCodexConfigDigest = codexCanonicalDigest(revision.codex_config_toml);
+  if (revision.codex_config_digest !== expectedCodexConfigDigest) {
+    throw invalidProfile('Codex runtime profile config digest does not match normalized Codex config.');
+  }
+
+  const expectedProfileDigest = codexRuntimeProfileRevisionDigest(revision);
+  if (revision.profile_digest !== expectedProfileDigest) {
+    throw invalidProfile('Codex runtime profile digest does not match runtime-affecting profile data.');
+  }
+
   if (secretConfigPattern.test(revision.codex_config_toml)) {
     throw invalidProfile('Codex config TOML must not contain secret-looking keys or environment interpolation channels.');
   }
@@ -427,6 +457,16 @@ export const validateCodexRuntimeProfileRevision = (
 
   const strict = options.strictRealDogfood === true;
   if (strict) {
+    if (
+      revision.docker_policy.app_server_only !== true ||
+      revision.docker_policy.rootless !== true ||
+      revision.docker_policy.read_only_rootfs !== true ||
+      revision.docker_policy.no_new_privileges !== true ||
+      !revision.docker_policy.drop_capabilities.includes('ALL')
+    ) {
+      throw dockerPolicyUnavailable('Strict real dogfood profiles require Docker app-server-only, rootless, read-only, no-new-privileges policy with all capabilities dropped.');
+    }
+
     if (revision.effective_config_assertions.approval_policy !== 'never') {
       throw invalidProfile('Strict Codex runtime profiles must assert approval_policy never.');
     }
@@ -469,7 +509,7 @@ export const validateCodexRuntimeProfileRevision = (
 
 export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDockerRuntimeEvidence => {
   if (!isPlainObject(evidence)) {
-    throw new DomainError('CODEX_RUNTIME_EVIDENCE_INVALID', 'Codex public-safe Docker runtime evidence must be an object.');
+    throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence must be an object.');
   }
 
   const allowedKeys = new Set<keyof CodexDockerRuntimeEvidence>([
@@ -494,20 +534,20 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
 
   for (const [key, value] of Object.entries(evidence)) {
     if (!allowedKeys.has(key as keyof CodexDockerRuntimeEvidence) || unsafeEvidenceKeyPattern.test(key)) {
-      throw new DomainError('CODEX_RUNTIME_EVIDENCE_INVALID', 'Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {
         field: key,
       });
     }
     if (typeof value !== 'string') {
-      throw new DomainError('CODEX_RUNTIME_EVIDENCE_INVALID', 'Codex public-safe Docker runtime evidence values must be strings.', { field: key });
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence values must be strings.', { field: key });
     }
     if (key.endsWith('_digest') && !isSha256Digest(value)) {
-      throw new DomainError('CODEX_RUNTIME_EVIDENCE_INVALID', 'Codex public-safe Docker runtime evidence digest fields must be sha256 digests.', {
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence digest fields must be sha256 digests.', {
         field: key,
       });
     }
     if (isRawPathEndpointOrContainerId(value) && !key.endsWith('_digest')) {
-      throw new DomainError('CODEX_RUNTIME_EVIDENCE_INVALID', 'Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {
         field: key,
       });
     }

@@ -44,9 +44,10 @@ export type DomainErrorCode =
   | 'MANUAL_PATH_SCOPE_INVALID'
   | 'EXECUTION_PACKAGE_VERSION_INVALID'
   | 'EXECUTION_PACKAGE_POLICY_INVALID'
-  | 'CODEX_RUNTIME_POLICY_INVALID'
-  | 'CODEX_RUNTIME_EVIDENCE_INVALID'
-  | 'codex_worker_docker_policy_unavailable';
+  | 'codex_runtime_profile_invalid'
+  | 'codex_worker_docker_policy_unavailable'
+  | 'codex_docker_runtime_evidence_unsafe'
+  | 'codex_app_server_effective_config_mismatch';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
