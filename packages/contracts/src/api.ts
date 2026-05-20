@@ -624,46 +624,6 @@ export const productLaneResponseSchema = z
   });
 export type ProductLaneResponse = z.infer<typeof productLaneResponseSchema>;
 
-export const workItemActionsResponseSchema = z
-  .object({
-    work_item_id: nonEmptyTrimmedStringSchema,
-    lane_id: productLaneIdSchema,
-    default_lane_id: productLaneIdSchema,
-    actions: z.array(productActionSchema),
-  })
-  .strict()
-  .superRefine((response, ctx) => {
-    const actionIds = new Set<string>();
-
-    response.actions.forEach((action, index) => {
-      if (actionIds.has(action.id)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['actions', index, 'id'],
-          message: `product action id must be unique within Work Item actions response: ${action.id}`,
-        });
-      }
-      actionIds.add(action.id);
-
-      if (action.kind === 'command' && action.command.work_item_id !== response.work_item_id) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['actions', index, 'command', 'work_item_id'],
-          message: 'command work_item_id must match response work_item_id',
-        });
-      }
-
-      if (action.lane_id !== response.lane_id) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['actions', index, 'lane_id'],
-          message: 'action lane_id must match response lane_id',
-        });
-      }
-    });
-  });
-export type WorkItemActionsResponse = z.infer<typeof workItemActionsResponseSchema>;
-
 export const runPackageRequestSchema = z
   .object({
     execution_package_id: z.string().min(1),

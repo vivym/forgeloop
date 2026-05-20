@@ -15,7 +15,7 @@ import {
   timeline,
   workItem,
 } from './product-data';
-import type { ProductLaneId, ProductLaneItem, ProductLaneResponse } from '@forgeloop/contracts';
+import type { ProductLaneId, ProductLaneItem, ProductLaneResponse, WorkItemDeliveryReadiness } from '@forgeloop/contracts';
 
 export type ProductApiMockHandler = (request: { input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
 export type ProductApiResponseMap = Record<string, unknown | ProductApiMockHandler>;
@@ -131,6 +131,38 @@ const productLaneResponse = (laneId: ProductLaneId, unsupportedFilters: string[]
 const itemForLane = (item: ProductLaneItem, laneId: ProductLaneId): ProductLaneItem => ({
   ...item,
   actions: item.actions.map((action) => ({ ...action, lane_id: laneId })),
+});
+
+const deliveryReadiness = (
+  item: typeof workItem,
+  actions = routeProductActions,
+  activeLane: ProductLaneId = 'requirements',
+): WorkItemDeliveryReadiness => ({
+  work_item_id: item.id,
+  work_item_kind: item.kind,
+  active_lane: activeLane,
+  overall_state: 'in_progress',
+  stages: [
+    'spec',
+    'plan',
+    'packages',
+    'execution',
+    'review',
+    'integration_readiness',
+    'quality_gate',
+    'release_readiness',
+  ].map((id) => ({
+    id: id as WorkItemDeliveryReadiness['stages'][number]['id'],
+    label: id === 'quality_gate' ? 'Quality Gate' : id.replaceAll('_', ' '),
+    state: id === 'integration_readiness' ? 'not_applicable' : 'ready',
+    object_refs: [],
+    blockers: [],
+    evidence_refs: [],
+  })),
+  blockers: [],
+  evidence: [],
+  next_actions: actions,
+  degraded_sources: [],
 });
 
 const routeTimeline = timeline.map((entry) => ({
@@ -336,18 +368,6 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/product-lanes/qa-test-owner?project_id=${projectId}`]: productLaneResponse('qa-test-owner'),
   [`GET /query/product-lanes/release-owner?project_id=${projectId}`]: productLaneResponse('release-owner'),
   [`GET /query/product-lanes/manager?project_id=${projectId}`]: productLaneResponse('manager'),
-  [`GET /query/work-items/${routeWorkItem.id}/actions?lane=requirements`]: {
-    work_item_id: routeWorkItem.id,
-    lane_id: 'requirements',
-    default_lane_id: 'requirements',
-    actions: routeProductActions,
-  },
-  [`GET /query/work-items/${routeWorkItem.id}/actions?lane=bugs`]: {
-    work_item_id: routeWorkItem.id,
-    lane_id: 'bugs',
-    default_lane_id: 'requirements',
-    actions: routeProductActions.map((action) => ({ ...action, lane_id: 'bugs' })),
-  },
   [`GET /query/specs?project_id=${projectId}`]: {
     items: [productListItem(spec, workItem, 'spec')],
     degraded_sources: [],
@@ -460,8 +480,16 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     packages: [executionPackage],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
-    next_actions: ['open_work_item'],
-    completion_state: { fixture: true },
+    delivery_readiness: deliveryReadiness(workItem),
+  },
+  [`GET /query/work-item-cockpit/${workItem.id}?lane=reviewer`]: {
+    work_item: workItem,
+    current_spec: spec,
+    current_plan: plan,
+    packages: [executionPackage],
+    run_sessions: [runSession],
+    review_packets: [reviewPacket],
+    delivery_readiness: deliveryReadiness(workItem, [], 'reviewer'),
   },
   [`GET /query/work-item-cockpit/${routeWorkItem.id}`]: {
     work_item: routeWorkItem,
@@ -470,8 +498,25 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     packages: [routeExecutionPackage],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
-    next_actions: ['open_work_item'],
-    completion_state: { fixture: true },
+    delivery_readiness: deliveryReadiness(routeWorkItem),
+  },
+  [`GET /query/work-item-cockpit/${routeWorkItem.id}?lane=requirements`]: {
+    work_item: routeWorkItem,
+    current_spec: routeSpec,
+    current_plan: routePlan,
+    packages: [routeExecutionPackage],
+    run_sessions: [runSession],
+    review_packets: [reviewPacket],
+    delivery_readiness: deliveryReadiness(routeWorkItem, routeProductActions, 'requirements'),
+  },
+  [`GET /query/work-item-cockpit/${routeWorkItem.id}?lane=reviewer`]: {
+    work_item: routeWorkItem,
+    current_spec: routeSpec,
+    current_plan: routePlan,
+    packages: [routeExecutionPackage],
+    run_sessions: [runSession],
+    review_packets: [reviewPacket],
+    delivery_readiness: deliveryReadiness(routeWorkItem, [], 'reviewer'),
   },
   [`POST /work-items/${routeWorkItem.id}/specs`]: routeSpec,
   [`POST /work-items/${routeWorkItem.id}/plans`]: routePlan,

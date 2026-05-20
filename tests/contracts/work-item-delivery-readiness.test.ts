@@ -17,6 +17,22 @@ const action = {
   target: { kind: 'object', object_type: 'execution_package', object_id: 'pkg-1', href: '/packages/pkg-1' },
 } as const;
 
+const commandAction = {
+  id: 'generate-spec-draft',
+  lane_id: 'execution-owner',
+  priority: 'primary',
+  label: 'Generate Spec Draft',
+  enabled: true,
+  kind: 'command',
+  command: {
+    type: 'generate_spec_draft',
+    object_type: 'spec',
+    object_id: 'spec-1',
+    work_item_id: 'wi-1',
+    spec_id: 'spec-1',
+  },
+} as const;
+
 const stage = {
   id: 'execution',
   label: 'Execution',
@@ -125,6 +141,38 @@ describe('Work Item delivery readiness contracts', () => {
   it('parses readiness and full cockpit responses', () => {
     expect(workItemDeliveryReadinessSchema.parse(readiness)).toEqual(readiness);
     expect(workItemCockpitResponseSchema.parse(cockpitResponse())).toMatchObject({ delivery_readiness: readiness });
+  });
+
+  it('rejects inconsistent readiness next actions', () => {
+    expect(
+      workItemDeliveryReadinessSchema.safeParse({
+        ...readiness,
+        next_actions: [action, { ...action, label: 'Duplicate action' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      workItemDeliveryReadinessSchema.safeParse({
+        ...readiness,
+        next_actions: [{ ...action, lane_id: 'reviewer' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      workItemDeliveryReadinessSchema.safeParse({
+        ...readiness,
+        next_actions: [commandAction],
+      }).success,
+    ).toBe(true);
+    expect(
+      workItemDeliveryReadinessSchema.safeParse({
+        ...readiness,
+        next_actions: [
+          {
+            ...commandAction,
+            command: { ...commandAction.command, work_item_id: 'other-work-item' },
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it('preserves review packet AI review and test mapping evidence in cockpit responses', () => {

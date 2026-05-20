@@ -62,7 +62,6 @@ export type {
   StartReleaseObservingRequest,
   SubmitReleaseForApprovalRequest,
   UnlinkReleaseObjectRequest,
-  WorkItemActionsResponse,
   WorkItemCockpitResponse as CockpitResponse,
   WorkItemDeliveryReadiness,
   DeliveryStage,
@@ -104,10 +103,6 @@ export interface ProductLaneQuery {
   stale?: boolean;
   cursor?: string;
   limit?: number;
-}
-
-export interface WorkItemActionsQuery {
-  lane?: ProductLaneId;
 }
 
 export type WorkItemKind = 'initiative' | 'requirement' | 'bug' | 'tech_debt';

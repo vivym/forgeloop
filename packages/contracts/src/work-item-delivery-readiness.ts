@@ -134,6 +134,7 @@ export const deliveryEvidenceSchema = z
 export const deliveryBlockerSchema = z
   .object({
     id: nonEmpty,
+    code: nonEmpty.optional(),
     label: nonEmpty,
     summary: nonEmpty.optional(),
     stage_id: deliveryStageIdSchema.optional(),
@@ -172,7 +173,37 @@ export const workItemDeliveryReadinessSchema = z
     degraded_sources: z.array(degradedSourceKeySchema).default([]),
     generated_at: isoDateTimeSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((readiness, ctx) => {
+    const actionIds = new Set<string>();
+
+    readiness.next_actions.forEach((action, index) => {
+      if (actionIds.has(action.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['next_actions', index, 'id'],
+          message: `product action id must be unique within Work Item delivery readiness: ${action.id}`,
+        });
+      }
+      actionIds.add(action.id);
+
+      if (action.lane_id !== readiness.active_lane) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['next_actions', index, 'lane_id'],
+          message: 'action lane_id must match readiness active_lane',
+        });
+      }
+
+      if (action.kind === 'command' && action.command.work_item_id !== readiness.work_item_id) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['next_actions', index, 'command', 'work_item_id'],
+          message: 'command work_item_id must match readiness work_item_id',
+        });
+      }
+    });
+  });
 
 const workItemCockpitWorkItemSchema = z
   .object({

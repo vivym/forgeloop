@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
@@ -191,7 +191,7 @@ describe('query module', () => {
   };
 
   it('returns the work item cockpit from the query surface', async () => {
-    const { app } = await track(createTestApp());
+    const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
 
     const response = await request(app.getHttpServer())
@@ -202,8 +202,53 @@ describe('query module', () => {
     expect(response.body.packages).toEqual([expect.objectContaining({ id: executionPackage.id })]);
     expect(response.body.run_sessions).toEqual(expect.any(Array));
     expect(response.body.review_packets).toEqual(expect.any(Array));
-    expect(response.body.next_actions).toEqual(expect.any(Array));
-    expect(response.body.completion_state).toEqual(expect.any(Object));
+    expect(response.body.delivery_readiness).toMatchObject({
+      work_item_id: executionPackage.work_item_id,
+      active_lane: 'requirements',
+    });
+    expect(response.body).not.toHaveProperty('next_actions');
+    expect(response.body).not.toHaveProperty('completion_state');
+
+    await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.delivery_readiness.active_lane).toBe('execution-owner');
+      });
+
+    await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=unknown`)
+      .expect(400);
+    await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?foo=bar`)
+      .expect(400);
+
+    vi.spyOn(repo, 'listExecutionPackageDependencies').mockRejectedValueOnce(new Error('dependency read failed'));
+    const degraded = await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .expect(200);
+    expect(degraded.body.delivery_readiness.degraded_sources).toContain('package_dependencies');
+    expect(degraded.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'integration_readiness')).toMatchObject({
+      state: 'blocked',
+    });
+
+    vi.spyOn(repo, 'listExecutionPackagesForWorkItem').mockRejectedValueOnce(new Error('package read failed'));
+    const degradedPackages = await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .expect(200);
+    expect(degradedPackages.body.delivery_readiness.degraded_sources).toContain('execution_packages');
+    expect(degradedPackages.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'packages')).toMatchObject({
+      state: 'blocked',
+    });
+
+    vi.spyOn(repo, 'getSpecRevision').mockRejectedValueOnce(new Error('spec revision read failed'));
+    const degradedSpecRevision = await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
+      .expect(200);
+    expect(degradedSpecRevision.body.delivery_readiness.degraded_sources).toContain('spec_revision');
+    expect(degradedSpecRevision.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'spec')).toMatchObject({
+      state: 'blocked',
+    });
   });
 
   it('returns 404 for a missing work item cockpit', async () => {

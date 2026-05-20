@@ -33,7 +33,6 @@ import type {
   StartReleaseObservingBody,
   SubmitForApprovalBody,
   UnlinkReleaseScopeBody,
-  WorkItemActionsQuery,
 } from './types';
 
 const createQueryApi = () => createForgeloopQueryApi();
@@ -86,16 +85,6 @@ export function useProductLaneQuery(laneId: ProductLaneId, query: ProductLaneQue
   return useQuery({
     queryKey: queryKeys.productLane(laneId, normalizedQuery),
     queryFn: () => createQueryApi().getProductLane(laneId, normalizedQuery),
-  });
-}
-
-export function useWorkItemActionsQuery(workItemId: string | undefined, laneId?: ProductLaneId) {
-  const query: WorkItemActionsQuery = laneId === undefined ? {} : { lane: laneId };
-
-  return useQuery({
-    queryKey: queryKeys.workItemActions(workItemId ?? '', laneId),
-    queryFn: () => createQueryApi().getWorkItemActions(requiredId(workItemId, 'workItemId'), query),
-    enabled: workItemId !== undefined,
   });
 }
 
@@ -376,10 +365,10 @@ export function useReleasesQuery(query: ReleaseProductQuery) {
   });
 }
 
-export function useWorkItemCockpitQuery(workItemId: string | undefined) {
+export function useWorkItemCockpitQuery(workItemId: string | undefined, lane?: ProductLaneId) {
   return useQuery({
-    queryKey: queryKeys.workItemCockpit(workItemId),
-    queryFn: () => createQueryApi().getWorkItemCockpit(requiredId(workItemId, 'workItemId')),
+    queryKey: queryKeys.workItemCockpit(workItemId, lane),
+    queryFn: () => createQueryApi().getWorkItemCockpit(requiredId(workItemId, 'workItemId'), lane === undefined ? {} : { lane }),
     enabled: workItemId !== undefined,
   });
 }
@@ -700,7 +689,6 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
 export function invalidateProductActionTargets(queryClient: QueryClient, input: ProductActionInvalidationInput) {
   return Promise.all([
     invalidateProductLaneProjectQueries(queryClient, input.projectId),
-    queryClient.invalidateQueries({ queryKey: ['work-item-actions', input.workItemId] }),
     queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) }),
     invalidateObjectQuery(queryClient, input.action.command.object_type, input.action.command.object_id),
     invalidateCommandDerivedResources(queryClient, input.action.command),
@@ -758,7 +746,6 @@ function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObje
       return Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(objectId) }),
-        queryClient.invalidateQueries({ queryKey: ['work-item-actions', objectId] }),
       ]);
     case 'spec':
       return queryClient.invalidateQueries({ queryKey: queryKeys.spec(objectId) });
@@ -921,7 +908,7 @@ function updateWorkItemCockpit(
     return;
   }
 
-  queryClient.setQueryData<CockpitResponse>(queryKeys.workItemCockpit(workItemId), (current) =>
+  queryClient.setQueriesData<CockpitResponse>({ queryKey: queryKeys.workItemCockpit(workItemId) }, (current) =>
     current === undefined ? current : updater(current),
   );
 }

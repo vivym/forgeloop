@@ -3,7 +3,7 @@ import {
   pipelineResponseSchema,
   productLaneResponseSchema,
   productListResponseSchema,
-  workItemActionsResponseSchema,
+  workItemCockpitResponseSchema,
 } from '@forgeloop/contracts';
 import type {
   CockpitResponse,
@@ -17,8 +17,6 @@ import type {
   ReleaseListResponse,
   ReviewPacket,
   TimelineEntry,
-  WorkItemActionsQuery,
-  WorkItemActionsResponse,
 } from './types';
 
 export interface ProjectQuery {
@@ -68,12 +66,10 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       productLaneResponseSchema.parse(
         await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
       ) as ProductLaneResponse,
-    getWorkItemActions: async (workItemId: string, query: WorkItemActionsQuery = {}) =>
-      workItemActionsResponseSchema.parse(
-        await request<unknown>(`/query/work-items/${encodeURIComponent(workItemId)}/actions${queryString(query)}`),
-      ) as WorkItemActionsResponse,
-    getWorkItemCockpit: (workItemId: string) =>
-      request<CockpitResponse>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
+    getWorkItemCockpit: async (workItemId: string, options: { lane?: ProductLaneId } = {}) =>
+      workItemCockpitResponseSchema.parse(
+        await request<unknown>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}${queryString(options)}`),
+      ) as CockpitResponse,
     getWorkItemReplay: (workItemId: string) =>
       request<TimelineEntry[]>(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
     getSpecReplay: (specId: string) => request<TimelineEntry[]>(`/query/replay/spec/${encodeURIComponent(specId)}`),

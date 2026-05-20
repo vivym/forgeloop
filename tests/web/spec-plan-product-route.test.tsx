@@ -3,7 +3,37 @@ import userEvent from '@testing-library/user-event';
 import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import WorkItemSpecPlanRoute from '../../apps/web/src/app/routes/work-items/$workItemId/spec-plan';
+import type { WorkItemDeliveryReadiness } from '../../apps/web/src/shared/api/types';
 import { renderRoute } from './router-test-utils';
+
+const cockpitReadiness = (workItemId = 'wi-1'): WorkItemDeliveryReadiness => ({
+  work_item_id: workItemId,
+  work_item_kind: 'requirement',
+  active_lane: 'requirements',
+  overall_state: 'in_progress',
+  stages: [
+    'spec',
+    'plan',
+    'packages',
+    'execution',
+    'review',
+    'integration_readiness',
+    'quality_gate',
+    'release_readiness',
+  ].map((id) => ({
+    id: id as WorkItemDeliveryReadiness['stages'][number]['id'],
+    label: id,
+    state: 'ready',
+    owner_lane: 'requirements',
+    object_refs: [],
+    blockers: [],
+    evidence_refs: [],
+  })),
+  blockers: [],
+  evidence: [],
+  next_actions: [],
+  degraded_sources: [],
+});
 
 describe('Work Item scoped Spec & Plan route', () => {
   it('renders Work Item scoped Spec & Plan actions without raw loaders', async () => {
@@ -40,8 +70,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           packages: [],
           run_sessions: [],
           review_packets: [],
-          next_actions: [],
-          completion_state: {},
+          delivery_readiness: cockpitReadiness(),
         },
         'POST /work-items/wi-1/specs': {
           id: 'spec-created',
@@ -101,8 +130,7 @@ describe('Work Item scoped Spec & Plan route', () => {
       packages: [],
       run_sessions: [],
       review_packets: [],
-      next_actions: [],
-      completion_state: {},
+      delivery_readiness: cockpitReadiness(),
     };
     const refreshedCockpit = {
       ...staleCockpit,
@@ -187,8 +215,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           packages: [],
           run_sessions: [],
           review_packets: [],
-          next_actions: [],
-          completion_state: {},
+          delivery_readiness: cockpitReadiness(),
         },
         'POST /work-items/wi-1/plans': {
           id: 'plan-created',
@@ -251,8 +278,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           packages: [],
           run_sessions: [],
           review_packets: [],
-          next_actions: [],
-          completion_state: {},
+          delivery_readiness: cockpitReadiness(),
         },
       },
     });
@@ -299,8 +325,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           packages: [],
           run_sessions: [],
           review_packets: [],
-          next_actions: [],
-          completion_state: {},
+          delivery_readiness: cockpitReadiness(),
         },
       },
     });
@@ -346,8 +371,7 @@ describe('Work Item scoped Spec & Plan route', () => {
       packages: [],
       run_sessions: [],
       review_packets: [],
-      next_actions: [],
-      completion_state: {},
+      delivery_readiness: cockpitReadiness(),
     });
 
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
@@ -474,8 +498,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           packages: [],
           run_sessions: [],
           review_packets: [],
-          next_actions: [],
-          completion_state: {},
+          delivery_readiness: cockpitReadiness(),
         },
       },
     });
@@ -532,8 +555,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           packages: [],
           run_sessions: [],
           review_packets: [],
-          next_actions: [],
-          completion_state: {},
+          delivery_readiness: cockpitReadiness(),
         },
       },
     });
@@ -631,8 +653,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           packages: [],
           run_sessions: [],
           review_packets: [],
-          next_actions: [],
-          completion_state: {},
+          delivery_readiness: cockpitReadiness(),
         },
       },
     });
@@ -655,7 +676,7 @@ describe('Work Item scoped Spec & Plan route', () => {
       },
     });
 
-    expect(await screen.findByText('No work item planning context is available.')).toBeTruthy();
+    expect(await screen.findByText('Spec & Plan data is temporarily unavailable.')).toBeTruthy();
     const historyButton = screen.getByRole('button', { name: 'Open revision history' }) as HTMLButtonElement;
     expect(historyButton.disabled).toBe(true);
 

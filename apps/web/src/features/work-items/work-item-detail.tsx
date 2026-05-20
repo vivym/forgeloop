@@ -1,15 +1,19 @@
-import { useParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 
 import { useWorkItemCockpitQuery, useWorkItemReplayQuery } from '../../shared/api/hooks';
 import { DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Badge, StatusPill } from '../../shared/ui';
 import { WorkItemNextActions } from './work-item-next-actions';
 import { createWorkItemDetailViewModel, formatValue } from './work-item-view-model';
+import { parseProductLaneId } from '../product-lanes/product-lanes';
 
 export function WorkItemDetail() {
   const params = useParams();
+  const [searchParams] = useSearchParams();
   const workItemId = params.workItemId;
-  const cockpit = useWorkItemCockpitQuery(workItemId);
+  const requestedLane = searchParams.get('lane');
+  const cockpitLane = parseProductLaneId(requestedLane ?? undefined);
+  const cockpit = useWorkItemCockpitQuery(workItemId, cockpitLane);
   const replay = useWorkItemReplayQuery(workItemId);
   const viewModel = createWorkItemDetailViewModel(cockpit.data, replay.data);
   const { workItem } = viewModel;
@@ -56,7 +60,11 @@ export function WorkItemDetail() {
 
   return (
     <DetailLayout
-      actionRail={<WorkItemNextActions workItem={workItem} />}
+      actionRail={
+        cockpit.data?.delivery_readiness === undefined ? undefined : (
+          <WorkItemNextActions readiness={cockpit.data.delivery_readiness} workItem={workItem} />
+        )
+      }
       header={
         <PageHeader
           eyebrow={`${formatValue(workItem.kind)} / ${workItem.priority}`}

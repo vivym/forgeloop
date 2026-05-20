@@ -5,7 +5,6 @@ import {
   productActionSchema,
   productLaneIdSchema,
   productLaneResponseSchema,
-  workItemActionsResponseSchema,
 } from '@forgeloop/contracts';
 
 const updatedAt = '2026-05-19T00:00:00.000Z';
@@ -106,6 +105,8 @@ describe('ProductAction contracts', () => {
 
     expect(`${'role'}${'Workbench'}ActionSchema` in contracts).toBe(false);
     expect(`${'role'}${'Workbench'}ResponseSchema` in contracts).toBe(false);
+    expect('workItemActionsResponseSchema' in contracts).toBe(false);
+    expect('WorkItemActionsResponse' in contracts).toBe(false);
   });
 
   it('parses valid navigate and command actions', () => {
@@ -122,15 +123,6 @@ describe('ProductAction contracts', () => {
       productActionSchema.safeParse({ ...validCommandAction, command: { ...validCommand, extra: true } }).success,
     ).toBe(false);
     expect(productLaneResponseSchema.safeParse({ ...validLaneResponse, extra: true }).success).toBe(false);
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        default_lane_id: 'bugs',
-        actions: [],
-        extra: true,
-      }).success,
-    ).toBe(false);
   });
 
   it('rejects empty or trimmed-empty strings across required string fields', () => {
@@ -369,52 +361,6 @@ describe('ProductAction contracts', () => {
             object: { type: 'lane_summary', id: 'summary_1', lane_id: 'requirements' },
           },
         ],
-      }).success,
-    ).toBe(false);
-  });
-
-  it('validates WorkItemActionsResponse work item, lane, default lane, and action id consistency', () => {
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        default_lane_id: 'bugs',
-        actions: [validNavigateAction],
-      }).success,
-    ).toBe(true);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        actions: [validNavigateAction],
-      }).success,
-    ).toBe(false);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_2',
-        lane_id: 'requirements',
-        default_lane_id: 'requirements',
-        actions: [validCommandAction],
-      }).success,
-    ).toBe(false);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'requirements',
-        default_lane_id: 'requirements',
-        actions: [validNavigateAction],
-      }).success,
-    ).toBe(false);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        default_lane_id: 'bugs',
-        actions: [validNavigateAction, { ...validNavigateAction, label: 'Duplicate action' }],
       }).success,
     ).toBe(false);
   });

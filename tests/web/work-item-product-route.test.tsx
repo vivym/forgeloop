@@ -17,10 +17,7 @@ describe('Work Item product route', () => {
     expect(screen.getByText('Brief / Intake')).toBeTruthy();
     expect(screen.getByText('Validation')).toBeTruthy();
     expect(await screen.findByRole('link', { name: 'Open work item' })).toBeTruthy();
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'http://localhost:3000/query/work-items/wi-1/actions?lane=requirements',
-      expect.objectContaining({ method: 'GET' }),
-    );
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
     expect(screen.queryByRole('button', { name: ['Update', 'brief'].join(' ') })).toBeNull();
     expect(screen.queryByRole('button', { name: ['Attach', 'evidence'].join(' ') })).toBeNull();
     expect(screen.queryByText(`${'Available after a draft'} exists.`)).toBeNull();
@@ -28,38 +25,25 @@ describe('Work Item product route', () => {
     expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
   });
 
-  it('uses valid lane query params for Work Item actions', async () => {
-    const screen = await renderRoute('/work-items/wi-1?lane=reviewer', {
-      apiOverrides: {
-        'GET /query/work-items/wi-1/actions?lane=reviewer': {
-          work_item_id: 'wi-1',
-          lane_id: 'reviewer',
-          default_lane_id: 'requirements',
-          actions: [navigateAction('open-review', 'Open review packet', '/reviews/review-web-product', 'reviewer')],
-        },
-      },
-    });
+  it('uses cockpit readiness as the Work Item action source', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=reviewer');
 
-    expect(await screen.findByRole('link', { name: 'Open review packet' })).toBeTruthy();
+    expect(await screen.findByText('No actions for Reviewer lane.')).toBeTruthy();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'http://localhost:3000/query/work-items/wi-1/actions?lane=reviewer',
+      'http://localhost:3000/query/work-item-cockpit/wi-1?lane=reviewer',
       expect.objectContaining({ method: 'GET' }),
     );
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
   });
 
   it('labels empty Work Item action states by lane', async () => {
-    const screen = await renderRoute('/work-items/wi-1?lane=reviewer', {
-      apiOverrides: {
-        'GET /query/work-items/wi-1/actions?lane=reviewer': {
-          work_item_id: 'wi-1',
-          lane_id: 'reviewer',
-          default_lane_id: 'requirements',
-          actions: [],
-        },
-      },
-    });
+    const screen = await renderRoute('/work-items/wi-1?lane=requirements');
 
-    expect(await screen.findByText('No actions for Reviewer lane.')).toBeTruthy();
+    expect(await screen.findByRole('link', { name: 'Open work item' })).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'http://localhost:3000/query/work-item-cockpit/wi-1?lane=requirements',
+      expect.objectContaining({ method: 'GET' }),
+    );
   });
 
   it('does not fetch Work Item actions for invalid lane params', async () => {
@@ -67,6 +51,14 @@ describe('Work Item product route', () => {
 
     expect(await screen.findByText('This lane is not available for this Work Item.')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open default lane' }).getAttribute('href')).toBe('/work-items/wi-1?lane=requirements');
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'http://localhost:3000/query/work-item-cockpit/wi-1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
+      expect.stringContaining('/query/work-item-cockpit/wi-1?lane=unknown'),
+      expect.anything(),
+    );
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
   });
 
@@ -296,23 +288,6 @@ function runPackageAction(id: string, label: string): ProductAction {
       object_type: 'execution_package',
       object_id: 'package-product-action',
       href: '/packages/package-product-action',
-    },
-  };
-}
-
-function navigateAction(id: string, label: string, href: string, laneId: ProductAction['lane_id'] = 'requirements'): ProductAction {
-  return {
-    id,
-    lane_id: laneId,
-    priority: 'primary',
-    label,
-    enabled: true,
-    kind: 'navigate',
-    target: {
-      kind: 'object',
-      object_type: 'review_packet',
-      object_id: id,
-      href,
     },
   };
 }

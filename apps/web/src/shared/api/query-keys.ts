@@ -51,16 +51,12 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
 
 export const queryKeys = {
   productLane: (laneId: ProductLaneId, query: ProductLaneQuery) => ['product-lanes', laneId, normalizeProductLaneQuery(query)],
-  workItemActions: (workItemId: string, laneId?: ProductLaneId) => [
-    'work-item-actions',
-    workItemId,
-    laneId === undefined ? {} : { lane: laneId },
-  ],
   pipeline: (projectId: string) => ['pipeline', { projectId }],
   workItems: (projectId: string) => ['work-items', { projectId }],
   productWorkItems: (query: ListProductQuery) => ['product-work-items', normalizeProductRegistryQuery(query)],
   workItem: (workItemId: string) => ['work-item', workItemId],
-  workItemCockpit: (workItemId: string | undefined) => ['work-item-cockpit', workItemId],
+  workItemCockpit: (workItemId: string | undefined, lane?: ProductLaneId) =>
+    lane === undefined ? ['work-item-cockpit', workItemId] : ['work-item-cockpit', workItemId, { lane }],
   workItemReplay: (workItemId: string | undefined) => ['work-item-replay', workItemId],
   specs: (query: ListProductQuery) => ['specs', normalizeProductRegistryQuery(query)],
   spec: (specId: string) => ['spec', specId],
