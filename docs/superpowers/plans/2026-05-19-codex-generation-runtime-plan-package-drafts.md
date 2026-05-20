@@ -3329,7 +3329,7 @@ git commit -m "fix: use approved revisions for automation projections"
 - Modify: `docs/superpowers/plans/2026-05-19-codex-generation-runtime-plan-package-drafts.md` only for checked boxes during execution
 - No product docs change required unless implementation discovers a new operator-facing env var name not covered in the spec
 
-- [ ] **Step 1: Run full focused acceptance suite**
+- [x] **Step 1: Run full focused acceptance suite**
 
 Run:
 
@@ -3339,7 +3339,7 @@ pnpm test tests/codex-runtime tests/automation tests/api/automation-commands.tes
 
 Expected: PASS.
 
-- [ ] **Step 2: Run package builds**
+- [x] **Step 2: Run package builds**
 
 Run:
 
@@ -3354,13 +3354,13 @@ pnpm --filter @forgeloop/executor build
 
 Expected: PASS.
 
-- [ ] **Step 3: Run full repository test suite when focused tests are stable**
+- [x] **Step 3: Run full repository test suite when focused tests are stable**
 
 Run: `pnpm test`
 
 Expected: PASS. For local runtime limits, run the full matrix before PR merge in CI and record the local subset that passed.
 
-- [ ] **Step 4: Run fake dogfood path**
+- [x] **Step 4: Run fake dogfood path**
 
 Run with local test env used by existing dogfood scripts:
 
@@ -3378,7 +3378,7 @@ Expected:
 - No RunSession is created.
 - No Spec/Plan submit/approve transition is performed by daemon.
 
-- [ ] **Step 5: Run app-server dogfood path where environment supports it**
+- [x] **Step 5: Run app-server dogfood path where environment supports it**
 
 Run only when a governed app-server endpoint is available:
 
@@ -3393,7 +3393,7 @@ Expected:
 - If governed app-server is available: at least one approved Spec produces a generated Plan draft.
 - If governed app-server is unavailable: dogfood reports blocked/skipped with public-safe reason, not CLI fallback.
 
-- [ ] **Step 6: Confirm no forbidden runtime paths remain**
+- [x] **Step 6: Confirm no forbidden runtime paths remain**
 
 Run:
 
@@ -3408,7 +3408,7 @@ Expected:
 - Existing `dangerFullAccess` hits may remain only in source-changing executor code and its tests, not generation runtime.
 - `api-package-v1` and `mock-package-drafter` must not remain in daemon-origin package generation command code.
 
-- [ ] **Step 7: Commit final acceptance adjustments**
+- [x] **Step 7: Commit final acceptance adjustments**
 
 ```bash
 git add tests scripts docs packages apps
@@ -3419,19 +3419,19 @@ git commit -m "test: cover codex generation closed loop acceptance"
 
 ## Final Verification Checklist
 
-- [ ] `pnpm test tests/codex-runtime`
-- [ ] `pnpm test tests/automation`
-- [ ] `pnpm test tests/api/automation-commands.test.ts tests/api/automation-runtime-snapshot.test.ts tests/api/automation-daemon.integration.test.ts`
-- [ ] `pnpm test tests/db/automation-repository.test.ts tests/db/repository-contract.ts`
-- [ ] `pnpm --filter @forgeloop/codex-runtime build`
-- [ ] `pnpm --filter @forgeloop/automation build`
-- [ ] `pnpm --filter @forgeloop/automation-daemon build`
-- [ ] `pnpm --filter @forgeloop/control-plane-api build`
-- [ ] `pnpm --filter @forgeloop/db build`
-- [ ] `pnpm --filter @forgeloop/executor build`
-- [ ] `pnpm test`
-- [ ] Fake dogfood succeeds.
-- [ ] App-server dogfood either succeeds or reports blocked/skipped without CLI fallback.
-- [ ] No RunSession is created by Plan 2 flows.
-- [ ] Daemon never submits or approves Spec/Plan.
-- [ ] Public action results do not contain raw prompts, raw app-server logs, HMACs, claim tokens, secrets, or local absolute paths.
+- [x] `pnpm test tests/codex-runtime`
+- [x] `pnpm test tests/automation`
+- [x] `pnpm test tests/api/automation-commands.test.ts tests/api/automation-runtime-snapshot.test.ts tests/api/automation-daemon.integration.test.ts`
+- [x] `pnpm test tests/db/automation-repository.test.ts tests/db/repository-contract.ts`
+- [x] `pnpm --filter @forgeloop/codex-runtime build`
+- [x] `pnpm --filter @forgeloop/automation build`
+- [x] `pnpm --filter @forgeloop/automation-daemon build`
+- [x] `pnpm --filter @forgeloop/control-plane-api build`
+- [x] `pnpm --filter @forgeloop/db build`
+- [x] `pnpm --filter @forgeloop/executor build`
+- [x] `pnpm test`
+- [x] Fake dogfood succeeds.
+- [x] App-server dogfood either succeeds or reports blocked/skipped without CLI fallback.
+- [x] No RunSession is created by Plan 2 flows.
+- [x] Daemon never submits or approves Spec/Plan.
+- [x] Public action results do not contain raw prompts, raw app-server logs, HMACs, claim tokens, secrets, or local absolute paths.
