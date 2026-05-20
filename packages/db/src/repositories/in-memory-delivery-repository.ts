@@ -1820,8 +1820,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         continue;
       }
       const spec = this.specs.get(workItem.current_spec_id);
-      const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id ?? workItem.current_spec_revision_id;
-      if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
+      const specRevisionId = spec?.approved_revision_id;
+      if (
+        spec === undefined ||
+        spec.status !== 'approved' ||
+        spec.resolution !== 'approved' ||
+        specRevisionId === undefined ||
+        spec.current_revision_id !== specRevisionId
+      ) {
         continue;
       }
       const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGeneratePlanDraft');
@@ -1884,10 +1890,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private async runtimeSnapshotPlanRevisionsRequiringPackages(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const plan of valuesFor(this.plans).sort(byCreatedAtThenId)) {
-      if (plan.status !== 'approved') {
+      if (plan.status !== 'approved' || plan.resolution !== 'approved') {
         continue;
       }
-      const planRevisionId = plan.approved_revision_id ?? plan.current_revision_id;
+      const planRevisionId = plan.approved_revision_id;
       if (planRevisionId === undefined || this.hasCurrentPackageGeneration(planRevisionId)) {
         continue;
       }

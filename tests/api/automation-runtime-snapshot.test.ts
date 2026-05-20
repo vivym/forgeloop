@@ -363,6 +363,31 @@ describe('internal automation runtime snapshot', () => {
       });
   });
 
+  it('does not list approved specs without approved current revisions for plan drafts', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.saveSpec(spec({ approved_revision_id: undefined, approved_at: undefined, approved_by_actor_id: undefined }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).toEqual([]);
+      });
+  });
+
+  it('does not list approved specs whose current revision is no longer the approved revision for plan drafts', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedSpec(repository);
+    await repository.saveSpecRevision(specRevision({ id: 'spec-revision-newer', revision_number: 2 }));
+    await repository.saveSpec(spec({ current_revision_id: 'spec-revision-newer', approved_revision_id: 'spec-revision-1' }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.work_items_requiring_plan).toEqual([]);
+      });
+  });
+
   it('preserves project scope for approved specs when multiple active repos can draft plans', async () => {
     const { app, repository } = await bootAutomationApp();
     await seedApprovedSpec(repository);
@@ -432,6 +457,18 @@ describe('internal automation runtime snapshot', () => {
             generation_key: 'default:plan-revision-1',
           }),
         );
+      });
+  });
+
+  it('does not list approved plans without approved revisions for package generation', async () => {
+    const { app, repository } = await bootAutomationApp();
+    await seedApprovedPlan(repository);
+    await repository.savePlan(plan({ approved_revision_id: undefined, approved_at: undefined, approved_by_actor_id: undefined }));
+
+    await signedAutomationGet(app)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_revisions_requiring_packages).toEqual([]);
       });
   });
 

@@ -377,7 +377,7 @@ describe('release flow dogfood script helpers', () => {
               throw new Error('expected strict local Codex work item spec fixture');
             }
             const spec = await repository.getSpec(workItem.current_spec_id);
-            const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id;
+            const specRevisionId = spec?.approved_revision_id;
             if (specRevisionId === undefined) {
               throw new Error('expected strict local Codex approved spec revision fixture');
             }

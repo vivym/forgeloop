@@ -2311,8 +2311,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         continue;
       }
       const spec = specsById.get(workItem.current_spec_id);
-      const specRevisionId = spec?.approved_revision_id ?? spec?.current_revision_id ?? workItem.current_spec_revision_id;
-      if (spec === undefined || spec.status !== 'approved' || specRevisionId === undefined) {
+      const specRevisionId = spec?.approved_revision_id;
+      if (
+        spec === undefined ||
+        spec.status !== 'approved' ||
+        spec.resolution !== 'approved' ||
+        specRevisionId === undefined ||
+        spec.current_revision_id !== specRevisionId
+      ) {
         continue;
       }
       const targetScope = this.runtimeSnapshotDraftTargetScope(
@@ -2389,10 +2395,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   ): Promise<RuntimeSnapshotTargetRow[]> {
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const plan of plansToEvaluate) {
-      if (plan.status !== 'approved') {
+      if (plan.status !== 'approved' || plan.resolution !== 'approved') {
         continue;
       }
-      const planRevisionId = plan.approved_revision_id ?? plan.current_revision_id;
+      const planRevisionId = plan.approved_revision_id;
       if (planRevisionId === undefined || this.hasCurrentPackageGeneration(generationRuns, planRevisionId)) {
         continue;
       }
