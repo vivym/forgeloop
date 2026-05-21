@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-const isoDateTimeSchema = z.string().datetime();
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const optionalTrimmedStringSchema = z.preprocess((value) => {
   if (typeof value !== 'string') {
@@ -19,6 +18,17 @@ const nonEmptyTrimmedArraySchema = z.preprocess((value) => {
     .map((item) => (typeof item === 'string' ? item.trim() : item))
     .filter((item) => item !== '');
 }, z.array(nonEmptyTrimmedStringSchema).min(1));
+const optionalTrimmedArraySchema = z.preprocess((value) => {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  const trimmedItems = value
+    .map((item) => (typeof item === 'string' ? item.trim() : item))
+    .filter((item) => item !== '');
+
+  return trimmedItems.length === 0 ? undefined : trimmedItems;
+}, z.array(nonEmptyTrimmedStringSchema).min(1).optional());
 
 export const workItemKindSchema = z.enum(['initiative', 'requirement', 'bug', 'tech_debt']);
 export type WorkItemKind = z.infer<typeof workItemKindSchema>;
@@ -30,8 +40,8 @@ const requirementIntakeContextSchema = z
     desired_outcome: nonEmptyTrimmedStringSchema,
     acceptance_criteria: nonEmptyTrimmedArraySchema,
     in_scope: nonEmptyTrimmedArraySchema,
-    out_of_scope: nonEmptyTrimmedArraySchema.optional(),
-    dependencies: nonEmptyTrimmedArraySchema.optional(),
+    out_of_scope: optionalTrimmedArraySchema,
+    dependencies: optionalTrimmedArraySchema,
     rollout_notes: optionalTrimmedStringSchema,
   })
   .strict();
@@ -115,18 +125,15 @@ export type CreateWorkItemRequest = z.infer<typeof createWorkItemRequestSchema>;
 
 export const patchWorkItemRequestSchema = z
   .object({
-    kind: workItemKindSchema.optional(),
-    title: nonEmptyTrimmedStringSchema.optional(),
     goal: nonEmptyTrimmedStringSchema.optional(),
     success_criteria: nonEmptyTrimmedArraySchema.optional(),
     priority: nonEmptyTrimmedStringSchema.optional(),
     risk: nonEmptyTrimmedStringSchema.optional(),
     driver_actor_id: nonEmptyTrimmedStringSchema.optional(),
     intake_context: workItemIntakeContextSchema.optional(),
-    phase: nonEmptyTrimmedStringSchema.optional(),
+    phase: z.enum(['draft', 'triage']).optional(),
   })
-  .strict()
-  .superRefine(refineKindMatchesIntakeContext);
+  .strict();
 export type PatchWorkItemRequest = z.infer<typeof patchWorkItemRequestSchema>;
 
 export const publicWorkItemSchema = z
@@ -145,10 +152,6 @@ export const publicWorkItemSchema = z
     activity_state: nonEmptyTrimmedStringSchema,
     gate_state: nonEmptyTrimmedStringSchema,
     resolution: nonEmptyTrimmedStringSchema,
-    current_spec_id: nonEmptyTrimmedStringSchema.optional(),
-    current_plan_id: nonEmptyTrimmedStringSchema.optional(),
-    created_at: isoDateTimeSchema.optional(),
-    updated_at: isoDateTimeSchema.optional(),
   })
   .strict()
   .superRefine(refineKindMatchesIntakeContext);

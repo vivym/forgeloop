@@ -126,6 +126,16 @@ describe('Work Item intake contracts', () => {
     ).toBe(false);
   });
 
+  it('omits optional context arrays that are empty after trimming', () => {
+    expect(
+      workItemIntakeContextSchema.parse({
+        ...validRequirementIntake,
+        out_of_scope: [' ', ''],
+        dependencies: [' ', ''],
+      }),
+    ).toEqual(validRequirementIntake);
+  });
+
   it('rejects owner_actor_id on create requests', () => {
     expect(
       createWorkItemRequestSchema.safeParse({
@@ -166,7 +176,7 @@ describe('Work Item intake contracts', () => {
     });
   });
 
-  it('accepts driver_actor_id and rejects owner_actor_id on patch requests', () => {
+  it('accepts driver_actor_id and rejects unsupported patch request fields', () => {
     expect(
       patchWorkItemRequestSchema.safeParse({
         driver_actor_id: 'actor-driver',
@@ -174,24 +184,37 @@ describe('Work Item intake contracts', () => {
     ).toBe(true);
     expect(
       patchWorkItemRequestSchema.safeParse({
+        kind: 'bug',
+      }).success,
+    ).toBe(false);
+    expect(
+      patchWorkItemRequestSchema.safeParse({
+        title: 'Checkout fails',
+      }).success,
+    ).toBe(false);
+    expect(
+      patchWorkItemRequestSchema.safeParse({
         owner_actor_id: 'actor-owner',
       }).success,
     ).toBe(false);
   });
 
-  it('requires patch request kind to match intake context type when both are provided', () => {
+  it('accepts only draft and triage patch phases', () => {
     expect(
       patchWorkItemRequestSchema.safeParse({
-        kind: 'bug',
-        intake_context: validRequirementIntake,
-      }).success,
-    ).toBe(false);
-    expect(
-      patchWorkItemRequestSchema.safeParse({
-        kind: 'bug',
-        intake_context: validBugIntake,
+        phase: 'draft',
       }).success,
     ).toBe(true);
+    expect(
+      patchWorkItemRequestSchema.safeParse({
+        phase: 'triage',
+      }).success,
+    ).toBe(true);
+    expect(
+      patchWorkItemRequestSchema.safeParse({
+        phase: 'implementation',
+      }).success,
+    ).toBe(false);
   });
 
   it('requires driver_actor_id and intake_context on public Work Items', () => {
@@ -212,6 +235,18 @@ describe('Work Item intake contracts', () => {
       publicWorkItemSchema.safeParse({
         ...validPublicWorkItem,
         owner_actor_id: 'actor-owner',
+      }).success,
+    ).toBe(false);
+    expect(
+      publicWorkItemSchema.safeParse({
+        ...validPublicWorkItem,
+        created_at: '2026-05-21T00:00:00.000Z',
+      }).success,
+    ).toBe(false);
+    expect(
+      publicWorkItemSchema.safeParse({
+        ...validPublicWorkItem,
+        current_spec_id: 'spec-1',
       }).success,
     ).toBe(false);
   });
