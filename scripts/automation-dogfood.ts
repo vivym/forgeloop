@@ -1,7 +1,8 @@
 import 'reflect-metadata';
 
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { isAbsolute, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -11,18 +12,32 @@ import { AutomationDaemon } from '../apps/automation-daemon/src/automation-daemo
 import { loadDaemonWorkflowPolicyDigest } from '../apps/automation-daemon/src/workflow-policy-loader';
 import {
   AutomationHttpClient,
+  signAutomationRequest,
   type AutomationGenerationPlanningConfig,
   type AutomationActionResponse,
   type ClaimNextActionInput,
   type NextAction,
 } from '../packages/automation/src/index';
 import {
+  CodexAppServerEndpointTransport,
   createCodexGenerationRuntime,
-  parseCodexAppServerEndpoint,
+  effectiveConfigFromResponse,
   type CodexGenerationRuntime,
 } from '../packages/codex-runtime/src/index';
+import {
+  CliDockerRunner,
+  CodexRuntimeControlPlaneClient,
+  DockerizedCodexAppServerLauncher,
+  createLocalCodexWorkerRuntime,
+} from '../packages/codex-worker-runtime/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../packages/db/src/index';
 import type { AutomationActionRun, Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
+import { createLeasedDockerCodexGenerationRuntime } from '../apps/automation-daemon/src/generation-runtime';
+import {
+  loadCodexRuntimeDogfoodBootstrapConfig,
+  runCodexRuntimeDogfoodBootstrap,
+  type CodexRuntimeDogfoodBootstrapConfig,
+} from './codex-runtime-dogfood-bootstrap';
 import {
   automationDogfoodExitCode,
   renderAutomationDogfoodSummary,
@@ -38,6 +53,8 @@ type EnvLike = Record<string, string | undefined>;
 export interface DogfoodGenerationRuntimeConfig {
   planning: AutomationGenerationPlanningConfig;
   runtime?: CodexGenerationRuntime;
+  localDockerRequested?: boolean;
+  cleanup?: () => void;
   appServerDogfood: AutomationDogfoodSummaryInput['appServerDogfood'];
 }
 
@@ -69,18 +86,6 @@ const optionalNonBlankEnv = (env: EnvLike, key: string): string | undefined => {
   return value.trim();
 };
 
-const optionalPositiveIntEnv = (env: EnvLike, key: string): number | undefined => {
-  const raw = optionalNonBlankEnv(env, key);
-  if (raw === undefined) {
-    return undefined;
-  }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${key}_invalid`);
-  }
-  return value;
-};
-
 export const requestedGenerationMode = (env: EnvLike = process.env): AutomationGenerationPlanningConfig['mode'] => {
   const explicitLegacyMode = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_AUTOMATION_GENERATION');
   const legacyMode = explicitLegacyMode ?? 'fake';
@@ -104,9 +109,9 @@ export const requestedGenerationMode = (env: EnvLike = process.env): AutomationG
   throw new Error('FORGELOOP_CODEX_AUTOMATION_GENERATION_invalid');
 };
 
-const preflightSkippedGeneration = (reasonCode: string): DogfoodGenerationRuntimeConfig => ({
+const preflightBlockedGeneration = (reasonCode: string): DogfoodGenerationRuntimeConfig => ({
   planning: createDogfoodGenerationPlanning('app_server'),
-  appServerDogfood: { status: 'skipped', reasonCode },
+  appServerDogfood: { status: 'blocked', reasonCode },
 });
 
 export const loadDogfoodGenerationRuntimeConfig = (env: EnvLike = process.env): DogfoodGenerationRuntimeConfig => {
@@ -119,40 +124,13 @@ export const loadDogfoodGenerationRuntimeConfig = (env: EnvLike = process.env): 
   }
 
   if (mode === 'app_server') {
-    const endpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
-    if (endpoint === undefined) {
-      return preflightSkippedGeneration('app_server_endpoint_missing');
-    }
-    try {
-      parseCodexAppServerEndpoint(endpoint);
-    } catch {
-      return preflightSkippedGeneration('app_server_endpoint_invalid');
-    }
-    const artifactRoot = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
-    if (artifactRoot === undefined) {
-      return preflightSkippedGeneration('app_server_artifact_root_missing');
-    }
-    if (!isAbsolute(artifactRoot)) {
-      return preflightSkippedGeneration('app_server_artifact_root_invalid');
-    }
-    const timeoutMs = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_TURN_TIMEOUT_MS');
-    const outputLimitBytes = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_OUTPUT_LIMIT_BYTES');
-    const rawNotificationLimitBytes = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_RAW_NOTIFICATION_LIMIT_BYTES');
-    const maxConcurrency = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_MAX_CONCURRENCY');
-    return {
-      planning: createDogfoodGenerationPlanning('app_server'),
-      runtime: createCodexGenerationRuntime({
-        mode: 'app_server',
-        appServerEndpoint: endpoint,
-        artifactRoot,
-        workspaceRoot: repoPath,
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
-        ...(outputLimitBytes === undefined ? {} : { outputLimitBytes }),
-        ...(rawNotificationLimitBytes === undefined ? {} : { rawNotificationLimitBytes }),
-        ...(maxConcurrency === undefined ? {} : { maxConcurrency }),
-      }),
-      appServerDogfood: { status: 'passed' },
-    };
+    return optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_MODE') === 'local_docker'
+      ? {
+          planning: createDogfoodGenerationPlanning('app_server'),
+          localDockerRequested: true,
+          appServerDogfood: { status: 'blocked', reasonCode: 'codex_worker_unavailable' },
+        }
+      : preflightBlockedGeneration('codex_docker_runtime_required');
   }
 
   return {
@@ -197,6 +175,193 @@ const createAutomationClient = (baseUrl: string): AutomationHttpClient =>
     daemonIdentity: automationDaemonIdentity,
     secret: automationSecret,
   });
+
+const requiredDogfoodEnv = (key: string): string => {
+  const value = optionalNonBlankEnv(process.env, key);
+  if (value === undefined) {
+    throw new Error(`${key}_missing`);
+  }
+  return value;
+};
+
+const dogfoodPositiveIntEnv = (key: string): number | undefined => {
+  const raw = optionalNonBlankEnv(process.env, key);
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${key}_invalid`);
+  }
+  return value;
+};
+
+const codexEffectiveConfigProbe = async (endpoint: `unix:${string}`): Promise<Record<string, unknown>> => {
+  const transport = new CodexAppServerEndpointTransport(endpoint);
+  try {
+    await transport.initialize();
+    for (const method of ['getEffectiveConfig', 'codex/getEffectiveConfig', 'effective_config']) {
+      try {
+        const response = await transport.request(method, {});
+        const config = effectiveConfigFromResponse(response);
+        if (config !== undefined) {
+          return config as Record<string, unknown>;
+        }
+      } catch {
+        // Try the next known effective-config method name.
+      }
+    }
+  } finally {
+    await transport.close().catch(() => undefined);
+  }
+  throw new Error('codex_app_server_effective_config_mismatch');
+};
+
+const dogfoodTrustedActorSigner = (input: { method: string; pathAndQuery: string; rawBody: string }) =>
+  signAutomationRequest({
+    ...input,
+    actorId: automationActorId,
+    actorClass: 'automation_daemon',
+    daemonIdentity: automationDaemonIdentity,
+    timestamp: new Date().toISOString(),
+    secret: automationSecret,
+  });
+
+const bootstrapConfigForProject = (baseUrl: string, project: Project): CodexRuntimeDogfoodBootstrapConfig =>
+  loadCodexRuntimeDogfoodBootstrapConfig({
+    ...process.env,
+    FORGELOOP_CONTROL_PLANE_URL: baseUrl,
+    FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: automationSecret,
+    FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: project.id,
+    FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: repoId,
+  });
+
+const createDogfoodLocalDockerGenerationRuntime = async (input: {
+  baseUrl: string;
+  project: Project;
+  generation: DogfoodGenerationRuntimeConfig;
+}): Promise<DogfoodGenerationRuntimeConfig> => {
+  const bootstrapConfig = bootstrapConfigForProject(input.baseUrl, input.project);
+  const bootstrapSummary = await runCodexRuntimeDogfoodBootstrap(bootstrapConfig);
+  const dockerImageDigest = String(bootstrapSummary.docker_image_digest);
+  const networkPolicyDigest = String(bootstrapSummary.network_policy_digest);
+  const networkProviderConfigDigest = String(bootstrapSummary.network_provider_config_digest);
+  const generationRuntimeProfileId = String(bootstrapSummary.generation_runtime_profile_id);
+  const generationCredentialBindingId = String(bootstrapSummary.generation_credential_binding_id);
+  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_WORKER_ID') ?? bootstrapConfig.workerIdentity;
+  const workerTempRoot = requiredDogfoodEnv('FORGELOOP_WORKER_TEMP_ROOT');
+  const generationArtifactRoot = requiredDogfoodEnv('FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
+  const dockerBin = optionalNonBlankEnv(process.env, 'FORGELOOP_DOCKER_BIN') ?? 'docker';
+  const controlPlaneClient = new CodexRuntimeControlPlaneClient({
+    baseUrl: input.baseUrl,
+    trustedActorSigner: dogfoodTrustedActorSigner,
+  });
+  const nonceFactory = () => randomUUID();
+  const now = () => new Date().toISOString();
+  const worker = createLocalCodexWorkerRuntime({
+    workerId,
+    workerIdentity: bootstrapConfig.workerIdentity,
+    version: 'automation-dogfood-local-docker',
+    bootstrapToken: bootstrapConfig.workerBootstrapToken,
+    bootstrapTokenVersion: bootstrapConfig.workerBootstrapTokenVersion,
+    authorizedScopes: [bootstrapConfig.allowedScope],
+    capabilities: ['generation'],
+    dockerImageDigests: [dockerImageDigest],
+    networkPolicyDigests: [networkPolicyDigest],
+    networkProviderConfigDigests: [networkProviderConfigDigest],
+    hostUid: bootstrapConfig.hostWorkerUid,
+    hostGid: bootstrapConfig.hostWorkerGid,
+    maxConcurrency: 1,
+    controlPlaneClient,
+    now,
+    nonceFactory,
+  });
+  await worker.register();
+  await worker.heartbeat();
+  const heartbeat = worker.startHeartbeatLoop();
+  const launcher = new DockerizedCodexAppServerLauncher({
+    dockerBin,
+    workerId,
+    workerTempRoot,
+    dockerRunner: new CliDockerRunner(dockerBin),
+    controlPlaneClient,
+    hostUid: bootstrapConfig.hostWorkerUid,
+    hostGid: bootstrapConfig.hostWorkerGid,
+    allowedRepoRoots: [repoPath],
+    effectiveConfigProbe: codexEffectiveConfigProbe,
+    now,
+    nonceFactory,
+  });
+  const turnTimeoutMs = dogfoodPositiveIntEnv('FORGELOOP_CODEX_GENERATION_TURN_TIMEOUT_MS');
+  const outputLimitBytes = dogfoodPositiveIntEnv('FORGELOOP_CODEX_GENERATION_OUTPUT_LIMIT_BYTES');
+  const rawNotificationLimitBytes = dogfoodPositiveIntEnv('FORGELOOP_CODEX_GENERATION_RAW_NOTIFICATION_LIMIT_BYTES');
+  const maxConcurrency = dogfoodPositiveIntEnv('FORGELOOP_CODEX_GENERATION_MAX_CONCURRENCY');
+  const runtime = createLeasedDockerCodexGenerationRuntime({
+    worker,
+    launcher,
+    dockerImageDigest,
+    createLaunchLease: async ({ taskKind, workerId: selectedWorkerId, generationInput }) => {
+      const orchestration = generationInput.orchestration;
+      if (orchestration === undefined) {
+        throw new Error('codex_launch_lease_denied');
+      }
+      const status = await controlPlaneClient.getStatus({
+        projectId: generationInput.projectId,
+        repoId: generationInput.repoIds[0],
+        targetKind: 'generation',
+        runtimeProfileId: generationRuntimeProfileId,
+        credentialBindingId: generationCredentialBindingId,
+      });
+      if (
+        status.runtime_profile_revision_id === undefined ||
+        status.credential_binding_id === undefined ||
+        status.credential_binding_version_id === undefined ||
+        status.credential_payload_digest === undefined
+      ) {
+        throw new Error(status.blocker_codes?.[0] ?? 'codex_launch_lease_denied');
+      }
+      const response = (await controlPlaneClient.createLaunchLease({
+        id: `codex-generation-lease-${orchestration.actionRunId}-${randomUUID()}`,
+        lease_request_id: `codex-generation-lease-request-${orchestration.actionRunId}-${taskKind}-${randomUUID()}`,
+        target: {
+          target_type: 'automation_action_run',
+          target_id: orchestration.actionRunId,
+          target_kind: 'generation',
+          project_id: generationInput.projectId,
+          ...(generationInput.repoIds[0] === undefined ? {} : { repo_id: generationInput.repoIds[0] }),
+        },
+        worker_id: selectedWorkerId,
+        runtime_profile_revision_id: status.runtime_profile_revision_id,
+        credential_binding_id: status.credential_binding_id,
+        credential_binding_version_id: status.credential_binding_version_id,
+        credential_payload_digest: status.credential_payload_digest,
+        launch_token: `codex-launch-${randomBytes(32).toString('base64url')}`,
+        launch_attempt: orchestration.actionAttempt,
+        action_type: orchestration.actionType,
+        action_attempt: orchestration.actionAttempt,
+        action_claim_token: orchestration.claimToken,
+        precondition_fingerprint: orchestration.preconditionFingerprint,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      })) as { lease: { id: string }; launch_token: string };
+      return { leaseId: response.lease.id, launchToken: response.launch_token };
+    },
+    runtimeConfig: {
+      artifactRoot: generationArtifactRoot,
+      workspaceRoot: repoPath,
+      ...(turnTimeoutMs === undefined ? {} : { timeoutMs: turnTimeoutMs }),
+      ...(outputLimitBytes === undefined ? {} : { outputLimitBytes }),
+      ...(rawNotificationLimitBytes === undefined ? {} : { rawNotificationLimitBytes }),
+      ...(maxConcurrency === undefined ? {} : { maxConcurrency }),
+    },
+  });
+
+  return {
+    ...input.generation,
+    runtime,
+    cleanup: () => heartbeat.stop(),
+    appServerDogfood: { status: 'passed' },
+  };
+};
 
 const createDaemon = (
   baseUrl: string,
@@ -362,7 +527,8 @@ const publicDogfoodErrorCode = (code: string | undefined): string | undefined =>
   if (code === undefined) {
     return undefined;
   }
-  return publicDogfoodErrorCodes.has(code) ? code : undefined;
+  const publicCode = code.split(':', 1)[0]?.trim();
+  return publicCode !== undefined && publicDogfoodErrorCodes.has(publicCode) ? publicCode : undefined;
 };
 
 const publicReasonForActionRun = (actionRun: AutomationActionRun): string | undefined => {
@@ -427,8 +593,8 @@ const resultWithExitCode = (summary: AutomationDogfoodSummaryInput): AutomationD
 });
 
 const runDogfood = async (): Promise<AutomationDogfoodResult> => {
-  const generation = loadDogfoodGenerationRuntimeConfig();
-  if (generation.runtime === undefined) {
+  let generation = loadDogfoodGenerationRuntimeConfig();
+  if (generation.runtime === undefined && generation.localDockerRequested !== true) {
     return resultWithExitCode({
       planDraftCreated: false,
       packageDraftCount: 0,
@@ -445,7 +611,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
   process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = automationSecret;
   let app: INestApplication | undefined;
   let repository: DeliveryRepository | undefined;
-  let seeded: { workItem: WorkItem } | undefined;
+  let seeded: { project: Project; workItem: WorkItem } | undefined;
   let restartRecoveredFromActionRuns = false;
   try {
     const booted = await bootControlPlane();
@@ -453,6 +619,25 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     repository = booted.repository;
     const { baseUrl } = booted;
     seeded = await seedDraftOnlyApprovedSpec(app);
+    if (generation.localDockerRequested === true) {
+      generation = await createDogfoodLocalDockerGenerationRuntime({
+        baseUrl,
+        project: seeded.project,
+        generation,
+      });
+    }
+    if (generation.runtime === undefined) {
+      return resultWithExitCode({
+        planDraftCreated: false,
+        packageDraftCount: 0,
+        completedActionTypes: [],
+        actionRunCount: 0,
+        nonSucceededActionRunCount: 0,
+        runSessionCount: 0,
+        restartRecoveredFromActionRuns: false,
+        appServerDogfood: generation.appServerDogfood,
+      });
+    }
     const interruptedClient = new RestartBeforeClaimClient({
       baseUrl,
       actorId: automationActorId,
@@ -532,6 +717,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     }
     throw error;
   } finally {
+    generation.cleanup?.();
     if (app !== undefined) {
       await app.close();
     }

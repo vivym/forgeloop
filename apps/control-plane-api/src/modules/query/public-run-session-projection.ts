@@ -1,9 +1,48 @@
 import { Injectable } from '@nestjs/common';
 import type { CheckResult, ExecutorResult } from '@forgeloop/contracts';
 import { serializePublicArtifactRef, serializePublicArtifactRefs } from '@forgeloop/db';
+import { validateCodexDockerRuntimeEvidence } from '@forgeloop/domain';
 import type { RunSession } from '@forgeloop/domain';
 
 type PublicRuntimeMetadata = NonNullable<RunSession['runtime_metadata']>;
+
+const publicDockerRuntimeEvidenceKeys = [
+  'runtime_profile_id',
+  'runtime_profile_revision_id',
+  'runtime_profile_digest',
+  'runtime_target_kind',
+  'source_access_mode',
+  'environment',
+  'credential_binding_id',
+  'credential_binding_version_id',
+  'credential_payload_digest',
+  'launch_lease_id',
+  'worker_id',
+  'docker_image_digest',
+  'container_id_digest',
+  'app_server_effective_config_digest',
+  'network_policy_digest',
+  'network_policy_self_test_digest',
+  'docker_policy_self_check_digest',
+  'workspace_isolation_digest',
+  'app_server_attempted',
+  'selected_execution_mode',
+] as const;
+
+const publicDockerRuntimeEvidence = (runtimeMetadata: PublicRuntimeMetadata): Partial<PublicRuntimeMetadata> => {
+  const candidate = publicDockerRuntimeEvidenceKeys.reduce<Partial<PublicRuntimeMetadata>>((metadata, key) => {
+    const value = runtimeMetadata[key];
+    if (value !== undefined) {
+      (metadata as Record<string, unknown>)[key] = value;
+    }
+    return metadata;
+  }, {});
+  try {
+    return validateCodexDockerRuntimeEvidence(candidate) as unknown as Partial<PublicRuntimeMetadata>;
+  } catch {
+    return {};
+  }
+};
 
 const serializePublicCheckResult = (checkResult: CheckResult): CheckResult => {
   const { stdout, stderr, ...publicCheckResult } = checkResult;
@@ -31,11 +70,16 @@ const serializePublicRuntimeMetadata = (
     return undefined;
   }
 
+  const hasWorkerLeaseMetadata =
+    runtimeMetadata.worker_lease_status !== undefined ||
+    runtimeMetadata.worker_lease_heartbeat_at !== undefined ||
+    runtimeMetadata.worker_lease_expires_at !== undefined;
   const publicMetadata: Partial<PublicRuntimeMetadata> = {
     durability_mode: runtimeMetadata.durability_mode,
     ...(runtimeMetadata.driver_kind === undefined ? {} : { driver_kind: runtimeMetadata.driver_kind }),
     ...(runtimeMetadata.driver_status === undefined ? {} : { driver_status: runtimeMetadata.driver_status }),
-    ...(runtimeMetadata.worker_id === undefined ? {} : { worker_id: runtimeMetadata.worker_id }),
+    ...publicDockerRuntimeEvidence(runtimeMetadata),
+    ...(hasWorkerLeaseMetadata && runtimeMetadata.worker_id !== undefined ? { worker_id: runtimeMetadata.worker_id } : {}),
     ...(runtimeMetadata.worker_lease_status === undefined ? {} : { worker_lease_status: runtimeMetadata.worker_lease_status }),
     ...(runtimeMetadata.worker_lease_heartbeat_at === undefined
       ? {}

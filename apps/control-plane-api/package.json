@@ -10,6 +10,7 @@
   "dependencies": {
     "@forgeloop/automation": "workspace:*",
     "@forgeloop/contracts": "workspace:*",
+    "@forgeloop/codex-worker-runtime": "workspace:*",
     "@forgeloop/codex-runtime": "workspace:*",
     "@forgeloop/db": "workspace:*",
     "@forgeloop/domain": "workspace:*",

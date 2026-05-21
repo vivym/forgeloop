@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { createCodexGenerationRuntime } from '../../packages/codex-runtime/src/index';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
-import { createAutomationDaemonGenerationRuntime } from '../../apps/automation-daemon/src/generation-runtime';
+import {
+  createAutomationDaemonGenerationRuntime,
+  createLeasedDockerCodexGenerationRuntime,
+} from '../../apps/automation-daemon/src/generation-runtime';
 import {
   projectRuntimeSnapshotIdempotencyKey,
   type AutomationGenerationWorkItemContextV1,
@@ -359,6 +362,62 @@ describe('automation daemon loop', () => {
     });
 
     expect(createAutomationDaemonGenerationRuntime(config)).toBeDefined();
+  });
+
+  it('terminalizes a leased generation session as failed when generation throws', async () => {
+    const closed: Array<{ status: string; summary: string }> = [];
+    const runtime = createLeasedDockerCodexGenerationRuntime({
+      dockerImageDigest: 'sha256:docker',
+      worker: {
+        selectForLaunch: async () => ({ workerId: 'worker-1', sessionToken: 'worker-session-1' }),
+        withLeaseSlot: async (operation) => operation(),
+      },
+      createLaunchLease: async () => ({ leaseId: 'lease-1', launchToken: 'launch-token-1' }),
+      launcher: {
+        launchFromLease: async () => ({
+          endpoint: 'unix:/safe/codex.sock',
+          containerWorkspacePath: '/workspace',
+          publicEvidence: {},
+          close: async (status, summary) => {
+            closed.push({ status, summary });
+          },
+        }),
+      },
+      innerRuntimeFactory: () => ({
+        generateSpecDraft: async () => {
+          throw new Error('generation failed');
+        },
+        generatePlanDraft: async () => {
+          throw new Error('unexpected');
+        },
+        generatePackageDrafts: async () => {
+          throw new Error('unexpected');
+        },
+      }),
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: {},
+        promptVersion: 'spec.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-1',
+          automationScope: repoScope,
+          idempotencyKey: 'idempotency-1',
+        },
+      }),
+    ).rejects.toThrow(/generation failed/);
+    expect(closed).toEqual([{ status: 'failed', summary: 'generation failed' }]);
   });
 
   it('throws early when required config is missing', () => {

@@ -13,6 +13,7 @@
     "paths": {
       "@forgeloop/automation": ["packages/automation/src/index.ts"],
       "@forgeloop/codex-runtime": ["packages/codex-runtime/src/index.ts"],
+      "@forgeloop/codex-worker-runtime": ["packages/codex-worker-runtime/src/index.ts"],
       "@forgeloop/contracts": ["packages/contracts/src/index.ts"],
       "@forgeloop/domain": ["packages/domain/src/index.ts"],
       "@forgeloop/db": ["packages/db/src/index.ts"],

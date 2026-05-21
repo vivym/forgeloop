@@ -255,6 +255,41 @@ const structuredCodexGenerationError = (error: unknown): StructuredCodexGenerati
   return { code: error.code, retryable: error.retryable, publicResultJson: error.publicResultJson };
 };
 
+const publicSafeErrorCodes = new Set([
+  'codex_generation_disabled',
+  'codex_generation_safety_unavailable',
+  'codex_generation_sandbox_invalid',
+  'codex_app_server_unavailable',
+  'codex_generation_timeout',
+  'codex_generation_cancelled',
+  'codex_generation_concurrency_limit_exceeded',
+  'codex_generation_raw_log_too_large',
+  'codex_generation_turn_failed',
+  'codex_launch_lease_denied',
+  'codex_launch_materialization_denied',
+  'codex_worker_unavailable',
+  'codex_worker_docker_policy_unavailable',
+  'codex_app_server_effective_config_mismatch',
+  'codex_runtime_workspace_isolation_unavailable',
+  'codex_docker_runtime_evidence_unsafe',
+  'codex_runtime_profile_invalid',
+  'generated_output_invalid_json',
+  'generated_output_ambiguous',
+  'generated_output_schema_invalid',
+  'generated_output_too_large',
+  'generated_package_dependency_invalid',
+  'generated_package_manifest_invalid',
+  'generated_package_policy_invalid',
+  'generated_spec_draft_invalid',
+  'generated_plan_draft_invalid',
+  'generated_payload_idempotency_drift',
+]);
+
+const publicSafeErrorCodeFromMessage = (message: string): string | undefined => {
+  const code = message.split(':', 1)[0]?.trim();
+  return code !== undefined && publicSafeErrorCodes.has(code) ? code : undefined;
+};
+
 const errorCode = (error: unknown): string | undefined => {
   const structuredGenerationError = structuredCodexGenerationError(error);
   if (structuredGenerationError !== undefined) {
@@ -263,32 +298,8 @@ const errorCode = (error: unknown): string | undefined => {
   if (error instanceof AutomationHttpError) {
     return error.code;
   }
-  const publicSafeErrorCodes = new Set([
-    'codex_generation_disabled',
-    'codex_generation_safety_unavailable',
-    'codex_generation_sandbox_invalid',
-    'codex_app_server_unavailable',
-    'codex_generation_timeout',
-    'codex_generation_cancelled',
-    'codex_generation_concurrency_limit_exceeded',
-    'codex_generation_raw_log_too_large',
-    'codex_generation_turn_failed',
-    'generated_output_invalid_json',
-    'generated_output_ambiguous',
-    'generated_output_schema_invalid',
-    'generated_output_too_large',
-    'generated_package_dependency_invalid',
-    'generated_package_manifest_invalid',
-    'generated_package_policy_invalid',
-    'generated_spec_draft_invalid',
-    'generated_plan_draft_invalid',
-    'generated_payload_idempotency_drift',
-  ]);
-  if (
-    error instanceof Error &&
-    (error.message === 'generation_disabled' || publicSafeErrorCodes.has(error.message))
-  ) {
-    return error.message;
+  if (error instanceof Error) {
+    return error.message === 'generation_disabled' ? error.message : publicSafeErrorCodeFromMessage(error.message);
   }
   return undefined;
 };
@@ -309,6 +320,14 @@ const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'codex_generation_disabled' ||
   code === 'codex_generation_safety_unavailable' ||
   code === 'codex_generation_sandbox_invalid' ||
+  code === 'codex_launch_lease_denied' ||
+  code === 'codex_launch_materialization_denied' ||
+  code === 'codex_worker_unavailable' ||
+  code === 'codex_worker_docker_policy_unavailable' ||
+  code === 'codex_app_server_effective_config_mismatch' ||
+  code === 'codex_runtime_workspace_isolation_unavailable' ||
+  code === 'codex_docker_runtime_evidence_unsafe' ||
+  code === 'codex_runtime_profile_invalid' ||
   code === 'generated_spec_draft_invalid' ||
   code === 'generated_package_dependency_invalid' ||
   code === 'generated_package_manifest_invalid' ||
@@ -365,6 +384,31 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
   return { code: 'transport_error' };
 };
 
+const requireActionClaimToken = (action: AutomationActionRunRecord): string => {
+  if (action.claimToken === undefined || action.claimToken.length === 0) {
+    throw new AutomationHttpError(
+      409,
+      { code: 'automation_action_claim_required' },
+      'Codex launch lease generation requires an active automation action claim.',
+    );
+  }
+  return action.claimToken;
+};
+
+const generationOrchestrationFor = (
+  action: AutomationActionRunRecord,
+  actionType: 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts',
+) => ({
+  targetType: 'automation_action_run' as const,
+  actionRunId: action.id,
+  actionType,
+  actionAttempt: action.attempt,
+  claimToken: requireActionClaimToken(action),
+  preconditionFingerprint: action.preconditionFingerprint,
+  automationScope: action.automationScope,
+  idempotencyKey: action.idempotencyKey,
+});
+
 const completeProjection = async (
   client: AutomationExecutorClient,
   action: AutomationActionRunRecord,
@@ -408,7 +452,7 @@ const executeCommand = async (
     }
     const context = await client.specDraftGenerationContext(actionInput.workItemId, {
       actionRunId: action.id,
-      claimToken: action.claimToken ?? '',
+      claimToken: requireActionClaimToken(action),
     });
     const generated = await runtime.generateSpecDraft({
       actionRunId: action.id,
@@ -420,6 +464,7 @@ const executeCommand = async (
       policyDigests: Object.fromEntries(
         context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
       ),
+      orchestration: generationOrchestrationFor(action, 'ensure_spec_draft'),
     });
     let generatedSpecDraft;
     try {
@@ -455,7 +500,7 @@ const executeCommand = async (
     const context = await client.planDraftGenerationContext(actionInput.workItemId, {
       specRevisionId: actionInput.specRevisionId,
       actionRunId: action.id,
-      claimToken: action.claimToken ?? '',
+      claimToken: requireActionClaimToken(action),
     });
     let generated;
     try {
@@ -469,6 +514,7 @@ const executeCommand = async (
         policyDigests: Object.fromEntries(
           context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
         ),
+        orchestration: generationOrchestrationFor(action, 'ensure_plan_draft'),
       });
     } catch (error) {
       if (error instanceof Error && error.message === 'generated_plan_draft_invalid') {
@@ -511,7 +557,7 @@ const executeCommand = async (
     const context = await client.packageDraftsGenerationContext(actionInput.planRevisionId, {
       generationKey: actionInput.generationKey,
       actionRunId: action.id,
-      claimToken: action.claimToken ?? '',
+      claimToken: requireActionClaimToken(action),
     });
     const generated = await runtime.generatePackageDrafts({
       actionRunId: action.id,
@@ -523,6 +569,7 @@ const executeCommand = async (
       policyDigests: Object.fromEntries(
         context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
       ),
+      orchestration: generationOrchestrationFor(action, 'ensure_package_drafts'),
     });
     let generatedPackageDrafts;
     try {

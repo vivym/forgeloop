@@ -68,6 +68,28 @@ const dockerProxyConfig = (): CodexDockerNetworkProxyConfig => {
   };
 };
 
+const dockerProxyNetworkPolicy = () => {
+  const allowlistRules = [
+    {
+      id: 'openai',
+      protocol: 'https' as const,
+      host: 'api.openai.com',
+      purpose: 'model_provider' as const,
+    },
+  ];
+  return {
+    mode: 'egress_allowlist' as const,
+    provider: 'docker_network_proxy' as const,
+    allowlist_rules: allowlistRules,
+    provider_config: dockerProxyConfig(),
+    egress_allowlist_digest: codexCanonicalDigest({
+      provider: 'docker_network_proxy',
+      allowlist_rules: allowlistRules,
+    }),
+    self_test_digest: dockerProxyConfig().self_test_image_digest,
+  };
+};
+
 const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRuntimeProfileRevision } => {
   const profileId = randomUUID();
   const revisionId = randomUUID();
@@ -93,19 +115,7 @@ const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRunti
     },
     app_server_required: true,
     allowed_driver_kind: 'app_server',
-    network_policy: {
-      mode: 'docker_network_proxy',
-      egress: 'allowlist',
-      allowlist: [
-        {
-          id: 'openai',
-          protocol: 'https',
-          host: 'api.openai.com',
-          purpose: 'model_provider',
-        },
-      ],
-      provider_config: dockerProxyConfig(),
-    },
+    network_policy: dockerProxyNetworkPolicy(),
     resource_limits: {
       cpu_ms: 120_000,
       memory_mb: 4096,
@@ -779,7 +789,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         expect(status).toMatchObject({
           runtime_profile_id: projectB.profile.id,
           runtime_profile_revision_id: projectB.revision.id,
-          blocker_codes: [],
+          blocker_codes: expect.arrayContaining(['codex_credential_unavailable', 'codex_worker_unavailable']),
         });
         expect(status).not.toHaveProperty('credential_binding_id');
         expect(status).not.toHaveProperty('credential_binding_version_id');

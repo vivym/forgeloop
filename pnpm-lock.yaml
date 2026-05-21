@@ -120,6 +120,9 @@ importers:
       '@forgeloop/codex-runtime':
         specifier: workspace:*
         version: link:../../packages/codex-runtime
+      '@forgeloop/codex-worker-runtime':
+        specifier: workspace:*
+        version: link:../../packages/codex-worker-runtime
 
   apps/control-plane-api:
     dependencies:
@@ -129,6 +132,9 @@ importers:
       '@forgeloop/codex-runtime':
         specifier: workspace:*
         version: link:../../packages/codex-runtime
+      '@forgeloop/codex-worker-runtime':
+        specifier: workspace:*
+        version: link:../../packages/codex-worker-runtime
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -356,6 +362,18 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/codex-worker-runtime:
+    dependencies:
+      '@forgeloop/codex-runtime':
+        specifier: workspace:*
+        version: link:../codex-runtime
+      '@forgeloop/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@forgeloop/executor':
+        specifier: workspace:*
+        version: link:../executor
+
   packages/contracts:
     dependencies:
       zod:
@@ -413,6 +431,9 @@ importers:
 
   packages/run-worker:
     dependencies:
+      '@forgeloop/codex-worker-runtime':
+        specifier: workspace:*
+        version: link:../codex-worker-runtime
       '@forgeloop/contracts':
         specifier: workspace:*
         version: link:../contracts

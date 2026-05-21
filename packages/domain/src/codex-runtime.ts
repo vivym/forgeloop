@@ -28,21 +28,28 @@ export interface CodexDockerNetworkProxyConfig {
   provider_config_digest: string;
 }
 
+export type CodexRuntimeNetworkProvider = 'host_firewall' | 'docker_network_proxy';
+
 export type CodexRuntimeNetworkPolicy =
   | {
       mode: 'disabled';
     }
   | {
-      mode: 'host_firewall';
-      egress: 'allowlist';
-      allowlist: readonly CodexNetworkAllowlistRule[];
+      mode: 'egress_allowlist';
+      provider: 'host_firewall';
+      allowlist_rules: readonly CodexNetworkAllowlistRule[];
+      egress_allowlist_digest: string;
+      self_test_digest: string;
     }
   | {
-      mode: 'docker_network_proxy';
-      egress: 'allowlist';
-      allowlist: readonly CodexNetworkAllowlistRule[];
+      mode: 'egress_allowlist';
+      provider: 'docker_network_proxy';
+      allowlist_rules: readonly CodexNetworkAllowlistRule[];
       provider_config: CodexDockerNetworkProxyConfig;
+      egress_allowlist_digest: string;
+      self_test_digest: string;
     };
+
 
 export interface CodexRuntimeResourceLimits {
   cpu_ms: number;
@@ -225,26 +232,29 @@ export interface CodexLaunchMaterialization {
 }
 
 export interface CodexDockerRuntimeEvidence {
-  runtime_profile_id?: string;
-  runtime_profile_revision_id?: string;
-  runtime_profile_digest?: string;
-  runtime_target_kind?: CodexRuntimeTargetKind;
-  source_access_mode?: CodexSourceAccessMode;
-  environment?: CodexRuntimeEnvironment;
+  runtime_profile_id: string;
+  runtime_profile_revision_id: string;
+  runtime_profile_digest: string;
+  runtime_target_kind: CodexRuntimeTargetKind;
+  source_access_mode: CodexSourceAccessMode;
+  environment: CodexRuntimeEnvironment;
   credential_binding_id?: string;
   credential_binding_version_id?: string;
   credential_payload_digest?: string;
-  launch_lease_id?: string;
-  docker_image_digest?: string;
-  container_id_digest?: string;
-  app_server_effective_config_digest?: string;
+  launch_lease_id: string;
+  worker_id: string;
+  docker_image_digest: string;
+  container_id_digest: string;
+  app_server_effective_config_digest: string;
   network_policy_digest?: string;
   network_policy_self_test_digest?: string;
-  docker_policy_self_check_digest?: string;
+  docker_policy_self_check_digest: string;
   workspace_isolation_digest?: string;
+  app_server_attempted: true;
+  selected_execution_mode: 'app_server';
 }
 
-export interface CodexRuntimeStatusProjection extends CodexDockerRuntimeEvidence {
+export interface CodexRuntimeStatusProjection extends Partial<CodexDockerRuntimeEvidence> {
   profile_status?: CodexRuntimeProfileRevision['status'];
   worker_status?: CodexWorkerRegistration['status'];
   lease_status?: CodexLaunchLease['status'];
@@ -253,9 +263,18 @@ export interface CodexRuntimeStatusProjection extends CodexDockerRuntimeEvidence
 
 export const codexPublicBlockerCodes = [
   'codex_worker_docker_policy_unavailable',
+  'codex_worker_unavailable',
+  'codex_worker_capability_mismatch',
+  'codex_worker_docker_unavailable',
   'codex_app_server_effective_config_mismatch',
+  'codex_app_server_unavailable',
+  'codex_runtime_workspace_isolation_unavailable',
   'codex_docker_runtime_evidence_unsafe',
+  'codex_docker_runtime_required',
   'codex_runtime_profile_invalid',
+  'codex_credential_unavailable',
+  'codex_launch_lease_denied',
+  'codex_launch_materialization_denied',
 ] as const;
 
 export type CodexPublicBlockerCode = (typeof codexPublicBlockerCodes)[number];
@@ -264,7 +283,7 @@ type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[
 
 const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
 const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[_-]?key|token|secret|auth)[A-Za-z0-9_.-]*\b)/i;
-const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|credential|payload|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
+const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -332,7 +351,8 @@ const stableJson = (value: unknown): string => JSON.stringify(canonicalize(value
 
 const isSha256Digest = (value: unknown): value is string => typeof value === 'string' && sha256DigestPattern.test(value);
 
-const isRawPathEndpointOrContainerId = (value: string): boolean => /^\/|https?:\/\//i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);
+const isRawPathEndpointOrContainerId = (value: string): boolean =>
+  /^\/|https?:\/\/|^unix:|\.sock$/i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);
 
 const assertSha256Digest = (value: unknown, label: string, error: (message: string) => DomainError = invalidProfile): void => {
   if (!isSha256Digest(value)) {
@@ -353,20 +373,28 @@ const sortedScopes = (scopes: readonly CodexRuntimeScope[]): readonly CodexRunti
 const sortedAllowlist = (rules: readonly CodexNetworkAllowlistRule[]): readonly CodexNetworkAllowlistRule[] =>
   [...rules].sort((left, right) => compareCodeUnits(left.id, right.id));
 
-const normalizedNetworkPolicy = (policy: CodexRuntimeNetworkPolicy): CodexRuntimeNetworkPolicy => {
+export const codexNetworkPolicyDigestInput = (
+  provider: CodexRuntimeNetworkProvider,
+  allowlistRules: readonly CodexNetworkAllowlistRule[],
+): { provider: CodexRuntimeNetworkProvider; allowlist_rules: readonly CodexNetworkAllowlistRule[] } => ({
+  provider,
+  allowlist_rules: sortedAllowlist(allowlistRules),
+});
+
+export const normalizeCodexRuntimeNetworkPolicy = (policy: CodexRuntimeNetworkPolicy): CodexRuntimeNetworkPolicy => {
   if (policy.mode === 'disabled') {
     return policy;
   }
-  if (policy.mode === 'host_firewall') {
-    return { ...policy, allowlist: sortedAllowlist(policy.allowlist) };
-  }
-  return { ...policy, allowlist: sortedAllowlist(policy.allowlist) };
+  return { ...policy, allowlist_rules: sortedAllowlist(policy.allowlist_rules) } as CodexRuntimeNetworkPolicy;
 };
 
 export const codexCanonicalDigest = (value: unknown): string =>
   `sha256:${createHash('sha256').update(stableJson(value)).digest('hex')}`;
 
 export const codexCredentialPayloadDigest = (payload: unknown): string => codexCanonicalDigest(payload);
+
+export const codexRuntimeNetworkPolicyDigest = (policy: CodexRuntimeNetworkPolicy): string =>
+  codexCanonicalDigest(normalizeCodexRuntimeNetworkPolicy(policy));
 
 export const codexRuntimeScopeMatches = (allowed: readonly CodexRuntimeScope[], target: CodexRuntimeScope): boolean =>
   allowed.some(
@@ -388,7 +416,7 @@ export const codexRuntimeProfileRevisionDigest = (revision: CodexRuntimeProfileR
     effective_config_assertions: revision.effective_config_assertions,
     app_server_required: revision.app_server_required,
     allowed_driver_kind: revision.allowed_driver_kind,
-    network_policy: normalizedNetworkPolicy(revision.network_policy),
+    network_policy: normalizeCodexRuntimeNetworkPolicy(revision.network_policy),
     resource_limits: revision.resource_limits,
     docker_policy: revision.docker_policy,
     allowed_scopes: sortedScopes(revision.allowed_scopes),
@@ -414,6 +442,13 @@ export const validateCodexEffectiveConfigAssertions = (
   assertions: CodexEffectiveConfigAssertions,
 ): CodexPublicBlockerCode | undefined => {
   const matchesAssertion = (capturedValue: unknown, assertionValue: unknown): boolean => {
+    if (Array.isArray(assertionValue)) {
+      return (
+        Array.isArray(capturedValue) &&
+        capturedValue.length === assertionValue.length &&
+        assertionValue.every((entry, index) => matchesAssertion(capturedValue[index], entry))
+      );
+    }
     if (isPlainObject(assertionValue)) {
       if (!isPlainObject(capturedValue)) {
         return false;
@@ -466,7 +501,8 @@ export const validateCodexRuntimeProfileRevision = (
 
   const strict = options.strictRealDogfood === true;
   if (strict) {
-    if (revision.network_policy.mode === 'disabled') {
+    const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+    if (networkPolicy.mode === 'disabled') {
       throw dockerPolicyUnavailable('Strict real dogfood profiles require a model_provider egress allowlist network policy.');
     }
     if (revision.docker_policy.network_disabled === true) {
@@ -508,14 +544,20 @@ export const validateCodexRuntimeProfileRevision = (
       }
     }
 
-    const hasModelProvider = revision.network_policy.allowlist.some((rule) => rule.purpose === 'model_provider');
+    const expectedAllowlistDigest = codexCanonicalDigest(codexNetworkPolicyDigestInput(networkPolicy.provider, networkPolicy.allowlist_rules));
+    if (networkPolicy.egress_allowlist_digest !== expectedAllowlistDigest) {
+      throw dockerPolicyUnavailable('Strict real dogfood egress allowlist digest does not match executable allowlist rules.');
+    }
+    assertSha256Digest(networkPolicy.self_test_digest, 'Network policy self-test digest', dockerPolicyUnavailable);
+    const hasModelProvider = networkPolicy.allowlist_rules.some((rule) => rule.purpose === 'model_provider');
     if (!hasModelProvider) {
       throw dockerPolicyUnavailable('Strict real dogfood egress allowlist profiles require a model_provider allowlist rule.');
     }
   }
 
-  if (revision.network_policy.mode === 'docker_network_proxy') {
-    validateCodexDockerNetworkProxyConfig(revision.network_policy.provider_config);
+  const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+  if (networkPolicy.mode === 'egress_allowlist' && networkPolicy.provider === 'docker_network_proxy') {
+    validateCodexDockerNetworkProxyConfig(networkPolicy.provider_config);
   }
 
   return revision;
@@ -537,6 +579,7 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
     'credential_binding_version_id',
     'credential_payload_digest',
     'launch_lease_id',
+    'worker_id',
     'docker_image_digest',
     'container_id_digest',
     'app_server_effective_config_digest',
@@ -544,13 +587,55 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
     'network_policy_self_test_digest',
     'docker_policy_self_check_digest',
     'workspace_isolation_digest',
+    'app_server_attempted',
+    'selected_execution_mode',
   ]);
+  const requiredKeys: Array<keyof CodexDockerRuntimeEvidence> = [
+    'runtime_profile_id',
+    'runtime_profile_revision_id',
+    'runtime_profile_digest',
+    'runtime_target_kind',
+    'source_access_mode',
+    'environment',
+    'launch_lease_id',
+    'worker_id',
+    'docker_image_digest',
+    'container_id_digest',
+    'app_server_effective_config_digest',
+    'docker_policy_self_check_digest',
+    'app_server_attempted',
+    'selected_execution_mode',
+  ];
+
+  for (const key of requiredKeys) {
+    if (!(key in evidence)) {
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence is missing required app-server proof.', {
+        field: key,
+      });
+    }
+  }
 
   for (const [key, value] of Object.entries(evidence)) {
     if (!allowedKeys.has(key as keyof CodexDockerRuntimeEvidence) || unsafeEvidenceKeyPattern.test(key)) {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {
         field: key,
       });
+    }
+    if (key === 'app_server_attempted') {
+      if (value !== true) {
+        throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence must prove app-server was attempted.', {
+          field: key,
+        });
+      }
+      continue;
+    }
+    if (key === 'selected_execution_mode') {
+      if (value !== 'app_server') {
+        throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence must prove app-server execution mode.', {
+          field: key,
+        });
+      }
+      continue;
     }
     if (typeof value !== 'string') {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence values must be strings.', { field: key });
@@ -567,7 +652,7 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
     }
   }
 
-  return evidence;
+  return evidence as unknown as CodexDockerRuntimeEvidence;
 };
 
 export const redactCodexLaunchMaterialization = (value: CodexLaunchMaterialization): Record<string, unknown> => ({
@@ -580,7 +665,7 @@ export const redactCodexLaunchMaterialization = (value: CodexLaunchMaterializati
     target_kind: value.profile_revision.target_kind,
     source_access_mode: value.profile_revision.source_access_mode,
     docker_image_digest: value.profile_revision.docker_image_digest,
-    network_policy_digest: codexCanonicalDigest(normalizedNetworkPolicy(value.profile_revision.network_policy)),
+    network_policy_digest: codexRuntimeNetworkPolicyDigest(value.profile_revision.network_policy),
   },
   resolved_credentials: value.resolved_credentials.map((credential) => ({
     binding_id: credential.binding_id,

@@ -15,6 +15,7 @@ import type {
   CodexRuntimeScope,
   CodexRuntimeStatusProjection,
   CodexRuntimeTargetKind,
+  CodexPublicBlockerCode,
   CodexWorkerBootstrapToken,
   CodexWorkerRegistration,
   CommandIdempotencyRecord,
@@ -53,7 +54,9 @@ import {
   capabilityFingerprint,
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexRuntimeNetworkPolicyDigest,
   codexRuntimeScopeMatches,
+  normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
   validateCodexRuntimeProfileRevision,
   isActiveRunSessionStatus,
@@ -559,20 +562,31 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
             now: input.now,
           })
         : undefined;
+    const profileNetworkPolicy = profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
     const worker =
-      profileRevision !== undefined
+      profileRevision !== undefined && profileNetworkPolicy !== undefined
         ? await this.findAvailableCodexWorker({
             project_id: input.project_id,
             ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
             target_kind: input.target_kind,
             docker_image_digest: profileRevision.docker_image_digest,
-            network_policy_digest: codexCanonicalDigest(profileRevision.network_policy),
-            ...(profileRevision.network_policy.mode === 'docker_network_proxy'
-              ? { network_provider_config_digest: profileRevision.network_policy.provider_config.provider_config_digest }
+            network_policy_digest: codexRuntimeNetworkPolicyDigest(profileNetworkPolicy),
+            ...(profileNetworkPolicy.mode === 'egress_allowlist' && profileNetworkPolicy.provider === 'docker_network_proxy'
+              ? { network_provider_config_digest: profileNetworkPolicy.provider_config.provider_config_digest }
               : {}),
             now: input.now,
           })
         : undefined;
+    const blockerCodes: CodexPublicBlockerCode[] = [];
+    if (profileRevision === undefined) {
+      blockerCodes.push('codex_runtime_profile_invalid');
+    }
+    if (input.credential_binding_id !== undefined && credential === undefined) {
+      blockerCodes.push('codex_credential_unavailable');
+    }
+    if (profileRevision !== undefined && worker === undefined) {
+      blockerCodes.push('codex_worker_unavailable');
+    }
 
     return {
       ...(profileRevision !== undefined
@@ -584,7 +598,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
             source_access_mode: profileRevision.source_access_mode,
             environment: profileRevision.environment,
             docker_image_digest: profileRevision.docker_image_digest,
-            network_policy_digest: codexCanonicalDigest(profileRevision.network_policy),
+            network_policy_digest: codexRuntimeNetworkPolicyDigest(profileRevision.network_policy),
             profile_status: profileRevision.status,
           }
         : {}),
@@ -596,7 +610,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
           }
         : {}),
       ...(worker !== undefined ? { worker_status: worker.status } : {}),
-      blocker_codes: profileRevision === undefined ? ['codex_runtime_profile_invalid'] : [],
+      blocker_codes: blockerCodes,
     };
   }
 
@@ -774,16 +788,19 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
 
     const profileRevision = this.codexRuntimeProfileRevisions.get(input.runtime_profile_revision_id);
+    const profileNetworkPolicy = profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
     if (
       profileRevision === undefined ||
+      profileNetworkPolicy === undefined ||
       profileRevision.status !== 'active' ||
       profileRevision.target_kind !== input.target.target_kind ||
       profileRevision.profile_digest !== input.runtime_profile_digest ||
       !codexRuntimeScopeMatches(profileRevision.allowed_scopes, codexScope(input.target.project_id, input.target.repo_id)) ||
       profileRevision.docker_image_digest !== input.docker_image_digest ||
-      codexCanonicalDigest(profileRevision.network_policy) !== input.network_policy_digest ||
-      (profileRevision.network_policy.mode === 'docker_network_proxy' &&
-        profileRevision.network_policy.provider_config.provider_config_digest !== input.network_provider_config_digest)
+      codexCanonicalDigest(profileNetworkPolicy) !== input.network_policy_digest ||
+      (profileNetworkPolicy.mode === 'egress_allowlist' &&
+        profileNetworkPolicy.provider === 'docker_network_proxy' &&
+        profileNetworkPolicy.provider_config.provider_config_digest !== input.network_provider_config_digest)
     ) {
       throw codexDenied('codex_launch_lease_denied', 'Launch lease runtime profile fence was rejected.');
     }
@@ -3164,7 +3181,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       (record.network_provider_config_digest === undefined ||
         worker.network_provider_config_digests.includes(record.network_provider_config_digest)) &&
       profileRevision.docker_image_digest === record.docker_image_digest &&
-      codexCanonicalDigest(profileRevision.network_policy) === record.network_policy_digest
+      codexRuntimeNetworkPolicyDigest(profileRevision.network_policy) === record.network_policy_digest
     );
   }
 

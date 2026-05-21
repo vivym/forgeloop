@@ -12,7 +12,7 @@ import {
   type CodexAppServerTransport,
   type CodexEffectiveConfig,
 } from '@forgeloop/codex-runtime';
-import type { RunRuntimeMetadata } from '@forgeloop/domain';
+import type { CodexDockerRuntimeEvidence, RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { normalizeCodexAppServerNotification } from './codex-event-normalizer.js';
 import type { CodexRawLogStore } from './codex-raw-log-store.js';
@@ -28,6 +28,7 @@ export interface CodexAppServerDriverOptions {
   transport: CodexAppServerTransport;
   rawLogStore?: CodexRawLogStore;
   runtimeSafety?: LocalCodexRuntimeSafety;
+  resourceSafetyMode?: { mode: 'local_governor' } | { mode: 'external_sandbox'; evidence: CodexDockerRuntimeEvidence };
   workerIdentity?: string;
   nonceFactory?: () => string;
   now?: () => string;
@@ -299,6 +300,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
   readonly #transport: CodexAppServerTransport;
   readonly #rawLogStore: CodexRawLogStore | undefined;
   readonly #runtimeSafety: LocalCodexRuntimeSafety | undefined;
+  readonly #resourceSafetyMode: NonNullable<CodexAppServerDriverOptions['resourceSafetyMode']>;
   readonly #workerIdentity: string;
   readonly #nonceFactory: () => string;
   readonly #now: () => string;
@@ -308,6 +310,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
     this.#transport = options.transport;
     this.#rawLogStore = options.rawLogStore;
     this.#runtimeSafety = options.runtimeSafety;
+    this.#resourceSafetyMode = options.resourceSafetyMode ?? { mode: 'local_governor' };
     this.#workerIdentity = options.workerIdentity ?? 'forgeloop-codex-app-server';
     this.#nonceFactory = options.nonceFactory ?? (() => randomUUID());
     this.#now = options.now ?? (() => new Date().toISOString());
@@ -316,8 +319,8 @@ export class CodexAppServerDriver implements CodexSessionDriver {
   async *startRun(input: CodexDriverStartInput): AsyncIterable<CodexDriverStreamItem> {
     try {
       await this.#transport.initialize?.();
-      const leaseState = await this.#createLease(input, input.runSpec.objective);
-      await this.#consumeLeaseCommand(leaseState, 'thread/start', input.runSpec.objective);
+      const leaseState = await this.#createLeaseIfNeeded(input, input.runSpec.objective);
+      await this.#consumeLeaseCommandIfNeeded(leaseState, 'thread/start', input.runSpec.objective);
 
       const threadResponse = await this.#transport.request('thread/start', {
         cwd: input.workspacePath,
@@ -345,10 +348,11 @@ export class CodexAppServerDriver implements CodexSessionDriver {
           driver_status: 'active',
           codex_thread_id: threadId,
           effective_dangerous_mode: 'confirmed',
+          ...this.#externalSandboxEvidence(),
         },
       };
 
-      await this.#consumeLeaseCommand(leaseState, 'turn/start', input.runSpec.objective);
+      await this.#consumeLeaseCommandIfNeeded(leaseState, 'turn/start', input.runSpec.objective);
       const turnResponse = await this.#transport.request('turn/start', {
         threadId,
         input: textInput(input.runSpec.objective),
@@ -361,6 +365,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       const runtimeMetadata: Partial<RunRuntimeMetadata> = {
         driver_kind: 'app_server',
         driver_status: 'active',
+        ...this.#externalSandboxEvidence(),
       };
       if (turnId !== undefined) {
         runtimeMetadata.active_turn_id = turnId;
@@ -421,8 +426,8 @@ export class CodexAppServerDriver implements CodexSessionDriver {
 
     try {
       await this.#transport.initialize?.();
-      const leaseState = await this.#createLease(input, input.runSpec.objective);
-      await this.#consumeLeaseCommand(leaseState, 'thread/resume', input.runSpec.objective);
+      const leaseState = await this.#createLeaseIfNeeded(input, input.runSpec.objective);
+      await this.#consumeLeaseCommandIfNeeded(leaseState, 'thread/resume', input.runSpec.objective);
 
       const response = await this.#transport.request('thread/resume', {
         threadId,
@@ -446,6 +451,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
           driver_status: 'active',
           codex_thread_id: threadId,
           effective_dangerous_mode: 'confirmed',
+          ...this.#externalSandboxEvidence(),
         },
       };
 
@@ -482,7 +488,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
 
     const activeTurnId = input.targetTurnId ?? input.runtimeMetadata.active_turn_id;
     if (activeTurnId !== undefined) {
-      await this.#consumeLeaseCommand(this.#requireExistingLease(), 'turn/steer', input.message);
+      await this.#consumeLeaseCommandIfNeeded(this.#leaseState, 'turn/steer', input.message);
       const response = await this.#transport.request('turn/steer', {
         threadId,
         input: textInput(input.message),
@@ -496,7 +502,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       };
     }
 
-    await this.#consumeLeaseCommand(this.#requireExistingLease(), 'turn/start', input.message);
+    await this.#consumeLeaseCommandIfNeeded(this.#leaseState, 'turn/start', input.message);
     const response = await this.#transport.request('turn/start', {
       threadId,
       input: textInput(input.message),
@@ -516,7 +522,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       return { acknowledged: false, reason: 'missing_thread_or_turn' };
     }
 
-    await this.#consumeLeaseCommand(this.#requireExistingLease(), 'turn/interrupt', JSON.stringify({ threadId, turnId }));
+    await this.#consumeLeaseCommandIfNeeded(this.#leaseState, 'turn/interrupt', JSON.stringify({ threadId, turnId }));
     const response = await this.#transport.request('turn/interrupt', { threadId, turnId });
     return {
       acknowledged: true,
@@ -572,6 +578,13 @@ export class CodexAppServerDriver implements CodexSessionDriver {
     return leaseState;
   }
 
+  async #createLeaseIfNeeded(input: CodexDriverStartInput, prompt: string): Promise<AppServerLeaseState | undefined> {
+    if (this.#resourceSafetyMode.mode === 'external_sandbox') {
+      return undefined;
+    }
+    return this.#createLease(input, prompt);
+  }
+
   #requireExistingLease(): AppServerLeaseState {
     if (this.#leaseState === undefined) {
       throw primaryGovernorUnavailableError();
@@ -607,6 +620,27 @@ export class CodexAppServerDriver implements CodexSessionDriver {
         runSpecDigest: leaseState.runSpecDigest,
       },
     });
+  }
+
+  async #consumeLeaseCommandIfNeeded(
+    leaseState: AppServerLeaseState | undefined,
+    method: string,
+    prompt: string,
+  ): Promise<void> {
+    if (this.#resourceSafetyMode.mode === 'external_sandbox') {
+      return;
+    }
+    if (leaseState === undefined) {
+      throw primaryGovernorUnavailableError();
+    }
+    await this.#consumeLeaseCommand(leaseState, method, prompt);
+  }
+
+  #externalSandboxEvidence(): Partial<RunRuntimeMetadata> {
+    if (this.#resourceSafetyMode.mode !== 'external_sandbox') {
+      return {};
+    }
+    return this.#resourceSafetyMode.evidence;
   }
 
   async *#streamNotifications(runSessionId: string): AsyncIterable<CodexDriverStreamItem> {

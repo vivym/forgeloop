@@ -197,6 +197,43 @@ describe('RunWorker', () => {
     expect(driver.resumeCalls).toHaveLength(0);
   });
 
+  it('passes the active run-worker lease context to driver factories', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const { runSession } = await seedQueuedPackageRun(repository);
+    const driver = new FakeCodexSessionDriver({
+      script: [{ kind: 'terminal', status: 'succeeded', summary: 'Driver completed.' }],
+    });
+    const factoryInputs: unknown[] = [];
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-lease-context',
+      driverFactory: (input) => {
+        factoryInputs.push(input);
+        return driver;
+      },
+      evidenceCollector: async ({ runSpec }) => ({
+        ...succeededExecutorResult(runSpec.run_session_id),
+        executor_type: runSpec.executor_type,
+      }),
+      selfReview: async () => succeededSelfReview(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+    });
+
+    await worker.drainOnce();
+
+    expect(factoryInputs).toHaveLength(1);
+    expect(factoryInputs[0]).toMatchObject({
+      runSession: { id: runSession.id },
+      workerLease: {
+        workerId: 'worker-lease-context',
+        runSessionId: runSession.id,
+        leaseToken: expect.any(String),
+      },
+    });
+  });
+
   it('moves idle active runs to stalled instead of timed_out', async () => {
     const repository = new InMemoryDeliveryRepository();
     const { runSession } = await seedReadyStartedPackageRun(repository);
@@ -645,6 +682,71 @@ describe('RunWorker', () => {
     expect(await repository.getRunSession(runSession.id)).toMatchObject({
       status: 'succeeded',
       summary: 'Executor completed the package.',
+    });
+  });
+
+  it('stalls instead of using host exec fallback when fallback is denied by policy', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const { runSession } = await seedReadyStartedPackageRun(repository);
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        codex_thread_id: 'thread-existing',
+        active_turn_id: 'turn-existing',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const appServerDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      deferResumeUntilIteration: true,
+      script: [
+        {
+          kind: 'event',
+          event: {
+            event_type: 'driver_fallback_used',
+            source: 'executor',
+            visibility: 'public',
+            summary: 'Codex app-server resume failed; fallback is required.',
+            payload: { reason: 'thread/resume failed' },
+          },
+          runtimeMetadata: {
+            driver_kind: 'exec_fallback',
+            driver_status: 'starting',
+          },
+        },
+      ],
+    });
+    const execFallbackDriver = new FakeCodexSessionDriver({
+      kind: 'exec_fallback',
+      script: [{ kind: 'terminal', status: 'succeeded', summary: 'Exec fallback should not run.' }],
+    });
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => appServerDriver,
+      execFallbackDriverFactory: () => execFallbackDriver,
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      now: () => new Date().toISOString(),
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+      leaseDurationMs: 60_000,
+      idleThresholdMs: 30_000,
+      allowExecFallback: false,
+    });
+
+    await worker.drainOnce();
+
+    expect(appServerDriver.resumeCalls).toHaveLength(1);
+    expect(execFallbackDriver.startCalls).toHaveLength(0);
+    expect(execFallbackDriver.resumeCalls).toHaveLength(0);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'stalled',
+      summary: 'Driver recovery failed.',
     });
   });
 

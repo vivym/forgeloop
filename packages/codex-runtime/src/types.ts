@@ -74,6 +74,17 @@ export interface CodexGenerationResult<TGenerated> {
   publicSummary: string;
 }
 
+export type CodexGenerationOrchestrationContext = {
+  targetType: 'automation_action_run';
+  actionRunId: string;
+  actionType: 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts';
+  actionAttempt: number;
+  claimToken: string;
+  preconditionFingerprint: string;
+  automationScope: string;
+  idempotencyKey: string;
+};
+
 export interface CodexGenerationRuntimeTaskInput<TContext extends Record<string, unknown>> {
   actionRunId: string;
   projectId: string;
@@ -82,6 +93,7 @@ export interface CodexGenerationRuntimeTaskInput<TContext extends Record<string,
   promptVersion: string;
   outputSchemaVersion: string;
   policyDigests: Record<string, string>;
+  orchestration?: CodexGenerationOrchestrationContext;
 }
 
 export interface CodexGenerationRuntime {

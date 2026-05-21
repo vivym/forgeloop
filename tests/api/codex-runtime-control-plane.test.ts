@@ -11,6 +11,8 @@ import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packa
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexNetworkPolicyDigestInput,
+  codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   type ExecutionPackage,
   type CodexRuntimeProfileRevision,
@@ -52,29 +54,29 @@ const providerConfig = {
   self_test_image_digest: sha('2'),
 };
 const providerConfigDigest = codexCanonicalDigest(providerConfig);
+const allowlistRules = [
+  {
+    id: 'model-provider',
+    protocol: 'https' as const,
+    host: 'api.openai.test',
+    purpose: 'model_provider' as const,
+  },
+];
 const networkPolicy = {
-  mode: 'docker_network_proxy' as const,
-  egress: 'allowlist' as const,
-  allowlist: [
-    {
-      id: 'model-provider',
-      protocol: 'https' as const,
-      host: 'api.openai.test',
-      purpose: 'model_provider' as const,
-    },
-  ],
+  mode: 'egress_allowlist' as const,
+  provider: 'docker_network_proxy' as const,
+  allowlist_rules: allowlistRules,
   provider_config: { ...providerConfig, provider_config_digest: providerConfigDigest },
+  egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('docker_network_proxy', allowlistRules)),
+  self_test_digest: providerConfig.self_test_image_digest,
 };
-const networkPolicyDigest = codexCanonicalDigest(networkPolicy);
+const networkPolicyDigest = codexRuntimeNetworkPolicyDigest(networkPolicy);
 const materializedNetworkPolicy = {
   mode: 'egress_allowlist',
   provider: 'docker_network_proxy',
-  allowlist_rules: networkPolicy.allowlist,
+  allowlist_rules: networkPolicy.allowlist_rules,
   provider_config: networkPolicy.provider_config,
-  egress_allowlist_digest: codexCanonicalDigest({
-    provider: 'docker_network_proxy',
-    allowlist_rules: networkPolicy.allowlist,
-  }),
+  egress_allowlist_digest: networkPolicy.egress_allowlist_digest,
   self_test_digest: providerConfig.self_test_image_digest,
 };
 
@@ -751,6 +753,7 @@ describe('codex runtime control-plane APIs', () => {
     expect(materialized.body.runtime_profile).toMatchObject({
       profile_id: profileId,
       revision_id: profileRevisionId,
+      environment: 'test',
       docker_image: 'forgeloop/codex-worker:test',
       docker_image_digest: buildProfileRevision().docker_image_digest,
       codex_config_toml: codexConfigToml,
@@ -1025,7 +1028,39 @@ describe('codex runtime control-plane APIs', () => {
       .expect(400);
     await request(app.getHttpServer())
       .post(`/internal/codex-workers/${workerId}/launch-leases/lease-1/terminal`)
+      .send(
+        terminalBody(registration.session_token, {
+          evidence_summary: { app_server_endpoint: 'unix:/tmp/private/codex.sock' },
+          nonce: 'terminal-nonce-raw-endpoint',
+        }),
+      )
+      .expect(400);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/launch-leases/lease-1/terminal`)
       .send(terminalBody(registration.session_token, { secret_payload_json: { token: 'abc' }, nonce: 'terminal-nonce-3' }))
+      .expect(400);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/launch-leases/lease-1/terminal`)
+      .send(
+        terminalBody(registration.session_token, {
+          evidence_summary: {
+            runtime_profile_id: profileId,
+            runtime_profile_revision_id: profileRevisionId,
+            runtime_profile_digest: buildProfileRevision().profile_digest,
+            runtime_target_kind: 'generation',
+            source_access_mode: 'artifact_only',
+            environment: 'test',
+            launch_lease_id: 'lease-1',
+            worker_id: '4f1e2d3c4f1e',
+            docker_image_digest: buildProfileRevision().docker_image_digest,
+            network_policy_digest: networkPolicyDigest,
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+            startup_blocker_code: 'codex_app_server_unavailable',
+          },
+          nonce: 'terminal-nonce-startup-raw-container',
+        }),
+      )
       .expect(400);
 
     const firstRecovery = await signedPost(app, '/internal/codex-runtime/recover-stale-workers', {
@@ -1051,5 +1086,84 @@ describe('codex runtime control-plane APIs', () => {
       reason_code: 'test_stale_worker',
     }).expect(201);
     expect(secondRecovery.body.recovered_launch_leases).toHaveLength(0);
+  });
+
+  it('accepts strict public Docker runtime evidence as terminal evidence', async () => {
+    const { app, repository } = await bootApp();
+    await seedRuntime(app, 'terminal-public-evidence');
+    const registration = await registerWorker(app);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(heartbeatBody(registration.session_token, 'terminal-public-evidence-heartbeat', { nonce_timestamp: now }))
+      .expect(201);
+    const claimed = await claimActionRun(repository);
+    await signedPost(app, '/internal/codex-launch-leases', launchLeaseBody(claimed)).expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/launch-leases/lease-1/terminal`)
+      .send(
+        terminalBody(registration.session_token, {
+          nonce: 'terminal-public-evidence',
+          evidence_summary: {
+            runtime_profile_id: profileId,
+            runtime_profile_revision_id: profileRevisionId,
+            runtime_profile_digest: buildProfileRevision().profile_digest,
+            runtime_target_kind: 'generation',
+            source_access_mode: 'artifact_only',
+            environment: 'test',
+            credential_binding_id: credentialBindingId,
+            credential_binding_version_id: credentialVersionId,
+            credential_payload_digest: credentialPayloadDigest,
+            launch_lease_id: 'lease-1',
+            worker_id: workerId,
+            docker_image_digest: buildProfileRevision().docker_image_digest,
+            container_id_digest: sha('5'),
+            app_server_effective_config_digest: sha('6'),
+            network_policy_digest: networkPolicyDigest,
+            network_policy_self_test_digest: sha('7'),
+            docker_policy_self_check_digest: sha('8'),
+            workspace_isolation_digest: sha('9'),
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+          },
+        }),
+      )
+      .expect(201);
+  });
+
+  it('accepts public-safe app-server startup failure evidence', async () => {
+    const { app, repository } = await bootApp();
+    await seedRuntime(app, 'terminal-startup-evidence');
+    const registration = await registerWorker(app);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(heartbeatBody(registration.session_token, 'terminal-startup-evidence-heartbeat', { nonce_timestamp: now }))
+      .expect(201);
+    const claimed = await claimActionRun(repository);
+    await signedPost(app, '/internal/codex-launch-leases', launchLeaseBody(claimed)).expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/launch-leases/lease-1/terminal`)
+      .send(
+        terminalBody(registration.session_token, {
+          nonce: 'terminal-startup-evidence',
+          evidence_summary: {
+            runtime_profile_id: profileId,
+            runtime_profile_revision_id: profileRevisionId,
+            runtime_profile_digest: buildProfileRevision().profile_digest,
+            runtime_target_kind: 'generation',
+            source_access_mode: 'artifact_only',
+            environment: 'test',
+            launch_lease_id: 'lease-1',
+            worker_id: workerId,
+            docker_image_digest: buildProfileRevision().docker_image_digest,
+            network_policy_digest: networkPolicyDigest,
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+            startup_blocker_code: 'codex_app_server_effective_config_mismatch',
+          },
+        }),
+      )
+      .expect(201);
   });
 });

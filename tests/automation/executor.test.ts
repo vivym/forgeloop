@@ -784,7 +784,50 @@ describe('automation executor', () => {
     expect(runtimeInputs[0]).toMatchObject({
       promptVersion: 'plan-draft.fake.v3',
       outputSchemaVersion: 'plan_draft.v1',
+      orchestration: {
+        targetType: 'automation_action_run',
+        actionRunId: 'action-run-1',
+        actionType: 'ensure_plan_draft',
+        actionAttempt: 1,
+        claimToken: 'claim-token-1',
+        preconditionFingerprint: 'precondition-fingerprint-1',
+        automationScope: repoScope,
+        idempotencyKey: 'idempotency-key-1',
+      },
     });
+  });
+
+  it('requires an active action claim before Codex generation launch leases', async () => {
+    const client = new FakeAutomationClient();
+    const runtimeInputs: unknown[] = [];
+
+    const result = await executeActionRun({
+      client,
+      action: claimedAction({ claimToken: undefined }),
+      actorId: 'actor-automation',
+      daemonIdentity: 'daemon-main',
+      generationRuntime: fakeGenerationRuntimeReturning(
+        {
+          taskKind: 'plan_draft',
+          promptVersion: 'plan-draft.fake.v1',
+          outputSchemaVersion: 'plan_draft.v1',
+          generated: validGeneratedPlanDraft(),
+          generationArtifacts: [],
+          publicSummary: 'Plan generated.',
+        },
+        runtimeInputs,
+      ),
+      generationPlanning: planGenerationPlanning(),
+    });
+
+    expect(result).toMatchObject({
+      actionRunId: 'action-run-1',
+      status: 'failed',
+      retryable: false,
+      reasonCode: 'automation_action_claim_required',
+    });
+    expect(runtimeInputs).toEqual([]);
+    expect(JSON.stringify(client.calls.find((call) => call.method === 'failAction')?.args[1])).not.toContain('claim-token');
   });
 
   it('fails retryably when app-server Plan draft output fails schema validation', async () => {

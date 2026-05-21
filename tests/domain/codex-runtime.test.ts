@@ -4,7 +4,9 @@ import {
   DomainError,
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexNetworkPolicyDigestInput,
   codexPublicBlockerCodes,
+  codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   codexRuntimeScopeMatches,
   redactCodexLaunchMaterialization,
@@ -75,6 +77,17 @@ const modelProviderRule = {
   purpose: 'model_provider',
 } as const;
 
+const hostFirewallPolicy = (rules = [modelProviderRule]) => ({
+  mode: 'egress_allowlist' as const,
+  provider: 'host_firewall' as const,
+  allowlist_rules: rules,
+  egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('host_firewall', rules)),
+  self_test_digest: codexCanonicalDigest({
+    ...codexNetworkPolicyDigestInput('host_firewall', rules),
+    self_test: 'host_firewall',
+  }),
+});
+
 const baseRevision = (overrides: Partial<CodexRuntimeProfileRevision> = {}): CodexRuntimeProfileRevision => {
   const revision = {
     id: 'revision-1',
@@ -97,11 +110,7 @@ const baseRevision = (overrides: Partial<CodexRuntimeProfileRevision> = {}): Cod
     },
     app_server_required: true,
     allowed_driver_kind: 'app_server',
-    network_policy: {
-      mode: 'host_firewall',
-      egress: 'allowlist',
-      allowlist: [modelProviderRule],
-    },
+    network_policy: hostFirewallPolicy(),
     resource_limits: {
       cpu_ms: 120_000,
       memory_mb: 1024,
@@ -176,10 +185,7 @@ describe('codex runtime domain contracts', () => {
 
   it('creates stable profile revision digests independent of object key order', () => {
     const left = baseRevision({
-      network_policy: {
-        mode: 'host_firewall',
-        egress: 'allowlist',
-        allowlist: [
+      network_policy: hostFirewallPolicy([
           {
             id: 'model-provider',
             protocol: 'https',
@@ -187,12 +193,10 @@ describe('codex runtime domain contracts', () => {
             path_prefix: '/v1',
             purpose: 'model_provider',
           },
-        ],
-      },
+        ]),
     });
     const right = baseRevision({
-      network_policy: {
-        allowlist: [
+      network_policy: hostFirewallPolicy([
           {
             purpose: 'model_provider',
             path_prefix: '/v1',
@@ -200,13 +204,22 @@ describe('codex runtime domain contracts', () => {
             protocol: 'https',
             id: 'model-provider',
           },
-        ],
-        egress: 'allowlist',
-        mode: 'host_firewall',
-      },
+        ]),
     });
 
     expect(codexRuntimeProfileRevisionDigest(left)).toBe(codexRuntimeProfileRevisionDigest(right));
+  });
+
+  it('creates stable network policy digests independent of allowlist rule order', () => {
+    const npmRule = {
+      id: 'npm',
+      protocol: 'https',
+      host: 'registry.npmjs.org',
+      purpose: 'package_registry',
+    } as const;
+    expect(codexRuntimeNetworkPolicyDigest(hostFirewallPolicy([modelProviderRule, npmRule]))).toBe(
+      codexRuntimeNetworkPolicyDigest(hostFirewallPolicy([npmRule, modelProviderRule])),
+    );
   });
 
   it('excludes database timestamps from profile digests but changes when runtime config changes', () => {
@@ -257,18 +270,14 @@ describe('codex runtime domain contracts', () => {
 
   it('rejects strict real dogfood egress allowlist profiles without a model provider rule', () => {
     const revision = baseRevision({
-      network_policy: {
-        mode: 'host_firewall',
-        egress: 'allowlist',
-        allowlist: [
+      network_policy: hostFirewallPolicy([
           {
             id: 'registry',
             protocol: 'https',
             host: 'registry.npmjs.org',
             purpose: 'package_registry',
           },
-        ],
-      },
+        ]),
     });
 
     expect(() => validateCodexRuntimeProfileRevision(revision, { strictRealDogfood: true })).toThrow(
@@ -416,6 +425,7 @@ describe('codex runtime domain contracts', () => {
         credential_binding_version_id: 'credential-version-1',
         credential_payload_digest: digestB,
         launch_lease_id: 'lease-1',
+        worker_id: 'worker-1',
         docker_image_digest: digestA,
         container_id_digest: digestB,
         app_server_effective_config_digest: digestC,
@@ -423,18 +433,22 @@ describe('codex runtime domain contracts', () => {
         network_policy_self_test_digest: digestB,
         docker_policy_self_check_digest: digestC,
         workspace_isolation_digest: digestA,
+        app_server_attempted: true,
+        selected_execution_mode: 'app_server',
       }),
     ).not.toThrow();
 
-    expect(() =>
-      validateCodexDockerRuntimeEvidence({
-        runtime_profile_id: '550e8400-e29b-41d4-a716-446655440000',
-        runtime_profile_revision_id: '018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
-        credential_binding_id: 'credential-binding-550e8400-e29b-41d4-a716-446655440000',
-        credential_binding_version_id: 'credential-version-018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
-        launch_lease_id: 'lease-550e8400-e29b-41d4-a716-446655440000',
-      }),
-    ).not.toThrow();
+    expectDomainErrorCode(
+      () =>
+        validateCodexDockerRuntimeEvidence({
+          runtime_profile_id: '550e8400-e29b-41d4-a716-446655440000',
+          runtime_profile_revision_id: '018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
+          credential_binding_id: 'credential-binding-550e8400-e29b-41d4-a716-446655440000',
+          credential_binding_version_id: 'credential-version-018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
+          launch_lease_id: 'lease-550e8400-e29b-41d4-a716-446655440000',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
 
     expectDomainErrorCode(
       () =>
@@ -449,7 +463,13 @@ describe('codex runtime domain contracts', () => {
       'codex_docker_runtime_evidence_unsafe',
     );
 
-    for (const unsafePublicId of ['/var/lib/forgeloop/workspaces/package-1', 'http://127.0.0.1:4555', '4f1e2d3c4f1e']) {
+    for (const unsafePublicId of [
+      '/var/lib/forgeloop/workspaces/package-1',
+      'http://127.0.0.1:4555',
+      'unix:/tmp/private/codex.sock',
+      'codex.sock',
+      '4f1e2d3c4f1e',
+    ]) {
       expectDomainErrorCode(
         () =>
           validateCodexDockerRuntimeEvidence({
