@@ -36,6 +36,14 @@ import {
 import { requiredReleaseFlowReportMarkers as wrapperRequiredReleaseFlowReportMarkers } from '../../scripts/release-flow-dogfood';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Release flow smoke tests need durable Work Item fixtures.',
+  desired_outcome: 'Release flow helpers seed requirement Work Items with typed intake context.',
+  acceptance_criteria: ['Direct Work Item fixtures include requirement intake context.'],
+  in_scope: ['Release flow dogfood smoke fixtures'],
+};
+
 describe('release flow dogfood script helpers', () => {
   const createDurableTestApp = async (repository: InMemoryDeliveryRepository): Promise<INestApplication> => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -1155,6 +1163,7 @@ describe('release flow dogfood script helpers', () => {
       priority: 'P1',
       risk: 'low',
       driver_actor_id: 'actor-owner',
+      intake_context: requirementIntakeContext,
       phase: 'done',
       activity_state: 'idle',
       gate_state: 'none',
@@ -1592,6 +1601,7 @@ describe('release flow dogfood script helpers', () => {
       priority: 'P1',
       risk: 'low',
       driver_actor_id: 'actor-owner',
+      intake_context: requirementIntakeContext,
       phase: 'execution',
       activity_state: 'idle',
       gate_state: 'not_submitted',

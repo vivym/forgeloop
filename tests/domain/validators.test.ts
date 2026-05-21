@@ -18,6 +18,13 @@ import {
 import { buildPackageRuntimePolicySnapshot, RUNTIME_POLICY_SOURCE_PATH, runtimePolicyFromDocument } from '../../packages/executor/src/index';
 
 const timestamp = '2026-05-05T00:00:00.000Z';
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Domain rules need typed Work Item intake fixtures.',
+  desired_outcome: 'Validator tests use requirement Work Items with complete intake context.',
+  acceptance_criteria: ['Direct Work Item fixtures include requirement intake context.'],
+  in_scope: ['Domain validator fixtures'],
+};
 
 const requiredCheck = {
   check_id: 'domain-tests',
@@ -167,6 +174,7 @@ const workItem: WorkItem = {
   priority: 'P0',
   risk: 'medium',
   driver_actor_id: 'actor-owner',
+  intake_context: requirementIntakeContext,
   phase: 'execution',
   activity_state: 'idle',
   gate_state: 'none',
