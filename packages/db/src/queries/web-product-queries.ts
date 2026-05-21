@@ -201,7 +201,7 @@ export async function listProductWorkItems(
     .filter((workItem) => query.gate_state === undefined || workItem.gate_state === query.gate_state)
     .filter((workItem) => query.resolution === undefined || workItem.resolution === query.resolution)
     .filter((workItem) => query.risk === undefined || workItem.risk === query.risk)
-    .filter((workItem) => query.owner_actor_id === undefined || workItem.owner_actor_id === query.owner_actor_id)
+    .filter((workItem) => query.owner_actor_id === undefined || workItem.driver_actor_id === query.owner_actor_id)
     .filter((workItem) => query.work_item_id === undefined || workItem.id === query.work_item_id);
 
   return applyResponseDegradation(paginateItems(workItems.map(workItemListItem), query), degradedSources);
@@ -539,7 +539,7 @@ const workItemListItem = (workItem: WorkItem): ProductListItem => ({
   gate_state: workItem.gate_state,
   resolution: workItem.resolution,
   risk: workItem.risk,
-  owner_actor_id: workItem.owner_actor_id,
+  owner_actor_id: workItem.driver_actor_id,
   related: [
     ...(workItem.current_spec_id === undefined ? [] : [objectRef('spec', workItem.current_spec_id)]),
     ...(workItem.current_plan_id === undefined ? [] : [objectRef('plan', workItem.current_plan_id)]),

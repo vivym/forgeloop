@@ -115,9 +115,9 @@ const itemBase = (
     actions,
     project_id: input.projectId,
     ...(input.actorIdValues === undefined ? {} : { actor_id_values: input.actorIdValues }),
-    ...(input.ownerActorId === undefined && input.workItem?.owner_actor_id === undefined
+    ...(input.ownerActorId === undefined && input.workItem?.driver_actor_id === undefined
       ? {}
-      : { owner_actor_id: input.ownerActorId ?? input.workItem?.owner_actor_id }),
+      : { owner_actor_id: input.ownerActorId ?? input.workItem?.driver_actor_id }),
     ...(input.ownerActorIdValues === undefined ? {} : { owner_actor_id_values: input.ownerActorIdValues }),
     ...(input.reviewerActorId === undefined ? {} : { reviewer_actor_id: input.reviewerActorId }),
     ...(input.reviewerActorIdValues === undefined ? {} : { reviewer_actor_id_values: input.reviewerActorIdValues }),
