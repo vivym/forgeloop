@@ -56,6 +56,16 @@ describe('Web product API hooks', () => {
     ).toEqual(['specs', { project_id: 'proj', status: 'approved', limit: 100, cursor: 'cursor-1' }]);
   });
 
+  it('omits owner filters from product Work Item registry query keys', () => {
+    expect(
+      queryKeys.productWorkItems({
+        project_id: 'proj',
+        driver_actor_id: 'driver',
+        owner_actor_id: 'owner',
+      } as any),
+    ).toEqual(['product-work-items', { project_id: 'proj', driver_actor_id: 'driver' }]);
+  });
+
   it('includes response-affecting Product Lane query inputs in stable cache keys', () => {
     const bugsLaneKey = queryKeys.productLane('bugs', {
       status: 'ready',
