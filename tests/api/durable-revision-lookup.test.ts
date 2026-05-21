@@ -139,7 +139,7 @@ describeIfDb('durable revision lookup', () => {
           success_criteria: ['Spec, plan, package, run, and review commands are available.'],
           priority: 'P0',
           risk: 'medium',
-          owner_actor_id: actorOwner,
+          driver_actor_id: actorOwner,
         })
         .expect(201)
     ).body;

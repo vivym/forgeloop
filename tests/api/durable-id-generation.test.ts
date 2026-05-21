@@ -93,7 +93,7 @@ describe('durable delivery object IDs', () => {
           success_criteria: ['ids are UUIDs'],
           priority: 'P1',
           risk: 'low',
-          owner_actor_id: ownerActorId,
+          driver_actor_id: ownerActorId,
         })
         .expect(201)
     ).body;

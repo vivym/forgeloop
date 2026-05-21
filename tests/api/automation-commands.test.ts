@@ -239,7 +239,7 @@ const createTestApp = async (
               success_criteria: ['Route is mounted and shares repository state.'],
               priority: 'P1',
               risk: 'low',
-              owner_actor_id: actorOwner,
+              driver_actor_id: actorOwner,
             })
         : { status: projectRepoRouteProbe.status };
     const publicAutomationRouteProbe = await request(server).post('/automation/manual-path-holds').send({});
@@ -385,7 +385,7 @@ const seedProjectRepoWorkItem = async (app: INestApplication): Promise<{ project
     success_criteria: ['Duplicate automation commands produce one plan draft.'],
     priority: 'P0',
     risk: 'medium',
-    owner_actor_id: actorOwner,
+    driver_actor_id: actorOwner,
     at: automationTestNow,
   });
   await repository.saveWorkItem(workItem);

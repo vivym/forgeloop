@@ -102,7 +102,7 @@ const createApprovedPlanRevision = async (app: INestApplication) => {
         success_criteria: ['local_codex run sessions retain workspace evidence.'],
         priority: 'P0',
         risk: 'high',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
       })
       .expect(201)
   ).body;

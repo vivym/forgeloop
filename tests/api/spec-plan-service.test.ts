@@ -70,7 +70,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
         success_criteria: ['Spec and plan routes stay behavior-compatible.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
       })
       .expect(201)
   ).body;

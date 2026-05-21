@@ -50,10 +50,10 @@ describe('Product Lanes route', () => {
 
   it('drops kind filters when linking into Work Item type lanes', async () => {
     const screen = await renderRoute(
-      `/lanes/spec-approver?project_id=${projectId}&kind=bug&status=active&owner_actor_id=actor-execution&driver_actor_id=actor-driver`,
+      `/lanes/spec-approver?project_id=${projectId}&kind=bug&status=active&driver_actor_id=actor-driver`,
       {
       apiOverrides: {
-        [`GET /query/product-lanes/spec-approver?project_id=${projectId}&owner_actor_id=actor-execution&driver_actor_id=actor-driver&kind=bug&status=active`]: {
+        [`GET /query/product-lanes/spec-approver?project_id=${projectId}&driver_actor_id=actor-driver&kind=bug&status=active`]: {
           lane_id: 'spec-approver',
           label: 'Spec Approver',
           description: 'Spec and Plan approval attention.',
@@ -73,10 +73,10 @@ describe('Product Lanes route', () => {
       `/lanes/bugs?project_id=${projectId}&driver_actor_id=actor-driver&status=active`,
     );
     expect(screen.getByRole('link', { name: 'Execution Owner' }).getAttribute('href')).toBe(
-      `/lanes/execution-owner?project_id=${projectId}&driver_actor_id=actor-driver&owner_actor_id=actor-execution&kind=bug&status=active`,
+      `/lanes/execution-owner?project_id=${projectId}&driver_actor_id=actor-driver&kind=bug&status=active`,
     );
     expect(screen.getByRole('link', { name: 'Reviewer' }).getAttribute('href')).toBe(
-      `/lanes/reviewer?project_id=${projectId}&driver_actor_id=actor-driver&owner_actor_id=actor-execution&kind=bug&status=active`,
+      `/lanes/reviewer?project_id=${projectId}&driver_actor_id=actor-driver&kind=bug&status=active`,
     );
   });
 

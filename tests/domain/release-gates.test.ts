@@ -71,7 +71,7 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['All package evidence is approved.'],
   priority: 'P1',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-owner',
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

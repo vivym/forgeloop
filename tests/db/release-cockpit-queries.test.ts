@@ -50,7 +50,7 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Release cockpit is public-safe.'],
   priority: 'p1',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-owner',
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

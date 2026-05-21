@@ -182,7 +182,7 @@ const seedDraftOnlyApprovedSpec = async (
       success_criteria: ['Daemon creates draft artifacts without run enqueue.'],
       priority: 'P0',
       risk: 'medium',
-      owner_actor_id: actorOwner,
+      driver_actor_id: actorOwner,
     })
     .expect(201)).body as WorkItem;
   const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
@@ -234,7 +234,7 @@ const seedDraftOnlyWorkItemWithoutSpec = async (app: INestApplication): Promise<
       success_criteria: ['Daemon creates a draft Spec revision.'],
       priority: 'P0',
       risk: 'medium',
-      owner_actor_id: actorOwner,
+      driver_actor_id: actorOwner,
     })
     .expect(201)).body as WorkItem;
 

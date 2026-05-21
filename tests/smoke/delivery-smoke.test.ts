@@ -156,7 +156,7 @@ const createApprovedSpecAndPlan = async (
         success_criteria: ['Spec, plan, package, run, review, and timeline evidence are persisted.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
       })
       .expect(201)
   ).body;

@@ -157,7 +157,7 @@ const createFixture = async (options: FixtureOptions = {}) => {
     success_criteria: ['A review packet is produced for successful runs.'],
     priority: 'p1',
     risk: 'medium',
-    owner_actor_id: 'actor-owner',
+    driver_actor_id: 'actor-owner',
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'not_submitted',

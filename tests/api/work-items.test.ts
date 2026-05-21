@@ -58,7 +58,7 @@ describe('Work Item product API', () => {
           title: `Launch ${kind} workbench`,
           goal: 'Close the MVP delivery loop.',
           success_criteria: ['Driver can move from intake to spec.'],
-          priority: kind === 'bug' ? 'P0' : 'P1',
+          priority: kind === 'bug' ? 'critical' : 'P1',
           risk: kind === 'bug' ? 'high' : 'medium',
           driver_actor_id: 'actor-driver',
           intake_context: intakeContextByKind[kind],

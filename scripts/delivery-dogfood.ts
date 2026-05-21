@@ -1153,7 +1153,7 @@ export const buildDurableDogfoodSeed = (input: {
     success_criteria: ['Events backfill after restart.', 'Worker lease takeover completes without duplicate input.'],
     priority: 'P0',
     risk: 'medium',
-    owner_actor_id: owner.id,
+    driver_actor_id: owner.id,
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'none',

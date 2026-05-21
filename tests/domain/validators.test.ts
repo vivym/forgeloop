@@ -166,7 +166,7 @@ const workItem: WorkItem = {
   success_criteria: ['Completion and review validators reflect the delivery domain spec.'],
   priority: 'P0',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-owner',
   phase: 'execution',
   activity_state: 'idle',
   gate_state: 'none',

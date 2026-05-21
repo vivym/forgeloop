@@ -59,7 +59,7 @@ const workItem = (): WorkItem => ({
   success_criteria: ['Release gates pass.'],
   priority: 'P1',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-owner',
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

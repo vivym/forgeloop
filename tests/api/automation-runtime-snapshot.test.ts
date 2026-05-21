@@ -92,7 +92,7 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Daemon receives eligible targets.'],
   priority: 'P0',
   risk: 'medium',
-  owner_actor_id: actorOwner,
+  driver_actor_id: actorOwner,
   phase: 'spec',
   activity_state: 'idle',
   gate_state: 'none',

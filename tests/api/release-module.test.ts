@@ -55,7 +55,7 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Release owner can approve a release.'],
   priority: 'P1',
   risk: 'medium',
-  owner_actor_id: actorOwner,
+  driver_actor_id: actorOwner,
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

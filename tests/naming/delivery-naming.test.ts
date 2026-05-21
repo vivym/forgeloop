@@ -133,6 +133,8 @@ const intakeDeletionTargetPatterns: LegacyPattern[] = [
 
 const roleWorkbenchScanRoots = ['apps', 'packages', 'scripts', 'tests', currentRoleWorkbenchPlan];
 const roleWorkbenchGuardFiles = new Set(['tests/naming/delivery-naming.test.ts', 'tests/web/no-legacy-web-ui.test.ts']);
+const workItemDriverScanRoots = ['apps', 'packages', 'tests', 'docs/PRD_v1.md'];
+const workItemDriverGuardFiles = new Set(['tests/naming/delivery-naming.test.ts', 'tests/web/no-legacy-web-ui.test.ts']);
 
 const roleWorkbenchDeletionMatches = () =>
   roleWorkbenchScanRoots.flatMap(files).flatMap((file) => {
@@ -143,6 +145,108 @@ const roleWorkbenchDeletionMatches = () =>
       roleWorkbenchDeletionTargetPatterns.concat(intakeDeletionTargetPatterns).flatMap(({ target, pattern }) =>
         pattern.test(line) ? [`${rel}:${index + 1} ${target}: ${line.trim()}`] : [],
       ),
+    );
+  });
+
+const workItemDriverForbiddenPatterns: LegacyPattern[] = [
+  { target: 'Work Item Owner', pattern: /Work Item Owner/ },
+  { target: 'work item owner', pattern: /work item owner/i },
+  { target: 'work-item-owner', pattern: /work-item-owner/ },
+  { target: 'workItemOwner', pattern: /workItemOwner/ },
+  { target: 'work_item_owner', pattern: /work_item_owner/ },
+  { target: 'owner_actor_id', pattern: /\bowner_actor_id\b/ },
+];
+
+const nearbyContext = (lines: string[], index: number): string => lines.slice(Math.max(0, index - 8), index + 9).join('\n');
+
+const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boolean => {
+  const projectOwnerPaths = [
+    /^apps\/control-plane-api\/src\/modules\/projects\//,
+    /^packages\/db\/src\/schema\/project\.ts$/,
+  ];
+  const executionPackageOwnerPaths = [
+    /^apps\/control-plane-api\/src\/modules\/execution-packages\//,
+    /^apps\/control-plane-api\/src\/modules\/automation\//,
+    /^apps\/control-plane-api\/src\/modules\/run-control\//,
+    /^apps\/control-plane-api\/src\/modules\/delivery\/dto\.ts$/,
+    /^apps\/web\/src\/features\/execution-packages\//,
+    /^packages\/db\/src\/schema\/execution-package\.ts$/,
+    /^packages\/db\/src\/queries\/work-item-cockpit-queries\.ts$/,
+    /^packages\/contracts\/src\/work-item-delivery-readiness\.ts$/,
+    /^packages\/workflow\/src\/activities\.ts$/,
+    /^apps\/web\/src\/features\/work-items\//,
+  ];
+  const productLaneOwnerPaths = [
+    /^apps\/control-plane-api\/src\/modules\/query\/product-lane-query-parser\.ts$/,
+    /^apps\/web\/src\/app\/routes\/lanes\//,
+    /^apps\/web\/src\/features\/product-lanes\//,
+    /^apps\/web\/src\/shared\/api\/hooks\.ts$/,
+    /^apps\/web\/src\/shared\/api\/query-keys\.ts$/,
+    /^apps\/web\/src\/shared\/api\/types\.ts$/,
+    /^packages\/contracts\/src\/api\.ts$/,
+    /^packages\/contracts\/src\/web-product-query\.ts$/,
+    /^packages\/db\/src\/queries\/product-lane-/,
+    /^packages\/db\/src\/queries\/web-product-queries\.ts$/,
+  ];
+  const releaseOrPackageSurfacePaths = [
+    /^apps\/web\/src\/features\/pipeline\//,
+    /^tests\/web\/fixtures\/product-api-mock\.ts$/,
+    /^tests\/web\/fixtures\/product-data\.ts$/,
+    /^tests\/web\/package-run-product-routes\.test\.tsx$/,
+    /^tests\/web\/review-release-product-routes\.test\.tsx$/,
+    /^tests\/web\/spec-plan-product-route\.test\.tsx$/,
+    /^tests\/web\/api\.test\.ts$/,
+  ];
+  const projectOwnerContext =
+    /\bProject\b|\bprojects\b|\/projects|records\.project|seed\.project|project\.owner_actor_id|columnType\(projects|hasForeignKey\(projects|repo_ids|object_type: 'project'|project_created/.test(
+      context,
+    );
+  const executionPackageOwnerContext =
+    /ExecutionPackage|executionPackage|execution_package|execution-packages|execution_packages|execution-owner|Execution Owner|packageBase|validateExecutionPackage|CreateExecutionPackage|PatchExecutionPackage|package_created|package_edited|cockpitPackage|Package owner|ownerActorId|ownerActorIdValues|context\.workItem\.driver_actor_id|reviewer_actor_id|qa_owner_actor_id|required_checks|required_artifact_kinds|spec_revision_id|plan_revision_id|repo_id/.test(
+      context,
+    );
+  const negativeWorkItemOwnerContext =
+    /rejects owner_actor_id|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|safeParse|toBe\(false\)|rejects\.toThrow|expect\(400\)|listWorkItems/.test(
+      context,
+    );
+  const runRequesterContext = /requested_by_actor_id|runSession\.requested_by_actor_id/.test(context);
+  const qaOwnerQueueContext = /qa_owner_queues|PipelineQaOwnerQueue|pipelineQaOwnerQueueSchema/.test(context);
+
+  return (
+    negativeWorkItemOwnerContext ||
+    runRequesterContext ||
+    qaOwnerQueueContext ||
+    ((projectOwnerPaths.some((pattern) => pattern.test(rel)) || /^tests\//.test(rel)) && projectOwnerContext) ||
+    (executionPackageOwnerPaths.some((pattern) => pattern.test(rel)) && executionPackageOwnerContext) ||
+    (/^packages\/domain\/src\/(?:states|types|validators)\.ts$/.test(rel) && (projectOwnerContext || executionPackageOwnerContext)) ||
+    (/^tests\//.test(rel) && executionPackageOwnerContext) ||
+    (productLaneOwnerPaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || negativeWorkItemOwnerContext || /Product Lane|productLane|product-lanes|lane/.test(context))) ||
+    (releaseOrPackageSurfacePaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || runRequesterContext))
+  );
+};
+
+const allowedWorkItemDriverReference = (rel: string, target: string, context: string): boolean => {
+  if (target !== 'owner_actor_id') {
+    return false;
+  }
+  if (rel === 'docs/superpowers/plans/2026-05-20-typed-work-item-intake.md') {
+    return true;
+  }
+  return allowedWorkItemOwnerActorIdReference(rel, context);
+};
+
+const workItemDriverNamingMatches = () =>
+  workItemDriverScanRoots.flatMap(files).flatMap((file) => {
+    const rel = relative(process.cwd(), file);
+    if (workItemDriverGuardFiles.has(rel)) return [];
+    const lines = readFileSync(file, 'utf8').split('\n');
+    return lines.flatMap((line, index) =>
+      workItemDriverForbiddenPatterns.flatMap(({ target, pattern }) => {
+        pattern.lastIndex = 0;
+        if (!pattern.test(line)) return [];
+        const context = nearbyContext(lines, index);
+        return allowedWorkItemDriverReference(rel, target, context) ? [] : [`${rel}:${index + 1} ${target}: ${line.trim()}`];
+      }),
     );
   });
 
@@ -173,5 +277,9 @@ describe('delivery naming cleanup', () => {
 
   it('has no active role workbench deletion targets outside the current checklist', () => {
     expect(roleWorkbenchDeletionMatches()).toEqual([]);
+  });
+
+  it('has no active Work Item Owner baggage on public Driver surfaces', () => {
+    expect(workItemDriverNamingMatches()).toEqual([]);
   });
 });

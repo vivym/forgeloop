@@ -74,7 +74,7 @@ const workItem = (id: string): WorkItem => ({
   success_criteria: [`${id} done`],
   priority: 'P0',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-owner',
   phase: 'execution',
   activity_state: 'idle',
   gate_state: 'none',
