@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import {
   useApprovePlanMutation,
   useApproveSpecMutation,
+  useCreateSpecMutation,
   useGeneratePlanDraftMutation,
   useGenerateSpecDraftMutation,
   usePipelineQuery,
@@ -18,7 +19,7 @@ import {
   useSpecsQuery,
   useSubmitPlanForApprovalMutation,
   useSubmitSpecForApprovalMutation,
-  useWorkItemActionsQuery,
+  useWorkItemCockpitQuery,
   useWorkItemsQuery,
 } from '../../apps/web/src/shared/api/hooks';
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
@@ -37,9 +38,10 @@ describe('Web product API hooks', () => {
       'bugs',
       { project_id: 'proj', blocked: true },
     ]);
-    expect(queryKeys.workItemActions('wi_1', 'bugs')).toEqual(['work-item-actions', 'wi_1', { lane: 'bugs' }]);
     expect(queryKeys.specReplay('spec-1')).toEqual(['spec-replay', 'spec-1']);
     expect(queryKeys.planReplay('plan-1')).toEqual(['plan-replay', 'plan-1']);
+    expect(queryKeys.workItemCockpit('wi-1')).toEqual(['work-item-cockpit', 'wi-1']);
+    expect(queryKeys.workItemCockpit('wi-1', 'reviewer')).toEqual(['work-item-cockpit', 'wi-1', { lane: 'reviewer' }]);
   });
 
   it('includes response-affecting Spec registry filters in stable cache keys', () => {
@@ -232,7 +234,7 @@ describe('Web product API hooks', () => {
     queryClient.clear();
   });
 
-  it('fetches Product Lane and Work Item actions through shared hooks', async () => {
+  it('fetches Product Lane projections through shared hooks', async () => {
     const fetchMock = installProductApiMock({
       [`GET /query/product-lanes/bugs?project_id=${projectId}&actor_id=actor-owner&blocked=true`]: {
         lane_id: 'bugs',
@@ -251,12 +253,6 @@ describe('Web product API hooks', () => {
         unsupported_filters: [],
         summary: { total: 1, blocked: 0, high_risk: 0, stale: 0 },
       },
-      [`GET /query/work-items/${workItem.id}/actions?lane=bugs`]: {
-        work_item_id: workItem.id,
-        lane_id: 'bugs',
-        default_lane_id: 'requirements',
-        actions: [],
-      },
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: ReactNode }) => (
@@ -267,24 +263,39 @@ describe('Web product API hooks', () => {
       () => useProductLaneQuery('bugs', { project_id: projectId, actor_id: 'actor-owner', blocked: true }),
       { wrapper },
     );
-    const actions = renderHook(() => useWorkItemActionsQuery(workItem.id, 'bugs'), { wrapper });
 
     await waitFor(() => expect(lane.result.current.isSuccess).toBe(true));
-    await waitFor(() => expect(actions.result.current.isSuccess).toBe(true));
 
     expect(lane.result.current.data?.lane_id).toBe('bugs');
-    expect(actions.result.current.data?.lane_id).toBe('bugs');
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/query/product-lanes/bugs?project_id=${projectId}&actor_id=actor-owner&blocked=true`,
       expect.objectContaining({ method: 'GET' }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      `http://localhost:3000/query/work-items/${workItem.id}/actions?lane=bugs`,
-      expect.objectContaining({ method: 'GET' }),
-    );
 
     lane.unmount();
-    actions.unmount();
+    queryClient.clear();
+  });
+
+  it('fetches Work Item cockpit data with lane-aware query keys', async () => {
+    const fetchMock = installProductApiMock();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const cockpit = renderHook(() => useWorkItemCockpitQuery(workItem.id, 'reviewer'), { wrapper });
+
+    await waitFor(() => expect(cockpit.result.current.isSuccess).toBe(true));
+
+    expect(cockpit.result.current.data?.delivery_readiness.active_lane).toBe('reviewer');
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/query/work-item-cockpit/${workItem.id}?lane=reviewer`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(queryClient.getQueryData(queryKeys.workItemCockpit(workItem.id, 'reviewer'))).toBeDefined();
+    expect(queryClient.getQueryData(queryKeys.workItemCockpit(workItem.id))).toBeUndefined();
+
+    cockpit.unmount();
     queryClient.clear();
   });
 
@@ -327,7 +338,6 @@ describe('Web product API hooks', () => {
       expect.objectContaining({ method: 'POST' }),
     );
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.workItemCockpit(workItem.id) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-item-actions', workItem.id] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevision('plan-rev-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 
@@ -388,7 +398,6 @@ describe('Web product API hooks', () => {
       expect.objectContaining({ method: 'POST' }),
     );
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.workItemCockpit(workItem.id) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-item-actions', workItem.id] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevision('plan-rev-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 
@@ -549,6 +558,80 @@ describe('Web product API hooks', () => {
 
     specMutation.unmount();
     planMutation.unmount();
+    queryClient.clear();
+  });
+
+  it('updates every cached Work Item cockpit lane variant after creating planning artifacts', async () => {
+    const fetchMock = installProductApiMock({
+      'POST /work-items/work-item-web-product/specs': {
+        id: 'spec-created-all-lanes',
+        work_item_id: workItem.id,
+        entity_type: 'spec',
+        status: 'draft',
+        editing_state: 'editable',
+        gate_state: 'open',
+        resolution: 'unresolved',
+      },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.workItemCockpit(workItem.id), {
+      work_item: { ...workItem, current_spec_id: undefined },
+      current_spec: null,
+      current_plan: null,
+      packages: [],
+      run_sessions: [],
+      review_packets: [],
+      delivery_readiness: {
+        work_item_id: workItem.id,
+        work_item_kind: workItem.kind,
+        active_lane: 'requirements',
+        overall_state: 'in_progress',
+        stages: [],
+        blockers: [],
+        evidence: [],
+        next_actions: [],
+        degraded_sources: [],
+      },
+    });
+    queryClient.setQueryData(queryKeys.workItemCockpit(workItem.id, 'reviewer'), {
+      work_item: { ...workItem, current_spec_id: undefined },
+      current_spec: null,
+      current_plan: null,
+      packages: [],
+      run_sessions: [],
+      review_packets: [],
+      delivery_readiness: {
+        work_item_id: workItem.id,
+        work_item_kind: workItem.kind,
+        active_lane: 'reviewer',
+        overall_state: 'in_progress',
+        stages: [],
+        blockers: [],
+        evidence: [],
+        next_actions: [],
+        degraded_sources: [],
+      },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const createSpec = renderHook(() => useCreateSpecMutation(workItem.id), { wrapper });
+    await createSpec.result.current.mutateAsync();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/work-items/${workItem.id}/specs`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(queryClient.getQueryData<{ current_spec: { id: string } | null }>(queryKeys.workItemCockpit(workItem.id))?.current_spec?.id).toBe(
+      'spec-created-all-lanes',
+    );
+    expect(
+      queryClient.getQueryData<{ current_spec: { id: string } | null }>(queryKeys.workItemCockpit(workItem.id, 'reviewer'))
+        ?.current_spec?.id,
+    ).toBe('spec-created-all-lanes');
+
+    createSpec.unmount();
     queryClient.clear();
   });
 

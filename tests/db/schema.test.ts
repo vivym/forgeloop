@@ -378,6 +378,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(run_sessions, 'artifacts')).toBe('PgJsonb');
     expect(columnType(review_packets, 'changedFiles')).toBe('PgJsonb');
     expect(columnType(review_packets, 'selfReview')).toBe('PgJsonb');
+    expect(columnType(review_packets, 'independentAiReview')).toBe('PgJsonb');
+    expect(columnType(review_packets, 'testMapping')).toBe('PgJsonb');
     expect(columnType(review_packets, 'riskNotes')).toBe('PgJsonb');
     expect(columnType(review_packets, 'requestedChanges')).toBe('PgJsonb');
     expect(columnType(object_events, 'metadata')).toBe('PgJsonb');

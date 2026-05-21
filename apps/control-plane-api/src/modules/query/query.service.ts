@@ -15,9 +15,8 @@ import {
   listProductSpecs,
   listProductWorkItems,
   getWorkItemCockpit,
-  getWorkItemActions as getWorkItemActionsQuery,
 } from '@forgeloop/db';
-import { productLaneResponseSchema, workItemActionsResponseSchema, type ProductListQuery } from '@forgeloop/contracts';
+import { productLaneResponseSchema, type ProductLaneId, type ProductListQuery } from '@forgeloop/contracts';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
@@ -25,10 +24,8 @@ import { ReviewEvidenceService } from '../review-evidence/review-evidence.servic
 import {
   parseProductLaneIdOrThrowBadRequest,
   parseProductLaneQuery,
-  parseWorkItemActionsQuery,
   type RawQuery,
 } from './product-lane-query-parser';
-import { PublicRunSessionProjection } from './public-run-session-projection';
 
 const supportedReplayObjectTypes = new Set(['work_item', 'execution_package', 'review_packet', 'release']);
 
@@ -37,24 +34,20 @@ export class QueryService {
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
-    @Inject(PublicRunSessionProjection)
-    private readonly publicRunSessionProjection: PublicRunSessionProjection,
     @Inject(ReviewEvidenceService)
     private readonly reviewEvidenceService: ReviewEvidenceService,
   ) {}
 
-  async getWorkItemCockpit(workItemId: string) {
+  async getWorkItemCockpit(workItemId: string, options: { lane?: ProductLaneId } = {}) {
     const cockpit = await getWorkItemCockpit(this.repository, workItemId, {
       run_session_metadata_fallback: this.initialRuntimeMetadata(),
+      ...(options.lane === undefined ? {} : { lane: options.lane }),
     });
     if (cockpit === undefined) {
       throw new NotFoundException(`WorkItem ${workItemId} not found`);
     }
 
-    return {
-      ...cockpit,
-      run_sessions: cockpit.run_sessions.map((runSession) => this.publicRunSessionProjection.serialize(runSession)),
-    };
+    return cockpit;
   }
 
   async getReleaseCockpit(releaseId: string) {
@@ -133,17 +126,6 @@ export class QueryService {
     const parsedLaneId = parseProductLaneIdOrThrowBadRequest(laneId);
     const filters = parseProductLaneQuery(parsedLaneId, rawQuery);
     return productLaneResponseSchema.parse(await getProductLaneQuery(this.repository, parsedLaneId, filters));
-  }
-
-  async getWorkItemActions(workItemId: string, rawQuery: RawQuery) {
-    const query = parseWorkItemActionsQuery(rawQuery);
-    const response = await getWorkItemActionsQuery(this.repository, workItemId, query.lane, {
-      cockpit: { run_session_metadata_fallback: this.initialRuntimeMetadata() },
-    });
-    if (response === undefined) {
-      throw new NotFoundException(`WorkItem ${workItemId} not found`);
-    }
-    return workItemActionsResponseSchema.parse(response);
   }
 
   private initialRuntimeMetadata(): RunRuntimeMetadata {

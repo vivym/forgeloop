@@ -12,8 +12,8 @@ import { defaultProductApiResponses, type ProductApiResponseMap } from '../web/f
 import { executionPackage, projectId, release, reviewPacket, runSession, workItem } from '../web/fixtures/product-data';
 
 const routes = [
-  '/workbench',
-  '/workbench/requirements',
+  '/lanes',
+  '/lanes/requirements',
   '/pipeline',
   '/work-items',
   '/work-items/wi-1',
@@ -67,6 +67,7 @@ describe('web product routes visual smoke', () => {
           await page.goto(`${web.url}${route}`);
           await expectPage(page.getByRole('main')).toBeVisible();
           await assertPopulatedRoute(page, route);
+          expect(await page.locator('body').innerText()).not.toContain('Workbench');
           const overflow = await page.evaluate(overflowDetails);
           expect(
             overflow.scrollWidth,
@@ -80,6 +81,8 @@ describe('web product routes visual smoke', () => {
         }
       }
 
+      await assertDeliveryCockpitRoute(page, web.url);
+
       expect(api.unhandledRequests).toEqual([]);
       expect(api.handledRequests).toContain(`GET /query/product-lanes/requirements?project_id=${projectId}`);
     },
@@ -89,7 +92,7 @@ describe('web product routes visual smoke', () => {
   it(
     'renders degraded product routes without horizontal overflow',
     async () => {
-      const web = await startReactRouterWeb('http://127.0.0.1:1');
+      const web = await startReactRouterWeb('http://127.0.0.1:1', { queryRetry: false });
       webProcess = web.process;
       browser = await chromium.launch();
       const page = await browser.newPage();
@@ -99,6 +102,8 @@ describe('web product routes visual smoke', () => {
         for (const route of routes) {
           await page.goto(`${web.url}${route}`);
           await expectPage(page.getByRole('main')).toBeVisible();
+          await assertDegradedRoute(page, route);
+          expect(await page.locator('body').innerText()).not.toContain('Workbench');
           const overflow = await page.evaluate(overflowDetails);
           expect(
             overflow.scrollWidth,
@@ -116,12 +121,19 @@ describe('web product routes visual smoke', () => {
   );
 });
 
-async function startReactRouterWeb(apiUrl: string): Promise<{ process: ChildProcess; url: string }> {
+async function startReactRouterWeb(apiUrl: string, options: { queryRetry?: boolean } = {}): Promise<{ process: ChildProcess; url: string }> {
   const port = await freePort();
   const webProcess = spawn(
     'pnpm',
     ['--filter', '@forgeloop/web', 'dev', '--host', '127.0.0.1', '--port', String(port)],
-    { env: { ...process.env, VITE_FORGELOOP_API_URL: apiUrl }, stdio: ['ignore', 'pipe', 'pipe'] },
+    {
+      env: {
+        ...process.env,
+        VITE_FORGELOOP_API_URL: apiUrl,
+        ...(options.queryRetry === undefined ? {} : { VITE_FORGELOOP_QUERY_RETRY: String(options.queryRetry) }),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
   );
   webProcess.stderr?.resume();
   webProcess.stdout?.resume();
@@ -237,8 +249,8 @@ function routeName(route: string): string {
 }
 
 async function assertPopulatedRoute(page: Awaited<ReturnType<Browser['newPage']>>, route: string) {
-  if (route === '/workbench') {
-    await expectPage(page).toHaveURL(/\/workbench\/requirements$/);
+  if (route === '/lanes') {
+    await expectPage(page).toHaveURL(/\/lanes\/requirements$/);
   }
   const expectation = populatedRouteText(route);
   await expectPage(
@@ -249,8 +261,8 @@ async function assertPopulatedRoute(page: Awaited<ReturnType<Browser['newPage']>
 
 function populatedRouteText(route: string): string | RegExp {
   switch (route) {
-    case '/workbench':
-    case '/workbench/requirements':
+    case '/lanes':
+    case '/lanes/requirements':
       return 'Improve release cockpit';
     case '/pipeline':
       return 'Release cockpit frontend waits on contract fixture parity.';
@@ -278,6 +290,37 @@ function populatedRouteText(route: string): string | RegExp {
     default:
       throw new Error(`Missing populated route assertion for ${route}`);
   }
+}
+
+async function assertDeliveryCockpitRoute(page: Awaited<ReturnType<Browser['newPage']>>, webUrl: string) {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.goto(`${webUrl}/work-items/${workItem.id}?lane=execution-owner`);
+  await expectPage(page.getByText('Delivery Cockpit')).toBeVisible();
+  await expectPage(page.getByText('Integration Readiness').first()).toBeVisible();
+  await expectPage(page.getByText('Execution Owner').first()).toBeVisible();
+  await expectPage(page.getByRole('link', { name: /Execution/i })).toBeVisible();
+  expect(await page.locator('body').innerText()).not.toContain('Workbench');
+
+  await page.getByRole('link', { name: /Quality Gate/i }).press('Enter');
+  await expectPage(page).toHaveURL(/#delivery-stage-quality_gate$/);
+  await expectPage(page.locator('#delivery-stage-quality_gate')).toBeFocused();
+
+  await page.getByRole('link', { name: /Release Readiness/i }).press('Space');
+  await expectPage(page).toHaveURL(/#delivery-stage-release_readiness$/);
+  await expectPage(page.locator('#delivery-stage-release_readiness')).toBeFocused();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${webUrl}/work-items/${workItem.id}?lane=execution-owner`);
+  const summaryTop = await page.getByTestId('delivery-action-summary').evaluate((node) => node.getBoundingClientRect().top);
+  const railTop = await page.getByTestId('delivery-stage-rail').evaluate((node) => node.getBoundingClientRect().top);
+  expect(summaryTop).toBeLessThan(railTop);
+}
+
+async function assertDegradedRoute(page: Awaited<ReturnType<Browser['newPage']>>, route: string) {
+  await expectPage(
+    page.getByRole('main').getByText(degradedRouteText(route)).filter({ visible: true }).first(),
+    `${route} did not reach its degraded/error state`,
+  ).toBeVisible({ timeout: 15_000 });
 }
 
 function highDensityProductApiResponses(): ProductApiResponseMap {
@@ -347,6 +390,43 @@ function responseFor<T>(key: string): T {
     throw new Error(`Missing static fixture for ${key}`);
   }
   return response as T;
+}
+
+function degradedRouteText(route: string): string | RegExp {
+  switch (route) {
+    case '/lanes':
+    case '/lanes/requirements':
+      return 'Product lane data is temporarily unavailable.';
+    case '/pipeline':
+      return 'Pipeline data is temporarily unavailable.';
+    case '/work-items':
+    case '/work-items/wi-1':
+      return 'Work item data is temporarily unavailable.';
+    case '/work-items/wi-1/spec-plan':
+      return 'Spec & Plan data is temporarily unavailable.';
+    case '/specs':
+      return 'Spec registry data is temporarily unavailable.';
+    case '/plans':
+      return 'Plan registry data is temporarily unavailable.';
+    case '/packages':
+      return 'packages are temporarily unavailable.';
+    case `/packages/${executionPackage.id}`:
+      return 'Execution package data is temporarily unavailable.';
+    case '/runs':
+      return 'runs are temporarily unavailable.';
+    case `/runs/${runSession.id}`:
+      return 'Run session data is temporarily unavailable.';
+    case '/reviews':
+      return 'The review packets inventory is temporarily unavailable.';
+    case `/reviews/${reviewPacket.id}`:
+      return 'Review packet data is temporarily unavailable.';
+    case '/releases':
+      return 'The releases inventory is temporarily unavailable.';
+    case `/releases/${release.id}`:
+      return 'Release cockpit data is temporarily unavailable.';
+    default:
+      throw new Error(`Missing degraded route assertion for ${route}`);
+  }
 }
 
 function duplicateProductLaneItems(item: ProductLaneItem | undefined, count: number): ProductLaneItem[] {

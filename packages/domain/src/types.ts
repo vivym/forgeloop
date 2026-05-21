@@ -15,7 +15,9 @@ import {
   type ExecutorResult,
   type ExecutorType,
   type FailureKind,
+  type IndependentAiReviewResult,
   type RequiredCheckSpec,
+  type ReviewPacketTestMapping,
   type RequestedChange,
   type RunCommandType,
   type RunEventSource,
@@ -470,6 +472,8 @@ export interface ReviewPacket {
   changed_files: ChangedFile[];
   check_result_summary: string;
   self_review: SelfReviewResult;
+  independent_ai_review?: IndependentAiReviewResult;
+  test_mapping?: ReviewPacketTestMapping[];
   risk_notes: string[];
   reviewed_by_actor_id?: string;
   reviewed_at?: IsoDateTime;

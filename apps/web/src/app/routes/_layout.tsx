@@ -4,7 +4,7 @@ import { useRuntimeFlags } from '../../shared/context/runtime-flags';
 import { AppShell, SidebarNav, Topbar } from '../../shared/layout';
 
 const navItems = [
-  { label: 'Workbench', to: '/workbench', activeOn: ['/', '/workbench'] },
+  { label: 'Lanes', to: '/lanes', activeOn: ['/', '/lanes'] },
   { label: 'Pipeline', to: '/pipeline' },
   { label: 'Work Items', to: '/work-items' },
   { label: 'Specs & Plans', to: '/specs', activeOn: ['/specs', '/plans'] },

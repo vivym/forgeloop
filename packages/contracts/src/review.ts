@@ -14,13 +14,15 @@ export type ReviewDecision = z.infer<typeof reviewDecisionSchema>;
 export const reviewSubmitDecisionSchema = z.enum(['approved', 'changes_requested']);
 export type ReviewSubmitDecision = z.infer<typeof reviewSubmitDecisionSchema>;
 
-export const requestedChangeSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().min(1),
-  file_path: z.string().min(1).optional(),
-  severity: z.enum(['minor', 'major', 'critical']).optional(),
-  suggested_validation: z.string().min(1).optional(),
-});
+export const requestedChangeSchema = z
+  .object({
+    title: z.string().min(1),
+    description: z.string().min(1),
+    file_path: z.string().min(1).optional(),
+    severity: z.enum(['minor', 'major', 'critical']).optional(),
+    suggested_validation: z.string().min(1).optional(),
+  })
+  .strict();
 export type RequestedChange = z.infer<typeof requestedChangeSchema>;
 
 export const selfReviewInputSchema = z.object({
@@ -46,6 +48,7 @@ export const selfReviewResultSchema = z
     follow_up_questions: z.array(z.string().min(1)),
     failure_message: z.string().min(1).optional(),
   })
+  .strict()
   .superRefine((result, ctx) => {
     if (result.status === 'failed' && !result.failure_message) {
       ctx.addIssue({
@@ -64,6 +67,55 @@ export const selfReviewResultSchema = z
     }
   });
 export type SelfReviewResult = z.infer<typeof selfReviewResultSchema>;
+
+export const reviewPacketTestMappingSchema = z
+  .object({
+    gate_id: z.string().min(1),
+    result: z.enum(['passed', 'failed', 'not_required']),
+    evidence_ref: z.string().min(1).optional(),
+    rationale: z.string().min(1).optional(),
+  })
+  .strict();
+export type ReviewPacketTestMapping = z.infer<typeof reviewPacketTestMappingSchema>;
+
+export const independentAiReviewResultSchema = z
+  .object({
+    status: z.enum(['approved', 'changes_requested', 'failed']),
+    summary: z.string().min(1),
+    run_session_id: z.string().min(1).optional(),
+    execution_package_id: z.string().min(1).optional(),
+    risk_notes: z.array(z.string().min(1)).default([]),
+    failure_message: z.string().min(1).optional(),
+  })
+  .strict();
+export type IndependentAiReviewResult = z.infer<typeof independentAiReviewResultSchema>;
+
+export const reviewPacketSchema = z
+  .object({
+    id: z.string().min(1),
+    run_session_id: z.string().min(1),
+    execution_package_id: z.string().min(1),
+    reviewer_actor_id: z.string().min(1),
+    spec_revision_id: z.string().min(1),
+    plan_revision_id: z.string().min(1),
+    status: reviewPacketStatusSchema,
+    decision: reviewDecisionSchema,
+    summary: z.string().min(1).optional(),
+    changed_files: z.array(changedFileSchema),
+    check_result_summary: z.string().min(1),
+    self_review: selfReviewResultSchema,
+    independent_ai_review: independentAiReviewResultSchema.optional(),
+    test_mapping: z.array(reviewPacketTestMappingSchema).optional(),
+    risk_notes: z.array(z.string().min(1)),
+    reviewed_by_actor_id: z.string().min(1).optional(),
+    reviewed_at: isoDateTimeSchema.optional(),
+    requested_changes: z.array(requestedChangeSchema),
+    created_at: isoDateTimeSchema,
+    updated_at: isoDateTimeSchema,
+    completed_at: isoDateTimeSchema.optional(),
+  })
+  .strict();
+export type ReviewPacket = z.infer<typeof reviewPacketSchema>;
 
 export const reviewDecisionPayloadSchema = z
   .object({

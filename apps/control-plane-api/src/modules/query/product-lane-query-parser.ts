@@ -122,13 +122,10 @@ export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): Par
   return resolved;
 }
 
-export function parseWorkItemActionsQuery(raw: RawQuery): { lane?: ProductLaneId } {
+export function parseWorkItemCockpitQuery(raw: RawQuery): { lane?: ProductLaneId } {
   assertKnownKeys(raw, ['lane']);
   const lane = optionalString(raw, 'lane');
-  if (lane === undefined) {
-    return {};
-  }
-  return { lane: parseProductLaneIdOrThrowBadRequest(lane) };
+  return lane === undefined ? {} : { lane: parseProductLaneIdOrThrowBadRequest(lane) };
 }
 
 export type { RawQuery, ProductLaneQueryKey };

@@ -219,6 +219,6 @@ function productObjectRefHref(object: ProductListItem['object']): string {
     case 'release':
       return `/releases/${encodeURIComponent(object.id)}`;
     default:
-      return '/workbench';
+      return '/lanes';
   }
 }

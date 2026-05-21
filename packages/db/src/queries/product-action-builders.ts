@@ -73,7 +73,7 @@ export const objectTarget = (objectType: ProductObjectType, objectId: string, hr
   href,
 });
 
-export const laneTarget = (laneId: ProductLaneId, href = `/workbench/${laneId}`): ProductActionTarget => ({
+export const laneTarget = (laneId: ProductLaneId, href = `/lanes/${laneId}`): ProductActionTarget => ({
   kind: 'lane',
   lane_id: laneId,
   href,

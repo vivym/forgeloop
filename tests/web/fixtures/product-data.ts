@@ -1,4 +1,11 @@
-import type { ProductAction, ProductLaneId, ProductLaneItem } from '@forgeloop/contracts';
+import type {
+  DeliveryStageId,
+  ProductAction,
+  ProductLaneId,
+  ProductLaneItem,
+  WorkItemCockpitResponse,
+  WorkItemDeliveryReadiness,
+} from '@forgeloop/contracts';
 
 export const projectId = 'project-web-product';
 export const actorId = 'actor-owner';
@@ -127,20 +134,27 @@ export const runSession = {
   id: 'run-web-product',
   execution_package_id: executionPackage.id,
   requested_by_actor_id: executionPackage.owner_actor_id,
-  status: 'passed',
+  status: 'succeeded',
   executor_type: 'mock',
   changed_files: [{ repo_id: 'forgeloop', path: 'apps/web/src/shared/api/hooks.ts', change_kind: 'added' }],
   check_results: [
     {
       check_id: 'web-typecheck',
       command: 'pnpm --filter @forgeloop/web typecheck',
-      status: 'passed',
+      status: 'succeeded',
       exit_code: 0,
       duration_seconds: 12,
       blocks_review: true,
     },
   ],
-  artifacts: [{ kind: 'diff', name: 'shared-api-foundation.diff', local_ref: 'fixtures/product-api' }],
+  artifacts: [
+    {
+      kind: 'diff',
+      name: 'shared-api-foundation.diff',
+      content_type: 'text/x-diff',
+      storage_uri: 's3://forgeloop-product-fixtures/shared-api-foundation.diff',
+    },
+  ],
   summary: 'Shared product API foundation passed deterministic checks.',
   created_at: '2026-05-18T00:24:00.000Z',
   updated_at: '2026-05-18T00:25:00.000Z',
@@ -153,17 +167,18 @@ export const reviewPacket = {
   run_session_id: runSession.id,
   execution_package_id: executionPackage.id,
   reviewer_actor_id: executionPackage.reviewer_actor_id,
-  status: 'approved',
+  status: 'completed',
   decision: 'approved',
   summary: 'Shared product API foundation is ready for route tests.',
   changed_files: runSession.changed_files,
   check_result_summary: 'All required product checks passed.',
   self_review: {
-    status: 'complete',
+    status: 'succeeded',
     summary: 'No live API dependency remains in the test fixtures.',
     spec_plan_alignment: 'Aligned',
     test_assessment: 'Focused hook and state checks pass.',
     risk_notes: ['Product Lane fixtures remain contract-shaped'],
+    follow_up_questions: [],
   },
   risk_notes: ['Keep deleted queue identifiers out of product navigation labels'],
   reviewed_by_actor_id: executionPackage.reviewer_actor_id,
@@ -294,7 +309,7 @@ export const productActionFixtures = {
     target: {
       kind: 'lane',
       lane_id: 'reviewer',
-      href: `/workbench/reviewer?project_id=${projectId}`,
+      href: `/lanes/reviewer?project_id=${projectId}`,
     },
   },
   commandTargetFollowUp: {
@@ -320,6 +335,200 @@ export const productActionFixtures = {
     },
   },
 } satisfies Record<string, ProductAction>;
+
+const deliveryStageLabels = {
+  spec: 'Spec',
+  plan: 'Plan',
+  packages: 'Packages',
+  execution: 'Execution',
+  review: 'Review',
+  integration_readiness: 'Integration Readiness',
+  quality_gate: 'Quality Gate',
+  release_readiness: 'Release Readiness',
+} satisfies Record<DeliveryStageId, string>;
+
+const deliveryStageOwnerLanes = {
+  spec: 'spec-approver',
+  plan: 'spec-approver',
+  packages: 'execution-owner',
+  execution: 'execution-owner',
+  review: 'reviewer',
+  integration_readiness: 'qa-test-owner',
+  quality_gate: 'qa-test-owner',
+  release_readiness: 'release-owner',
+} satisfies Record<DeliveryStageId, ProductLaneId>;
+
+const deliveryStageIds = Object.keys(deliveryStageLabels) as DeliveryStageId[];
+
+export function deliveryReadiness(
+  item: Pick<WorkItemCockpitResponse['work_item'], 'id' | 'kind'>,
+  actions: readonly ProductAction[] = [],
+  activeLane: ProductLaneId = 'requirements',
+  overrides: Partial<
+    Pick<WorkItemDeliveryReadiness, 'overall_state' | 'stages' | 'blockers' | 'evidence' | 'degraded_sources'>
+  > = {},
+): WorkItemDeliveryReadiness {
+  const stages =
+    overrides.stages ??
+    deliveryStageIds.map((id) => ({
+      id,
+      label: deliveryStageLabels[id],
+      state: id === 'integration_readiness' ? 'not_applicable' : 'ready',
+      owner_lane: deliveryStageOwnerLanes[id],
+      object_refs: [],
+      blockers: [],
+      evidence_refs: [],
+    }));
+
+  return {
+    work_item_id: item.id,
+    work_item_kind: item.kind as WorkItemDeliveryReadiness['work_item_kind'],
+    active_lane: activeLane,
+    overall_state: overrides.overall_state ?? 'in_progress',
+    stages,
+    blockers: overrides.blockers ?? [],
+    evidence: overrides.evidence ?? [],
+    next_actions: [...actions],
+    degraded_sources: overrides.degraded_sources ?? [],
+    generated_at: fixtureUpdatedAt,
+  };
+}
+
+const baseCockpitFixture = (
+  item: WorkItemCockpitResponse['work_item'],
+  readiness: WorkItemDeliveryReadiness,
+): WorkItemCockpitResponse => ({
+  work_item: item,
+  current_spec: { ...spec, work_item_id: item.id },
+  current_plan: { ...plan, work_item_id: item.id },
+  packages: [{ ...executionPackage, work_item_id: item.id }],
+  run_sessions: [runSession],
+  review_packets: [reviewPacket],
+  delivery_readiness: readiness,
+});
+
+const workItemKindFixture = (
+  id: string,
+  kind: WorkItemCockpitResponse['work_item']['kind'],
+  title: string,
+  lane: ProductLaneId,
+): WorkItemCockpitResponse => {
+  const item = {
+    ...workItem,
+    id,
+    kind,
+    title,
+    phase: kind === 'bug' ? 'validation' : 'planning',
+    risk: kind === 'bug' ? 'high' : 'medium',
+  } as WorkItemCockpitResponse['work_item'];
+
+  return baseCockpitFixture(item, deliveryReadiness(item, [], lane));
+};
+
+export const workItemKindCockpitFixtures = {
+  requirement: workItemKindFixture(
+    'wi-fixture-requirement',
+    'requirement',
+    'Clarify release readiness requirements',
+    'requirements',
+  ),
+  bug: workItemKindFixture('wi-fixture-bug', 'bug', 'Fix release validation failure', 'bugs'),
+  techDebt: workItemKindFixture(
+    'wi-fixture-tech-debt',
+    'tech_debt',
+    'Reduce route fixture duplication',
+    'tech-debt',
+  ),
+  initiative: workItemKindFixture(
+    'wi-fixture-initiative',
+    'initiative',
+    'Launch product lane reporting',
+    'initiatives',
+  ),
+} satisfies Record<string, WorkItemCockpitResponse>;
+
+const initiativeWithoutPackagesWorkItem = {
+  ...workItem,
+  id: 'wi-initiative-without-packages',
+  kind: 'initiative',
+  title: 'Launch product lane reporting',
+  goal: 'Coordinate child work before execution packages exist.',
+  success_criteria: ['Child work is identified', 'Readiness can be aggregated'],
+  phase: 'planning',
+} as WorkItemCockpitResponse['work_item'];
+
+export const initiativeWithoutPackagesCockpitFixture: WorkItemCockpitResponse = {
+  work_item: initiativeWithoutPackagesWorkItem,
+  current_spec: null,
+  current_plan: null,
+  packages: [],
+  run_sessions: [],
+  review_packets: [],
+  delivery_readiness: deliveryReadiness(initiativeWithoutPackagesWorkItem, [], 'initiatives', {
+    overall_state: 'blocked',
+    stages: deliveryStageIds.map((id) => ({
+      id,
+      label: deliveryStageLabels[id],
+      state: id === 'spec' || id === 'plan' ? 'missing' : 'blocked',
+      owner_lane: deliveryStageOwnerLanes[id],
+      object_refs: [],
+      blockers:
+        id === 'packages'
+          ? [
+              {
+                id: 'initiative-child-readiness-unavailable',
+                label: 'Child-work aggregation unavailable',
+                stage_id: 'packages',
+                owner_lane: 'initiatives',
+                severity: 'blocking',
+              },
+            ]
+          : [],
+      evidence_refs: [],
+    })),
+  }),
+};
+
+const managerCommandAction = {
+  ...productActionFixtures.commandTargetFollowUp,
+  id: 'manager-bad-run-command',
+  command: {
+    ...productActionFixtures.commandTargetFollowUp.command,
+    work_item_id: workItem.id,
+  },
+} satisfies ProductAction;
+
+export const cockpitFixtureWithManagerCommandAction: WorkItemCockpitResponse = baseCockpitFixture(
+  workItem as WorkItemCockpitResponse['work_item'],
+  deliveryReadiness(workItem as WorkItemCockpitResponse['work_item'], [managerCommandAction], 'manager'),
+);
+
+const degradedExecutionBlocker = {
+  id: 'run-sessions-degraded',
+  code: 'run_sessions_unavailable',
+  label: 'Execution evidence is unavailable because run sessions could not be loaded.',
+  stage_id: 'execution',
+  owner_lane: 'execution-owner',
+  severity: 'blocking',
+} satisfies WorkItemDeliveryReadiness['blockers'][number];
+
+export const cockpitFixtureWithDegradedRunSource: WorkItemCockpitResponse = baseCockpitFixture(
+  workItem as WorkItemCockpitResponse['work_item'],
+  deliveryReadiness(workItem as WorkItemCockpitResponse['work_item'], [], 'execution-owner', {
+    overall_state: 'blocked',
+    degraded_sources: ['run_sessions'],
+    blockers: [degradedExecutionBlocker],
+    stages: deliveryStageIds.map((id) => ({
+      id,
+      label: deliveryStageLabels[id],
+      state: id === 'execution' ? 'blocked' : id === 'release_readiness' ? 'blocked' : 'ready',
+      owner_lane: deliveryStageOwnerLanes[id],
+      object_refs: [],
+      blockers: id === 'execution' ? [degradedExecutionBlocker] : [],
+      evidence_refs: [],
+    })),
+  }),
+);
 
 const workItemLaneItem = (
   laneId: Extract<ProductLaneId, 'requirements' | 'bugs' | 'tech-debt' | 'initiatives'>,

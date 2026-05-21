@@ -124,7 +124,19 @@ function ReviewPacketDetailView({ reviewPacketId }: { reviewPacketId: string }) 
           </div>
         </ActionRail>
       }
-      header={<PageHeader subtitle={`Decision ${review.decision} / Status ${review.status}`} title={review.summary ?? review.id} />}
+      header={
+        <PageHeader
+          eyebrow={
+            <span className="fl-inline-actions">
+              <span>Review</span>
+              <StatusPill tone={reviewDecisionTone(review.decision)}>{review.decision}</StatusPill>
+              <StatusPill tone={reviewDecisionTone(review.status)}>{review.status}</StatusPill>
+            </span>
+          }
+          subtitle={`Package ${review.execution_package_id} / Run ${review.run_session_id}`}
+          title={review.summary ?? review.id}
+        />
+      }
     >
       <Section title="Summary" description="Decision state, related package, and related run.">
         <dl className="fl-metadata-grid">
@@ -340,4 +352,12 @@ function formatAge(value: string | undefined) {
   if (days === 0) return 'today';
   if (days === 1) return '1 day ago';
   return `${days} days ago`;
+}
+
+function reviewDecisionTone(value: string | undefined) {
+  const normalized = value?.toLowerCase() ?? '';
+  if (['approved', 'completed', 'passed'].includes(normalized)) return 'success';
+  if (['changes_requested', 'failed', 'rejected'].includes(normalized)) return 'danger';
+  if (['pending', 'requested'].includes(normalized)) return 'warning';
+  return 'info';
 }

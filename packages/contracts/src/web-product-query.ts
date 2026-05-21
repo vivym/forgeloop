@@ -93,6 +93,10 @@ export const productListItemSchema = z
         surface_type: z.string().min(1).optional(),
         blocked_reason: z.string().min(1).optional(),
         last_run_session_id: z.string().min(1).optional(),
+        current_run_session_id: z.string().min(1).optional(),
+        current_review_packet_id: z.string().min(1).optional(),
+        integration_readiness: z.record(z.string(), z.unknown()).optional(),
+        required_test_gates: z.array(z.record(z.string(), z.unknown())).default([]),
       })
       .strict()
       .optional(),

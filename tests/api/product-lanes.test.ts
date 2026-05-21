@@ -9,7 +9,6 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import {
   getProductLane,
-  getWorkItemActions,
   InMemoryDeliveryRepository,
   resolveLaneFilters,
 } from '../../packages/db/src/index';
@@ -21,14 +20,6 @@ const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
 const ownerHeaders = { 'x-forgeloop-actor-id': actorOwner, 'x-forgeloop-actor-class': 'human_admin' };
 const reviewerHeaders = { 'x-forgeloop-actor-id': actorReviewer, 'x-forgeloop-actor-class': 'human' };
-const cockpitOptions = {
-  run_session_metadata_fallback: {
-    driver: 'fake' as const,
-    workflow_only: false,
-    executor_type: 'mock' as const,
-  },
-};
-
 const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {
   const repo = new InMemoryDeliveryRepository();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -106,24 +97,6 @@ const seedSubmittedPlan = async (app: INestApplication) => {
   await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
 
   return { project, workItem, plan };
-};
-
-const seedApprovedPlanWithoutPackages = async (app: INestApplication) => {
-  const { workItem } = await seedDraftWorkItem(app, 'requirement');
-  const server = app.getHttpServer();
-  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-
-  await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
-
-  const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
-  const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
-
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
-
-  return { workItem, planRevision };
 };
 
 const saveReviewPacket = async (
@@ -255,7 +228,7 @@ describe('product lane projections', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('serves Product Lane and Work Item actions endpoints and removes old workbench routes', async () => {
+  it('serves Product Lane endpoints without Work Item action endpoint compatibility', async () => {
     const { app } = await track(createTestApp());
     const { project, workItem } = await seedDraftWorkItem(app);
 
@@ -267,20 +240,16 @@ describe('product lane projections', () => {
       items: [expect.objectContaining({ object: { type: 'work_item', id: workItem.id } })],
     });
 
-    const actionsResponse = await request(app.getHttpServer()).get(`/query/work-items/${workItem.id}/actions?lane=bugs`).expect(200);
-    expect(actionsResponse.body).toMatchObject({
-      work_item_id: workItem.id,
-      lane_id: 'bugs',
-      default_lane_id: 'bugs',
-    });
+    await request(app.getHttpServer()).get(`/query/work-items/${workItem.id}/actions?lane=bugs`).expect(404);
+    expect(JSON.stringify(laneResponse.body)).not.toContain('/workbench');
 
     const removedEndpoint = `/query/${'work'}${'benches'}/spec-approver?project_id=${project.id}`;
     await request(app.getHttpServer()).get(removedEndpoint).expect(404);
   });
 
-  it('rejects invalid Product Lane and Work Item actions query parameters', async () => {
+  it('rejects invalid Product Lane query parameters', async () => {
     const { app } = await track(createTestApp());
-    const { project, workItem } = await seedDraftWorkItem(app);
+    const { project } = await seedDraftWorkItem(app);
     const server = app.getHttpServer();
 
     await request(server).get(`/query/product-lanes/bugs?project_id=${project.id}&kind=requirement`).expect(400);
@@ -304,11 +273,6 @@ describe('product lane projections', () => {
     await request(server)
       .get(`/query/product-lanes/release-owner?project_id=${project.id}&actor_id=actor-a&release_owner_actor_id=actor-b`)
       .expect(400);
-
-    await request(server).get(`/query/work-items/${workItem.id}/actions?lane=`).expect(400);
-    await request(server).get(`/query/work-items/${workItem.id}/actions?lane=bugs&lane=reviewer`).expect(400);
-    await request(server).get(`/query/work-items/${workItem.id}/actions?foo=bar`).expect(400);
-    await request(server).get(`/query/work-items/${workItem.id}/actions?lane=unknown`).expect(400);
   });
 
   it('returns work item type lanes as strict ProductLaneResponse DTOs', async () => {
@@ -570,31 +534,6 @@ describe('product lane projections', () => {
     expect(pagedManagerLane.summary).toEqual(managerLane.summary);
   });
 
-  it('returns lane-aware Work Item actions without legacy create aliases', async () => {
-    const { app, repo } = await track(createTestApp());
-    const { workItem } = await seedDraftWorkItem(app, 'bug');
-
-    const response = await getWorkItemActions(repo, workItem.id, undefined, { cockpit: cockpitOptions });
-
-    expect(response).toMatchObject({
-      work_item_id: workItem.id,
-      lane_id: 'bugs',
-      default_lane_id: 'bugs',
-      actions: [
-        expect.objectContaining({
-          lane_id: 'bugs',
-          kind: 'navigate',
-          target: expect.objectContaining({ kind: 'object', object_type: 'work_item', object_id: workItem.id }),
-        }),
-      ],
-    });
-    expect(response?.actions).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ command: expect.objectContaining({ type: expect.stringContaining('create') }) }),
-      ]),
-    );
-  });
-
   it('filters Spec and Plan approval attention by persisted review actor decisions', async () => {
     const { app, repo } = await track(createTestApp());
     const specSeed = await seedSubmittedSpec(app);
@@ -640,55 +579,4 @@ describe('product lane projections', () => {
     ).resolves.toMatchObject({ items: [], summary: expect.objectContaining({ total: 0 }) });
   });
 
-  it('returns package generation actions only after an approved Plan revision exists', async () => {
-    const { app, repo } = await track(createTestApp());
-    const { workItem, planRevision } = await seedApprovedPlanWithoutPackages(app);
-
-    const response = await getWorkItemActions(repo, workItem.id, undefined, { cockpit: cockpitOptions });
-
-    expect(response?.actions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'command',
-          command: expect.objectContaining({
-            type: 'generate_packages',
-            work_item_id: workItem.id,
-            plan_revision_id: planRevision.id,
-          }),
-        }),
-      ]),
-    );
-    expect(response?.actions).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ command: expect.objectContaining({ type: 'generate_plan_draft' }) }),
-      ]),
-    );
-  });
-
-  it('does not create package generation actions from approved Plans without approved revisions', async () => {
-    const { app, repo } = await track(createTestApp());
-    const { workItem, planRevision } = await seedApprovedPlanWithoutPackages(app);
-    const plan = await repo.getPlan(planRevision.plan_id);
-    expect(plan).toBeDefined();
-    await repo.savePlan({
-      ...plan!,
-      approved_revision_id: undefined,
-      approved_at: undefined,
-      approved_by_actor_id: undefined,
-    });
-
-    const response = await getWorkItemActions(repo, workItem.id, undefined, { cockpit: cockpitOptions });
-
-    expect(response?.actions).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'command',
-          command: expect.objectContaining({
-            type: 'generate_packages',
-            plan_revision_id: planRevision.id,
-          }),
-        }),
-      ]),
-    );
-  });
 });
