@@ -61,6 +61,14 @@ export type {
 const isMainModule = (): boolean => process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 const nowIso = (): string => new Date().toISOString();
+const techDebtIntakeContext = {
+  type: 'tech_debt',
+  current_pain: 'Local Codex dogfood fixtures need typed intake context.',
+  desired_invariant: 'The real local_codex path uses the current Work Item create contract.',
+  affected_modules: ['delivery-local-codex-dogfood.ts'],
+  behavior_preservation: 'Local Codex execution evidence remains unchanged.',
+  validation_strategy: 'Local Codex dogfood run',
+};
 
 export const buildBoundedLocalCodexRunPackage = (input: {
   repoPath: string;
@@ -253,7 +261,8 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
       success_criteria: ['Local Codex run produces terminal review evidence.'],
       priority: 'P0',
       risk: 'medium',
-      owner_actor_id: actor,
+      driver_actor_id: actor,
+      intake_context: techDebtIntakeContext,
     },
   });
   const spec = await requestJson<{ id: string }>(apiUrl, `/work-items/${encodeURIComponent(workItem.id)}/specs`, { method: 'POST' });

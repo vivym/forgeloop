@@ -20,9 +20,10 @@ export const work_items = pgTable('work_items', {
   successCriteria: jsonb('success_criteria').$type<WorkItem['success_criteria']>().notNull(),
   priority: text('priority').notNull(),
   risk: text('risk').notNull(),
-  ownerActorId: uuid('owner_actor_id')
+  driverActorId: uuid('driver_actor_id')
     .notNull()
     .references(() => actors.id),
+  intakeContext: jsonb('intake_context').$type<WorkItem['intake_context']>().notNull(),
   phase: workItemPhase('phase').notNull(),
   activityState: workItemActivityState('activity_state').notNull(),
   gateState: workItemGateState('gate_state').notNull(),

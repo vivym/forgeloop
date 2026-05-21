@@ -36,6 +36,14 @@ const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'h
 const reviewerHeaders = { [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' };
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Release owners need typed work item context.',
+  desired_outcome: 'Release risk controls link to a valid work item.',
+  acceptance_criteria: ['Release owner can approve a release.'],
+  in_scope: ['Release module flows.'],
+};
+
 const project = (overrides: Partial<Project> = {}): Project => ({
   id: 'project-1',
   name: 'Forgeloop',
@@ -55,7 +63,8 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Release owner can approve a release.'],
   priority: 'P1',
   risk: 'medium',
-  owner_actor_id: actorOwner,
+  driver_actor_id: actorOwner,
+  intake_context: requirementIntakeContext,
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

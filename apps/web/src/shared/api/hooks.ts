@@ -62,13 +62,13 @@ export function useWorkItemsQuery(projectId: string) {
   });
 }
 
-export function useProductWorkItemsQuery(query: Pick<ListProductQuery, 'project_id' | 'phase' | 'status' | 'risk' | 'owner_actor_id' | 'cursor' | 'limit'>) {
+export function useProductWorkItemsQuery(query: Pick<ListProductQuery, 'project_id' | 'phase' | 'status' | 'risk' | 'driver_actor_id' | 'cursor' | 'limit'>) {
   const normalizedQuery = {
     project_id: query.project_id,
     ...(query.phase === undefined ? {} : { phase: query.phase }),
     ...(query.status === undefined ? {} : { status: query.status }),
     ...(query.risk === undefined ? {} : { risk: query.risk }),
-    ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
+    ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
     ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
     ...(query.limit === undefined ? {} : { limit: query.limit }),
   };

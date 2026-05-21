@@ -20,6 +20,13 @@ import { createPackageExecutionActivities, executePackageRun, reviewPacketIdForR
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Package execution workflow tests need complete Work Item fixtures.',
+  desired_outcome: 'Workflow fixtures preserve typed requirement intake data.',
+  acceptance_criteria: ['Direct Work Item fixtures include requirement intake context.'],
+  in_scope: ['Package execution workflow fixtures'],
+};
 
 const requiredChecks = [
   {
@@ -157,7 +164,8 @@ const createFixture = async (options: FixtureOptions = {}) => {
     success_criteria: ['A review packet is produced for successful runs.'],
     priority: 'p1',
     risk: 'medium',
-    owner_actor_id: 'actor-owner',
+    driver_actor_id: 'actor-owner',
+    intake_context: requirementIntakeContext,
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'not_submitted',

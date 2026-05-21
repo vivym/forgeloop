@@ -33,7 +33,8 @@ export class WorkItemService {
       success_criteria: dto.success_criteria,
       priority: dto.priority,
       risk: dto.risk,
-      owner_actor_id: dto.owner_actor_id,
+      driver_actor_id: dto.driver_actor_id,
+      intake_context: dto.intake_context,
       at: this.runtime.now(),
     });
     await this.repository.saveWorkItem(workItem);
@@ -43,7 +44,7 @@ export class WorkItemService {
         object_type: 'work_item',
         object_id: workItem.id,
         event_type: 'work_item_created',
-        actor_id: workItem.owner_actor_id,
+        actor_id: workItem.driver_actor_id,
         metadata: {},
         created_at: this.runtime.now(),
       },
@@ -65,7 +66,7 @@ export class WorkItemService {
   }
 
   async updateWorkItem(workItemId: string, dto: UpdateWorkItemDto): Promise<WorkItem> {
-    if (Object.keys(dto).length === 0) {
+    if (Object.values(dto).every((value) => value === undefined)) {
       throw new BadRequestException('At least one work item readiness field is required');
     }
 
@@ -73,6 +74,10 @@ export class WorkItemService {
       const workItem = await repository.getWorkItem(workItemId);
       if (workItem === undefined) {
         throw new NotFoundException(`WorkItem ${workItemId} not found`);
+      }
+
+      if (dto.intake_context !== undefined && dto.intake_context.type !== workItem.kind) {
+        throw new BadRequestException('intake_context type must match Work Item kind');
       }
 
       if (dto.phase !== undefined) {
@@ -90,7 +95,8 @@ export class WorkItemService {
         success_criteria: dto.success_criteria ?? workItem.success_criteria,
         priority: dto.priority ?? workItem.priority,
         risk: dto.risk ?? workItem.risk,
-        owner_actor_id: dto.owner_actor_id ?? workItem.owner_actor_id,
+        driver_actor_id: dto.driver_actor_id ?? workItem.driver_actor_id,
+        intake_context: dto.intake_context ?? workItem.intake_context,
         phase: dto.phase ?? workItem.phase,
         activity_state: workItem.activity_state,
         gate_state: workItem.gate_state,
@@ -118,7 +124,7 @@ export class WorkItemService {
             object_id: updated.id,
             from_status: statusForWorkItem(workItem),
             to_status: statusForWorkItem(updated),
-            actor_id: dto.owner_actor_id ?? workItem.owner_actor_id,
+            actor_id: dto.driver_actor_id ?? workItem.driver_actor_id,
             created_at: this.runtime.now(),
           },
           repository,
@@ -130,7 +136,7 @@ export class WorkItemService {
           object_type: 'work_item',
           object_id: updated.id,
           event_type: 'work_item_updated',
-          actor_id: dto.owner_actor_id ?? workItem.owner_actor_id,
+          actor_id: dto.driver_actor_id ?? workItem.driver_actor_id,
           metadata: {},
           created_at: this.runtime.now(),
         },

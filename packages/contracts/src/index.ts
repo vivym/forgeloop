@@ -6,3 +6,5 @@ export * from './run-event-rendering.js';
 export * from './review.js';
 export * from './web-product-query.js';
 export * from './work-item-delivery-readiness.js';
+export * from './work-item-intake.js';
+export { workItemKindSchema, type WorkItemKind } from './work-item-intake.js';

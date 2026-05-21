@@ -10,16 +10,16 @@ import { projectId } from './fixtures/product-data';
 describe('Product Lanes route', () => {
   it('redirects /lanes to Requirements while preserving supported filters and stripping old state', async () => {
     const screen = await renderRoute(
-      '/lanes?project_id=project-web-product&kind=bug&status=active&blocked=true&unsupported_view=old',
+      '/lanes?project_id=project-web-product&kind=bug&status=active&blocked=true&driver_actor_id=actor-driver&unsupported_view=old',
     );
 
     expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'http://localhost:3000/query/product-lanes/requirements?project_id=project-web-product&status=active&blocked=true',
+      'http://localhost:3000/query/product-lanes/requirements?project_id=project-web-product&driver_actor_id=actor-driver&status=active&blocked=true',
       expect.objectContaining({ method: 'GET' }),
     );
     expect(screen.getByRole('link', { name: /bugs/i }).getAttribute('href')).toBe(
-      '/lanes/bugs?project_id=project-web-product&status=active&blocked=true',
+      '/lanes/bugs?project_id=project-web-product&driver_actor_id=actor-driver&status=active&blocked=true',
     );
     expect(screen.queryByText(/unsupported_view/i)).toBeNull();
     expect(document.body.innerHTML).not.toContain(deletedProductLaneRoot);
@@ -49,9 +49,11 @@ describe('Product Lanes route', () => {
   });
 
   it('drops kind filters when linking into Work Item type lanes', async () => {
-    const screen = await renderRoute(`/lanes/spec-approver?project_id=${projectId}&kind=bug&status=active`, {
+    const screen = await renderRoute(
+      `/lanes/spec-approver?project_id=${projectId}&kind=bug&status=active&driver_actor_id=actor-driver`,
+      {
       apiOverrides: {
-        [`GET /query/product-lanes/spec-approver?project_id=${projectId}&kind=bug&status=active`]: {
+        [`GET /query/product-lanes/spec-approver?project_id=${projectId}&driver_actor_id=actor-driver&kind=bug&status=active`]: {
           lane_id: 'spec-approver',
           label: 'Spec Approver',
           description: 'Spec and Plan approval attention.',
@@ -60,17 +62,75 @@ describe('Product Lanes route', () => {
           items: [],
         },
       },
-    });
+      },
+    );
 
     expect(await screen.findByRole('heading', { name: /spec approver/i })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Requirements' }).getAttribute('href')).toBe(
-      `/lanes/requirements?project_id=${projectId}&status=active`,
+      `/lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver&status=active`,
     );
     expect(screen.getByRole('link', { name: 'Bugs' }).getAttribute('href')).toBe(
-      `/lanes/bugs?project_id=${projectId}&status=active`,
+      `/lanes/bugs?project_id=${projectId}&driver_actor_id=actor-driver&status=active`,
+    );
+    expect(screen.getByRole('link', { name: 'Execution Owner' }).getAttribute('href')).toBe(
+      `/lanes/execution-owner?project_id=${projectId}&driver_actor_id=actor-driver&kind=bug&status=active`,
     );
     expect(screen.getByRole('link', { name: 'Reviewer' }).getAttribute('href')).toBe(
-      `/lanes/reviewer?project_id=${projectId}&kind=bug&status=active`,
+      `/lanes/reviewer?project_id=${projectId}&driver_actor_id=actor-driver&kind=bug&status=active`,
+    );
+  });
+
+  it('uses driver_actor_id for Work Item lanes without translating execution owner filters', async () => {
+    const screen = await renderRoute(
+      `/lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver&owner_actor_id=actor-execution`,
+      {
+        apiOverrides: {
+          [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`]: {
+            lane_id: 'requirements',
+            label: 'Requirements',
+            description: 'Requirement intake and planning progression.',
+            unsupported_filters: [],
+            summary: { total: 0, blocked: 0, high_risk: 0, stale: 0 },
+            items: [],
+          },
+        },
+      },
+    );
+
+    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `http://localhost:3000/query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(screen.getByRole('link', { name: 'Bugs' }).getAttribute('href')).toBe(
+      `/lanes/bugs?project_id=${projectId}&driver_actor_id=actor-driver`,
+    );
+    expect(screen.getByRole('link', { name: 'Execution Owner' }).getAttribute('href')).toBe(
+      `/lanes/execution-owner?project_id=${projectId}&driver_actor_id=actor-driver&owner_actor_id=actor-execution`,
+    );
+  });
+
+  it('strips stale kind and owner filters from direct Work Item lane URLs', async () => {
+    const screen = await renderRoute(
+      `/lanes/requirements?project_id=${projectId}&kind=bug&owner_actor_id=actor-owner&driver_actor_id=actor-driver`,
+      {
+        apiOverrides: {
+          [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`]: {
+            lane_id: 'requirements',
+            label: 'Requirements',
+            description: 'Requirement intake and planning progression.',
+            unsupported_filters: [],
+            summary: { total: 0, blocked: 0, high_risk: 0, stale: 0 },
+            items: [],
+          },
+        },
+      },
+    );
+
+    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `http://localhost:3000/query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`,
+      expect.objectContaining({ method: 'GET' }),
     );
   });
 

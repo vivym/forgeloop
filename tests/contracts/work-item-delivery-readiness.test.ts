@@ -66,7 +66,14 @@ const cockpitResponse = (overrides: Record<string, unknown> = {}) => ({
     success_criteria: ['Done'],
     priority: 'high',
     risk: 'medium',
-    owner_actor_id: 'actor-1',
+    driver_actor_id: 'actor-1',
+    intake_context: {
+      type: 'requirement',
+      stakeholder_problem: 'Users need a validated delivery cockpit response.',
+      desired_outcome: 'The cockpit exposes Work Item driver intake data.',
+      acceptance_criteria: ['Cockpit response schema accepts driver and intake context.'],
+      in_scope: ['Contract parsing'],
+    },
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'none',
@@ -141,6 +148,20 @@ describe('Work Item delivery readiness contracts', () => {
   it('parses readiness and full cockpit responses', () => {
     expect(workItemDeliveryReadinessSchema.parse(readiness)).toEqual(readiness);
     expect(workItemCockpitResponseSchema.parse(cockpitResponse())).toMatchObject({ delivery_readiness: readiness });
+  });
+
+  it('rejects cockpit work items when kind does not match intake context type', () => {
+    const response = cockpitResponse();
+
+    expect(
+      workItemCockpitResponseSchema.safeParse({
+        ...response,
+        work_item: {
+          ...response.work_item,
+          kind: 'bug',
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects inconsistent readiness next actions', () => {

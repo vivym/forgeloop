@@ -78,6 +78,34 @@ const legacyDeletionMatches = () =>
     );
   });
 
+const workItemWebScanFiles = () =>
+  [
+    'apps/web/src/features/work-items',
+    'apps/web/src/app/routes/work-items',
+    'apps/web/src/app/routes/lanes',
+    'apps/web/src/features/product-lanes',
+    'tests/web/work-item-intake-form.test.tsx',
+    'tests/web/work-item-product-route.test.tsx',
+    'tests/web/product-lanes-route.test.tsx',
+    'tests/web/api-hooks.test.tsx',
+  ].flatMap((path) => (statSync(path).isDirectory() ? textFiles(path) : [path]));
+
+const allowedWorkItemOwnerWebContext = (context: string): boolean =>
+  /rejects owner_actor_id|owner_actor_id is not supported|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|strips stale kind and owner filters|omits owner filters|without translating execution owner filters|Execution Owner|executionPackage\.owner_actor_id|owner: executionPackage\.owner_actor_id|workItemTypeLaneIds\.has\(laneId\)|key === 'kind' \|\| key === 'owner_actor_id'|supportedProductLaneSearchParams[\s\S]*qa_owner_actor_id[\s\S]*release_owner_actor_id/.test(
+    context,
+  );
+
+const workItemWebOwnerMatches = () =>
+  workItemWebScanFiles().flatMap((file) => {
+    if (file.endsWith('no-legacy-web-ui.test.ts')) return [];
+    const lines = readFileSync(file, 'utf8').split('\n');
+    return lines.flatMap((line, index) => {
+      if (!/Work Item Owner|work item owner|work-item-owner|workItemOwner|work_item_owner|\bowner_actor_id\b/i.test(line)) return [];
+      const context = lines.slice(Math.max(0, index - 8), index + 9).join('\n');
+      return allowedWorkItemOwnerWebContext(context) ? [] : [`${file}:${index + 1} ${line.trim()}`];
+    });
+  });
+
 describe('no legacy Web UI baggage', () => {
   it('does not keep old workbench classes or legacy routes', () => {
     expect(sourceText()).not.toMatch(/workbench-grid|className="panel"|\.panel\b|\/legacy|src\/main\.tsx|Load role queue|Load cockpit|Load replay/);
@@ -93,6 +121,15 @@ describe('no legacy Web UI baggage', () => {
 
   it('does not keep deleted role workbench product vocabulary', () => {
     expect(legacyDeletionMatches()).toEqual([]);
+  });
+
+  it('does not keep Work Item Owner copy or fields on Work Item Web surfaces', () => {
+    expect(workItemWebOwnerMatches()).toEqual([]);
+  });
+
+  it('scans all Work Item product lane Web surfaces for Work Item Owner baggage', () => {
+    expect(workItemWebScanFiles()).toContain('apps/web/src/features/work-items/delivery-cockpit/typed-brief.tsx');
+    expect(workItemWebScanFiles()).toContain('apps/web/src/features/product-lanes/product-lanes.ts');
   });
 
   it('does not expose raw or debug-only controls on product Web surfaces', () => {

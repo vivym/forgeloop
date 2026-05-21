@@ -66,6 +66,13 @@ const automationActorId = 'daemon-actor';
 const automationDaemonIdentity = 'daemon-1';
 const automationTestNow = '2026-05-05T00:00:00.000Z';
 let seedCounter = 0;
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Automation command fixtures need typed intake context.',
+  desired_outcome: 'Automation command tests create valid requirement Work Items.',
+  acceptance_criteria: ['Automation commands can generate Spec and Plan drafts.'],
+  in_scope: ['Automation command API tests'],
+};
 
 const runtimeLimitVector = (overrides: Partial<ResourceLimitVector> = {}): ResourceLimitVector => ({
   cpu_ms: 1_000,
@@ -239,7 +246,8 @@ const createTestApp = async (
               success_criteria: ['Route is mounted and shares repository state.'],
               priority: 'P1',
               risk: 'low',
-              owner_actor_id: actorOwner,
+              driver_actor_id: actorOwner,
+              intake_context: requirementIntakeContext,
             })
         : { status: projectRepoRouteProbe.status };
     const publicAutomationRouteProbe = await request(server).post('/automation/manual-path-holds').send({});
@@ -385,7 +393,8 @@ const seedProjectRepoWorkItem = async (app: INestApplication): Promise<{ project
     success_criteria: ['Duplicate automation commands produce one plan draft.'],
     priority: 'P0',
     risk: 'medium',
-    owner_actor_id: actorOwner,
+    driver_actor_id: actorOwner,
+    intake_context: requirementIntakeContext,
     at: automationTestNow,
   });
   await repository.saveWorkItem(workItem);

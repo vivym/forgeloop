@@ -182,7 +182,14 @@ describe('query module', () => {
           success_criteria: ['Spec replay includes decisions', 'Plan replay includes decisions'],
           priority: 'high',
           risk: 'medium',
-          owner_actor_id: actorOwner,
+          driver_actor_id: actorOwner,
+          intake_context: {
+            type: 'requirement',
+            stakeholder_problem: 'Replay needs Work Item driver-safe fixtures.',
+            desired_outcome: 'Query tests seed typed Work Item intake records.',
+            acceptance_criteria: ['The replay test Work Item can create Spec and Plan revisions.'],
+            in_scope: ['Query module tests'],
+          },
         })
         .expect(201)
     ).body;
@@ -411,6 +418,56 @@ describe('query module', () => {
     );
     await request(app.getHttpServer()).get('/query/runs').query({ project_id: projectId }).expect(200);
     await request(app.getHttpServer()).get('/query/review-packets').query({ project_id: projectId }).expect(200);
+  });
+
+  it('filters product Work Items by driver_actor_id and does not expose owner_actor_id', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const response = await request(app.getHttpServer())
+      .get('/query/work-items')
+      .query({ project_id: projectId, driver_actor_id: actorOwner })
+      .expect(200);
+
+    expect(response.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: executionPackage.work_item_id,
+          driver_actor_id: actorOwner,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(response.body.items)).not.toContain('owner_actor_id');
+  });
+
+  it('rejects owner_actor_id on product Work Item registry queries', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+
+    await request(app.getHttpServer())
+      .get('/query/work-items')
+      .query({ project_id: executionPackage.project_id, owner_actor_id: actorOwner })
+      .expect(400);
+  });
+
+  it('keeps non-Work-Item product registry owner and reviewer filters', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyPackage(app);
+    const projectId = executionPackage.project_id;
+
+    const packagesResponse = await request(app.getHttpServer())
+      .get('/query/execution-packages')
+      .query({ project_id: projectId, owner_actor_id: actorOwner })
+      .expect(200);
+    expect(packagesResponse.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id, owner_actor_id: actorOwner })]),
+    );
+
+    await request(app.getHttpServer())
+      .get('/query/review-packets')
+      .query({ project_id: projectId, reviewer_actor_id: actorReviewer })
+      .expect(200);
   });
 
   it('parses product list boolean query filters from strings', async () => {

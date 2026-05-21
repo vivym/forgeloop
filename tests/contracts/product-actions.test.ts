@@ -114,6 +114,24 @@ describe('ProductAction contracts', () => {
     expect(productActionSchema.parse(validCommandAction)).toEqual(validCommandAction);
   });
 
+  it('does not add typed Work Item intake commands to ProductAction command schemas', () => {
+    for (const type of ['create_work_item', 'update_work_item', 'patch_work_item', 'update_work_item_intake']) {
+      expect(
+        productActionSchema.safeParse({
+          ...validCommandAction,
+          command: {
+            type,
+            object_type: 'work_item',
+            object_id: 'wi_1',
+            work_item_id: 'wi_1',
+            driver_actor_id: 'actor-driver',
+            intake_context: { type: 'bug' },
+          },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it('rejects unknown object fields on all product action contract objects', () => {
     expect(productActionSchema.safeParse({ ...validNavigateAction, extra: true }).success).toBe(false);
     expect(

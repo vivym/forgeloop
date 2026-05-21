@@ -133,6 +133,8 @@ const intakeDeletionTargetPatterns: LegacyPattern[] = [
 
 const roleWorkbenchScanRoots = ['apps', 'packages', 'scripts', 'tests', currentRoleWorkbenchPlan];
 const roleWorkbenchGuardFiles = new Set(['tests/naming/delivery-naming.test.ts', 'tests/web/no-legacy-web-ui.test.ts']);
+const workItemDriverScanRoots = ['apps', 'packages', 'tests', 'docs/PRD_v1.md'];
+const workItemDriverGuardFiles = new Set(['tests/naming/delivery-naming.test.ts', 'tests/web/no-legacy-web-ui.test.ts']);
 
 const roleWorkbenchDeletionMatches = () =>
   roleWorkbenchScanRoots.flatMap(files).flatMap((file) => {
@@ -143,6 +145,135 @@ const roleWorkbenchDeletionMatches = () =>
       roleWorkbenchDeletionTargetPatterns.concat(intakeDeletionTargetPatterns).flatMap(({ target, pattern }) =>
         pattern.test(line) ? [`${rel}:${index + 1} ${target}: ${line.trim()}`] : [],
       ),
+    );
+  });
+
+const workItemDriverForbiddenPatterns: LegacyPattern[] = [
+  { target: 'Work Item Owner', pattern: /Work Item Owner/ },
+  { target: 'work item owner', pattern: /work item owner/i },
+  { target: 'work-item-owner', pattern: /work-item-owner/ },
+  { target: 'workItemOwner', pattern: /workItemOwner/ },
+  { target: 'work_item_owner', pattern: /work_item_owner/ },
+  { target: 'owner_actor_id', pattern: /\bowner_actor_id\b/ },
+];
+
+const nearbyContext = (lines: string[], index: number): string => lines.slice(Math.max(0, index - 16), index + 17).join('\n');
+
+const matchesAny = (rel: string, patterns: RegExp[]): boolean => patterns.some((pattern) => pattern.test(rel));
+
+const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boolean => {
+  const projectOwnerPaths = [
+    /^apps\/control-plane-api\/src\/modules\/projects\//,
+    /^packages\/db\/src\/schema\/project\.ts$/,
+  ];
+  const projectOwnerTestPaths = [
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|delivery-flow|durable-id-generation|durable-revision-lookup|execution-package-service|local-codex-routing|product-lanes|query-module|spec-plan-service)\.test\.ts$/,
+    /^tests\/db\/schema\.test\.ts$/,
+    /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
+    /^tests\/smoke\/(?:delivery-dogfood-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
+  ];
+  const executionPackageOwnerPaths = [
+    /^apps\/control-plane-api\/src\/modules\/execution-packages\//,
+    /^apps\/control-plane-api\/src\/modules\/automation\//,
+    /^apps\/control-plane-api\/src\/modules\/run-control\//,
+    /^apps\/control-plane-api\/src\/modules\/delivery\/dto\.ts$/,
+    /^apps\/web\/src\/features\/execution-packages\//,
+    /^packages\/db\/src\/schema\/execution-package\.ts$/,
+    /^packages\/db\/src\/queries\/work-item-cockpit-queries\.ts$/,
+    /^packages\/contracts\/src\/work-item-delivery-readiness\.ts$/,
+    /^packages\/workflow\/src\/activities\.ts$/,
+    /^apps\/web\/src\/features\/work-items\/work-item-view-model\.ts$/,
+    /^apps\/web\/src\/features\/work-items\/delivery-cockpit\/package-matrix\.tsx$/,
+  ];
+  const executionPackageOwnerTestPaths = [
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|test-acceptance-gate)\.test\.ts$/,
+    /^tests\/db\/(?:automation-repository|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
+    /^tests\/db\/repository-contract\.ts$/,
+    /^tests\/contracts\/work-item-delivery-readiness\.test\.ts$/,
+    /^tests\/domain\/(?:release-gates|release-states|states|validators)\.test\.ts$/,
+    /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
+    /^tests\/smoke\/(?:delivery-dogfood-script|delivery-dogfood-work-items-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
+    /^tests\/web\/(?:api|package-run-product-routes|review-release-product-routes)\.test\.tsx?$/,
+    /^tests\/web\/fixtures\/product-(?:api-mock|data)\.ts$/,
+    /^tests\/workflow\/package-execution-workflow\.test\.ts$/,
+  ];
+  const productLaneOwnerPaths = [
+    /^apps\/control-plane-api\/src\/modules\/query\/product-lane-query-parser\.ts$/,
+    /^apps\/web\/src\/app\/routes\/lanes\//,
+    /^apps\/web\/src\/features\/product-lanes\//,
+    /^apps\/web\/src\/shared\/api\/hooks\.ts$/,
+    /^apps\/web\/src\/shared\/api\/query-keys\.ts$/,
+    /^apps\/web\/src\/shared\/api\/types\.ts$/,
+    /^packages\/contracts\/src\/api\.ts$/,
+    /^packages\/contracts\/src\/web-product-query\.ts$/,
+    /^packages\/db\/src\/queries\/product-lane-/,
+    /^packages\/db\/src\/queries\/web-product-queries\.ts$/,
+  ];
+  const releaseOrPackageSurfacePaths = [
+    /^apps\/web\/src\/features\/pipeline\//,
+    /^tests\/web\/fixtures\/product-api-mock\.ts$/,
+    /^tests\/web\/fixtures\/product-data\.ts$/,
+    /^tests\/web\/package-run-product-routes\.test\.tsx$/,
+    /^tests\/web\/review-release-product-routes\.test\.tsx$/,
+    /^tests\/web\/spec-plan-product-route\.test\.tsx$/,
+    /^tests\/web\/api\.test\.ts$/,
+  ];
+  const workItemOwnerRejectionTestPaths = [
+    /^apps\/control-plane-api\/src\/modules\/query\/query\.service\.ts$/,
+    /^tests\/contracts\/work-item-intake\.test\.ts$/,
+    /^tests\/api\/(?:product-lanes|query-module|work-items)\.test\.ts$/,
+    /^tests\/domain\/states\.test\.ts$/,
+    /^tests\/web\/(?:api|api-hooks|product-lanes-route|work-item-intake-form|work-item-product-route)\.test\.tsx?$/,
+  ];
+  const projectOwnerContext =
+    /\bProject\b|\bprojects\b|\/projects|records\.project|seed\.project|project\.owner_actor_id|columnType\(projects|hasForeignKey\(projects|repo_ids|object_type: 'project'|project_created/.test(
+      context,
+    );
+  const executionPackageOwnerContext =
+    /ExecutionPackage|executionPackage|execution_package|execution-packages|execution_packages|execution-owner|Execution Owner|packageBase|validateExecutionPackage|CreateExecutionPackage|PatchExecutionPackage|package_created|package_edited|cockpitPackage|Package assignee|Package owner|ownerActorId|ownerActorIdValues|context\.workItem\.driver_actor_id|reviewer_actor_id|qa_owner_actor_id|required_checks|required_artifact_kinds|spec_revision_id|plan_revision_id|repo_id/.test(
+      context,
+    );
+  const negativeWorkItemOwnerContext =
+    /rejects owner_actor_id|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|rejects Work Item create bodies with execution owner fields before POSTing|whitelists product Work Item query filters before sending requests|createWorkItemRequestSchema[\s\S]*owner_actor_id|patchWorkItemRequestSchema[\s\S]*owner_actor_id|publicWorkItemSchema[\s\S]*owner_actor_id|api\.createWorkItem\([\s\S]*owner_actor_id|\.patch\(`\/work-items\/[\s\S]*owner_actor_id/.test(
+      context,
+    );
+  const runRequesterContext = /requested_by_actor_id|runSession\.requested_by_actor_id/.test(context);
+  const qaOwnerQueueContext = /qa_owner_queues|PipelineQaOwnerQueue|pipelineQaOwnerQueueSchema/.test(context);
+
+  return (
+    (matchesAny(rel, workItemOwnerRejectionTestPaths) && negativeWorkItemOwnerContext) ||
+    runRequesterContext ||
+    qaOwnerQueueContext ||
+    (matchesAny(rel, projectOwnerPaths.concat(projectOwnerTestPaths)) && projectOwnerContext) ||
+    (matchesAny(rel, executionPackageOwnerPaths.concat(executionPackageOwnerTestPaths)) && executionPackageOwnerContext) ||
+    (/^packages\/domain\/src\/(?:states|types|validators)\.ts$/.test(rel) && (projectOwnerContext || executionPackageOwnerContext)) ||
+    (productLaneOwnerPaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || negativeWorkItemOwnerContext)) ||
+    (releaseOrPackageSurfacePaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || runRequesterContext))
+  );
+};
+
+const allowedWorkItemDriverReference = (rel: string, target: string, context: string): boolean => {
+  if (target !== 'owner_actor_id') {
+    return false;
+  }
+  if (rel === 'docs/superpowers/plans/2026-05-20-typed-work-item-intake.md') {
+    return true;
+  }
+  return allowedWorkItemOwnerActorIdReference(rel, context);
+};
+
+const workItemDriverNamingMatches = () =>
+  workItemDriverScanRoots.flatMap(files).flatMap((file) => {
+    const rel = relative(process.cwd(), file);
+    if (workItemDriverGuardFiles.has(rel)) return [];
+    const lines = readFileSync(file, 'utf8').split('\n');
+    return lines.flatMap((line, index) =>
+      workItemDriverForbiddenPatterns.flatMap(({ target, pattern }) => {
+        pattern.lastIndex = 0;
+        if (!pattern.test(line)) return [];
+        const context = nearbyContext(lines, index);
+        return allowedWorkItemDriverReference(rel, target, context) ? [] : [`${rel}:${index + 1} ${target}: ${line.trim()}`];
+      }),
     );
   });
 
@@ -173,5 +304,25 @@ describe('delivery naming cleanup', () => {
 
   it('has no active role workbench deletion targets outside the current checklist', () => {
     expect(roleWorkbenchDeletionMatches()).toEqual([]);
+  });
+
+  it('has no active Work Item Owner baggage on public Driver surfaces', () => {
+    expect(workItemDriverNamingMatches()).toEqual([]);
+  });
+
+  it('does not allow Work Item owner fields globally across tests', () => {
+    expect(allowedWorkItemOwnerActorIdReference('tests/unknown-owner-field.test.ts', 'Project owner_actor_id')).toBe(false);
+    expect(allowedWorkItemOwnerActorIdReference('tests/unknown-owner-field.test.ts', 'ExecutionPackage owner_actor_id')).toBe(false);
+    expect(allowedWorkItemOwnerActorIdReference('apps/web/src/features/work-items/work-items-list.tsx', 'ExecutionPackage owner_actor_id')).toBe(false);
+    expect(allowedWorkItemOwnerActorIdReference('apps/web/src/features/work-items/work-item-view-model.ts', 'ExecutionPackage owner_actor_id')).toBe(true);
+    expect(
+      allowedWorkItemOwnerActorIdReference('apps/web/src/features/product-lanes/product-lane-route.tsx', 'Product Lane owner_actor_id lane'),
+    ).toBe(false);
+    expect(
+      allowedWorkItemOwnerActorIdReference(
+        'apps/web/src/features/work-items/delivery-cockpit/package-matrix.tsx',
+        'Package assignee, latest execution, and blocking context. Owner',
+      ),
+    ).toBe(true);
   });
 });

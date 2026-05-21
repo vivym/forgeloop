@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 
 import { useProductLaneQuery } from '../../shared/api/hooks';
-import type { ProductLaneId, ProductLaneQuery } from '../../shared/api/types';
+import {
+  isProductLaneSearchParamSupported,
+  productLaneQueryFromSearchParams,
+  supportedProductLaneSearchParams,
+} from '../../shared/api/types';
+import type { ProductLaneId } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Badge, Button } from '../../shared/ui';
@@ -12,7 +17,6 @@ import {
   parseProductLaneId,
   productLaneDefinition,
   productLanes,
-  supportedProductLaneSearchParams,
 } from './product-lanes';
 import { ProductLaneTable } from './product-lane-table';
 import { createProductLaneViewModel } from './product-lane-view-model';
@@ -32,7 +36,10 @@ function ProductLaneRouteContent({ laneId }: { laneId: NonNullable<ReturnType<ty
   const { projectId: contextProjectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const projectId = searchParams.get('project_id')?.trim() || contextProjectId;
-  const queryInput = useMemo(() => productLaneQueryFromSearch(searchParams, projectId), [projectId, searchParams]);
+  const queryInput = useMemo(
+    () => productLaneQueryFromSearchParams(laneId, searchParams, projectId),
+    [laneId, projectId, searchParams],
+  );
   const query = useProductLaneQuery(laneId, queryInput);
   const requestedSelectedId = searchParams.get('selected') ?? undefined;
   const [selectedItemId, setSelectedItemId] = useState<string | undefined>(() => requestedSelectedId);
@@ -128,34 +135,11 @@ function UnknownProductLane() {
   );
 }
 
-function productLaneQueryFromSearch(searchParams: URLSearchParams, projectId: string): ProductLaneQuery {
-  return {
-    project_id: projectId,
-    ...stringParam(searchParams, 'actor_id'),
-    ...stringParam(searchParams, 'owner_actor_id'),
-    ...stringParam(searchParams, 'reviewer_actor_id'),
-    ...stringParam(searchParams, 'qa_owner_actor_id'),
-    ...stringParam(searchParams, 'release_owner_actor_id'),
-    ...kindParam(searchParams),
-    ...stringParam(searchParams, 'phase'),
-    ...stringParam(searchParams, 'status'),
-    ...stringParam(searchParams, 'gate_state'),
-    ...stringParam(searchParams, 'resolution'),
-    ...stringParam(searchParams, 'risk'),
-    ...booleanParam(searchParams, 'blocked'),
-    ...booleanParam(searchParams, 'stale'),
-    ...stringParam(searchParams, 'cursor'),
-    ...numberParam(searchParams, 'limit'),
-  };
-}
-
-const workItemTypeLaneIds = new Set<ProductLaneId>(['requirements', 'bugs', 'tech-debt', 'initiatives']);
-
 function laneHref(laneId: ProductLaneId, searchParams: URLSearchParams, projectId: string) {
   const next = new URLSearchParams();
   next.set('project_id', projectId);
   for (const key of supportedProductLaneSearchParams) {
-    if (key === 'project_id' || (key === 'kind' && workItemTypeLaneIds.has(laneId))) {
+    if (key === 'project_id' || !isProductLaneSearchParamSupported(laneId, key)) {
       continue;
     }
     const value = searchParams.get(key);
@@ -165,35 +149,6 @@ function laneHref(laneId: ProductLaneId, searchParams: URLSearchParams, projectI
   }
   const encoded = next.toString();
   return `/lanes/${laneId}${encoded ? `?${encoded}` : ''}`;
-}
-
-function stringParam(searchParams: URLSearchParams, key: keyof ProductLaneQuery) {
-  const value = searchParams.get(key)?.trim();
-  return value ? { [key]: value } : {};
-}
-
-function kindParam(searchParams: URLSearchParams): Pick<ProductLaneQuery, 'kind'> | Record<string, never> {
-  const value = searchParams.get('kind')?.trim();
-  if (value === 'initiative' || value === 'requirement' || value === 'bug' || value === 'tech_debt') {
-    return { kind: value };
-  }
-  return {};
-}
-
-function booleanParam(searchParams: URLSearchParams, key: 'blocked' | 'stale') {
-  const value = searchParams.get(key)?.trim();
-  if (value === 'true') return { [key]: true };
-  if (value === 'false') return { [key]: false };
-  return {};
-}
-
-function numberParam(searchParams: URLSearchParams, key: 'limit') {
-  const value = searchParams.get(key)?.trim();
-  if (value === undefined || value.length === 0) {
-    return {};
-  }
-  const parsed = Number(value);
-  return Number.isInteger(parsed) ? { [key]: parsed } : {};
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

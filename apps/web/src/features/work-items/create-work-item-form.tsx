@@ -1,103 +1,209 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
 import { useNavigate } from 'react-router';
 import { z } from 'zod';
 
+import { createWorkItemRequestSchema } from '@forgeloop/contracts';
 import { createForgeloopCommandApi } from '../../shared/api/commands';
-import type { CreateWorkItemBody } from '../../shared/api/types';
+import type { CreateWorkItemBody, WorkItemKind } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { PageHeader, Section } from '../../shared/layout';
-import { Button, Input, Select, Textarea } from '../../shared/ui';
+import { Button, Input, Select } from '../../shared/ui';
+import { IntakeFields } from './intake/intake-fields';
+import {
+  createDefaultIntakeDrafts,
+  defaultEmptyIntakeValues,
+  defaultRiskByKind,
+  deriveGoal,
+  deriveSuccessCriteria,
+  laneForWorkItemKind,
+  normalizeIntakeDraft,
+  normalizeList,
+  workItemKindLabels,
+  type CreateWorkItemVisibleFormValues,
+} from './intake/intake-model';
 
-const createWorkItemFormSchema = z.object({
-  project_id: z.string().min(1),
-  kind: z.enum(['initiative', 'requirement', 'bug', 'tech_debt']),
-  title: z.string().min(1),
-  goal: z.string().min(1),
-  success_criteria: z.array(z.string().min(1)).min(1),
-  priority: z.string().min(1),
-  risk: z.string().min(1),
-  owner_actor_id: z.string().min(1),
-});
+const workItemKindValues = ['requirement', 'bug', 'tech_debt', 'initiative'] as const satisfies readonly WorkItemKind[];
 
-type CreateWorkItemFormValues = z.infer<typeof createWorkItemFormSchema>;
-type CreateWorkItemVisibleFormValues = Omit<CreateWorkItemFormValues, 'project_id' | 'owner_actor_id'>;
-
-const toCommandBody = (values: CreateWorkItemFormValues): CreateWorkItemBody => ({
-  project_id: values.project_id,
-  kind: values.kind,
-  title: values.title,
-  goal: values.goal,
-  success_criteria: values.success_criteria,
-  priority: values.priority,
-  risk: values.risk,
-  owner_actor_id: values.owner_actor_id,
-});
+const createWorkItemVisibleFormSchema = z
+  .object({
+    kind: z.enum(workItemKindValues),
+    title: z.string().trim().min(1, 'Title is required.'),
+    priority: z.string().trim().min(1, 'Priority is required.'),
+    risk: z.string().trim().min(1, 'Risk is required.'),
+    intake: z.object({
+      requirement: z.object({
+        stakeholder_problem: z.string(),
+        desired_outcome: z.string(),
+        acceptance_criteria: z.string(),
+        in_scope: z.string(),
+        out_of_scope: z.string(),
+        dependencies: z.string(),
+        rollout_notes: z.string(),
+      }),
+      bug: z.object({
+        impact_summary: z.string(),
+        observed_behavior: z.string(),
+        expected_behavior: z.string(),
+        reproduction_steps: z.string(),
+        affected_environment: z.string(),
+        verification_path: z.string(),
+        suspected_area: z.string(),
+        regression_risk: z.string(),
+      }),
+      tech_debt: z.object({
+        current_pain: z.string(),
+        desired_invariant: z.string(),
+        affected_modules: z.string(),
+        behavior_preservation: z.string(),
+        validation_strategy: z.string(),
+        migration_constraints: z.string(),
+        rollback_notes: z.string(),
+      }),
+      initiative: z.object({
+        business_outcome: z.string(),
+        scope_narrative: z.string(),
+        success_metrics: z.string(),
+        milestone_intent: z.string(),
+        child_breakdown_assumptions: z.string(),
+        major_risks: z.string(),
+        cross_item_coordination_notes: z.string(),
+      }),
+    }),
+  })
+  .superRefine((values, ctx) => {
+    switch (values.kind) {
+      case 'requirement':
+        requireText(ctx, ['intake', 'requirement', 'stakeholder_problem'], values.intake.requirement.stakeholder_problem, 'Stakeholder problem');
+        requireText(ctx, ['intake', 'requirement', 'desired_outcome'], values.intake.requirement.desired_outcome, 'Desired outcome');
+        requireList(ctx, ['intake', 'requirement', 'acceptance_criteria'], values.intake.requirement.acceptance_criteria, 'Acceptance criteria');
+        requireList(ctx, ['intake', 'requirement', 'in_scope'], values.intake.requirement.in_scope, 'In scope');
+        return;
+      case 'bug':
+        requireText(ctx, ['intake', 'bug', 'impact_summary'], values.intake.bug.impact_summary, 'Impact summary');
+        requireText(ctx, ['intake', 'bug', 'observed_behavior'], values.intake.bug.observed_behavior, 'Observed behavior');
+        requireText(ctx, ['intake', 'bug', 'expected_behavior'], values.intake.bug.expected_behavior, 'Expected behavior');
+        requireList(ctx, ['intake', 'bug', 'reproduction_steps'], values.intake.bug.reproduction_steps, 'Reproduction steps');
+        requireText(ctx, ['intake', 'bug', 'affected_environment'], values.intake.bug.affected_environment, 'Affected environment');
+        requireText(ctx, ['intake', 'bug', 'verification_path'], values.intake.bug.verification_path, 'Verification path');
+        return;
+      case 'tech_debt':
+        requireText(ctx, ['intake', 'tech_debt', 'current_pain'], values.intake.tech_debt.current_pain, 'Current pain');
+        requireText(ctx, ['intake', 'tech_debt', 'desired_invariant'], values.intake.tech_debt.desired_invariant, 'Desired invariant');
+        requireList(ctx, ['intake', 'tech_debt', 'affected_modules'], values.intake.tech_debt.affected_modules, 'Affected modules');
+        requireText(ctx, ['intake', 'tech_debt', 'behavior_preservation'], values.intake.tech_debt.behavior_preservation, 'Behavior preservation');
+        requireText(ctx, ['intake', 'tech_debt', 'validation_strategy'], values.intake.tech_debt.validation_strategy, 'Validation strategy');
+        return;
+      case 'initiative':
+        requireText(ctx, ['intake', 'initiative', 'business_outcome'], values.intake.initiative.business_outcome, 'Business outcome');
+        requireText(ctx, ['intake', 'initiative', 'scope_narrative'], values.intake.initiative.scope_narrative, 'Scope narrative');
+        requireList(ctx, ['intake', 'initiative', 'success_metrics'], values.intake.initiative.success_metrics, 'Success metrics');
+        return;
+      default: {
+        const exhaustive: never = values.kind;
+        throw new Error(`Unsupported Work Item kind: ${exhaustive}`);
+      }
+    }
+  });
 
 export function CreateWorkItemForm() {
   const navigate = useNavigate();
   const { projectId } = useProjectContext();
   const { actorId } = useActorContext();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const visibleFormSchema = createWorkItemFormSchema.omit({ project_id: true, owner_actor_id: true });
+  const previousKind = useRef<WorkItemKind>('requirement');
+  const riskEdited = useRef(false);
   const form = useForm<CreateWorkItemVisibleFormValues>({
-    resolver: zodResolver(visibleFormSchema),
+    resolver: zodResolver(createWorkItemVisibleFormSchema),
     defaultValues: {
       kind: 'requirement',
       title: '',
-      goal: '',
-      success_criteria: [''],
       priority: 'P1',
-      risk: 'medium',
+      risk: defaultRiskByKind.requirement,
+      intake: createDefaultIntakeDrafts(),
     },
   });
+  const kind = useWatch({ control: form.control, name: 'kind' });
+  const intake = useWatch({ control: form.control, name: 'intake' });
+
+  useEffect(() => {
+    if (kind === previousKind.current) return;
+
+    form.setValue(`intake.${kind}`, { ...defaultEmptyIntakeValues[kind] }, { shouldDirty: false, shouldValidate: false });
+    if (!riskEdited.current) {
+      form.setValue('risk', defaultRiskByKind[kind], { shouldDirty: false, shouldValidate: true });
+    }
+    previousKind.current = kind;
+  }, [form, kind]);
+
+  const preview = useMemo(() => {
+    try {
+      const normalized = normalizeIntakeDraft(kind, intake);
+      return {
+        goal: deriveGoal(kind, normalized),
+        successCriteria: deriveSuccessCriteria(kind, normalized),
+      };
+    } catch {
+      return { goal: '', successCriteria: [] };
+    }
+  }, [intake, kind]);
 
   const onSubmit = form.handleSubmit(async (values) => {
     setSubmitError(null);
     try {
-      const payload = createWorkItemFormSchema.parse({
-        ...values,
+      const intakeContext = normalizeIntakeDraft(values.kind, values.intake);
+      const body: CreateWorkItemBody = createWorkItemRequestSchema.parse({
         project_id: projectId,
-        owner_actor_id: actorId,
+        kind: values.kind,
+        title: values.title,
+        goal: deriveGoal(values.kind, intakeContext),
+        success_criteria: deriveSuccessCriteria(values.kind, intakeContext),
+        priority: values.priority,
+        risk: values.risk,
+        driver_actor_id: actorId,
+        intake_context: intakeContext,
       });
-      const created = await createForgeloopCommandApi().createWorkItem(toCommandBody(payload));
-      navigate(`/work-items/${encodeURIComponent(created.id)}`);
+      const created = await createForgeloopCommandApi().createWorkItem(body);
+      navigate(`/work-items/${encodeURIComponent(created.id)}?lane=${laneForWorkItemKind(values.kind)}`);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : 'Could not create the work item.');
     }
   });
 
+  const riskRegistration = form.register('risk', {
+    onChange: () => {
+      riskEdited.current = true;
+    },
+  });
+
   return (
     <>
-      <PageHeader subtitle="Capture the owner brief and the validation outcome expected from the work item." title="New Work Item" />
+      <PageHeader subtitle="Capture typed intake context and the expected validation outcome." title="New Work Item" />
       <Section title="Create work item">
         <form className="stack-form" onSubmit={(event) => void onSubmit(event)}>
           <div className="state-grid" aria-label="Product context">
             <ContextMetric label="Workspace" value="Current project" />
-            <ContextMetric label="Owner" value="Signed-in work item owner" />
+            <ContextMetric label="Driver" value="Signed-in driver" />
           </div>
           <div className="form-grid two">
             <label>
               Kind
               <Select
                 {...form.register('kind')}
-                options={[
-                  { label: 'Initiative', value: 'initiative' },
-                  { label: 'Requirement', value: 'requirement' },
-                  { label: 'Bug', value: 'bug' },
-                  { label: 'Tech debt', value: 'tech_debt' },
-                ]}
+                options={workItemKindValues.map((value) => ({ label: workItemKindLabels[value], value }))}
               />
             </label>
             <label>
               Priority
               <Input {...form.register('priority')} invalid={Boolean(form.formState.errors.priority)} />
+              <FieldError message={form.formState.errors.priority?.message} />
             </label>
             <label>
               Risk
-              <Input {...form.register('risk')} invalid={Boolean(form.formState.errors.risk)} />
+              <Input {...riskRegistration} invalid={Boolean(form.formState.errors.risk)} />
+              <FieldError message={form.formState.errors.risk?.message} />
             </label>
           </div>
           <label>
@@ -105,29 +211,16 @@ export function CreateWorkItemForm() {
             <Input {...form.register('title')} invalid={Boolean(form.formState.errors.title)} />
             <FieldError message={form.formState.errors.title?.message} />
           </label>
-          <label>
-            Goal
-            <Textarea {...form.register('goal')} invalid={Boolean(form.formState.errors.goal)} />
-            <FieldError message={form.formState.errors.goal?.message} />
-          </label>
-          <label>
-            Success criteria
-            <Textarea
-              invalid={Boolean(form.formState.errors.success_criteria)}
-              onChange={(event) =>
-                form.setValue(
-                  'success_criteria',
-                  event.target.value
-                    .split('\n')
-                    .map((line) => line.trim())
-                    .filter(Boolean),
-                  { shouldValidate: true },
-                )
-              }
-              placeholder="One criterion per line"
-            />
-            <FieldError message={form.formState.errors.success_criteria?.message} />
-          </label>
+          <IntakeFields kind={kind} register={form.register} errors={form.formState.errors} />
+          {preview.goal || preview.successCriteria.length > 0 ? (
+            <div className="state-grid" aria-label="Derived Work Item brief">
+              <ContextMetric label="Derived goal" value={preview.goal || 'Add intake context'} />
+              <ContextMetric
+                label="Derived criteria"
+                value={preview.successCriteria.length > 0 ? preview.successCriteria.join('; ') : 'Add required outcomes'}
+              />
+            </div>
+          ) : null}
           {submitError ? <p className="danger-text">{submitError}</p> : null}
           <div className="button-row">
             <Button loading={form.formState.isSubmitting} type="submit" variant="primary">
@@ -143,8 +236,24 @@ export function CreateWorkItemForm() {
   );
 }
 
+function requireText(ctx: z.RefinementCtx, path: (string | number)[], value: string, label: string) {
+  if (value.trim().length === 0) {
+    ctx.addIssue({ code: 'custom', path, message: `${label} is required.` });
+  }
+}
+
+function requireList(ctx: z.RefinementCtx, path: (string | number)[], value: string, label: string) {
+  if (normalizeList(value).length === 0) {
+    ctx.addIssue({ code: 'custom', path, message: `${label} is required.` });
+  }
+}
+
 function FieldError({ message }: { message: string | undefined }) {
-  return message ? <span className="danger-text" role="alert">{message}</span> : null;
+  return message ? (
+    <span className="danger-text" role="alert">
+      {message}
+    </span>
+  ) : null;
 }
 
 function ContextMetric({ label, value }: { label: string; value: string }) {

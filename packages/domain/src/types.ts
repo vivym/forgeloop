@@ -25,6 +25,7 @@ import {
   type RunEventVisibility,
   type RunSpec,
   type SelfReviewResult,
+  type WorkItemIntakeContext,
 } from '@forgeloop/contracts';
 import type { PackageRuntimePolicySnapshot, SourceMutationPolicy, ValidationStrategy } from './automation.js';
 
@@ -132,7 +133,8 @@ export interface WorkItem {
   success_criteria: string[];
   priority: string;
   risk: string;
-  owner_actor_id: string;
+  driver_actor_id: string;
+  intake_context: WorkItemIntakeContext;
   phase: WorkItemPhase;
   activity_state: WorkItemActivityState;
   gate_state: WorkItemGateState;

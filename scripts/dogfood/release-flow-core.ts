@@ -105,6 +105,13 @@ const requiredCheck = {
   timeout_seconds: 120,
   blocks_review: true,
 };
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Release flow dogfood fixtures need typed intake context.',
+  desired_outcome: 'Dogfood Work Items can exercise release flow through public APIs.',
+  acceptance_criteria: ['Release flow dogfood can create specs, plans, releases, and replay evidence.'],
+  in_scope: ['Release flow dogfood scripts'],
+};
 const unsafeSerializedStrings = [
   '/Users/',
   '/workspace/',
@@ -410,7 +417,8 @@ const probeDeliveryRouteReadiness = async (
             success_criteria: ['Route is mounted and shares repository state.'],
             priority: 'P1',
             risk: 'low',
-            owner_actor_id: actorId,
+            driver_actor_id: actorId,
+            intake_context: requirementIntakeContext,
           })
       : { status: projectRepo.status };
 
@@ -804,7 +812,8 @@ const createDeliveryPath = async (
         success_criteria: ['Release owner can submit, approve, observe, close, and inspect replay safely.'],
         priority: 'P1',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: requirementIntakeContext,
       })
       .expect(201)
   ).body as { id: string };
@@ -1561,7 +1570,8 @@ export const runDurableReleaseLifecycle = async (input: {
         success_criteria: ['Release can be approved, observed, closed, and replayed after reopen.'],
         priority: 'P1',
         risk: 'medium',
-        owner_actor_id: owner.id,
+        driver_actor_id: owner.id,
+        intake_context: requirementIntakeContext,
       })
       .expect(201)
   ).body as WorkItem;
