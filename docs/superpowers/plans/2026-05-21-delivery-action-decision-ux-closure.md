@@ -41,6 +41,7 @@ This plan intentionally excludes Typed Work Item Intake, Work Item create DTO ch
 - Object-page command endpoints may remain available for rerun, force rerun, review decisions, and release decisions, but they must not become ProductAction command variants in this stream.
 - Do not call browser-facing code into `/internal/codex-runtime/*`, runtime setup, credential, worker, launch, or lease endpoints.
 - Do not expose profile ids, credential binding ids, worker ids, lease ids, digests, lease timing, local paths, raw config, raw runtime metadata, raw auth, or Docker command internals in the public readiness DTO.
+- Do not display raw object ids or fingerprints in Package, Review, or Release page copy. Use object titles, keys, labels, and safe navigation links instead. API payloads may carry object ids needed for routing and mutations, but user-facing text should not echo them as product copy.
 - Launch lease and run-worker fence failures are not pre-run blockers in this plan. They surface after enqueue through Run Console/runtime event state.
 
 ## Implementation Rules
@@ -51,6 +52,16 @@ This plan intentionally excludes Typed Work Item Intake, Work Item create DTO ch
 - Prefer pure action-model helpers and DB query helpers over business-rule duplication in React components.
 - Use existing UI primitives only: `ActionRail`, `DetailLayout`, `Section`, `Drawer`, `Button`, `Textarea`, `Input`, `Select`, `StatusPill`, `Badge`, `DataTable`.
 
+## Current Contract Literals To Preserve
+
+- Review Packet statuses: `draft`, `ready`, `in_review`, `completed`, `escalated`, `archived`.
+- Review decisions: `none`, `approved`, `changes_requested`, `need_more_context`, `escalate`.
+- Force-rerun endpoint eligibility is stricter than generic "open review" semantics: `apps/control-plane-api/src/modules/run-control/run-control.service.ts` currently requires the current Review Packet for `previous_run_session_id` to be `ready` or `in_review` with `decision === 'none'`. Do not broaden Package page force-rerun enablement to `draft` or `escalated` unless the endpoint validation changes in the same implementation.
+- Run Session nonterminal statuses: `queued`, `running`, `waiting_for_input`, `stalled`, `resuming`, `cancel_requested`.
+- Release phases: `draft`, `candidate`, `approval`, `rollout`, `observing`, `completed`, `closed`.
+- Release gate states include `not_submitted`, `awaiting_approval`, `changes_requested`, `approved`, `rollout_failed`, `rollout_succeeded`.
+- Release resolutions: `none`, `completed`, `rolled_back`, `cancelled`.
+
 ## File Structure And Ownership
 
 ### Contracts
@@ -58,17 +69,22 @@ This plan intentionally excludes Typed Work Item Intake, Work Item create DTO ch
 - Create `packages/contracts/src/delivery-runtime-readiness.ts`
   - Own the public-safe read-only readiness DTO for delivery run actions.
   - Own blocker code schema, action state schema, and response schema.
-  - No ids or raw runtime internals except `execution_package_id`.
+  - No object ids or raw runtime internals; navigation must use safe `next_step_href` links only.
+- Modify `packages/contracts/src/work-item-delivery-readiness.ts`
+  - Redact the existing public cockpit `runtime_metadata` projection so it does not expose worker ids, lease timing, cursors, local paths, raw config, raw auth, or other raw runtime internals.
 - Modify `packages/contracts/src/index.ts`
   - Export the new readiness module.
 - Tests:
   - Create `tests/contracts/delivery-runtime-readiness.test.ts`.
+  - Modify `tests/contracts/work-item-delivery-readiness.test.ts`.
   - Modify `tests/contracts/contracts.test.ts` only if the shared contract barrel needs coverage.
 
 ### DB Read Models
 
 - Modify `packages/db/src/repositories/delivery-repository.ts`
   - Add read-only credential binding candidate lookup for product-safe readiness, if the existing repository cannot derive credential state without a Web-supplied credential id.
+  - Add read-only active runtime profile diagnostics if needed to distinguish "no `run_execution` profile exists" from "only incompatible target profiles exist".
+  - Add read-only worker readiness diagnostics if needed to distinguish no online worker, unsupported target capability, Docker image capability mismatch, and network policy/provider mismatch. Return blocker categories only, not worker ids or raw worker records.
 - Modify `packages/db/src/repositories/in-memory-delivery-repository.ts`
   - Implement the new read-only lookup.
 - Modify `packages/db/src/repositories/drizzle-delivery-repository.ts`
@@ -78,6 +94,7 @@ This plan intentionally excludes Typed Work Item Intake, Work Item create DTO ch
   - Call existing runtime repository methods and return only contract-safe fields.
   - Map ambiguous or missing credential state to public blocker codes.
 - Modify `packages/db/src/queries/work-item-cockpit-queries.ts`
+  - Redact `projectRuntimeMetadata` and leased-run fallback projection to match the tightened public cockpit runtime metadata contract.
   - Precompute runtime readiness for current packages and pass it into `deriveWorkItemDeliveryReadiness`.
 - Modify `packages/db/src/queries/work-item-delivery-readiness.ts`
   - Consume precomputed readiness for execution-owner `run_package` actions.
@@ -138,7 +155,7 @@ This plan intentionally excludes Typed Work Item Intake, Work Item create DTO ch
   - Support add/remove/edit requested-change rows with severity.
 - Modify `apps/web/src/features/review-packets/review-packet-routes.tsx`
   - Replace hardcoded approve/request-changes button payloads with the form.
-  - Disable completed, archived, or superseded packets.
+  - Disable completed or archived packets, and any packet whose decision is no longer `none`.
   - Keep package/run links and explain evidence availability.
 - Tests:
   - Modify `tests/web/review-release-product-routes.test.tsx`.
@@ -171,17 +188,21 @@ This plan intentionally excludes Typed Work Item Intake, Work Item create DTO ch
 
 **Files:**
 - Create: `packages/contracts/src/delivery-runtime-readiness.ts`
+- Modify: `packages/contracts/src/work-item-delivery-readiness.ts`
 - Modify: `packages/contracts/src/index.ts`
 - Modify: `packages/db/src/repositories/delivery-repository.ts`
 - Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
 - Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
 - Create: `packages/db/src/queries/delivery-runtime-readiness.ts`
+- Modify: `packages/db/src/queries/work-item-cockpit-queries.ts`
 - Modify: `packages/db/src/index.ts`
 - Modify: `apps/control-plane-api/src/modules/query/query.controller.ts`
 - Modify: `apps/control-plane-api/src/modules/query/query.service.ts`
 - Test: `tests/contracts/delivery-runtime-readiness.test.ts`
+- Test: `tests/contracts/work-item-delivery-readiness.test.ts`
 - Test: `tests/db/delivery-runtime-readiness.test.ts`
 - Test: `tests/api/query-module.test.ts`
+- Test: `tests/web/package-run-product-routes.test.tsx`
 
 - [ ] **Step 1: Write failing contract tests for sanitized readiness**
 
@@ -194,7 +215,6 @@ import { deliveryRunReadinessResponseSchema } from '@forgeloop/contracts';
 describe('delivery runtime readiness contract', () => {
   it('parses a public-safe blocked local Codex readiness response', () => {
     const parsed = deliveryRunReadinessResponseSchema.parse({
-      execution_package_id: 'pkg-1',
       executor_type: 'local_codex',
       target_kind: 'run_execution',
       state: 'blocked',
@@ -214,7 +234,6 @@ describe('delivery runtime readiness contract', () => {
 
   it('rejects raw runtime ids, digests, lease metadata, local paths, and raw config', () => {
     const unsafe = {
-      execution_package_id: 'pkg-1',
       executor_type: 'local_codex',
       target_kind: 'run_execution',
       state: 'ready',
@@ -233,11 +252,59 @@ describe('delivery runtime readiness contract', () => {
 });
 ```
 
+- [ ] **Step 1b: Tighten existing cockpit runtime metadata contract tests**
+
+Modify `tests/contracts/work-item-delivery-readiness.test.ts` so the existing `rejects non-public cockpit run runtime metadata fields` test no longer treats worker and lease metadata as public:
+
+```ts
+const safeRunSession = {
+  ...runSession,
+  runtime_metadata: {
+    durability_mode: 'durable',
+    driver_kind: 'app_server',
+    driver_status: 'active',
+    last_event_at: '2026-05-20T00:00:01.000Z',
+    recovery_attempt_count: 0,
+  },
+};
+
+expect(workItemCockpitResponseSchema.parse(cockpitResponse({ run_sessions: [safeRunSession] })).run_sessions[0]).toMatchObject({
+  runtime_metadata: {
+    durability_mode: 'durable',
+    driver_kind: 'app_server',
+    driver_status: 'active',
+    last_event_at: '2026-05-20T00:00:01.000Z',
+    recovery_attempt_count: 0,
+  },
+});
+
+for (const unsafeRuntimeMetadata of [
+  { worker_id: 'worker-1' },
+  { worker_lease_status: 'active' },
+  { worker_lease_heartbeat_at: '2026-05-20T00:00:00.000Z' },
+  { worker_lease_expires_at: '2026-05-20T00:05:00.000Z' },
+  { last_event_cursor: 'cursor-1' },
+  { runtime_profile_id: 'profile-1' },
+  { credential_binding_id: 'binding-1' },
+  { launch_lease_id: 'lease-1' },
+  { workspace_path: '/tmp/workspace' },
+  { codex_config_toml: 'approval_policy = "never"' },
+]) {
+  expect(
+    workItemCockpitResponseSchema.safeParse(
+      cockpitResponse({
+        run_sessions: [{ ...safeRunSession, runtime_metadata: { ...safeRunSession.runtime_metadata, ...unsafeRuntimeMetadata } }],
+      }),
+    ).success,
+  ).toBe(false);
+}
+```
+
 - [ ] **Step 2: Run contract test to verify it fails**
 
-Run: `pnpm vitest run tests/contracts/delivery-runtime-readiness.test.ts`
+Run: `pnpm vitest run tests/contracts/delivery-runtime-readiness.test.ts tests/contracts/work-item-delivery-readiness.test.ts`
 
-Expected: FAIL because `deliveryRunReadinessResponseSchema` does not exist.
+Expected: FAIL because `deliveryRunReadinessResponseSchema` does not exist and the existing cockpit metadata schema still accepts raw worker/lease fields.
 
 - [ ] **Step 3: Add the public-safe contract**
 
@@ -276,7 +343,6 @@ export const deliveryRunReadinessBlockerSchema = z
 
 export const deliveryRunReadinessResponseSchema = z
   .object({
-    execution_package_id: nonEmpty,
     executor_type: z.literal('local_codex'),
     target_kind: z.literal('run_execution'),
     state: z.enum(['ready', 'blocked', 'unknown']),
@@ -304,6 +370,45 @@ Modify `packages/contracts/src/index.ts`:
 export * from './delivery-runtime-readiness.js';
 ```
 
+Modify `packages/contracts/src/work-item-delivery-readiness.ts` so `publicRuntimeMetadataSchema` keeps only human-safe status fields:
+
+```ts
+const publicRuntimeMetadataSchema = z
+  .object({
+    durability_mode: z.enum(['durable', 'volatile_demo']).optional(),
+    driver_kind: z.enum(['app_server', 'exec_fallback', 'fake']).optional(),
+    driver_status: z.enum(['not_started', 'starting', 'active', 'waiting_for_input', 'stalled', 'terminal']).optional(),
+    last_event_at: isoDateTimeSchema.optional(),
+    recovery_attempt_count: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+```
+
+Do not add compatibility aliases for removed raw metadata fields. If Web tests currently seed `worker_id` or lease timing into public cockpit fixtures, remove those properties and assert the UI still renders public driver status instead.
+
+- [ ] **Step 3b: Redact Work Item Cockpit runtime metadata projection**
+
+Modify `packages/db/src/queries/work-item-cockpit-queries.ts`:
+
+- Change `withWorkerLeaseMetadata` so a leased run with missing persisted runtime metadata still receives the safe durability fallback, but does not merge `worker_id`, `worker_lease_status`, lease timestamps, or lease tokens into `runSession.runtime_metadata`.
+- Change `projectRuntimeMetadata` to project only the fields allowed by `publicRuntimeMetadataSchema`: `durability_mode`, `driver_kind`, `driver_status`, `last_event_at`, and `recovery_attempt_count`.
+- Do not expose `last_event_cursor` from cockpit responses. Cursor-level state belongs to Run Console/runtime event APIs, not public Work Item Cockpit readiness.
+
+Update `tests/api/query-module.test.ts`:
+
+```ts
+expect(response.body.run_sessions[0].runtime_metadata).toMatchObject({
+  durability_mode: 'durable',
+});
+expect(response.body.run_sessions[0].runtime_metadata).not.toHaveProperty('worker_id');
+expect(response.body.run_sessions[0].runtime_metadata).not.toHaveProperty('worker_lease_status');
+expect(response.body.run_sessions[0].runtime_metadata).not.toHaveProperty('worker_lease_heartbeat_at');
+expect(response.body.run_sessions[0].runtime_metadata).not.toHaveProperty('worker_lease_expires_at');
+expect(response.body.run_sessions[0].runtime_metadata).not.toHaveProperty('last_event_cursor');
+```
+
+Keep `/run-sessions/:id/events` or Run Console specific tests separate; this stream removes raw runtime identifiers from browser delivery cockpit DTOs, not necessarily from internal runtime control-plane tests.
+
 - [ ] **Step 4: Write failing DB readiness tests**
 
 Create `tests/db/delivery-runtime-readiness.test.ts` with fixtures that use `InMemoryDeliveryRepository`:
@@ -311,19 +416,27 @@ Create `tests/db/delivery-runtime-readiness.test.ts` with fixtures that use `InM
 ```ts
 import { describe, expect, it } from 'vitest';
 import { InMemoryDeliveryRepository, deriveDeliveryRunReadiness } from '@forgeloop/db';
-import { seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
+import {
+  seedActiveGenerationProfile,
+  seedActiveRunExecutionProfile,
+  seedOnlineCodexWorkerWithDockerMismatch,
+  seedOnlineCodexWorkerWithNetworkMismatch,
+  seedOnlineCompatibleCodexWorker,
+  seedReadyExecutionPackage,
+  seedReadyLocalCodexExecutionPackage,
+  seedSingleCredentialBinding,
+} from '../helpers/delivery-runtime-fixtures';
 
 const now = '2026-05-21T00:00:00.000Z';
 
 describe('deriveDeliveryRunReadiness', () => {
   it('blocks local Codex run when no run_execution runtime profile exists', async () => {
     const repository = new InMemoryDeliveryRepository();
-    const executionPackage = await seedReadyExecutionPackage(repository);
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repository);
 
     const readiness = await deriveDeliveryRunReadiness(repository, { executionPackage, now });
 
     expect(readiness).toMatchObject({
-      execution_package_id: executionPackage.id,
       state: 'blocked',
       blockers: [expect.objectContaining({ code: 'runtime_profile_missing' })],
     });
@@ -332,7 +445,7 @@ describe('deriveDeliveryRunReadiness', () => {
 
   it('blocks local Codex run when credential binding cannot be selected safely', async () => {
     const repository = new InMemoryDeliveryRepository();
-    const executionPackage = await seedReadyExecutionPackage(repository);
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repository);
     await seedActiveRunExecutionProfile(repository, executionPackage);
     await seedOnlineCompatibleCodexWorker(repository, executionPackage);
 
@@ -343,7 +456,7 @@ describe('deriveDeliveryRunReadiness', () => {
 
   it('returns ready only when profile, credential, worker, Docker capability, and target match', async () => {
     const repository = new InMemoryDeliveryRepository();
-    const executionPackage = await seedReadyExecutionPackage(repository);
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repository);
     await seedActiveRunExecutionProfile(repository, executionPackage);
     await seedSingleCredentialBinding(repository, executionPackage);
     await seedOnlineCompatibleCodexWorker(repository, executionPackage);
@@ -353,10 +466,59 @@ describe('deriveDeliveryRunReadiness', () => {
       blockers: [],
     });
   });
+
+  it('distinguishes an incompatible active runtime target from a missing runtime profile', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repository);
+    await seedActiveGenerationProfile(repository, executionPackage);
+
+    const readiness = await deriveDeliveryRunReadiness(repository, { executionPackage, now });
+
+    expect(readiness.blockers.map((blocker) => blocker.code)).toContain('runtime_target_incompatible');
+    expect(readiness.blockers.map((blocker) => blocker.code)).not.toContain('runtime_profile_missing');
+  });
+
+  it('blocks packages whose captured runtime policy cannot use local Codex run execution', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const executionPackage = await seedReadyExecutionPackage(repository);
+    await seedActiveRunExecutionProfile(repository, executionPackage);
+    await seedSingleCredentialBinding(repository, executionPackage);
+    await seedOnlineCompatibleCodexWorker(repository, executionPackage);
+
+    const readiness = await deriveDeliveryRunReadiness(repository, { executionPackage, now });
+
+    expect(readiness.blockers.map((blocker) => blocker.code)).toContain('package_runtime_target_incompatible');
+  });
+
+  it('distinguishes Docker image capability mismatch from generic worker unavailability', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repository);
+    await seedActiveRunExecutionProfile(repository, executionPackage);
+    await seedSingleCredentialBinding(repository, executionPackage);
+    await seedOnlineCodexWorkerWithDockerMismatch(repository, executionPackage);
+
+    const readiness = await deriveDeliveryRunReadiness(repository, { executionPackage, now });
+
+    expect(readiness.blockers.map((blocker) => blocker.code)).toContain('worker_docker_capability_mismatch');
+    expect(readiness.blockers.map((blocker) => blocker.code)).not.toContain('worker_unavailable');
+  });
+
+  it('distinguishes network policy mismatch from generic worker unavailability', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repository);
+    await seedActiveRunExecutionProfile(repository, executionPackage);
+    await seedSingleCredentialBinding(repository, executionPackage);
+    await seedOnlineCodexWorkerWithNetworkMismatch(repository, executionPackage);
+
+    const readiness = await deriveDeliveryRunReadiness(repository, { executionPackage, now });
+
+    expect(readiness.blockers.map((blocker) => blocker.code)).toContain('worker_network_policy_mismatch');
+    expect(readiness.blockers.map((blocker) => blocker.code)).not.toContain('worker_unavailable');
+  });
 });
 ```
 
-Use existing runtime fixture helpers where available. If `tests/helpers/delivery-runtime-fixtures.ts` does not expose these focused seed helpers, add focused exports there instead of creating duplicate fixture factories in the test file.
+Use existing runtime fixture helpers where available. If `tests/helpers/delivery-runtime-fixtures.ts` does not expose these focused seed helpers, create and export them there in this task: `seedActiveRunExecutionProfile`, `seedActiveGenerationProfile`, `seedSingleCredentialBinding`, `seedOnlineCompatibleCodexWorker`, `seedOnlineCodexWorkerWithDockerMismatch`, and `seedOnlineCodexWorkerWithNetworkMismatch`. Do not create duplicate fixture factories in the test file. `seedReadyLocalCodexExecutionPackage` must differ from the existing mock package fixture by producing a captured policy snapshot compatible with local Codex run execution; keep the existing `seedReadyExecutionPackage` mock fixture for the explicit `package_runtime_target_incompatible` test.
 
 - [ ] **Step 5: Run DB readiness tests to verify they fail**
 
@@ -364,11 +526,17 @@ Run: `pnpm vitest run tests/db/delivery-runtime-readiness.test.ts`
 
 Expected: FAIL because the DB helper and possibly seed helper exports do not exist.
 
-- [ ] **Step 6: Add repository read-only credential lookup if needed**
+- [ ] **Step 6: Add repository read-only runtime diagnostics if needed**
 
 Modify `packages/db/src/repositories/delivery-repository.ts`:
 
 ```ts
+export interface ListActiveCodexRuntimeProfileRevisionsForScopeInput {
+  project_id: string;
+  repo_id?: string;
+  now: string;
+}
+
 export interface ListCodexCredentialBindingsForScopeInput {
   project_id: string;
   repo_id?: string;
@@ -377,15 +545,46 @@ export interface ListCodexCredentialBindingsForScopeInput {
   now: string;
 }
 
+export interface CodexWorkerReadinessDiagnosticsInput {
+  project_id: string;
+  repo_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+  now: string;
+}
+
+export interface CodexWorkerReadinessDiagnostics {
+  state:
+    | 'ready'
+    | 'worker_unavailable'
+    | 'worker_target_unsupported'
+    | 'worker_docker_capability_mismatch'
+    | 'worker_network_policy_mismatch';
+}
+
 export interface DeliveryRepository {
   // existing methods...
+  listActiveCodexRuntimeProfileRevisionsForScope(
+    input: ListActiveCodexRuntimeProfileRevisionsForScopeInput,
+  ): Promise<CodexRuntimeProfileRevision[]>;
   listCodexCredentialBindingsForScope(
     input: ListCodexCredentialBindingsForScopeInput,
   ): Promise<CodexCredentialBindingPublic[]>;
+  getCodexWorkerReadinessDiagnostics(
+    input: CodexWorkerReadinessDiagnosticsInput,
+  ): Promise<CodexWorkerReadinessDiagnostics>;
 }
 ```
 
-Implement in both repositories as a read-only query over active credential bindings for the profile, project, optional repo, and active version. Return `CodexCredentialBindingPublic` only. Do not return secret payloads. If the current implementation can safely derive exactly one binding through an existing repository method without adding this method, skip the new repository method and document the reason in the commit message.
+Implement in both repositories as read-only queries:
+
+- Runtime profile diagnostics list active profile revisions in scope without filtering by target so the helper can return `runtime_target_incompatible` when only non-`run_execution` targets exist.
+- Credential lookup reads active credential bindings for the profile, project, optional repo, and active version. Return `CodexCredentialBindingPublic` only. Do not return secret payloads.
+- Worker diagnostics evaluate online, connected, fresh workers in scope by target capability, Docker image digest, network policy digest, and optional network provider config digest. Return only the public-safe state enum above. Do not return worker ids, session tokens, lease state, capability arrays, digests, labels, or raw registration rows.
+
+If the current implementation can safely derive any of these answers through existing repository methods without adding the method, skip that method and document the reason in the commit message. Do not degrade blocker specificity to a generic `worker_unavailable` when the diagnostic can distinguish target, Docker, or network mismatch.
 
 - [ ] **Step 7: Implement shared readiness derivation**
 
@@ -397,7 +596,7 @@ import {
   type DeliveryRunReadinessBlocker,
   type DeliveryRunReadinessResponse,
 } from '@forgeloop/contracts';
-import type { ExecutionPackage } from '@forgeloop/domain';
+import { codexCanonicalDigest, type ExecutionPackage } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
 
@@ -424,21 +623,30 @@ export const deriveDeliveryRunReadiness = async (
   const blockers: DeliveryRunReadinessBlocker[] = [];
   const { executionPackage } = input;
 
-  const profileRevision = await repository.getActiveCodexRuntimeProfileRevision({
+  const activeProfileRevisions = await repository.listActiveCodexRuntimeProfileRevisionsForScope({
     project_id: executionPackage.project_id,
     repo_id: executionPackage.repo_id,
-    target_kind: 'run_execution',
     now: input.now,
   });
+  const profileRevision = activeProfileRevisions.find((revision) => revision.target_kind === 'run_execution');
 
   if (profileRevision === undefined) {
-    blockers.push(blocker('runtime_profile_missing', 'Local Codex run execution has no active runtime profile.', executionPackage.id));
-  } else if (profileRevision.target_kind !== 'run_execution') {
-    blockers.push(blocker('runtime_target_incompatible', 'The active Codex runtime profile is not for run execution.', executionPackage.id));
+    const hasOtherTargetProfile = activeProfileRevisions.length > 0;
+    blockers.push(
+      blocker(
+        hasOtherTargetProfile ? 'runtime_target_incompatible' : 'runtime_profile_missing',
+        hasOtherTargetProfile
+          ? 'The active Codex runtime profile is not for run execution.'
+          : 'Local Codex run execution has no active runtime profile.',
+        executionPackage.id,
+      ),
+    );
   }
 
   if (executionPackage.package_policy_snapshot === undefined) {
     blockers.push(blocker('package_policy_snapshot_missing', 'This package is missing a captured runtime policy snapshot.', executionPackage.id));
+  } else if (!packagePolicySnapshotSupportsLocalCodexRunExecution(executionPackage.package_policy_snapshot)) {
+    blockers.push(blocker('package_runtime_target_incompatible', 'This package was not captured for Local Codex run execution.', executionPackage.id));
   }
 
   if (profileRevision !== undefined) {
@@ -461,7 +669,9 @@ export const deriveDeliveryRunReadiness = async (
       repo_id: executionPackage.repo_id,
       target_kind: 'run_execution',
       runtime_profile_id: profileRevision.profile_id,
-      credential_binding_id: credentialBindings.length === 1 ? credentialBindings[0]?.id : undefined,
+      ...(credentialBindings.length === 1 && credentialBindings[0] !== undefined
+        ? { credential_binding_id: credentialBindings[0].id }
+        : {}),
       now: input.now,
     });
 
@@ -472,12 +682,24 @@ export const deriveDeliveryRunReadiness = async (
     }
 
     if (status.worker_status !== 'online') {
-      blockers.push(blocker('worker_unavailable', 'No compatible online Codex worker is available for this package.', executionPackage.id));
+      const workerDiagnostics = await repository.getCodexWorkerReadinessDiagnostics({
+        project_id: executionPackage.project_id,
+        repo_id: executionPackage.repo_id,
+        target_kind: 'run_execution',
+        docker_image_digest: profileRevision.docker_image_digest,
+        network_policy_digest: codexCanonicalDigest(profileRevision.network_policy),
+        ...(profileRevision.network_policy.mode === 'docker_network_proxy'
+          ? { network_provider_config_digest: profileRevision.network_policy.provider_config.provider_config_digest }
+          : {}),
+        now: input.now,
+      });
+      if (workerDiagnostics.state !== 'ready') {
+        blockers.push(blocker(workerDiagnostics.state, workerDiagnosticMessage(workerDiagnostics.state), executionPackage.id));
+      }
     }
   }
 
   return deliveryRunReadinessResponseSchema.parse({
-    execution_package_id: executionPackage.id,
     executor_type: 'local_codex',
     target_kind: 'run_execution',
     state: blockers.length === 0 ? 'ready' : 'blocked',
@@ -487,7 +709,7 @@ export const deriveDeliveryRunReadiness = async (
 };
 ```
 
-Adjust the exact worker/Docker/network blocker mapping to the fields available in `CodexRuntimeStatusProjection` and `findAvailableCodexWorker`. Keep the output sanitized even if internal status contains ids or digests.
+Add small local helpers `packagePolicySnapshotSupportsLocalCodexRunExecution` and `workerDiagnosticMessage` in this file. Adjust the exact Docker/network digest extraction to the current domain helpers, but keep the public output sanitized even if internal status contains ids or digests.
 
 - [ ] **Step 8: Add the public query endpoint**
 
@@ -531,8 +753,8 @@ it('serves public-safe execution package runtime readiness without raw runtime i
     .get(`/query/execution-packages/${executionPackage.id}/runtime-readiness`)
     .expect(200);
 
-  expect(response.body.execution_package_id).toBe(executionPackage.id);
   expect(response.body.executor_type).toBe('local_codex');
+  expect(response.body).not.toHaveProperty('execution_package_id');
   expect(JSON.stringify(response.body)).not.toMatch(/runtime_profile_id|credential_binding_id|worker_id|lease|digest|workspace|codex_config/i);
 });
 ```
@@ -542,7 +764,7 @@ it('serves public-safe execution package runtime readiness without raw runtime i
 Run:
 
 ```bash
-pnpm vitest run tests/contracts/delivery-runtime-readiness.test.ts tests/db/delivery-runtime-readiness.test.ts tests/api/query-module.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/contracts/delivery-runtime-readiness.test.ts tests/contracts/work-item-delivery-readiness.test.ts tests/db/delivery-runtime-readiness.test.ts tests/api/query-module.test.ts tests/web/package-run-product-routes.test.tsx --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -550,7 +772,7 @@ Expected: PASS.
 - [ ] **Step 11: Commit Task 1**
 
 ```bash
-git add packages/contracts/src/delivery-runtime-readiness.ts packages/contracts/src/index.ts packages/db/src/repositories/delivery-repository.ts packages/db/src/repositories/in-memory-delivery-repository.ts packages/db/src/repositories/drizzle-delivery-repository.ts packages/db/src/queries/delivery-runtime-readiness.ts packages/db/src/index.ts apps/control-plane-api/src/modules/query/query.controller.ts apps/control-plane-api/src/modules/query/query.service.ts tests/contracts/delivery-runtime-readiness.test.ts tests/db/delivery-runtime-readiness.test.ts tests/api/query-module.test.ts tests/helpers/delivery-runtime-fixtures.ts
+git add packages/contracts/src/delivery-runtime-readiness.ts packages/contracts/src/work-item-delivery-readiness.ts packages/contracts/src/index.ts packages/db/src/repositories/delivery-repository.ts packages/db/src/repositories/in-memory-delivery-repository.ts packages/db/src/repositories/drizzle-delivery-repository.ts packages/db/src/queries/delivery-runtime-readiness.ts packages/db/src/queries/work-item-cockpit-queries.ts packages/db/src/index.ts apps/control-plane-api/src/modules/query/query.controller.ts apps/control-plane-api/src/modules/query/query.service.ts tests/contracts/delivery-runtime-readiness.test.ts tests/contracts/work-item-delivery-readiness.test.ts tests/db/delivery-runtime-readiness.test.ts tests/api/query-module.test.ts tests/helpers/delivery-runtime-fixtures.ts tests/web/package-run-product-routes.test.tsx
 git commit -m "feat: add public delivery runtime readiness"
 ```
 
@@ -559,12 +781,15 @@ git commit -m "feat: add public delivery runtime readiness"
 ### Task 2: Gate Package Page Run Actions With The Shared Readiness Model
 
 **Files:**
+- Modify: `packages/contracts/src/work-item-delivery-readiness.ts`
+- Modify: `packages/db/src/queries/work-item-cockpit-queries.ts`
 - Modify: `apps/web/src/shared/api/types.ts`
 - Modify: `apps/web/src/shared/api/query.ts`
 - Modify: `apps/web/src/shared/api/query-keys.ts`
 - Modify: `apps/web/src/shared/api/hooks.ts`
 - Create: `apps/web/src/features/execution-packages/package-action-model.ts`
 - Modify: `apps/web/src/features/execution-packages/execution-package-routes.tsx`
+- Modify: `tests/web/fixtures/product-api-mock.ts`
 - Test: `tests/web/package-run-product-routes.test.tsx`
 
 - [ ] **Step 1: Write failing Web tests for Package action gating**
@@ -578,7 +803,6 @@ it('disables package run actions with public-safe runtime readiness blockers', a
       [`GET /execution-packages/${executionPackage.id}`]: { ...executionPackage, phase: 'ready', gate_state: 'not_submitted' },
       [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
       [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
-        execution_package_id: executionPackage.id,
         executor_type: 'local_codex',
         target_kind: 'run_execution',
         state: 'blocked',
@@ -601,10 +825,9 @@ it('disables package run actions with public-safe runtime readiness blockers', a
 it('enables package run only when package state and runtime readiness are both ready', async () => {
   const screen = await renderRoute(`/packages/${executionPackage.id}`, {
     apiOverrides: {
-      [`GET /execution-packages/${executionPackage.id}`]: { ...executionPackage, phase: 'ready', gate_state: 'not_submitted', last_run_session_id: undefined },
+      [`GET /execution-packages/${executionPackage.id}`]: { ...executionPackageWithoutRun, phase: 'ready', gate_state: 'not_submitted' },
       [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
       [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
-        execution_package_id: executionPackage.id,
         executor_type: 'local_codex',
         target_kind: 'run_execution',
         state: 'ready',
@@ -628,7 +851,6 @@ it('blocks package run replacement while the current run pointer is unresolved',
       },
       [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
       [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
-        execution_package_id: executionPackage.id,
         executor_type: 'local_codex',
         target_kind: 'run_execution',
         state: 'ready',
@@ -653,7 +875,6 @@ it('blocks rerun replacement while a current review packet is open', async () =>
       },
       [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
       [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
-        execution_package_id: executionPackage.id,
         executor_type: 'local_codex',
         target_kind: 'run_execution',
         state: 'ready',
@@ -664,6 +885,162 @@ it('blocks rerun replacement while a current review packet is open', async () =>
 
   expect(await screen.findByRole('button', { name: 'Rerun' })).toHaveProperty('disabled', true);
   expect(screen.getByText(/Review Packet must be decided/i)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+});
+
+it('enables force rerun only with a current open review and a governance rationale', async () => {
+  const user = userEvent.setup();
+  const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+    apiOverrides: {
+      [`GET /execution-packages/${executionPackage.id}`]: {
+        ...executionPackage,
+        phase: 'review',
+        gate_state: 'awaiting_human_review',
+        last_run_session_id: runSession.id,
+        current_review_packet_id: reviewPacket.id,
+      },
+      [`GET /query/reviews/${reviewPacket.id}`]: { ...reviewPacket, status: 'ready', decision: 'none', run_session_id: runSession.id },
+      [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+        executor_type: 'local_codex',
+        target_kind: 'run_execution',
+        state: 'ready',
+        blockers: [],
+      },
+    },
+  });
+
+  expect(await screen.findByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  await user.type(screen.getByLabelText('Force rerun reason'), 'Replace stale evidence after requested changes.');
+  expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', false);
+});
+
+it('blocks force rerun without the backend-required current open review context', async () => {
+  const user = userEvent.setup();
+  const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+    apiOverrides: {
+      [`GET /execution-packages/${executionPackage.id}`]: {
+        ...executionPackage,
+        phase: 'review',
+        gate_state: 'awaiting_human_review',
+        last_run_session_id: runSession.id,
+      },
+      [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+        executor_type: 'local_codex',
+        target_kind: 'run_execution',
+        state: 'ready',
+        blockers: [],
+      },
+    },
+  });
+
+  await user.type(await screen.findByLabelText('Force rerun reason'), 'Try force rerun without review.');
+  expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  expect(screen.getByText(/current open ready or in-review Review Packet/i)).toBeTruthy();
+});
+
+it('blocks force rerun for non-owner actors even with an eligible open review', async () => {
+  const user = userEvent.setup();
+  const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+    actorId: 'actor-not-owner',
+    apiOverrides: {
+      [`GET /execution-packages/${executionPackage.id}`]: {
+        ...executionPackage,
+        phase: 'review',
+        resolution: 'none',
+        gate_state: 'awaiting_human_review',
+        last_run_session_id: runSession.id,
+        current_review_packet_id: reviewPacket.id,
+      },
+      [`GET /query/reviews/${reviewPacket.id}`]: {
+        ...reviewPacket,
+        status: 'ready',
+        decision: 'none',
+        execution_package_id: executionPackage.id,
+        run_session_id: runSession.id,
+      },
+      [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+        executor_type: 'local_codex',
+        target_kind: 'run_execution',
+        state: 'ready',
+        blockers: [],
+      },
+    },
+  });
+
+  await user.type(await screen.findByLabelText('Force rerun reason'), 'Replace stale evidence after requested changes.');
+  expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  expect(screen.getByText(/only the package owner/i)).toBeTruthy();
+});
+
+it('blocks force rerun when the loaded Review Packet is not for the latest package run', async () => {
+  const user = userEvent.setup();
+  const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+    apiOverrides: {
+      [`GET /execution-packages/${executionPackage.id}`]: {
+        ...executionPackage,
+        phase: 'review',
+        resolution: 'none',
+        gate_state: 'awaiting_human_review',
+        last_run_session_id: runSession.id,
+        current_review_packet_id: reviewPacket.id,
+      },
+      [`GET /query/reviews/${reviewPacket.id}`]: {
+        ...reviewPacket,
+        status: 'ready',
+        decision: 'none',
+        execution_package_id: executionPackage.id,
+        run_session_id: 'stale-run-session',
+      },
+      [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+        executor_type: 'local_codex',
+        target_kind: 'run_execution',
+        state: 'ready',
+        blockers: [],
+      },
+    },
+  });
+
+  await user.type(await screen.findByLabelText('Force rerun reason'), 'Replace stale evidence after requested changes.');
+  expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  expect(screen.getByText(/latest package run/i)).toBeTruthy();
+});
+
+it('blocks force rerun for draft or escalated review statuses rejected by the command endpoint', async () => {
+  const user = userEvent.setup();
+  const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+    apiOverrides: {
+      [`GET /execution-packages/${executionPackage.id}`]: {
+        ...executionPackage,
+        phase: 'review',
+        resolution: 'none',
+        gate_state: 'awaiting_human_review',
+        last_run_session_id: runSession.id,
+        current_review_packet_id: reviewPacket.id,
+      },
+      [`GET /query/reviews/${reviewPacket.id}`]: {
+        ...reviewPacket,
+        status: 'draft',
+        decision: 'none',
+        execution_package_id: executionPackage.id,
+        run_session_id: runSession.id,
+      },
+      [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+        executor_type: 'local_codex',
+        target_kind: 'run_execution',
+        state: 'ready',
+        blockers: [],
+      },
+    },
+  });
+
+  await user.type(await screen.findByLabelText('Force rerun reason'), 'Replace stale evidence after requested changes.');
+  expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  expect(screen.getByText(/ready or in-review Review Packet/i)).toBeTruthy();
 });
 ```
 
@@ -687,6 +1064,7 @@ Modify `apps/web/src/shared/api/query.ts`:
 
 ```ts
 import { deliveryRunReadinessResponseSchema } from '@forgeloop/contracts';
+import type { DeliveryRunReadiness } from './types';
 
 getExecutionPackageRuntimeReadiness: async (packageId: string) =>
   deliveryRunReadinessResponseSchema.parse(
@@ -712,7 +1090,43 @@ export function usePackageRuntimeReadinessQuery(packageId: string | undefined) {
 }
 ```
 
-- [ ] **Step 4: Add pure Package action model**
+- [ ] **Step 4: Add default Web API mock readiness response**
+
+Modify `tests/web/fixtures/product-api-mock.ts` so existing Package route tests that do not override the new endpoint keep rendering with deterministic data:
+
+```ts
+[`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+  executor_type: 'local_codex',
+  target_kind: 'run_execution',
+  state: 'ready',
+  blockers: [],
+  generated_at: executionPackage.updated_at,
+},
+```
+
+Do not make the Package action model treat `readiness === undefined` as ready. Missing readiness data must keep run actions disabled while the query is loading or failed.
+
+- [ ] **Step 5: Expose current run/review pointers on the Web package type**
+
+Modify `packages/contracts/src/work-item-delivery-readiness.ts` package projection schema to include the current package pointers that are already present on the domain object:
+
+```ts
+current_run_session_id: nonEmpty.optional(),
+current_review_packet_id: nonEmpty.optional(),
+current_release_id: nonEmpty.optional(),
+```
+
+Modify `packages/db/src/queries/work-item-cockpit-queries.ts` `projectExecutionPackage` to project those fields with conditional spreads:
+
+```ts
+...(executionPackage.current_run_session_id === undefined ? {} : { current_run_session_id: executionPackage.current_run_session_id }),
+...(executionPackage.current_review_packet_id === undefined ? {} : { current_review_packet_id: executionPackage.current_review_packet_id }),
+...(executionPackage.current_release_id === undefined ? {} : { current_release_id: executionPackage.current_release_id }),
+```
+
+This keeps `apps/web/src/shared/api/types.ts` `ExecutionPackage = WorkItemCockpitResponse['packages'][number]` usable for `GET /execution-packages/:id` without adding a separate unchecked Web package shape. These product object ids are safe; do not add raw runtime profile, credential, worker, lease, digest, local path, or config fields.
+
+- [ ] **Step 6: Add pure Package action model**
 
 Create `apps/web/src/features/execution-packages/package-action-model.ts`:
 
@@ -740,14 +1154,20 @@ const firstRuntimeBlocker = (readiness: DeliveryRunReadiness | undefined): strin
 
 const activeRunStatuses = new Set(['queued', 'running', 'waiting_for_input', 'stalled', 'resuming', 'cancel_requested']);
 const openReviewStatuses = new Set(['draft', 'ready', 'in_review', 'escalated']);
+const forceRerunReviewStatuses = new Set(['ready', 'in_review']);
+const actionState = (enabled: boolean, reason?: string): PackageActionState =>
+  reason === undefined ? { enabled } : { enabled, reason };
 
 export function packageActionModel(input: {
   executionPackage: ExecutionPackage;
-  readiness?: DeliveryRunReadiness;
+  actorId: string;
+  readiness: DeliveryRunReadiness | undefined;
   currentRun?: Pick<RunSession, 'id' | 'status'>;
   hasActiveRun?: boolean;
-  openReview?: Pick<ReviewPacket, 'id' | 'status' | 'decision'>;
+  openReview?: Pick<ReviewPacket, 'id' | 'status' | 'decision' | 'execution_package_id' | 'run_session_id'>;
   hasOpenReview?: boolean;
+  forceRerunReview?: Pick<ReviewPacket, 'id' | 'status' | 'decision' | 'execution_package_id' | 'run_session_id'>;
+  hasForceRerunReview?: boolean;
   actionPending: boolean;
   forceRerunReason: string;
 }): PackageActionModel {
@@ -761,61 +1181,119 @@ export function packageActionModel(input: {
   const hasOpenReview =
     input.hasOpenReview === true ||
     (input.openReview !== undefined &&
-      (openReviewStatuses.has(input.openReview.status) || input.openReview.decision === 'pending'));
+      openReviewStatuses.has(input.openReview.status) &&
+      input.openReview.decision === 'none');
+  const forceRerunReview = input.forceRerunReview ?? input.openReview;
+  const hasForceRerunReview =
+    input.hasForceRerunReview === true ||
+    (forceRerunReview !== undefined &&
+      forceRerunReviewStatuses.has(forceRerunReview.status) &&
+      forceRerunReview.decision === 'none');
+  const forceRerunReviewMatchesCurrentRun =
+    forceRerunReview !== undefined &&
+    forceRerunReview.execution_package_id === executionPackage.id &&
+    forceRerunReview.run_session_id === executionPackage.last_run_session_id;
+  const forceRerunOwnerAllowed = executionPackage.owner_actor_id === input.actorId;
+  const forceRerunResolutionAllowed = executionPackage.resolution === 'none';
   const markReadyAllowed = executionPackage.phase === 'draft' || executionPackage.gate_state === 'changes_requested';
   const runStateAllowed = executionPackage.phase === 'ready' && executionPackage.gate_state === 'not_submitted';
-  const replacementAllowed = !hasActiveRun && !hasOpenReview;
-  const replacementReason = hasActiveRun
+  const normalReplacementAllowed = !hasActiveRun && !hasOpenReview;
+  const normalReplacementReason = hasActiveRun
     ? 'A run is already active for this package. Open the Run Console before starting another run.'
     : hasOpenReview
       ? 'The current Review Packet must be decided before replacing package evidence.'
       : undefined;
+  const forceRerunAllowed =
+    hasPreviousRun &&
+    !hasActiveRun &&
+    hasForceRerunReview &&
+    forceRerunReviewMatchesCurrentRun &&
+    executionPackage.phase === 'review' &&
+    forceRerunResolutionAllowed &&
+    forceRerunOwnerAllowed &&
+    input.forceRerunReason.trim().length > 0;
+  const forceRerunReason =
+    !hasPreviousRun
+      ? 'Force rerun is available after this package has a previous run.'
+      : hasActiveRun
+        ? 'A run is already active for this package. Open the Run Console before forcing a rerun.'
+      : !hasForceRerunReview
+        ? hasOpenReview
+          ? 'Checking current Review Packet eligibility for force rerun.'
+          : 'Force rerun requires a current open ready or in-review Review Packet.'
+      : !forceRerunReviewMatchesCurrentRun
+        ? 'Force rerun requires a current open Review Packet for the latest package run.'
+      : executionPackage.phase !== 'review'
+        ? 'Force rerun is available only while the package is in review.'
+      : !forceRerunResolutionAllowed
+        ? 'Force rerun is unavailable after the package is resolved.'
+      : !forceRerunOwnerAllowed
+        ? 'Force rerun is available only to the package owner.'
+      : input.forceRerunReason.trim().length === 0
+        ? 'Force rerun requires a governance rationale.'
+      : runtimeReason;
   const editAllowed = !hasActiveRun && (executionPackage.last_run_session_id === undefined || executionPackage.gate_state === 'changes_requested');
 
   return {
-    markReady: {
-      enabled: markReadyAllowed && !actionPending,
-      reason: markReadyAllowed ? undefined : 'Mark ready is available only for draft packages or packages with requested changes.',
-    },
-    run: {
-      enabled: runStateAllowed && replacementAllowed && runtimeReason === undefined && !actionPending,
-      reason: !runStateAllowed
+    markReady: actionState(
+      markReadyAllowed && !actionPending,
+      markReadyAllowed ? undefined : 'Mark ready is available only for draft packages or packages with requested changes.',
+    ),
+    run: actionState(
+      runStateAllowed && normalReplacementAllowed && runtimeReason === undefined && !actionPending,
+      !runStateAllowed
         ? 'Run is available only for ready packages that have not been submitted.'
-        : replacementReason ?? runtimeReason,
-    },
-    rerun: {
-      enabled: hasPreviousRun && replacementAllowed && runtimeReason === undefined && !actionPending,
-      reason: hasPreviousRun ? replacementReason ?? runtimeReason : 'Rerun is available after this package has a previous run.',
-    },
-    forceRerun: {
-      enabled: hasPreviousRun && replacementAllowed && input.forceRerunReason.trim().length > 0 && runtimeReason === undefined && !actionPending,
-      reason: !hasPreviousRun
-        ? 'Force rerun is available after this package has a previous run.'
-        : replacementReason !== undefined
-          ? replacementReason
-        : input.forceRerunReason.trim().length === 0
-          ? 'Force rerun requires a governance rationale.'
-          : runtimeReason,
-    },
-    edit: {
-      enabled: editAllowed && !actionPending,
-      reason: editAllowed ? undefined : 'Package details can be edited only before execution starts or after changes are requested.',
-    },
+        : normalReplacementReason ?? runtimeReason,
+    ),
+    rerun: actionState(
+      hasPreviousRun && normalReplacementAllowed && runtimeReason === undefined && !actionPending,
+      hasPreviousRun ? normalReplacementReason ?? runtimeReason : 'Rerun is available after this package has a previous run.',
+    ),
+    forceRerun: actionState(
+      forceRerunAllowed && runtimeReason === undefined && !actionPending,
+      forceRerunReason,
+    ),
+    edit: actionState(
+      editAllowed && !actionPending,
+      editAllowed ? undefined : 'Package details can be edited only before execution starts or after changes are requested.',
+    ),
   };
 }
 ```
 
 Adjust field names if Stream B or later contracts add a better open-review indicator. Keep this helper pure.
 If the Package detail API does not expose `current_run_session_id` or `current_review_packet_id`, extend the Web package type/projection in this task. Do not treat missing active-run/open-review data as false when the backend has that state.
+The separate `forceRerunReviewStatuses` set intentionally follows the command endpoint's stricter validation (`ready` or `in_review` only), even though the domain-level generic open-review helper also includes `draft` and `escalated`.
 
-- [ ] **Step 5: Wire Package detail UI to the action model**
+- [ ] **Step 7: Wire Package detail UI to the action model**
 
 Modify `apps/web/src/features/execution-packages/execution-package-routes.tsx`:
 
-- Import `usePackageRuntimeReadinessQuery` and `packageActionModel`.
+- Import `usePackageRuntimeReadinessQuery`, the existing Review Packet detail query hook if one exists, and `packageActionModel`.
 - Call `const readinessQuery = usePackageRuntimeReadinessQuery(packageId);`.
-- Build `const actions = packageActionModel({ executionPackage, readiness: readinessQuery.data, hasActiveRun: executionPackage.current_run_session_id !== undefined, hasOpenReview: executionPackage.current_review_packet_id !== undefined, actionPending, forceRerunReason: forceReason });`.
+- If `executionPackage.current_review_packet_id` exists, load that Review Packet by id and pass it as `openReview`/`forceRerunReview`; if no reusable hook exists, add one to `apps/web/src/shared/api/hooks.ts` instead of enabling force-rerun from the id pointer alone.
+- Build the action model from loaded state:
+
+```ts
+const reviewPointerLoading =
+  executionPackage.current_review_packet_id !== undefined && currentReviewQuery.data === undefined;
+
+const actions = packageActionModel({
+  executionPackage,
+  actorId,
+  readiness: readinessQuery.data,
+  hasActiveRun: executionPackage.current_run_session_id !== undefined,
+  ...(reviewPointerLoading ? { hasOpenReview: true } : {}),
+  ...(currentReviewQuery.data === undefined ? {} : { openReview: currentReviewQuery.data, forceRerunReview: currentReviewQuery.data }),
+  actionPending,
+  forceRerunReason: forceReason,
+});
+```
+
 - If this route has loaded the current run detail, pass `currentRun` instead of `hasActiveRun`; the model then enables replacement only when that run status is terminal. Do not infer that `current_run_session_id === last_run_session_id` is safe, because the active current run can also be the latest run.
+- Use `current_review_packet_id` as a conservative `hasOpenReview` signal to block normal run/rerun while Review Packet details load. Do not use it as proof that force-rerun is allowed; force-rerun requires a loaded `ready` or `in_review` packet with `decision === 'none'`.
+- Keep force-rerun status checks aligned to the command endpoint, not to the broader domain `isOpenReviewPacketStatus` helper. The current endpoint rejects `draft` and `escalated` Review Packets before enqueue.
+- Change the Package header subtitle and metadata so it does not display `work_item_id`, `repo_id`, run ids, or package ids as visible product copy. Prefer the Work Item title/Package objective where available and keep raw ids only inside link `to` attributes.
 - Disable buttons from `actions.*.enabled`.
 - Render concise reason text below blocked actions:
 
@@ -825,7 +1303,7 @@ Modify `apps/web/src/features/execution-packages/execution-package-routes.tsx`:
 
 Do not clear `forceReason` on mutation failure. Render `runPackage.isError`, `rerunPackage.isError`, and `forceRerunPackage.isError` inline near their buttons.
 
-- [ ] **Step 6: Invalidate package runtime readiness after package mutations**
+- [ ] **Step 8: Invalidate package runtime readiness after package mutations**
 
 Modify `apps/web/src/shared/api/hooks.ts`:
 
@@ -842,16 +1320,16 @@ function invalidatePackageResources(queryClient: QueryClient, packageId: string)
 
 Ensure `useMarkPackageReadyMutation`, `usePatchExecutionPackageMutation`, `useRunPackageMutation`, `useRerunPackageMutation`, and `useForceRerunPackageMutation` eventually call this path or explicitly invalidate readiness.
 
-- [ ] **Step 7: Run focused Web verification**
+- [ ] **Step 9: Run focused Web verification**
 
 Run: `pnpm vitest run tests/web/package-run-product-routes.test.tsx`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit Task 2**
+- [ ] **Step 10: Commit Task 2**
 
 ```bash
-git add apps/web/src/shared/api/types.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/query-keys.ts apps/web/src/shared/api/hooks.ts apps/web/src/features/execution-packages/package-action-model.ts apps/web/src/features/execution-packages/execution-package-routes.tsx tests/web/package-run-product-routes.test.tsx
+git add packages/contracts/src/work-item-delivery-readiness.ts packages/db/src/queries/work-item-cockpit-queries.ts apps/web/src/shared/api/types.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/query-keys.ts apps/web/src/shared/api/hooks.ts apps/web/src/features/execution-packages/package-action-model.ts apps/web/src/features/execution-packages/execution-package-routes.tsx tests/web/fixtures/product-api-mock.ts tests/web/package-run-product-routes.test.tsx
 git commit -m "feat: gate package actions with runtime readiness"
 ```
 
@@ -873,7 +1351,7 @@ Add Product Lane coverage to `tests/api/product-lanes.test.ts`:
 ```ts
 it('does not emit enabled run_package lane actions when runtime readiness is blocked', async () => {
   const { app } = await track(createTestApp());
-  const executionPackage = await seedReadyPackage(app, { phase: 'ready', gate_state: 'not_submitted' });
+  const executionPackage = await seedReadyExecutionPackageThroughApi(app);
 
   const response = await request(app.getHttpServer())
     .get('/query/product-lanes/execution-owner')
@@ -896,7 +1374,7 @@ Add Work Item Cockpit coverage:
 ```ts
 it('uses the same runtime readiness blocker for Work Item Cockpit run_package', async () => {
   const { app } = await track(createTestApp());
-  const executionPackage = await seedReadyPackage(app, { phase: 'ready', gate_state: 'not_submitted' });
+  const executionPackage = await seedReadyExecutionPackageThroughApi(app);
 
   const response = await request(app.getHttpServer())
     .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
@@ -1042,7 +1520,7 @@ it('requires a reviewer-entered approve summary instead of hardcoded review text
   const user = userEvent.setup();
   const screen = await renderRoute(`/reviews/${reviewPacket.id}`, {
     apiOverrides: {
-      [`GET /query/reviews/${reviewPacket.id}`]: { ...reviewPacket, status: 'awaiting_review', decision: 'pending' },
+      [`GET /query/reviews/${reviewPacket.id}`]: { ...reviewPacket, status: 'ready', decision: 'none' },
       [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
       [`POST /review-packets/${reviewPacket.id}/approve`]: { review_packet_id: reviewPacket.id, status: 'completed', decision: 'approved' },
     },
@@ -1051,7 +1529,7 @@ it('requires a reviewer-entered approve summary instead of hardcoded review text
   await user.click(await screen.findByRole('button', { name: 'Approve review' }));
   expect(screen.getByText(/review summary is required/i)).toBeTruthy();
 
-  await user.type(screen.getByLabelText('Review summary'), 'Implementation evidence is complete.');
+  await user.type(screen.getByLabelText('Approve summary'), 'Implementation evidence is complete.');
   await user.click(screen.getByRole('button', { name: 'Approve review' }));
 
   await waitFor(() => {
@@ -1067,13 +1545,15 @@ it('requires at least one requested change with title, description, and severity
   const user = userEvent.setup();
   const screen = await renderRoute(`/reviews/${reviewPacket.id}`, {
     apiOverrides: {
-      [`GET /query/reviews/${reviewPacket.id}`]: { ...reviewPacket, status: 'awaiting_review', decision: 'pending' },
+      [`GET /query/reviews/${reviewPacket.id}`]: { ...reviewPacket, status: 'ready', decision: 'none' },
       [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
       [`POST /review-packets/${reviewPacket.id}/request-changes`]: { review_packet_id: reviewPacket.id, status: 'completed', decision: 'changes_requested' },
     },
   });
 
-  await user.click(await screen.findByRole('button', { name: 'Request changes' }));
+  await user.click(await screen.findByRole('tab', { name: 'Request changes' }));
+  await user.type(screen.getByLabelText('Request changes summary'), 'Implementation needs targeted fixes before approval.');
+  await user.click(screen.getByRole('button', { name: 'Request changes' }));
   expect(screen.getByText(/requested change is required/i)).toBeTruthy();
 
   await user.click(screen.getByRole('button', { name: 'Add requested change' }));
@@ -1129,7 +1609,7 @@ export function ReviewDecisionForm({
       .map((change) => ({
         title: change.title.trim(),
         description: change.description.trim(),
-        severity: change.severity,
+        ...(change.severity === undefined ? {} : { severity: change.severity }),
       }))
       .filter((change) => change.title && change.description);
 
@@ -1141,7 +1621,7 @@ export function ReviewDecisionForm({
     setError(undefined);
     onSubmit({
       summary: summary.trim(),
-      requested_changes: mode === 'request_changes' ? requestedChanges : undefined,
+      ...(mode === 'request_changes' ? { requested_changes: requestedChanges } : {}),
     });
   }
 
@@ -1152,7 +1632,7 @@ export function ReviewDecisionForm({
   return (
     <form className="stack-form compact" onSubmit={submit}>
       <label className="field">
-        Review summary
+        {mode === 'approve' ? 'Approve summary' : 'Request changes summary'}
         <Textarea disabled={disabled} onChange={(event) => setSummary(event.currentTarget.value)} rows={3} value={summary} />
       </label>
       {mode === 'request_changes' ? (
@@ -1208,18 +1688,25 @@ Adjust the exact props so `reviewed_by_actor_id` is injected by the route, not t
 Modify `apps/web/src/features/review-packets/review-packet-routes.tsx`:
 
 - Import `ReviewDecisionForm`.
+- Add local route state for the active decision mode:
+
+```ts
+const [decisionMode, setDecisionMode] = useState<'approve' | 'request_changes'>('approve');
+```
+
+- Render a two-option tab/segmented control with `role="tab"` labels `Approve` and `Request changes`, then render exactly one `ReviewDecisionForm` for `decisionMode`. Do not mount approve and request-changes forms simultaneously; otherwise duplicated field labels make tests and assistive technology ambiguous.
 - Determine `decisionDisabled` from review status/decision:
 
 ```ts
-const decisionDisabled = ['completed', 'archived', 'superseded'].includes(review.status);
+const decisionDisabled = review.status === 'completed' || review.status === 'archived' || review.decision !== 'none';
 ```
 
-- Submit approve:
+- Submit approve when `decisionMode === 'approve'`:
 
 ```tsx
 <ReviewDecisionForm
   actionPending={approveReview.isPending}
-  apiError={approveReview.isError ? 'Review approval is temporarily unavailable.' : undefined}
+  {...(approveReview.isError ? { apiError: 'Review approval is temporarily unavailable.' } : {})}
   disabled={decisionDisabled || actionPending}
   mode="approve"
   onSubmit={(body) =>
@@ -1234,6 +1721,7 @@ const decisionDisabled = ['completed', 'archived', 'superseded'].includes(review
 
 - Submit changes similarly to `requestChanges.mutate`.
 - Render a disabled reason when `decisionDisabled` is true.
+- Change the Review header subtitle and summary metadata so the page does not display raw `execution_package_id`, `run_session_id`, or review id. Use Package objective, run summary/status, and links with ids only inside `to` attributes.
 
 - [ ] **Step 5: Broaden Review invalidation**
 
@@ -1284,10 +1772,11 @@ Add tests to `tests/web/review-release-product-routes.test.tsx`:
 
 ```ts
 it('renders only the active release decision group with disabled reasons', async () => {
+  const { rollout_strategy: _rolloutStrategy, ...releaseMissingRolloutStrategy } = releaseWithKey;
   const blockedCockpit = {
     ...releaseCockpitResponse,
-    release: { ...releaseWithKey, phase: 'candidate', gate_state: 'not_submitted', resolution: 'none', rollout_strategy: undefined },
-    blockers: [{ code: 'missing_rollout_strategy', message: 'Release is missing a rollout strategy.', severity: 'blocking' }],
+    release: { ...releaseMissingRolloutStrategy, phase: 'candidate', gate_state: 'not_submitted', resolution: 'none' },
+    blockers: [{ code: 'missing_rollout_strategy', category: 'planning', overrideable: true, message: 'Release is missing a rollout strategy.' }],
   };
 
   const screen = await renderRoute(`/releases/${release.id}`, {
@@ -1310,10 +1799,10 @@ it('requires override rationale and confirmation before override approval', asyn
       [`GET /query/release-cockpit/${release.id}`]: {
         ...releaseCockpitResponse,
         release: { ...releaseWithKey, phase: 'approval', gate_state: 'awaiting_approval', resolution: 'none' },
-        blockers: [{ code: 'failed_required_check', message: 'A required check failed.', severity: 'blocking' }],
+        blockers: [{ code: 'failed_required_check', category: 'evidence', overrideable: true, message: 'A required check failed.' }],
         blocker_snapshot: {
           ...releaseCockpitResponse.blocker_snapshot,
-          blockers: [{ code: 'failed_required_check', message: 'A required check failed.', severity: 'blocking' }],
+          blockers: [{ code: 'failed_required_check', category: 'evidence', overrideable: true, message: 'A required check failed.' }],
         },
       },
       [`GET /query/replay/release/${release.id}`]: timeline,
@@ -1358,46 +1847,59 @@ export interface ReleaseActionAvailability {
 
 const hasText = (value: string | undefined | null): boolean => typeof value === 'string' && value.trim().length > 0;
 const firstBlocker = (cockpit: ReleaseCockpitResponse): string | undefined => cockpit.blockers[0]?.message;
+const availability = (
+  input: Omit<ReleaseActionAvailability, 'reason'>,
+  reason?: string,
+): ReleaseActionAvailability => (reason === undefined ? input : { ...input, reason });
 
 export function releaseActionModel(cockpit: ReleaseCockpitResponse): Record<ReleaseDecisionGroup, ReleaseActionAvailability> {
   const release = cockpit.release;
   const planningComplete = hasText(release.scope_summary) && hasText(release.rollout_strategy) && hasText(release.rollback_plan) && hasText(release.observation_plan);
   const hasBlockers = cockpit.blockers.length > 0;
-  const approvalPhase = ['approval', 'candidate'].includes(release.phase);
-  const approved = release.gate_state === 'approved' || release.resolution === 'approved';
+  const approvalDecisionVisible = release.phase === 'approval' && release.gate_state === 'awaiting_approval';
+  const approved = release.gate_state === 'approved';
+  const qaHandoffVisible = approved || release.phase === 'rollout' || release.phase === 'observing';
   const observing = release.phase === 'observing';
 
   return {
     edit_planning: { group: 'edit_planning', visible: release.phase === 'draft' || release.phase === 'candidate', enabled: true },
-    submit_for_approval: {
-      group: 'submit_for_approval',
-      visible: release.phase === 'draft' || release.phase === 'candidate',
-      enabled: planningComplete,
-      reason: planningComplete ? undefined : 'Release needs scope, rollout, rollback, and observation planning before submission.',
-    },
-    approval_decision: {
-      group: 'approval_decision',
-      visible: approvalPhase,
-      enabled: !hasBlockers,
-      reason: hasBlockers ? firstBlocker(cockpit) ?? 'Release readiness blockers must be resolved or override-approved.' : undefined,
-    },
-    qa_test_acceptance: {
-      group: 'qa_test_acceptance',
-      visible: approvalPhase || approved,
-      enabled: !hasBlockers,
-      reason: hasBlockers ? firstBlocker(cockpit) : undefined,
-    },
+    submit_for_approval: availability(
+      {
+        group: 'submit_for_approval',
+        visible: release.phase === 'draft' || release.phase === 'candidate',
+        enabled: planningComplete,
+      },
+      planningComplete ? undefined : 'Release needs scope, rollout, rollback, and observation planning before submission.',
+    ),
+    approval_decision: availability(
+      {
+        group: 'approval_decision',
+        visible: approvalDecisionVisible,
+        enabled: !hasBlockers,
+      },
+      hasBlockers ? firstBlocker(cockpit) ?? 'Release readiness blockers must be resolved or override-approved.' : undefined,
+    ),
+    qa_test_acceptance: availability(
+      {
+        group: 'qa_test_acceptance',
+        visible: qaHandoffVisible,
+        enabled: !hasBlockers,
+      },
+      hasBlockers ? firstBlocker(cockpit) : undefined,
+    ),
     observation_transition: {
       group: 'observation_transition',
       visible: approved,
       enabled: approved,
     },
-    close_release: {
-      group: 'close_release',
-      visible: observing || release.phase === 'rollout',
-      enabled: observing,
-      reason: observing ? undefined : 'Release must be observing before normal closure.',
-    },
+    close_release: availability(
+      {
+        group: 'close_release',
+        visible: observing || release.phase === 'rollout',
+        enabled: observing,
+      },
+      observing ? undefined : 'Release must be observing before normal closure.',
+    ),
   };
 }
 ```
@@ -1418,12 +1920,15 @@ Create `apps/web/src/features/releases/release-action-rail.tsx` by moving the ex
 - Close visible only in observing/close-ready states; requires terminal resolution, summary if the selected resolution needs it, confirmation text `close release`, and observation requirement unless the API supports explicit override.
 
 Render disabled reasons with `p.empty` near the relevant action. Keep all form state local so API errors do not clear user input.
+Do not render `cockpit.blocker_snapshot.blocker_fingerprint` or raw release/work item/package ids in visible text. Override approval may still submit the full `blocker_snapshot` body required by the API, but the UI should show blocker categories/messages and confirmation text, not fingerprints.
 
 - [ ] **Step 5: Wire route and remove old inline rail**
 
 Modify `apps/web/src/features/releases/release-routes.tsx`:
 
 - Import `ReleaseActionRail` from `./release-action-rail`.
+- Import `releaseActionModel` from `./release-action-model` and compute `const releaseActions = releaseActionModel(cockpit);`.
+- Pass `model={releaseActions}` to `ReleaseActionRail` so the route and any remaining Test Acceptance section share the same state-aware decision model.
 - Delete the old inline `ReleaseActionRail` function after the new component is in use.
 - Keep `TestAcceptanceForm` only once; if it remains as a detail section, make the rail link or scroll to it instead of duplicating submission controls.
 
@@ -1529,7 +2034,7 @@ it('routes Release Owner to a release readiness decision with explicit expected 
 });
 ```
 
-Use existing delivery-flow/product-lane seed helpers if they already create these states. If not, add focused helper exports next to the existing API test fixtures; avoid building large inline object graphs inside the assertions.
+Use existing delivery-flow/product-lane seed helpers if they already create these states. If not, add focused helper functions in `tests/api/product-lanes.test.ts` before these tests, or export them from the existing API fixture module already used by this file: `seedReviewAwaitingHumanDecision`, `seedReleaseWaitingForTestAcceptance`, and `seedReleaseAwaitingApprovalDecision`. Keep the helpers narrow and state-focused; avoid building large inline object graphs inside the assertions.
 
 - [ ] **Step 2: Write failing tests for all-lane cockpit invalidation**
 
@@ -1570,9 +2075,18 @@ it('invalidates every cached Work Item Cockpit lane variant after ProductAction 
     action: runPackageProductActionFixture,
   });
 
-  const cockpitInvalidation = invalidateSpy.mock.calls.find(([input]) => {
-    return typeof input === 'object' && input !== null && 'predicate' in input;
-  })?.[0] as { predicate?: (query: { queryKey: readonly unknown[] }) => boolean } | undefined;
+  const cockpitInvalidation = invalidateSpy.mock.calls
+    .map(([input]) => input)
+    .find((input): input is { predicate: (query: { queryKey: readonly unknown[] }) => boolean } => {
+      return (
+        typeof input === 'object' &&
+        input !== null &&
+        'predicate' in input &&
+        typeof input.predicate === 'function' &&
+        input.predicate({ queryKey: queryKeys.workItemCockpit(workItem.id, 'execution-owner') }) === true &&
+        input.predicate({ queryKey: queryKeys.workItemCockpit('other-work-item', 'execution-owner') }) === false
+      );
+    });
 
   expect(cockpitInvalidation?.predicate?.({ queryKey: queryKeys.workItemCockpit(workItem.id, 'execution-owner') })).toBe(true);
   expect(cockpitInvalidation?.predicate?.({ queryKey: queryKeys.workItemCockpit(workItem.id, 'reviewer') })).toBe(true);
@@ -1611,12 +2125,16 @@ The description must say what decision is expected, not just where the link open
 Modify `apps/web/src/features/releases/release-routes.tsx`:
 
 ```tsx
+const releaseActions = releaseActionModel(cockpit);
+
+<ReleaseActionRail actorId={actorId} cockpit={cockpit} model={releaseActions} />
+
 <Section id="test-acceptance" title="Test Acceptance" description="QA acceptance is acknowledged with summary and artifact references.">
-  <TestAcceptanceForm actorId={actorId} disabledReason={model.qa_test_acceptance.reason} releaseId={release.id} />
+  <TestAcceptanceForm actorId={actorId} disabledReason={releaseActions.qa_test_acceptance.reason} releaseId={release.id} />
 </Section>
 ```
 
-Modify `TestAcceptanceForm` to accept `disabledReason?: string`, render it, and disable submit when present.
+Modify `ReleaseActionRail` to accept the precomputed `model` prop instead of recomputing it internally, so the route and rail share one decision model. Modify `TestAcceptanceForm` to accept `disabledReason?: string`, render it, and disable submit when present.
 
 - [ ] **Step 6: Fix invalidation for all Work Item Cockpit lane variants**
 
@@ -1646,7 +2164,10 @@ Expected: PASS.
 - [ ] **Step 8: Commit Task 6**
 
 ```bash
-git add packages/db/src/queries/work-item-delivery-readiness.ts apps/web/src/features/releases/release-action-model.ts apps/web/src/features/releases/release-action-rail.tsx apps/web/src/features/releases/release-routes.tsx apps/web/src/shared/api/hooks.ts tests/api/product-lanes.test.ts tests/web/review-release-product-routes.test.tsx tests/web/api-hooks.test.tsx tests/web/product-action-invalidation.test.tsx
+git add packages/db/src/queries/work-item-delivery-readiness.ts apps/web/src/features/releases/release-action-model.ts apps/web/src/features/releases/release-action-rail.tsx apps/web/src/features/releases/release-routes.tsx apps/web/src/shared/api/hooks.ts tests/api/product-lanes.test.ts tests/web/review-release-product-routes.test.tsx
+git add tests/web/api-hooks.test.tsx
+# If Step 2 created a separate invalidation test file instead of extending api-hooks, run this additional add:
+# git add tests/web/product-action-invalidation.test.tsx
 git commit -m "feat: close delivery handoff invalidation"
 ```
 
@@ -1670,14 +2191,12 @@ it('exposes the post-plan delivery closure path through product pages', async ()
   const screen = await renderRoute(`/packages/${executionPackage.id}`, {
     apiOverrides: {
       [`GET /execution-packages/${executionPackage.id}`]: {
-        ...executionPackage,
+        ...executionPackageWithoutRun,
         phase: 'ready',
         gate_state: 'not_submitted',
-        last_run_session_id: undefined,
       },
       [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
       [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
-        execution_package_id: executionPackage.id,
         executor_type: 'local_codex',
         target_kind: 'run_execution',
         state: 'ready',
@@ -1688,10 +2207,22 @@ it('exposes the post-plan delivery closure path through product pages', async ()
 
   expect(await screen.findByRole('button', { name: 'Run' })).toBeTruthy();
   expect(screen.queryByText(/Dev Tools|raw JSON|runtime_profile_id|credential_binding_id|worker_id/i)).toBeNull();
+  expect(screen.queryByText(executionPackage.id)).toBeNull();
+  expect(screen.queryByText(executionPackage.work_item_id)).toBeNull();
+  expect(screen.queryByText(executionPackage.repo_id)).toBeNull();
 });
 ```
 
-Add companion assertions on `/reviews/:id` and `/releases/:id` in existing tests if a separate e2e test would duplicate too much fixture setup.
+Add companion assertions on `/reviews/:id` and `/releases/:id` in existing tests if a separate e2e test would duplicate too much fixture setup:
+
+```ts
+expect(screen.queryByText(reviewPacket.id)).toBeNull();
+expect(screen.queryByText(reviewPacket.execution_package_id)).toBeNull();
+expect(screen.queryByText(reviewPacket.run_session_id)).toBeNull();
+expect(screen.queryByText(release.id)).toBeNull();
+expect(screen.queryByText(releaseCockpitResponse.blocker_snapshot.blocker_fingerprint)).toBeNull();
+expect(screen.queryByText(/blocker_fingerprint|raw JSON|Dev Tools/i)).toBeNull();
+```
 
 - [ ] **Step 2: Run full targeted test suite**
 
@@ -1700,6 +2231,7 @@ Run:
 ```bash
 pnpm vitest run \
   tests/contracts/delivery-runtime-readiness.test.ts \
+  tests/contracts/work-item-delivery-readiness.test.ts \
   tests/contracts/product-actions.test.ts \
   tests/contracts/contracts.test.ts \
   tests/db/delivery-runtime-readiness.test.ts \
@@ -1718,15 +2250,20 @@ Expected: PASS.
 Run:
 
 ```bash
-rg -n "work-item-owner|/workbench" apps/web/src packages/contracts/src packages/db/src/queries tests/web tests/api
-rg -n "runtime_profile_id|credential_binding_id|worker_id|launch_lease|lease_token|codex_config_toml" apps/web/src packages/contracts/src tests/web
-pnpm typecheck
+! rg -n "p0|P0|work-item-owner|Work Item Owner|[Ww]orkbench|/workbench" apps/web/src packages/contracts/src packages/db/src/queries
+! rg -n "runtime_profile_id|credential_binding_id|worker_id|launch_lease|lease_token|codex_config_toml|runtime_profile_digest|credential_payload_digest|docker_image_digest|workspace_root|local_path|localPath|raw_config|raw_auth|Docker command|docker run" apps/web/src/features/execution-packages apps/web/src/features/review-packets apps/web/src/features/releases packages/contracts/src/delivery-runtime-readiness.ts
+rg -n "runtime_profile_id|credential_binding_id|worker_id|launch_lease|lease_token|codex_config_toml" tests/web || true
+pnpm vitest run tests/web/no-legacy-web-ui.test.ts tests/api/delivery-route-contract.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm --filter @forgeloop/web typecheck
+pnpm -r build
 ```
 
 Expected:
-- The first `rg` returns no active legacy Workbench or Work Item Owner product vocabulary.
-- The second `rg` returns no raw runtime identifiers in browser UI, public contracts, or Web tests for the new readiness surface. If `worker_id` appears only in pre-existing Run Console public runtime metadata tests, confirm it is not part of `DeliveryRunReadinessResponse` and not rendered by Package readiness UI.
-- `pnpm typecheck` passes.
+- The first `rg` returns no active legacy `p0`, Workbench, or Work Item Owner product vocabulary in active product source.
+- The second `rg` returns no raw runtime identifiers in browser object pages or the public runtime readiness contract. Do not include `packages/contracts/src/work-item-delivery-readiness.ts` in this zero-hit guard because its safe public schema may still contain the field name `runtime_metadata`.
+- The third `rg` returns either no hits or only negative assertions/unsafe-input fixtures that prove redaction. There must be no Web fixture that feeds raw runtime identifiers into a successful public DTO parse.
+- Legacy guard tests pass.
+- `pnpm --filter @forgeloop/web typecheck` and `pnpm -r build` pass.
 
 - [ ] **Step 4: Optional browser visual smoke**
 
@@ -1767,6 +2304,7 @@ Run:
 ```bash
 pnpm vitest run \
   tests/contracts/delivery-runtime-readiness.test.ts \
+  tests/contracts/work-item-delivery-readiness.test.ts \
   tests/contracts/product-actions.test.ts \
   tests/contracts/contracts.test.ts \
   tests/db/delivery-runtime-readiness.test.ts \
@@ -1776,7 +2314,8 @@ pnpm vitest run \
   tests/web/review-release-product-routes.test.tsx \
   tests/web/api-hooks.test.tsx \
   --pool=forks --no-file-parallelism --maxWorkers=1
-pnpm typecheck
+pnpm --filter @forgeloop/web typecheck
+pnpm -r build
 git diff --check
 ```
 
