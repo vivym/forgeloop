@@ -6,6 +6,21 @@ import type {
   AutomationScope,
   Artifact,
   Actor,
+  CodexCredentialBinding,
+  CodexCredentialBindingPublic,
+  CodexCredentialBindingVersion,
+  CodexLaunchLease,
+  CodexLaunchLeaseWithToken,
+  CodexLaunchMaterialization,
+  CodexLaunchTarget,
+  CodexRuntimeProfile,
+  CodexRuntimeProfileRevision,
+  CodexRuntimeScope,
+  CodexRuntimeStatusProjection,
+  CodexRuntimeTargetKind,
+  CodexWorkerBootstrapToken,
+  CodexWorkerRegistration,
+  ResolvedCodexCredential,
   CommandIdempotencyRecord,
   Decision,
   ExecutionPackageGenerationRun,
@@ -63,6 +78,209 @@ export interface TraceArtifactRefRecord {
   artifact_id?: string;
   ref: Artifact['ref'];
   created_at: string;
+}
+
+export interface CreateCodexRuntimeProfileWithRevisionInput {
+  profile: CodexRuntimeProfile;
+  revision: CodexRuntimeProfileRevision;
+}
+
+export interface CreateCodexCredentialBindingWithVersionInput {
+  binding: CodexCredentialBinding;
+  version: CodexCredentialBindingVersion;
+  secret_payload_json: unknown;
+}
+
+export interface ResolveCodexRuntimeForLaunchInput {
+  project_id: string;
+  repo_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  runtime_profile_id?: string;
+  now: string;
+}
+
+export interface ResolveCodexCredentialForLaunchInput {
+  credential_binding_id: string;
+  target_kind: CodexRuntimeTargetKind;
+  runtime_profile_id?: string;
+  project_id: string;
+  repo_id?: string;
+  required_payload_digest?: string;
+  now: string;
+}
+
+export interface GetCodexRuntimeStatusInput {
+  project_id: string;
+  repo_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  runtime_profile_id?: string;
+  credential_binding_id?: string;
+  now: string;
+}
+
+export interface CreateCodexWorkerBootstrapTokenInput {
+  id: string;
+  worker_identity: string;
+  bootstrap_token_hash: string;
+  bootstrap_token_version: number;
+  status: 'active' | 'revoked' | 'consumed';
+  allowed_scopes_json: readonly CodexRuntimeScope[];
+  allowed_capabilities_json: Record<string, unknown>;
+  created_by_actor_id: string;
+  created_at: string;
+  expires_at: string;
+  revoked_at?: string;
+}
+
+export interface UpsertCodexWorkerRegistrationInput {
+  worker_id: string;
+  worker_identity: string;
+  version: string;
+  bootstrap_token_hash: string;
+  bootstrap_token_version: number;
+  session_token: string;
+  session_expires_at: string;
+  status: CodexWorkerRegistration['status'];
+  control_channel_status: CodexWorkerRegistration['control_channel_status'];
+  allowed_scopes: readonly CodexRuntimeScope[];
+  capabilities: readonly CodexRuntimeTargetKind[];
+  docker_image_digests: readonly string[];
+  network_policy_digests: readonly string[];
+  network_provider_config_digests?: readonly string[];
+  host_worker_uid: number;
+  host_worker_gid: number;
+  lease_count: number;
+  max_concurrency: number;
+  labels?: Record<string, unknown>;
+  session_public_key_id: string;
+  session_public_key_algorithm: 'x25519';
+  session_public_key_material: string;
+  session_public_key_expires_at: string;
+  now: string;
+}
+
+export interface HeartbeatCodexWorkerInput {
+  worker_id: string;
+  session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  status: CodexWorkerRegistration['status'];
+  control_channel_status: CodexWorkerRegistration['control_channel_status'];
+  active_lease_count: number;
+  capabilities: readonly CodexRuntimeTargetKind[];
+  now: string;
+}
+
+export interface FindAvailableCodexWorkerInput {
+  project_id: string;
+  repo_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+  now: string;
+}
+
+export interface CodexLaunchFenceSnapshot {
+  action_claim_token_hash?: string;
+  precondition_fingerprint?: string;
+  run_worker_lease_id?: string;
+  run_worker_lease_token_hash?: string;
+  run_session_status?: string;
+  run_session_updated_at?: string;
+  execution_package_version?: number;
+}
+
+export interface CreateOrReplayCodexLaunchLeaseInput {
+  id: string;
+  lease_request_id: string;
+  target: CodexLaunchTarget;
+  launch_attempt: number;
+  worker_id: string;
+  runtime_profile_revision_id: string;
+  runtime_profile_digest: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  credential_payload_digest: string;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+  launch_token: string;
+  action_type?: string;
+  action_attempt?: number;
+  action_claim_token_hash?: string;
+  precondition_fingerprint?: string;
+  execution_package_id?: string;
+  run_worker_lease_id?: string;
+  run_worker_lease_token_hash?: string;
+  run_session_status?: string;
+  run_session_updated_at?: string;
+  execution_package_version?: number;
+  expires_at: string;
+  now: string;
+}
+
+export interface MaterializeCodexLaunchLeaseInput {
+  lease_id: string;
+  worker_id: string;
+  launch_token: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  materialization_request_hash: string;
+  active_fence?: CodexLaunchFenceSnapshot;
+  now: string;
+}
+
+export interface TerminalizeCodexLaunchLeaseInput {
+  lease_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  terminal_status: Extract<CodexLaunchLease['status'], 'terminal'>;
+  reason_code: string;
+  evidence_summary?: Record<string, unknown>;
+  runtime_job_id?: string;
+  idempotency_key: string;
+  now: string;
+}
+
+export interface RevokeCodexLaunchLeaseInput {
+  lease_id: string;
+  reason_code: string;
+  idempotency_key: string;
+  now: string;
+}
+
+export interface RecoverStaleCodexWorkerLeasesInput {
+  stale_before: string;
+  now: string;
+  worker_id?: string;
+  reason_code: string;
+}
+
+export interface ConsumeCodexRuntimeSetupNonceInput {
+  setup_nonce_hash: string;
+  request_signature_hash: string;
+  actor_id: string;
+  actor_class: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface CodexRuntimeRecoveryResult {
+  recovered_launch_leases: CodexLaunchLease[];
+  automation_action_transitions: Array<{
+    action_type?: string;
+    target_id: string;
+    reason_code: string;
+  }>;
+  run_session_transitions: Array<{
+    run_session_id?: string;
+    execution_package_id?: string;
+    reason_code: string;
+  }>;
 }
 
 export type ReleaseWorkItemRecord = ReleaseWorkItem;
@@ -645,6 +863,30 @@ export interface RuntimeSnapshotRepositoryData {
 export interface DeliveryRepository {
   withDeliveryTransaction<T>(write: (repository: DeliveryRepository) => Promise<T>): Promise<T>;
   withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T>;
+
+  createCodexRuntimeProfileWithRevision(
+    input: CreateCodexRuntimeProfileWithRevisionInput,
+  ): Promise<CodexRuntimeProfileRevision>;
+  getActiveCodexRuntimeProfileRevision(
+    input: ResolveCodexRuntimeForLaunchInput,
+  ): Promise<CodexRuntimeProfileRevision | undefined>;
+  createCodexCredentialBindingWithVersion(
+    input: CreateCodexCredentialBindingWithVersionInput,
+  ): Promise<CodexCredentialBindingVersion>;
+  getCodexCredentialBindingPublic(id: string): Promise<CodexCredentialBindingPublic | undefined>;
+  resolveCodexCredentialForLaunch(input: ResolveCodexCredentialForLaunchInput): Promise<ResolvedCodexCredential | undefined>;
+  getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection>;
+  createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken>;
+  upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration>;
+  heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration>;
+  findAvailableCodexWorker(input: FindAvailableCodexWorkerInput): Promise<CodexWorkerRegistration | undefined>;
+  createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLeaseWithToken>;
+  materializeCodexLaunchLease(input: MaterializeCodexLaunchLeaseInput): Promise<CodexLaunchMaterialization>;
+  terminalizeCodexLaunchLease(input: TerminalizeCodexLaunchLeaseInput): Promise<CodexLaunchLease>;
+  revokeCodexLaunchLease(input: RevokeCodexLaunchLeaseInput): Promise<CodexLaunchLease>;
+  expireCodexLaunchLeases(now: string): Promise<number>;
+  recoverStaleCodexWorkerLeases(input: RecoverStaleCodexWorkerLeasesInput): Promise<CodexRuntimeRecoveryResult>;
+  consumeCodexRuntimeSetupNonce(input: ConsumeCodexRuntimeSetupNonceInput): Promise<void>;
 
   saveOrganization(organization: Organization): Promise<void>;
   getOrganization(organizationId: string): Promise<Organization | undefined>;
