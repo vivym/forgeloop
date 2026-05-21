@@ -491,6 +491,12 @@ const initiativeWithoutPackagesWorkItem = {
   title: 'Launch product lane reporting',
   goal: 'Coordinate child work before execution packages exist.',
   success_criteria: ['Child work is identified', 'Readiness can be aggregated'],
+  intake_context: {
+    type: 'initiative',
+    business_outcome: 'Launch product lane reporting across related child work.',
+    scope_narrative: 'Coordinate child work before execution packages exist.',
+    success_metrics: ['Child work is identified', 'Readiness can be aggregated'],
+  },
   phase: 'planning',
 } as WorkItemCockpitResponse['work_item'];
 
