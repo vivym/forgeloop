@@ -1,0 +1,16 @@
+{
+  "name": "@forgeloop/codex-worker-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@forgeloop/codex-runtime": "workspace:*",
+    "@forgeloop/domain": "workspace:*",
+    "@forgeloop/executor": "workspace:*"
+  }
+}

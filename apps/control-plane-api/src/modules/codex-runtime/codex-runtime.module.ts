@@ -10,5 +10,6 @@ import { TrustedCodexRuntimeSetupGuard } from './trusted-codex-runtime-setup.gua
   imports: [ControlPlaneCoreModule],
   controllers: [CodexRuntimeController],
   providers: [CodexRuntimeService, TrustedAutomationActorGuard, TrustedCodexRuntimeSetupGuard],
+  exports: [CodexRuntimeService],
 })
 export class CodexRuntimeModule {}

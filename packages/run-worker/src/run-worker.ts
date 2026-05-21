@@ -25,11 +25,22 @@ import { evaluateRunProgress } from './watchdog.js';
 
 type IsoDateTime = string;
 
+export interface RunWorkerDriverFactoryInput {
+  runSession: RunSession;
+  runtimeMetadata: RunRuntimeMetadata;
+  workerLease: {
+    workerId: string;
+    runSessionId: string;
+    leaseId?: string;
+    leaseToken: string;
+  };
+}
+
 export interface RunWorkerInput {
   repository: DeliveryRepository;
   workerId: string;
-  driverFactory: (input: { runSession: RunSession; runtimeMetadata: RunRuntimeMetadata }) => CodexSessionDriver;
-  execFallbackDriverFactory?: (input: { runSession: RunSession; runtimeMetadata: RunRuntimeMetadata }) => CodexSessionDriver;
+  driverFactory: (input: RunWorkerDriverFactoryInput) => CodexSessionDriver;
+  execFallbackDriverFactory?: (input: RunWorkerDriverFactoryInput) => CodexSessionDriver;
   evidenceCollector: (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
   selfReview: (input: SelfReviewInput) => Promise<SelfReviewResult>;
   now?: () => IsoDateTime;
@@ -38,11 +49,13 @@ export interface RunWorkerInput {
   leaseDurationMs?: number;
   idleThresholdMs?: number;
   artifactRoot?: string;
+  allowExecFallback?: boolean;
 }
 
 interface OwnedRun {
   runSessionId: string;
   workerId: string;
+  leaseId?: string;
   leaseToken: string;
 }
 
@@ -275,6 +288,7 @@ export class RunWorker {
   private readonly leaseDurationMs: number;
   private readonly idleThresholdMs: number;
   private readonly artifactRoot: string;
+  private readonly allowExecFallback: boolean;
   private drainPromise: Promise<void> | undefined;
   private drainAgainRequested = false;
 
@@ -291,6 +305,7 @@ export class RunWorker {
     this.leaseDurationMs = input.leaseDurationMs ?? 60_000;
     this.idleThresholdMs = input.idleThresholdMs ?? 120_000;
     this.artifactRoot = input.artifactRoot ?? '.forgeloop/artifacts';
+    this.allowExecFallback = input.allowExecFallback ?? true;
   }
 
   kick(): void {
@@ -320,9 +335,11 @@ export class RunWorker {
       }
 
       const at = this.now();
+      let leaseId: string;
       let leaseToken: string;
       try {
         const acquired = await acquireLeaseForRun(this.repository, session.id, this.workerId, at, this.leaseDurationMs);
+        leaseId = acquired.lease.id;
         leaseToken = acquired.leaseToken;
         await this.repository.appendWorkerRunEvent(
           {
@@ -341,7 +358,7 @@ export class RunWorker {
         continue;
       }
 
-      await this.runOne({ runSessionId: session.id, workerId: this.workerId, leaseToken });
+      await this.runOne({ runSessionId: session.id, workerId: this.workerId, leaseId, leaseToken });
     }
   }
 
@@ -373,8 +390,8 @@ export class RunWorker {
         !wasQueued &&
         (runtimeMetadata.driver_kind === 'exec_fallback' || runtimeMetadata.selected_execution_mode === 'exec_fallback');
       const driver = resumeWithExecFallback
-        ? this.execFallbackDriverFactory({ runSession: started, runtimeMetadata })
-        : this.driverFactory({ runSession: started, runtimeMetadata });
+        ? this.execFallbackDriverFactory({ runSession: started, runtimeMetadata, workerLease: input })
+        : this.driverFactory({ runSession: started, runtimeMetadata, workerLease: input });
       openedDrivers.add(driver);
       if (isRealLocalCodexDriverRun(started, driver)) {
         activeRunSession = await this.prepareLocalCodexRuntime(
@@ -717,6 +734,9 @@ export class RunWorker {
     }
 
     const reasonText = fallbackReason(reason);
+    if (!this.allowExecFallback) {
+      throw new Error(`fallback_denied_by_policy: ${reasonText}`);
+    }
     const updatedRunSession = await this.updateRuntimeMetadata(runSession, lease, {
       ...runtimeMetadata,
       driver_kind: 'exec_fallback',
@@ -727,7 +747,7 @@ export class RunWorker {
       effective_dangerous_mode: 'confirmed',
     } as Partial<RunRuntimeMetadata>);
     const fallbackMetadata = updatedRunSession.runtime_metadata!;
-    const fallback = this.execFallbackDriverFactory({ runSession: updatedRunSession, runtimeMetadata: fallbackMetadata });
+    const fallback = this.execFallbackDriverFactory({ runSession: updatedRunSession, runtimeMetadata: fallbackMetadata, workerLease: lease });
     const at = this.now();
     await this.repository.appendWorkerRunEvent(
       {
@@ -812,7 +832,11 @@ export class RunWorker {
       const latest = (await this.repository.getRunSession(runSession.id)) ?? runSession;
       await this.stallRun(latest, lease, 'Driver recovery failed.', error);
       return {
-        driver: this.execFallbackDriverFactory({ runSession: latest, runtimeMetadata: latest.runtime_metadata ?? runtimeMetadata }),
+        driver: this.execFallbackDriverFactory({
+          runSession: latest,
+          runtimeMetadata: latest.runtime_metadata ?? runtimeMetadata,
+          workerLease: lease,
+        }),
         runtimeMetadata: latest.runtime_metadata ?? runtimeMetadata,
         iterator: (async function* empty() {})()[Symbol.asyncIterator](),
         currentRunSession: latest,

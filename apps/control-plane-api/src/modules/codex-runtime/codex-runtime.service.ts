@@ -4,7 +4,10 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, Unauthoriz
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexRuntimeNetworkPolicyDigest,
+  normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
+  validateCodexDockerRuntimeEvidence,
   validateCodexRuntimeProfileRevision,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
@@ -14,6 +17,7 @@ import {
   type CodexRuntimeProfileRevision,
   type CodexRuntimeScope,
   type CodexRuntimeTargetKind,
+  type CodexPublicBlockerCode,
 } from '@forgeloop/domain';
 import type { CodexLaunchFenceSnapshot, DeliveryRepository } from '@forgeloop/db';
 
@@ -59,19 +63,6 @@ type ActiveLaunchFence =
       snapshot: CodexLaunchFenceSnapshot;
     };
 
-const unsafeEvidenceTerms = [
-  'secret',
-  'token',
-  'auth',
-  'api_key',
-  'password',
-  'raw_prompt',
-  'raw_codex_log',
-  'container_id',
-  'socket_path',
-  'host_path',
-];
-
 const nowIso = (): string => process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? new Date().toISOString();
 
 const launchLeaseTtlMs = 10 * 60 * 1000;
@@ -104,30 +95,8 @@ const requireUnsafeDbCredentialStore = (): void => {
 
 const generateWorkerSessionToken = (): string => `codex-worker-session-${randomBytes(32).toString('base64url')}`;
 
-const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
-
-const materializedAllowlistRules = (rules: CodexRuntimeNetworkPolicy & { mode: 'host_firewall' | 'docker_network_proxy' }) =>
-  [...rules.allowlist].sort((left, right) => compareCodeUnits(left.id, right.id));
-
 const materializedNetworkPolicy = (policy: CodexRuntimeNetworkPolicy) => {
-  if (policy.mode === 'disabled') {
-    return { mode: 'disabled' as const };
-  }
-  const provider = policy.mode;
-  const allowlistRules = materializedAllowlistRules(policy);
-  const egressAllowlistDigest = codexCanonicalDigest({ provider, allowlist_rules: allowlistRules });
-  const selfTestDigest =
-    policy.mode === 'docker_network_proxy'
-      ? policy.provider_config.self_test_image_digest
-      : codexCanonicalDigest({ provider, allowlist_rules: allowlistRules, self_test: 'host_firewall' });
-  return {
-    mode: 'egress_allowlist' as const,
-    provider,
-    allowlist_rules: allowlistRules,
-    ...(policy.mode === 'docker_network_proxy' ? { provider_config: policy.provider_config } : {}),
-    egress_allowlist_digest: egressAllowlistDigest,
-    self_test_digest: selfTestDigest,
-  };
+  return normalizeCodexRuntimeNetworkPolicy(policy);
 };
 
 const actorScopeMatchesTarget = (automationScope: string, projectId: string, repoId?: string): boolean => {
@@ -137,26 +106,83 @@ const actorScopeMatchesTarget = (automationScope: string, projectId: string, rep
   return automationScope === `project:${projectId}` || automationScope.startsWith(`repo:${projectId}:`);
 };
 
-const networkProviderConfigDigest = (revision: CodexRuntimeProfileRevision): string | undefined =>
-  revision.network_policy.mode === 'docker_network_proxy'
-    ? revision.network_policy.provider_config.provider_config_digest
+const networkProviderConfigDigest = (revision: CodexRuntimeProfileRevision): string | undefined => {
+  const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+  return networkPolicy.mode === 'egress_allowlist' && networkPolicy.provider === 'docker_network_proxy'
+    ? networkPolicy.provider_config.provider_config_digest
     : undefined;
+};
 
-const hasUnsafeEvidence = (value: unknown): boolean => {
-  if (typeof value === 'string') {
-    const lower = value.toLowerCase();
-    return unsafeEvidenceTerms.some((term) => lower.includes(term));
+const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
+const rawPathEndpointOrContainerPattern = /(^\/|https?:\/\/|^unix:|\.sock$|^[A-Fa-f0-9]{12,64}$)/;
+const startupFailureEvidenceKeys = new Set([
+  'runtime_profile_id',
+  'runtime_profile_revision_id',
+  'runtime_profile_digest',
+  'runtime_target_kind',
+  'source_access_mode',
+  'environment',
+  'launch_lease_id',
+  'worker_id',
+  'docker_image_digest',
+  'network_policy_digest',
+  'app_server_attempted',
+  'selected_execution_mode',
+  'startup_blocker_code',
+]);
+const startupFailureBlockerCodes = new Set<CodexPublicBlockerCode>([
+  'codex_worker_unavailable',
+  'codex_worker_docker_policy_unavailable',
+  'codex_worker_docker_unavailable',
+  'codex_runtime_workspace_isolation_unavailable',
+  'codex_app_server_effective_config_mismatch',
+  'codex_app_server_unavailable',
+  'codex_docker_runtime_evidence_unsafe',
+  'codex_runtime_profile_invalid',
+]);
+
+const isStartupFailureEvidenceSummary = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
   }
-  if (Array.isArray(value)) {
-    return value.some(hasUnsafeEvidence);
+  const evidence = value as Record<string, unknown>;
+  if (evidence.app_server_attempted !== true || evidence.selected_execution_mode !== 'app_server') {
+    return false;
   }
-  if (typeof value === 'object' && value !== null) {
-    return Object.entries(value as Record<string, unknown>).some(([key, entry]) => {
-      const lowerKey = key.toLowerCase();
-      return unsafeEvidenceTerms.some((term) => lowerKey.includes(term)) || hasUnsafeEvidence(entry);
-    });
+  if (typeof evidence.startup_blocker_code !== 'string' || !startupFailureBlockerCodes.has(evidence.startup_blocker_code as CodexPublicBlockerCode)) {
+    return false;
   }
-  return false;
+  for (const [key, entry] of Object.entries(evidence)) {
+    if (!startupFailureEvidenceKeys.has(key)) {
+      return false;
+    }
+    if (key === 'app_server_attempted') {
+      continue;
+    }
+    if (typeof entry !== 'string') {
+      return false;
+    }
+    if (key.endsWith('_digest')) {
+      if (!sha256DigestPattern.test(entry)) {
+        return false;
+      }
+    } else if (rawPathEndpointOrContainerPattern.test(entry)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const assertPublicSafeTerminalEvidence = (evidence: Record<string, unknown>): void => {
+  try {
+    validateCodexDockerRuntimeEvidence(evidence);
+    return;
+  } catch {
+    if (isStartupFailureEvidenceSummary(evidence)) {
+      return;
+    }
+    throw new BadRequestException('Codex launch terminal evidence summary cannot include raw secrets, tokens, paths, or logs');
+  }
 };
 
 const assertFreshWorkerNonceTimestamp = (nonceTimestamp: string, now: string): void => {
@@ -339,7 +365,7 @@ export class CodexRuntimeService {
       credential_binding_version_id: input.credential_binding_version_id,
       credential_payload_digest: input.credential_payload_digest,
       docker_image_digest: revision.docker_image_digest,
-      network_policy_digest: codexCanonicalDigest(revision.network_policy),
+      network_policy_digest: codexRuntimeNetworkPolicyDigest(revision.network_policy),
       ...(providerConfigDigest === undefined ? {} : { network_provider_config_digest: providerConfigDigest }),
       launch_token: input.launch_token,
       ...(input.action_type === undefined ? {} : { action_type: input.action_type }),
@@ -396,6 +422,7 @@ export class CodexRuntimeService {
         profile_digest: materialized.profile_revision.profile_digest,
         target_kind: materialized.profile_revision.target_kind,
         source_access_mode: materialized.profile_revision.source_access_mode,
+        environment: materialized.profile_revision.environment,
         docker_image: materialized.profile_revision.docker_image,
         docker_image_digest: materialized.profile_revision.docker_image_digest,
         codex_config_toml: materialized.profile_revision.codex_config_toml,
@@ -423,8 +450,8 @@ export class CodexRuntimeService {
   terminalizeLaunchLease(workerId: string, leaseId: string, input: TerminalizeCodexLaunchLeaseDto) {
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
-    if (input.evidence_summary !== undefined && hasUnsafeEvidence(input.evidence_summary)) {
-      throw new BadRequestException('Codex launch terminal evidence summary cannot include raw secrets, tokens, paths, or logs');
+    if (input.evidence_summary !== undefined) {
+      assertPublicSafeTerminalEvidence(input.evidence_summary);
     }
     return this.repository.terminalizeCodexLaunchLease({
       lease_id: leaseId,

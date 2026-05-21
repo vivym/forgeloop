@@ -48,15 +48,19 @@ const dockerNetworkProxyConfigSchema = z.object({
 const networkPolicySchema = z.union([
   z.object({ mode: z.literal('disabled') }).strict(),
   z.object({
-    mode: z.literal('host_firewall'),
-    egress: z.literal('allowlist'),
-    allowlist: z.array(allowlistRuleSchema).min(1),
+    mode: z.literal('egress_allowlist'),
+    provider: z.literal('host_firewall'),
+    allowlist_rules: z.array(allowlistRuleSchema).min(1),
+    egress_allowlist_digest: sha256DigestSchema,
+    self_test_digest: sha256DigestSchema,
   }).strict(),
   z.object({
-    mode: z.literal('docker_network_proxy'),
-    egress: z.literal('allowlist'),
-    allowlist: z.array(allowlistRuleSchema).min(1),
+    mode: z.literal('egress_allowlist'),
+    provider: z.literal('docker_network_proxy'),
+    allowlist_rules: z.array(allowlistRuleSchema).min(1),
     provider_config: dockerNetworkProxyConfigSchema,
+    egress_allowlist_digest: sha256DigestSchema,
+    self_test_digest: sha256DigestSchema,
   }).strict(),
 ]);
 

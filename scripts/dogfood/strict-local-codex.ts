@@ -293,7 +293,6 @@ export async function preflightLocalCodexDogfood<
   const runCommand = input.runCommand ?? defaultRunCommand;
   const repoPath = resolve(input.repoPath);
   const blockers: StrictPreflightBlocker[] = [];
-  let codexCommandAvailable = true;
   let dirtyFiles: string[] | undefined;
   let dirtySource: StrictDirtySourceSummary<TSource> | undefined;
   let worktreeProbePath: string | undefined;
@@ -303,21 +302,6 @@ export async function preflightLocalCodexDogfood<
       repoPath,
       blockers: [strictBlocker('worktree_create_failed', 'Missing required command: git')],
     });
-  }
-
-  if (!(await commandExists(runCommand, 'codex', repoPath))) {
-    codexCommandAvailable = false;
-    blockers.push(strictBlocker('missing_codex_command', 'Missing required command: codex'));
-  }
-
-  if (codexCommandAvailable) {
-    try {
-      await runCommand('codex', ['login', 'status'], { cwd: repoPath, timeoutMs: 15_000 });
-    } catch {
-      blockers.push(
-        strictBlocker('codex_not_authenticated', 'Codex runtime is not authenticated or ready for local execution'),
-      );
-    }
   }
 
   if (input.env[DANGEROUS_MODE_CONFIRMATION_ENV] !== '1') {
@@ -458,34 +442,44 @@ export const validateLocalCodexRuntimeMetadata = (
 
   const metadata = input.runtime_metadata ?? {};
   const workspacePath = metadata.workspace_path;
-  if (typeof workspacePath !== 'string' || !workspacePath.includes('/.worktrees/')) {
-    throw new Error('Runtime metadata assertion failed: expected worktree workspace_path.');
-  }
-  if (
-    options.expectedRunSessionId !== undefined &&
-    !workspacePath.endsWith(`/.worktrees/${options.expectedRunSessionId}`)
-  ) {
-    throw new Error('Runtime metadata assertion failed: expected run-session-id worktree workspace_path.');
+  if (workspacePath !== undefined) {
+    if (typeof workspacePath !== 'string' || !workspacePath.includes('/.worktrees/')) {
+      throw new Error('Runtime metadata assertion failed: expected worktree workspace_path.');
+    }
+    if (
+      options.expectedRunSessionId !== undefined &&
+      !workspacePath.endsWith(`/.worktrees/${options.expectedRunSessionId}`)
+    ) {
+      throw new Error('Runtime metadata assertion failed: expected run-session-id worktree workspace_path.');
+    }
+  } else if (typeof metadata.workspace_isolation_digest !== 'string') {
+    throw new Error('Runtime metadata assertion failed: expected workspace isolation digest.');
   }
 
   if (metadata.app_server_attempted !== true) {
     throw new Error('Runtime metadata assertion failed: expected app_server_attempted=true.');
   }
 
-  if (metadata.selected_execution_mode !== 'app_server' && metadata.selected_execution_mode !== 'exec_fallback') {
-    throw new Error('Runtime metadata assertion failed: selected_execution_mode is required.');
+  if (metadata.selected_execution_mode !== 'app_server') {
+    throw new Error('Runtime metadata assertion failed: selected_execution_mode must be Dockerized app_server.');
   }
 
   if (metadata.effective_dangerous_mode !== 'confirmed') {
     throw new Error('Runtime metadata assertion failed: expected confirmed dangerous mode.');
   }
 
-  if (metadata.selected_execution_mode === 'exec_fallback') {
-    if (metadata.exec_fallback_dangerous_bypass !== true || metadata.effective_dangerous_mode !== 'confirmed') {
-      throw new Error('Runtime metadata assertion failed: exec fallback must record confirmed dangerous bypass mode.');
-    }
-    if (typeof metadata.app_server_fallback_reason !== 'string' || metadata.app_server_fallback_reason.length === 0) {
-      throw new Error('Runtime metadata assertion failed: exec fallback must record app_server_fallback_reason.');
+  const requiredDockerEvidence = [
+    'launch_lease_id',
+    'runtime_profile_revision_id',
+    'credential_binding_version_id',
+    'docker_image_digest',
+    'container_id_digest',
+    'app_server_effective_config_digest',
+    'docker_policy_self_check_digest',
+  ] as const;
+  for (const field of requiredDockerEvidence) {
+    if (typeof metadata[field] !== 'string' || metadata[field].length === 0) {
+      throw new Error(`Runtime metadata assertion failed: missing Dockerized app-server evidence field ${field}.`);
     }
   }
 };

@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -11,6 +13,7 @@ import {
   requiredAutomationDogfoodSummaryMarkers,
 } from '../../scripts/automation-dogfood-summary';
 import { loadDogfoodGenerationRuntimeConfig, requestedGenerationMode } from '../../scripts/automation-dogfood';
+import { loadCodexRuntimeDogfoodBootstrapConfig } from '../../scripts/codex-runtime-dogfood-bootstrap';
 
 const rootUrl = new URL('../..', import.meta.url);
 
@@ -25,6 +28,31 @@ const emptyDogfoodResult = {
   runSessionCount: 0,
   restartRecoveredFromActionRuns: false,
 };
+const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
+const bootstrapEnv = () => ({
+  FORGELOOP_CONTROL_PLANE_URL: 'http://127.0.0.1:3000',
+  FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'secret',
+  FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'setup-admin',
+  FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_CLASS: 'system_bootstrap',
+  FORGELOOP_CODEX_RUNTIME_SETUP_DAEMON_IDENTITY: 'setup-daemon',
+  FORGELOOP_CODEX_DOCKER_IMAGE: 'ghcr.io/forgeloop/codex-runtime',
+  FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('a'),
+  FORGELOOP_CODEX_GENERATION_EXPECTED_EFFECTIVE_CONFIG_DIGEST: digest('b'),
+  FORGELOOP_CODEX_RUN_EXECUTION_EXPECTED_EFFECTIVE_CONFIG_DIGEST: digest('c'),
+  FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-1',
+  FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-1',
+  FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON: JSON.stringify([
+    { id: 'openai', protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' },
+  ]),
+  FORGELOOP_CODEX_NETWORK_PROVIDER: 'docker_network_proxy',
+  FORGELOOP_CODEX_NETWORK_PROXY_IMAGE: 'ghcr.io/forgeloop/proxy',
+  FORGELOOP_CODEX_NETWORK_PROXY_IMAGE_DIGEST: digest('d'),
+  FORGELOOP_CODEX_NETWORK_SELF_TEST_IMAGE: 'ghcr.io/forgeloop/self-test',
+  FORGELOOP_CODEX_NETWORK_SELF_TEST_IMAGE_DIGEST: digest('e'),
+  FORGELOOP_WORKER_IDENTITY: 'worker-1',
+  FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'worker-bootstrap-token',
+  FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
+});
 
 describe('automation dogfood script', () => {
   it('is registered as the root automation:dogfood command', () => {
@@ -89,11 +117,11 @@ describe('automation dogfood script', () => {
       nonSucceededActionRunCount: 0,
       runSessionCount: 0,
       restartRecoveredFromActionRuns: false,
-      appServerDogfood: { status: 'skipped', reasonCode: 'app_server_endpoint_missing' },
+      appServerDogfood: { status: 'blocked', reasonCode: 'codex_docker_runtime_required' },
     });
 
-    expect(summary).toContain('App-server dogfood: SKIPPED (app_server_endpoint_missing)');
-    expect(automationDogfoodExitCode({ ...emptyDogfoodResult, appServerDogfood: { status: 'skipped', reasonCode: 'app_server_endpoint_missing' } })).toBe(0);
+    expect(summary).toContain('App-server dogfood: BLOCKED (codex_docker_runtime_required)');
+    expect(automationDogfoodExitCode({ ...emptyDogfoodResult, appServerDogfood: { status: 'blocked', reasonCode: 'codex_docker_runtime_required' } })).toBe(1);
   });
 
   it('parses dogfood generation env without hiding explicit conflicts', () => {
@@ -116,10 +144,21 @@ describe('automation dogfood script', () => {
     expect(disabled.runtime).toBeUndefined();
     expect(disabled.appServerDogfood).toEqual({ status: 'skipped', reasonCode: 'generation_disabled' });
 
-    const missingEndpoint = loadDogfoodGenerationRuntimeConfig({ FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex' });
-    expect(missingEndpoint.planning.mode).toBe('app_server');
-    expect(missingEndpoint.runtime).toBeUndefined();
-    expect(missingEndpoint.appServerDogfood).toEqual({ status: 'skipped', reasonCode: 'app_server_endpoint_missing' });
+    const directEndpoint = loadDogfoodGenerationRuntimeConfig({
+      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
+      FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
+    });
+    expect(directEndpoint.planning.mode).toBe('app_server');
+    expect(directEndpoint.runtime).toBeUndefined();
+    expect(directEndpoint.appServerDogfood).toEqual({ status: 'blocked', reasonCode: 'codex_docker_runtime_required' });
+
+    const localDocker = loadDogfoodGenerationRuntimeConfig({
+      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      FORGELOOP_CODEX_WORKER_MODE: 'local_docker',
+    });
+    expect(localDocker.runtime).toBeUndefined();
+    expect(localDocker.appServerDogfood).toEqual({ status: 'blocked', reasonCode: 'codex_worker_unavailable' });
   });
 
   it('redacts non-allowlisted app-server dogfood reason text from public summaries', () => {
@@ -143,8 +182,58 @@ describe('automation dogfood script', () => {
     const source = readText('scripts/automation-dogfood.ts');
 
     expect(source).toContain('FORGELOOP_CODEX_AUTOMATION_GENERATION');
-    expect(source).toContain('FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
+    expect(source).toContain('FORGELOOP_CODEX_WORKER_MODE');
+    expect(source).not.toContain('parseCodexAppServerEndpoint');
     expect(source).not.toContain("generationRuntime: createCodexGenerationRuntime({ mode: 'fake' })");
+  });
+
+  it('loads strict Codex runtime bootstrap config from file/stdin-safe auth only', () => {
+    const config = loadCodexRuntimeDogfoodBootstrapConfig(bootstrapEnv(), '{"env":{"OPENAI_API_KEY":"sk-test"}}');
+
+    expect(config.authJson).toEqual({ env: { OPENAI_API_KEY: 'sk-test' } });
+    expect(config.allowedScope).toEqual({ project_id: 'project-1', repo_id: 'repo-1' });
+    expect(config.networkPolicy).toMatchObject({
+      mode: 'egress_allowlist',
+      provider: 'docker_network_proxy',
+    });
+    expect(config.networkPolicy.allowlist_rules).toEqual([
+      { id: 'openai', protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' },
+    ]);
+    expect(() =>
+      loadCodexRuntimeDogfoodBootstrapConfig({
+        ...bootstrapEnv(),
+        FORGELOOP_CODEX_AUTH_JSON_INLINE: '{"env":{"OPENAI_API_KEY":"sk-test"}}',
+      }),
+    ).toThrow(/INLINE_not_allowed/);
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-auth-'));
+    try {
+      const authPath = join(tempRoot, 'auth.json');
+      writeFileSync(authPath, '{"env":{"OPENAI_API_KEY":"sk-test"}}');
+      chmodSync(authPath, 0o644);
+      expect(() =>
+        loadCodexRuntimeDogfoodBootstrapConfig({
+          ...bootstrapEnv(),
+          FORGELOOP_CODEX_AUTH_JSON_PATH: authPath,
+        }),
+      ).toThrow(/protected_regular_file/);
+      chmodSync(authPath, 0o600);
+      expect(
+        loadCodexRuntimeDogfoodBootstrapConfig({
+          ...bootstrapEnv(),
+          FORGELOOP_CODEX_AUTH_JSON_PATH: authPath,
+        }).authJson,
+      ).toEqual({ env: { OPENAI_API_KEY: 'sk-test' } });
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+    expect(() =>
+      loadCodexRuntimeDogfoodBootstrapConfig({
+        ...bootstrapEnv(),
+        FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON: JSON.stringify([
+          { id: 'npm', protocol: 'https', host: 'registry.npmjs.org', purpose: 'package_registry' },
+        ]),
+      }, '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
+    ).toThrow(/model_provider/);
   });
 
   it('fails the dogfood gate unless every expected daemon artifact is present exactly once', () => {

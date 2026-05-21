@@ -37,6 +37,49 @@ describe('automation daemon generation config', () => {
     ).toThrow(/app-server/i);
   });
 
+  it('allows strict app-server generation without endpoint when local Docker worker mode is configured', () => {
+    const config = loadAutomationDaemonConfig({
+      ...baseEnv,
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+      FORGELOOP_CODEX_WORKER_MODE: 'local_docker',
+      FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
+      FORGELOOP_WORKER_IDENTITY: 'local-worker',
+      FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'bootstrap-token',
+      FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
+      FORGELOOP_WORKER_TEMP_ROOT: '/tmp/forgeloop-worker',
+      FORGELOOP_WORKER_LABELS: '{"host":"local"}',
+      FORGELOOP_WORKER_MAX_CONCURRENCY: '2',
+      FORGELOOP_DOCKER_BIN: 'docker',
+      FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: `sha256:${'a'.repeat(64)}`,
+      FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: `sha256:${'b'.repeat(64)}`,
+      FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-1',
+      FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-1',
+      FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID: 'credential-binding-1',
+    });
+
+    expect(config.generationPlanning.mode).toBe('app_server');
+    expect(config.codexWorkerMode).toBe('local_docker');
+    expect(config.appServerEndpoint).toBeUndefined();
+    expect(config.workerIdentity).toBe('local-worker');
+    expect(config.workerLabels).toEqual({ host: 'local' });
+    expect(config.workerMaxConcurrency).toBe(2);
+    expect(config.workerDockerImageDigests).toEqual([`sha256:${'a'.repeat(64)}`]);
+    expect(config.workerNetworkPolicyDigests).toEqual([`sha256:${'b'.repeat(64)}`]);
+    expect(config.workerAuthorizedScopes).toEqual([{ project_id: 'project-1', repo_id: 'repo-1' }]);
+    expect(config.generationCredentialBindingId).toBe('credential-binding-1');
+  });
+
+  it('rejects local Docker worker app-server generation without worker bootstrap config', () => {
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...baseEnv,
+        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+        FORGELOOP_CODEX_WORKER_MODE: 'local_docker',
+        FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
+      }),
+    ).toThrow(/FORGELOOP_WORKER_IDENTITY/);
+  });
+
   it('rejects app-server generation when only the artifact root is missing', () => {
     expect(() =>
       loadAutomationDaemonConfig({

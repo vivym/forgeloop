@@ -83,8 +83,8 @@ describe('delivery local Codex dogfood script helpers', () => {
     });
   });
 
-  it('preflight reports strict blocker codes for missing Codex and unauthenticated runtime', async () => {
-    const missingCodex = await preflightLocalCodexDogfood({
+  it('preflight does not depend on host Codex command or host Codex authentication', async () => {
+    const result = await preflightLocalCodexDogfood({
       env: strictReadyEnv,
       repoPath: '/repo',
       runCommand: async (command) => {
@@ -95,29 +95,9 @@ describe('delivery local Codex dogfood script helpers', () => {
       },
     });
 
-    expect(missingCodex).toMatchObject({
-      ok: false,
-      blockers: [{ code: 'missing_codex_command' }],
-    });
-
-    const unavailableRuntime = await preflightLocalCodexDogfood({
-      env: strictReadyEnv,
-      repoPath: '/repo',
-      runCommand: async (command, args) => {
-        if (command === 'git') {
-          return { stdout: '', stderr: '' };
-        }
-        if (command === 'codex' && args[0] === '--version') {
-          return { stdout: 'codex 1.0.0', stderr: '' };
-        }
-        throw new Error('not logged in');
-      },
-    });
-
-    expect(unavailableRuntime).toMatchObject({
-      ok: false,
-      blockers: [{ code: 'codex_not_authenticated' }],
-    });
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('missing_codex_command');
+    expect(JSON.stringify(result)).not.toContain('codex_not_authenticated');
   });
 
   it('preflight reports strict blockers for unconfirmed dangerous mode, dirty source, durable repo, and worktree creation', async () => {
@@ -434,7 +414,7 @@ describe('delivery local Codex dogfood script helpers', () => {
         }),
         { expectedRunSessionId: 'run-1' },
       ),
-    ).not.toThrow();
+    ).toThrow(/Dockerized app_server/);
 
     expect(() =>
       validateWithRunSession(
@@ -445,6 +425,13 @@ describe('delivery local Codex dogfood script helpers', () => {
             app_server_attempted: true,
             selected_execution_mode: 'app_server',
             effective_dangerous_mode: 'confirmed',
+            launch_lease_id: 'lease-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            credential_binding_version_id: 'credential-v1',
+            docker_image_digest: `sha256:${'a'.repeat(64)}`,
+            container_id_digest: `sha256:${'b'.repeat(64)}`,
+            app_server_effective_config_digest: `sha256:${'c'.repeat(64)}`,
+            docker_policy_self_check_digest: `sha256:${'d'.repeat(64)}`,
           },
         }),
         { expectedRunSessionId: 'run-session-1' },
@@ -459,6 +446,13 @@ describe('delivery local Codex dogfood script helpers', () => {
             workspace_path: '/repo/.worktrees/run-1',
             app_server_attempted: true,
             selected_execution_mode: 'app_server',
+            launch_lease_id: 'lease-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            credential_binding_version_id: 'credential-v1',
+            docker_image_digest: `sha256:${'a'.repeat(64)}`,
+            container_id_digest: `sha256:${'b'.repeat(64)}`,
+            app_server_effective_config_digest: `sha256:${'c'.repeat(64)}`,
+            docker_policy_self_check_digest: `sha256:${'d'.repeat(64)}`,
           },
         }),
         { expectedRunSessionId: 'run-1' },
@@ -484,7 +478,7 @@ describe('delivery local Codex dogfood script helpers', () => {
       runtimeMetadata: {
         workspace_path: '/Users/viv/projs/forgeloop/.worktrees/run-1',
         app_server_attempted: true,
-        selected_execution_mode: 'exec_fallback',
+        selected_execution_mode: 'app_server',
         effective_dangerous_mode: 'confirmed',
       },
       terminalEvidence: {
@@ -501,7 +495,7 @@ describe('delivery local Codex dogfood script helpers', () => {
       },
     });
 
-    expect(report).toContain('- Runtime metadata: app_server_attempted=true selected_execution_mode=exec_fallback effective_dangerous_mode=confirmed');
+    expect(report).toContain('- Runtime metadata: app_server_attempted=true selected_execution_mode=app_server effective_dangerous_mode=confirmed');
     expect(report).toContain('- Artifacts: diff, review_packet');
     expect(report).toContain('- Review Packet: available');
     expect(report).not.toContain('workspace_path');
