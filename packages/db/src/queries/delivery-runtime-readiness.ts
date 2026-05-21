@@ -154,3 +154,12 @@ export async function deriveDeliveryRunReadiness(
     generated_at: now,
   });
 }
+
+export const deliveryRunReadinessDisabledReason = (
+  readiness: DeliveryRunReadinessResponse | undefined,
+): string | undefined => {
+  if (readiness === undefined || readiness.state === 'ready') {
+    return undefined;
+  }
+  return readiness.blockers.find((blocker) => blocker.severity === 'blocking')?.message ?? readiness.blockers[0]?.message;
+};

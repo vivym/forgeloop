@@ -44,6 +44,7 @@ export class QueryService {
   async getWorkItemCockpit(workItemId: string, options: { lane?: ProductLaneId } = {}) {
     const cockpit = await getWorkItemCockpit(this.repository, workItemId, {
       run_session_metadata_fallback: this.initialRuntimeMetadata(),
+      now: this.runtime.now(),
       ...(options.lane === undefined ? {} : { lane: options.lane }),
     });
     if (cockpit === undefined) {
@@ -142,7 +143,7 @@ export class QueryService {
   async getProductLane(laneId: string, rawQuery: RawQuery) {
     const parsedLaneId = parseProductLaneIdOrThrowBadRequest(laneId);
     const filters = parseProductLaneQuery(parsedLaneId, rawQuery);
-    return productLaneResponseSchema.parse(await getProductLaneQuery(this.repository, parsedLaneId, filters));
+    return productLaneResponseSchema.parse(await getProductLaneQuery(this.repository, parsedLaneId, filters, { now: this.runtime.now() }));
   }
 
   private initialRuntimeMetadata(): RunRuntimeMetadata {

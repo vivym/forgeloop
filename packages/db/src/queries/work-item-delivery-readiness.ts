@@ -9,6 +9,7 @@ import {
   type DeliveryStage,
   type DeliveryStageId,
   type DeliveryStageState,
+  type DeliveryRunReadinessResponse,
   type ProductAction,
   type ProductLaneId,
   type ProductObjectType,
@@ -39,6 +40,7 @@ import {
   objectTarget,
   runPackageAction,
 } from './product-action-builders';
+import { deliveryRunReadinessDisabledReason } from './delivery-runtime-readiness';
 import { laneForWorkItemKind } from './product-lane-types';
 import {
   currentApprovedPlanPackages,
@@ -72,6 +74,7 @@ export interface WorkItemDeliveryReadinessInput {
   releaseEvidence: readonly ReleaseEvidenceLike[];
   decisions: readonly DecisionLike[];
   degradedSources?: readonly DegradedSourceKey[];
+  packageRunReadinessByPackageId?: ReadonlyMap<string, DeliveryRunReadinessResponse>;
 }
 
 type StageInput = Omit<DeliveryStage, 'label' | 'blockers' | 'evidence_refs' | 'object_refs'> & {
@@ -934,12 +937,15 @@ const actionForLane = (
 
   if (laneId === 'execution-owner') {
     if (firstPackage !== undefined && firstRun === undefined && firstPackage.phase === 'ready') {
+      const disabledReason = deliveryRunReadinessDisabledReason(input.packageRunReadinessByPackageId?.get(firstPackage.id));
       return [
         runPackageAction({
           id: `run-package-${firstPackage.id}`,
           laneId,
           priority: 'primary',
           label: 'Run package',
+          enabled: disabledReason === undefined,
+          ...(disabledReason === undefined ? {} : { disabledReason, blockedReason: disabledReason }),
           workItemId: input.workItem.id,
           packageId: firstPackage.id,
           target: objectTarget('execution_package', firstPackage.id, `/packages/${firstPackage.id}`),

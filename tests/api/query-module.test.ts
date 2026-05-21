@@ -353,6 +353,29 @@ describe('query module', () => {
     }
   });
 
+  it('uses runtime readiness blockers to disable cockpit run package next actions', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
+
+    const response = await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .expect(200);
+    const action = response.body.delivery_readiness.next_actions.find(
+      (candidate: { kind: string; command?: { type: string } }) =>
+        candidate.kind === 'command' && candidate.command?.type === 'run_package',
+    );
+
+    expect(action).toMatchObject({
+      enabled: false,
+      disabled_reason: 'A local Codex run execution profile must be active for this package scope.',
+      blocked_reason: 'A local Codex run execution profile must be active for this package scope.',
+      command: expect.objectContaining({ type: 'run_package', package_id: executionPackage.id }),
+    });
+    expect(JSON.stringify(action)).not.toContain('sha256:');
+    expect(JSON.stringify(action)).not.toContain('/workspace');
+    expect(JSON.stringify(action)).not.toContain('codex_config');
+  });
+
   it('returns 404 for a missing work item cockpit', async () => {
     const { app } = await track(createTestApp());
 

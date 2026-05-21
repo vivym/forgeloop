@@ -12,7 +12,11 @@ import {
   InMemoryDeliveryRepository,
   resolveLaneFilters,
 } from '../../packages/db/src/index';
-import { seedReadyExecutionPackageThroughApi, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
+import {
+  seedReadyExecutionPackageThroughApi,
+  seedReadyLocalCodexExecutionPackage,
+  succeededSelfReview,
+} from '../helpers/delivery-runtime-fixtures';
 
 const now = '2026-05-05T00:00:00.000Z';
 const actorOwner = 'actor-owner';
@@ -341,6 +345,36 @@ describe('product lane projections', () => {
     await request(app.getHttpServer())
       .get(`/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`)
       .expect(200);
+  });
+
+  it('disables Product Lane run package actions when local Codex runtime readiness is blocked', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
+
+    for (const path of [
+      `/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`,
+      `/query/product-lanes/qa-test-owner?project_id=${executionPackage.project_id}&qa_owner_actor_id=${actorQa}`,
+    ]) {
+      const response = await request(app.getHttpServer()).get(path).expect(200);
+      const item = response.body.items.find(
+        (candidate: { object: { type: string; id: string } }) =>
+          candidate.object.type === 'execution_package' && candidate.object.id === executionPackage.id,
+      );
+      const action = item?.actions.find(
+        (candidate: { kind: string; command?: { type: string } }) =>
+          candidate.kind === 'command' && candidate.command?.type === 'run_package',
+      );
+
+      expect(action).toMatchObject({
+        enabled: false,
+        disabled_reason: 'A local Codex run execution profile must be active for this package scope.',
+        blocked_reason: 'A local Codex run execution profile must be active for this package scope.',
+        command: expect.objectContaining({ type: 'run_package', package_id: executionPackage.id }),
+      });
+      expect(JSON.stringify(action)).not.toContain('sha256:');
+      expect(JSON.stringify(action)).not.toContain('/workspace');
+      expect(JSON.stringify(action)).not.toContain('codex_config');
+    }
   });
 
   it('keeps unsupported owner_actor_id response metadata for non-Work-Item lanes', async () => {

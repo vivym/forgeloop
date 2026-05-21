@@ -16,6 +16,10 @@ import { isOpenReviewPacketStatus } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
 import {
+  deliveryRunReadinessDisabledReason,
+  deriveDeliveryRunReadiness,
+} from './delivery-runtime-readiness';
+import {
   generatePackagesAction,
   generatePlanDraftAction,
   generateSpecDraftAction,
@@ -37,6 +41,10 @@ import {
   type ParsedProductLaneFilters,
   type ProductLaneProjectionItem,
 } from './product-lane-types';
+
+export interface ProductLaneQueryOptions {
+  now?: string;
+}
 
 const staleAfterMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -592,14 +600,79 @@ const buildManagerLane = async (
   });
 };
 
+type ProductLaneAction = ProductLaneResponse['items'][number]['actions'][number];
+
+const isRunPackageAction = (
+  action: ProductLaneAction,
+): action is ProductLaneAction & { kind: 'command'; command: { type: 'run_package'; package_id: string } } =>
+  action.kind === 'command' && action.command.type === 'run_package';
+
+const gateVisibleRunPackageActions = async (
+  repository: DeliveryRepository,
+  response: ProductLaneResponse,
+  options: ProductLaneQueryOptions,
+): Promise<ProductLaneResponse> => {
+  const packageIds = uniqueStrings(
+    response.items.flatMap((item) =>
+      item.actions.flatMap((action) => (isRunPackageAction(action) ? [action.command.package_id] : [])),
+    ),
+  );
+  if (packageIds.length === 0) {
+    return response;
+  }
+
+  const readinessNow = options.now ?? new Date().toISOString();
+  const disabledReasons = new Map(
+    await Promise.all(
+      packageIds.map(async (packageId) => {
+        const executionPackage = await repository.getExecutionPackage(packageId);
+        return [
+          packageId,
+          executionPackage === undefined
+            ? undefined
+            : deliveryRunReadinessDisabledReason(
+                await deriveDeliveryRunReadiness(repository, { executionPackage, now: readinessNow }),
+              ),
+        ] as const;
+      }),
+    ),
+  );
+
+  return productLaneResponseSchema.parse({
+    ...response,
+    items: response.items.map((item) => ({
+      ...item,
+      actions: item.actions.map((action) => {
+        if (!isRunPackageAction(action)) {
+          return action;
+        }
+        const disabledReason = disabledReasons.get(action.command.package_id);
+        return disabledReason === undefined
+          ? action
+          : {
+              ...action,
+              enabled: false,
+              disabled_reason: disabledReason,
+              blocked_reason: disabledReason,
+            };
+      }),
+    })),
+  });
+};
+
 export async function getProductLane(
   repository: DeliveryRepository,
   laneId: ProductLaneId,
   filters: ParsedProductLaneFilters,
+  options: ProductLaneQueryOptions = {},
 ): Promise<ProductLaneResponse> {
   if (laneId === 'manager') {
     return buildManagerLane(repository, filters);
   }
   const items = await loadProductLaneCandidates(repository, laneId, filters);
-  return productLaneResponseSchema.parse(buildProductLaneResponse(laneId, items, filters));
+  return gateVisibleRunPackageActions(
+    repository,
+    productLaneResponseSchema.parse(buildProductLaneResponse(laneId, items, filters)),
+    options,
+  );
 }

@@ -21,13 +21,16 @@ import {
 } from '@forgeloop/contracts';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
+import { deriveDeliveryRunReadiness } from './delivery-runtime-readiness';
 import { serializePublicArtifactRef, serializePublicArtifactRefs } from './public-evidence-serialization';
+import { selectWorkItemRunSession } from './work-item-delivery-selection';
 import { deriveWorkItemDeliveryReadiness } from './work-item-delivery-readiness';
 import type { ReleaseBlockerLike, ReleaseTestAcceptanceEvidenceLike } from './work-item-release-readiness';
 
 export interface WorkItemCockpitOptions {
   run_session_metadata_fallback: RunRuntimeMetadata;
   lane?: ProductLaneId;
+  now?: string;
 }
 
 const withWorkerLeaseMetadata = async (
@@ -441,6 +444,25 @@ export async function getWorkItemCockpit(
   ).flat();
   const releaseBlockers = safeReleaseBlockers(degradedSources, scopedReleases);
   const releaseTestAcceptance = releaseEvidences.flatMap(releaseTestAcceptanceFromEvidence);
+  const readinessNow = options.now ?? new Date().toISOString();
+  const runPackageReadinessCandidate = options.lane === 'execution-owner' ? currentPackages[0] : undefined;
+  const shouldDeriveRunPackageReadiness =
+    runPackageReadinessCandidate !== undefined &&
+    runPackageReadinessCandidate.phase === 'ready' &&
+    selectWorkItemRunSession(runPackageReadinessCandidate, runSessions) === undefined;
+  const packageRunReadinessByPackageId = new Map(
+    shouldDeriveRunPackageReadiness
+      ? [
+          [
+            runPackageReadinessCandidate.id,
+            await deriveDeliveryRunReadiness(repository, {
+              executionPackage: runPackageReadinessCandidate,
+              now: readinessNow,
+            }),
+          ] as const,
+        ]
+      : [],
+  );
 
   return workItemCockpitResponseSchema.parse({
     work_item: projectWorkItem(workItem),
@@ -472,6 +494,7 @@ export async function getWorkItemCockpit(
       releaseEvidence: releaseEvidences.map(releaseEvidenceLike),
       decisions,
       degradedSources: [...degradedSources],
+      packageRunReadinessByPackageId,
     }),
   });
 }
