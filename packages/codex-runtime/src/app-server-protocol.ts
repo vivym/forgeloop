@@ -27,7 +27,7 @@ const normalizeEffectiveConfig = (value: unknown): CodexEffectiveConfig | undefi
   }
 
   const approvalPolicy = value.approvalPolicy ?? value.approval_policy;
-  const sandbox = value.sandbox;
+  const sandbox = value.sandbox ?? value.sandbox_mode;
   const sandboxPolicy = value.sandboxPolicy ?? value.sandbox_policy;
   const writableRoots = value.writableRoots ?? value.writable_roots;
   const hasConfig =
@@ -52,7 +52,7 @@ const normalizeEffectiveConfig = (value: unknown): CodexEffectiveConfig | undefi
   return config;
 };
 
-const responseRecord = (response: Record<string, unknown>, key: 'response' | 'result'): Record<string, unknown> | undefined =>
+const responseRecord = (response: Record<string, unknown>, key: string): Record<string, unknown> | undefined =>
   isRecord(response[key]) ? response[key] : undefined;
 
 export const effectiveConfigFromResponse = (response: unknown): CodexEffectiveConfig | undefined => {
@@ -62,6 +62,9 @@ export const effectiveConfigFromResponse = (response: unknown): CodexEffectiveCo
 
   const directResponse = responseRecord(response, 'response');
   const resultResponse = responseRecord(response, 'result');
+  const configResponse = responseRecord(response, 'config');
+  const directConfigResponse = responseRecord(directResponse ?? {}, 'config');
+  const resultConfigResponse = responseRecord(resultResponse ?? {}, 'config');
   return (
     normalizeEffectiveConfig(response.effectiveConfig) ??
     normalizeEffectiveConfig(response.effective_config) ??
@@ -69,6 +72,9 @@ export const effectiveConfigFromResponse = (response: unknown): CodexEffectiveCo
     normalizeEffectiveConfig(directResponse?.effective_config) ??
     normalizeEffectiveConfig(resultResponse?.effectiveConfig) ??
     normalizeEffectiveConfig(resultResponse?.effective_config) ??
+    normalizeEffectiveConfig(configResponse) ??
+    normalizeEffectiveConfig(directConfigResponse) ??
+    normalizeEffectiveConfig(resultConfigResponse) ??
     normalizeEffectiveConfig(response) ??
     normalizeEffectiveConfig(directResponse) ??
     normalizeEffectiveConfig(resultResponse)

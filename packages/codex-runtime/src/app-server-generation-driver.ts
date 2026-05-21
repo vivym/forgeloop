@@ -279,7 +279,7 @@ export class AppServerGenerationDriver {
       const threadResponse = await this.#withDeadline(
         this.options.transport.request('thread/start', {
           approvalPolicy: 'never',
-          sandboxPolicy: { type: 'readOnly' },
+          sandbox: 'read-only',
         }),
         deadline,
       );
@@ -297,7 +297,7 @@ export class AppServerGenerationDriver {
           threadId,
           input: textInput(input.prompt),
           approvalPolicy: 'never',
-          sandboxPolicy: { type: 'readOnly' },
+          sandboxPolicy: { type: 'readOnly', networkAccess: false },
         }),
         deadline,
       );

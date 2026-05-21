@@ -111,12 +111,12 @@ describe('AppServerGenerationDriver', () => {
 
     expect(request).toHaveBeenNthCalledWith(1, 'thread/start', {
       approvalPolicy: 'never',
-      sandboxPolicy: { type: 'readOnly' },
+      sandbox: 'read-only',
     });
     expect(request).toHaveBeenNthCalledWith(2, 'turn/start', {
       approvalPolicy: 'never',
       input: [{ type: 'text', text: '{}', text_elements: [] }],
-      sandboxPolicy: { type: 'readOnly' },
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
       threadId: 'thread-1',
     });
   });
@@ -233,6 +233,11 @@ describe('AppServerGenerationDriver', () => {
         result: { effective_config: { sandbox_policy: { type: 'readOnly' }, approval_policy: 'never' } },
       }),
     ).toEqual({ sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' });
+    expect(
+      effectiveConfigFromResponse({
+        config: { sandbox_mode: 'read-only', approval_policy: 'never' },
+      }),
+    ).toEqual({ sandbox: 'read-only', approvalPolicy: 'never' });
   });
 
   it('blocks app-server mode when generation safety lease is unavailable', async () => {
@@ -719,15 +724,21 @@ describe('AppServerGenerationDriver', () => {
 });
 
 describe('app-server endpoint and generation safety contracts', () => {
-  it('rejects process-spawning app-server endpoints and accepts unix sockets', () => {
+  it('rejects process-spawning app-server endpoints and accepts governed sockets', () => {
     expect(() => parseCodexAppServerEndpoint('exec:codex app-server')).toThrow(/codex_app_server_endpoint_invalid/);
     expect(() => parseCodexAppServerEndpoint('cli')).toThrow(/codex_app_server_endpoint_invalid/);
     expect(() => parseCodexAppServerEndpoint('spawn:/tmp/fake')).toThrow(/codex_app_server_endpoint_invalid/);
     expect(() => parseCodexAppServerEndpoint('stdio')).toThrow(/codex_app_server_endpoint_invalid/);
     expect(() => parseCodexAppServerEndpoint('http://127.0.0.1:1234')).toThrow(/codex_app_server_endpoint_invalid/);
+    expect(() => parseCodexAppServerEndpoint('ws://token@127.0.0.1:1234')).toThrow(/codex_app_server_endpoint_invalid/);
+    expect(() => parseCodexAppServerEndpoint('ws://127.0.0.1:1234?token=secret')).toThrow(/codex_app_server_endpoint_invalid/);
     expect(parseCodexAppServerEndpoint('unix:/tmp/codex-app-server.sock')).toEqual({
       type: 'unix',
       path: '/tmp/codex-app-server.sock',
+    });
+    expect(parseCodexAppServerEndpoint('ws://127.0.0.1:1234')).toEqual({
+      type: 'websocket',
+      url: 'ws://127.0.0.1:1234/',
     });
   });
 

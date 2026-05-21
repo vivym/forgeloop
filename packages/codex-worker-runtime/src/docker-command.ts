@@ -2,6 +2,8 @@ import type { CodexRuntimeNetworkPolicy, CodexRuntimeProfileRevision } from '@fo
 
 import { networkArgsForDocker, validateMaterializedNetworkPolicy } from './network-policy.js';
 
+export type CodexDockerAppServerTransport = 'unix' | 'websocket' | 'docker_exec';
+
 export interface DockerCommandInput {
   dockerBin: string;
   workerId: string;
@@ -18,6 +20,9 @@ export interface DockerCommandInput {
   codexHomeHostPath: string;
   socketHostDir: string;
   socketContainerPath: '/run/forgeloop/codex.sock';
+  appServerTransport?: CodexDockerAppServerTransport;
+  websocketContainerPort?: 34567;
+  websocketTokenContainerPath?: '/run/forgeloop/ws-token';
   networkPolicy: CodexRuntimeNetworkPolicy;
   resourceLimits: CodexRuntimeProfileRevision['resource_limits'];
   dockerPolicy: CodexRuntimeProfileRevision['docker_policy'];
@@ -28,13 +33,18 @@ export interface DockerCommand {
   args: string[];
   publicSummary: Record<string, unknown>;
   internal?: {
+    controlTransport?: CodexDockerAppServerTransport;
     socketHostPath?: string;
+    socketContainerPath?: string;
+    websocketContainerPort?: number;
   };
 }
 
 const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
 const forbiddenHostPathPattern = /(^|\/)(\.codex|\.ssh|\.git-credentials|\.npmrc|\.yarnrc|\.pnpmrc|auth\.json|config\.toml|docker\.sock)$/i;
 const secretLookingPattern = /(sk-[a-z0-9_-]+|api[_-]?key|secret|token|password)/i;
+const isSafeSecretLookingDockerArg = (arg: string): boolean =>
+  arg === '--ws-auth' || arg === 'capability-token' || arg === '--ws-token-file' || arg === '/run/forgeloop/ws-token';
 
 const assertPinnedDigest = (value: string, label: string): void => {
   if (!sha256DigestPattern.test(value)) {
@@ -58,9 +68,15 @@ const bindMount = (hostPath: string, containerPath: string, mode: 'ro' | 'rw'): 
 
 const label = (key: string, value: string): string => `forgeloop.${key}=${value}`;
 
+const copyCodexSeedScript =
+  'cp /codex-seed/config.toml /codex-home/config.toml && cp /codex-seed/auth.json /codex-home/auth.json && chmod 600 /codex-home/config.toml /codex-home/auth.json && exec "$@"';
+
 export const buildCodexAppServerDockerCommand = (input: DockerCommandInput): DockerCommand => {
   assertPinnedDigest(input.imageDigest, 'Docker image digest');
   const networkPolicy = validateMaterializedNetworkPolicy(input.networkPolicy, { strictRealDogfood: input.networkPolicy.mode !== 'disabled' });
+  const appServerTransport = input.appServerTransport ?? 'docker_exec';
+  const websocketContainerPort = input.websocketContainerPort ?? 34567;
+  const websocketTokenContainerPath = input.websocketTokenContainerPath ?? '/run/forgeloop/ws-token';
 
   const hostPaths = [
     input.artifactHostPath,
@@ -78,6 +94,9 @@ export const buildCodexAppServerDockerCommand = (input: DockerCommandInput): Doc
   }
   if (!input.dockerPolicy.drop_capabilities.includes('ALL')) {
     throw new Error('Docker policy must drop all capabilities.');
+  }
+  if (appServerTransport === 'websocket' && networkPolicy.mode === 'disabled') {
+    throw new Error('websocket app-server transport requires Docker networking.');
   }
 
   const networkArgs =
@@ -113,23 +132,40 @@ export const buildCodexAppServerDockerCommand = (input: DockerCommandInput): Doc
     '--pids-limit',
     String(input.resourceLimits.pids),
     ...networkArgs,
+    ...(appServerTransport === 'websocket' ? ['--publish', `127.0.0.1::${websocketContainerPort}`] : []),
     '--env',
     'CODEX_HOME=/codex-home',
+    '--env',
+    'HOME=/codex-home',
+    '--tmpfs',
+    `/codex-home:rw,noexec,nosuid,nodev,uid=${input.hostUid},gid=${input.hostGid},mode=700`,
     ...(input.workspaceHostPath === undefined ? [] : ['--volume', bindMount(input.workspaceHostPath, input.workspaceContainerPath, 'rw')]),
     '--volume',
     bindMount(input.artifactHostPath, '/artifacts', 'rw'),
     '--volume',
-    bindMount(input.codexHomeHostPath, '/codex-home', 'ro'),
-    '--volume',
-    bindMount(input.socketHostDir, '/run/forgeloop', 'rw'),
+    bindMount(input.codexHomeHostPath, '/codex-seed', 'ro'),
+    ...(appServerTransport === 'docker_exec'
+      ? [
+          '--tmpfs',
+          `/run/forgeloop:rw,noexec,nosuid,nodev,uid=${input.hostUid},gid=${input.hostGid},mode=700`,
+          '--tmpfs',
+          `/tmp:rw,nosuid,nodev,uid=${input.hostUid},gid=${input.hostGid},mode=1777`,
+        ]
+      : ['--volume', bindMount(input.socketHostDir, '/run/forgeloop', 'rw')]),
     `${input.image}@${input.imageDigest}`,
+    'sh',
+    '-ceu',
+    copyCodexSeedScript,
+    'forgeloop-codex-entrypoint',
     'codex',
     'app-server',
-    '--socket',
-    input.socketContainerPath,
+    '--listen',
+    ...(appServerTransport === 'websocket'
+      ? [`ws://0.0.0.0:${websocketContainerPort}`, '--ws-auth', 'capability-token', '--ws-token-file', websocketTokenContainerPath]
+      : [`unix://${input.socketContainerPath}`]),
   ];
 
-  if (args.some((arg) => secretLookingPattern.test(arg) && !arg.startsWith('forgeloop.'))) {
+  if (args.some((arg) => secretLookingPattern.test(arg) && !arg.startsWith('forgeloop.') && !isSafeSecretLookingDockerArg(arg))) {
     throw new Error('secret-looking value cannot appear in Docker argv.');
   }
 
@@ -143,11 +179,18 @@ export const buildCodexAppServerDockerCommand = (input: DockerCommandInput): Doc
       target_id: input.targetId,
       image_digest: input.imageDigest,
       network_mode: networkPolicy.mode === 'disabled' ? 'disabled' : networkPolicy.provider,
+      app_server_transport: appServerTransport,
       run_as_non_root: true,
       read_only_rootfs: input.dockerPolicy.read_only_rootfs,
     },
     internal: {
-      socketHostPath: input.socketHostDir.endsWith('/codex.sock') ? input.socketHostDir : `${input.socketHostDir}/codex.sock`,
+      controlTransport: appServerTransport,
+      socketContainerPath: input.socketContainerPath,
+      ...(appServerTransport === 'unix'
+        ? { socketHostPath: input.socketHostDir.endsWith('/codex.sock') ? input.socketHostDir : `${input.socketHostDir}/codex.sock` }
+        : appServerTransport === 'websocket'
+          ? { websocketContainerPort }
+          : {}),
     },
   };
 };
