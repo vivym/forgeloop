@@ -18,10 +18,12 @@ ForgeLoop has recently closed several important mainline gaps:
 - Product Lanes replaced the coarse historical Workbench model.
 - ProductAction exists as the single action projection for lane and Work Item next actions.
 - Release, Review, Package, and Run pages have object-specific command surfaces.
+- Codex Runtime Distribution and Docker Worker control-plane support has landed: runtime profiles, credential bindings, worker registrations, runtime status, and launch leases now exist as backend/runtime infrastructure.
 
 The main product gap is now not object existence. The gap is product completeness:
 
 - The Delivery Cockpit can explain readiness and route users to the next object, but the decision/action experience after Package, Review, QA/Test, and Release is still uneven.
+- Package run actions still need product-safe runtime readiness explanations now that real Codex execution can be blocked by missing runtime profile, credential, worker, Docker capability, or launch-lease prerequisites.
 - Work Item creation still uses a generic form despite the PRD's typed Work Item model: Initiative, Requirement, Bug, and Tech Debt have different intake semantics.
 - UI polish should continue, but broad visual rewrites across the same pages touched by the two product streams would create conflicts and delay closure.
 
@@ -44,7 +46,7 @@ The two streams must be independently implementable, testable, reviewable, and m
 ## Non-Goals
 
 - No Evolution Loop, Retrospective, Replay Diagnose Learn Codify Improve product implementation.
-- No new broad automation daemon or runtime execution architecture.
+- No new broad automation daemon or runtime execution architecture. The merged Codex runtime layer may be consumed for product-safe readiness, but these streams must not redesign it.
 - No compatibility endpoint, route alias, adapter shim, double-read path, or fallback query for old Workbench or Work Item Owner concepts.
 - No full Test Center.
 - No new route families such as `/requirements/:id` or `/bugs/:id`.
@@ -63,8 +65,9 @@ Work Item Cockpit -> Package -> Run -> Review Packet -> QA/Test acceptance -> Re
 
 Stream A owns:
 
-- ProductAction command boundary for delivery actions.
+- Delivery ProductAction behavior within the existing command boundary.
 - Package action gating and command affordances.
+- Product-safe Codex runtime readiness display for run/rerun/force-rerun actions.
 - Review Packet decision forms.
 - QA/Test acceptance handoff surfaces.
 - Release action rail state gating and decision forms.
@@ -109,6 +112,7 @@ This avoids three branches editing the same Package, Review, Release, Work Item,
 | Run Console | Owns only if command handoff requires it | Avoid | A only |
 | Review Packet page | Owns | Avoid | A only |
 | Release pages | Owns | Avoid | A only |
+| Codex runtime status/readiness consumption | Owns public-safe display and blocker mapping for delivery run actions using read-only readiness/status projection fields | Avoid | No changes to runtime setup, worker registration, launch lease, credential command semantics, or remediation architecture |
 | Work Item create page | Avoid | Owns | B only |
 | Product Lanes queue projection | Owns only delivery action rows | Read-only | B uses existing kind-to-lane mapping for post-create routing |
 | Shared UI primitives | Minimal, with tests | Minimal, with tests | Prefer additive primitives; no broad redesign |
@@ -122,6 +126,7 @@ Streams A and B can start from the same current `main` if they respect ownership
 Hard dependencies:
 
 - Stream A must not depend on any unmerged code in `feature/codex-generation-runtime-plan-package`.
+- Stream A may depend on merged Codex Runtime Distribution support from PR #13, but only through public-safe readiness/status projection. It must not change runtime setup, credential, worker registration, launch lease, or Docker policy semantics.
 - Stream B must not add a coarse Work Item Owner abstraction to unblock typed intake.
 - Stream C broad polish must wait until A and B merge.
 
@@ -173,6 +178,7 @@ All streams must preserve these constraints:
 - ProductAction remains the only lane/cockpit action descriptor.
 - ProductAction command union remains unchanged during these two parallel implementation streams.
 - Complex decisions that require rationale, evidence, or confirmation must use dedicated product forms rather than generic raw command buttons.
+- Codex runtime profile, credential, worker, Docker, and launch-lease details must be redacted to public-safe readiness/blocker summaries in product UI.
 - Dev Tools remain for debugging only and must not be required for the main delivery path.
 - Approved revision handoff remains strict; no fallback to current revision.
 - No product route, API, query key, component, or fixture may introduce `work-item-owner` as an active concept.

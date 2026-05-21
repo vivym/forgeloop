@@ -16,11 +16,13 @@ ForgeLoop already has the main delivery objects and routes:
 - Run Console with stream, operator input, cancel, and resume.
 - Review Packet detail with approve and request-changes controls.
 - Release Cockpit with edit, submit, approve, override, request changes, test acceptance, observing, evidence, and close controls.
+- Codex Runtime Distribution and Docker Worker control-plane support now exists for runtime profiles, credential bindings, worker registrations, runtime status, and launch leases.
 
 The product gap is consistency and closure:
 
 - Some next actions are commands, but responsibility-lane actions often navigate without explaining the exact decision the user must complete.
 - Package action buttons are not fully state-aware in the UI.
+- Run actions do not yet explain Codex runtime readiness blockers such as missing runtime profile, missing credential binding, no compatible online worker, Docker policy mismatch, or launch prerequisite failure.
 - Review decisions use hardcoded summaries and generic requested-change payloads.
 - QA/Test acceptance is present on Release pages but not clearly connected to Work Item quality-gate readiness.
 - Release actions are available as a long command list instead of a state-aware decision rail.
@@ -44,7 +46,7 @@ The user should understand:
 
 - No Evolution Loop, Retrospective, or Observation implementation.
 - No full Test Center.
-- No new execution runtime or generation runtime architecture.
+- No new execution runtime or generation runtime architecture. This stream consumes the merged Codex runtime readiness/status model but does not redesign runtime profiles, credentials, workers, launch leases, Docker policy, or app-server execution.
 - No broad Work Item intake redesign.
 - No generic command runner.
 - No raw JSON or Dev Tools dependency for the main path.
@@ -108,6 +110,9 @@ State-aware behavior:
 - `Rerun` enabled only when a previous run exists and normal rerun validation can pass.
 - `Force rerun` enabled only when a previous run exists, a non-empty rationale is provided, and the current state allows replacement.
 - Edit package details remains available only before execution has started or when gate state is changes requested.
+- Codex runtime readiness must be included for `local_codex` run actions. If runtime profile, credential, worker, Docker capability, or launch prerequisites are missing, the run action is disabled with a public-safe blocker reason. The UI may link to an existing owning setup/remediation surface when one exists, but this stream must not create a new runtime preflight or remediation architecture.
+- Runtime readiness display must not expose raw auth, raw config, lease tokens, worker session tokens, local paths, raw logs, or Docker command internals.
+- The package page may consume a public-safe runtime readiness projection. That projection must be read-only mapping over existing runtime status/readiness data. Browser code must not call internal setup, credential, worker, launch, or lease endpoints directly.
 
 Disabled actions must show concise reasons. Do not hide blocked actions when the reason teaches the user how to proceed.
 
@@ -200,6 +205,7 @@ Likely files:
 - `packages/db/src/queries/product-action-builders.ts`
 - `packages/db/src/queries/work-item-delivery-readiness.ts`
 - `packages/db/src/queries/product-lane-queries.ts`
+- `apps/control-plane-api/src/modules/query/*` only if a public-safe Codex runtime readiness projection is needed for Web delivery pages; this is projection/mapping only, not runtime setup or remediation ownership
 - `apps/web/src/shared/api/hooks.ts`
 - `apps/web/src/shared/api/query-keys.ts`
 - `apps/web/src/features/product-actions/product-action-list.tsx`
@@ -214,6 +220,9 @@ Avoid:
 - `apps/web/src/features/work-items/create-work-item-form.tsx`
 - Work Item create DTO changes.
 - `packages/contracts/src/api.ts` ProductAction command union changes during parallel A/B work.
+- `apps/control-plane-api/src/modules/codex-runtime/*` command/setup/worker/launch semantics.
+- `packages/db/src/schema/codex-runtime.ts`.
+- `packages/domain/src/codex-runtime.ts` runtime policy semantics.
 - Broad shared theme rewrites.
 
 ## Data And Cache Invalidation
@@ -236,6 +245,7 @@ Required tests:
 - Contract tests only if this stream changes non-ProductAction response schemas; ProductAction command union changes are out of scope during parallel A/B work.
 - DB query tests for next-action derivation in reviewer, QA/Test Owner, release-owner, and execution-owner lanes.
 - Web tests for Package action gating.
+- Web/API tests for public-safe Codex runtime readiness blockers in run/rerun/force-rerun actions.
 - Web tests for Review decision form validation and submit payloads.
 - Web tests for Release action rail state-aware enabled/disabled behavior.
 - Web tests for Work Item Cockpit next actions routing into Package/Review/Release decisions.
@@ -245,6 +255,7 @@ Required tests:
 
 - A user can follow Work Item Cockpit next actions through package execution, review decision, QA/Test handoff, and release readiness without Dev Tools.
 - Package buttons expose valid actions only and explain invalid ones.
+- Package run actions include public-safe Codex runtime readiness blockers when local Codex execution cannot start.
 - Review decisions no longer use hardcoded summaries or generic fixed requested-change payloads.
 - Release action rail shows state-aware decisions and required rationales/evidence.
 - ProductAction remains bounded and unchanged; complex human decisions stay on object pages.
