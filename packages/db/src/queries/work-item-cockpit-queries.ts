@@ -105,6 +105,11 @@ const projectExecutionPackage = (executionPackage: ExecutionPackage) => ({
   allowed_paths: executionPackage.allowed_paths,
   forbidden_paths: executionPackage.forbidden_paths,
   version: executionPackage.version,
+  ...(executionPackage.current_run_session_id === undefined ? {} : { current_run_session_id: executionPackage.current_run_session_id }),
+  ...(executionPackage.current_review_packet_id === undefined
+    ? {}
+    : { current_review_packet_id: executionPackage.current_review_packet_id }),
+  ...(executionPackage.current_release_id === undefined ? {} : { current_release_id: executionPackage.current_release_id }),
   ...(executionPackage.last_run_session_id === undefined ? {} : { last_run_session_id: executionPackage.last_run_session_id }),
   ...(executionPackage.last_failure_summary === undefined ? {} : { last_failure_summary: executionPackage.last_failure_summary }),
   ...(executionPackage.blocked_reason === undefined ? {} : { blocked_reason: executionPackage.blocked_reason }),

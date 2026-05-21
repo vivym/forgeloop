@@ -373,6 +373,13 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     items: [packageListItem],
     degraded_sources: [],
   },
+  [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+    executor_type: 'local_codex',
+    target_kind: 'run_execution',
+    state: 'ready',
+    blockers: [],
+    generated_at: '2026-05-18T00:23:00.000Z',
+  },
   [`GET /query/runs?project_id=${projectId}&limit=100`]: {
     items: [runListItem],
     degraded_sources: [],

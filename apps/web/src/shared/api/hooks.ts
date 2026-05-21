@@ -206,6 +206,13 @@ export function usePackageQuery(packageId: string) {
   });
 }
 
+export function usePackageRuntimeReadinessQuery(packageId: string) {
+  return useQuery({
+    queryKey: queryKeys.packageRuntimeReadiness(packageId),
+    queryFn: () => createQueryApi().getExecutionPackageRuntimeReadiness(packageId),
+  });
+}
+
 export function useRunsQuery(query: ListProductQuery) {
   const normalizedQuery = normalizePackageRunQuery(query);
 
@@ -245,10 +252,11 @@ export function useReviewPacketsQuery(query: ListProductQuery) {
   });
 }
 
-export function useReviewQuery(reviewPacketId: string) {
+export function useReviewQuery(reviewPacketId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.review(reviewPacketId),
-    queryFn: () => createQueryApi().getReview(reviewPacketId),
+    queryFn: () => createQueryApi().getReview(requiredId(reviewPacketId, 'reviewPacketId')),
+    enabled: reviewPacketId !== undefined,
   });
 }
 
@@ -278,7 +286,7 @@ export function useMarkPackageReadyMutation(packageId: string) {
       createCommandApi().markPackageReady(packageId, body),
     onSuccess: (executionPackage) => {
       setPackageDetail(queryClient, packageId, executionPackage);
-      return invalidatePackages(queryClient);
+      return invalidatePackageResources(queryClient, packageId);
     },
   });
 }
@@ -417,7 +425,7 @@ export function usePatchExecutionPackageMutation(packageId: string) {
     mutationFn: (body: PatchExecutionPackageBody) => createCommandApi().patchExecutionPackage(packageId, body),
     onSuccess: (executionPackage) => {
       setPackageDetail(queryClient, packageId, executionPackage);
-      return invalidatePackages(queryClient);
+      return invalidatePackageResources(queryClient, packageId);
     },
   });
 }
@@ -803,7 +811,12 @@ function invalidatePackageDetail(queryClient: QueryClient, packageId: string) {
 }
 
 function invalidatePackageResources(queryClient: QueryClient, packageId: string) {
-  return Promise.all([invalidatePackageDetail(queryClient, packageId), invalidatePackages(queryClient)]);
+  return Promise.all([
+    invalidatePackageDetail(queryClient, packageId),
+    queryClient.invalidateQueries({ queryKey: queryKeys.packageRuntimeReadiness(packageId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.executionPackageReplay(packageId) }),
+    invalidatePackages(queryClient),
+  ]);
 }
 
 function invalidatePackages(queryClient: QueryClient) {

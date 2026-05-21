@@ -67,6 +67,7 @@ export type {
   UnlinkReleaseObjectRequest,
   WorkItemCockpitResponse as CockpitResponse,
   WorkItemDeliveryReadiness,
+  DeliveryRunReadinessResponse as DeliveryRunReadiness,
   DeliveryStage,
   DeliveryStageId,
   DeliveryStageState,

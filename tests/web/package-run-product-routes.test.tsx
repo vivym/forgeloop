@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 
-import { waitFor } from '@testing-library/react';
+import { cleanup, waitFor } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
-import type { RunEvent } from '../../apps/web/src/shared/api/types';
-import { actorId, executionPackage, planRevision, projectId, runSession, timeline, workItem } from './fixtures/product-data';
+import { buildPackageActions } from '../../apps/web/src/features/execution-packages/package-action-model';
+import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
+import type { DeliveryRunReadiness, RunEvent } from '../../apps/web/src/shared/api/types';
+import { actorId, executionPackage, planRevision, projectId, reviewPacket, runSession, timeline, workItem } from './fixtures/product-data';
 
 const packageListResponse = {
   items: [
@@ -124,6 +127,38 @@ const executionPackageWithoutRun = {
   last_run_session_id: undefined,
 };
 
+const runnableExecutionPackage = {
+  ...executionPackage,
+  gate_state: 'not_submitted',
+};
+
+const runnableExecutionPackageWithoutRun = {
+  ...executionPackageWithoutRun,
+  gate_state: 'not_submitted',
+};
+
+const readyRuntimeReadiness = {
+  executor_type: 'local_codex',
+  target_kind: 'run_execution',
+  state: 'ready',
+  blockers: [],
+  generated_at: '2026-05-18T00:23:00.000Z',
+} satisfies DeliveryRunReadiness;
+
+const blockedRuntimeReadiness = {
+  executor_type: 'local_codex',
+  target_kind: 'run_execution',
+  state: 'blocked',
+  blockers: [
+    {
+      code: 'runtime_profile_missing',
+      message: 'Select an execution environment before starting a run.',
+      severity: 'blocking',
+    },
+  ],
+  generated_at: '2026-05-18T00:23:00.000Z',
+} satisfies DeliveryRunReadiness;
+
 const runSessionWithDebugMetadata = {
   ...runSession,
   runtime_metadata: {
@@ -136,6 +171,91 @@ const runSessionWithDebugMetadata = {
     [`raw_${'payload'}`]: `debug-${'only'}-secret`,
   },
 };
+
+describe('buildPackageActions', () => {
+  const baseInput = {
+    actorId: executionPackage.owner_actor_id,
+    readiness: readyRuntimeReadiness,
+    hasOpenReview: false,
+    actionPending: false,
+    forceReason: '',
+  };
+
+  it('gates run and rerun to ready packages that have not been submitted', () => {
+    const draftActions = buildPackageActions({
+      ...baseInput,
+      executionPackage: {
+        ...executionPackageWithoutRun,
+        phase: 'draft',
+        gate_state: 'not_submitted',
+      },
+    });
+    expect(draftActions.markReady.enabled).toBe(true);
+    expect(draftActions.run).toMatchObject({
+      enabled: false,
+      reason: 'Run is available only for ready packages that have not been submitted.',
+    });
+
+    const changesRequestedActions = buildPackageActions({
+      ...baseInput,
+      executionPackage: {
+        ...executionPackage,
+        phase: 'ready',
+        gate_state: 'changes_requested',
+      },
+    });
+    expect(changesRequestedActions.markReady.enabled).toBe(true);
+    expect(changesRequestedActions.run).toMatchObject({
+      enabled: false,
+      reason: 'Run is available only for ready packages that have not been submitted.',
+    });
+    expect(changesRequestedActions.rerun).toMatchObject({
+      enabled: false,
+      reason: 'Rerun is available only for ready packages that have not been submitted.',
+    });
+
+    const queuedActions = buildPackageActions({
+      ...baseInput,
+      executionPackage: {
+        ...executionPackage,
+        phase: 'queued',
+        gate_state: 'not_submitted',
+      },
+    });
+    expect(queuedActions.markReady.enabled).toBe(false);
+    expect(queuedActions.rerun).toMatchObject({
+      enabled: false,
+      reason: 'Rerun is available only for ready packages that have not been submitted.',
+    });
+  });
+
+  it('gates package edits to pre-execution packages or requested changes', () => {
+    const beforeExecutionActions = buildPackageActions({
+      ...baseInput,
+      executionPackage: runnableExecutionPackageWithoutRun,
+    });
+    expect(beforeExecutionActions.edit.enabled).toBe(true);
+
+    const executedActions = buildPackageActions({
+      ...baseInput,
+      executionPackage: runnableExecutionPackage,
+    });
+    expect(executedActions.edit).toMatchObject({
+      enabled: false,
+      reason: 'Package details can be edited only before execution starts or after changes are requested.',
+    });
+
+    const changesRequestedActions = buildPackageActions({
+      ...baseInput,
+      executionPackage: {
+        ...executionPackage,
+        phase: 'ready',
+        gate_state: 'changes_requested',
+      },
+    });
+    expect(changesRequestedActions.edit.enabled).toBe(true);
+  });
+});
 
 describe('package and run product routes', () => {
   it('uses the product Execution Package list endpoint with supported filters', async () => {
@@ -354,7 +474,7 @@ describe('package and run product routes', () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/packages/${executionPackage.id}`, {
       apiOverrides: {
-        [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+        [`GET /execution-packages/${executionPackage.id}`]: runnableExecutionPackageWithoutRun,
         [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
         [`POST /execution-packages/${executionPackage.id}/run`]: { run_session_id: runSession.id },
       },
@@ -381,11 +501,396 @@ describe('package and run product routes', () => {
     expect(String((runRequest?.[1] as RequestInit | undefined)?.body)).not.toContain('"mock"');
   });
 
-  it('reruns a package with local Codex execution and previous run context', async () => {
-    const user = userEvent.setup();
+  it('disables run actions with public-safe runtime readiness blockers and hides raw runtime terms', async () => {
     const screen = await renderRoute(`/packages/${executionPackage.id}`, {
       apiOverrides: {
         [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: blockedRuntimeReadiness,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    expect((await screen.findAllByText(/Select an execution environment before starting a run/i)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Run' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Rerun' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+    expect(document.body.textContent).not.toMatch(/runtime_profile_missing/i);
+    expect(document.body.textContent).not.toMatch(/local_codex/i);
+    expect(document.body.textContent).not.toMatch(/runtime-profile-internal/i);
+    expect(document.body.textContent).not.toMatch(/digest|\/tmp|config/i);
+  });
+
+  it('enables run only when package state and runtime readiness are ready', async () => {
+    const draftPackage = {
+      ...executionPackage,
+      phase: 'draft',
+      last_run_session_id: undefined,
+    };
+    const readyPackage = {
+      ...executionPackage,
+      phase: 'ready',
+      gate_state: 'not_submitted',
+      last_run_session_id: undefined,
+    };
+    const blockedScreen = await renderRoute(`/packages/${executionPackage.id}`, {
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: draftPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    expect(await blockedScreen.findByRole('button', { name: 'Run' })).toHaveProperty('disabled', true);
+    expect(blockedScreen.getAllByText(/ready packages that have not been submitted/i).length).toBeGreaterThan(0);
+    cleanup();
+
+    const readyScreen = await renderRoute(`/packages/${executionPackage.id}`, {
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: readyPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+        [`POST /execution-packages/${executionPackage.id}/run`]: { run_session_id: runSession.id },
+      },
+    });
+
+    await waitFor(() => expect(readyScreen.getByRole('button', { name: 'Run' })).toHaveProperty('disabled', false));
+  });
+
+  it('keeps run actions disabled while stale runtime readiness is refetching', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.packageRuntimeReadiness(executionPackage.id), readyRuntimeReadiness);
+    let resolveReadiness!: (readiness: DeliveryRunReadiness) => void;
+    const readinessRefetch = new Promise<DeliveryRunReadiness>((resolve) => {
+      resolveReadiness = resolve;
+    });
+
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      queryClient,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: runnableExecutionPackageWithoutRun,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: async () => readinessRefetch,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    const run = await screen.findByRole('button', { name: 'Run' });
+    expect(run).toHaveProperty('disabled', true);
+    expect(screen.getAllByText(/Checking execution readiness before starting a run/i).length).toBeGreaterThan(0);
+
+    resolveReadiness(readyRuntimeReadiness);
+
+    await waitFor(() => expect(run).toHaveProperty('disabled', false));
+  });
+
+  it('keeps run actions disabled after stale runtime readiness refetch fails', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.packageRuntimeReadiness(executionPackage.id), readyRuntimeReadiness);
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      queryClient,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: runnableExecutionPackageWithoutRun,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: () => {
+          throw new Error('readiness unavailable');
+        },
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    const run = await screen.findByRole('button', { name: 'Run' });
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKeys.packageRuntimeReadiness(executionPackage.id))).toMatchObject({
+        error: expect.any(Error),
+        fetchStatus: 'idle',
+      }),
+    );
+    await waitFor(() => expect(screen.getAllByText(/Checking execution readiness before starting a run/i).length).toBeGreaterThan(0));
+    expect(run).toHaveProperty('disabled', true);
+  });
+
+  it('blocks run replacement while the current run session is unresolved', async () => {
+    const packageWithActiveRun = {
+      ...executionPackage,
+      gate_state: 'not_submitted',
+      current_run_session_id: runSession.id,
+    };
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: packageWithActiveRun,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    expect(await screen.findByRole('button', { name: 'Run' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Rerun' })).toHaveProperty('disabled', true);
+    expect(screen.getAllByText(/run is already in progress/i).length).toBeGreaterThan(0);
+  });
+
+  it('blocks rerun while a current open review exists', async () => {
+    const packageWithOpenReview = {
+      ...executionPackage,
+      gate_state: 'not_submitted',
+      current_review_packet_id: reviewPacket.id,
+    };
+    const openReview = {
+      ...reviewPacket,
+      status: 'in_review',
+      decision: 'none',
+    };
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: packageWithOpenReview,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/reviews/${reviewPacket.id}`]: openReview,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    expect(await screen.findByRole('button', { name: 'Rerun' })).toHaveProperty('disabled', true);
+    expect(screen.getAllByText(/open review must be resolved before rerun/i).length).toBeGreaterThan(0);
+  });
+
+  it('enables force rerun only with current eligible review and governance rationale', async () => {
+    const user = userEvent.setup();
+    const reviewPackage = {
+      ...executionPackage,
+      phase: 'review',
+      resolution: 'none',
+      current_review_packet_id: reviewPacket.id,
+    };
+    const currentReview = {
+      ...reviewPacket,
+      status: 'ready',
+      decision: 'none',
+    };
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/reviews/${reviewPacket.id}`]: currentReview,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+        [`POST /execution-packages/${executionPackage.id}/force-rerun`]: { run_session_id: 'run-force-rerun' },
+      },
+    });
+
+    const force = await screen.findByRole('button', { name: 'Force rerun' });
+    expect(force).toHaveProperty('disabled', true);
+
+    await user.type(screen.getByLabelText('Force rerun reason'), 'Retry after dependency recovery');
+    await waitFor(() => expect(force).toHaveProperty('disabled', false));
+
+    await user.click(force);
+    await waitFor(() =>
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/execution-packages/${executionPackage.id}/force-rerun`,
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+  });
+
+  it('keeps force rerun disabled while stale current review eligibility is refetching', async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const reviewPackage = {
+      ...executionPackage,
+      phase: 'review',
+      resolution: 'none',
+      current_review_packet_id: reviewPacket.id,
+    };
+    const currentReview = {
+      ...reviewPacket,
+      status: 'ready',
+      decision: 'none',
+    };
+    queryClient.setQueryData(queryKeys.review(reviewPacket.id), currentReview);
+    let resolveReview!: (review: typeof currentReview) => void;
+    const reviewRefetch = new Promise<typeof currentReview>((resolve) => {
+      resolveReview = resolve;
+    });
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      queryClient,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/reviews/${reviewPacket.id}`]: async () => reviewRefetch,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+        [`POST /execution-packages/${executionPackage.id}/force-rerun`]: { run_session_id: 'run-force-rerun' },
+      },
+    });
+
+    await user.type(await screen.findByLabelText('Force rerun reason'), 'Retry after dependency recovery');
+    const force = screen.getByRole('button', { name: 'Force rerun' });
+    expect(force).toHaveProperty('disabled', true);
+
+    resolveReview(currentReview);
+
+    await waitFor(() => expect(force).toHaveProperty('disabled', false));
+  });
+
+  it('keeps force rerun disabled after stale current review refetch fails', async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const reviewPackage = {
+      ...executionPackage,
+      phase: 'review',
+      resolution: 'none',
+      current_review_packet_id: reviewPacket.id,
+    };
+    const currentReview = {
+      ...reviewPacket,
+      status: 'ready',
+      decision: 'none',
+    };
+    queryClient.setQueryData(queryKeys.review(reviewPacket.id), currentReview);
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      queryClient,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/reviews/${reviewPacket.id}`]: () => {
+          throw new Error('review unavailable');
+        },
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+        [`POST /execution-packages/${executionPackage.id}/force-rerun`]: { run_session_id: 'run-force-rerun' },
+      },
+    });
+
+    await user.type(await screen.findByLabelText('Force rerun reason'), 'Retry after dependency recovery');
+    const force = screen.getByRole('button', { name: 'Force rerun' });
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKeys.review(reviewPacket.id))).toMatchObject({
+        error: expect.any(Error),
+        fetchStatus: 'idle',
+      }),
+    );
+    await waitFor(() => expect(screen.getByText(/current open ready or in-review Review Packet/i)).toBeTruthy());
+    expect(force).toHaveProperty('disabled', true);
+  });
+
+  it('blocks force rerun without current open review context', async () => {
+    const user = userEvent.setup();
+    const reviewPackage = {
+      ...executionPackage,
+      phase: 'review',
+      resolution: 'none',
+    };
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    await user.type(await screen.findByLabelText('Force rerun reason'), 'Retry after dependency recovery');
+
+    expect(await screen.findByText(/current open ready or in-review Review Packet/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  });
+
+  it('blocks force rerun for non-owner actor', async () => {
+    const user = userEvent.setup();
+    const reviewPackage = {
+      ...executionPackage,
+      phase: 'review',
+      resolution: 'none',
+      current_review_packet_id: reviewPacket.id,
+    };
+    const currentReview = {
+      ...reviewPacket,
+      status: 'in_review',
+      decision: 'none',
+    };
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: 'actor-not-owner',
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/reviews/${reviewPacket.id}`]: currentReview,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    await user.type(await screen.findByLabelText('Force rerun reason'), 'Retry after dependency recovery');
+
+    expect(await screen.findByText(/only the package owner can force rerun/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  });
+
+  it('blocks force rerun when the loaded Review Packet does not belong to the latest package run', async () => {
+    const user = userEvent.setup();
+    const reviewPackage = {
+      ...executionPackage,
+      phase: 'review',
+      resolution: 'none',
+      current_review_packet_id: reviewPacket.id,
+    };
+    const staleReview = {
+      ...reviewPacket,
+      run_session_id: 'run-older-than-latest',
+      status: 'ready',
+      decision: 'none',
+    };
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+        [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/reviews/${reviewPacket.id}`]: staleReview,
+        [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+      },
+    });
+
+    await user.type(await screen.findByLabelText('Force rerun reason'), 'Retry after dependency recovery');
+
+    expect(await screen.findByText(/review must match the latest run/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+  });
+
+  it.each(['draft', 'escalated'] as const)(
+    'blocks force rerun for %s review status rejected by the command endpoint',
+    async (status) => {
+      const user = userEvent.setup();
+      const reviewPackage = {
+        ...executionPackage,
+        phase: 'review',
+        resolution: 'none',
+        current_review_packet_id: reviewPacket.id,
+      };
+      const ineligibleReview = {
+        ...reviewPacket,
+        status,
+        decision: 'none',
+      };
+      const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+        actorId: executionPackage.owner_actor_id,
+        apiOverrides: {
+          [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+          [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+          [`GET /query/reviews/${reviewPacket.id}`]: ineligibleReview,
+          [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
+        },
+      });
+
+      await user.type(await screen.findByLabelText('Force rerun reason'), 'Retry after dependency recovery');
+
+      expect(await screen.findByText(/review must be ready or in review/i)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Force rerun' })).toHaveProperty('disabled', true);
+    },
+  );
+
+  it('reruns a package with local Codex execution and previous run context', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
+      apiOverrides: {
+        [`GET /execution-packages/${executionPackage.id}`]: runnableExecutionPackage,
         [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
         [`POST /execution-packages/${executionPackage.id}/rerun`]: { run_session_id: 'run-rerun' },
       },
@@ -416,6 +921,7 @@ describe('package and run product routes', () => {
   it('requires a previous run before force rerun is available', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
       apiOverrides: {
         [`GET /execution-packages/${executionPackage.id}`]: executionPackageWithoutRun,
         [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
@@ -435,9 +941,22 @@ describe('package and run product routes', () => {
 
   it('force reruns with the previous run session id when reason and history are present', async () => {
     const user = userEvent.setup();
+    const reviewPackage = {
+      ...executionPackage,
+      phase: 'review',
+      resolution: 'none',
+      current_review_packet_id: reviewPacket.id,
+    };
+    const currentReview = {
+      ...reviewPacket,
+      status: 'in_review',
+      decision: 'none',
+    };
     const screen = await renderRoute(`/packages/${executionPackage.id}`, {
+      actorId: executionPackage.owner_actor_id,
       apiOverrides: {
-        [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+        [`GET /execution-packages/${executionPackage.id}`]: reviewPackage,
+        [`GET /query/reviews/${reviewPacket.id}`]: currentReview,
         [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
         [`POST /execution-packages/${executionPackage.id}/force-rerun`]: { run_session_id: 'run-force-rerun' },
       },
@@ -445,7 +964,7 @@ describe('package and run product routes', () => {
 
     await user.type(await screen.findByLabelText('Force rerun reason'), 'Retry after dependency recovery');
     const force = screen.getByRole('button', { name: 'Force rerun' });
-    expect(force).toHaveProperty('disabled', false);
+    await waitFor(() => expect(force).toHaveProperty('disabled', false));
     await user.click(force);
 
     await waitFor(() =>
@@ -472,9 +991,13 @@ describe('package and run product routes', () => {
 
   it('edits package details through the package patch action', async () => {
     const user = userEvent.setup();
+    const editablePackage = {
+      ...executionPackage,
+      last_run_session_id: undefined,
+    };
     const screen = await renderRoute(`/packages/${executionPackage.id}`, {
       apiOverrides: {
-        [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+        [`GET /execution-packages/${executionPackage.id}`]: editablePackage,
         [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
         [`PATCH /execution-packages/${executionPackage.id}`]: {
           ...executionPackage,
@@ -505,6 +1028,7 @@ describe('package and run product routes', () => {
     const user = userEvent.setup();
     const packageWithTwoChecks = {
       ...executionPackage,
+      last_run_session_id: undefined,
       required_checks: [
         executionPackage.required_checks[0],
         {

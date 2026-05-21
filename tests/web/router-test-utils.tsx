@@ -77,10 +77,11 @@ export async function renderRoute(
     actorId?: string;
     projectId?: string;
     apiOverrides?: ProductApiResponseMap;
+    queryClient?: QueryClient;
   } = {},
 ) {
   installProductApiMock(options.apiOverrides);
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = options.queryClient ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const RoutesStub = createRoutesStub(options.routes ?? productRoutes);
 
   render(
