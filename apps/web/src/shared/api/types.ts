@@ -112,6 +112,100 @@ export interface ProductLaneQuery {
   limit?: number;
 }
 
+export const supportedProductLaneSearchParams = [
+  'project_id',
+  'actor_id',
+  'driver_actor_id',
+  'owner_actor_id',
+  'reviewer_actor_id',
+  'qa_owner_actor_id',
+  'release_owner_actor_id',
+  'cursor',
+  'limit',
+  'kind',
+  'phase',
+  'status',
+  'gate_state',
+  'resolution',
+  'risk',
+  'blocked',
+  'stale',
+] as const;
+
+export type ProductLaneSearchParam = (typeof supportedProductLaneSearchParams)[number];
+
+const workItemTypeLaneIds = new Set<ProductLaneId>(['requirements', 'bugs', 'tech-debt', 'initiatives']);
+const executionOwnerLaneIds = new Set<ProductLaneId>(['execution-owner']);
+
+export function isWorkItemTypeLane(laneId: ProductLaneId): boolean {
+  return workItemTypeLaneIds.has(laneId);
+}
+
+export function isProductLaneSearchParamSupported(laneId: ProductLaneId, key: ProductLaneSearchParam): boolean {
+  if (key === 'kind') {
+    return !isWorkItemTypeLane(laneId);
+  }
+  if (key === 'owner_actor_id') {
+    return executionOwnerLaneIds.has(laneId);
+  }
+  return true;
+}
+
+export function productLaneQueryFromSearchParams(
+  laneId: ProductLaneId,
+  searchParams: URLSearchParams,
+  projectId: string,
+): ProductLaneQuery {
+  return {
+    project_id: projectId,
+    ...stringParam(searchParams, 'actor_id'),
+    ...stringParam(searchParams, 'driver_actor_id'),
+    ...(isProductLaneSearchParamSupported(laneId, 'owner_actor_id')
+      ? stringParam(searchParams, 'owner_actor_id')
+      : {}),
+    ...stringParam(searchParams, 'reviewer_actor_id'),
+    ...stringParam(searchParams, 'qa_owner_actor_id'),
+    ...stringParam(searchParams, 'release_owner_actor_id'),
+    ...(isWorkItemTypeLane(laneId) ? {} : kindParam(searchParams)),
+    ...stringParam(searchParams, 'phase'),
+    ...stringParam(searchParams, 'status'),
+    ...stringParam(searchParams, 'gate_state'),
+    ...stringParam(searchParams, 'resolution'),
+    ...stringParam(searchParams, 'risk'),
+    ...booleanParam(searchParams, 'blocked'),
+    ...booleanParam(searchParams, 'stale'),
+    ...stringParam(searchParams, 'cursor'),
+    ...numberParam(searchParams, 'limit'),
+  };
+}
+
+function stringParam(searchParams: URLSearchParams, key: keyof ProductLaneQuery) {
+  const value = searchParams.get(key)?.trim();
+  return value ? { [key]: value } : {};
+}
+
+function kindParam(searchParams: URLSearchParams): Pick<ProductLaneQuery, 'kind'> | Record<string, never> {
+  const value = searchParams.get('kind')?.trim();
+  if (value === 'initiative' || value === 'requirement' || value === 'bug' || value === 'tech_debt') {
+    return { kind: value };
+  }
+  return {};
+}
+
+function booleanParam(searchParams: URLSearchParams, key: 'blocked' | 'stale') {
+  const value = searchParams.get(key)?.trim();
+  if (value === 'true') return { [key]: true };
+  if (value === 'false') return { [key]: false };
+  return {};
+}
+
+function numberParam(searchParams: URLSearchParams, key: 'limit') {
+  const value = searchParams.get(key)?.trim();
+  if (value === undefined || value.length === 0) return {};
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? { [key]: parsed } : {};
+}
+
 export type WorkItemKind = 'initiative' | 'requirement' | 'bug' | 'tech_debt';
 export type ArtifactKind =
   | 'diff'

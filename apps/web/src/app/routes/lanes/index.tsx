@@ -1,9 +1,6 @@
 import { Navigate, useSearchParams } from 'react-router';
-import {
-  defaultProductLaneId,
-  isProductLaneSearchParamSupported,
-  supportedProductLaneSearchParams,
-} from '../../../features/product-lanes/product-lanes';
+import { defaultProductLaneId } from '../../../features/product-lanes/product-lanes';
+import { isProductLaneSearchParamSupported, supportedProductLaneSearchParams } from '../../../shared/api/types';
 
 export default function ProductLanesRoute() {
   const [searchParams] = useSearchParams();

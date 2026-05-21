@@ -25,52 +25,12 @@ export const productLaneIds = productLanes.map((lane) => lane.id);
 
 const productLaneIdSet = new Set<string>(productLaneIds);
 
-export const supportedProductLaneSearchParams = [
-  'project_id',
-  'actor_id',
-  'driver_actor_id',
-  'owner_actor_id',
-  'reviewer_actor_id',
-  'qa_owner_actor_id',
-  'release_owner_actor_id',
-  'cursor',
-  'limit',
-  'kind',
-  'phase',
-  'status',
-  'gate_state',
-  'resolution',
-  'risk',
-  'blocked',
-  'stale',
-] as const;
-
-type ProductLaneSearchParam = (typeof supportedProductLaneSearchParams)[number];
-
-const workItemTypeLaneIds = new Set<ProductLaneId>(['requirements', 'bugs', 'tech-debt', 'initiatives']);
-
 export function parseProductLaneId(value: string | undefined): ProductLaneId | undefined {
   return value !== undefined && productLaneIdSet.has(value) ? (value as ProductLaneId) : undefined;
 }
 
 export function productLaneDefinition(laneId: ProductLaneId) {
   return productLanes.find((lane) => lane.id === laneId) ?? productLanes[0];
-}
-
-export function isWorkItemTypeLane(laneId: ProductLaneId): boolean {
-  return workItemTypeLaneIds.has(laneId);
-}
-
-const executionOwnerLaneIds = new Set<ProductLaneId>(['execution-owner']);
-
-export function isProductLaneSearchParamSupported(laneId: ProductLaneId, key: ProductLaneSearchParam): boolean {
-  if (key === 'kind') {
-    return !isWorkItemTypeLane(laneId);
-  }
-  if (key === 'owner_actor_id') {
-    return executionOwnerLaneIds.has(laneId);
-  }
-  return true;
 }
 
 export function laneForWorkItemKind(kind: WorkItemKind): ProductLaneId {
