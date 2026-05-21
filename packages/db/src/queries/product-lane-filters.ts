@@ -102,6 +102,9 @@ export const matchesProductLaneFilters = (item: ProductLaneProjectionItem, filte
       return false;
     }
   }
+  if (applied.driver_actor_id !== undefined && !matchesActor(item.driver_actor_id, item.driver_actor_id_values, applied.driver_actor_id)) {
+    return false;
+  }
   if (applied.owner_actor_id !== undefined && !matchesActor(item.owner_actor_id, item.owner_actor_id_values, applied.owner_actor_id)) {
     return false;
   }
@@ -163,6 +166,11 @@ export const toProductLaneResponseItem = (item: ProductLaneProjectionItem): Prod
   ...(item.gate_state === undefined ? {} : { gate_state: item.gate_state }),
   ...(item.resolution === undefined ? {} : { resolution: item.resolution }),
   ...(item.risk === undefined ? {} : { risk: item.risk }),
+  ...(item.driver_actor_id === undefined ? {} : { driver_actor_id: item.driver_actor_id }),
+  ...(item.owner_actor_id === undefined ? {} : { owner_actor_id: item.owner_actor_id }),
+  ...(item.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: item.reviewer_actor_id }),
+  ...(item.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: item.qa_owner_actor_id }),
+  ...(item.release_owner_actor_id === undefined ? {} : { release_owner_actor_id: item.release_owner_actor_id }),
   updated_at: item.updated_at,
   actions: item.actions,
 });

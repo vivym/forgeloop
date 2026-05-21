@@ -20,6 +20,38 @@ const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
 const ownerHeaders = { 'x-forgeloop-actor-id': actorOwner, 'x-forgeloop-actor-class': 'human_admin' };
 const reviewerHeaders = { 'x-forgeloop-actor-id': actorReviewer, 'x-forgeloop-actor-class': 'human' };
+const intakeContextByKind = {
+  initiative: {
+    type: 'initiative',
+    business_outcome: 'Improve product lane delivery visibility.',
+    scope_narrative: 'Group lane work across intake, approval, execution, QA, and release.',
+    success_metrics: ['Each lane returns the seeded Work Item.'],
+  },
+  requirement: {
+    type: 'requirement',
+    stakeholder_problem: 'Approvers need lane attention to reflect Work Item context.',
+    desired_outcome: 'Requirement lane fixtures include typed intake context.',
+    acceptance_criteria: ['The item appears in the lane.'],
+    in_scope: ['Product lane projections'],
+  },
+  bug: {
+    type: 'bug',
+    impact_summary: 'Lane projections can drop bug Work Items.',
+    observed_behavior: 'Bug items require typed intake context.',
+    expected_behavior: 'Bug items appear in the bug lane.',
+    reproduction_steps: ['Seed a bug Work Item', 'Query the bug lane'],
+    affected_environment: 'product lane API test',
+    verification_path: 'Product lane API assertions',
+  },
+  tech_debt: {
+    type: 'tech_debt',
+    current_pain: 'Tech debt lane fixtures use legacy owner intake.',
+    desired_invariant: 'Tech debt fixtures use typed intake context.',
+    affected_modules: ['product-lanes.test.ts'],
+    behavior_preservation: 'Existing product lane assertions still pass.',
+    validation_strategy: 'Focused Product Lane API tests',
+  },
+} as const;
 const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {
   const repo = new InMemoryDeliveryRepository();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -64,7 +96,8 @@ const seedDraftWorkItem = async (
         success_criteria: ['The item appears in the lane.'],
         priority: 'P1',
         risk: kind === 'bug' ? 'high' : 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: intakeContextByKind[kind],
       })
       .expect(201)
   ).body;
@@ -273,6 +306,52 @@ describe('product lane projections', () => {
     await request(server)
       .get(`/query/product-lanes/release-owner?project_id=${project.id}&actor_id=actor-a&release_owner_actor_id=actor-b`)
       .expect(400);
+    await request(server)
+      .get(`/query/product-lanes/bugs?project_id=${project.id}&actor_id=actor-a&driver_actor_id=actor-b`)
+      .expect(400);
+  });
+
+  it('filters Work Item type lanes by driver_actor_id and rejects owner_actor_id', async () => {
+    const { app } = await track(createTestApp());
+    const { project, workItem } = await seedDraftWorkItem(app, 'bug');
+    const server = app.getHttpServer();
+
+    const response = await request(server)
+      .get(`/query/product-lanes/bugs?project_id=${project.id}&driver_actor_id=${actorOwner}`)
+      .expect(200);
+    expect(response.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          object: { type: 'work_item', id: workItem.id },
+          driver_actor_id: actorOwner,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(response.body.items)).not.toContain('owner_actor_id');
+
+    await request(server)
+      .get(`/query/product-lanes/bugs?project_id=${project.id}&owner_actor_id=${actorOwner}`)
+      .expect(400);
+  });
+
+  it('keeps execution-owner lane owner_actor_id filtering for execution packages', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+
+    await request(app.getHttpServer())
+      .get(`/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`)
+      .expect(200);
+  });
+
+  it('keeps unsupported owner_actor_id response metadata for non-Work-Item lanes', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+
+    const response = await request(app.getHttpServer())
+      .get(`/query/product-lanes/reviewer?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`)
+      .expect(200);
+
+    expect(response.body.unsupported_filters).toContain('owner_actor_id');
   });
 
   it('returns work item type lanes as strict ProductLaneResponse DTOs', async () => {
@@ -295,7 +374,7 @@ describe('product lane projections', () => {
       const filters = resolveLaneFilters(lane, {
         project_id: laneSeed.project.id,
         kind,
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
         reviewer_actor_id: actorReviewer,
         limit: 5,
       });
@@ -577,6 +656,21 @@ describe('product lane projections', () => {
         resolveLaneFilters('spec-approver', { project_id: planSeed.project.id, actor_id: actorOwner }),
       ),
     ).resolves.toMatchObject({ items: [], summary: expect.objectContaining({ total: 0 }) });
+  });
+
+  it('reports owner_actor_id as unsupported for direct Work Item lane filter resolution', async () => {
+    const { app } = await track(createTestApp());
+    const { project } = await seedDraftWorkItem(app, 'requirement');
+
+    const filters = resolveLaneFilters('requirements', {
+      project_id: project.id,
+      kind: 'requirement',
+      driver_actor_id: actorOwner,
+      owner_actor_id: actorOwner,
+      limit: 5,
+    });
+
+    expect(filters.unsupported_filters).toContain('owner_actor_id');
   });
 
 });

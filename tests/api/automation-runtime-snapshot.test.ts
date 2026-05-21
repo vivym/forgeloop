@@ -31,6 +31,14 @@ const rawSecretPath = '/Users/viv/projs/forgeloop/.worktrees/feature/http-automa
 
 const apps: INestApplication[] = [];
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Automation runtime needs an eligible typed work item.',
+  desired_outcome: 'Runtime snapshots expose valid generation targets.',
+  acceptance_criteria: ['Daemon receives eligible targets.'],
+  in_scope: ['Automation runtime snapshot.'],
+};
+
 const bootAutomationApp = async (): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
@@ -92,7 +100,8 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Daemon receives eligible targets.'],
   priority: 'P0',
   risk: 'medium',
-  owner_actor_id: actorOwner,
+  driver_actor_id: actorOwner,
+  intake_context: requirementIntakeContext,
   phase: 'spec',
   activity_state: 'idle',
   gate_state: 'none',

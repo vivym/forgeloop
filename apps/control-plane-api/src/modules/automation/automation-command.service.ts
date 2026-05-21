@@ -1341,14 +1341,14 @@ export class AutomationCommandService {
       }
       await repository.saveSpec(spec);
       await repository.saveWorkItem({ ...currentWorkItem, current_spec_id: spec.id, updated_at: spec.updated_at });
-      await this.eventWithRepository(repository, 'spec', spec.id, 'spec_created', workItem.owner_actor_id, {
+      await this.eventWithRepository(repository, 'spec', spec.id, 'spec_created', workItem.driver_actor_id, {
         work_item_id: workItem.id,
       });
     }
 
     const drafting = transitionSpecPlan(spec, { type: 'generate_draft_start', at: this.now() }) as Spec;
     await repository.saveSpec(drafting);
-    await this.eventWithRepository(repository, 'spec', spec.id, 'spec_draft_generation_started', workItem.owner_actor_id, {
+    await this.eventWithRepository(repository, 'spec', spec.id, 'spec_draft_generation_started', workItem.driver_actor_id, {
       work_item_id: workItem.id,
     });
 
@@ -1367,7 +1367,7 @@ export class AutomationCommandService {
       risk_notes: input.generated.risk_notes,
       test_strategy_summary: input.generated.test_strategy_summary,
       ...(input.generated.structured_document === undefined ? {} : { structured_document: input.generated.structured_document }),
-      author_actor_id: precondition.daemon_identity ?? 'automation-spec-drafter',
+      author_actor_id: workItem.driver_actor_id,
       artifact_refs: input.generationArtifacts,
       created_at: this.now(),
     };
@@ -1506,12 +1506,12 @@ export class AutomationCommandService {
       }
       await repository.savePlan(plan);
       await repository.saveWorkItem({ ...currentWorkItem, current_plan_id: plan.id, updated_at: plan.updated_at });
-      await this.eventWithRepository(repository, 'plan', plan.id, 'plan_created', workItem.owner_actor_id, { work_item_id: workItem.id });
+      await this.eventWithRepository(repository, 'plan', plan.id, 'plan_created', workItem.driver_actor_id, { work_item_id: workItem.id });
     }
 
     const drafting = transitionSpecPlan(plan, { type: 'generate_draft_start', at: this.now() }) as Plan;
     await repository.savePlan(drafting);
-    await this.eventWithRepository(repository, 'plan', plan.id, 'plan_draft_generation_started', workItem.owner_actor_id, {
+    await this.eventWithRepository(repository, 'plan', plan.id, 'plan_draft_generation_started', workItem.driver_actor_id, {
       work_item_id: workItem.id,
     });
 
@@ -1530,7 +1530,7 @@ export class AutomationCommandService {
       risk_mitigations: input.generated.risk_mitigations,
       rollback_notes: input.generated.rollback_notes,
       ...(input.generated.structured_document === undefined ? {} : { structured_document: input.generated.structured_document }),
-      author_actor_id: input.precondition.daemon_identity ?? 'automation-plan-drafter',
+      author_actor_id: workItem.driver_actor_id,
       artifact_refs: input.generationArtifacts,
       created_at: this.now(),
     };
@@ -1854,9 +1854,9 @@ export class AutomationCommandService {
             project_id: context.project.id,
             repo_id: generatedPackage.repo_id,
             objective: generatedPackage.objective,
-            owner_actor_id: context.workItem.owner_actor_id,
-            reviewer_actor_id: context.workItem.owner_actor_id,
-            qa_owner_actor_id: context.workItem.owner_actor_id,
+            owner_actor_id: context.workItem.driver_actor_id,
+            reviewer_actor_id: context.workItem.driver_actor_id,
+            qa_owner_actor_id: context.workItem.driver_actor_id,
             required_checks: generatedPackage.required_checks,
             required_artifact_kinds: generatedPackage.required_artifact_kinds,
             allowed_paths: generatedPackage.allowed_paths,

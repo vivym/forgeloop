@@ -9,6 +9,7 @@ import {
   reviewPacketStatusSchema,
   reviewPacketTestMappingSchema,
 } from './review.js';
+import { workItemIntakeContextSchema } from './work-item-intake.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const nonEmpty = z.string().trim().min(1);
@@ -215,7 +216,8 @@ const workItemCockpitWorkItemSchema = z
     success_criteria: z.array(z.string()),
     priority: nonEmpty,
     risk: nonEmpty,
-    owner_actor_id: nonEmpty,
+    driver_actor_id: nonEmpty,
+    intake_context: workItemIntakeContextSchema,
     phase: nonEmpty,
     activity_state: nonEmpty,
     gate_state: nonEmpty,
@@ -225,7 +227,16 @@ const workItemCockpitWorkItemSchema = z
     created_at: isoDateTimeSchema.optional(),
     updated_at: isoDateTimeSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((workItem, ctx) => {
+    if (workItem.kind !== workItem.intake_context.type) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['intake_context', 'type'],
+        message: 'intake_context type must match kind',
+      });
+    }
+  });
 
 const cockpitSpecPlanSchema = z
   .object({

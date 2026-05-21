@@ -35,6 +35,14 @@ const qaHeaders = { [actorHeaderName]: actorQa, [actorClassHeaderName]: 'human' 
 const releaseOwnerHeaders = { [actorHeaderName]: actorReleaseOwner, [actorClassHeaderName]: 'human_admin' };
 const reviewerHeaders = { [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' };
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Release approval needs accepted test evidence.',
+  desired_outcome: 'Releases are blocked until test acceptance exists.',
+  acceptance_criteria: ['Release approval requires test acceptance.'],
+  in_scope: ['Release test acceptance gate.'],
+};
+
 const project = (overrides: Partial<Project> = {}): Project => ({
   id: 'project-1',
   name: 'Forgeloop',
@@ -54,7 +62,8 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Release approval requires test acceptance.'],
   priority: 'P1',
   risk: 'medium',
-  owner_actor_id: actorOwner,
+  driver_actor_id: actorOwner,
+  intake_context: requirementIntakeContext,
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

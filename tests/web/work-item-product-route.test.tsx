@@ -8,7 +8,7 @@ import WorkItemDetailRoute from '../../apps/web/src/app/routes/work-items/$workI
 import { ProductActionList } from '../../apps/web/src/features/product-actions/product-action-list';
 import { WorkItemNextActions } from '../../apps/web/src/features/work-items/work-item-next-actions';
 import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
-import type { ProductAction, ProductLaneId } from '../../apps/web/src/shared/api/types';
+import type { ProductAction, ProductLaneId, WorkItemIntakeContext } from '../../apps/web/src/shared/api/types';
 import { renderRoute } from './router-test-utils';
 import {
   cockpitFixtureWithDegradedRunSource,
@@ -24,6 +24,24 @@ import {
   workItem,
   workItemKindCockpitFixtures,
 } from './fixtures/product-data';
+
+const bugIntakeContext: WorkItemIntakeContext = {
+  type: 'bug',
+  impact_summary: 'Release validation is blocked.',
+  observed_behavior: 'Validation fails before release approval.',
+  expected_behavior: 'Validation succeeds for release candidates.',
+  reproduction_steps: ['Open release validation', 'Run validation'],
+  affected_environment: 'test',
+  verification_path: 'Validation succeeds',
+};
+
+const requirementIntakeContext: WorkItemIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Release stakeholders need better cockpit visibility.',
+  desired_outcome: 'Planning artifacts are visible in the release cockpit.',
+  acceptance_criteria: ['Planning artifacts are visible'],
+  in_scope: ['Release cockpit route filtering.'],
+};
 
 describe('Work Item product route', () => {
   it('renders the typed Delivery Cockpit from Work Item readiness', async () => {
@@ -232,7 +250,8 @@ describe('Work Item product route', () => {
             success_criteria: ['Validation succeeds'],
             priority: 'P0',
             risk: 'high',
-            owner_actor_id: 'actor-owner',
+            driver_actor_id: 'actor-owner',
+            intake_context: bugIntakeContext,
             phase: 'validation',
             activity_state: 'active',
             gate_state: 'open',
@@ -247,7 +266,8 @@ describe('Work Item product route', () => {
             success_criteria: ['Planning artifacts are visible'],
             priority: 'P1',
             risk: 'medium',
-            owner_actor_id: 'actor-owner',
+            driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',

@@ -409,7 +409,7 @@ export class RunControlService {
     );
     const workItem = this.requireFound(await this.repository.getWorkItem(executionPackage.work_item_id), `WorkItem ${executionPackage.work_item_id}`);
     const allowed = new Set([
-      workItem.owner_actor_id,
+      workItem.driver_actor_id,
       executionPackage.owner_actor_id,
       executionPackage.reviewer_actor_id,
       executionPackage.qa_owner_actor_id,

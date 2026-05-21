@@ -9,6 +9,7 @@ import type {
   RequiredCheckSpec,
   RunSpec,
   SelfReviewResult,
+  WorkItemIntakeContext,
 } from '@forgeloop/contracts';
 
 import {
@@ -90,6 +91,13 @@ describe('domain state transitions', () => {
       command: 'pnpm test tests/domain',
       timeout_seconds: 120,
       blocks_review: true,
+    };
+    const requirementIntakeContext: WorkItemIntakeContext = {
+      type: 'requirement',
+      stakeholder_problem: 'Delivery teams need enforceable state transitions.',
+      desired_outcome: 'Work items preserve typed intake through domain transitions.',
+      acceptance_criteria: ['Work Item Driver is recorded on creation.'],
+      in_scope: ['Domain Work Item creation'],
     };
 
     const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
@@ -213,15 +221,19 @@ describe('domain state transitions', () => {
         success_criteria: ['Spec, plan, execution, and review gates are enforced.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: 'actor-owner',
+        driver_actor_id: 'actor-driver',
+        intake_context: requirementIntakeContext,
       });
 
       expect(created).toMatchObject({
+        driver_actor_id: 'actor-driver',
+        intake_context: requirementIntakeContext,
         phase: 'draft',
         activity_state: 'idle',
         gate_state: 'none',
         resolution: 'none',
       });
+      expect(created).not.toHaveProperty('owner_actor_id');
 
       const specSubmitted = transitionWorkItem(created, { type: 'submit_spec' });
       expect(specSubmitted).toMatchObject({
@@ -260,6 +272,62 @@ describe('domain state transitions', () => {
       });
     });
 
+    it('rejects create when kind does not match intake context type', () => {
+      expectDomainError(
+        () =>
+          transitionWorkItem(undefined, {
+            type: 'create',
+            id: 'work-item-kind-mismatch',
+            project_id: 'project-1',
+            kind: 'bug',
+            title: 'Reject mismatched intake',
+            goal: 'Prevent inconsistent Work Item kinds.',
+            success_criteria: ['Mismatched kind and intake context is rejected.'],
+            priority: 'P0',
+            risk: 'medium',
+            driver_actor_id: 'actor-driver',
+            intake_context: requirementIntakeContext,
+          }),
+        'INVALID_TRANSITION',
+      );
+    });
+
+    it('clones intake context on create', () => {
+      const intakeContext: WorkItemIntakeContext = {
+        type: 'requirement',
+        stakeholder_problem: 'Delivery teams need stable intake context.',
+        desired_outcome: 'Created Work Items are isolated from event object mutation.',
+        acceptance_criteria: ['Initial acceptance criterion'],
+        in_scope: ['Initial scope'],
+      };
+
+      const created = transitionWorkItem(undefined, {
+        type: 'create',
+        id: 'work-item-cloned-intake',
+        project_id: 'project-1',
+        kind: 'requirement',
+        title: 'Clone intake context',
+        goal: 'Prevent event mutation from changing created state.',
+        success_criteria: ['Intake context is cloned on create.'],
+        priority: 'P0',
+        risk: 'medium',
+        driver_actor_id: 'actor-driver',
+        intake_context: intakeContext,
+      });
+
+      intakeContext.stakeholder_problem = 'Mutated stakeholder problem';
+      intakeContext.acceptance_criteria.push('Mutated acceptance criterion');
+      intakeContext.in_scope.push('Mutated scope');
+
+      expect(created.intake_context).toEqual({
+        type: 'requirement',
+        stakeholder_problem: 'Delivery teams need stable intake context.',
+        desired_outcome: 'Created Work Items are isolated from event object mutation.',
+        acceptance_criteria: ['Initial acceptance criterion'],
+        in_scope: ['Initial scope'],
+      });
+    });
+
     it('supports changes-requested and resubmission gates for spec and plan', () => {
       const base = transitionWorkItem(undefined, {
         type: 'create',
@@ -271,7 +339,8 @@ describe('domain state transitions', () => {
         success_criteria: ['Spec and plan gates can be resubmitted after requested changes.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: 'actor-owner',
+        driver_actor_id: 'actor-driver',
+        intake_context: requirementIntakeContext,
       });
 
       const specReview = transitionWorkItem(base, { type: 'submit_spec' });
@@ -312,7 +381,16 @@ describe('domain state transitions', () => {
         success_criteria: ['Triage items can submit a spec.'],
         priority: 'P1',
         risk: 'low',
-        owner_actor_id: 'actor-owner',
+        driver_actor_id: 'actor-driver',
+        intake_context: {
+          type: 'bug',
+          impact_summary: 'Triaged defects need to enter spec review.',
+          observed_behavior: 'The item is waiting in triage.',
+          expected_behavior: 'The item can submit a spec.',
+          reproduction_steps: ['Create a triaged bug Work Item.'],
+          affected_environment: 'Domain tests',
+          verification_path: 'Run transition tests.',
+        },
         phase: 'triage',
         activity_state: 'idle',
         gate_state: 'none',
@@ -338,7 +416,8 @@ describe('domain state transitions', () => {
         success_criteria: ['Draft work items cannot approve a plan.'],
         priority: 'P1',
         risk: 'low',
-        owner_actor_id: 'actor-owner',
+        driver_actor_id: 'actor-driver',
+        intake_context: requirementIntakeContext,
       });
 
       expectDomainError(() => transitionWorkItem(item, { type: 'approve_plan' }), 'INVALID_TRANSITION');
@@ -354,7 +433,8 @@ describe('domain state transitions', () => {
         success_criteria: ['Completion requires derived evidence.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: 'actor-owner',
+        driver_actor_id: 'actor-driver',
+        intake_context: requirementIntakeContext,
         phase: 'execution',
         activity_state: 'idle',
         gate_state: 'none',
@@ -377,7 +457,8 @@ describe('domain state transitions', () => {
         success_criteria: ['Completion cannot proceed without derived evidence.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: 'actor-owner',
+        driver_actor_id: 'actor-driver',
+        intake_context: requirementIntakeContext,
         phase: 'execution',
         activity_state: 'idle',
         gate_state: 'none',

@@ -94,7 +94,7 @@ export class ExecutionPackageService {
         {
           repo_id: repo.repo_id,
           objective: `Implement ${context.workItem.title}.`,
-          owner_actor_id: context.workItem.owner_actor_id,
+          owner_actor_id: context.workItem.driver_actor_id,
           reviewer_actor_id: 'actor-reviewer',
           qa_owner_actor_id: 'actor-qa',
           required_checks: [

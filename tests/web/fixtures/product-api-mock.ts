@@ -27,6 +27,13 @@ const routeWorkItem = {
   title: 'Improve release cockpit',
   goal: 'Improve release readiness visibility.',
   success_criteria: ['Planning artifacts are visible', 'Validation path is visible'],
+  intake_context: {
+    type: 'requirement',
+    stakeholder_problem: 'Release readiness is hard to inspect.',
+    desired_outcome: 'Planning artifacts and validation path are visible.',
+    acceptance_criteria: ['Planning artifacts are visible', 'Validation path is visible'],
+    in_scope: ['Release cockpit'],
+  },
   phase: 'planning',
 };
 
@@ -95,6 +102,7 @@ const routeProductLaneItem = {
   gate_state: routeWorkItem.gate_state,
   resolution: routeWorkItem.resolution,
   risk: routeWorkItem.risk,
+  driver_actor_id: routeWorkItem.driver_actor_id,
   updated_at: routeWorkItem.updated_at ?? '2026-05-18T00:00:00.000Z',
   actions: routeProductActions,
 };
@@ -249,7 +257,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
             gate_state: workItem.gate_state,
             resolution: workItem.resolution,
             risk: workItem.risk,
-            owner_actor_id: workItem.owner_actor_id,
+            driver_actor_id: workItem.driver_actor_id,
             related: [],
             counts: {},
             updated_at: workItem.updated_at ?? '2026-05-18T00:00:00.000Z',
@@ -313,7 +321,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         gate_state: workItem.gate_state,
         resolution: workItem.resolution,
         risk: workItem.risk,
-        owner_actor_id: workItem.owner_actor_id,
+        driver_actor_id: workItem.driver_actor_id,
         related: [],
         counts: {},
         updated_at: workItem.updated_at ?? '2026-05-18T00:00:00.000Z',
@@ -322,7 +330,11 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     degraded_sources: [],
   },
   [`GET /query/product-lanes/requirements?project_id=${projectId}`]: productLaneResponse('requirements'),
+  [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`]:
+    productLaneResponse('requirements'),
   [`GET /query/product-lanes/requirements?project_id=${projectId}&status=active&blocked=true`]:
+    productLaneResponse('requirements'),
+  [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver&status=active&blocked=true`]:
     productLaneResponse('requirements'),
   [`GET /query/product-lanes/requirements?project_id=${projectId}&phase=planning`]: productLaneResponse(
     'requirements',

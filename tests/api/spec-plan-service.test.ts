@@ -18,6 +18,13 @@ const reviewerHeaders = {
   'x-forgeloop-actor-id': actorReviewer,
   'x-forgeloop-actor-class': 'human',
 };
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Spec and plan routing fixtures need typed intake context.',
+  desired_outcome: 'SpecPlanService tests create valid requirement Work Items.',
+  acceptance_criteria: ['Spec and plan commands remain behavior-compatible.'],
+  in_scope: ['SpecPlanService API tests'],
+};
 
 const validSpecRevision = {
   summary: 'Manual API spec',
@@ -70,7 +77,8 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
         success_criteria: ['Spec and plan routes stay behavior-compatible.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: requirementIntakeContext,
       })
       .expect(201)
   ).body;

@@ -62,6 +62,13 @@ export interface DogfoodGenerationRuntimeConfig {
 const automationSecret = process.env.FORGELOOP_AUTOMATION_DOGFOOD_SECRET ?? 'automation-dogfood-secret';
 const automationActorId = process.env.FORGELOOP_AUTOMATION_ACTOR_ID ?? 'automation-dogfood-actor';
 const automationDaemonIdentity = process.env.FORGELOOP_AUTOMATION_DAEMON_IDENTITY ?? 'automation-dogfood-daemon';
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Automation dogfood fixtures need typed intake context.',
+  desired_outcome: 'Automation dogfood can create valid requirement Work Items.',
+  acceptance_criteria: ['Plan and package drafts are created without enqueueing a run.'],
+  in_scope: ['Automation dogfood script'],
+};
 const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
 const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
@@ -441,7 +448,8 @@ const seedDraftOnlyApprovedSpec = async (
       success_criteria: ['Plan and package drafts are created without enqueueing a run.'],
       priority: 'P0',
       risk: 'medium',
-      owner_actor_id: actorOwner,
+      driver_actor_id: actorOwner,
+      intake_context: requirementIntakeContext,
     })
     .expect(201)).body as WorkItem;
   const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;

@@ -1,8 +1,10 @@
+import type { ProductWorkItemRegistryQuery } from './query';
 import type { ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
 
 export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
   project_id: query.project_id,
   ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
+  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
   ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
   ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
   ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
@@ -27,6 +29,7 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
   ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
   ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
   ...(query.risk === undefined ? {} : { risk: query.risk }),
+  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
   ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
   ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
   ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
@@ -49,11 +52,28 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
   ...(query.limit === undefined ? {} : { limit: query.limit }),
 });
 
+export const normalizeProductWorkItemRegistryQuery = (
+  query: ProductWorkItemRegistryQuery,
+): ProductWorkItemRegistryQuery => ({
+  project_id: query.project_id,
+  ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
+  ...(query.status === undefined ? {} : { status: query.status }),
+  ...(query.phase === undefined ? {} : { phase: query.phase }),
+  ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
+  ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
+  ...(query.risk === undefined ? {} : { risk: query.risk }),
+  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
+  ...(query.blocked === undefined ? {} : { blocked: query.blocked }),
+  ...(query.stale === undefined ? {} : { stale: query.stale }),
+  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
+
 export const queryKeys = {
   productLane: (laneId: ProductLaneId, query: ProductLaneQuery) => ['product-lanes', laneId, normalizeProductLaneQuery(query)],
   pipeline: (projectId: string) => ['pipeline', { projectId }],
   workItems: (projectId: string) => ['work-items', { projectId }],
-  productWorkItems: (query: ListProductQuery) => ['product-work-items', normalizeProductRegistryQuery(query)],
+  productWorkItems: (query: ProductWorkItemRegistryQuery) => ['product-work-items', normalizeProductWorkItemRegistryQuery(query)],
   workItem: (workItemId: string) => ['work-item', workItemId],
   workItemCockpit: (workItemId: string | undefined, lane?: ProductLaneId) =>
     lane === undefined ? ['work-item-cockpit', workItemId] : ['work-item-cockpit', workItemId, { lane }],

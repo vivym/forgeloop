@@ -16,6 +16,14 @@ const afterRetry = '2026-05-05T00:10:00.000Z';
 const buildManualScopeKey = (scope: { object_type: string; object_id: string }) =>
   `${scope.object_type}:${scope.object_id}`;
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Automation needs a typed work item target.',
+  desired_outcome: 'Automation eligibility can reason about a normalized work item.',
+  acceptance_criteria: ['Automation graph has a valid work item target.'],
+  in_scope: ['Automation eligibility graph.'],
+};
+
 type ActionInputOverrides = Partial<CreateOrReplayAutomationActionRunInput> & Partial<ClaimAutomationActionRunInput>;
 
 const createActionInput = (
@@ -941,7 +949,8 @@ async function seedPackageGraph(repository: DeliveryRepository): Promise<void> {
     success_criteria: ['Ancestor holds block packages.'],
     priority: 'P0',
     risk: 'medium',
-    owner_actor_id: 'actor-admin',
+    driver_actor_id: 'actor-admin',
+    intake_context: requirementIntakeContext,
     phase: 'plan',
     activity_state: 'idle',
     gate_state: 'none',
@@ -1007,7 +1016,8 @@ const specWorkItem = (id: string, overrides: Partial<WorkItem> = {}): WorkItem =
   success_criteria: ['Spec draft exists.'],
   priority: 'p1',
   risk: 'low',
-  owner_actor_id: 'actor-admin',
+  driver_actor_id: 'actor-admin',
+  intake_context: requirementIntakeContext,
   phase: 'triage',
   activity_state: 'idle',
   gate_state: 'none',
@@ -1095,7 +1105,8 @@ async function seedPackageEligibilityGraph(repository: DeliveryRepository): Prom
     success_criteria: ['Ancestor holds block package drafting.'],
     priority: 'P0',
     risk: 'medium',
-    owner_actor_id: 'actor-admin',
+    driver_actor_id: 'actor-admin',
+    intake_context: requirementIntakeContext,
     phase: 'plan',
     activity_state: 'idle',
     gate_state: 'none',

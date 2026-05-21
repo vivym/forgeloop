@@ -14,6 +14,7 @@ import {
   usePipelineQuery,
   useProductActionCommandMutation,
   useProductLaneQuery,
+  useProductWorkItemsQuery,
   useRequestPlanChangesMutation,
   useRequestSpecChangesMutation,
   useSpecsQuery,
@@ -55,12 +56,22 @@ describe('Web product API hooks', () => {
     ).toEqual(['specs', { project_id: 'proj', status: 'approved', limit: 100, cursor: 'cursor-1' }]);
   });
 
+  it('omits owner filters from product Work Item registry query keys', () => {
+    expect(
+      queryKeys.productWorkItems({
+        project_id: 'proj',
+        driver_actor_id: 'driver',
+        owner_actor_id: 'owner',
+      } as any),
+    ).toEqual(['product-work-items', { project_id: 'proj', driver_actor_id: 'driver' }]);
+  });
+
   it('includes response-affecting Product Lane query inputs in stable cache keys', () => {
     const bugsLaneKey = queryKeys.productLane('bugs', {
       status: 'ready',
       project_id: 'proj',
       actor_id: 'actor-owner',
-      owner_actor_id: 'actor-owner',
+      driver_actor_id: 'actor-driver',
       kind: 'bug',
       limit: 25,
       cursor: 'cursor-1',
@@ -81,7 +92,7 @@ describe('Web product API hooks', () => {
       cursor: 'cursor-1',
       limit: 25,
       kind: 'bug',
-      owner_actor_id: 'actor-owner',
+      driver_actor_id: 'actor-driver',
       actor_id: 'actor-owner',
       project_id: 'proj',
       status: 'ready',
@@ -105,7 +116,7 @@ describe('Web product API hooks', () => {
       {
         project_id: 'proj',
         actor_id: 'actor-owner',
-        owner_actor_id: 'actor-owner',
+        driver_actor_id: 'actor-driver',
         kind: 'bug',
         phase: 'triage',
         status: 'ready',
@@ -121,7 +132,7 @@ describe('Web product API hooks', () => {
     expect(Object.keys(bugsLaneKey[2] as Record<string, unknown>)).toEqual([
       'project_id',
       'actor_id',
-      'owner_actor_id',
+      'driver_actor_id',
       'kind',
       'phase',
       'status',
@@ -133,6 +144,39 @@ describe('Web product API hooks', () => {
       'cursor',
       'limit',
     ]);
+  });
+
+  it('fetches product Work Items with driver_actor_id in the query key and URL', async () => {
+    const fetchMock = installProductApiMock({
+      [`GET /query/work-items?project_id=${projectId}&driver_actor_id=actor-driver&limit=25`]: {
+        items: [],
+        degraded_sources: [],
+      },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result, unmount } = renderHook(
+      () => useProductWorkItemsQuery({ project_id: projectId, driver_actor_id: 'actor-driver', limit: 25 }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/query/work-items?project_id=${projectId}&driver_actor_id=actor-driver&limit=25`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(queryClient.getQueryData(queryKeys.productWorkItems({ project_id: projectId, driver_actor_id: 'actor-driver', limit: 25 }))).toEqual({
+      items: [],
+      degraded_sources: [],
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('owner_actor_id');
+
+    unmount();
+    queryClient.clear();
   });
 
   it('uses the installed product API mock when hooks were imported before fetch was stubbed', async () => {

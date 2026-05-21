@@ -41,6 +41,14 @@ const project = (overrides: Partial<Project> = {}): Project => ({
   ...overrides,
 });
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Release owners need readiness visibility.',
+  desired_outcome: 'Release cockpit exposes public-safe release readiness.',
+  acceptance_criteria: ['Release cockpit is public-safe.'],
+  in_scope: ['Release cockpit projection.'],
+};
+
 const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   id: 'work-item-1',
   project_id: 'project-1',
@@ -50,7 +58,8 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Release cockpit is public-safe.'],
   priority: 'p1',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-owner',
+  intake_context: requirementIntakeContext,
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

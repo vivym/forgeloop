@@ -50,6 +50,13 @@ const requiredCheck = {
   timeout_seconds: 120,
   blocks_review: true,
 };
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Delivery teams need durable Work Item records.',
+  desired_outcome: 'Repository adapters persist typed Work Item intake.',
+  acceptance_criteria: ['Work Item fixtures round-trip driver identity and intake context.'],
+  in_scope: ['DB repository contract'],
+};
 
 const project: Project = {
   id: 'project-1',
@@ -82,7 +89,8 @@ const workItem: WorkItem = {
   success_criteria: ['Required delivery records can be saved and queried.'],
   priority: 'P0',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-driver',
+  intake_context: requirementIntakeContext,
   phase: 'execution',
   activity_state: 'idle',
   gate_state: 'none',

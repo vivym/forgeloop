@@ -61,15 +61,26 @@ describe('Forgeloop web API client', () => {
 
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
+    const intakeContext = {
+      type: 'bug',
+      impact_summary: 'Checkout fails for signed-in users.',
+      observed_behavior: 'Submit returns an error toast.',
+      expected_behavior: 'Order is created or validation is shown.',
+      reproduction_steps: ['Sign in', 'Add item to cart', 'Submit checkout'],
+      affected_environment: 'Production web',
+      verification_path: 'Regression test for checkout submit',
+    } as const;
+
     const result = await api.createWorkItem({
       project_id: 'project-1',
-      kind: 'requirement',
-      title: 'Ship release cockpit',
-      goal: 'Operate delivery from the browser',
-      success_criteria: ['Create and run a package'],
+      kind: 'bug',
+      title: 'Checkout fails',
+      goal: 'Checkout fails for signed-in users; expected order creation or validation.',
+      success_criteria: ['Order is created or validation is shown', 'Regression test for checkout submit'],
       priority: 'P0',
-      risk: 'medium',
-      owner_actor_id: 'actor-owner',
+      risk: 'high',
+      driver_actor_id: 'actor-driver',
+      intake_context: intakeContext,
     });
 
     expect(result).toMatchObject({ id: 'work-item-1' });
@@ -78,15 +89,49 @@ describe('Forgeloop web API client', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         project_id: 'project-1',
-        kind: 'requirement',
-        title: 'Ship release cockpit',
-        goal: 'Operate delivery from the browser',
-        success_criteria: ['Create and run a package'],
+        kind: 'bug',
+        title: 'Checkout fails',
+        goal: 'Checkout fails for signed-in users; expected order creation or validation.',
+        success_criteria: ['Order is created or validation is shown', 'Regression test for checkout submit'],
         priority: 'P0',
-        risk: 'medium',
-        owner_actor_id: 'actor-owner',
+        risk: 'high',
+        driver_actor_id: 'actor-driver',
+        intake_context: intakeContext,
       }),
     });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty('owner_actor_id');
+  });
+
+  it('rejects Work Item create bodies with execution owner fields before POSTing', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'work-item-1' }), { status: 201 }));
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    const intakeContext = {
+      type: 'bug',
+      impact_summary: 'Checkout fails for signed-in users.',
+      observed_behavior: 'Submit returns an error toast.',
+      expected_behavior: 'Order is created or validation is shown.',
+      reproduction_steps: ['Sign in', 'Add item to cart', 'Submit checkout'],
+      affected_environment: 'Production web',
+      verification_path: 'Regression test for checkout submit',
+    } as const;
+
+    await expect(
+      api.createWorkItem({
+        project_id: 'project-1',
+        kind: 'bug',
+        title: 'Checkout fails',
+        goal: 'Checkout fails for signed-in users; expected order creation or validation.',
+        success_criteria: ['Order is created or validation is shown', 'Regression test for checkout submit'],
+        priority: 'P0',
+        risk: 'high',
+        driver_actor_id: 'actor-driver',
+        owner_actor_id: 'actor-owner',
+        intake_context: intakeContext,
+      } as any),
+    ).rejects.toThrow();
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('encodes query parameters and command request bodies', async () => {
@@ -607,6 +652,30 @@ describe('Forgeloop web API client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://api.local/query/product-lanes/qa-test-owner?project_id=project+1&actor_id=actor%2Fowner&qa_owner_actor_id=actor%2Fowner&kind=initiative&limit=25&cursor=item+1&phase=triage&status=needs_review&gate_state=awaiting_test&resolution=none&risk=high+risk&blocked=false&stale=true',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('whitelists product Work Item query filters before sending requests', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          items: [],
+          degraded_sources: [],
+        }),
+        { status: 200 },
+      ),
+    );
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await queryApi.listWorkItems({
+      project_id: 'project-1',
+      driver_actor_id: 'actor-driver',
+      owner_actor_id: 'actor-owner',
+    } as any);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/query/work-items?project_id=project-1&driver_actor_id=actor-driver',
       expect.objectContaining({ method: 'GET' }),
     );
   });

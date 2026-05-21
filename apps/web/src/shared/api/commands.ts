@@ -1,4 +1,5 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
+import { createWorkItemRequestSchema } from '@forgeloop/contracts';
 import type {
   ActorCommandBody,
   AcknowledgeReleaseTestAcceptanceBody,
@@ -185,7 +186,8 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         body,
         actorId: releaseActorId(body),
       }),
-    createWorkItem: (body: CreateWorkItemBody) => request<WorkItem>('/work-items', { method: 'POST', body }),
+    createWorkItem: async (body: CreateWorkItemBody) =>
+      request<WorkItem>('/work-items', { method: 'POST', body: createWorkItemRequestSchema.parse(body) }),
     listWorkItems: (projectId?: string) =>
       request<WorkItem[]>(`/work-items${projectId ? `?${new URLSearchParams({ project_id: projectId }).toString()}` : ''}`),
     getWorkItem: (workItemId: string) => request<WorkItem>(`/work-items/${encodeURIComponent(workItemId)}`),

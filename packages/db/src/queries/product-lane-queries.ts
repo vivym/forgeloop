@@ -73,6 +73,8 @@ const itemBase = (
     resolution?: string | undefined;
     risk?: string | undefined;
     actorIdValues?: readonly string[] | undefined;
+    driverActorId?: string | undefined;
+    driverActorIdValues?: readonly string[] | undefined;
     ownerActorId?: string | undefined;
     ownerActorIdValues?: readonly string[] | undefined;
     reviewerActorId?: string | undefined;
@@ -115,9 +117,9 @@ const itemBase = (
     actions,
     project_id: input.projectId,
     ...(input.actorIdValues === undefined ? {} : { actor_id_values: input.actorIdValues }),
-    ...(input.ownerActorId === undefined && input.workItem?.owner_actor_id === undefined
-      ? {}
-      : { owner_actor_id: input.ownerActorId ?? input.workItem?.owner_actor_id }),
+    ...(input.driverActorId === undefined ? {} : { driver_actor_id: input.driverActorId }),
+    ...(input.driverActorIdValues === undefined ? {} : { driver_actor_id_values: input.driverActorIdValues }),
+    ...(input.ownerActorId === undefined ? {} : { owner_actor_id: input.ownerActorId }),
     ...(input.ownerActorIdValues === undefined ? {} : { owner_actor_id_values: input.ownerActorIdValues }),
     ...(input.reviewerActorId === undefined ? {} : { reviewer_actor_id: input.reviewerActorId }),
     ...(input.reviewerActorIdValues === undefined ? {} : { reviewer_actor_id_values: input.reviewerActorIdValues }),
@@ -171,6 +173,7 @@ const workItemLaneItem = (laneId: ProductLaneId, workItem: WorkItem): ProductLan
       updatedAt: workItem.updated_at,
       workItem,
       surfaceType: 'work_item',
+      driverActorId: workItem.driver_actor_id,
       blocked: workItem.activity_state === 'awaiting_ai' || workItem.gate_state.includes('changes_requested'),
     },
     [workItemAction(laneId, workItem)],
@@ -504,6 +507,7 @@ const loadProductLaneCandidates = async (
           updatedAt: workItem.updated_at,
           workItem,
           surfaceType: 'work_item',
+          driverActorId: workItem.driver_actor_id,
           qaOwnerActorId: qaOwnerActorIds[0],
           qaOwnerActorIdValues: qaOwnerActorIds,
         },

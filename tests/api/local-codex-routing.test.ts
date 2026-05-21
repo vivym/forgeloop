@@ -19,6 +19,13 @@ const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
 const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' };
 const reviewerHeaders = { [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' };
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Local Codex routing fixtures need typed intake context.',
+  desired_outcome: 'Routing tests create valid requirement Work Items.',
+  acceptance_criteria: ['local_codex run sessions retain workspace evidence.'],
+  in_scope: ['Local Codex routing tests'],
+};
 
 const requiredChecks = [
   {
@@ -102,7 +109,8 @@ const createApprovedPlanRevision = async (app: INestApplication) => {
         success_criteria: ['local_codex run sessions retain workspace evidence.'],
         priority: 'P0',
         risk: 'high',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: requirementIntakeContext,
       })
       .expect(201)
   ).body;

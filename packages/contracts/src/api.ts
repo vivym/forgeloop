@@ -159,6 +159,7 @@ const productHrefBaseUrl = 'https://forgeloop.local';
 const supportedProductLaneQueryKeys = new Set([
   'project_id',
   'actor_id',
+  'driver_actor_id',
   'owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',
@@ -550,6 +551,11 @@ export const productLaneItemSchema = z
     gate_state: nonEmptyTrimmedStringSchema.optional(),
     resolution: nonEmptyTrimmedStringSchema.optional(),
     risk: nonEmptyTrimmedStringSchema.optional(),
+    driver_actor_id: nonEmptyTrimmedStringSchema.optional(),
+    owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
+    reviewer_actor_id: nonEmptyTrimmedStringSchema.optional(),
+    qa_owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
+    release_owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
     updated_at: isoDateTimeSchema,
     actions: z.array(productActionSchema),
   })

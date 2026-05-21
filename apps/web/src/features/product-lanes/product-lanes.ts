@@ -25,25 +25,6 @@ export const productLaneIds = productLanes.map((lane) => lane.id);
 
 const productLaneIdSet = new Set<string>(productLaneIds);
 
-export const supportedProductLaneSearchParams = [
-  'project_id',
-  'actor_id',
-  'owner_actor_id',
-  'reviewer_actor_id',
-  'qa_owner_actor_id',
-  'release_owner_actor_id',
-  'cursor',
-  'limit',
-  'kind',
-  'phase',
-  'status',
-  'gate_state',
-  'resolution',
-  'risk',
-  'blocked',
-  'stale',
-] as const;
-
 export function parseProductLaneId(value: string | undefined): ProductLaneId | undefined {
   return value !== undefined && productLaneIdSet.has(value) ? (value as ProductLaneId) : undefined;
 }
