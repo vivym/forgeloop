@@ -1,4 +1,5 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
+import { normalizeProductWorkItemRegistryQuery } from './query-keys';
 import {
   pipelineResponseSchema,
   productLaneResponseSchema,
@@ -47,7 +48,9 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
     getPipeline: async (query: ProjectQuery) =>
       pipelineResponseSchema.parse(await request<unknown>(`/query/pipeline${queryString(query)}`)) as PipelineResponse,
     listWorkItems: async (query: ProductWorkItemRegistryQuery) =>
-      productListResponseSchema.parse(await request<unknown>(`/query/work-items${queryString(query)}`)) as ProductListResponse,
+      productListResponseSchema.parse(
+        await request<unknown>(`/query/work-items${queryString(normalizeProductWorkItemRegistryQuery(query))}`),
+      ) as ProductListResponse,
     listSpecs: async (query: ProductRegistryQuery) =>
       productListResponseSchema.parse(await request<unknown>(`/query/specs${queryString(query)}`)) as ProductListResponse,
     listPlans: async (query: ProductRegistryQuery) =>

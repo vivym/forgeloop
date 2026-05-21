@@ -110,6 +110,30 @@ describe('Product Lanes route', () => {
     );
   });
 
+  it('strips stale kind and owner filters from direct Work Item lane URLs', async () => {
+    const screen = await renderRoute(
+      `/lanes/requirements?project_id=${projectId}&kind=bug&owner_actor_id=actor-owner&driver_actor_id=actor-driver`,
+      {
+        apiOverrides: {
+          [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`]: {
+            lane_id: 'requirements',
+            label: 'Requirements',
+            description: 'Requirement intake and planning progression.',
+            unsupported_filters: [],
+            summary: { total: 0, blocked: 0, high_risk: 0, stale: 0 },
+            items: [],
+          },
+        },
+      },
+    );
+
+    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `http://localhost:3000/query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('uses Product Lane API paths and renders unsupported filter notices plus selected actions', async () => {
     const screen = await renderRoute(`/lanes/requirements?project_id=${projectId}&selected=wi-1&phase=planning`);
 

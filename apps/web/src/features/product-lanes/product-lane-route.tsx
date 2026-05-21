@@ -137,7 +137,7 @@ function productLaneQueryFromSearch(laneId: ProductLaneId, searchParams: URLSear
     ...stringParam(searchParams, 'reviewer_actor_id'),
     ...stringParam(searchParams, 'qa_owner_actor_id'),
     ...stringParam(searchParams, 'release_owner_actor_id'),
-    ...kindParam(searchParams),
+    ...(workItemTypeLaneIds.has(laneId) ? {} : kindParam(searchParams)),
     ...stringParam(searchParams, 'phase'),
     ...stringParam(searchParams, 'status'),
     ...stringParam(searchParams, 'gate_state'),
