@@ -2250,19 +2250,17 @@ Expected: PASS.
 Run:
 
 ```bash
-! rg -n "p0|P0|work-item-owner|Work Item Owner|[Ww]orkbench|/workbench" apps/web/src packages/contracts/src packages/db/src/queries
+pnpm vitest run tests/naming/delivery-naming.test.ts tests/web/no-legacy-web-ui.test.ts tests/api/delivery-route-contract.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 ! rg -n "runtime_profile_id|credential_binding_id|worker_id|launch_lease|lease_token|codex_config_toml|runtime_profile_digest|credential_payload_digest|docker_image_digest|workspace_root|local_path|localPath|raw_config|raw_auth|Docker command|docker run" apps/web/src/features/execution-packages apps/web/src/features/review-packets apps/web/src/features/releases packages/contracts/src/delivery-runtime-readiness.ts
 rg -n "runtime_profile_id|credential_binding_id|worker_id|launch_lease|lease_token|codex_config_toml" tests/web || true
-pnpm vitest run tests/web/no-legacy-web-ui.test.ts tests/api/delivery-route-contract.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 pnpm --filter @forgeloop/web typecheck
 pnpm -r build
 ```
 
 Expected:
-- The first `rg` returns no active legacy `p0`, Workbench, or Work Item Owner product vocabulary in active product source.
+- The naming cleanup gate and legacy Web UI guard pass, proving no active legacy subsystem vocabulary is present in active product source.
 - The second `rg` returns no raw runtime identifiers in browser object pages or the public runtime readiness contract. Do not include `packages/contracts/src/work-item-delivery-readiness.ts` in this zero-hit guard because its safe public schema may still contain the field name `runtime_metadata`.
 - The third `rg` returns either no hits or only negative assertions/unsafe-input fixtures that prove redaction. There must be no Web fixture that feeds raw runtime identifiers into a successful public DTO parse.
-- Legacy guard tests pass.
 - `pnpm --filter @forgeloop/web typecheck` and `pnpm -r build` pass.
 
 - [ ] **Step 4: Optional browser visual smoke**
