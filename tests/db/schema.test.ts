@@ -430,7 +430,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnNotNull(codex_worker_registrations, 'capabilityCeilingJson')).toBe(true);
     expect(columnType(project_repos, 'project_id')).toBe('PgUUID');
     expect(columnType(projects, 'owner_actor_id')).toBe('PgUUID');
-    expect(columnType(work_items, 'owner_actor_id')).toBe('PgUUID');
+    expect(columnType(work_items, 'driver_actor_id')).toBe('PgUUID');
+    expect(columnType(work_items, 'intake_context')).toBe('PgJsonb');
+    expect(Object.keys(getTableColumns(work_items))).not.toContain('ownerActorId');
     expect(columnType(execution_packages, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'reviewer_actor_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'qa_owner_actor_id')).toBe('PgUUID');
@@ -502,7 +504,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
   it('defines durable project and actor foreign keys', () => {
     expect(hasForeignKey(project_repos, 'project_id', column(projects, 'id'))).toBe(true);
     expect(hasForeignKey(projects, 'owner_actor_id', column(actors, 'id'))).toBe(true);
-    expect(hasForeignKey(work_items, 'owner_actor_id', column(actors, 'id'))).toBe(true);
+    expect(hasForeignKey(work_items, 'driver_actor_id', column(actors, 'id'))).toBe(true);
     expect(hasForeignKey(execution_packages, 'owner_actor_id', column(actors, 'id'))).toBe(true);
     expect(hasForeignKey(execution_packages, 'reviewer_actor_id', column(actors, 'id'))).toBe(true);
     expect(hasForeignKey(execution_packages, 'qa_owner_actor_id', column(actors, 'id'))).toBe(true);

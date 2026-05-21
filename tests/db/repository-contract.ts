@@ -38,6 +38,13 @@ import type {
 
 const at = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Repository users need typed Work Item intake persisted.',
+  desired_outcome: 'Work Items round-trip driver identity and intake context.',
+  acceptance_criteria: ['Work Item driver and intake context are durable.'],
+  in_scope: ['Repository contract fixtures'],
+};
 
 const buildManualScopeKey = (scope: {
   object_type: string;
@@ -172,7 +179,8 @@ export async function runDeliveryRepositoryContract(repository: DeliveryReposito
     success_criteria: ['Repository contract passes for memory and Drizzle.'],
     priority: 'p1',
     risk: 'medium',
-    owner_actor_id: ids.human,
+    driver_actor_id: ids.human,
+    intake_context: requirementIntakeContext,
     phase: 'release',
     activity_state: 'idle',
     gate_state: 'awaiting_release_approval',
@@ -953,7 +961,8 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     success_criteria: ['Spec draft exists.'],
     priority: 'p1',
     risk: 'low',
-    owner_actor_id: ids.human,
+    driver_actor_id: ids.human,
+    intake_context: requirementIntakeContext,
     phase: 'triage',
     activity_state: 'idle',
     gate_state: 'none',
@@ -1994,7 +2003,8 @@ const saveApprovedSpecProjectionCandidate = async (
     success_criteria: input.successCriteria,
     priority: 'p1',
     risk: 'low',
-    owner_actor_id: ids.human,
+    driver_actor_id: ids.human,
+    intake_context: requirementIntakeContext,
     phase: 'plan',
     activity_state: 'idle',
     gate_state: 'none',
@@ -2076,7 +2086,8 @@ const saveApprovedPlanProjectionCandidate = async (
     success_criteria: input.successCriteria,
     priority: 'p1',
     risk: 'low',
-    owner_actor_id: ids.human,
+    driver_actor_id: ids.human,
+    intake_context: requirementIntakeContext,
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'none',

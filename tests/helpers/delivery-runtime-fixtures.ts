@@ -33,6 +33,13 @@ const later = '2026-05-05T00:01:00.000Z';
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Delivery teams need a ready execution package fixture.',
+  desired_outcome: 'Runtime fixtures preserve Work Item driver intake data.',
+  acceptance_criteria: ['Work Item fixture can seed the delivery runtime.'],
+  in_scope: ['Runtime delivery fixtures'],
+};
 let readyExecutionPackageSeedCounter = 0;
 const ownerHeaders = {
   'x-forgeloop-actor-id': actorOwner,
@@ -183,7 +190,8 @@ const baseRecords = (): {
     success_criteria: ['A review packet is produced for successful runs.'],
     priority: 'P0',
     risk: 'medium',
-    owner_actor_id: actorOwner,
+    driver_actor_id: actorOwner,
+    intake_context: requirementIntakeContext,
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'none',
@@ -523,7 +531,8 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
         success_criteria: ['Spec, plan, package, run, and review commands are available.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: requirementIntakeContext,
       })
       .expect(201)
   ).body;

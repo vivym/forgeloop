@@ -18,6 +18,13 @@ import {
 } from '../../packages/db/src/queries/work-item-delivery-readiness';
 
 const now = '2026-05-20T00:00:00.000Z';
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Teams need delivery readiness for a typed Work Item.',
+  desired_outcome: 'Readiness inputs preserve Work Item driver intake data.',
+  acceptance_criteria: ['Readiness fixtures include driver and intake context.'],
+  in_scope: ['Readiness query tests'],
+};
 
 const workItemFixture = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   id: 'wi-1',
@@ -28,7 +35,8 @@ const workItemFixture = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   success_criteria: ['Readiness is deterministic.'],
   priority: 'medium',
   risk: 'medium',
-  owner_actor_id: 'actor-owner',
+  driver_actor_id: 'actor-owner',
+  intake_context: requirementIntakeContext,
   phase: 'release',
   activity_state: 'idle',
   gate_state: 'none',

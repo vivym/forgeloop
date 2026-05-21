@@ -22,6 +22,7 @@ import type {
   RequiredCheckSpec,
   RunSpec,
   SelfReviewResult,
+  WorkItemIntakeContext,
 } from '@forgeloop/contracts';
 import type { WorkItemCompletion } from './completion.js';
 import {
@@ -52,7 +53,8 @@ export type WorkItemTransition =
       success_criteria: string[];
       priority: string;
       risk: string;
-      owner_actor_id: string;
+      driver_actor_id: string;
+      intake_context: WorkItemIntakeContext;
       current_spec_id?: string;
       current_plan_id?: string;
     })
@@ -512,7 +514,8 @@ export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkIt
       success_criteria: [...event.success_criteria],
       priority: event.priority,
       risk: event.risk,
-      owner_actor_id: event.owner_actor_id,
+      driver_actor_id: event.driver_actor_id,
+      intake_context: event.intake_context,
       phase: 'draft',
       activity_state: 'idle',
       gate_state: 'none',

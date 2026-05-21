@@ -9,6 +9,7 @@ import {
   reviewPacketStatusSchema,
   reviewPacketTestMappingSchema,
 } from './review.js';
+import { workItemIntakeContextSchema } from './work-item-intake.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const nonEmpty = z.string().trim().min(1);
@@ -215,7 +216,8 @@ const workItemCockpitWorkItemSchema = z
     success_criteria: z.array(z.string()),
     priority: nonEmpty,
     risk: nonEmpty,
-    owner_actor_id: nonEmpty,
+    driver_actor_id: nonEmpty,
+    intake_context: workItemIntakeContextSchema,
     phase: nonEmpty,
     activity_state: nonEmpty,
     gate_state: nonEmpty,
