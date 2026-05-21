@@ -22,7 +22,7 @@ The product gap is consistency and closure:
 
 - Some next actions are commands, but responsibility-lane actions often navigate without explaining the exact decision the user must complete.
 - Package action buttons are not fully state-aware in the UI.
-- Run actions do not yet explain Codex runtime readiness blockers such as missing runtime profile, missing credential binding, no compatible online worker, Docker policy mismatch, or launch prerequisite failure.
+- Run actions do not yet explain Codex runtime readiness blockers such as missing runtime profile, missing credential binding, no compatible online worker, Docker policy mismatch, or static runtime target mismatch. Launch failures that require a Run Session are a Run Console/runtime-event concern after enqueue.
 - Review decisions use hardcoded summaries and generic requested-change payloads.
 - QA/Test acceptance is present on Release pages but not clearly connected to Work Item quality-gate readiness.
 - Release actions are available as a long command list instead of a state-aware decision rail.
@@ -59,7 +59,7 @@ The user should understand:
 
 ProductAction remains the single action descriptor for Product Lanes and Work Item Cockpit.
 
-Allowed command actions should remain limited to bounded actions with no rich human decision payload:
+Allowed ProductAction command actions should remain limited to bounded actions with no rich human decision payload:
 
 - `generate_spec_draft`
 - `generate_plan_draft`
@@ -68,6 +68,8 @@ Allowed command actions should remain limited to bounded actions with no rich hu
 - `run_package`
 
 During the parallel A/B implementation window, this stream must not add new ProductAction command variants. It must use existing command actions for direct cockpit/lane execution and navigate actions for everything else.
+
+Command inventory schemas may list additional object-page endpoints such as rerun, force-rerun, approve, or request-changes. That inventory is not the ProductAction command union and does not authorize adding ProductAction command variants in this stream.
 
 `rerun_package` and `force_rerun_package` stay on the Package page for this stream. `force_rerun_package` requires a human rationale and must not become a ProductAction command.
 
@@ -85,7 +87,8 @@ Work Item Cockpit remains the cross-role guidance surface. It should not become 
 Responsibility-lane actions should be explicit:
 
 - Execution Owner:
-  - run the package when the selected package is ready and has no selected run;
+  - run the package when the selected package is ready, has no selected run, and the shared public-safe runtime readiness model allows `local_codex` execution;
+  - show a disabled `run_package` ProductAction with the same blocker reason, or navigate to Package actions, when runtime readiness is blocked or unknown;
   - open Package actions when rerun, force rerun, active-run conflict, or package edit is required.
 - Reviewer:
   - open Review decision when a Review Packet is available and awaiting human decision;
@@ -110,9 +113,15 @@ State-aware behavior:
 - `Rerun` enabled only when a previous run exists and normal rerun validation can pass.
 - `Force rerun` enabled only when a previous run exists, a non-empty rationale is provided, and the current state allows replacement.
 - Edit package details remains available only before execution has started or when gate state is changes requested.
-- Codex runtime readiness must be included for `local_codex` run actions. If runtime profile, credential, worker, Docker capability, or launch prerequisites are missing, the run action is disabled with a public-safe blocker reason. The UI may link to an existing owning setup/remediation surface when one exists, but this stream must not create a new runtime preflight or remediation architecture.
+- Codex runtime readiness must be included for every `local_codex` run action, including Package page buttons and ProductAction `run_package` emitted for Work Item Cockpit or Product Lanes. If static pre-run readiness is blocked or unknown, the run action is disabled with a public-safe blocker reason. The UI may link to an existing owning setup/remediation surface when one exists, but this stream must not create a new runtime preflight or remediation architecture.
 - Runtime readiness display must not expose raw auth, raw config, lease tokens, worker session tokens, local paths, raw logs, or Docker command internals.
-- The package page may consume a public-safe runtime readiness projection. That projection must be read-only mapping over existing runtime status/readiness data. Browser code must not call internal setup, credential, worker, launch, or lease endpoints directly.
+- The Package page, Work Item Cockpit action builders, and Product Lane action builders must consume the same public-safe runtime readiness projection for `run_package` gating.
+- The readiness derivation must live in a shared query/domain helper that both ProductAction builders and the public query endpoint can call. Do not duplicate blocker logic separately in Web components, API controllers, and DB query builders.
+- If no existing public-safe projection can satisfy this, Stream A must add a read-only product query/runtime-readiness projection and non-mutating blocker derivation over existing runtime tables/services so run actions can distinguish missing runtime profile, missing credential binding, no compatible online worker, Docker capability mismatch, and static runtime target incompatibility. This may add public-safe response schemas and blocker codes, but must not add setup, credential, worker registration, launch lease, Docker policy, remediation, or mutation semantics.
+- The public readiness DTO must be a separate sanitized product shape, not a pass-through of internal runtime status or public run metadata. It should expose only readiness state, blocker codes, user-facing messages, and safe next-step links. It must not expose profile ids, credential binding ids, worker ids, lease ids, digests, lease timing, local paths, raw config, or raw runtime metadata.
+- The readiness projection must not require browser code to provide or learn raw `credential_binding_id`, worker ids, lease ids, lease timing metadata, local paths, or raw runtime config. If the current runtime model cannot select a credential binding through an existing product-safe rule, the projection must return a public-safe `credential_binding_unconfigured` or `credential_binding_ambiguous` blocker instead of adding a Web-supplied binding selector.
+- Launch lease and run-worker fence failures are not pre-run Package blockers because they require a Run Session. They should surface after enqueue in Run Console/runtime event state, or be handled by a separate runtime-owned preflight design.
+- Browser code must not call internal setup, credential, worker, launch, or lease endpoints directly.
 
 Disabled actions must show concise reasons. Do not hide blocked actions when the reason teaches the user how to proceed.
 
@@ -205,7 +214,7 @@ Likely files:
 - `packages/db/src/queries/product-action-builders.ts`
 - `packages/db/src/queries/work-item-delivery-readiness.ts`
 - `packages/db/src/queries/product-lane-queries.ts`
-- `apps/control-plane-api/src/modules/query/*` only if a public-safe Codex runtime readiness projection is needed for Web delivery pages; this is projection/mapping only, not runtime setup or remediation ownership
+- `apps/control-plane-api/src/modules/query/*` only if a public-safe Codex runtime readiness projection is needed for Web delivery pages; this is read-only projection, mapping, and blocker derivation only, not runtime setup or remediation ownership
 - `apps/web/src/shared/api/hooks.ts`
 - `apps/web/src/shared/api/query-keys.ts`
 - `apps/web/src/features/product-actions/product-action-list.tsx`
@@ -244,8 +253,11 @@ Required tests:
 
 - Contract tests only if this stream changes non-ProductAction response schemas; ProductAction command union changes are out of scope during parallel A/B work.
 - DB query tests for next-action derivation in reviewer, QA/Test Owner, release-owner, and execution-owner lanes.
+- DB/query tests proving Work Item Cockpit and Product Lanes do not emit an enabled `run_package` ProductAction when public-safe runtime readiness is blocked or unknown.
 - Web tests for Package action gating.
-- Web/API tests for public-safe Codex runtime readiness blockers in run/rerun/force-rerun actions.
+- API tests for the read-only public-safe Codex runtime readiness projection and blocker redaction. Do not require `POST /execution-packages/:id/run`, rerun, or force-rerun command endpoints to reject runtime readiness blockers in this stream.
+- DB/query tests must include a stale or blocked runtime readiness fixture and fail if a Work Item Cockpit or Product Lane item still exposes an enabled `run_package` command.
+- Web tests for public-safe Codex runtime readiness blockers in run/rerun/force-rerun actions.
 - Web tests for Review decision form validation and submit payloads.
 - Web tests for Release action rail state-aware enabled/disabled behavior.
 - Web tests for Work Item Cockpit next actions routing into Package/Review/Release decisions.
@@ -255,7 +267,8 @@ Required tests:
 
 - A user can follow Work Item Cockpit next actions through package execution, review decision, QA/Test handoff, and release readiness without Dev Tools.
 - Package buttons expose valid actions only and explain invalid ones.
-- Package run actions include public-safe Codex runtime readiness blockers when local Codex execution cannot start.
+- Package, Work Item Cockpit, and Product Lane run actions include public-safe Codex runtime readiness blockers when local Codex execution cannot be started from static pre-run readiness.
+- Launch lease or worker-fence failures that happen after enqueue are visible in Run Console/runtime event state, not treated as pre-run Package gating.
 - Review decisions no longer use hardcoded summaries or generic fixed requested-change payloads.
 - Release action rail shows state-aware decisions and required rationales/evidence.
 - ProductAction remains bounded and unchanged; complex human decisions stay on object pages.

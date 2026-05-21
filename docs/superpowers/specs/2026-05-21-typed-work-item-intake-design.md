@@ -26,6 +26,15 @@ The current Web create form is generic:
 
 The current product language still has remnants of coarse owner semantics in the create surface. That is not enough for a product that routes different Work Item types into different lanes and asks different roles to act on different information.
 
+PRD alignment note: older PRD wording that says Work Item Owner is superseded for Work Items by Work Item Driver. Execution Owner, QA/Test Owner, and Release Owner remain separate non-Work-Item role concepts.
+
+Current implementation delta:
+
+- Current Work Item create/update/read code still exposes public `owner_actor_id`; Stream B must replace that public Work Item surface with `driver_actor_id`.
+- Current Work Item type lanes still use `owner_actor_id` as their actor filter; Stream B must migrate only Requirements, Bugs, Tech Debt, and Initiatives lanes to `driver_actor_id`.
+- Current Work Item create/storage/read paths do not have `intake_context`; Stream B must add the discriminated typed context and persist/read it.
+- These are implementation targets for Stream B, not prerequisites that must already exist before the stream starts.
+
 ## Goal
 
 Make Work Item creation type-aware and driver-oriented.
@@ -40,6 +49,7 @@ Each Work Item type should capture the minimum information needed to create a us
 - No initiative decomposition engine.
 - No separate `/requirements`, `/bugs`, `/tech-debt`, or `/initiatives` object route family.
 - No generic custom-field builder.
+- No Work Item Brief generation automation in this stream. Typed intake stores structured context so a later brief/spec generation slice can consume it.
 - No legacy Work Item Owner page, lane, route, query key, or product copy.
 - No compatibility create endpoint that accepts both old and new product payloads.
 
@@ -68,6 +78,20 @@ Required direction:
 
 Do not accept both `owner_actor_id` and `driver_actor_id` in the public create API. There is one active product contract.
 
+### Product Lane Driver Filters
+
+Typed Work Item lanes must stop exposing a Work Item Owner filter as the actor filter.
+
+Requirements, Bugs, Tech Debt, and Initiatives lanes should use `driver_actor_id` in product-facing route/query/API filter contracts when filtering by the Work Item's Driver.
+
+Rules:
+
+- Do not accept `owner_actor_id` as an alias or fallback for Work Item type-lane Driver filters.
+- Do not double-read `owner_actor_id` and `driver_actor_id` to keep old links working.
+- If the shared Product Lane query contract cannot express this cleanly with one schema, split validation by lane or add a lane-aware parser.
+- Preserve distinct product role terminology for non-Work-Item responsibilities: Execution Owner, QA/Test Owner, and Release Owner remain valid role concepts and should not be renamed to Driver by this stream.
+- Internal persistence may still use `owner_actor_id` only behind a repository/query mapping boundary, never as the Work Item type-lane product filter name.
+
 ### Typed Intake Context
 
 Work Item should gain a structured intake context instead of forcing all type-specific information into generic goal text.
@@ -89,6 +113,48 @@ The exact storage can be a JSON object on Work Item or an equivalent first-class
 - available for later Work Item detail/cockpit typed brief display;
 - available to Spec draft generation context when implemented;
 - not stored only as formatted prose.
+
+### Per-Kind Intake Schema
+
+The create DTO must include a discriminated `intake_context` whose `type` matches the Work Item `kind`.
+
+All required string fields must be non-empty after trimming. All required arrays must contain at least one non-empty item. Optional empty strings should be omitted from stored context.
+
+| Work Item kind | Context type | Required fields | Optional fields |
+| --- | --- | --- | --- |
+| `requirement` | `requirement` | `stakeholder_problem`, `desired_outcome`, `acceptance_criteria` min 1, `in_scope` min 1 | `out_of_scope`, `dependencies`, `rollout_notes` |
+| `bug` | `bug` | `impact_summary`, `observed_behavior`, `expected_behavior`, `reproduction_steps` min 1, `affected_environment`, `verification_path` | `suspected_area`, `regression_risk` |
+| `tech_debt` | `tech_debt` | `current_pain`, `desired_invariant`, `affected_modules` min 1, `behavior_preservation`, `validation_strategy` | `migration_constraints`, `rollback_notes` |
+| `initiative` | `initiative` | `business_outcome`, `scope_narrative`, `success_metrics` min 1 | `milestone_intent`, `child_breakdown_assumptions`, `major_risks`, `cross_item_coordination_notes` |
+
+Defaults and derivation:
+
+| Work Item kind | Default risk | Default lane | `goal` normalization | `success_criteria` seed |
+| --- | --- | --- | --- | --- |
+| `requirement` | `medium` | `requirements` | concise summary of stakeholder problem and desired outcome | `acceptance_criteria` |
+| `bug` | `high` | `bugs` | concise summary of impact, observed behavior, and expected behavior | expected behavior plus verification path |
+| `tech_debt` | `medium` | `tech-debt` | concise summary of current pain and desired invariant | desired invariant plus validation strategy |
+| `initiative` | `medium` | `initiatives` | concise summary of business outcome and scope narrative | `success_metrics` |
+
+Validation errors must be field-specific. A request with `kind=bug` and `intake_context.type=requirement`, missing required fields, empty required arrays, or public `owner_actor_id` must be rejected.
+
+Illustrative payload shape:
+
+```json
+{
+  "kind": "bug",
+  "driver_actor_id": "actor-123",
+  "intake_context": {
+    "type": "bug",
+    "impact_summary": "Checkout fails for signed-in users",
+    "observed_behavior": "Submit returns 500",
+    "expected_behavior": "Order is created or validation is shown",
+    "reproduction_steps": ["Sign in", "Add item", "Submit checkout"],
+    "affected_environment": "production",
+    "verification_path": "Regression test for checkout submit"
+  }
+}
+```
 
 ### Requirement Intake
 
@@ -192,13 +258,14 @@ Each intake type must map into the existing cross-type Work Item fields:
 - `success_criteria`
 - `priority`
 - `risk`
-- driver/owner actor field depending on the selected naming migration
+- `driver_actor_id` in all public create/update payloads and read models
 - structured `intake_context`
 
 Rules:
 
 - `goal` should be a concise normalized summary, not a dump of all type fields.
 - `success_criteria` should be derived from explicit validation/acceptance fields and editable before submit.
+- If persistence keeps `owner_actor_id`, map it only inside the repository or query boundary with no public alias or dual-read path.
 - Structured intake context must preserve the detailed type-specific fields.
 - Empty optional fields should be omitted or normalized consistently.
 
@@ -226,7 +293,7 @@ Likely files:
 - new `apps/web/src/features/work-items/intake/*`
 - `apps/web/src/shared/api/commands.ts`
 - `apps/web/src/shared/api/types.ts`
-- `apps/web/src/features/product-lanes/product-lanes.ts` only if post-create routing needs shared helpers
+- Product Lane query/filter files only for Work Item type-lane `driver_actor_id` naming and post-create routing
 - Work Item fixtures and tests
 
 Avoid:
@@ -234,7 +301,7 @@ Avoid:
 - Package, Run, Review, and Release pages.
 - Delivery decision ProductAction changes.
 - Work Item Delivery Cockpit page and `delivery-cockpit/*` edits during parallel A/B work.
-- Product Lanes projection edits; use existing kind-to-lane helpers for post-create routing.
+- Product Lanes delivery action projection edits; use existing kind-to-lane helpers except where Work Item type-lane Driver filter naming must change.
 - Broad Work Item Delivery Cockpit typed brief rendering. Showing structured intake in the cockpit is deferred until after A/B merge.
 
 ## UI Requirements
@@ -254,11 +321,13 @@ Required tests:
 - Contract tests for typed intake schemas and create payload validation.
 - API tests for creating each Work Item kind with valid typed intake.
 - API rejection tests for missing required type-specific fields.
+- API tests that accept `driver_actor_id`, reject public Work Item `owner_actor_id`, and prove Work Item create/update/read responses and fixtures do not expose Work Item owner fields.
 - Repository/schema tests if a new persisted intake field is added.
 - Web form tests for each Work Item type.
 - Web test that changing type updates fields, defaults, and validation.
 - Web test that post-create navigation uses the correct lane query.
-- Naming guard test that `work-item-owner` does not appear in active product route/copy/query keys/fixtures.
+- Naming guard test that Work Item owner vocabulary and fields do not appear in active product-facing routes, API DTOs/read models, query keys, fixtures, happy-path tests, or UI copy. This includes `work-item-owner`, `Work Item Owner`, `work item owner`, and public Work Item `owner_actor_id` usage. The guard may allow retained internal persistence mapping, unrelated role names such as Execution Owner, QA/Test Owner, and Release Owner, and isolated negative/guard tests that mention legacy names only to prove rejection or no fallback.
+- Contract/Web/API tests proving Work Item type lanes use `driver_actor_id`, reject `owner_actor_id` fallback for Driver filtering, and do not break Execution Owner / QA-Test Owner / Release Owner filters.
 - Test or compile assertion that typed intake does not modify ProductAction command schemas.
 
 ## Acceptance Criteria
@@ -268,5 +337,6 @@ Required tests:
 - Post-create navigation opens the correct lane-aware Work Item Cockpit.
 - Structured intake context is persisted and queryable, but cockpit rendering of that context is deferred to the post-merge UI/typed brief pass.
 - New product UI uses Driver language, not coarse Work Item Owner language.
+- Work Item type-lane Driver filtering uses `driver_actor_id` with no `owner_actor_id` compatibility path.
 - No compatibility create path or fallback old form remains.
 - The stream does not touch delivery decision pages owned by Stream A.

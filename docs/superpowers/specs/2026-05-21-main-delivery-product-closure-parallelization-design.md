@@ -23,7 +23,7 @@ ForgeLoop has recently closed several important mainline gaps:
 The main product gap is now not object existence. The gap is product completeness:
 
 - The Delivery Cockpit can explain readiness and route users to the next object, but the decision/action experience after Package, Review, QA/Test, and Release is still uneven.
-- Package run actions still need product-safe runtime readiness explanations now that real Codex execution can be blocked by missing runtime profile, credential, worker, Docker capability, or launch-lease prerequisites.
+- Package, Work Item Cockpit, and Product Lane run actions still need product-safe runtime readiness explanations now that real Codex execution can be blocked before enqueue by missing runtime profile, credential binding, compatible worker, Docker capability, or static runtime target mismatch. Launch-lease failures require a Run Session and should surface after enqueue in Run Console/runtime events.
 - Work Item creation still uses a generic form despite the PRD's typed Work Item model: Initiative, Requirement, Bug, and Tech Debt have different intake semantics.
 - UI polish should continue, but broad visual rewrites across the same pages touched by the two product streams would create conflicts and delay closure.
 
@@ -86,6 +86,7 @@ Stream B owns:
 - Work Item Driver language and UI copy.
 - Type-specific fields for Initiative, Requirement, Bug, and Tech Debt.
 - Typed intake normalization into canonical Work Item data and structured intake context.
+- Work Item type-lane Driver filter naming for Requirements, Bugs, Tech Debt, and Initiatives lanes.
 - Post-create routing into the correct Product Lane and Work Item Cockpit.
 - Tests proving typed intake creates valid Work Items without exposing `work-item-owner`.
 
@@ -114,8 +115,10 @@ This avoids three branches editing the same Package, Review, Release, Work Item,
 | Release pages | Owns | Avoid | A only |
 | Codex runtime status/readiness consumption | Owns public-safe display and blocker mapping for delivery run actions using read-only readiness/status projection fields | Avoid | No changes to runtime setup, worker registration, launch lease, credential command semantics, or remediation architecture |
 | Work Item create page | Avoid | Owns | B only |
-| Product Lanes queue projection | Owns only delivery action rows | Read-only | B uses existing kind-to-lane mapping for post-create routing |
+| Work Item type-lane Driver filters | Read-only | Owns `driver_actor_id` route/query/filter naming for Requirements, Bugs, Tech Debt, and Initiatives lanes | Do not alias `owner_actor_id` to `driver_actor_id` for Work Item type lanes |
+| Product Lanes queue projection | Owns only delivery action rows | Owns only type-lane Driver filter naming and post-create routing | B must not change delivery action row derivation |
 | Shared UI primitives | Minimal, with tests | Minimal, with tests | Prefer additive primitives; no broad redesign |
+| Shared Web API client files | Owns only delivery action/runtime readiness hooks, query keys, and response types | Owns only typed intake/Driver payload, lane-filter, and response types | Keep edits scoped by exported function/type; no opportunistic rewrites |
 | Global CSS/theme/tokens | Avoid unless required for bug fix | Avoid unless required for typed form layout | Save broad polish for Stream C |
 | E2E route smoke | Owns delivery path scenarios | Owns typed create scenario | Final UI pass may expand screenshots |
 
@@ -155,12 +158,14 @@ Do not reuse or modify:
 
 ## Merge Strategy
 
-Preferred order:
+Required order for this plan:
 
-1. Merge Stream B first when it changes shared Work Item Driver naming or create DTO contracts.
-2. Merge Stream A first only if Stream B stays confined to Web form architecture and does not touch shared Work Item driver fields.
+1. Merge Stream B first.
+2. Rebase Stream A onto the merged Stream B result before merging Stream A.
 3. After both merge, sync `main`.
 4. Start Stream C UI cleanup from updated `main`.
+
+Reason: Stream B owns mandatory Work Item Driver contract, query, and type-lane naming changes. Stream A must not merge against legacy Work Item owner-facing contracts.
 
 Conflict policy:
 
@@ -175,8 +180,10 @@ All streams must preserve these constraints:
 - Work Item is typed: Initiative, Requirement, Bug, Tech Debt.
 - Product Lanes remain the user-facing work entry model.
 - Work Item Driver language replaces coarse Work Item Owner language in active product UI and product-facing APIs touched by these streams.
+- Work Item type lanes must use Driver language and `driver_actor_id` for active product-facing route/query/API filters. `owner_actor_id` remains valid only for distinct non-Work-Item role concepts such as Execution Owner, QA/Test Owner, Release Owner, or retained internal persistence mapping.
 - ProductAction remains the only lane/cockpit action descriptor.
 - ProductAction command union remains unchanged during these two parallel implementation streams.
+- Command inventory schemas may list non-ProductAction command endpoints, but that does not authorize expanding the ProductAction command union during Streams A or B.
 - Complex decisions that require rationale, evidence, or confirmation must use dedicated product forms rather than generic raw command buttons.
 - Codex runtime profile, credential, worker, Docker, and launch-lease details must be redacted to public-safe readiness/blocker summaries in product UI.
 - Dev Tools remain for debugging only and must not be required for the main delivery path.
