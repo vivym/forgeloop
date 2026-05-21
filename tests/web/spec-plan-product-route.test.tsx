@@ -35,6 +35,14 @@ const cockpitReadiness = (workItemId = 'wi-1'): WorkItemDeliveryReadiness => ({
   degraded_sources: [],
 });
 
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Delivery teams need visible planning readiness.',
+  desired_outcome: 'Spec and Plan route fixtures include typed Work Item intake data.',
+  acceptance_criteria: ['Work Item cockpit fixtures parse as requirement read models.'],
+  in_scope: ['Spec and Plan route cockpit fixtures'],
+} as const;
+
 describe('Work Item scoped Spec & Plan route', () => {
   it('renders Work Item scoped Spec & Plan actions without raw loaders', async () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan');
@@ -60,6 +68,7 @@ describe('Work Item scoped Spec & Plan route', () => {
             priority: 'P0',
             risk: 'medium',
             driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',
@@ -120,6 +129,7 @@ describe('Work Item scoped Spec & Plan route', () => {
         priority: 'P0',
         risk: 'medium',
         driver_actor_id: 'actor-owner',
+        intake_context: requirementIntakeContext,
         phase: 'planning',
         activity_state: 'active',
         gate_state: 'open',
@@ -194,6 +204,7 @@ describe('Work Item scoped Spec & Plan route', () => {
             priority: 'P0',
             risk: 'medium',
             driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',
@@ -257,6 +268,7 @@ describe('Work Item scoped Spec & Plan route', () => {
             priority: 'P0',
             risk: 'medium',
             driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',
@@ -305,6 +317,7 @@ describe('Work Item scoped Spec & Plan route', () => {
             priority: 'P0',
             risk: 'medium',
             driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',
@@ -346,6 +359,7 @@ describe('Work Item scoped Spec & Plan route', () => {
       priority: 'P0',
       risk: 'medium',
       driver_actor_id: 'actor-owner',
+      intake_context: requirementIntakeContext,
       phase: 'planning',
       activity_state: 'active',
       gate_state: 'open',
@@ -466,6 +480,7 @@ describe('Work Item scoped Spec & Plan route', () => {
             priority: 'P0',
             risk: 'medium',
             driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',
@@ -524,6 +539,7 @@ describe('Work Item scoped Spec & Plan route', () => {
             priority: 'P0',
             risk: 'medium',
             driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',
@@ -623,6 +639,7 @@ describe('Work Item scoped Spec & Plan route', () => {
             priority: 'P0',
             risk: 'medium',
             driver_actor_id: 'actor-owner',
+            intake_context: requirementIntakeContext,
             phase: 'planning',
             activity_state: 'active',
             gate_state: 'open',
