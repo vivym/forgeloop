@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { lstat } from 'node:fs/promises';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { lstat, writeFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -10,15 +10,23 @@ import {
   type CodexDockerRuntimeEvidence,
   type CodexLaunchMaterialization,
 } from '@forgeloop/domain';
+import type { CodexAppServerTransport } from '@forgeloop/codex-runtime';
 
-import { buildCodexAppServerDockerCommand } from './docker-command.js';
+import { buildCodexAppServerDockerCommand, type CodexDockerAppServerTransport } from './docker-command.js';
+import { CodexAppServerDockerExecTransport } from './docker-exec-app-server-transport.js';
 import type { DockerRunner, StartedDockerContainer } from './docker-runner.js';
 import { runNetworkPolicySelfTest } from './network-policy.js';
 import { cleanupCodexTaskFilesystem, prepareCodexTaskFilesystem, type PreparedCodexTaskFilesystem } from './task-filesystem.js';
 import { prepareContainerWorkspace, type PreparedContainerWorkspace } from './workspace-isolation.js';
 
+export type DockerizedCodexAppServerEndpoint = `unix:${string}` | `ws://${string}` | `docker-exec:${string}`;
+
 export interface DockerizedCodexAppServerSession {
-  endpoint: `unix:${string}`;
+  endpoint: DockerizedCodexAppServerEndpoint;
+  endpointAuth?: {
+    bearerToken: string;
+  };
+  createTransport?: () => CodexAppServerTransport;
   containerWorkspacePath: '/workspace';
   hostWorkspacePathDigest?: string;
   publicEvidence: CodexDockerRuntimeEvidence;
@@ -31,13 +39,21 @@ export interface DockerizedCodexAppServerLauncherOptions {
   workerSessionToken?: string;
   workerTempRoot: string;
   dockerRunner: DockerRunner & { options?: { effectiveConfig?: Record<string, unknown> } };
-  effectiveConfigProbe?: (endpoint: `unix:${string}`) => Promise<Record<string, unknown>>;
+  effectiveConfigProbe?: (
+    endpoint: DockerizedCodexAppServerEndpoint,
+    auth?: { bearerToken: string },
+    createTransport?: () => CodexAppServerTransport,
+  ) => Promise<Record<string, unknown>>;
   controlPlaneClient: {
     materializeLaunchLease(workerId: string, leaseId: string, input: Record<string, unknown>): Promise<CodexLaunchMaterialization>;
     terminalizeLaunchLease(workerId: string, leaseId: string, input: Record<string, unknown>): Promise<unknown>;
   };
   hostUid: number;
   hostGid: number;
+  appServerTransport?: CodexDockerAppServerTransport;
+  websocketTokenFactory?: () => string;
+  dockerExecTransportFactory?: (input: { containerId: string; socketContainerPath: string }) => CodexAppServerTransport;
+  startupProbeTimeoutMs?: number;
   allowedRepoRoots?: readonly string[];
   nonceFactory?: () => string;
   now?: () => string;
@@ -99,6 +115,15 @@ export class DockerizedCodexAppServerLauncher {
         policy: materialization.profile_revision.network_policy,
       });
 
+      const appServerTransport = this.options.appServerTransport ?? 'docker_exec';
+      const endpointAuth =
+        appServerTransport === 'websocket'
+          ? { bearerToken: this.options.websocketTokenFactory?.() ?? randomBytes(32).toString('base64url') }
+          : undefined;
+      if (endpointAuth !== undefined) {
+        await writeFile(`${filesystem.socketHostDir}/ws-token`, endpointAuth.bearerToken, { mode: 0o600 });
+      }
+
       const command = buildCodexAppServerDockerCommand({
         dockerBin: this.options.dockerBin,
         workerId: this.options.workerId,
@@ -115,18 +140,40 @@ export class DockerizedCodexAppServerLauncher {
         codexHomeHostPath: filesystem.codexHomeHostPath,
         socketHostDir: filesystem.socketHostDir,
         socketContainerPath: '/run/forgeloop/codex.sock',
+        appServerTransport,
         networkPolicy: materialization.profile_revision.network_policy,
         resourceLimits: materialization.profile_revision.resource_limits,
         dockerPolicy: materialization.profile_revision.docker_policy,
       });
       container = await this.options.dockerRunner.start(command);
-      const endpoint = `unix:${container.socketHostPath}` as const;
-      await waitForUnixSocketInside(container.socketHostPath, filesystem.socketHostDir);
+      const createTransport =
+        appServerTransport === 'docker_exec'
+          ? () =>
+              this.options.dockerExecTransportFactory?.({
+                containerId: container!.containerId,
+                socketContainerPath: '/run/forgeloop/codex.sock',
+              }) ??
+              new CodexAppServerDockerExecTransport({
+                dockerBin: this.options.dockerBin,
+                containerId: container!.containerId,
+                socketContainerPath: '/run/forgeloop/codex.sock',
+              })
+          : undefined;
+      const endpoint =
+        appServerTransport === 'websocket'
+          ? appServerWebSocketEndpoint(container.appServerEndpoint)
+          : appServerTransport === 'docker_exec'
+            ? appServerDockerExecEndpoint(container.containerIdDigest)
+            : (`unix:${container.socketHostPath}` as const);
+      if (appServerTransport === 'unix') {
+        await waitForUnixSocketInside(container.socketHostPath, filesystem.socketHostDir);
+      }
 
-      const effectiveConfig = await this.#waitForEffectiveConfig(endpoint);
-      if (effectiveConfig === undefined) {
+      const probedEffectiveConfig = await this.#waitForEffectiveConfig(endpoint, endpointAuth, createTransport);
+      if (probedEffectiveConfig === undefined) {
         throw new Error('codex_app_server_effective_config_mismatch');
       }
+      const effectiveConfig = runtimeEvidenceEffectiveConfig(probedEffectiveConfig, materialization.profile_revision);
       const effectiveConfigDigest = codexCanonicalDigest(effectiveConfig);
       if (effectiveConfigDigest !== materialization.profile_revision.expected_effective_config_digest) {
         throw new Error('codex_app_server_effective_config_mismatch');
@@ -165,6 +212,8 @@ export class DockerizedCodexAppServerLauncher {
 
       return {
         endpoint,
+        ...(endpointAuth === undefined ? {} : { endpointAuth }),
+        ...(createTransport === undefined ? {} : { createTransport }),
         containerWorkspacePath: '/workspace',
         ...(workspace.hostWorkspacePath === undefined ? {} : { hostWorkspacePathDigest: codexCanonicalDigest(workspace.hostWorkspacePath) }),
         publicEvidence,
@@ -227,18 +276,30 @@ export class DockerizedCodexAppServerLauncher {
     });
   }
 
-  async #waitForEffectiveConfig(endpoint: `unix:${string}`): Promise<Record<string, unknown> | undefined> {
+  async #waitForEffectiveConfig(
+    endpoint: DockerizedCodexAppServerEndpoint,
+    auth?: { bearerToken: string },
+    createTransport?: () => CodexAppServerTransport,
+  ): Promise<Record<string, unknown> | undefined> {
     if (this.options.effectiveConfigProbe === undefined) {
       return this.options.dockerRunner.options?.effectiveConfig;
     }
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + (this.options.startupProbeTimeoutMs ?? 5_000);
     let lastError: unknown;
     while (Date.now() <= deadline) {
       try {
-        return await this.options.effectiveConfigProbe(endpoint);
+        const remainingMs = Math.max(1, deadline - Date.now());
+        return await withTimeout(
+          this.options.effectiveConfigProbe(endpoint, auth, createTransport),
+          remainingMs,
+          'codex_app_server_unavailable',
+        );
       } catch (error) {
         lastError = error;
-        await delay(50);
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0) {
+          await delay(Math.min(50, remainingMs));
+        }
       }
     }
     if (lastError !== undefined) {
@@ -341,4 +402,84 @@ const waitForUnixSocketInside = async (socketPath: string, socketDir: string): P
     throw lastError;
   }
   throw new Error('codex_app_server_socket_invalid');
+};
+
+const appServerWebSocketEndpoint = (endpoint: string | undefined): `ws://${string}` => {
+  if (endpoint === undefined || !endpoint.startsWith('ws://')) {
+    throw new Error('codex_app_server_socket_invalid');
+  }
+  return endpoint as `ws://${string}`;
+};
+
+const appServerDockerExecEndpoint = (containerIdDigest: string): `docker-exec:${string}` => {
+  if (!/^sha256:[a-f0-9]{64}$/.test(containerIdDigest)) {
+    throw new Error('codex_app_server_socket_invalid');
+  }
+  return `docker-exec:${containerIdDigest}`;
+};
+
+const stringValue = (record: Record<string, unknown>, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string') {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const withTimeout = async <T>(operation: Promise<T>, timeoutMs: number, errorCode: string): Promise<T> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(errorCode)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+};
+
+const sandboxType = (config: Record<string, unknown>): string | undefined => {
+  const sandbox = config.sandbox_policy ?? config.sandboxPolicy ?? config.sandbox ?? config.sandbox_mode;
+  if (typeof sandbox === 'string') {
+    return sandbox;
+  }
+  if (sandbox !== null && typeof sandbox === 'object' && !Array.isArray(sandbox)) {
+    const type = (sandbox as Record<string, unknown>).type;
+    return typeof type === 'string' ? type : undefined;
+  }
+  return undefined;
+};
+
+const runtimeEvidenceEffectiveConfig = (
+  config: Record<string, unknown>,
+  revision: CodexLaunchMaterialization['profile_revision'],
+): Record<string, unknown> => {
+  const approvalPolicy = stringValue(config, ['approval_policy', 'approvalPolicy']);
+  const base: Record<string, unknown> = {
+    target_kind: revision.target_kind,
+    ...(approvalPolicy === undefined ? {} : { approval_policy: approvalPolicy }),
+  };
+  if (revision.target_kind === 'generation') {
+    return {
+      ...base,
+      source_write_policy: revision.source_access_mode,
+      forbidden_writable_roots: revision.source_access_mode === 'artifact_only' ? ['workspace'] : [],
+    };
+  }
+  const assertedSandboxType =
+    revision.effective_config_assertions.target_kind === 'run_execution'
+      ? revision.effective_config_assertions.sandbox_type
+      : undefined;
+  const effectiveSandboxType = sandboxType(config) ?? assertedSandboxType;
+  return {
+    ...base,
+    ...(effectiveSandboxType === undefined ? {} : { sandbox_type: effectiveSandboxType }),
+    writable_roots_policy: 'task_workspace_only',
+  };
 };

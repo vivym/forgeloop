@@ -7,6 +7,7 @@ export interface StartedDockerContainer {
   containerId: string;
   containerIdDigest: string;
   socketHostPath: string;
+  appServerEndpoint?: string;
   labels?: Record<string, string>;
   stop(): Promise<void>;
 }
@@ -37,10 +38,13 @@ export class CliDockerRunner implements DockerRunner {
     }
 
     const containerId = Buffer.concat(chunks).toString('utf8').trim();
+    const appServerEndpoint =
+      input.internal?.websocketContainerPort === undefined ? undefined : await this.#inspectPublishedEndpoint(containerId, input.internal.websocketContainerPort);
     return {
       containerId,
       containerIdDigest: digest(containerId),
       socketHostPath: String(input.internal?.socketHostPath ?? ''),
+      ...(appServerEndpoint === undefined ? {} : { appServerEndpoint }),
       stop: async () => {
         await new Promise<void>((resolve) => {
           const stop = spawn(input.executable, ['rm', '-f', containerId], { stdio: 'ignore' });
@@ -82,6 +86,36 @@ export class CliDockerRunner implements DockerRunner {
           });
         },
       }));
+  }
+
+  async #inspectPublishedEndpoint(containerId: string, containerPort: number): Promise<string> {
+    const child = spawn(this.dockerBin, ['port', containerId, `${containerPort}/tcp`], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const chunks: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const code = await new Promise<number | null>((resolve) => {
+      child.once('error', () => resolve(1));
+      child.once('exit', resolve);
+    });
+    if (code !== 0) {
+      throw new Error('codex_worker_docker_unavailable');
+    }
+    const endpoint = Buffer.concat(chunks)
+      .toString('utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .at(0);
+    if (endpoint === undefined) {
+      throw new Error('codex_worker_docker_unavailable');
+    }
+    const lastColon = endpoint.lastIndexOf(':');
+    const port = lastColon === -1 ? undefined : endpoint.slice(lastColon + 1);
+    if (port === undefined || !/^\d+$/.test(port)) {
+      throw new Error('codex_worker_docker_unavailable');
+    }
+    return `ws://127.0.0.1:${port}`;
   }
 
   async run(input: DockerCommand): Promise<{ exitCode: number; stdout: string; stderr: string }> {

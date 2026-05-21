@@ -1,5 +1,5 @@
 import type { DockerizedCodexAppServerLauncher, LocalCodexWorkerRuntime } from '@forgeloop/codex-worker-runtime';
-import { createCodexGenerationRuntime, type CodexGenerationRuntime } from '@forgeloop/codex-runtime';
+import { CodexAppServerEndpointTransport, createCodexGenerationRuntime, type CodexGenerationRuntime } from '@forgeloop/codex-runtime';
 
 import type { AutomationDaemonConfig } from './config.js';
 
@@ -67,6 +67,7 @@ export const createLeasedDockerCodexGenerationRuntime = (
           mode: 'app_server',
           ...options.runtimeConfig,
           appServerEndpoint: session.endpoint,
+          transportFactory: (endpoint) => session.createTransport?.() ?? new CodexAppServerEndpointTransport(endpoint, session.endpointAuth),
         });
         const result = await call(runtime, input);
         await session.close('succeeded', 'generation complete');

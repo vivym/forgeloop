@@ -11,7 +11,7 @@ import {
   DockerizedCodexAppServerLauncher,
   normalizeMaterializationResponse,
 } from '@forgeloop/codex-worker-runtime';
-import { CodexAppServerEndpointTransport, effectiveConfigFromResponse } from '@forgeloop/codex-runtime';
+import { CodexAppServerEndpointTransport, effectiveConfigFromResponse, type CodexAppServerTransport } from '@forgeloop/codex-runtime';
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
 import type { CodexRuntimeScope, CodexRuntimeTargetKind, RunRuntimeMetadata, RunSession } from '@forgeloop/domain';
@@ -195,13 +195,22 @@ const codexRunWorkerMode = (): 'disabled' | 'local_docker' => {
 
 const expiresFromNow = (ms: number): string => new Date(Date.now() + ms).toISOString();
 
-const probeCodexEffectiveConfig = async (endpoint: `unix:${string}`): Promise<Record<string, unknown>> => {
-  const transport = new CodexAppServerEndpointTransport(endpoint);
+const probeCodexEffectiveConfig = async (
+  endpoint: `unix:${string}` | `ws://${string}` | `docker-exec:${string}`,
+  auth?: { bearerToken: string },
+  createTransport?: () => CodexAppServerTransport,
+): Promise<Record<string, unknown>> => {
+  const transport = createTransport?.() ?? new CodexAppServerEndpointTransport(endpoint, auth);
   try {
-    await transport.initialize();
-    for (const method of ['getEffectiveConfig', 'codex/getEffectiveConfig', 'effective_config']) {
+    await transport.initialize?.();
+    for (const [method, params] of [
+      ['config/read', { includeLayers: false }],
+      ['getEffectiveConfig', {}],
+      ['codex/getEffectiveConfig', {}],
+      ['effective_config', {}],
+    ] as const) {
       try {
-        const response = await transport.request(method, {});
+        const response = await transport.request(method, params);
         const config = effectiveConfigFromResponse(response);
         if (config !== undefined) {
           return config as Record<string, unknown>;
@@ -211,7 +220,7 @@ const probeCodexEffectiveConfig = async (endpoint: `unix:${string}`): Promise<Re
       }
     }
   } finally {
-    await transport.close().catch(() => undefined);
+    await transport.close?.().catch(() => undefined);
   }
   throw new Error('codex_app_server_effective_config_mismatch');
 };

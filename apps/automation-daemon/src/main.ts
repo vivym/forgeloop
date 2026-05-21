@@ -7,7 +7,7 @@ import {
   createLocalCodexWorkerRuntime,
   DockerizedCodexAppServerLauncher,
 } from '@forgeloop/codex-worker-runtime';
-import { CodexAppServerEndpointTransport, effectiveConfigFromResponse } from '@forgeloop/codex-runtime';
+import { CodexAppServerEndpointTransport, effectiveConfigFromResponse, type CodexAppServerTransport } from '@forgeloop/codex-runtime';
 
 import { AutomationDaemon } from './automation-daemon.js';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from './config.js';
@@ -29,13 +29,22 @@ const requiredLocalDockerConfig = <T>(value: T | undefined, name: string): T => 
   return value;
 };
 
-const codexEffectiveConfigProbe = async (endpoint: `unix:${string}`): Promise<Record<string, unknown>> => {
-  const transport = new CodexAppServerEndpointTransport(endpoint);
+const codexEffectiveConfigProbe = async (
+  endpoint: `unix:${string}` | `ws://${string}` | `docker-exec:${string}`,
+  auth?: { bearerToken: string },
+  createTransport?: () => CodexAppServerTransport,
+): Promise<Record<string, unknown>> => {
+  const transport = createTransport?.() ?? new CodexAppServerEndpointTransport(endpoint, auth);
   try {
-    await transport.initialize();
-    for (const method of ['getEffectiveConfig', 'codex/getEffectiveConfig', 'effective_config']) {
+    await transport.initialize?.();
+    for (const [method, params] of [
+      ['config/read', { includeLayers: false }],
+      ['getEffectiveConfig', {}],
+      ['codex/getEffectiveConfig', {}],
+      ['effective_config', {}],
+    ] as const) {
       try {
-        const response = await transport.request(method, {});
+        const response = await transport.request(method, params);
         const config = effectiveConfigFromResponse(response);
         if (config !== undefined) {
           return config as Record<string, unknown>;
@@ -45,7 +54,7 @@ const codexEffectiveConfigProbe = async (endpoint: `unix:${string}`): Promise<Re
       }
     }
   } finally {
-    await transport.close().catch(() => undefined);
+    await transport.close?.().catch(() => undefined);
   }
   throw new Error('codex_app_server_effective_config_mismatch');
 };
@@ -122,6 +131,7 @@ const createLocalDockerGenerationRuntimeOptions = async () => {
     controlPlaneClient,
     hostUid,
     hostGid,
+    ...(config.appServerTransport === undefined ? {} : { appServerTransport: config.appServerTransport }),
     allowedRepoRoots: config.allowedRepoRoots,
     effectiveConfigProbe: codexEffectiveConfigProbe,
     now,

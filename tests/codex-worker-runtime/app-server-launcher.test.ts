@@ -1,16 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { codexCanonicalDigest, type CodexLaunchMaterialization } from '@forgeloop/domain';
+import { effectiveConfigFromResponse, type CodexAppServerTransport } from '../../packages/codex-runtime/src/index';
 
 import { DockerizedCodexAppServerLauncher } from '../../packages/codex-worker-runtime/src/app-server-launcher';
 import { FakeDockerRunner } from '../../packages/codex-worker-runtime/src/fake-docker-runner';
 
 const digest = (char: string) => `sha256:${char.repeat(64)}`;
 
-const materialization = (tempRoot: string): CodexLaunchMaterialization => ({
+const dockerProxyNetworkPolicy = (): CodexLaunchMaterialization['profile_revision']['network_policy'] => {
+  const allowlistRules = [{ id: 'openai', protocol: 'https' as const, host: 'api.openai.com', purpose: 'model_provider' as const }];
+  const providerConfig = {
+    proxy_image: 'ghcr.io/forgeloop/proxy',
+    proxy_image_digest: digest('b'),
+    self_test_image: 'ghcr.io/forgeloop/self-test',
+    self_test_image_digest: digest('c'),
+  };
+  return {
+    mode: 'egress_allowlist',
+    provider: 'docker_network_proxy',
+    allowlist_rules: allowlistRules,
+    provider_config: {
+      ...providerConfig,
+      provider_config_digest: codexCanonicalDigest(providerConfig),
+    },
+    egress_allowlist_digest: codexCanonicalDigest({
+      provider: 'docker_network_proxy',
+      allowlist_rules: allowlistRules,
+    }),
+    self_test_digest: providerConfig.self_test_image_digest,
+  };
+};
+
+const materialization = (
+  tempRoot: string,
+  overrides: { networkPolicy?: CodexLaunchMaterialization['profile_revision']['network_policy'] } = {},
+): CodexLaunchMaterialization => ({
   launch_target: {
     target_type: 'automation_action_run',
     target_id: 'action-1',
@@ -55,7 +84,7 @@ const materialization = (tempRoot: string): CodexLaunchMaterialization => ({
     },
     app_server_required: true,
     allowed_driver_kind: 'app_server',
-    network_policy: { mode: 'disabled' },
+    network_policy: overrides.networkPolicy ?? { mode: 'disabled' },
     resource_limits: {
       cpu_ms: 1000,
       memory_mb: 512,
@@ -114,7 +143,7 @@ describe('DockerizedCodexAppServerLauncher', () => {
 
     const session = await launcher.launchFromLease({ leaseId: 'lease-1', launchToken: 'launch-secret' });
 
-    expect(session.endpoint).toMatch(/^unix:/);
+    expect(session.endpoint).toMatch(/^docker-exec:sha256:[a-f0-9]{64}$/);
     expect(JSON.stringify(session.publicEvidence)).not.toContain(workerTempRoot);
     expect(session.publicEvidence).toMatchObject({
       runtime_profile_id: 'profile-1',
@@ -127,6 +156,192 @@ describe('DockerizedCodexAppServerLauncher', () => {
 
     await session.close('succeeded', 'done');
     expect(terminalized).toHaveLength(1);
+    await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
+  });
+
+  it('starts websocket app-server sessions with private bearer auth material', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const runner = new FakeDockerRunner({
+      effectiveConfig: {
+        target_kind: 'generation',
+        approval_policy: 'never',
+        source_write_policy: 'artifact_only',
+        forbidden_writable_roots: ['workspace'],
+      },
+    });
+    const launcher = new DockerizedCodexAppServerLauncher({
+      dockerBin: 'docker',
+      workerId: 'worker-1',
+      workerSessionToken: 'session-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        materializeLaunchLease: async () => materialization(workerTempRoot, { networkPolicy: dockerProxyNetworkPolicy() }),
+        terminalizeLaunchLease: async () => ({}),
+      },
+      appServerTransport: 'websocket',
+      hostUid: 501,
+      hostGid: 20,
+      nonceFactory: () => 'nonce-1',
+      websocketTokenFactory: () => 'secret-token',
+      now: () => '2026-05-21T00:00:00.000Z',
+    });
+
+    const session = await launcher.launchFromLease({ leaseId: 'lease-1', launchToken: 'launch-secret' });
+
+    expect(session.endpoint).toMatch(/^ws:\/\/127\.0\.0\.1:/);
+    expect(session.endpointAuth).toEqual({ bearerToken: 'secret-token' });
+    expect(JSON.stringify(session.publicEvidence)).not.toContain('secret-token');
+    expect(runner.startedCommands[1]?.args.join(' ')).not.toContain('secret-token');
+    await expect(readFile(join(workerTempRoot, 'lease-1', 'run', 'ws-token'), 'utf8')).resolves.toBe('secret-token');
+
+    await session.close('succeeded', 'done');
+    await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
+  });
+
+  it('starts docker-exec app-server sessions with a private exec transport factory', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const runner = new FakeDockerRunner();
+    const createdTransports: Array<{ containerId: string; socketContainerPath: string }> = [];
+    const launcher = new DockerizedCodexAppServerLauncher({
+      dockerBin: 'docker',
+      workerId: 'worker-1',
+      workerSessionToken: 'session-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        materializeLaunchLease: async () => materialization(workerTempRoot),
+        terminalizeLaunchLease: async () => ({}),
+      },
+      appServerTransport: 'docker_exec',
+      dockerExecTransportFactory: (input) => {
+        createdTransports.push(input);
+        return {
+          initialize: async () => undefined,
+          request: async () => ({
+            config: {
+              approval_policy: 'never',
+            },
+          }),
+          close: async () => undefined,
+        } satisfies CodexAppServerTransport;
+      },
+      effectiveConfigProbe: async (endpoint, auth, createTransport) => {
+        expect(endpoint).toMatch(/^docker-exec:sha256:[a-f0-9]{64}$/);
+        expect(auth).toBeUndefined();
+        expect(createTransport).toBeDefined();
+        const transport = createTransport?.();
+        await transport?.initialize?.();
+        const response = await transport?.request('config/read', { includeLayers: false });
+        await transport?.close?.();
+        return (response as { config: Record<string, unknown> }).config;
+      },
+      hostUid: 501,
+      hostGid: 20,
+      nonceFactory: () => 'nonce-1',
+      now: () => '2026-05-21T00:00:00.000Z',
+    });
+
+    const session = await launcher.launchFromLease({ leaseId: 'lease-1', launchToken: 'launch-secret' });
+
+    expect(session.endpoint).toMatch(/^docker-exec:sha256:[a-f0-9]{64}$/);
+    expect(session.endpointAuth).toBeUndefined();
+    expect(session.createTransport).toBeDefined();
+    expect(createdTransports).toEqual([{ containerId: 'fake-container-1', socketContainerPath: '/run/forgeloop/codex.sock' }]);
+    expect(JSON.stringify(session.publicEvidence)).not.toContain('fake-container-1');
+    expect(runner.startedCommands[0]?.args).toContain('--tmpfs');
+    expect(runner.startedCommands[0]?.args).not.toContain(`${join(workerTempRoot, 'lease-1', 'run')}:/run/forgeloop:rw`);
+
+    await session.close('succeeded', 'done');
+    await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
+  });
+
+  it('hashes Codex 0.132 config/read output using the canonical evidence contract', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const runner = new FakeDockerRunner();
+    const launcher = new DockerizedCodexAppServerLauncher({
+      dockerBin: 'docker',
+      workerId: 'worker-1',
+      workerSessionToken: 'session-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        materializeLaunchLease: async () => materialization(workerTempRoot),
+        terminalizeLaunchLease: async () => ({}),
+      },
+      appServerTransport: 'docker_exec',
+      effectiveConfigProbe: async () =>
+        effectiveConfigFromResponse({
+          config: {
+            approval_policy: 'never',
+            sandbox: null,
+          },
+        }) as Record<string, unknown>,
+      hostUid: 501,
+      hostGid: 20,
+      nonceFactory: () => 'nonce-1',
+      now: () => '2026-05-21T00:00:00.000Z',
+    });
+
+    const session = await launcher.launchFromLease({ leaseId: 'lease-1', launchToken: 'launch-secret' });
+
+    expect(session.publicEvidence.app_server_effective_config_digest).toBe(
+      codexCanonicalDigest({
+        target_kind: 'generation',
+        approval_policy: 'never',
+        source_write_policy: 'artifact_only',
+        forbidden_writable_roots: ['workspace'],
+      }),
+    );
+
+    await session.close('succeeded', 'done');
+    await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
+  });
+
+  it('bounds a hung effective-config probe during startup', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const runner = new FakeDockerRunner();
+    let releaseProbe: ((error: Error) => void) | undefined;
+    const launcher = new DockerizedCodexAppServerLauncher({
+      dockerBin: 'docker',
+      workerId: 'worker-1',
+      workerSessionToken: 'session-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        materializeLaunchLease: async () => materialization(workerTempRoot),
+        terminalizeLaunchLease: async () => ({}),
+      },
+      appServerTransport: 'docker_exec',
+      startupProbeTimeoutMs: 75,
+      effectiveConfigProbe: async () =>
+        new Promise<Record<string, unknown>>((_resolve, reject) => {
+          releaseProbe = reject;
+        }),
+      hostUid: 501,
+      hostGid: 20,
+      nonceFactory: () => 'nonce-1',
+      now: () => '2026-05-21T00:00:00.000Z',
+    });
+    const launch = launcher.launchFromLease({ leaseId: 'lease-1', launchToken: 'launch-secret' });
+
+    try {
+      const result = await Promise.race([
+        launch.then(
+          () => 'resolved',
+          (error: unknown) => `rejected:${error instanceof Error ? error.message : 'unknown'}`,
+        ),
+        delay(750).then(() => 'probe_still_hung'),
+      ]);
+      expect(result).not.toBe('probe_still_hung');
+      expect(result).toBe('rejected:codex_app_server_unavailable');
+      await expect(launch).rejects.toThrow(/codex_app_server_unavailable/);
+    } finally {
+      releaseProbe?.(new Error('released_probe'));
+      await launch.catch(() => undefined);
+    }
+
+    expect(runner.stoppedContainerDigests).toHaveLength(1);
     await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
   });
 

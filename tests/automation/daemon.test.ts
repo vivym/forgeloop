@@ -420,6 +420,91 @@ describe('automation daemon loop', () => {
     expect(closed).toEqual([{ status: 'failed', summary: 'generation failed' }]);
   });
 
+  it('passes leased Docker private app-server transport into the generation runtime', async () => {
+    const closed: Array<{ status: string; summary: string }> = [];
+    const privateTransport = {
+      request: async () => ({}),
+    };
+    const seenConfigs: Array<Parameters<typeof createCodexGenerationRuntime>[0]> = [];
+    const runtime = createLeasedDockerCodexGenerationRuntime({
+      dockerImageDigest: 'sha256:docker',
+      worker: {
+        selectForLaunch: async () => ({ workerId: 'worker-1', sessionToken: 'worker-session-1' }),
+        withLeaseSlot: async (operation) => operation(),
+      },
+      createLaunchLease: async () => ({ leaseId: 'lease-1', launchToken: 'launch-token-1' }),
+      launcher: {
+        launchFromLease: async () => ({
+          endpoint: `docker-exec:sha256:${'a'.repeat(64)}`,
+          createTransport: () => privateTransport,
+          containerWorkspacePath: '/workspace',
+          publicEvidence: {},
+          close: async (status, summary) => {
+            closed.push({ status, summary });
+          },
+        }),
+      },
+      innerRuntimeFactory: (config) => {
+        seenConfigs.push(config);
+        return {
+          generateSpecDraft: async () => ({
+            taskKind: 'spec_draft',
+            promptVersion: 'spec.v1',
+            outputSchemaVersion: 'spec_draft.v1',
+            generated: {
+              schema_version: 'spec_draft.v1',
+              summary: 'summary',
+              content: 'content',
+              background: 'background',
+              goals: [],
+              scope_in: [],
+              scope_out: [],
+              acceptance_criteria: [],
+              risk_notes: [],
+              test_strategy_summary: 'tests',
+            },
+            generationArtifacts: [],
+            publicSummary: 'generated',
+          }),
+          generatePlanDraft: async () => {
+            throw new Error('unexpected');
+          },
+          generatePackageDrafts: async () => {
+            throw new Error('unexpected');
+          },
+        };
+      },
+    });
+
+    await runtime.generateSpecDraft({
+      actionRunId: 'action-run-1',
+      projectId: 'project-1',
+      repoIds: ['repo-1'],
+      context: {},
+      promptVersion: 'spec.v1',
+      outputSchemaVersion: 'spec_draft.v1',
+      policyDigests: {},
+      orchestration: {
+        targetType: 'automation_action_run',
+        actionRunId: 'action-run-1',
+        actionType: 'ensure_spec_draft',
+        actionAttempt: 1,
+        claimToken: 'claim-token-1',
+        preconditionFingerprint: 'precondition-1',
+        automationScope: repoScope,
+        idempotencyKey: 'idempotency-1',
+      },
+    });
+
+    expect(seenConfigs).toHaveLength(1);
+    expect(seenConfigs[0]).toMatchObject({
+      mode: 'app_server',
+      appServerEndpoint: `docker-exec:sha256:${'a'.repeat(64)}`,
+    });
+    expect(seenConfigs[0]?.transportFactory?.(`docker-exec:sha256:${'a'.repeat(64)}`)).toBe(privateTransport);
+    expect(closed).toEqual([{ status: 'succeeded', summary: 'generation complete' }]);
+  });
+
   it('throws early when required config is missing', () => {
     expect(() => loadAutomationDaemonConfig({})).toThrow(/FORGELOOP_CONTROL_PLANE_URL/);
   });

@@ -24,6 +24,8 @@ export class FakeDockerRunner implements DockerRunner {
     const containerId = `fake-container-${this.startedCommands.length}`;
     const containerIdDigest = digest(containerId);
     const socketHostPath = input.internal?.socketHostPath ?? '';
+    const appServerEndpoint =
+      input.internal?.websocketContainerPort === undefined ? undefined : `ws://127.0.0.1:${input.internal.websocketContainerPort}`;
     let socketServer: Server | undefined;
     if (socketHostPath.length > 0) {
       await mkdir(dirname(socketHostPath), { recursive: true });
@@ -37,6 +39,7 @@ export class FakeDockerRunner implements DockerRunner {
       containerId,
       containerIdDigest,
       socketHostPath,
+      ...(appServerEndpoint === undefined ? {} : { appServerEndpoint }),
       stop: async () => {
         this.stoppedContainerDigests.push(containerIdDigest);
         await new Promise<void>((resolve) => {

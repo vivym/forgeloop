@@ -1,6 +1,7 @@
 export * from './app-server-launcher.js';
 export * from './control-plane-client.js';
 export * from './docker-command.js';
+export * from './docker-exec-app-server-transport.js';
 export * from './docker-runner.js';
 export * from './fake-docker-runner.js';
 export * from './local-worker.js';

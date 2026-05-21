@@ -73,7 +73,7 @@ describe('createCodexGenerationRuntime', () => {
     });
     expect(endpoints).toEqual(['unix:/tmp/codex-app-server.sock']);
     expect(requests.map((request) => request.method)).toEqual(['thread/start', 'turn/start']);
-    expect(requests[0]?.params).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly' } });
+    expect(requests[0]?.params).toMatchObject({ approvalPolicy: 'never', sandbox: 'read-only' });
   });
 
   it('maps app-server schema-invalid Plan output to generated_output_schema_invalid', async () => {

@@ -9,7 +9,7 @@ import {
 } from '@forgeloop/executor';
 import type { RunRuntimeMetadata, RunSession } from '@forgeloop/domain';
 
-import type { DockerizedCodexAppServerLauncher, DockerizedCodexAppServerSession } from './app-server-launcher.js';
+import type { DockerizedCodexAppServerEndpoint, DockerizedCodexAppServerLauncher, DockerizedCodexAppServerSession } from './app-server-launcher.js';
 
 export interface CodexRunSessionDriverLaunchInput {
   runSession: RunSession;
@@ -33,7 +33,8 @@ export interface LeasedRunSessionDriverOptions {
   runtimeSafety?: LocalCodexRuntimeSafety;
   workerIdentity: string;
   innerDriverFactory?: (input: {
-    endpoint: `unix:${string}`;
+    endpoint: DockerizedCodexAppServerEndpoint;
+    endpointAuth?: { bearerToken: string };
     dockerSession: DockerizedCodexAppServerSession;
   }) => CodexSessionDriver;
 }
@@ -110,9 +111,13 @@ class LeasedRunSessionCodexDriver implements CodexSessionDriver {
       originalWorkspacePath: input.workspacePath,
     });
     this.#inner =
-      this.options.innerDriverFactory?.({ endpoint: this.#dockerSession.endpoint, dockerSession: this.#dockerSession }) ??
+      this.options.innerDriverFactory?.({
+        endpoint: this.#dockerSession.endpoint,
+        ...(this.#dockerSession.endpointAuth === undefined ? {} : { endpointAuth: this.#dockerSession.endpointAuth }),
+        dockerSession: this.#dockerSession,
+      }) ??
       new CodexAppServerDriver({
-        transport: new CodexAppServerEndpointTransport(this.#dockerSession.endpoint),
+        transport: this.#dockerSession.createTransport?.() ?? new CodexAppServerEndpointTransport(this.#dockerSession.endpoint, this.#dockerSession.endpointAuth),
         ...(this.options.rawLogStore === undefined ? {} : { rawLogStore: this.options.rawLogStore }),
         ...(this.options.runtimeSafety === undefined ? {} : { runtimeSafety: this.options.runtimeSafety }),
         resourceSafetyMode: { mode: 'external_sandbox', evidence: this.#dockerSession.publicEvidence },

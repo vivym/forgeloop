@@ -7,6 +7,7 @@ export const DEFAULT_AUTOMATION_NO_CLAIM_BACKOFF_MS = 10_000;
 export const DEFAULT_WORKFLOW_POLICY_PARSER_VERSION = 'workflow-md-parser:v1';
 
 export type CodexWorkerMode = 'disabled' | 'local_docker';
+export type CodexAppServerTransport = 'unix' | 'websocket' | 'docker_exec';
 
 export interface AutomationDaemonConfig {
   controlPlaneUrl: string;
@@ -39,6 +40,7 @@ export interface AutomationDaemonConfig {
   dockerBin?: string;
   dockerSocket?: string;
   workerTempRoot?: string;
+  appServerTransport?: CodexAppServerTransport;
   appServerEndpoint?: string;
   generationArtifactRoot?: string;
   generationTurnTimeoutMs?: number;
@@ -122,6 +124,17 @@ const codexWorkerModeEnv = (env: EnvLike): CodexWorkerMode => {
     return raw;
   }
   throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_WORKER_MODE must be disabled or local_docker');
+};
+
+const appServerTransportEnv = (env: EnvLike): CodexAppServerTransport | undefined => {
+  const raw = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_TRANSPORT');
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === 'unix' || raw === 'websocket' || raw === 'docker_exec') {
+    return raw;
+  }
+  throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_APP_SERVER_TRANSPORT must be unix, websocket, or docker_exec');
 };
 
 const recordEnv = (env: EnvLike, key: string): Record<string, string> | undefined => {
@@ -322,6 +335,7 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
   const dockerBin = optionalNonBlankEnv(env, 'FORGELOOP_DOCKER_BIN');
   const dockerSocket = optionalNonBlankEnv(env, 'FORGELOOP_DOCKER_SOCKET');
   const workerTempRoot = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_TEMP_ROOT');
+  const appServerTransport = appServerTransportEnv(env);
   const generationTurnTimeoutMs = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_TURN_TIMEOUT_MS');
   const generationOutputLimitBytes = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_OUTPUT_LIMIT_BYTES');
   const generationRawNotificationLimitBytes = optionalPositiveIntEnv(
@@ -368,6 +382,7 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     ...(dockerBin === undefined ? {} : { dockerBin }),
     ...(dockerSocket === undefined ? {} : { dockerSocket }),
     ...(workerTempRoot === undefined ? {} : { workerTempRoot }),
+    ...(appServerTransport === undefined ? {} : { appServerTransport }),
     ...(appServerEndpoint === undefined ? {} : { appServerEndpoint }),
     ...(generationArtifactRoot === undefined ? {} : { generationArtifactRoot }),
     ...(generationTurnTimeoutMs === undefined ? {} : { generationTurnTimeoutMs }),

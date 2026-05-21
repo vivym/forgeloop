@@ -45,8 +45,32 @@ const baseInput = (overrides: Partial<DockerCommandInput> = {}): DockerCommandIn
   ...overrides,
 });
 
+const dockerProxyNetworkPolicy = (): DockerCommandInput['networkPolicy'] => {
+  const allowlistRules = [{ id: 'openai', protocol: 'https' as const, host: 'api.openai.com', purpose: 'model_provider' as const }];
+  const providerConfig = {
+    proxy_image: 'ghcr.io/forgeloop/proxy',
+    proxy_image_digest: digest('b'),
+    self_test_image: 'ghcr.io/forgeloop/self-test',
+    self_test_image_digest: digest('c'),
+  };
+  return {
+    mode: 'egress_allowlist',
+    provider: 'docker_network_proxy',
+    allowlist_rules: allowlistRules,
+    provider_config: {
+      ...providerConfig,
+      provider_config_digest: codexCanonicalDigest(providerConfig),
+    },
+    egress_allowlist_digest: codexCanonicalDigest({
+      provider: 'docker_network_proxy',
+      allowlist_rules: allowlistRules,
+    }),
+    self_test_digest: providerConfig.self_test_image_digest,
+  };
+};
+
 describe('buildCodexAppServerDockerCommand', () => {
-  it('builds a hardened docker app-server command from a pinned image digest', () => {
+  it('defaults to the hardened docker-exec app-server command from a pinned image digest', () => {
     const command = buildCodexAppServerDockerCommand(baseInput());
 
     expect(command.executable).toBe('docker');
@@ -67,14 +91,79 @@ describe('buildCodexAppServerDockerCommand', () => {
     expect(command.args).not.toContain('--privileged');
     expect(command.args).toContain('--network');
     expect(command.args).toContain('none');
+    expect(command.args).toContain('HOME=/codex-home');
+    expect(command.args).toContain('/safe/codex-home:/codex-seed:ro');
+    expect(command.args).not.toContain('/safe/codex-home:/codex-home:rw');
+    expect(command.args).toContain('/codex-home:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=700');
+    expect(command.args).toContain('cp /codex-seed/config.toml /codex-home/config.toml && cp /codex-seed/auth.json /codex-home/auth.json && chmod 600 /codex-home/config.toml /codex-home/auth.json && exec "$@"');
     expect(command.args).toContain('ghcr.io/forgeloop/codex-app-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-    expect(command.args.slice(-3)).toEqual(['app-server', '--socket', '/run/forgeloop/codex.sock']);
+    expect(command.args).not.toContain('--publish');
+    expect(command.args).not.toContain('/safe/run:/run/forgeloop:rw');
+    expect(command.args).toContain('/run/forgeloop:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=700');
+    expect(command.args).toContain('/tmp:rw,nosuid,nodev,uid=501,gid=20,mode=1777');
+    expect(command.args.slice(-3)).toEqual(['app-server', '--listen', 'unix:///run/forgeloop/codex.sock']);
     expect(command.publicSummary).toMatchObject({
       worker_id: 'worker-1',
       launch_lease_id: 'lease-1',
       image_digest: digest('a'),
       network_mode: 'disabled',
+      app_server_transport: 'docker_exec',
     });
+    expect(command.internal).toMatchObject({
+      controlTransport: 'docker_exec',
+      socketContainerPath: '/run/forgeloop/codex.sock',
+    });
+    expect(command.internal).not.toHaveProperty('socketHostPath');
+  });
+
+  it('builds a hardened websocket app-server command without exposing the capability token', () => {
+    const command = buildCodexAppServerDockerCommand(
+      baseInput({
+        appServerTransport: 'websocket',
+        networkPolicy: dockerProxyNetworkPolicy(),
+      }),
+    );
+
+    expect(command.args).toContain('--publish');
+    expect(command.args).toContain('127.0.0.1::34567');
+    expect(command.args.slice(-7)).toEqual([
+      'app-server',
+      '--listen',
+      'ws://0.0.0.0:34567',
+      '--ws-auth',
+      'capability-token',
+      '--ws-token-file',
+      '/run/forgeloop/ws-token',
+    ]);
+    expect(command.args.join(' ')).not.toContain('Bearer');
+    expect(command.args.join(' ')).not.toContain('secret-token');
+    expect(command.internal).toMatchObject({ websocketContainerPort: 34567 });
+  });
+
+  it('builds a hardened docker-exec app-server command without exposing a host socket or port', () => {
+    const command = buildCodexAppServerDockerCommand(baseInput({ appServerTransport: 'docker_exec' }));
+
+    expect(command.args).not.toContain('--publish');
+    expect(command.args).not.toContain('/safe/run:/run/forgeloop:rw');
+    expect(command.args).toContain('--tmpfs');
+    expect(command.args).toContain('/run/forgeloop:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=700');
+    expect(command.args).toContain('/tmp:rw,nosuid,nodev,uid=501,gid=20,mode=1777');
+    expect(command.args.slice(-3)).toEqual(['app-server', '--listen', 'unix:///run/forgeloop/codex.sock']);
+    expect(command.publicSummary).toMatchObject({
+      app_server_transport: 'docker_exec',
+    });
+    expect(command.internal).toMatchObject({
+      controlTransport: 'docker_exec',
+      socketContainerPath: '/run/forgeloop/codex.sock',
+    });
+    expect(command.internal).not.toHaveProperty('socketHostPath');
+    expect(command.internal).not.toHaveProperty('websocketContainerPort');
+  });
+
+  it('rejects websocket app-server transport when Docker networking is disabled', () => {
+    expect(() => buildCodexAppServerDockerCommand(baseInput({ appServerTransport: 'websocket' }))).toThrow(
+      /websocket app-server transport requires Docker networking/,
+    );
   });
 
   it('rejects unpinned images and secret-looking channels', () => {

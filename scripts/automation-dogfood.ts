@@ -22,6 +22,7 @@ import {
   CodexAppServerEndpointTransport,
   createCodexGenerationRuntime,
   effectiveConfigFromResponse,
+  type CodexAppServerTransport,
   type CodexGenerationRuntime,
 } from '../packages/codex-runtime/src/index';
 import {
@@ -196,13 +197,33 @@ const dogfoodPositiveIntEnv = (key: string): number | undefined => {
   return value;
 };
 
-const codexEffectiveConfigProbe = async (endpoint: `unix:${string}`): Promise<Record<string, unknown>> => {
-  const transport = new CodexAppServerEndpointTransport(endpoint);
+const dogfoodAppServerTransport = (): 'unix' | 'websocket' | 'docker_exec' => {
+  const raw = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_APP_SERVER_TRANSPORT');
+  if (raw === undefined) {
+    return 'docker_exec';
+  }
+  if (raw === 'unix' || raw === 'websocket' || raw === 'docker_exec') {
+    return raw;
+  }
+  throw new Error('FORGELOOP_CODEX_APP_SERVER_TRANSPORT_invalid');
+};
+
+const codexEffectiveConfigProbe = async (
+  endpoint: `unix:${string}` | `ws://${string}` | `docker-exec:${string}`,
+  auth?: { bearerToken: string },
+  createTransport?: () => CodexAppServerTransport,
+): Promise<Record<string, unknown>> => {
+  const transport = createTransport?.() ?? new CodexAppServerEndpointTransport(endpoint, auth);
   try {
-    await transport.initialize();
-    for (const method of ['getEffectiveConfig', 'codex/getEffectiveConfig', 'effective_config']) {
+    await transport.initialize?.();
+    for (const [method, params] of [
+      ['config/read', { includeLayers: false }],
+      ['getEffectiveConfig', {}],
+      ['codex/getEffectiveConfig', {}],
+      ['effective_config', {}],
+    ] as const) {
       try {
-        const response = await transport.request(method, {});
+        const response = await transport.request(method, params);
         const config = effectiveConfigFromResponse(response);
         if (config !== undefined) {
           return config as Record<string, unknown>;
@@ -212,7 +233,7 @@ const codexEffectiveConfigProbe = async (endpoint: `unix:${string}`): Promise<Re
       }
     }
   } finally {
-    await transport.close().catch(() => undefined);
+    await transport.close?.().catch(() => undefined);
   }
   throw new Error('codex_app_server_effective_config_mismatch');
 };
@@ -287,6 +308,7 @@ const createDogfoodLocalDockerGenerationRuntime = async (input: {
     controlPlaneClient,
     hostUid: bootstrapConfig.hostWorkerUid,
     hostGid: bootstrapConfig.hostWorkerGid,
+    appServerTransport: dogfoodAppServerTransport(),
     allowedRepoRoots: [repoPath],
     effectiveConfigProbe: codexEffectiveConfigProbe,
     now,
