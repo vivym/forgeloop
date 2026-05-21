@@ -20,6 +20,38 @@ const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
 const ownerHeaders = { 'x-forgeloop-actor-id': actorOwner, 'x-forgeloop-actor-class': 'human_admin' };
 const reviewerHeaders = { 'x-forgeloop-actor-id': actorReviewer, 'x-forgeloop-actor-class': 'human' };
+const intakeContextByKind = {
+  initiative: {
+    type: 'initiative',
+    business_outcome: 'Improve product lane delivery visibility.',
+    scope_narrative: 'Group lane work across intake, approval, execution, QA, and release.',
+    success_metrics: ['Each lane returns the seeded Work Item.'],
+  },
+  requirement: {
+    type: 'requirement',
+    stakeholder_problem: 'Approvers need lane attention to reflect Work Item context.',
+    desired_outcome: 'Requirement lane fixtures include typed intake context.',
+    acceptance_criteria: ['The item appears in the lane.'],
+    in_scope: ['Product lane projections'],
+  },
+  bug: {
+    type: 'bug',
+    impact_summary: 'Lane projections can drop bug Work Items.',
+    observed_behavior: 'Bug items require typed intake context.',
+    expected_behavior: 'Bug items appear in the bug lane.',
+    reproduction_steps: ['Seed a bug Work Item', 'Query the bug lane'],
+    affected_environment: 'product lane API test',
+    verification_path: 'Product lane API assertions',
+  },
+  tech_debt: {
+    type: 'tech_debt',
+    current_pain: 'Tech debt lane fixtures use legacy owner intake.',
+    desired_invariant: 'Tech debt fixtures use typed intake context.',
+    affected_modules: ['product-lanes.test.ts'],
+    behavior_preservation: 'Existing product lane assertions still pass.',
+    validation_strategy: 'Focused Product Lane API tests',
+  },
+} as const;
 const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {
   const repo = new InMemoryDeliveryRepository();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -64,7 +96,8 @@ const seedDraftWorkItem = async (
         success_criteria: ['The item appears in the lane.'],
         priority: 'P1',
         risk: kind === 'bug' ? 'high' : 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: intakeContextByKind[kind],
       })
       .expect(201)
   ).body;

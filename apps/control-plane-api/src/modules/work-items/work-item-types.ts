@@ -17,7 +17,16 @@ export interface WorkItemTypeMetadata {
   };
 }
 
-const requiredFields = ['project_id', 'title', 'goal', 'success_criteria', 'priority', 'risk', 'owner_actor_id'];
+const requiredFields = [
+  'project_id',
+  'title',
+  'goal',
+  'success_criteria',
+  'priority',
+  'risk',
+  'driver_actor_id',
+  'intake_context',
+];
 
 export const workItemTypeMetadata: WorkItemTypeMetadata[] = [
   {

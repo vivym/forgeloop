@@ -35,6 +35,13 @@ const reviewerHeaders = {
   'x-forgeloop-actor-id': actorReviewer,
   'x-forgeloop-actor-class': 'human',
 };
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Delivery operators need a complete command surface.',
+  desired_outcome: 'Spec, plan, package, run, and review commands are available over REST.',
+  acceptance_criteria: ['Spec, plan, package, run, and review commands are available.'],
+  in_scope: ['Control plane API delivery flow'],
+} as const;
 
 const requiredChecks = [
   {
@@ -154,7 +161,8 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
         success_criteria: ['Spec, plan, package, run, and review commands are available.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: requirementIntakeContext,
       })
       .expect(201)
   ).body;
@@ -587,7 +595,8 @@ describe('delivery control plane API', () => {
         success_criteria: 'not-an-array',
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: requirementIntakeContext,
       })
       .expect(400);
     expect((await request(server).get('/work-items').query({ project_id: project.id }).expect(200)).body).toHaveLength(1);
