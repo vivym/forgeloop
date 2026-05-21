@@ -50,6 +50,8 @@ describe('delivery dogfood script helpers', () => {
     expect(seed.records.project.owner_actor_id).toBe(seed.actors.owner.id);
     expect(seed.records.workItem.project_id).toBe(seed.records.project.id);
     expect(seed.records.workItem.driver_actor_id).toBe(seed.actors.owner.id);
+    expect(seed.records.workItem.intake_context).toMatchObject({ type: 'tech_debt' });
+    expect(seed.records.workItem.kind).toBe(seed.records.workItem.intake_context.type);
     expect(seed.records.workItem.current_spec_id).toBe(seed.records.spec.id);
     expect(seed.records.workItem.current_plan_id).toBe(seed.records.plan.id);
     expect(seed.records.spec.work_item_id).toBe(seed.records.workItem.id);

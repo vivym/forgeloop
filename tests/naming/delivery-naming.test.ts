@@ -182,7 +182,8 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^packages\/db\/src\/queries\/work-item-cockpit-queries\.ts$/,
     /^packages\/contracts\/src\/work-item-delivery-readiness\.ts$/,
     /^packages\/workflow\/src\/activities\.ts$/,
-    /^apps\/web\/src\/features\/work-items\//,
+    /^apps\/web\/src\/features\/work-items\/work-item-view-model\.ts$/,
+    /^apps\/web\/src\/features\/work-items\/delivery-cockpit\/package-matrix\.tsx$/,
   ];
   const executionPackageOwnerTestPaths = [
     /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|test-acceptance-gate)\.test\.ts$/,
@@ -229,7 +230,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
       context,
     );
   const executionPackageOwnerContext =
-    /ExecutionPackage|executionPackage|execution_package|execution-packages|execution_packages|execution-owner|Execution Owner|packageBase|validateExecutionPackage|CreateExecutionPackage|PatchExecutionPackage|package_created|package_edited|cockpitPackage|Package owner|ownerActorId|ownerActorIdValues|context\.workItem\.driver_actor_id|reviewer_actor_id|qa_owner_actor_id|required_checks|required_artifact_kinds|spec_revision_id|plan_revision_id|repo_id/.test(
+    /ExecutionPackage|executionPackage|execution_package|execution-packages|execution_packages|execution-owner|Execution Owner|packageBase|validateExecutionPackage|CreateExecutionPackage|PatchExecutionPackage|package_created|package_edited|cockpitPackage|Package assignee|Package owner|ownerActorId|ownerActorIdValues|context\.workItem\.driver_actor_id|reviewer_actor_id|qa_owner_actor_id|required_checks|required_artifact_kinds|spec_revision_id|plan_revision_id|repo_id/.test(
       context,
     );
   const negativeWorkItemOwnerContext =
@@ -312,5 +313,13 @@ describe('delivery naming cleanup', () => {
   it('does not allow Work Item owner fields globally across tests', () => {
     expect(allowedWorkItemOwnerActorIdReference('tests/unknown-owner-field.test.ts', 'Project owner_actor_id')).toBe(false);
     expect(allowedWorkItemOwnerActorIdReference('tests/unknown-owner-field.test.ts', 'ExecutionPackage owner_actor_id')).toBe(false);
+    expect(allowedWorkItemOwnerActorIdReference('apps/web/src/features/work-items/work-items-list.tsx', 'ExecutionPackage owner_actor_id')).toBe(false);
+    expect(allowedWorkItemOwnerActorIdReference('apps/web/src/features/work-items/work-item-view-model.ts', 'ExecutionPackage owner_actor_id')).toBe(true);
+    expect(
+      allowedWorkItemOwnerActorIdReference(
+        'apps/web/src/features/work-items/delivery-cockpit/package-matrix.tsx',
+        'Package assignee, latest execution, and blocking context. Owner',
+      ),
+    ).toBe(true);
   });
 });

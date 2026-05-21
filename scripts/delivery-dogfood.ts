@@ -37,7 +37,7 @@ import type { CodexSessionDriver } from '../packages/executor/src';
 import { FakeCodexSessionDriver, type FakeCodexScriptItem, RunWorker } from '../packages/run-worker/src';
 
 const execFile = promisify(execFileCallback);
-const techDebtIntakeContext = {
+const techDebtIntakeContext: WorkItem['intake_context'] = {
   type: 'tech_debt',
   current_pain: 'Delivery dogfood fixtures need typed intake context.',
   desired_invariant: 'Dogfood technical debt Work Items use the current create contract.',
@@ -1163,6 +1163,7 @@ export const buildDurableDogfoodSeed = (input: {
     priority: 'P0',
     risk: 'medium',
     driver_actor_id: owner.id,
+    intake_context: techDebtIntakeContext,
     phase: 'execution',
     activity_state: 'idle',
     gate_state: 'none',
