@@ -199,6 +199,18 @@ describe('Work Item intake contracts', () => {
     ).toBe(false);
   });
 
+  it('omits optional patch fields that are empty after trimming', () => {
+    expect(
+      patchWorkItemRequestSchema.parse({
+        goal: ' ',
+        success_criteria: [' ', ''],
+        priority: '',
+        risk: ' ',
+        driver_actor_id: ' ',
+      }),
+    ).toEqual({});
+  });
+
   it('accepts only draft and triage patch phases', () => {
     expect(
       patchWorkItemRequestSchema.safeParse({

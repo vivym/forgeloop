@@ -125,11 +125,11 @@ export type CreateWorkItemRequest = z.infer<typeof createWorkItemRequestSchema>;
 
 export const patchWorkItemRequestSchema = z
   .object({
-    goal: nonEmptyTrimmedStringSchema.optional(),
-    success_criteria: nonEmptyTrimmedArraySchema.optional(),
-    priority: nonEmptyTrimmedStringSchema.optional(),
-    risk: nonEmptyTrimmedStringSchema.optional(),
-    driver_actor_id: nonEmptyTrimmedStringSchema.optional(),
+    goal: optionalTrimmedStringSchema,
+    success_criteria: optionalTrimmedArraySchema,
+    priority: optionalTrimmedStringSchema,
+    risk: optionalTrimmedStringSchema,
+    driver_actor_id: optionalTrimmedStringSchema,
     intake_context: workItemIntakeContextSchema.optional(),
     phase: z.enum(['draft', 'triage']).optional(),
   })
