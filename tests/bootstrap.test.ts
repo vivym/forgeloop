@@ -34,6 +34,7 @@ describe('workspace bootstrap contract', () => {
       'apps/workflow-worker/package.json': '@forgeloop/workflow-worker',
       'packages/automation/package.json': '@forgeloop/automation',
       'packages/codex-runtime/package.json': '@forgeloop/codex-runtime',
+      'packages/codex-worker-runtime/package.json': '@forgeloop/codex-worker-runtime',
       'packages/contracts/package.json': '@forgeloop/contracts',
       'packages/db/package.json': '@forgeloop/db',
       'packages/domain/package.json': '@forgeloop/domain',
@@ -56,6 +57,7 @@ describe('workspace bootstrap contract', () => {
     expect(baseTsconfig.compilerOptions.paths).toEqual({
       '@forgeloop/automation': ['packages/automation/src/index.ts'],
       '@forgeloop/codex-runtime': ['packages/codex-runtime/src/index.ts'],
+      '@forgeloop/codex-worker-runtime': ['packages/codex-worker-runtime/src/index.ts'],
       '@forgeloop/contracts': ['packages/contracts/src/index.ts'],
       '@forgeloop/domain': ['packages/domain/src/index.ts'],
       '@forgeloop/db': ['packages/db/src/index.ts'],
