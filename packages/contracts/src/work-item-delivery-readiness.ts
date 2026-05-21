@@ -273,11 +273,6 @@ const publicRuntimeMetadataSchema = z
     driver_status: z
       .enum(['not_started', 'starting', 'active', 'waiting_for_input', 'stalled', 'terminal'])
       .optional(),
-    worker_id: nonEmpty.optional(),
-    worker_lease_status: z.enum(['active', 'released', 'expired']).optional(),
-    worker_lease_heartbeat_at: isoDateTimeSchema.optional(),
-    worker_lease_expires_at: isoDateTimeSchema.optional(),
-    last_event_cursor: nonEmpty.optional(),
     last_event_at: isoDateTimeSchema.optional(),
     recovery_attempt_count: z.number().int().nonnegative().optional(),
   })

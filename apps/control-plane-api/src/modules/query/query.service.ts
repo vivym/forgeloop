@@ -14,12 +14,14 @@ import {
   listProductRuns,
   listProductSpecs,
   listProductWorkItems,
+  deriveDeliveryRunReadiness,
   getWorkItemCockpit,
 } from '@forgeloop/db';
 import { productLaneResponseSchema, type ProductLaneId, type ProductListQuery } from '@forgeloop/contracts';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { ReviewEvidenceService } from '../review-evidence/review-evidence.service';
 import {
   parseProductLaneIdOrThrowBadRequest,
@@ -34,6 +36,7 @@ export class QueryService {
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    @Inject(ControlPlaneRuntimeService) private readonly runtime: ControlPlaneRuntimeService,
     @Inject(ReviewEvidenceService)
     private readonly reviewEvidenceService: ReviewEvidenceService,
   ) {}
@@ -111,6 +114,17 @@ export class QueryService {
 
   listExecutionPackages(query: ProductListQuery) {
     return listProductExecutionPackages(this.repository, query);
+  }
+
+  async getExecutionPackageRuntimeReadiness(packageId: string) {
+    const executionPackage = await this.repository.getExecutionPackage(packageId);
+    if (executionPackage === undefined) {
+      throw new NotFoundException(`ExecutionPackage ${packageId} not found`);
+    }
+    return deriveDeliveryRunReadiness(this.repository, {
+      executionPackage,
+      now: this.runtime.now(),
+    });
   }
 
   listRuns(query: ProductListQuery) {

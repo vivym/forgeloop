@@ -31,25 +31,16 @@ export interface WorkItemCockpitOptions {
 }
 
 const withWorkerLeaseMetadata = async (
-  repository: DeliveryRepository,
+  _repository: DeliveryRepository,
   runSession: RunSession,
   fallbackRuntimeMetadata: RunRuntimeMetadata,
 ): Promise<RunSession> => {
-  const lease = await repository.getRunWorkerLease(runSession.id);
-  if (lease === undefined) {
-    return runSession;
-  }
-
-  return {
-    ...runSession,
-    runtime_metadata: {
-      ...(runSession.runtime_metadata ?? fallbackRuntimeMetadata),
-      worker_id: lease.worker_id,
-      worker_lease_status: lease.status,
-      worker_lease_heartbeat_at: lease.heartbeat_at,
-      worker_lease_expires_at: lease.expires_at,
-    },
-  };
+  return runSession.runtime_metadata === undefined
+    ? {
+        ...runSession,
+        runtime_metadata: fallbackRuntimeMetadata,
+      }
+    : runSession;
 };
 
 const projectWorkItem = (workItem: WorkItem) => ({
@@ -143,15 +134,6 @@ const projectRuntimeMetadata = (runtimeMetadata: RunSession['runtime_metadata'])
         ...(runtimeMetadata.durability_mode === undefined ? {} : { durability_mode: runtimeMetadata.durability_mode }),
         ...(runtimeMetadata.driver_kind === undefined ? {} : { driver_kind: runtimeMetadata.driver_kind }),
         ...(runtimeMetadata.driver_status === undefined ? {} : { driver_status: runtimeMetadata.driver_status }),
-        ...(runtimeMetadata.worker_id === undefined ? {} : { worker_id: runtimeMetadata.worker_id }),
-        ...(runtimeMetadata.worker_lease_status === undefined ? {} : { worker_lease_status: runtimeMetadata.worker_lease_status }),
-        ...(runtimeMetadata.worker_lease_heartbeat_at === undefined
-          ? {}
-          : { worker_lease_heartbeat_at: runtimeMetadata.worker_lease_heartbeat_at }),
-        ...(runtimeMetadata.worker_lease_expires_at === undefined
-          ? {}
-          : { worker_lease_expires_at: runtimeMetadata.worker_lease_expires_at }),
-        ...(runtimeMetadata.last_event_cursor === undefined ? {} : { last_event_cursor: runtimeMetadata.last_event_cursor }),
         ...(runtimeMetadata.last_event_at === undefined ? {} : { last_event_at: runtimeMetadata.last_event_at }),
         ...(runtimeMetadata.recovery_attempt_count === undefined
           ? {}

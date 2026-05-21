@@ -5,6 +5,7 @@ export * from './repositories/in-memory-delivery-repository';
 export * from './repositories/drizzle-delivery-repository';
 export * from './schema';
 export * from './queries/work-item-cockpit-queries';
+export * from './queries/delivery-runtime-readiness';
 export * from './queries/release-cockpit-queries';
 export * from './queries/release-test-acceptance-gate';
 export * from './queries/release-public-link-visibility';
