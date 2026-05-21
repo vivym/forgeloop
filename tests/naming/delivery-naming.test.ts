@@ -157,12 +157,20 @@ const workItemDriverForbiddenPatterns: LegacyPattern[] = [
   { target: 'owner_actor_id', pattern: /\bowner_actor_id\b/ },
 ];
 
-const nearbyContext = (lines: string[], index: number): string => lines.slice(Math.max(0, index - 8), index + 9).join('\n');
+const nearbyContext = (lines: string[], index: number): string => lines.slice(Math.max(0, index - 16), index + 17).join('\n');
+
+const matchesAny = (rel: string, patterns: RegExp[]): boolean => patterns.some((pattern) => pattern.test(rel));
 
 const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boolean => {
   const projectOwnerPaths = [
     /^apps\/control-plane-api\/src\/modules\/projects\//,
     /^packages\/db\/src\/schema\/project\.ts$/,
+  ];
+  const projectOwnerTestPaths = [
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|delivery-flow|durable-id-generation|durable-revision-lookup|execution-package-service|local-codex-routing|product-lanes|query-module|spec-plan-service)\.test\.ts$/,
+    /^tests\/db\/schema\.test\.ts$/,
+    /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
+    /^tests\/smoke\/(?:delivery-dogfood-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
   ];
   const executionPackageOwnerPaths = [
     /^apps\/control-plane-api\/src\/modules\/execution-packages\//,
@@ -175,6 +183,18 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^packages\/contracts\/src\/work-item-delivery-readiness\.ts$/,
     /^packages\/workflow\/src\/activities\.ts$/,
     /^apps\/web\/src\/features\/work-items\//,
+  ];
+  const executionPackageOwnerTestPaths = [
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|test-acceptance-gate)\.test\.ts$/,
+    /^tests\/db\/(?:automation-repository|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
+    /^tests\/db\/repository-contract\.ts$/,
+    /^tests\/contracts\/work-item-delivery-readiness\.test\.ts$/,
+    /^tests\/domain\/(?:release-gates|release-states|states|validators)\.test\.ts$/,
+    /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
+    /^tests\/smoke\/(?:delivery-dogfood-script|delivery-dogfood-work-items-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
+    /^tests\/web\/(?:api|package-run-product-routes|review-release-product-routes)\.test\.tsx?$/,
+    /^tests\/web\/fixtures\/product-(?:api-mock|data)\.ts$/,
+    /^tests\/workflow\/package-execution-workflow\.test\.ts$/,
   ];
   const productLaneOwnerPaths = [
     /^apps\/control-plane-api\/src\/modules\/query\/product-lane-query-parser\.ts$/,
@@ -197,6 +217,13 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^tests\/web\/spec-plan-product-route\.test\.tsx$/,
     /^tests\/web\/api\.test\.ts$/,
   ];
+  const workItemOwnerRejectionTestPaths = [
+    /^apps\/control-plane-api\/src\/modules\/query\/query\.service\.ts$/,
+    /^tests\/contracts\/work-item-intake\.test\.ts$/,
+    /^tests\/api\/(?:product-lanes|query-module|work-items)\.test\.ts$/,
+    /^tests\/domain\/states\.test\.ts$/,
+    /^tests\/web\/(?:api|api-hooks|product-lanes-route|work-item-intake-form|work-item-product-route)\.test\.tsx?$/,
+  ];
   const projectOwnerContext =
     /\bProject\b|\bprojects\b|\/projects|records\.project|seed\.project|project\.owner_actor_id|columnType\(projects|hasForeignKey\(projects|repo_ids|object_type: 'project'|project_created/.test(
       context,
@@ -206,20 +233,19 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
       context,
     );
   const negativeWorkItemOwnerContext =
-    /rejects owner_actor_id|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|safeParse|toBe\(false\)|rejects\.toThrow|expect\(400\)|listWorkItems/.test(
+    /rejects owner_actor_id|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|rejects Work Item create bodies with execution owner fields before POSTing|whitelists product Work Item query filters before sending requests|createWorkItemRequestSchema[\s\S]*owner_actor_id|patchWorkItemRequestSchema[\s\S]*owner_actor_id|publicWorkItemSchema[\s\S]*owner_actor_id|api\.createWorkItem\([\s\S]*owner_actor_id|\.patch\(`\/work-items\/[\s\S]*owner_actor_id/.test(
       context,
     );
   const runRequesterContext = /requested_by_actor_id|runSession\.requested_by_actor_id/.test(context);
   const qaOwnerQueueContext = /qa_owner_queues|PipelineQaOwnerQueue|pipelineQaOwnerQueueSchema/.test(context);
 
   return (
-    negativeWorkItemOwnerContext ||
+    (matchesAny(rel, workItemOwnerRejectionTestPaths) && negativeWorkItemOwnerContext) ||
     runRequesterContext ||
     qaOwnerQueueContext ||
-    ((projectOwnerPaths.some((pattern) => pattern.test(rel)) || /^tests\//.test(rel)) && projectOwnerContext) ||
-    (executionPackageOwnerPaths.some((pattern) => pattern.test(rel)) && executionPackageOwnerContext) ||
+    (matchesAny(rel, projectOwnerPaths.concat(projectOwnerTestPaths)) && projectOwnerContext) ||
+    (matchesAny(rel, executionPackageOwnerPaths.concat(executionPackageOwnerTestPaths)) && executionPackageOwnerContext) ||
     (/^packages\/domain\/src\/(?:states|types|validators)\.ts$/.test(rel) && (projectOwnerContext || executionPackageOwnerContext)) ||
-    (/^tests\//.test(rel) && executionPackageOwnerContext) ||
     (productLaneOwnerPaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || negativeWorkItemOwnerContext || /Product Lane|productLane|product-lanes|lane/.test(context))) ||
     (releaseOrPackageSurfacePaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || runRequesterContext))
   );
@@ -281,5 +307,10 @@ describe('delivery naming cleanup', () => {
 
   it('has no active Work Item Owner baggage on public Driver surfaces', () => {
     expect(workItemDriverNamingMatches()).toEqual([]);
+  });
+
+  it('does not allow Work Item owner fields globally across tests', () => {
+    expect(allowedWorkItemOwnerActorIdReference('tests/unknown-owner-field.test.ts', 'Project owner_actor_id')).toBe(false);
+    expect(allowedWorkItemOwnerActorIdReference('tests/unknown-owner-field.test.ts', 'ExecutionPackage owner_actor_id')).toBe(false);
   });
 });

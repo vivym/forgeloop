@@ -10,14 +10,14 @@ export interface TypedBriefProps {
 export function TypedBrief({ workItem }: TypedBriefProps) {
   if (workItem === null) {
     return (
-      <Section description="Owner request, goal, and success criteria for this product work." title="Typed brief">
+      <Section description="Intake context, goal, and success criteria for this product work." title="Typed brief">
         <Skeleton lines={3} />
       </Section>
     );
   }
 
   return (
-    <Section description="Owner request, goal, and success criteria for this product work." title="Typed brief">
+    <Section description="Intake context, goal, and success criteria for this product work." title="Typed brief">
       <div className="detail-block">
         <div className="pill-list">
           <Badge tone="info">{formatValue(workItem.kind)}</Badge>

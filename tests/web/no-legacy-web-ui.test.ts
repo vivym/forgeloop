@@ -83,7 +83,7 @@ const workItemWebScanFiles = () =>
     'apps/web/src/features/work-items',
     'apps/web/src/app/routes/work-items',
     'apps/web/src/app/routes/lanes',
-    'apps/web/src/features/product-lanes/product-lane-route.tsx',
+    'apps/web/src/features/product-lanes',
     'tests/web/work-item-intake-form.test.tsx',
     'tests/web/work-item-product-route.test.tsx',
     'tests/web/product-lanes-route.test.tsx',
@@ -91,7 +91,7 @@ const workItemWebScanFiles = () =>
   ].flatMap((path) => (statSync(path).isDirectory() ? textFiles(path) : [path]));
 
 const allowedWorkItemOwnerWebContext = (context: string): boolean =>
-  /rejects owner_actor_id|owner_actor_id is not supported|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|strips stale kind and owner filters|omits owner filters|without translating execution owner filters|Execution Owner|executionPackage\.owner_actor_id|owner: executionPackage\.owner_actor_id|workItemTypeLaneIds\.has\(laneId\)|key === 'kind' \|\| key === 'owner_actor_id'/.test(
+  /rejects owner_actor_id|owner_actor_id is not supported|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|strips stale kind and owner filters|omits owner filters|without translating execution owner filters|Execution Owner|executionPackage\.owner_actor_id|owner: executionPackage\.owner_actor_id|workItemTypeLaneIds\.has\(laneId\)|key === 'kind' \|\| key === 'owner_actor_id'|supportedProductLaneSearchParams[\s\S]*qa_owner_actor_id[\s\S]*release_owner_actor_id/.test(
     context,
   );
 
@@ -125,6 +125,11 @@ describe('no legacy Web UI baggage', () => {
 
   it('does not keep Work Item Owner copy or fields on Work Item Web surfaces', () => {
     expect(workItemWebOwnerMatches()).toEqual([]);
+  });
+
+  it('scans all Work Item product lane Web surfaces for Work Item Owner baggage', () => {
+    expect(workItemWebScanFiles()).toContain('apps/web/src/features/work-items/delivery-cockpit/typed-brief.tsx');
+    expect(workItemWebScanFiles()).toContain('apps/web/src/features/product-lanes/product-lanes.ts');
   });
 
   it('does not expose raw or debug-only controls on product Web surfaces', () => {
