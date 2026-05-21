@@ -343,6 +343,17 @@ describe('product lane projections', () => {
       .expect(200);
   });
 
+  it('keeps unsupported owner_actor_id response metadata for non-Work-Item lanes', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+
+    const response = await request(app.getHttpServer())
+      .get(`/query/product-lanes/reviewer?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`)
+      .expect(200);
+
+    expect(response.body.unsupported_filters).toContain('owner_actor_id');
+  });
+
   it('returns work item type lanes as strict ProductLaneResponse DTOs', async () => {
     const { app, repo } = await track(createTestApp());
     const seeded = [

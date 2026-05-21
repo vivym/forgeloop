@@ -1,6 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import { productLaneIdSchema, type ProductLaneId } from '@forgeloop/contracts';
-import { productLaneQueryKeys, resolveLaneFilters, type ParsedProductLaneFilters, type ProductLaneQueryKey } from '@forgeloop/db';
+import {
+  productLaneQueryKeys,
+  resolveLaneFilters,
+  workItemKindByLane,
+  type ParsedProductLaneFilters,
+  type ProductLaneQueryKey,
+} from '@forgeloop/db';
 import { z } from 'zod';
 
 type RawQuery = Record<string, string | string[] | undefined>;
@@ -120,7 +126,7 @@ export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): Par
   if (resolved.conflicts.length > 0) {
     throw new BadRequestException({ message: 'Conflicting product lane filters.', conflicts: resolved.conflicts });
   }
-  if (resolved.unsupported_filters.includes('owner_actor_id')) {
+  if (laneId in workItemKindByLane && resolved.unsupported_filters.includes('owner_actor_id')) {
     throw new BadRequestException('owner_actor_id is not supported for this product lane.');
   }
   return resolved;
