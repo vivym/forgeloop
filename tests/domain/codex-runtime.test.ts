@@ -92,8 +92,8 @@ const baseRevision = (overrides: Partial<CodexRuntimeProfileRevision> = {}): Cod
     effective_config_assertions: {
       target_kind: 'generation',
       approval_policy: 'never',
-      source_access_mode: 'artifact_only',
-      source_workspace_write_policy: 'none',
+      source_write_policy: 'artifact_only',
+      forbidden_writable_roots: ['workspace'],
     },
     app_server_required: true,
     allowed_driver_kind: 'app_server',
