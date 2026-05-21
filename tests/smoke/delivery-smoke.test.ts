@@ -23,6 +23,32 @@ const ownerHeaders = { [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'h
 const reviewerHeaders = { [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' };
 const repoId = 'repo-1';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const intakeContextByKind = {
+  requirement: {
+    type: 'requirement',
+    stakeholder_problem: 'Smoke delivery fixtures need typed intake context.',
+    desired_outcome: 'The smoke loop can create a valid requirement Work Item.',
+    acceptance_criteria: ['Spec, plan, package, run, review, and timeline evidence are persisted.'],
+    in_scope: ['Delivery smoke workflow'],
+  },
+  bug: {
+    type: 'bug',
+    impact_summary: 'The smoke loop must handle bug Work Items.',
+    observed_behavior: 'Legacy fixtures omitted typed intake context.',
+    expected_behavior: 'Bug smoke fixtures create valid Work Items.',
+    reproduction_steps: ['Create a bug smoke Work Item', 'Run the delivery loop'],
+    affected_environment: 'delivery smoke test',
+    verification_path: 'Delivery smoke assertions',
+  },
+  tech_debt: {
+    type: 'tech_debt',
+    current_pain: 'The smoke loop must handle technical debt Work Items.',
+    desired_invariant: 'Tech debt smoke fixtures use typed intake context.',
+    affected_modules: ['delivery-smoke.test.ts'],
+    behavior_preservation: 'Existing smoke workflow assertions still pass.',
+    validation_strategy: 'Focused delivery smoke test',
+  },
+} as const;
 
 const requiredChecks = [
   {
@@ -157,6 +183,7 @@ const createApprovedSpecAndPlan = async (
         priority: 'P0',
         risk: 'medium',
         driver_actor_id: actorOwner,
+        intake_context: intakeContextByKind[kind],
       })
       .expect(201)
   ).body;

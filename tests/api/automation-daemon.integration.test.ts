@@ -49,6 +49,13 @@ const reviewerHeaders = {
   'x-forgeloop-actor-id': actorReviewer,
   'x-forgeloop-actor-class': 'human',
 };
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Automation daemon fixtures need typed intake context.',
+  desired_outcome: 'Daemon integration tests create valid requirement Work Items.',
+  acceptance_criteria: ['Daemon creates draft artifacts through valid Work Items.'],
+  in_scope: ['Automation daemon integration tests'],
+};
 
 const apps: INestApplication[] = [];
 let tempRoot: string;
@@ -183,6 +190,7 @@ const seedDraftOnlyApprovedSpec = async (
       priority: 'P0',
       risk: 'medium',
       driver_actor_id: actorOwner,
+      intake_context: requirementIntakeContext,
     })
     .expect(201)).body as WorkItem;
   const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
@@ -235,6 +243,7 @@ const seedDraftOnlyWorkItemWithoutSpec = async (app: INestApplication): Promise<
       priority: 'P0',
       risk: 'medium',
       driver_actor_id: actorOwner,
+      intake_context: requirementIntakeContext,
     })
     .expect(201)).body as WorkItem;
 

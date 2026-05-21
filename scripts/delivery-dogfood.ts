@@ -37,6 +37,14 @@ import type { CodexSessionDriver } from '../packages/executor/src';
 import { FakeCodexSessionDriver, type FakeCodexScriptItem, RunWorker } from '../packages/run-worker/src';
 
 const execFile = promisify(execFileCallback);
+const techDebtIntakeContext = {
+  type: 'tech_debt',
+  current_pain: 'Delivery dogfood fixtures need typed intake context.',
+  desired_invariant: 'Dogfood technical debt Work Items use the current create contract.',
+  affected_modules: ['delivery-dogfood.ts'],
+  behavior_preservation: 'Long-running run console evidence remains unchanged.',
+  validation_strategy: 'Delivery dogfood run',
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -678,7 +686,8 @@ const createApprovedPlan = async (apiUrl: string, projectId: string, label: stri
       success_criteria: ['Live events are visible before terminal completion.', 'Review evidence is persisted.'],
       priority: 'P0',
       risk: 'medium',
-      owner_actor_id: actorOwner,
+      driver_actor_id: actorOwner,
+      intake_context: techDebtIntakeContext,
     },
   });
   const workItemId = stringField(workItem, 'id');

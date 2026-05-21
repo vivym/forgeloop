@@ -32,6 +32,13 @@ if (connectionString !== undefined) {
 }
 
 const describeIfDb = describe.skipIf(connectionString === undefined);
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Durable revision lookup fixtures need typed intake context.',
+  desired_outcome: 'Revision lookup tests create valid requirement Work Items.',
+  acceptance_criteria: ['Spec and plan revisions can be looked up durably.'],
+  in_scope: ['Durable revision lookup tests'],
+};
 
 describeIfDb('durable revision lookup', () => {
   const apps: INestApplication[] = [];
@@ -140,6 +147,7 @@ describeIfDb('durable revision lookup', () => {
           priority: 'P0',
           risk: 'medium',
           driver_actor_id: actorOwner,
+          intake_context: requirementIntakeContext,
         })
         .expect(201)
     ).body;

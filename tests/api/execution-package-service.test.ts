@@ -20,6 +20,13 @@ const reviewerHeaders = {
   'x-forgeloop-actor-id': actorReviewer,
   'x-forgeloop-actor-class': 'human',
 };
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Execution package service fixtures need typed intake context.',
+  desired_outcome: 'ExecutionPackageService tests create valid requirement Work Items.',
+  acceptance_criteria: ['Execution package routes remain behavior-compatible.'],
+  in_scope: ['ExecutionPackageService API tests'],
+};
 
 const requiredChecks = [
   {
@@ -94,7 +101,8 @@ const createApprovedPlan = async (app: INestApplication) => {
         success_criteria: ['Execution package routes are owned by ExecutionPackageService.'],
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: requirementIntakeContext,
       })
       .expect(201)
   ).body;

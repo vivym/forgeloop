@@ -14,6 +14,13 @@ import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Durable ID fixtures need typed intake context.',
+  desired_outcome: 'Durable API-created Work Items use the current create contract.',
+  acceptance_criteria: ['All aggregate IDs are UUIDs.'],
+  in_scope: ['Durable ID generation tests'],
+};
 
 describe('durable delivery object IDs', () => {
   const apps: INestApplication[] = [];
@@ -94,6 +101,7 @@ describe('durable delivery object IDs', () => {
           priority: 'P1',
           risk: 'low',
           driver_actor_id: ownerActorId,
+          intake_context: requirementIntakeContext,
         })
         .expect(201)
     ).body;

@@ -42,6 +42,32 @@ type DogfoodItemDefinition = {
   strictRunMode: DogfoodRunMode;
   requiresChangesRequestedRerun: boolean;
 };
+const intakeContextByKind = {
+  requirement: {
+    type: 'requirement',
+    stakeholder_problem: 'Delivery dogfood fixtures need typed intake context.',
+    desired_outcome: 'Dogfood Work Items can drive the delivery loop.',
+    acceptance_criteria: ['Spec, plan, package, run, review, and completion evidence are persisted.'],
+    in_scope: ['Delivery dogfood Work Item script'],
+  },
+  bug: {
+    type: 'bug',
+    impact_summary: 'Delivery dogfood must exercise bug Work Items.',
+    observed_behavior: 'Legacy fixtures omitted typed intake context.',
+    expected_behavior: 'Bug dogfood fixtures create valid Work Items.',
+    reproduction_steps: ['Create a bug dogfood Work Item', 'Run the delivery loop'],
+    affected_environment: 'delivery dogfood script',
+    verification_path: 'Dogfood script assertions',
+  },
+  tech_debt: {
+    type: 'tech_debt',
+    current_pain: 'Delivery dogfood must exercise technical debt Work Items.',
+    desired_invariant: 'Tech debt fixtures use typed intake context.',
+    affected_modules: ['delivery-dogfood-work-items.ts'],
+    behavior_preservation: 'Existing dogfood assertions still pass.',
+    validation_strategy: 'Dogfood smoke test',
+  },
+} as const;
 
 type DogfoodItemResult = {
   key: string;
@@ -566,7 +592,8 @@ const approveSpecAndPlan = async (
         success_criteria: item.successCriteria,
         priority: 'P0',
         risk: 'medium',
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
+        intake_context: intakeContextByKind[item.kind],
       })
       .expect(201)
   ).body as { id: string };
