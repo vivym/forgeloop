@@ -54,6 +54,7 @@ export class CodexRuntimeController {
   }
 
   @Get('/internal/codex-runtime/status')
+  @UseGuards(TrustedAutomationActorGuard)
   getStatus(@Query(new ZodValidationPipe(codexRuntimeStatusQuerySchema)) query: CodexRuntimeStatusQuery) {
     return this.service.getStatus(query);
   }

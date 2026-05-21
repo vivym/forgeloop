@@ -431,6 +431,24 @@ const signedPost = (
   return request(app.getHttpServer()).post(pathAndQuery).set(headers).set('Content-Type', 'application/json').send(rawBody);
 };
 
+const signedGet = (
+  app: INestApplication,
+  pathAndQuery: string,
+  actorClass: 'automation_daemon' | 'human_admin' | 'system_bootstrap' = 'automation_daemon',
+) => {
+  const headers = signAutomationRequest({
+    method: 'GET',
+    pathAndQuery,
+    rawBody: '',
+    actorId,
+    actorClass,
+    daemonIdentity,
+    timestamp: new Date().toISOString(),
+    secret,
+  });
+  return request(app.getHttpServer()).get(pathAndQuery).set(headers);
+};
+
 const signedSetupPost = (
   app: INestApplication,
   pathAndQuery: string,
@@ -577,9 +595,9 @@ describe('codex runtime control-plane APIs', () => {
     vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
     await signedSetupPost(app, '/internal/codex-runtime/credentials', credentialBody(), 'status-credential').expect(201);
 
-    const status = await request(app.getHttpServer())
-      .get(`/internal/codex-runtime/status?project_id=${projectId}&repo_id=${repoId}&target_kind=generation&credential_binding_id=${credentialBindingId}`)
-      .expect(200);
+    const statusQuery = `/internal/codex-runtime/status?project_id=${projectId}&repo_id=${repoId}&target_kind=generation&credential_binding_id=${credentialBindingId}`;
+    await request(app.getHttpServer()).get(statusQuery).expect(401);
+    const status = await signedGet(app, statusQuery).expect(200);
     expect(status.body).toMatchObject({
       runtime_profile_id: profileId,
       credential_binding_id: credentialBindingId,

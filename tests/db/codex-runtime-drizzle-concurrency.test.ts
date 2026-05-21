@@ -24,6 +24,7 @@ import {
   createDbClient,
   DrizzleDeliveryRepository,
   resetForgeloopDatabase,
+  type CreateOrReplayCodexLaunchLeaseInput,
   type DeliveryRepository,
 } from '../../packages/db/src/index';
 
@@ -326,6 +327,37 @@ const createLaunchLease = async (
     now,
   });
 
+const targetAttemptLaunchLeaseInput = (
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  suffix: string,
+  targetId: string,
+): CreateOrReplayCodexLaunchLeaseInput => ({
+  id: randomUUID(),
+  lease_request_id: `lease-request-${suffix}-${randomUUID()}`,
+  target: {
+    target_type: 'automation_action_run',
+    target_id: targetId,
+    target_kind: 'generation',
+    project_id: seed.binding.project_id,
+    repo_id: seed.binding.repo_id,
+  },
+  worker_id: seed.workerId,
+  runtime_profile_revision_id: seed.revision.id,
+  runtime_profile_digest: seed.revision.profile_digest,
+  credential_binding_id: seed.binding.id,
+  credential_binding_version_id: seed.version.id,
+  credential_payload_digest: seed.version.payload_digest,
+  docker_image_digest: seed.revision.docker_image_digest,
+  network_policy_digest: codexCanonicalDigest(seed.revision.network_policy),
+  network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+  launch_token: `launch-token-${suffix}`,
+  launch_attempt: 1,
+  action_claim_token_hash: tokenHash(`action-claim-token-${suffix}`),
+  precondition_fingerprint: `precondition-${suffix}`,
+  expires_at: expiresAt,
+  now,
+});
+
 const expectWorkerLeaseCount = async (client: ReturnType<typeof createDbClient>, workerId: string, leaseCount: number) => {
   const [workerRow] = await client.db
     .select({ leaseCount: codex_worker_registrations.leaseCount })
@@ -397,6 +429,37 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ id: input.id }) }),
           expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ id: input.id }) }),
         ]);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('denies concurrent launch lease creates for the same target attempt without leaking unique constraint errors', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db);
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db);
+        const seed = await seedRuntime(firstRepository, { createInitialLease: false, maxConcurrency: 2 });
+        const targetId = randomUUID();
+
+        const [first, second] = await Promise.allSettled([
+          firstRepository.createOrReplayCodexLaunchLease(targetAttemptLaunchLeaseInput(seed, 'target-race-a', targetId)),
+          secondRepository.createOrReplayCodexLaunchLease(targetAttemptLaunchLeaseInput(seed, 'target-race-b', targetId)),
+        ]);
+
+        const successes = [first, second].filter((result) => result.status === 'fulfilled');
+        const failures = [first, second].filter((result) => result.status === 'rejected');
+        expect(successes).toHaveLength(1);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({
+          reason: {
+            name: 'DomainError',
+            code: 'codex_launch_lease_denied',
+          },
+        });
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
       } finally {
         await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
       }

@@ -1263,7 +1263,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           createdAt: input.now,
           expiresAt: input.expires_at,
         } as never)
-        .onConflictDoNothing({ target: codex_launch_leases.leaseRequestId })
+        .onConflictDoNothing()
         .returning();
       if (row === undefined) {
         const replayed = await replayExisting();
