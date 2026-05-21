@@ -24,6 +24,10 @@ export interface ProjectQuery {
 }
 
 export type ProductRegistryQuery = ListProductQuery;
+export type ProductWorkItemRegistryQuery = Pick<
+  ListProductQuery,
+  'project_id' | 'actor_id' | 'status' | 'phase' | 'gate_state' | 'resolution' | 'risk' | 'driver_actor_id' | 'blocked' | 'stale' | 'cursor' | 'limit'
+>;
 
 const queryString = (params: object = {}) => {
   const searchParams = new URLSearchParams();
@@ -42,7 +46,7 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const productMethods = {
     getPipeline: async (query: ProjectQuery) =>
       pipelineResponseSchema.parse(await request<unknown>(`/query/pipeline${queryString(query)}`)) as PipelineResponse,
-    listWorkItems: async (query: ProductRegistryQuery) =>
+    listWorkItems: async (query: ProductWorkItemRegistryQuery) =>
       productListResponseSchema.parse(await request<unknown>(`/query/work-items${queryString(query)}`)) as ProductListResponse,
     listSpecs: async (query: ProductRegistryQuery) =>
       productListResponseSchema.parse(await request<unknown>(`/query/specs${queryString(query)}`)) as ProductListResponse,

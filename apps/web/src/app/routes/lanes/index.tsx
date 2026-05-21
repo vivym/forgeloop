@@ -6,7 +6,7 @@ export default function ProductLanesRoute() {
   const targetParams = new URLSearchParams();
 
   for (const key of supportedProductLaneSearchParams) {
-    if (key === 'kind') {
+    if (key === 'kind' || key === 'owner_actor_id') {
       continue;
     }
     const value = searchParams.get(key)?.trim();

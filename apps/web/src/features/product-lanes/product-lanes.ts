@@ -28,6 +28,7 @@ const productLaneIdSet = new Set<string>(productLaneIds);
 export const supportedProductLaneSearchParams = [
   'project_id',
   'actor_id',
+  'driver_actor_id',
   'owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',

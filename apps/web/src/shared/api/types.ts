@@ -16,6 +16,9 @@ import type {
   releaseListQuerySchema,
   RequestReleaseChangesRequest,
   WorkItemCockpitResponse,
+  CreateWorkItemRequest,
+  PublicWorkItem,
+  WorkItemIntakeContext,
 } from '@forgeloop/contracts';
 
 export type {
@@ -69,6 +72,9 @@ export type {
   DeliveryStageState,
   DeliveryBlocker,
   DeliveryEvidence,
+  CreateWorkItemRequest,
+  PublicWorkItem,
+  WorkItemIntakeContext,
 } from '@forgeloop/contracts';
 
 export type CreateReleaseBody = zInput<typeof createReleaseRequestSchema>;
@@ -89,6 +95,7 @@ export type ListProductQuery = zInput<typeof productListQuerySchema>;
 export interface ProductLaneQuery {
   project_id: string;
   actor_id?: string;
+  driver_actor_id?: string;
   owner_actor_id?: string;
   reviewer_actor_id?: string;
   qa_owner_actor_id?: string;
@@ -200,16 +207,7 @@ export interface TimelineEntry {
   payload?: Record<string, unknown>;
 }
 
-export interface CreateWorkItemBody {
-  project_id: string;
-  kind: WorkItemKind;
-  title: string;
-  goal: string;
-  success_criteria: string[];
-  priority: string;
-  risk: string;
-  owner_actor_id: string;
-}
+export type CreateWorkItemBody = CreateWorkItemRequest;
 
 export interface CreateSpecRevisionBody {
   summary: string;

@@ -3,6 +3,7 @@ import type { ListProductQuery, ProductLaneId, ProductLaneQuery } from './types'
 export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
   project_id: query.project_id,
   ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
+  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
   ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
   ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
   ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
@@ -27,6 +28,7 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
   ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
   ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
   ...(query.risk === undefined ? {} : { risk: query.risk }),
+  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
   ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
   ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
   ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),

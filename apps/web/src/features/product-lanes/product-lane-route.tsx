@@ -32,7 +32,7 @@ function ProductLaneRouteContent({ laneId }: { laneId: NonNullable<ReturnType<ty
   const { projectId: contextProjectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const projectId = searchParams.get('project_id')?.trim() || contextProjectId;
-  const queryInput = useMemo(() => productLaneQueryFromSearch(searchParams, projectId), [projectId, searchParams]);
+  const queryInput = useMemo(() => productLaneQueryFromSearch(laneId, searchParams, projectId), [laneId, projectId, searchParams]);
   const query = useProductLaneQuery(laneId, queryInput);
   const requestedSelectedId = searchParams.get('selected') ?? undefined;
   const [selectedItemId, setSelectedItemId] = useState<string | undefined>(() => requestedSelectedId);
@@ -128,11 +128,12 @@ function UnknownProductLane() {
   );
 }
 
-function productLaneQueryFromSearch(searchParams: URLSearchParams, projectId: string): ProductLaneQuery {
+function productLaneQueryFromSearch(laneId: ProductLaneId, searchParams: URLSearchParams, projectId: string): ProductLaneQuery {
   return {
     project_id: projectId,
     ...stringParam(searchParams, 'actor_id'),
-    ...stringParam(searchParams, 'owner_actor_id'),
+    ...stringParam(searchParams, 'driver_actor_id'),
+    ...(workItemTypeLaneIds.has(laneId) ? {} : stringParam(searchParams, 'owner_actor_id')),
     ...stringParam(searchParams, 'reviewer_actor_id'),
     ...stringParam(searchParams, 'qa_owner_actor_id'),
     ...stringParam(searchParams, 'release_owner_actor_id'),
@@ -155,7 +156,11 @@ function laneHref(laneId: ProductLaneId, searchParams: URLSearchParams, projectI
   const next = new URLSearchParams();
   next.set('project_id', projectId);
   for (const key of supportedProductLaneSearchParams) {
-    if (key === 'project_id' || (key === 'kind' && workItemTypeLaneIds.has(laneId))) {
+    if (
+      key === 'project_id' ||
+      (key === 'kind' && workItemTypeLaneIds.has(laneId)) ||
+      (key === 'owner_actor_id' && workItemTypeLaneIds.has(laneId))
+    ) {
       continue;
     }
     const value = searchParams.get(key);

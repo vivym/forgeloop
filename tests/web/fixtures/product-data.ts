@@ -10,6 +10,14 @@ import type {
 export const projectId = 'project-web-product';
 export const actorId = 'actor-owner';
 
+export const requirementIntakeContext = {
+  type: 'requirement',
+  stakeholder_problem: 'Product operators need deterministic route-backed product data.',
+  desired_outcome: 'Web route tests exercise Product Lane and Work Item flows without live APIs.',
+  acceptance_criteria: ['API hooks resolve deterministic fixtures', 'Product Lane labels expose domain queues'],
+  in_scope: ['Shared API hooks', 'Route test fixtures'],
+} as const;
+
 export const workItem = {
   id: 'work-item-web-product',
   project_id: projectId,
@@ -19,7 +27,8 @@ export const workItem = {
   success_criteria: ['API hooks resolve deterministic fixtures', 'Product Lane labels expose domain queues'],
   priority: 'P0',
   risk: 'medium',
-  owner_actor_id: actorId,
+  driver_actor_id: actorId,
+  intake_context: requirementIntakeContext,
   phase: 'triage',
   activity_state: 'active',
   gate_state: 'open',
@@ -218,7 +227,7 @@ export const timeline = [
     object_id: workItem.id,
     summary: 'Created shared product API foundation work item.',
     created_at: workItem.created_at,
-    payload: { project_id: projectId },
+  payload: { project_id: projectId },
   },
 ];
 
@@ -418,6 +427,34 @@ const workItemKindFixture = (
     id,
     kind,
     title,
+    intake_context:
+      kind === 'bug'
+        ? {
+            type: 'bug',
+            impact_summary: title,
+            observed_behavior: 'The route shows a failing state.',
+            expected_behavior: 'The route shows the expected product state.',
+            reproduction_steps: ['Open the route'],
+            affected_environment: 'Web test fixture',
+            verification_path: 'Route test passes',
+          }
+        : kind === 'tech_debt'
+          ? {
+              type: 'tech_debt',
+              current_pain: title,
+              desired_invariant: 'Fixture duplication is reduced.',
+              affected_modules: ['tests/web/fixtures'],
+              behavior_preservation: 'Existing route behavior is preserved.',
+              validation_strategy: 'Focused Web tests pass.',
+            }
+          : kind === 'initiative'
+            ? {
+                type: 'initiative',
+                business_outcome: title,
+                scope_narrative: 'Coordinate related Web product work.',
+                success_metrics: ['Related work is visible'],
+              }
+            : requirementIntakeContext,
     phase: kind === 'bug' ? 'validation' : 'planning',
     risk: kind === 'bug' ? 'high' : 'medium',
   } as WorkItemCockpitResponse['work_item'];
@@ -545,6 +582,7 @@ const workItemLaneItem = (
   gate_state: 'open',
   resolution: 'unresolved',
   risk: kind === 'bug' ? 'high' : 'medium',
+  driver_actor_id: workItem.driver_actor_id,
   updated_at: fixtureUpdatedAt,
   actions: [
     {

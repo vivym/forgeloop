@@ -61,15 +61,26 @@ describe('Forgeloop web API client', () => {
 
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
+    const intakeContext = {
+      type: 'bug',
+      impact_summary: 'Checkout fails for signed-in users.',
+      observed_behavior: 'Submit returns an error toast.',
+      expected_behavior: 'Order is created or validation is shown.',
+      reproduction_steps: ['Sign in', 'Add item to cart', 'Submit checkout'],
+      affected_environment: 'Production web',
+      verification_path: 'Regression test for checkout submit',
+    } as const;
+
     const result = await api.createWorkItem({
       project_id: 'project-1',
-      kind: 'requirement',
-      title: 'Ship release cockpit',
-      goal: 'Operate delivery from the browser',
-      success_criteria: ['Create and run a package'],
+      kind: 'bug',
+      title: 'Checkout fails',
+      goal: 'Checkout fails for signed-in users; expected order creation or validation.',
+      success_criteria: ['Order is created or validation is shown', 'Regression test for checkout submit'],
       priority: 'P0',
-      risk: 'medium',
-      owner_actor_id: 'actor-owner',
+      risk: 'high',
+      driver_actor_id: 'actor-driver',
+      intake_context: intakeContext,
     });
 
     expect(result).toMatchObject({ id: 'work-item-1' });
@@ -78,15 +89,17 @@ describe('Forgeloop web API client', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         project_id: 'project-1',
-        kind: 'requirement',
-        title: 'Ship release cockpit',
-        goal: 'Operate delivery from the browser',
-        success_criteria: ['Create and run a package'],
+        kind: 'bug',
+        title: 'Checkout fails',
+        goal: 'Checkout fails for signed-in users; expected order creation or validation.',
+        success_criteria: ['Order is created or validation is shown', 'Regression test for checkout submit'],
         priority: 'P0',
-        risk: 'medium',
-        owner_actor_id: 'actor-owner',
+        risk: 'high',
+        driver_actor_id: 'actor-driver',
+        intake_context: intakeContext,
       }),
     });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty('owner_actor_id');
   });
 
   it('encodes query parameters and command request bodies', async () => {
