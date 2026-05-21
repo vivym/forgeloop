@@ -4,6 +4,7 @@ import type { WorkItemKind } from '@forgeloop/domain';
 export const productLaneQueryKeys = [
   'project_id',
   'actor_id',
+  'driver_actor_id',
   'owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',
@@ -40,6 +41,7 @@ export const productLaneByWorkItemKind = {
 } as const satisfies Record<WorkItemKind, ProductLaneId>;
 
 export type ProductLaneActorFilterKey =
+  | 'driver_actor_id'
   | 'owner_actor_id'
   | 'reviewer_actor_id'
   | 'qa_owner_actor_id'
@@ -58,7 +60,7 @@ const workItemTypeLaneFilters = [
   'limit',
   'kind',
   'actor_id',
-  'owner_actor_id',
+  'driver_actor_id',
   'phase',
   'status',
   'gate_state',
@@ -72,25 +74,25 @@ export const productLaneMetadata: Record<ProductLaneId, ProductLaneMetadata> = {
     label: 'Requirements',
     description: 'Requirement work items that need product definition, spec, plan, execution, or release follow-through.',
     applied_filters: workItemTypeLaneFilters,
-    actor_filter: 'owner_actor_id',
+    actor_filter: 'driver_actor_id',
   },
   bugs: {
     label: 'Bugs',
     description: 'Bug work items and linked delivery objects that need repair, review, evidence, or release attention.',
     applied_filters: workItemTypeLaneFilters,
-    actor_filter: 'owner_actor_id',
+    actor_filter: 'driver_actor_id',
   },
   'tech-debt': {
     label: 'Tech Debt',
     description: 'Tech debt work items and linked validation blockers that need refactor scope, plan, or package attention.',
     applied_filters: workItemTypeLaneFilters,
-    actor_filter: 'owner_actor_id',
+    actor_filter: 'driver_actor_id',
   },
   initiatives: {
     label: 'Initiatives',
     description: 'Initiatives that need product shaping, split readiness, and linked requirement drill-down.',
     applied_filters: workItemTypeLaneFilters,
-    actor_filter: 'owner_actor_id',
+    actor_filter: 'driver_actor_id',
   },
   'spec-approver': {
     label: 'Spec Approver',
@@ -185,6 +187,8 @@ export interface ParsedProductLaneFilters {
 export type ProductLaneFilterSubject = {
   project_id: string;
   actor_id_values?: readonly string[] | undefined;
+  driver_actor_id?: string | undefined;
+  driver_actor_id_values?: readonly string[] | undefined;
   owner_actor_id?: string | undefined;
   owner_actor_id_values?: readonly string[] | undefined;
   reviewer_actor_id?: string | undefined;

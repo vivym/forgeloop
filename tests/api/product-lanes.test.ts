@@ -306,6 +306,41 @@ describe('product lane projections', () => {
     await request(server)
       .get(`/query/product-lanes/release-owner?project_id=${project.id}&actor_id=actor-a&release_owner_actor_id=actor-b`)
       .expect(400);
+    await request(server)
+      .get(`/query/product-lanes/bugs?project_id=${project.id}&actor_id=actor-a&driver_actor_id=actor-b`)
+      .expect(400);
+  });
+
+  it('filters Work Item type lanes by driver_actor_id and rejects owner_actor_id', async () => {
+    const { app } = await track(createTestApp());
+    const { project, workItem } = await seedDraftWorkItem(app, 'bug');
+    const server = app.getHttpServer();
+
+    const response = await request(server)
+      .get(`/query/product-lanes/bugs?project_id=${project.id}&driver_actor_id=${actorOwner}`)
+      .expect(200);
+    expect(response.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          object: { type: 'work_item', id: workItem.id },
+          driver_actor_id: actorOwner,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(response.body.items)).not.toContain('owner_actor_id');
+
+    await request(server)
+      .get(`/query/product-lanes/bugs?project_id=${project.id}&owner_actor_id=${actorOwner}`)
+      .expect(400);
+  });
+
+  it('keeps execution-owner lane owner_actor_id filtering for execution packages', async () => {
+    const { app } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+
+    await request(app.getHttpServer())
+      .get(`/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`)
+      .expect(200);
   });
 
   it('returns work item type lanes as strict ProductLaneResponse DTOs', async () => {
@@ -328,7 +363,7 @@ describe('product lane projections', () => {
       const filters = resolveLaneFilters(lane, {
         project_id: laneSeed.project.id,
         kind,
-        owner_actor_id: actorOwner,
+        driver_actor_id: actorOwner,
         reviewer_actor_id: actorReviewer,
         limit: 5,
       });
@@ -610,6 +645,21 @@ describe('product lane projections', () => {
         resolveLaneFilters('spec-approver', { project_id: planSeed.project.id, actor_id: actorOwner }),
       ),
     ).resolves.toMatchObject({ items: [], summary: expect.objectContaining({ total: 0 }) });
+  });
+
+  it('reports owner_actor_id as unsupported for direct Work Item lane filter resolution', async () => {
+    const { app } = await track(createTestApp());
+    const { project } = await seedDraftWorkItem(app, 'requirement');
+
+    const filters = resolveLaneFilters('requirements', {
+      project_id: project.id,
+      kind: 'requirement',
+      driver_actor_id: actorOwner,
+      owner_actor_id: actorOwner,
+      limit: 5,
+    });
+
+    expect(filters.unsupported_filters).toContain('owner_actor_id');
   });
 
 });
