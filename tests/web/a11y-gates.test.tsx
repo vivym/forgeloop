@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { renderRoute } from './router-test-utils';
 
 describe('web accessibility gates', () => {
-  it.each(['/workbench', '/runs/run-web-product', '/releases/release-web-product'])(
+  it.each(['/lanes', '/runs/run-web-product', '/releases/release-web-product'])(
     'renders a skip link to the primary main landmark on %s',
     async (route) => {
       const screen = await renderRoute(route);
@@ -20,7 +20,7 @@ describe('web accessibility gates', () => {
     },
   );
 
-  it.each(['/workbench', '/pipeline', '/runs/run-web-product', '/releases/release-web-product'])(
+  it.each(['/lanes', '/pipeline', '/runs/run-web-product', '/releases/release-web-product'])(
     'has no automated axe violations on %s',
     async (route) => {
       await renderRoute(route);
@@ -39,7 +39,7 @@ describe('web accessibility gates', () => {
     expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Skip to main content' }));
 
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Workbench' }));
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Lanes' }));
 
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Pipeline' }));

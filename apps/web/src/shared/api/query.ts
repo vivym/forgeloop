@@ -3,7 +3,7 @@ import {
   pipelineResponseSchema,
   productLaneResponseSchema,
   productListResponseSchema,
-  workItemActionsResponseSchema,
+  workItemCockpitResponseSchema,
 } from '@forgeloop/contracts';
 import type {
   CockpitResponse,
@@ -17,8 +17,6 @@ import type {
   ReleaseListResponse,
   ReviewPacket,
   TimelineEntry,
-  WorkItemActionsQuery,
-  WorkItemActionsResponse,
 } from './types';
 
 export interface ProjectQuery {
@@ -66,14 +64,16 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const api = {
     getProductLane: async (laneId: ProductLaneId, query: ProductLaneQuery) =>
       productLaneResponseSchema.parse(
-        await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
+        hardenManagerProductLaneActions(
+          await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
+        ),
       ) as ProductLaneResponse,
-    getWorkItemActions: async (workItemId: string, query: WorkItemActionsQuery = {}) =>
-      workItemActionsResponseSchema.parse(
-        await request<unknown>(`/query/work-items/${encodeURIComponent(workItemId)}/actions${queryString(query)}`),
-      ) as WorkItemActionsResponse,
-    getWorkItemCockpit: (workItemId: string) =>
-      request<CockpitResponse>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
+    getWorkItemCockpit: async (workItemId: string, options: { lane?: ProductLaneId } = {}) =>
+      workItemCockpitResponseSchema.parse(
+        hardenManagerCockpitActions(
+          await request<unknown>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}${queryString(options)}`),
+        ),
+      ) as CockpitResponse,
     getWorkItemReplay: (workItemId: string) =>
       request<TimelineEntry[]>(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
     getSpecReplay: (specId: string) => request<TimelineEntry[]>(`/query/replay/spec/${encodeURIComponent(specId)}`),
@@ -95,3 +95,82 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
 }
 
 export type ForgeloopQueryApi = ReturnType<typeof createForgeloopQueryApi>;
+
+function hardenManagerCockpitActions(response: unknown): unknown {
+  if (!isRecord(response) || !isRecord(response.delivery_readiness) || response.delivery_readiness.active_lane !== 'manager') {
+    return response;
+  }
+
+  const rawActions = response.delivery_readiness.next_actions;
+  if (!Array.isArray(rawActions)) return response;
+
+  return {
+    ...response,
+    delivery_readiness: {
+      ...response.delivery_readiness,
+      next_actions: rawActions.flatMap((action) => hardenManagerAction(action)),
+    },
+  };
+}
+
+function hardenManagerProductLaneActions(response: unknown): unknown {
+  if (!isRecord(response) || response.lane_id !== 'manager' || !Array.isArray(response.items)) {
+    return response;
+  }
+
+  return {
+    ...response,
+    items: response.items.map((item) => {
+      if (!isRecord(item) || !Array.isArray(item.actions)) return item;
+
+      return {
+        ...item,
+        actions: item.actions.flatMap((action) => hardenManagerAction(action)),
+      };
+    }),
+  };
+}
+
+function hardenManagerAction(action: unknown): unknown[] {
+  if (!isRecord(action)) return [];
+
+  if (action.kind === 'navigate') {
+    return [{ ...action, lane_id: 'manager' }];
+  }
+
+  if (action.kind !== 'command' || !isRecord(action.target) || action.target.kind !== 'object') {
+    return [];
+  }
+
+  return [
+    {
+      id: `${String(action.id)}-drill-down`,
+      lane_id: 'manager',
+      priority: 'secondary',
+      label: managerObjectActionLabel(action.target.object_type),
+      ...(typeof action.description === 'string' ? { description: action.description } : {}),
+      enabled: true,
+      kind: 'navigate',
+      target: action.target,
+    },
+  ];
+}
+
+function managerObjectActionLabel(objectType: unknown) {
+  switch (objectType) {
+    case 'execution_package':
+      return 'Open package';
+    case 'run_session':
+      return 'Open run';
+    case 'review_packet':
+      return 'Open review';
+    case 'work_item':
+      return 'Open work item';
+    default:
+      return 'Open detail';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

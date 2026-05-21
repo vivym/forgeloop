@@ -329,6 +329,12 @@ describe('package and run product routes', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run' })).toBeTruthy());
 
+    expectPageHeaderText(/Package/i);
+    expect(screen.getByRole('link', { name: /Open Work Item/i })).toBeTruthy();
+    expectStatusPillText(productCopyPackage.phase);
+    expectActionRailBeforeDetailContent();
+    expectNoLegacyWorkbenchText();
+    expectNoNestedCards();
     expect(screen.getByRole('button', { name: 'Force rerun' })).toBeTruthy();
     expect(screen.getByText('Timeline')).toBeTruthy();
     expect(screen.getByText('Generate packages')).toBeTruthy();
@@ -663,6 +669,15 @@ describe('package and run product routes', () => {
 
     await waitFor(() => expect(screen.getByText('Applied package changes and started checks.')).toBeTruthy());
 
+    expectPageHeaderText(/Run/i);
+    expect(screen.getByRole('link', { name: /Open Package/i })).toBeTruthy();
+    expectStatusPillText(runSessionWithDebugMetadata.status);
+    expectActionRailBeforeDetailContent();
+    expect(screen.getByTestId('run-console-controls').compareDocumentPosition(screen.getByTestId('run-console-events'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expectNoLegacyWorkbenchText();
+    expectNoNestedCards();
     expect(screen.getAllByText('Run Console').length).toBeGreaterThan(0);
     expect(screen.getByText('Run update')).toBeTruthy();
     expect(screen.getByText('Package')).toBeTruthy();
@@ -796,3 +811,29 @@ describe('package and run product routes', () => {
     await waitFor(() => expect(screen.getByText('Live event after command refresh.')).toBeTruthy());
   });
 });
+
+function expectStatusPillText(value: string) {
+  const statusPills = Array.from(document.body.querySelectorAll('.fl-status-pill'));
+  expect(statusPills.some((pill) => pill.textContent?.includes(value))).toBe(true);
+}
+
+function expectPageHeaderText(pattern: RegExp) {
+  expect(document.body.querySelector('.fl-page-header')?.textContent).toMatch(pattern);
+}
+
+function expectActionRailBeforeDetailContent() {
+  const rail = document.body.querySelector('.fl-detail-layout__rail');
+  const content = document.body.querySelector('.fl-detail-layout__content');
+  expect(rail).toBeTruthy();
+  expect(content).toBeTruthy();
+  if (rail === null || content === null) throw new Error('Detail layout did not render action rail and content regions.');
+  expect(rail.compareDocumentPosition(content)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
+function expectNoLegacyWorkbenchText() {
+  expect(document.body.textContent).not.toMatch(/Workbench/i);
+}
+
+function expectNoNestedCards() {
+  expect(document.body.querySelector('.fl-card .fl-card, .card .card')).toBeNull();
+}

@@ -2,9 +2,9 @@ import { index, layout, prefix, route, type RouteConfig } from '@react-router/de
 
 export default [
   layout('./routes/_layout.tsx', [
-    index('./routes/workbench/index.tsx', { id: 'routes/workbench/_index' }),
-    route('workbench', './routes/workbench/index.tsx'),
-    route('workbench/:laneId', './routes/workbench/$laneId.tsx'),
+    index('./routes/lanes/index.tsx', { id: 'routes/lanes/_index' }),
+    route('lanes', './routes/lanes/index.tsx'),
+    route('lanes/:laneId', './routes/lanes/$laneId.tsx'),
     route('pipeline', './routes/pipeline/index.tsx'),
     ...prefix('work-items', [
       index('./routes/work-items/index.tsx'),

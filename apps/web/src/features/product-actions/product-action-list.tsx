@@ -2,19 +2,20 @@ import { Link } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { useProductActionCommandMutation } from '../../shared/api/hooks';
-import type { ProductAction, ProductActionTarget, ProductCommandAction, ProductNavigateAction } from '../../shared/api/types';
+import type { ProductAction, ProductActionTarget, ProductCommandAction, ProductLaneId, ProductNavigateAction } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { Button } from '../../shared/ui';
 import { cn } from '../../shared/utils/cn';
-import { actionStateLabel, isCommandAction, sortProductActions } from './product-actions';
+import { actionStateLabel, isCommandAction, sanitizeProductActionsForDisplay } from './product-actions';
 
 export interface ProductActionListProps {
+  activeLane?: ProductLaneId;
   projectId: string;
   actions: readonly ProductAction[];
 }
 
-export function ProductActionList({ actions, projectId }: ProductActionListProps) {
-  const sortedActions = sortProductActions(actions);
+export function ProductActionList({ actions, activeLane, projectId }: ProductActionListProps) {
+  const sortedActions = sanitizeProductActionsForDisplay(actions, activeLane);
 
   if (!sortedActions.length) {
     return <p className="empty">No product actions are available.</p>;

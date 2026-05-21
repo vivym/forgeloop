@@ -11,8 +11,8 @@ export function DetailLayout({ header, children, actionRail }: DetailLayoutProps
     <div className="fl-detail-layout">
       <div className="fl-detail-layout__header">{header}</div>
       <div className="fl-detail-layout__body">
-        <div className="fl-detail-layout__content">{children}</div>
         {actionRail ? <div className="fl-detail-layout__rail">{actionRail}</div> : null}
+        <div className="fl-detail-layout__content">{children}</div>
       </div>
     </div>
   );

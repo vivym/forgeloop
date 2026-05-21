@@ -223,7 +223,19 @@ function PackageDetailView({ packageId }: { packageId: string }) {
       }
       header={
         <PageHeader
-          subtitle={`${executionPackage.repo_id} / ${executionPackage.work_item_id}`}
+          actions={
+            <Link className="fl-button fl-button--secondary" to={`/work-items/${encodeURIComponent(executionPackage.work_item_id)}`}>
+              Open Work Item
+            </Link>
+          }
+          eyebrow={
+            <span className="fl-inline-actions">
+              <span>Package</span>
+              <StatusPill tone={deliverySurfaceStateTone(executionPackage.phase)}>{executionPackage.phase}</StatusPill>
+              <StatusPill tone={deliverySurfaceStateTone(executionPackage.gate_state)}>{executionPackage.gate_state}</StatusPill>
+            </span>
+          }
+          subtitle={`Repository ${executionPackage.repo_id} / Work Item ${executionPackage.work_item_id}`}
           title={executionPackage.objective}
         />
       }
@@ -640,6 +652,14 @@ function Metadata({ label, value }: { label: string; value: string | number | bo
       <dd>{String(value)}</dd>
     </div>
   );
+}
+
+function deliverySurfaceStateTone(value: string | undefined) {
+  const normalized = value?.toLowerCase() ?? '';
+  if (['approved', 'completed', 'passed', 'ready', 'resolved', 'succeeded'].includes(normalized)) return 'success';
+  if (['blocked', 'cancelled', 'failed', 'rejected'].includes(normalized)) return 'danger';
+  if (['open', 'pending', 'queued', 'running', 'submitted'].includes(normalized)) return 'warning';
+  return 'info';
 }
 
 function LoadingDetail({ title }: { title: string }) {

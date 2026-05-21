@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@forgeloop/contracts': resolve(rootDir, 'packages/contracts/src/index.ts'),
+      '@forgeloop/domain': resolve(rootDir, 'packages/domain/src/index.ts'),
     },
   },
   test: {

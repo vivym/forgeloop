@@ -494,8 +494,12 @@ describe('delivery control plane API', () => {
     expect(cockpit.current_spec.current_revision_id).toBe(specRevisionId);
     expect(cockpit.current_plan.current_revision_id).toBe(planRevisionId);
     expect(cockpit.packages.find((item: { id: string }) => item.id === executionPackage.id).resolution).toBe('completed');
-    expect(cockpit.completion_state.done).toBe(false);
-    expect(cockpit.next_actions).toContain('mark_packages_ready');
+    expect(cockpit.delivery_readiness).toMatchObject({
+      work_item_id: workItem.id,
+    });
+    expect(cockpit).not.toHaveProperty('completion_state');
+    expect(cockpit).not.toHaveProperty('next_actions');
+    expect(cockpit.delivery_readiness.next_actions).toEqual(expect.any(Array));
 
     const timeline = (await request(server).get(`/query/replay/work_item/${workItem.id}`).expect(200)).body;
     const timelineSources = timeline.map((entry: { source: string }) => entry.source);

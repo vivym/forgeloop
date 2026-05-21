@@ -5,7 +5,6 @@ import {
   productActionSchema,
   productLaneIdSchema,
   productLaneResponseSchema,
-  workItemActionsResponseSchema,
 } from '@forgeloop/contracts';
 
 const updatedAt = '2026-05-19T00:00:00.000Z';
@@ -20,7 +19,7 @@ const validObjectTarget = {
 const validLaneTarget = {
   kind: 'lane',
   lane_id: 'bugs',
-  href: '/workbench/bugs?project_id=p1',
+  href: '/lanes/bugs?project_id=p1',
 } as const;
 
 const validNavigateAction = {
@@ -90,7 +89,7 @@ const validLaneResponse = {
 } as const;
 
 describe('ProductAction contracts', () => {
-  it('exports only the product-lane contract surface for workbench actions', () => {
+  it('exports only the product-lane contract surface for Product Lane actions', () => {
     expect(productLaneIdSchema.options).toEqual([
       'requirements',
       'bugs',
@@ -106,6 +105,8 @@ describe('ProductAction contracts', () => {
 
     expect(`${'role'}${'Workbench'}ActionSchema` in contracts).toBe(false);
     expect(`${'role'}${'Workbench'}ResponseSchema` in contracts).toBe(false);
+    expect('workItemActionsResponseSchema' in contracts).toBe(false);
+    expect('WorkItemActionsResponse' in contracts).toBe(false);
   });
 
   it('parses valid navigate and command actions', () => {
@@ -122,15 +123,6 @@ describe('ProductAction contracts', () => {
       productActionSchema.safeParse({ ...validCommandAction, command: { ...validCommand, extra: true } }).success,
     ).toBe(false);
     expect(productLaneResponseSchema.safeParse({ ...validLaneResponse, extra: true }).success).toBe(false);
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        default_lane_id: 'bugs',
-        actions: [],
-        extra: true,
-      }).success,
-    ).toBe(false);
   });
 
   it('rejects empty or trimmed-empty strings across required string fields', () => {
@@ -207,6 +199,7 @@ describe('ProductAction contracts', () => {
       '/work-items/%252e%252e/%252e%252e/query/replay',
       '/work-items/%2Fwi_1',
       '/api/work-items/wi_1',
+      '/workbench/bugs',
       '/workbench-old/bugs',
       '/work-items/wi_1/run',
       '/work-items/wi_1/rerun',
@@ -220,6 +213,11 @@ describe('ProductAction contracts', () => {
         false,
       );
     }
+
+    expect(
+      productActionSchema.safeParse({ ...validNavigateAction, target: { ...validObjectTarget, href: '/lanes/bugs' } })
+        .success,
+    ).toBe(true);
   });
 
   it('validates lane targets against the target lane id', () => {
@@ -227,37 +225,43 @@ describe('ProductAction contracts', () => {
     expect(
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/workbench/requirements?project_id=p1' },
+        target: { kind: 'lane', lane_id: 'bugs', href: '/workbench/bugs?project_id=p1' },
       }).success,
     ).toBe(false);
     expect(
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: `/workbench/bugs?${'role'}=${'work'}-${'item'}-${'owner'}` },
+        target: { ...validLaneTarget, href: '/lanes/requirements?project_id=p1' },
       }).success,
     ).toBe(false);
     expect(
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/workbench/bugs?project_id=p1&project_id=p2' },
+        target: { ...validLaneTarget, href: `/lanes/bugs?${'role'}=${'work'}-${'item'}-${'owner'}` },
       }).success,
     ).toBe(false);
     expect(
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/workbench/bugs?project_id=p1&kind=bug&blocked=true' },
+        target: { ...validLaneTarget, href: '/lanes/bugs?project_id=p1&project_id=p2' },
+      }).success,
+    ).toBe(false);
+    expect(
+      productActionSchema.safeParse({
+        ...validNavigateAction,
+        target: { ...validLaneTarget, href: '/lanes/bugs?project_id=p1&kind=bug&blocked=true' },
       }).success,
     ).toBe(true);
     expect(() =>
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/workbench/%E0%A4%A' },
+        target: { ...validLaneTarget, href: '/lanes/%E0%A4%A' },
       }),
     ).not.toThrow();
     expect(
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/workbench/%E0%A4%A' },
+        target: { ...validLaneTarget, href: '/lanes/%E0%A4%A' },
       }).success,
     ).toBe(false);
   });
@@ -357,52 +361,6 @@ describe('ProductAction contracts', () => {
             object: { type: 'lane_summary', id: 'summary_1', lane_id: 'requirements' },
           },
         ],
-      }).success,
-    ).toBe(false);
-  });
-
-  it('validates WorkItemActionsResponse work item, lane, default lane, and action id consistency', () => {
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        default_lane_id: 'bugs',
-        actions: [validNavigateAction],
-      }).success,
-    ).toBe(true);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        actions: [validNavigateAction],
-      }).success,
-    ).toBe(false);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_2',
-        lane_id: 'requirements',
-        default_lane_id: 'requirements',
-        actions: [validCommandAction],
-      }).success,
-    ).toBe(false);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'requirements',
-        default_lane_id: 'requirements',
-        actions: [validNavigateAction],
-      }).success,
-    ).toBe(false);
-
-    expect(
-      workItemActionsResponseSchema.safeParse({
-        work_item_id: 'wi_1',
-        lane_id: 'bugs',
-        default_lane_id: 'bugs',
-        actions: [validNavigateAction, { ...validNavigateAction, label: 'Duplicate action' }],
       }).success,
     ).toBe(false);
   });

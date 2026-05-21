@@ -22,6 +22,8 @@ export const review_packets = pgTable(
     changedFiles: jsonb('changed_files').$type<ReviewPacket['changed_files']>().notNull(),
     checkResultSummary: text('check_result_summary').notNull(),
     selfReview: jsonb('self_review').$type<ReviewPacket['self_review']>().notNull(),
+    independentAiReview: jsonb('independent_ai_review').$type<ReviewPacket['independent_ai_review']>(),
+    testMapping: jsonb('test_mapping').$type<ReviewPacket['test_mapping']>(),
     riskNotes: jsonb('risk_notes').$type<ReviewPacket['risk_notes']>().notNull(),
     reviewedByActorId: uuid('reviewed_by_actor_id').references(() => actors.id),
     reviewedAt: timestampColumn('reviewed_at'),

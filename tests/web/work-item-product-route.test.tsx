@@ -6,21 +6,38 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import WorkItemDetailRoute from '../../apps/web/src/app/routes/work-items/$workItemId';
 import { ProductActionList } from '../../apps/web/src/features/product-actions/product-action-list';
+import { WorkItemNextActions } from '../../apps/web/src/features/work-items/work-item-next-actions';
 import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
-import type { ProductAction } from '../../apps/web/src/shared/api/types';
+import type { ProductAction, ProductLaneId } from '../../apps/web/src/shared/api/types';
 import { renderRoute } from './router-test-utils';
+import {
+  cockpitFixtureWithDegradedRunSource,
+  cockpitFixtureWithManagerCommandAction,
+  deliveryReadiness,
+  executionPackage,
+  initiativeWithoutPackagesCockpitFixture,
+  plan,
+  productActionFixtures,
+  reviewPacket,
+  runSession,
+  spec,
+  workItem,
+  workItemKindCockpitFixtures,
+} from './fixtures/product-data';
 
 describe('Work Item product route', () => {
-  it('renders Work Item detail with Brief / Intake and Validation sections', async () => {
-    const screen = await renderRoute('/work-items/wi-1');
-    expect(await screen.findByRole('heading', { name: /improve release cockpit/i })).toBeTruthy();
-    expect(screen.getByText('Brief / Intake')).toBeTruthy();
-    expect(screen.getByText('Validation')).toBeTruthy();
-    expect(await screen.findByRole('link', { name: 'Open work item' })).toBeTruthy();
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'http://localhost:3000/query/work-items/wi-1/actions?lane=requirements',
-      expect.objectContaining({ method: 'GET' }),
-    );
+  it('renders the typed Delivery Cockpit from Work Item readiness', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=execution-owner');
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getAllByText('Integration Readiness').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Quality Gate').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Release Readiness').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Execution Owner/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /Spec ready/i }).getAttribute('href')).toBe('#delivery-stage-spec');
+    expect(screen.getByRole('link', { name: /Plan ready/i }).getAttribute('href')).toBe('#delivery-stage-plan');
+    expect(document.getElementById('delivery-stage-spec')).toBeTruthy();
+    expect(document.getElementById('delivery-stage-plan')).toBeTruthy();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
     expect(screen.queryByRole('button', { name: ['Update', 'brief'].join(' ') })).toBeNull();
     expect(screen.queryByRole('button', { name: ['Attach', 'evidence'].join(' ') })).toBeNull();
     expect(screen.queryByText(`${'Available after a draft'} exists.`)).toBeNull();
@@ -28,38 +45,129 @@ describe('Work Item product route', () => {
     expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
   });
 
-  it('uses valid lane query params for Work Item actions', async () => {
-    const screen = await renderRoute('/work-items/wi-1?lane=reviewer', {
-      apiOverrides: {
-        'GET /query/work-items/wi-1/actions?lane=reviewer': {
-          work_item_id: 'wi-1',
-          lane_id: 'reviewer',
-          default_lane_id: 'requirements',
-          actions: [navigateAction('open-review', 'Open review packet', '/reviews/review-web-product', 'reviewer')],
-        },
-      },
-    });
+  it('uses cockpit readiness as the Work Item action source', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=reviewer');
 
-    expect(await screen.findByRole('link', { name: 'Open review packet' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getAllByText(/Reviewer/i).length).toBeGreaterThan(0);
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'http://localhost:3000/query/work-items/wi-1/actions?lane=reviewer',
+      'http://localhost:3000/query/work-item-cockpit/wi-1?lane=reviewer',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
+  });
+
+  it('renders the Work Item next actions rail as a presentational component', () => {
+    render(
+      <WorkItemNextActions
+        actions={[]}
+        activeLane="requirements"
+        projectId="project-web-product"
+        workItemId="wi-1"
+      />,
+    );
+
+    expect(rtlScreen.getByText('No actions for Requirements lane.')).toBeTruthy();
+  });
+
+  it('labels empty Work Item action states by lane', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=requirements');
+
+    expect(await screen.findByRole('link', { name: 'Open work item' })).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'http://localhost:3000/query/work-item-cockpit/wi-1?lane=requirements',
       expect.objectContaining({ method: 'GET' }),
     );
   });
 
-  it('labels empty Work Item action states by lane', async () => {
-    const screen = await renderRoute('/work-items/wi-1?lane=reviewer', {
+  it.each([
+    ['requirement', workItemKindCockpitFixtures.requirement, /Requirement/i],
+    ['bug', workItemKindCockpitFixtures.bug, /Bug/i],
+    ['tech debt', workItemKindCockpitFixtures.techDebt, /Tech Debt/i],
+    ['initiative', workItemKindCockpitFixtures.initiative, /Initiative/i],
+  ])('renders a kind-specific typed brief for %s work items', async (_label, cockpit, expectedKind) => {
+    const lane = cockpit.delivery_readiness.active_lane;
+    const screen = await renderRoute(`/work-items/${cockpit.work_item.id}?lane=${lane}`, {
       apiOverrides: {
-        'GET /query/work-items/wi-1/actions?lane=reviewer': {
-          work_item_id: 'wi-1',
-          lane_id: 'reviewer',
-          default_lane_id: 'requirements',
-          actions: [],
-        },
+        [`GET /query/work-item-cockpit/${cockpit.work_item.id}?lane=${lane}`]: cockpit,
       },
     });
 
-    expect(await screen.findByText('No actions for Reviewer lane.')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getByText(cockpit.work_item.title)).toBeTruthy();
+    expect(screen.getAllByText(expectedKind).length).toBeGreaterThan(0);
+  });
+
+  it('renders Initiative breakdown without release-ready copy when no packages exist', async () => {
+    const cockpit = initiativeWithoutPackagesCockpitFixture;
+    const screen = await renderRoute(`/work-items/${cockpit.work_item.id}?lane=initiatives`, {
+      apiOverrides: {
+        [`GET /query/work-item-cockpit/${cockpit.work_item.id}?lane=initiatives`]: cockpit,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getByText(/Initiative breakdown/i)).toBeTruthy();
+    expect(screen.getByText(/Child-work aggregation unavailable/i)).toBeTruthy();
+    expect(screen.queryByText(/Ready for release/i)).toBeNull();
+  });
+
+  it('hardens manager lane actions by converting mutating commands to drill-down links', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=manager', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1?lane=manager': cockpitFixtureWithManagerCommandAction,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Run package/i })).toBeNull();
+    expect(screen.getAllByRole('link', { name: /Open package/i }).length).toBeGreaterThan(0);
+  });
+
+  it('renders degraded delivery readiness without release-ready copy', async () => {
+    const screen = await renderRoute('/work-items/wi-1?lane=execution-owner', {
+      apiOverrides: {
+        'GET /query/work-item-cockpit/wi-1?lane=execution-owner': cockpitFixtureWithDegradedRunSource,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    expect(screen.getByText(/Delivery readiness degraded/i)).toBeTruthy();
+    expect(screen.getByText(/run_sessions/i)).toBeTruthy();
+    expect(screen.queryByText(/Ready for release/i)).toBeNull();
+  });
+
+  it('executes non-manager cockpit command actions from the delivery action rail', async () => {
+    const user = userEvent.setup();
+    const commandAction = productActionFixtures.commandTargetFollowUp;
+    const screen = await renderRoute(`/work-items/${workItem.id}?lane=execution-owner`, {
+      actorId: 'actor-cockpit-command',
+      apiOverrides: {
+        [`GET /query/work-item-cockpit/${workItem.id}?lane=execution-owner`]: {
+          work_item: workItem,
+          current_spec: spec,
+          current_plan: plan,
+          packages: [executionPackage],
+          run_sessions: [runSession],
+          review_packets: [reviewPacket],
+          delivery_readiness: deliveryReadiness(workItem, [commandAction], 'execution-owner'),
+        },
+        [`POST /execution-packages/${executionPackage.id}/run`]: {},
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Run package/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        `http://localhost:3000/execution-packages/${executionPackage.id}/run`,
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-cockpit-command' }),
+        }),
+      ),
+    );
   });
 
   it('does not fetch Work Item actions for invalid lane params', async () => {
@@ -67,6 +175,14 @@ describe('Work Item product route', () => {
 
     expect(await screen.findByText('This lane is not available for this Work Item.')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open default lane' }).getAttribute('href')).toBe('/work-items/wi-1?lane=requirements');
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'http://localhost:3000/query/work-item-cockpit/wi-1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
+      expect.stringContaining('/query/work-item-cockpit/wi-1?lane=unknown'),
+      expect.anything(),
+    );
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/query/work-items/wi-1/actions'), expect.anything());
   });
 
@@ -214,6 +330,20 @@ describe('ProductActionList', () => {
     expect(rtlScreen.getByRole('link', { name: 'Open Run package' }).getAttribute('href')).toBe('/packages/package-product-action');
   });
 
+  it('downgrades manager command actions to read-only drill-down links', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderProductActions([runPackageAction('run-package', 'Run package')], { activeLane: 'manager' });
+
+    expect(rtlScreen.queryByRole('button', { name: 'Run package' })).toBeNull();
+    const link = rtlScreen.getByRole('link', { name: 'Open package' });
+    expect(link.getAttribute('href')).toBe('/packages/package-product-action');
+
+    await user.click(link);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('renders navigate actions as links using the backend target href directly', () => {
     renderProductActions([
       {
@@ -256,14 +386,14 @@ describe('ProductActionList', () => {
   });
 });
 
-function renderProductActions(actions: ProductAction[], options: { actorId?: string } = {}) {
+function renderProductActions(actions: ProductAction[], options: { actorId?: string; activeLane?: ProductLaneId } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
   render(
     <QueryClientProvider client={queryClient}>
       <ActorProvider value={options.actorId ? { actorId: options.actorId } : undefined}>
         <MemoryRouter initialEntries={['/work-items/wi-1']}>
-          <ProductActionList actions={actions} projectId="project-web-product" />
+          <ProductActionList actions={actions} activeLane={options.activeLane} projectId="project-web-product" />
           <LocationProbe />
         </MemoryRouter>
       </ActorProvider>
@@ -296,23 +426,6 @@ function runPackageAction(id: string, label: string): ProductAction {
       object_type: 'execution_package',
       object_id: 'package-product-action',
       href: '/packages/package-product-action',
-    },
-  };
-}
-
-function navigateAction(id: string, label: string, href: string, laneId: ProductAction['lane_id'] = 'requirements'): ProductAction {
-  return {
-    id,
-    lane_id: laneId,
-    priority: 'primary',
-    label,
-    enabled: true,
-    kind: 'navigate',
-    target: {
-      kind: 'object',
-      object_type: 'review_packet',
-      object_id: id,
-      href,
     },
   };
 }

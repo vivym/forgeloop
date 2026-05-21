@@ -299,6 +299,14 @@ const reviewPacket: ReviewPacket = {
     risk_notes: ['Postgres integration remains future work.'],
     follow_up_questions: [],
   },
+  independent_ai_review: {
+    status: 'approved',
+    summary: 'Independent review passed.',
+    run_session_id: runSession.id,
+    execution_package_id: executionPackage.id,
+    risk_notes: [],
+  },
+  test_mapping: [{ gate_id: requiredCheck.check_id, result: 'passed', evidence_ref: `run-check:${requiredCheck.check_id}` }],
   risk_notes: ['Postgres integration remains future work.'],
   requested_changes: [],
   created_at: now,
@@ -1038,6 +1046,8 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
       changedFiles: reviewPacket.changed_files,
       checkResultSummary: reviewPacket.check_result_summary,
       selfReview: reviewPacket.self_review,
+      independentAiReview: reviewPacket.independent_ai_review,
+      testMapping: reviewPacket.test_mapping,
       riskNotes: reviewPacket.risk_notes,
       requestedChanges: reviewPacket.requested_changes,
       createdAt: reviewPacket.created_at,
@@ -1058,6 +1068,8 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
     expect(mappedRunSession).not.toHaveProperty('failure_reason');
     expect(mappedReviewPacket).not.toHaveProperty('completed_at');
     expect(mappedReviewPacket).not.toHaveProperty('summary');
+    expect(mappedReviewPacket?.independent_ai_review).toEqual(reviewPacket.independent_ai_review);
+    expect(mappedReviewPacket?.test_mapping).toEqual(reviewPacket.test_mapping);
   });
 
   it('maps spec revisions fetched by id', async () => {

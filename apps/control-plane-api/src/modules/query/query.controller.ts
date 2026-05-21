@@ -2,6 +2,7 @@ import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
 import { productListQuerySchema, type ProductListQuery } from '@forgeloop/contracts';
 
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
+import { parseWorkItemCockpitQuery } from './product-lane-query-parser';
 import { QueryService } from './query.service';
 
 @Controller('query')
@@ -9,8 +10,8 @@ export class QueryController {
   constructor(@Inject(QueryService) private readonly service: QueryService) {}
 
   @Get('work-item-cockpit/:workItemId')
-  getWorkItemCockpit(@Param('workItemId') workItemId: string) {
-    return this.service.getWorkItemCockpit(workItemId);
+  getWorkItemCockpit(@Param('workItemId') workItemId: string, @Query() query: Record<string, string | string[] | undefined>) {
+    return this.service.getWorkItemCockpit(workItemId, parseWorkItemCockpitQuery(query));
   }
 
   @Get('release-cockpit/:releaseId')
@@ -61,11 +62,6 @@ export class QueryController {
   @Get('product-lanes/:laneId')
   getProductLane(@Param('laneId') laneId: string, @Query() query: Record<string, string | string[] | undefined>) {
     return this.service.getProductLane(laneId, query);
-  }
-
-  @Get('work-items/:workItemId/actions')
-  getWorkItemActions(@Param('workItemId') workItemId: string, @Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getWorkItemActions(workItemId, query);
   }
 
   @Get('replay/spec/:specId')

@@ -3,6 +3,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import { deletedProductLaneLabel, deletedProductLaneRoot } from './deleted-route-guards';
 import { renderRoute } from './router-test-utils';
 
 function containsElement(node: ReactNode, predicate: (element: ReactElement) => boolean): boolean {
@@ -17,32 +18,33 @@ function containsElement(node: ReactNode, predicate: (element: ReactElement) => 
 }
 
 describe('React Router product shell', () => {
-  it('renders Workbench through route modules', async () => {
-    const screen = await renderRoute('/workbench');
+  it('renders Product Lanes through route modules', async () => {
+    const screen = await renderRoute('/lanes');
     expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
   });
 
   it('shows product nav labels and does not show Intake as user-facing role copy', async () => {
-    const screen = await renderRoute('/workbench');
-    expect(screen.getByRole('link', { name: 'Workbench' })).toBeTruthy();
+    const screen = await renderRoute('/lanes');
+    expect(screen.getByRole('link', { name: 'Lanes' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: deletedProductLaneLabel })).toBeNull();
     expect(screen.getByRole('link', { name: 'Specs & Plans' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
   });
 
   it('routes sidebar clicks through React Router without document navigation', async () => {
     const user = userEvent.setup();
-    const screen = await renderRoute('/workbench');
+    const screen = await renderRoute('/lanes');
 
     await user.click(screen.getByRole('link', { name: 'Pipeline' }));
 
     expect(screen.getByRole('heading', { name: 'Pipeline' })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Workbench' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Lanes' })).toBeNull();
   });
 
-  it('marks the Workbench nav item active on the index route', async () => {
+  it('marks the Lanes nav item active on the index route', async () => {
     const screen = await renderRoute('/');
 
-    expect(screen.getByRole('link', { name: 'Workbench' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Lanes' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('marks Specs & Plans active for plan routes', async () => {
@@ -53,7 +55,7 @@ describe('React Router product shell', () => {
 
   it('respects the requested route path', async () => {
     const screen = await renderRoute('/not-a-product-route');
-    expect(screen.queryByRole('heading', { name: /workbench/i })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /lanes/i })).toBeNull();
   });
 
   it('exports root route loading and error boundaries', async () => {
@@ -77,17 +79,20 @@ describe('React Router product shell', () => {
     ).toBe(true);
   });
 
-  it('keeps the canonical route config wired to the Workbench route module', async () => {
+  it('keeps the canonical route config wired to the Product Lanes route module', async () => {
     const routeConfigModule = await import('../../apps/web/src/app/routes');
     const routeConfig = routeConfigModule.default;
     const layoutRoute = routeConfig.find((route) => route.file === './routes/_layout.tsx');
 
     expect(layoutRoute?.children).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ index: true, file: './routes/workbench/index.tsx' }),
-        expect.objectContaining({ path: 'workbench', file: './routes/workbench/index.tsx' }),
-        expect.objectContaining({ path: 'workbench/:laneId', file: './routes/workbench/$laneId.tsx' }),
+        expect.objectContaining({ index: true, file: './routes/lanes/index.tsx' }),
+        expect.objectContaining({ path: 'lanes', file: './routes/lanes/index.tsx' }),
+        expect.objectContaining({ path: 'lanes/:laneId', file: './routes/lanes/$laneId.tsx' }),
       ]),
     );
+    const routePaths = layoutRoute?.children?.map((route) => route.path).filter(Boolean) ?? [];
+    expect(routePaths).not.toContain(deletedProductLaneRoot.slice(1));
+    expect(routePaths).not.toContain(`${deletedProductLaneRoot.slice(1)}/:laneId`);
   });
 });

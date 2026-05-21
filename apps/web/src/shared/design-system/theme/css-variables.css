@@ -901,6 +901,14 @@ a {
   min-width: 0;
 }
 
+.fl-detail-layout__content {
+  order: 1;
+}
+
+.fl-detail-layout__rail {
+  order: 2;
+}
+
 .fl-action-rail {
   display: grid;
   gap: var(--fl-space-4);
@@ -1104,6 +1112,10 @@ a {
 
   .fl-detail-layout__body {
     grid-template-columns: 1fr;
+  }
+
+  .fl-detail-layout__rail {
+    order: 0;
   }
 
   .fl-action-rail {

@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe('responsive layout contract', () => {
   it('renders the shell with stable responsive landmarks', async () => {
-    const screen = await renderRoute('/workbench');
+    const screen = await renderRoute('/lanes');
 
     expect(screen.getByRole('banner')).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
