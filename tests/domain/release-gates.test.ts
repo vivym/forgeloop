@@ -62,6 +62,14 @@ const release = (overrides: Partial<Release> = {}): Release => ({
   ...overrides,
 });
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Release stakeholders need a gated work item.',
+  desired_outcome: 'Release gates can decide whether the item is ready.',
+  acceptance_criteria: ['All package evidence is approved.'],
+  in_scope: ['Release gate evaluation.'],
+};
+
 const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   id: 'work-item-1',
   project_id: 'project-1',
@@ -72,6 +80,7 @@ const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
   priority: 'P1',
   risk: 'medium',
   driver_actor_id: 'actor-owner',
+  intake_context: requirementIntakeContext,
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

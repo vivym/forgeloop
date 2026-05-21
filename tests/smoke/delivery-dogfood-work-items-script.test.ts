@@ -65,6 +65,14 @@ const evaluateStrictLocalCodexAcceptance = (): StrictEvaluator => {
   return candidate as StrictEvaluator;
 };
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Dogfood acceptance needs typed work item records.',
+  desired_outcome: 'The script can evaluate completed dogfood items.',
+  acceptance_criteria: ['Dogfood acceptance finds qualifying work items.'],
+  in_scope: ['Strict local Codex acceptance.'],
+};
+
 const workItem = (id: string): WorkItem => ({
   id,
   project_id: 'project-1',
@@ -75,6 +83,7 @@ const workItem = (id: string): WorkItem => ({
   priority: 'P0',
   risk: 'medium',
   driver_actor_id: 'actor-owner',
+  intake_context: requirementIntakeContext,
   phase: 'execution',
   activity_state: 'idle',
   gate_state: 'none',

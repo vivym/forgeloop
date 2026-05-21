@@ -1,12 +1,16 @@
 import { Navigate, useSearchParams } from 'react-router';
-import { supportedProductLaneSearchParams } from '../../../features/product-lanes/product-lanes';
+import {
+  defaultProductLaneId,
+  isProductLaneSearchParamSupported,
+  supportedProductLaneSearchParams,
+} from '../../../features/product-lanes/product-lanes';
 
 export default function ProductLanesRoute() {
   const [searchParams] = useSearchParams();
   const targetParams = new URLSearchParams();
 
   for (const key of supportedProductLaneSearchParams) {
-    if (key === 'kind' || key === 'owner_actor_id') {
+    if (!isProductLaneSearchParamSupported(defaultProductLaneId, key)) {
       continue;
     }
     const value = searchParams.get(key)?.trim();
@@ -16,5 +20,5 @@ export default function ProductLanesRoute() {
   }
 
   const encoded = targetParams.toString();
-  return <Navigate replace to={`/lanes/requirements${encoded ? `?${encoded}` : ''}`} />;
+  return <Navigate replace to={`/lanes/${defaultProductLaneId}${encoded ? `?${encoded}` : ''}`} />;
 }

@@ -9,6 +9,8 @@ import { Badge, Button } from '../../shared/ui';
 import { ProductActionList } from '../product-actions/product-action-list';
 import {
   defaultProductLaneId,
+  isProductLaneSearchParamSupported,
+  isWorkItemTypeLane,
   parseProductLaneId,
   productLaneDefinition,
   productLanes,
@@ -133,11 +135,13 @@ function productLaneQueryFromSearch(laneId: ProductLaneId, searchParams: URLSear
     project_id: projectId,
     ...stringParam(searchParams, 'actor_id'),
     ...stringParam(searchParams, 'driver_actor_id'),
-    ...(workItemTypeLaneIds.has(laneId) ? {} : stringParam(searchParams, 'owner_actor_id')),
+    ...(isProductLaneSearchParamSupported(laneId, 'owner_actor_id')
+      ? stringParam(searchParams, 'owner_actor_id')
+      : {}),
     ...stringParam(searchParams, 'reviewer_actor_id'),
     ...stringParam(searchParams, 'qa_owner_actor_id'),
     ...stringParam(searchParams, 'release_owner_actor_id'),
-    ...(workItemTypeLaneIds.has(laneId) ? {} : kindParam(searchParams)),
+    ...(isWorkItemTypeLane(laneId) ? {} : kindParam(searchParams)),
     ...stringParam(searchParams, 'phase'),
     ...stringParam(searchParams, 'status'),
     ...stringParam(searchParams, 'gate_state'),
@@ -150,17 +154,11 @@ function productLaneQueryFromSearch(laneId: ProductLaneId, searchParams: URLSear
   };
 }
 
-const workItemTypeLaneIds = new Set<ProductLaneId>(['requirements', 'bugs', 'tech-debt', 'initiatives']);
-
 function laneHref(laneId: ProductLaneId, searchParams: URLSearchParams, projectId: string) {
   const next = new URLSearchParams();
   next.set('project_id', projectId);
   for (const key of supportedProductLaneSearchParams) {
-    if (
-      key === 'project_id' ||
-      (key === 'kind' && workItemTypeLaneIds.has(laneId)) ||
-      (key === 'owner_actor_id' && workItemTypeLaneIds.has(laneId))
-    ) {
+    if (key === 'project_id' || !isProductLaneSearchParamSupported(laneId, key)) {
       continue;
     }
     const value = searchParams.get(key);

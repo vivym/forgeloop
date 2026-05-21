@@ -39,6 +39,14 @@ const project = (): Project => ({
   updated_at: now,
 });
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Release readers need replay visibility.',
+  desired_outcome: 'Release replay shows the public-safe history.',
+  acceptance_criteria: ['Release replay is public safe.'],
+  in_scope: ['Release replay projection.'],
+};
+
 const workItem = (): WorkItem => ({
   id: 'work-item-1',
   project_id: 'project-1',
@@ -49,6 +57,7 @@ const workItem = (): WorkItem => ({
   priority: 'p1',
   risk: 'medium',
   driver_actor_id: 'actor-owner',
+  intake_context: requirementIntakeContext,
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',

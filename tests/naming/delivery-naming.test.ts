@@ -247,7 +247,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     (matchesAny(rel, projectOwnerPaths.concat(projectOwnerTestPaths)) && projectOwnerContext) ||
     (matchesAny(rel, executionPackageOwnerPaths.concat(executionPackageOwnerTestPaths)) && executionPackageOwnerContext) ||
     (/^packages\/domain\/src\/(?:states|types|validators)\.ts$/.test(rel) && (projectOwnerContext || executionPackageOwnerContext)) ||
-    (productLaneOwnerPaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || negativeWorkItemOwnerContext || /Product Lane|productLane|product-lanes|lane/.test(context))) ||
+    (productLaneOwnerPaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || negativeWorkItemOwnerContext)) ||
     (releaseOrPackageSurfacePaths.some((pattern) => pattern.test(rel)) && (executionPackageOwnerContext || runRequesterContext))
   );
 };
@@ -315,6 +315,9 @@ describe('delivery naming cleanup', () => {
     expect(allowedWorkItemOwnerActorIdReference('tests/unknown-owner-field.test.ts', 'ExecutionPackage owner_actor_id')).toBe(false);
     expect(allowedWorkItemOwnerActorIdReference('apps/web/src/features/work-items/work-items-list.tsx', 'ExecutionPackage owner_actor_id')).toBe(false);
     expect(allowedWorkItemOwnerActorIdReference('apps/web/src/features/work-items/work-item-view-model.ts', 'ExecutionPackage owner_actor_id')).toBe(true);
+    expect(
+      allowedWorkItemOwnerActorIdReference('apps/web/src/features/product-lanes/product-lane-route.tsx', 'Product Lane owner_actor_id lane'),
+    ).toBe(false);
     expect(
       allowedWorkItemOwnerActorIdReference(
         'apps/web/src/features/work-items/delivery-cockpit/package-matrix.tsx',

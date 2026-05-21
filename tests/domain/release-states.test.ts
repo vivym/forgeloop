@@ -50,6 +50,14 @@ const blockerSnapshot = (releaseId: string, blockers: ReleaseBlocker[]): Release
     blockers,
   });
 
+const requirementIntakeContext: WorkItem['intake_context'] = {
+  type: 'requirement',
+  stakeholder_problem: 'Release stakeholders need a shippable item.',
+  desired_outcome: 'Release gates can validate the linked work item.',
+  acceptance_criteria: ['Release gates pass.'],
+  in_scope: ['Release readiness validation.'],
+};
+
 const workItem = (): WorkItem => ({
   id: 'work-item-1',
   project_id: 'project-1',
@@ -60,6 +68,7 @@ const workItem = (): WorkItem => ({
   priority: 'P1',
   risk: 'medium',
   driver_actor_id: 'actor-owner',
+  intake_context: requirementIntakeContext,
   phase: 'done',
   activity_state: 'idle',
   gate_state: 'none',
