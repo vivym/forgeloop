@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingMessage } from 'node:http';
-import type { Socket } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -126,6 +126,97 @@ describe('CodexAppServerEndpointTransport websocket support', () => {
     }
 
     expect(authorization).toBe('Bearer secret-token');
+    expect(received).toEqual([
+      expect.objectContaining({ method: 'initialize' }),
+      expect.objectContaining({ method: 'initialized' }),
+    ]);
+  });
+
+  it('connects to IPv6 websocket endpoints with an unbracketed TCP host', async () => {
+    const received: unknown[] = [];
+    let host: string | undefined;
+    const sockets = new Set<Socket>();
+    const server = createServer();
+    server.on('upgrade', (request: IncomingMessage, socket: Socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+      host = request.headers.host;
+      const key = request.headers['sec-websocket-key'];
+      if (typeof key !== 'string') {
+        socket.destroy();
+        return;
+      }
+      socket.write(
+        [
+          'HTTP/1.1 101 Switching Protocols',
+          'Upgrade: websocket',
+          'Connection: Upgrade',
+          `Sec-WebSocket-Accept: ${acceptKey(key)}`,
+          '',
+          '',
+        ].join('\r\n'),
+      );
+
+      let pending = Buffer.alloc(0);
+      socket.on('data', (chunk: Buffer) => {
+        pending = Buffer.concat([pending, chunk]);
+        let decoded = decodeClientFrame(pending);
+        while (decoded !== undefined) {
+          const message = JSON.parse(decoded.payload) as { id?: number; method?: string };
+          received.push(message);
+          pending = decoded.remaining;
+          if (message.id !== undefined) {
+            socket.write(websocketFrame(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { ok: true } })));
+          }
+          decoded = decodeClientFrame(pending);
+        }
+      });
+    });
+    const listening = await new Promise<boolean>((resolve, reject) => {
+      const cleanup = (): void => {
+        server.off('error', onError);
+      };
+      const onError = (error: NodeJS.ErrnoException): void => {
+        cleanup();
+        if (error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT') {
+          resolve(false);
+          return;
+        }
+        reject(error);
+      };
+      server.once('error', onError);
+      server.listen(0, '::1', () => {
+        cleanup();
+        resolve(true);
+      });
+    });
+    if (!listening) {
+      return;
+    }
+    servers.push({
+      close: async () => {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    });
+    const address = server.address() as AddressInfo | null;
+    if (address === null) {
+      throw new Error('test_server_address_unavailable');
+    }
+
+    const transport = new CodexAppServerEndpointTransport(`ws://[::1]:${address.port}`);
+    try {
+      await transport.initialize();
+      for (let attempt = 0; attempt < 20 && received.length < 2; attempt += 1) {
+        await delay(5);
+      }
+    } finally {
+      await transport.close();
+    }
+
+    expect(host).toBe(`[::1]:${address.port}`);
     expect(received).toEqual([
       expect.objectContaining({ method: 'initialize' }),
       expect.objectContaining({ method: 'initialized' }),

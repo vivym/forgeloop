@@ -135,7 +135,7 @@ export class CodexAppServerEndpointTransport implements CodexAppServerTransport 
   async #connectWebSocket(urlString: string): Promise<{ socket: Socket; leftover: Buffer }> {
     const url = new URL(urlString);
     const socket = createConnection({
-      host: url.hostname,
+      host: websocketConnectHost(url),
       port: url.port.length === 0 ? 80 : Number(url.port),
     });
     await new Promise<void>((resolve, reject) => {
@@ -236,8 +236,14 @@ const bearerHeaders = (bearerToken: string | undefined): string[] => {
 };
 
 const hostHeader = (url: URL): string => {
-  const host = url.hostname.includes(':') ? `[${url.hostname}]` : url.hostname;
+  const hostname = websocketConnectHost(url);
+  const host = hostname.includes(':') ? `[${hostname}]` : hostname;
   return url.port.length === 0 ? host : `${host}:${url.port}`;
+};
+
+const websocketConnectHost = (url: URL): string => {
+  const hostname = url.hostname;
+  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
 };
 
 const defaultHandshakeTimeoutMs = 5_000;
