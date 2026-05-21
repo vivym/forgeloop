@@ -168,6 +168,33 @@ const objectRef = (
   ...(title === undefined ? {} : { title }),
 });
 
+const productObjectHref = (objectType: ProductObjectType, objectId: string): string => {
+  switch (objectType) {
+    case 'work_item':
+      return `/work-items/${objectId}`;
+    case 'spec':
+      return `/specs/${objectId}`;
+    case 'spec_revision':
+      return '/specs';
+    case 'plan':
+      return `/plans/${objectId}`;
+    case 'plan_revision':
+      return '/plans';
+    case 'execution_package':
+      return `/packages/${objectId}`;
+    case 'run_session':
+      return `/runs/${objectId}`;
+    case 'review_packet':
+      return `/reviews/${objectId}`;
+    case 'release':
+      return `/releases/${objectId}`;
+    default: {
+      const exhaustive: never = objectType;
+      return exhaustive;
+    }
+  }
+};
+
 const blocker = (
   stageId: DeliveryStageId,
   code: string,
@@ -806,7 +833,11 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
               item.message,
               'release-owner',
               item.object_type !== undefined && item.object_id !== undefined
-                ? objectRef(item.object_type as ProductObjectType, item.object_id, `/${item.object_type === 'execution_package' ? 'packages' : `${item.object_type}s`}/${item.object_id}`)
+                ? objectRef(
+                    item.object_type as ProductObjectType,
+                    item.object_id,
+                    productObjectHref(item.object_type as ProductObjectType, item.object_id),
+                  )
                 : undefined,
             ),
           ).concat(

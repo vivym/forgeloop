@@ -510,6 +510,23 @@ describe('Work Item delivery readiness', () => {
     expect(releaseStage?.blockers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'missing_linked_release' })]));
   });
 
+  it('uses canonical Work Item routes for pre-release blocker object links', () => {
+    const readiness = deriveWorkItemDeliveryReadiness(readyInput({ linkedRelease: null }));
+
+    expect(readiness.stages.find((stage) => stage.id === 'release_readiness')).toMatchObject({
+      blockers: expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing_linked_release',
+          object_ref: expect.objectContaining({
+            object_type: 'work_item',
+            object_id: 'wi-1',
+            href: '/work-items/wi-1',
+          }),
+        }),
+      ]),
+    });
+  });
+
   it('keeps draft packages actionable and blocks explicitly blocked packages', () => {
     const draft = deriveWorkItemDeliveryReadiness(
       readyInput({ packages: [packageFixture({ phase: 'draft', blocked_reason: undefined })] }),
