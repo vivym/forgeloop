@@ -150,6 +150,20 @@ describe('Work Item delivery readiness contracts', () => {
     expect(workItemCockpitResponseSchema.parse(cockpitResponse())).toMatchObject({ delivery_readiness: readiness });
   });
 
+  it('rejects cockpit work items when kind does not match intake context type', () => {
+    const response = cockpitResponse();
+
+    expect(
+      workItemCockpitResponseSchema.safeParse({
+        ...response,
+        work_item: {
+          ...response.work_item,
+          kind: 'bug',
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects inconsistent readiness next actions', () => {
     expect(
       workItemDeliveryReadinessSchema.safeParse({

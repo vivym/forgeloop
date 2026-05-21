@@ -227,7 +227,16 @@ const workItemCockpitWorkItemSchema = z
     created_at: isoDateTimeSchema.optional(),
     updated_at: isoDateTimeSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((workItem, ctx) => {
+    if (workItem.kind !== workItem.intake_context.type) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['intake_context', 'type'],
+        message: 'intake_context type must match kind',
+      });
+    }
+  });
 
 const cockpitSpecPlanSchema = z
   .object({

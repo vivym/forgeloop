@@ -505,6 +505,10 @@ export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkIt
       return invalidTransition('WorkItem', 'none', event.type);
     }
 
+    if (event.kind !== event.intake_context.type) {
+      return invalidTransition('WorkItem', `kind/${event.kind}`, `create/${event.intake_context.type}`);
+    }
+
     return {
       id: event.id,
       project_id: event.project_id,
@@ -515,7 +519,7 @@ export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkIt
       priority: event.priority,
       risk: event.risk,
       driver_actor_id: event.driver_actor_id,
-      intake_context: event.intake_context,
+      intake_context: cloneJsonObject(event.intake_context),
       phase: 'draft',
       activity_state: 'idle',
       gate_state: 'none',

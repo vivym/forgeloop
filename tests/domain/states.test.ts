@@ -272,6 +272,62 @@ describe('domain state transitions', () => {
       });
     });
 
+    it('rejects create when kind does not match intake context type', () => {
+      expectDomainError(
+        () =>
+          transitionWorkItem(undefined, {
+            type: 'create',
+            id: 'work-item-kind-mismatch',
+            project_id: 'project-1',
+            kind: 'bug',
+            title: 'Reject mismatched intake',
+            goal: 'Prevent inconsistent Work Item kinds.',
+            success_criteria: ['Mismatched kind and intake context is rejected.'],
+            priority: 'P0',
+            risk: 'medium',
+            driver_actor_id: 'actor-driver',
+            intake_context: requirementIntakeContext,
+          }),
+        'INVALID_TRANSITION',
+      );
+    });
+
+    it('clones intake context on create', () => {
+      const intakeContext: WorkItemIntakeContext = {
+        type: 'requirement',
+        stakeholder_problem: 'Delivery teams need stable intake context.',
+        desired_outcome: 'Created Work Items are isolated from event object mutation.',
+        acceptance_criteria: ['Initial acceptance criterion'],
+        in_scope: ['Initial scope'],
+      };
+
+      const created = transitionWorkItem(undefined, {
+        type: 'create',
+        id: 'work-item-cloned-intake',
+        project_id: 'project-1',
+        kind: 'requirement',
+        title: 'Clone intake context',
+        goal: 'Prevent event mutation from changing created state.',
+        success_criteria: ['Intake context is cloned on create.'],
+        priority: 'P0',
+        risk: 'medium',
+        driver_actor_id: 'actor-driver',
+        intake_context: intakeContext,
+      });
+
+      intakeContext.stakeholder_problem = 'Mutated stakeholder problem';
+      intakeContext.acceptance_criteria.push('Mutated acceptance criterion');
+      intakeContext.in_scope.push('Mutated scope');
+
+      expect(created.intake_context).toEqual({
+        type: 'requirement',
+        stakeholder_problem: 'Delivery teams need stable intake context.',
+        desired_outcome: 'Created Work Items are isolated from event object mutation.',
+        acceptance_criteria: ['Initial acceptance criterion'],
+        in_scope: ['Initial scope'],
+      });
+    });
+
     it('supports changes-requested and resubmission gates for spec and plan', () => {
       const base = transitionWorkItem(undefined, {
         type: 'create',
