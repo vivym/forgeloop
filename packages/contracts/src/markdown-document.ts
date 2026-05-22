@@ -49,12 +49,30 @@ export type MarkdownValidationResult =
   | { ok: true; markdown: string; attachment_ids: string[] }
   | { ok: false; issues: MarkdownValidationIssue[] };
 
+const allowedProductRoutePatterns = [
+  /^\/dashboard$/,
+  /^\/my-work$/,
+  /^\/requirements(?:\/new|\/[^/?#]+(?:\/(?:spec|plan|evidence))?)?$/,
+  /^\/initiatives(?:\/new|\/[^/?#]+(?:\/evidence)?)?$/,
+  /^\/tech-debt(?:\/new|\/[^/?#]+(?:\/evidence)?)?$/,
+  /^\/tasks(?:\/new|\/[^/?#]+(?:\/packages\/[^/?#]+|\/runs\/[^/?#]+|\/reviews\/[^/?#]+)?)?$/,
+  /^\/bugs(?:\/new|\/[^/?#]+(?:\/evidence)?)?$/,
+  /^\/releases(?:\/[^/?#]+(?:\/evidence)?)?$/,
+  /^\/specs-plans$/,
+  /^\/specs\/[^/?#]+(?:\/revisions\/[^/?#]+)?$/,
+  /^\/plans\/[^/?#]+(?:\/revisions\/[^/?#]+)?$/,
+  /^\/board$/,
+  /^\/reports(?:\/(?:delivery|quality|release-readiness|observation|replay))?$/,
+  /^\/dev-tools$/,
+] as const;
+
 const htmlPattern = /<\/?[a-z][\s\S]*?>/i;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
 const angleDestinationPattern = /<((?:https?:\/\/|javascript:|data:|file:|blob:|s3:|gs:)[^>\s]+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])((?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+)/gim;
+const bareUrlBlockPattern = /(?:^|[\s(])(?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+/im;
 const rawStoragePattern =
   /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
@@ -133,6 +151,7 @@ type MarkdownDestination = {
   kind: 'image' | 'link' | 'bare';
   value: string;
 };
+type DetectedMarkdownKind = MarkdownBlockKind | 'unsupported_heading_level';
 
 function markdownDestinations(markdown: string): MarkdownDestination[] {
   const destinations: MarkdownDestination[] = [];
@@ -155,7 +174,7 @@ function markdownDestinations(markdown: string): MarkdownDestination[] {
     destinations.push({ kind: 'link', value });
   }
   collectCaptureGroup(markdown, angleDestinationPattern, destinations, 'link');
-  collectCaptureGroup(markdown, bareUrlPattern, destinations, 'bare');
+  collectCaptureGroup(markdown, bareUrlPattern, destinations, 'link');
 
   return destinations;
 }
@@ -211,26 +230,36 @@ function linkDestinationAllowed(destination: string): boolean {
 }
 
 function isSafeProductRoute(destination: string): boolean {
-  return destination.startsWith('/') && !destination.startsWith('//') && !destination.startsWith('/api/attachments/');
+  return (
+    destination.startsWith('/') &&
+    !destination.startsWith('//') &&
+    !destination.includes('?') &&
+    !destination.includes('#') &&
+    allowedProductRoutePatterns.some((pattern) => pattern.test(destination))
+  );
 }
 
 function isSafeHttpsExternalLink(destination: string): boolean {
   return /^https:\/\/[^\s/$.?#].[^\s]*$/i.test(destination) && !rawStoragePattern.test(destination);
 }
 
-function unsupportedBlockKinds(markdown: string, allowedBlocks: ReadonlySet<MarkdownBlockKind>): MarkdownBlockKind[] {
+function unsupportedBlockKinds(markdown: string, allowedBlocks: ReadonlySet<MarkdownBlockKind>): DetectedMarkdownKind[] {
   const found = detectedBlockKinds(markdown);
-  return [...found].filter((blockKind) => !allowedBlocks.has(blockKind));
+  return [...found].filter((blockKind) => blockKind === 'unsupported_heading_level' || !allowedBlocks.has(blockKind));
 }
 
-function detectedBlockKinds(markdown: string): Set<MarkdownBlockKind> {
-  const blockKinds = new Set<MarkdownBlockKind>();
+function detectedBlockKinds(markdown: string): Set<DetectedMarkdownKind> {
+  const blockKinds = new Set<DetectedMarkdownKind>();
   const lines = markdown.split(/\r?\n/);
 
   if (/!\[[^\]]*](?:\([^)]*\)|\[[^\]]+])/.test(markdown)) {
     blockKinds.add('image');
   }
-  if (/(^|[^!])\[[^\]]+](?:\([^)]*\)|\[[^\]]+])/.test(markdown) || /<https?:\/\/[^>]+>/.test(markdown)) {
+  if (
+    /(^|[^!])\[[^\]]+](?:\([^)]*\)|\[[^\]]+])/.test(markdown) ||
+    /<https?:\/\/[^>]+>/.test(markdown) ||
+    bareUrlBlockPattern.test(markdown)
+  ) {
     blockKinds.add('link');
   }
   if (/(^|[^*_])\*\*[^*\n]+\*\*([^*_]|$)/.test(markdown) || /(^|[^_])__[^_\n]+__([^_]|$)/.test(markdown)) {
@@ -248,8 +277,11 @@ function detectedBlockKinds(markdown: string): Set<MarkdownBlockKind> {
   if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m.test(markdown)) {
     blockKinds.add('horizontal_rule');
   }
-  if (/^\s{0,3}#{1,6}\s+\S/m.test(markdown)) {
+  if (/^\s{0,3}#{1,4}\s+\S/m.test(markdown)) {
     blockKinds.add('heading');
+  }
+  if (/^\s{0,3}#{5,6}\s+\S/m.test(markdown)) {
+    blockKinds.add('unsupported_heading_level');
   }
   if (/^\s{0,3}[-+*]\s+\[[ xX]\]\s+\S/m.test(markdown)) {
     blockKinds.add('task_list');

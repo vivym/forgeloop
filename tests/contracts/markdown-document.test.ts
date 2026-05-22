@@ -39,6 +39,9 @@ describe('MarkdownDocument validation', () => {
     for (const markdown of [
       '[external](https://example.com/docs)',
       '[task](/tasks/task-1)',
+      '[requirement evidence](/requirements/req-1/evidence)',
+      '[task package](/tasks/task-1/packages/pkg-1)',
+      '[release readiness](/reports/release-readiness)',
       '[external][docs]\n\n[docs]: https://example.com/docs',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(true);
@@ -74,6 +77,10 @@ describe('MarkdownDocument validation', () => {
       '[api](/api/attachments/att-1/render/token)',
       '[http][ref]\n\n[ref]: http://example.com',
       '[api][ref]\n\n[ref]: /api/attachments/att-1/render/token',
+      '[api](/api/secrets)',
+      '[asset](/assets/app.js)',
+      '[query](/tasks/task-1?token=secret)',
+      '[hash](/tasks/task-1#frag)',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }
@@ -119,6 +126,7 @@ describe('MarkdownDocument validation', () => {
       '![flow](attachment://att-1)',
       '| Col |\n| --- |\n| Value |',
       '```ts\nconst bad = true;\n```',
+      'https://example.com',
       '**bold**',
       '*italic*',
       '~~strike~~',
@@ -136,6 +144,31 @@ describe('MarkdownDocument validation', () => {
         expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
       }
     }
+  });
+
+  it('rejects heading levels above h4', () => {
+    for (const markdown of ['##### h5', '###### h6']) {
+      const result = validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph', 'heading'],
+        markdown,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
+      }
+    }
+  });
+
+  it('accepts h4 when heading is allowed', () => {
+    expect(
+      validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph', 'heading'],
+        markdown: '#### h4',
+      }).ok,
+    ).toBe(true);
   });
 
   it('requires task_list policy for task list syntax', () => {
