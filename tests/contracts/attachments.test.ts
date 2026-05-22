@@ -28,15 +28,34 @@ describe('attachment contracts', () => {
   });
 
   it('rejects raw storage render urls', () => {
-    expect(() =>
+    for (const render_url of [
+      'https://bucket.example.com/private/key?signature=raw',
+      '/api/attachments/att-1/render/token?X-Goog-Signature=abc',
+      '/api/attachments/att-1/render/token?token=secret',
+      '/api/attachments/att-1/render/token#frag',
+    ]) {
+      expect(() =>
+        attachmentRenderRefSchema.parse({
+          attachment_id: 'att-1',
+          render_url,
+          expires_at: '2026-05-23T00:05:00.000Z',
+          content_type: 'image/png',
+          disposition: 'inline',
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('accepts same-origin attachment render API paths without query or fragment', () => {
+    expect(
       attachmentRenderRefSchema.parse({
         attachment_id: 'att-1',
-        render_url: 'https://bucket.example.com/private/key?signature=raw',
+        render_url: '/api/attachments/att-1/render/token',
         expires_at: '2026-05-23T00:05:00.000Z',
         content_type: 'image/png',
         disposition: 'inline',
       }),
-    ).toThrow(/same-origin/i);
+    ).toMatchObject({ render_url: '/api/attachments/att-1/render/token' });
   });
 
   it('parses upload metadata without accepting binary content in JSON', () => {
@@ -48,5 +67,17 @@ describe('attachment contracts', () => {
         visibility: 'object',
       }),
     ).toMatchObject({ object_type: 'tech_debt' });
+
+    for (const extraField of ['binary', 'content', 'storage_uri', 'extra_field']) {
+      expect(() =>
+        attachmentUploadMetadataSchema.parse({
+          object_type: 'tech_debt',
+          object_id: 'td-1',
+          evidence_category: 'log',
+          visibility: 'object',
+          [extraField]: 'not-public',
+        }),
+      ).toThrow();
+    }
   });
 });

@@ -95,4 +95,40 @@ describe('project management typed object contracts', () => {
       }),
     ).toThrow();
   });
+
+  it('rejects nested package state that exposes legacy work_item_id', () => {
+    expect(() =>
+      productListItemSchema.parse({
+        id: 'row-2',
+        object: { type: 'execution_package', id: 'pkg-1', title: 'Package' },
+        title: 'Package',
+        package_state: {
+          work_item_id: 'wi-1',
+          spec_revision_id: 'spec-rev-1',
+          plan_revision_id: 'plan-rev-1',
+        },
+        updated_at: '2026-05-23T00:00:00.000Z',
+      }),
+    ).toThrow();
+  });
+
+  it('accepts nested package state with typed scope refs', () => {
+    expect(
+      productListItemSchema.parse({
+        id: 'row-3',
+        object: { type: 'execution_package', id: 'pkg-1', title: 'Package' },
+        title: 'Package',
+        package_state: {
+          scope_ref: { type: 'requirement', id: 'req-1' },
+          spec_revision_id: 'spec-rev-1',
+          plan_revision_id: 'plan-rev-1',
+        },
+        updated_at: '2026-05-23T00:00:00.000Z',
+      }),
+    ).toMatchObject({
+      package_state: {
+        scope_ref: { type: 'requirement', id: 'req-1' },
+      },
+    });
+  });
 });

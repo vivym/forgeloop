@@ -84,7 +84,7 @@ export const productListItemSchema = z
       .optional(),
     package_state: z
       .object({
-        work_item_id: z.string().min(1),
+        scope_ref: productObjectRefSchema,
         spec_revision_id: z.string().min(1).optional(),
         plan_revision_id: z.string().min(1).optional(),
         surface_type: z.string().min(1).optional(),

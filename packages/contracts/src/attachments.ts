@@ -70,13 +70,40 @@ export const attachmentRefSchema = z
 export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
 
 const sameOriginRenderUrlSchema = z.string().trim().min(1).superRefine((value, ctx) => {
-  if (!value.startsWith('/api/attachments/')) {
+  const parsedUrl = parseRelativeRenderUrl(value);
+
+  if (parsedUrl === undefined) {
     ctx.addIssue({ code: 'custom', message: 'render_url must be a same-origin attachment API URL' });
+    return;
+  }
+
+  if (!/^\/api\/attachments\/[^/]+\/render\/[^/]+$/.test(parsedUrl.pathname)) {
+    ctx.addIssue({ code: 'custom', message: 'render_url must be an attachment render API path' });
+  }
+  if (parsedUrl.search.length > 0 || parsedUrl.hash.length > 0) {
+    ctx.addIssue({ code: 'custom', message: 'render_url must not include query string or fragment' });
   }
   if (/storage|bucket|s3|signature|x-amz|https?:\/\//i.test(value)) {
     ctx.addIssue({ code: 'custom', message: 'render_url must not expose raw storage details' });
   }
 });
+
+function parseRelativeRenderUrl(value: string): { pathname: string; search: string; hash: string } | undefined {
+  if (!value.startsWith('/') || value.startsWith('//')) {
+    return undefined;
+  }
+
+  const hashIndex = value.indexOf('#');
+  const searchIndex = value.indexOf('?');
+  const pathEndCandidates = [searchIndex, hashIndex].filter((index) => index >= 0);
+  const pathEnd = pathEndCandidates.length === 0 ? value.length : Math.min(...pathEndCandidates);
+
+  return {
+    pathname: value.slice(0, pathEnd),
+    search: searchIndex >= 0 ? value.slice(searchIndex, hashIndex >= 0 ? hashIndex : value.length) : '',
+    hash: hashIndex >= 0 ? value.slice(hashIndex) : '',
+  };
+}
 
 export const attachmentRenderRefSchema = z
   .object({

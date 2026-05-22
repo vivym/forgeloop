@@ -42,8 +42,47 @@ describe('MarkdownDocument validation', () => {
       '![bad](data:image/png;base64,aaaa)',
       '![bad](blob:https://example.com/1)',
       '![bad](https://bucket.example.com/private/key?signature=raw)',
+      '[ref][x]\n\n[x]: javascript:alert(1)',
+      '![bad][img]\n\n[img]: data:image/png;base64,aaaa',
+      'raw https://bucket.example.com/private/key?signature=raw',
+      '<https://bucket.example.com/private/key?signature=raw>',
+      '[encoded](java%73cript:alert(1))',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
+    }
+  });
+
+  it('returns all validation issues across inline, reference, bare, and attachment scans', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      markdown:
+        '<iframe></iframe>\n[ref][x]\n\n[x]: javascript:alert(1)\nraw https://bucket.example.com/private/key?signature=raw\n![missing](attachment://att-missing)',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toEqual(
+        expect.arrayContaining(['raw_html', 'unsafe_protocol', 'raw_storage_url', 'unresolved_attachment']),
+      );
+    }
+  });
+
+  it('rejects block and inline kinds that are not allowed by policy', () => {
+    for (const markdown of [
+      '![flow](attachment://att-1)',
+      '| Col |\n| --- |\n| Value |',
+      '```ts\nconst bad = true;\n```',
+    ]) {
+      const result = validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph'],
+        markdown,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
+      }
     }
   });
 

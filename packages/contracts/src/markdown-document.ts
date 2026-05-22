@@ -50,7 +50,10 @@ export type MarkdownValidationResult =
   | { ok: false; issues: MarkdownValidationIssue[] };
 
 const htmlPattern = /<\/?[a-z][\s\S]*?>/i;
-const destinationPattern = /!?\[[^\]]*]\(([^)\s]+)[^)]*\)/gi;
+const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
+const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
+const angleDestinationPattern = /<((?:https?:\/\/|javascript:|data:|file:|blob:)[^>\s]+)>/gi;
+const bareUrlPattern = /(?:^|[\s(])((?:https?:\/\/|javascript:|data:|file:|blob:)[^\s<>)]+)/gim;
 const rawStoragePattern = /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
@@ -75,14 +78,22 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
     issues.push({ code: 'raw_html', message: 'Markdown must not contain raw HTML or MDX JSX.' });
   }
 
+  for (const blockKind of unsupportedBlockKinds(document.markdown, new Set(document.allowed_blocks))) {
+    issues.push({
+      code: 'unsupported_block',
+      message: `${blockKind} is not allowed by this Markdown policy.`,
+    });
+  }
+
   for (const destination of markdownDestinations(document.markdown)) {
-    if (unsafeProtocolPattern.test(destination)) {
+    const normalizedDestination = normalizeDestination(destination);
+    if (unsafeProtocolPattern.test(normalizedDestination)) {
       issues.push({ code: 'unsafe_protocol', message: 'Markdown links and images must use safe protocols.' });
     }
-    if (base64OrBlobPattern.test(destination)) {
+    if (base64OrBlobPattern.test(normalizedDestination)) {
       issues.push({ code: 'base64_or_blob', message: 'Markdown must not contain data, file, blob, or base64 URLs.' });
     }
-    if (rawStoragePattern.test(destination)) {
+    if (rawStoragePattern.test(normalizedDestination)) {
       issues.push({ code: 'raw_storage_url', message: 'Markdown must not contain raw storage URLs.' });
     }
   }
@@ -108,13 +119,94 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
 
 function markdownDestinations(markdown: string): string[] {
   const destinations: string[] = [];
-  for (const match of markdown.matchAll(destinationPattern)) {
+
+  collectCaptureGroup(markdown, inlineDestinationPattern, destinations);
+  collectCaptureGroup(markdown, referenceDefinitionPattern, destinations);
+  collectCaptureGroup(markdown, angleDestinationPattern, destinations);
+  collectCaptureGroup(markdown, bareUrlPattern, destinations);
+
+  return destinations;
+}
+
+function collectCaptureGroup(markdown: string, pattern: RegExp, destinations: string[]): void {
+  for (const match of markdown.matchAll(pattern)) {
     const destination = match[1];
     if (destination !== undefined) {
       destinations.push(destination);
     }
   }
-  return destinations;
+}
+
+function normalizeDestination(destination: string): string {
+  const trimmed = destination.trim().replace(/^<|>$/g, '');
+  try {
+    return decodeURIComponent(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function unsupportedBlockKinds(markdown: string, allowedBlocks: ReadonlySet<MarkdownBlockKind>): MarkdownBlockKind[] {
+  const found = detectedBlockKinds(markdown);
+  return [...found].filter((blockKind) => !allowedBlocks.has(blockKind));
+}
+
+function detectedBlockKinds(markdown: string): Set<MarkdownBlockKind> {
+  const blockKinds = new Set<MarkdownBlockKind>();
+  const lines = markdown.split(/\r?\n/);
+
+  if (/!\[[^\]]*](?:\([^)]*\)|\[[^\]]+])/.test(markdown)) {
+    blockKinds.add('image');
+  }
+  if (/(^|[^!])\[[^\]]+](?:\([^)]*\)|\[[^\]]+])/.test(markdown) || /<https?:\/\/[^>]+>/.test(markdown)) {
+    blockKinds.add('link');
+  }
+  if (/^\s{0,3}#{1,6}\s+\S/m.test(markdown)) {
+    blockKinds.add('heading');
+  }
+  if (/^\s{0,3}(?:[-+*]\s+|\d+[.)]\s+)\S/m.test(markdown)) {
+    blockKinds.add('list');
+  }
+  if (/^\s{0,3}(?:```|~~~)/m.test(markdown)) {
+    blockKinds.add('code_block');
+  }
+  if (/^\s{0,3}>\s?/m.test(markdown)) {
+    blockKinds.add('blockquote');
+  }
+  if (hasTable(markdown)) {
+    blockKinds.add('table');
+  }
+  if (lines.some((line) => isParagraphLine(line))) {
+    blockKinds.add('paragraph');
+  }
+
+  return blockKinds;
+}
+
+function hasTable(markdown: string): boolean {
+  const lines = markdown.split(/\r?\n/);
+  return lines.some((line, index) => {
+    const nextLine = lines[index + 1];
+    return (
+      line.includes('|') &&
+      nextLine !== undefined &&
+      /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(nextLine)
+    );
+  });
+}
+
+function isParagraphLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  if (/^(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+|>\s?|```|~~~|\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$)/.test(trimmed)) {
+    return false;
+  }
+  if (trimmed.includes('|')) {
+    return false;
+  }
+  return true;
 }
 
 function attachmentIdsReferencedBy(markdown: string): string[] {
