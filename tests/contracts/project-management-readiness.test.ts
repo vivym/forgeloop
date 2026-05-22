@@ -40,30 +40,94 @@ function disabled(code: ProductSafeDisabledReason['code']): ProductSafeDisabledR
   };
 }
 
+const approvedReviewEvidence = {
+  id: 'review-evidence-1',
+  authority_type: 'human_review_decision',
+  authority_ref: { type: 'human_review_decision', id: 'decision-1' },
+  scope_ref: { type: 'requirement', id: 'req-1' },
+  status: 'approved',
+  required: true,
+  attachment_refs: [],
+} as const;
+
+const passedQaEvidence = {
+  id: 'qa-evidence-1',
+  scope_ref: { type: 'requirement', id: 'req-1' },
+  evidence_type: 'qa_acceptance',
+  status: 'passed',
+  required: true,
+  attachment_refs: [],
+} as const;
+
 describe('project management release readiness contracts', () => {
   it('accepts typed review and test evidence authority', () => {
+    expect(reviewEvidenceRefSchema.parse(approvedReviewEvidence)).toMatchObject({ status: 'approved' });
+
+    expect(testAcceptanceEvidenceRefSchema.parse(passedQaEvidence)).toMatchObject({ status: 'passed' });
+  });
+
+  it('requires typed evidence authority for passed readiness gates', () => {
     expect(
-      reviewEvidenceRefSchema.parse({
-        id: 'review-evidence-1',
-        authority_type: 'human_review_decision',
-        authority_ref: { type: 'human_review_decision', id: 'decision-1' },
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
         scope_ref: { type: 'requirement', id: 'req-1' },
-        status: 'approved',
-        required: true,
-        attachment_refs: [],
-      }),
-    ).toMatchObject({ status: 'approved' });
+        kind: 'review',
+        status: 'passed',
+      }).success,
+    ).toBe(false);
 
     expect(
-      testAcceptanceEvidenceRefSchema.parse({
-        id: 'qa-evidence-1',
-        scope_ref: { type: 'task', id: 'task-1' },
-        evidence_type: 'qa_acceptance',
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'qa-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'qa_acceptance',
         status: 'passed',
-        required: true,
-        attachment_refs: [],
-      }),
-    ).toMatchObject({ status: 'passed' });
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects mismatched passed readiness evidence authority', () => {
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        evidence_ref: passedQaEvidence,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'qa-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'qa_acceptance',
+        status: 'passed',
+        evidence_ref: approvedReviewEvidence,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts passed readiness gates backed by matching approved or passed evidence authority', () => {
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        evidence_ref: approvedReviewEvidence,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'qa-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'qa_acceptance',
+        status: 'passed',
+        evidence_ref: passedQaEvidence,
+      }).success,
+    ).toBe(true);
   });
 
   it('rejects freeform notes, ai self-review, and bare attachments as gate authority', () => {

@@ -91,6 +91,13 @@ export const productSafeDisabledReasonSchema = z
   .strict();
 export type ProductSafeDisabledReason = z.infer<typeof productSafeDisabledReasonSchema>;
 
+const testAcceptanceRequirementKinds = [
+  'qa_acceptance',
+  'product_acceptance',
+  'regression',
+  'integration_validation',
+] as const;
+
 export const evidenceRequirementStatusSchema = z
   .object({
     requirement_id: nonEmpty,
@@ -113,8 +120,74 @@ export const evidenceRequirementStatusSchema = z
     supporting_attachment_refs: z.array(attachmentRefSchema).optional(),
     disabled_reason: productSafeDisabledReasonSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((requirement, ctx) => {
+    if (requirement.status !== 'passed') {
+      return;
+    }
+
+    if (!requirement.evidence_ref) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence_ref'],
+        message: 'passed readiness gates require typed evidence authority',
+      });
+      return;
+    }
+
+    if (requirement.kind === 'review') {
+      const reviewEvidence = reviewEvidenceRefSchema.safeParse(requirement.evidence_ref);
+      if (!reviewEvidence.success) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref'],
+          message: 'passed review readiness gates require review evidence authority',
+        });
+        return;
+      }
+      if (reviewEvidence.data.status !== 'approved') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref', 'status'],
+          message: 'passed review readiness gates require approved review evidence',
+        });
+      }
+      return;
+    }
+
+    if (isTestAcceptanceRequirementKind(requirement.kind)) {
+      const testEvidence = testAcceptanceEvidenceRefSchema.safeParse(requirement.evidence_ref);
+      if (!testEvidence.success) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref'],
+          message: 'passed test readiness gates require test acceptance evidence authority',
+        });
+        return;
+      }
+      if (testEvidence.data.status !== 'passed') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref', 'status'],
+          message: 'passed test readiness gates require passed test evidence',
+        });
+      }
+      if (testEvidence.data.evidence_type !== requirement.kind) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref', 'evidence_type'],
+          message: 'test readiness evidence type must match the readiness gate kind',
+        });
+      }
+    }
+  });
 export type EvidenceRequirementStatus = z.infer<typeof evidenceRequirementStatusSchema>;
+
+function isTestAcceptanceRequirementKind(
+  kind: EvidenceRequirementStatus['kind'],
+): kind is (typeof testAcceptanceRequirementKinds)[number] {
+  return (testAcceptanceRequirementKinds as readonly string[]).includes(kind);
+}
 
 export const releaseReadinessDetailSchema = z
   .object({
