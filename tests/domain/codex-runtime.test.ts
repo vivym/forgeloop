@@ -478,7 +478,7 @@ describe('codex runtime domain contracts', () => {
           internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/junit',
         },
       ],
-      public_summary: 'Checks:3 passed; Result:passed after updating Dockerfile.dev and vite.config.mts.',
+      public_summary: `Checks:3 passed; Result:passed after updating Dockerfile.dev and vite.config.mts with digest ${digestA}.`,
     } satisfies CodexRunExecutionRuntimeJobResult;
 
     expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
@@ -670,6 +670,10 @@ describe('codex runtime domain contracts', () => {
     'Cache endpoint redis:6379 failed before draft publication',
     'Worker read file:///etc/passwd during setup',
     'Output at file:/tmp/codex.log before cleanup',
+    'Local app server was [::1]:4555/internal',
+    'Worker endpoint fe80::1 failed',
+    'Worker endpoint 2130706433 failed',
+    'Container 4f1e2d3c4f1e failed',
     'Generated draft; local app server was http://127.0.0.1:4555/internal',
     'Worker endpoint redis.default.svc returned an error',
     'Container socket unix:/tmp/codex.sock was unavailable',
@@ -963,12 +967,12 @@ describe('codex runtime domain contracts', () => {
 
   it('redacts launch materialization without leaking raw secret payloads', () => {
     const payload = { api_key: 'super-secret-key', token: 'raw-token' };
-      const materialization = {
-        launch_target: {
+    const materialization = {
+      launch_target: {
         target_type: 'run_session',
-          target_id: 'package-1',
-          target_kind: 'run_execution',
-          project_id: 'project-1',
+        target_id: 'package-1',
+        target_kind: 'run_execution',
+        project_id: 'project-1',
         repo_id: 'repo-1',
       },
       profile_revision: baseRevision({ target_kind: 'run_execution', source_access_mode: 'path_policy_scoped' }),
