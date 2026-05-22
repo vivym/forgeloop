@@ -480,7 +480,7 @@ const singleLabelHostPortPattern = /^[a-z][a-z0-9_-]*:\d{1,5}(\/|$)/i;
 const normalizeRuntimePublicKey = (key: string): string =>
   key
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .replace(/[-\s]+/g, '_')
+    .replace(/[-:\s]+/g, '_')
     .toLowerCase();
 
 const compactRuntimePublicKey = (key: string): string => normalizeRuntimePublicKey(key).replace(/_/g, '');

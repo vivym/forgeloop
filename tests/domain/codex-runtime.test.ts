@@ -585,6 +585,7 @@ describe('codex runtime domain contracts', () => {
       { authHeader: 'artifact://ok' },
       { api_key: 'sk-test' },
       { apiKey: 'sk-test' },
+      { 'api:key': 'public text' },
       { description: 'Authorization: Bearer raw-token' },
       { artifact_ref: 'artifact://http://127.0.0.1:4555/raw' },
       { artifact_ref: 'artifact://codex-runtime-jobs/runtime-job-1/http%3A%2F%2F127.0.0.1%3A4555%2Fraw' },
@@ -594,11 +595,13 @@ describe('codex runtime domain contracts', () => {
       { next_step: 'forgeloop://runs/http%3A%2F%2F127.0.0.1%3A4555%2Fraw' },
       { next_step: 'forgeloop://http://127.0.0.1:4555/raw' },
       { socket_path: 'artifact://ok' },
+      { 'socket:path': 'public text' },
       { socketPath: 'artifact://ok' },
       { socket_ref: 'artifact://ok' },
       { container_name: 'artifact://ok' },
       { containerName: 'artifact://ok' },
       { container_ref: 'artifact://ok' },
+      { 'container:id': 'public text' },
       { raw_context: { project_id: 'project-1' } },
       { raw_output: 'public text' },
       { rawoutput: 'public text' },
@@ -607,6 +610,8 @@ describe('codex runtime domain contracts', () => {
       { authheader: 'public text' },
       { containerid: 'public text' },
       { workspacepath: 'public text' },
+      { 'workspace:path': 'public text' },
+      { 'source:repo:path': 'public text' },
       { 'http://127.0.0.1:4555/internal': 'public text' },
       { '/var/lib/forgeloop/workspaces/job': 'public text' },
       { '4f1e2d3c4f1e': 'public text' },
@@ -786,6 +791,24 @@ describe('codex runtime domain contracts', () => {
       );
     },
   );
+
+  it('rejects colon-separated unsafe keys inside generated payload', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'spec_draft',
+          prompt_version: 'generation-prompt-v1',
+          output_schema_version: 'spec-draft-output.v1',
+          generated_payload: {
+            'container:id': 'public text',
+          },
+          generated_payload_digest: digestA,
+          generation_artifacts: [],
+          public_summary: 'Generated a spec draft.',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
 
   it.each([
     'runtime_job_id',
