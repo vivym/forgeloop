@@ -476,6 +476,7 @@ const validRuntimeTargetKinds = new Set<CodexRuntimeTargetKind>(['generation', '
 const validSourceAccessModes = new Set<CodexSourceAccessMode>(['artifact_only', 'path_policy_scoped']);
 const validRuntimeEnvironments = new Set<CodexRuntimeEnvironment>(['local_dogfood', 'test']);
 const validNetworkAllowlistProtocols = new Set<CodexNetworkAllowlistRule['protocol']>(['https', 'http', 'tcp']);
+const validRuntimeNetworkProviders = new Set<CodexRuntimeNetworkProvider>(['host_firewall', 'docker_network_proxy']);
 const runtimeResourceLimitKeys: Array<keyof CodexRuntimeResourceLimits> = [
   'cpu_ms',
   'memory_mb',
@@ -974,6 +975,18 @@ const assertStrictCodexRuntimeNetworkAllowlistRule = (rule: CodexNetworkAllowlis
   }
 };
 
+const assertStrictCodexRuntimeNetworkPolicy = (
+  policy: CodexRuntimeNetworkPolicy,
+): Extract<CodexRuntimeNetworkPolicy, { mode: 'egress_allowlist' }> => {
+  if (policy.mode !== 'egress_allowlist') {
+    throw dockerPolicyUnavailable('Strict real dogfood profiles require a model_provider egress allowlist network policy.');
+  }
+  if (!validRuntimeNetworkProviders.has(policy.provider)) {
+    throw dockerPolicyUnavailable('Strict real dogfood egress allowlist profiles require a supported network provider.');
+  }
+  return policy;
+};
+
 const dockerNetworkProxyConfigDigestInput = (config: CodexDockerNetworkProxyConfig): Omit<CodexDockerNetworkProxyConfig, 'provider_config_digest'> => ({
   proxy_image: config.proxy_image,
   proxy_image_digest: config.proxy_image_digest,
@@ -1447,10 +1460,7 @@ export const validateCodexRuntimeProfileRevision = (
 
   const strict = options.strictRealDogfood === true;
   if (strict) {
-    const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
-    if (networkPolicy.mode === 'disabled') {
-      throw dockerPolicyUnavailable('Strict real dogfood profiles require a model_provider egress allowlist network policy.');
-    }
+    const networkPolicy = assertStrictCodexRuntimeNetworkPolicy(normalizeCodexRuntimeNetworkPolicy(revision.network_policy));
     networkPolicy.allowlist_rules.forEach(assertStrictCodexRuntimeNetworkAllowlistRule);
     if (revision.docker_policy.network_disabled === true) {
       throw dockerPolicyUnavailable('Strict real dogfood profiles must not disable Docker networking when using an egress allowlist network policy.');

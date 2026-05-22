@@ -1045,6 +1045,44 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('rejects strict real dogfood profiles with unknown network policy mode', () => {
+    const policy = {
+      ...hostFirewallPolicy(),
+      mode: 'audit_only',
+    };
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            network_policy: policy as CodexRuntimeProfileRevision['network_policy'],
+          }),
+          { strictRealDogfood: true },
+        ),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it('rejects strict real dogfood profiles with unknown network provider', () => {
+    const rules = [modelProviderRule];
+    const policy = {
+      ...hostFirewallPolicy(rules),
+      provider: 'noop_provider',
+      egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('noop_provider' as never, rules)),
+    };
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            network_policy: policy as CodexRuntimeProfileRevision['network_policy'],
+          }),
+          { strictRealDogfood: true },
+        ),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
   it.each([
     'cpu_ms',
     'memory_mb',
