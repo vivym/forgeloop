@@ -539,6 +539,8 @@ const isRawRuntimePublicString = (value: string): boolean => {
     /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?(?:::0*1|(?:0{1,4}:){7}0{0,3}1)(?:%[A-Za-z0-9_.-]+)?\]?)(:\d{1,5})?(\/|$)/i;
   const privateIpv4EndpointPattern =
     /^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2})(:\d{1,5})?(\/|$)/i;
+  const ipv4MappedPrivateEndpointPattern =
+    /^\[?::ffff:(127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2}|0\.0\.0\.0)\]?(:\d{1,5})?(\/|$)/i;
   const privateIpv6EndpointPattern =
     /^\[?(?:(?:fc|fd)[0-9a-f]{0,2}|fe80):[0-9a-f:]+(?:%[A-Za-z0-9_.-]+)?\]?(:\d{1,5})?(\/|$)/i;
   const internalHostEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal(:\d{1,5})?(\/|$)/i;
@@ -562,6 +564,7 @@ const isRawRuntimePublicString = (value: string): boolean => {
     /\.sock(?:$|[/?#])/i.test(value) ||
     loopbackEndpointPattern.test(value) ||
     privateIpv4EndpointPattern.test(value) ||
+    ipv4MappedPrivateEndpointPattern.test(value) ||
     privateIpv6EndpointPattern.test(value) ||
     internalHostEndpointPattern.test(value) ||
     clusterLocalEndpointPattern.test(value) ||
