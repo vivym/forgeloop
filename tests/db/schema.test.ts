@@ -476,6 +476,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(codex_runtime_jobs, 'acceptedWorkerSessionDigest')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'acceptedSessionPublicKeyId')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'materializationRequestDigest')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'runtimeEvidenceDigest')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'launchMaterializationDigest')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'cancelRequestDigest')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'terminalRequestDigest')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'lastEventAt')).toBe('PgTimestampString');

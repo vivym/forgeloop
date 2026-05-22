@@ -296,6 +296,8 @@ export const codex_runtime_jobs = pgTable(
     materializationRequestDigest: text('materialization_request_digest'),
     startIdempotencyKey: text('start_idempotency_key'),
     startRequestDigest: text('start_request_digest'),
+    runtimeEvidenceDigest: text('runtime_evidence_digest'),
+    launchMaterializationDigest: text('launch_materialization_digest'),
     startedAt: timestampColumn('started_at'),
     lastEventAt: timestampColumn('last_event_at'),
     cancelRequestedAt: timestampColumn('cancel_requested_at'),

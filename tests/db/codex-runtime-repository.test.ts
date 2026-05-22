@@ -646,6 +646,7 @@ const startRuntimeJob = (
     idempotency_key: `start-${runtimeJobId}`,
     request_digest: tokenHash(`start-request-${runtimeJobId}`),
     runtime_evidence_digest: tokenHash(`runtime-evidence-${runtimeJobId}`),
+    launch_materialization_digest: tokenHash(`launch-materialization-${runtimeJobId}`),
     now: later,
     ...patch,
   });
@@ -1522,6 +1523,22 @@ describe('codex runtime repository behavior', () => {
       status: 'running',
       start_idempotency_key: 'start-runtime-job-1',
       start_request_digest: tokenHash('start-request-runtime-job-1'),
+      runtime_evidence_digest: tokenHash('runtime-evidence-runtime-job-1'),
+      launch_materialization_digest: tokenHash('launch-materialization-runtime-job-1'),
+    });
+    await expect(
+      startRuntimeJob(repository, 'runtime-job-1', {
+        nonce: 'start-replay-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(expect.objectContaining({ runtime_evidence_digest: tokenHash('runtime-evidence-runtime-job-1') }));
+    await expect(
+      startRuntimeJob(repository, 'runtime-job-1', {
+        nonce: 'start-conflicting-evidence-nonce-runtime-job-1',
+        launch_materialization_digest: tokenHash('conflicting-launch-materialization-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
     });
 
     const cancelled = await createRuntimeJobWithCapturedToken(
@@ -1564,6 +1581,7 @@ describe('codex runtime repository behavior', () => {
         idempotency_key: 'start-cancelled-start',
         request_digest: tokenHash('start-cancelled-start-request'),
         runtime_evidence_digest: tokenHash('runtime-evidence-cancelled-start'),
+        launch_materialization_digest: tokenHash('launch-materialization-cancelled-start'),
         now: later,
       }),
     ).rejects.toMatchObject<Partial<DomainError>>({
@@ -1949,6 +1967,7 @@ describe('codex runtime repository behavior', () => {
       idempotency_key: 'start-running-cancel',
       request_digest: tokenHash('start-running-cancel-request'),
       runtime_evidence_digest: tokenHash('runtime-evidence-running-cancel'),
+      launch_materialization_digest: tokenHash('launch-materialization-running-cancel'),
       now: later,
     });
     await expect(

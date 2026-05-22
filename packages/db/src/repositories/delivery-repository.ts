@@ -350,6 +350,7 @@ export interface StartCodexRuntimeJobInput {
   idempotency_key: string;
   request_digest: string;
   runtime_evidence_digest: string;
+  launch_materialization_digest: string;
   now: string;
 }
 

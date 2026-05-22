@@ -585,6 +585,10 @@ const runtimeJobFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexRuntimeJo
     : { materialization_request_digest: record.materialization_request_digest }),
   ...(record.start_idempotency_key === undefined ? {} : { start_idempotency_key: record.start_idempotency_key }),
   ...(record.start_request_digest === undefined ? {} : { start_request_digest: record.start_request_digest }),
+  ...(record.runtime_evidence_digest === undefined ? {} : { runtime_evidence_digest: record.runtime_evidence_digest }),
+  ...(record.launch_materialization_digest === undefined
+    ? {}
+    : { launch_materialization_digest: record.launch_materialization_digest }),
   ...(record.started_at === undefined ? {} : { started_at: record.started_at }),
   ...(record.last_event_at === undefined ? {} : { last_event_at: record.last_event_at }),
   ...(record.cancel_requested_at === undefined ? {} : { cancel_requested_at: record.cancel_requested_at }),
@@ -1619,7 +1623,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
     }
     if (bundle.job.status === 'running') {
-      if (bundle.job.start_idempotency_key === input.idempotency_key && bundle.job.start_request_digest === input.request_digest) {
+      if (
+        bundle.job.start_idempotency_key === input.idempotency_key &&
+        bundle.job.start_request_digest === input.request_digest &&
+        bundle.job.runtime_evidence_digest === input.runtime_evidence_digest &&
+        bundle.job.launch_materialization_digest === input.launch_materialization_digest
+      ) {
         return runtimeJobFromDbRecord(bundle.job);
       }
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
@@ -1633,6 +1642,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         status: 'running',
         startIdempotencyKey: input.idempotency_key,
         startRequestDigest: input.request_digest,
+        runtimeEvidenceDigest: input.runtime_evidence_digest,
+        launchMaterializationDigest: input.launch_materialization_digest,
         startedAt: input.now,
         updatedAt: input.now,
       } as never)

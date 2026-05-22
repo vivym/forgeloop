@@ -253,6 +253,8 @@ export interface CodexRuntimeJob {
   materialization_request_digest?: string;
   start_idempotency_key?: string;
   start_request_digest?: string;
+  runtime_evidence_digest?: string;
+  launch_materialization_digest?: string;
   started_at?: IsoDateTime;
   last_event_at?: IsoDateTime;
   cancel_requested_at?: IsoDateTime;

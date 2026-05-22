@@ -1301,7 +1301,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
     }
     if (record.job.status === 'running') {
-      if (record.job.start_idempotency_key === input.idempotency_key && record.job.start_request_digest === input.request_digest) {
+      if (
+        record.job.start_idempotency_key === input.idempotency_key &&
+        record.job.start_request_digest === input.request_digest &&
+        record.job.runtime_evidence_digest === input.runtime_evidence_digest &&
+        record.job.launch_materialization_digest === input.launch_materialization_digest
+      ) {
         return clone(record.job);
       }
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
@@ -1316,6 +1321,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         status: 'running',
         start_idempotency_key: input.idempotency_key,
         start_request_digest: input.request_digest,
+        runtime_evidence_digest: input.runtime_evidence_digest,
+        launch_materialization_digest: input.launch_materialization_digest,
         started_at: input.now,
         updated_at: input.now,
       },

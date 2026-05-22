@@ -758,6 +758,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           idempotency_key: `start-${input.runtime_job_id}`,
           request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
           runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
           now: later,
         });
 
@@ -875,6 +876,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           idempotency_key: `start-${running.input.runtime_job_id}`,
           request_digest: tokenHash(`start-request-${running.input.runtime_job_id}`),
           runtime_evidence_digest: tokenHash(`runtime-evidence-${running.input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${running.input.runtime_job_id}`),
           now: later,
         });
         await repository.cancelCodexRuntimeJob({
