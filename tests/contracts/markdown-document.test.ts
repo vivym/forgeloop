@@ -307,6 +307,29 @@ describe('MarkdownDocument validation', () => {
     }
   });
 
+  it('masks multi-backtick inline code contents while enforcing inline_code policy', () => {
+    for (const markdown of ['``[x](https://example.com/docs)``', '``**bold**``']) {
+      expect(
+        validateMarkdownDocument({
+          ...baseDocument,
+          allowed_blocks: ['paragraph', 'inline_code'],
+          markdown,
+        }).ok,
+      ).toBe(true);
+    }
+
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['paragraph'],
+      markdown: '``[x](https://example.com/docs)``',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
+    }
+  });
+
   it('does not treat setext heading underlines as horizontal rules', () => {
     expect(
       validateMarkdownDocument({

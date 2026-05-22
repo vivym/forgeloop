@@ -191,9 +191,17 @@ function stripFencedCodeBlocks(markdown: string): string {
 }
 
 function stripInlineCodeSpans(markdown: string): string {
-  return markdown.replace(/(`+)([\s\S]*?)\1/g, (_match, _ticks: string, contents: string) =>
+  return markdown.replace(inlineCodeSpanPattern(), (_match, _ticks: string, contents: string) =>
     contents.replace(/[^\r\n]/g, ' '),
   );
+}
+
+function hasInlineCodeSpan(markdown: string): boolean {
+  return inlineCodeSpanPattern().test(markdown);
+}
+
+function inlineCodeSpanPattern(): RegExp {
+  return /(`+)([\s\S]*?)\1/g;
 }
 
 function parseOpeningFence(line: string): { char: '`' | '~'; length: number } | undefined {
@@ -573,7 +581,7 @@ function detectedBlockKinds(markdown: string): Set<DetectedMarkdownKind> {
   if (/~~[^~\n]+~~/.test(activeMarkdown)) {
     blockKinds.add('strikethrough');
   }
-  if (/(^|[^`])`[^`\n]+`([^`]|$)/.test(unmaskedActiveMarkdown)) {
+  if (hasInlineCodeSpan(unmaskedActiveMarkdown)) {
     blockKinds.add('inline_code');
   }
   if (hasHorizontalRule(activeMarkdown)) {
