@@ -63,7 +63,7 @@ const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
 const canonicalAttachmentDestinationPattern = /^attachment:\/\/([A-Za-z0-9_-]+)$/;
 const blockDirectivePattern = /^ {0,3}::+[A-Za-z][\w-]*(?:\[[^\]\n]*])?(?:\{[^}\n]*})?(?:\s.*)?$/;
-const textDirectivePattern = /(?:^|[\s([{]):[A-Za-z][\w-]*(?:\[[^\]\n]*]|\{[^}\n]*})/;
+const textDirectivePattern = /(?:^|[\s([{]):[A-Za-z][\w-]*(?=$|[\s)\]},.!?;]|\[[^\]\n]*]|\{[^}\n]*})/;
 
 export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValidationResult {
   const parsed = markdownDocumentSchema.safeParse(input);
@@ -232,11 +232,37 @@ function blockLevelContent(line: string): string | undefined {
 }
 
 function isMdxImportLine(line: string): boolean {
-  return /^import(?:\s*$|\s+(?:type\s+)?(?:[\w*{]|\*\s+as\b|["']))/.test(line);
+  if (!/^import\b/.test(line)) {
+    return false;
+  }
+  const afterImport = line.replace(/^import\b/, '').trimStart();
+  const afterTrivia = stripLeadingJsBlockComments(afterImport).trimStart();
+  if (afterTrivia === '') {
+    return true;
+  }
+  const afterType = afterTrivia.startsWith('type ')
+    ? stripLeadingJsBlockComments(afterTrivia.slice('type'.length).trimStart()).trimStart()
+    : afterTrivia;
+  return /^([\w{]|\*\s+as\b|["'])/.test(afterType);
 }
 
 function isMdxExportLine(line: string): boolean {
-  return /^export(?:\s*$|\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|\{|\*))/.test(line);
+  if (!/^export\b/.test(line)) {
+    return false;
+  }
+  const afterExport = line.replace(/^export\b/, '').trimStart();
+  const afterTrivia = stripLeadingJsBlockComments(afterExport).trimStart();
+  return afterTrivia === '' || /^(default\b|const\b|let\b|var\b|function\b|class\b|\{|\*)/.test(afterTrivia);
+}
+
+function stripLeadingJsBlockComments(value: string): string {
+  let remainder = value;
+  let match = /^\/\*[^]*?\*\//.exec(remainder);
+  while (match) {
+    remainder = remainder.slice(match[0].length).trimStart();
+    match = /^\/\*[^]*?\*\//.exec(remainder);
+  }
+  return remainder;
 }
 
 function markdownDestinations(markdown: string): MarkdownDestination[] {
