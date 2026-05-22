@@ -53,7 +53,8 @@ const htmlCommentPattern = /<!--[\s\S]*?-->/;
 const htmlDeclarationPattern = /<![A-Za-z][^>]*>/;
 const htmlProcessingInstructionPattern = /<\?[\s\S]*?\?>/;
 const mdxFragmentPattern = /<>[\s\S]*?<\/>/;
-const htmlTagPattern = /<\/?[A-Za-z][A-Za-z0-9.-]*(?=[\s/>])[^>]*>/;
+const htmlTagPattern = /<\/?[A-Za-z][A-Za-z0-9.-]*(?::[A-Za-z][A-Za-z0-9.-]*)?(?=[\s/>])[^>]*>/;
+const mdxExpressionPattern = /(?:^|[\s([{])\{(?:\/\*[\s\S]*?\*\/|[^{}\n]*[+*/=][^{}\n]*)}(?=$|[\s)\]},.!?;:])/;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
@@ -212,7 +213,8 @@ function containsRawHtmlOrMdx(markdown: string): boolean {
     htmlDeclarationPattern.test(markdown) ||
     htmlProcessingInstructionPattern.test(markdown) ||
     mdxFragmentPattern.test(markdown) ||
-    htmlTagPattern.test(markdown)
+    htmlTagPattern.test(markdown) ||
+    mdxExpressionPattern.test(markdown)
   );
 }
 
