@@ -756,6 +756,9 @@ describe('codex runtime domain contracts', () => {
     'Container socket unix:/tmp/codex.sock was unavailable',
     'Worker wrote temporary files under /tmp/workspace',
     'Worker read ../src/index before cleanup',
+    'Worker read `/tmp/workspace` before cleanup',
+    'Worker read `../src/index` before cleanup',
+    'Worker read `\\\\server\\share\\file.txt` before cleanup',
     'Model response contained api_key=sk-test',
     'Authorization: Bearer raw-token appeared in summary',
   ])('rejects endpoint leakage embedded in display text %#', (publicSummary) => {
@@ -1042,6 +1045,16 @@ describe('codex runtime domain contracts', () => {
         }),
       'codex_runtime_profile_invalid',
     );
+  });
+
+  it.each([
+    ['resource_limits', 'codex_runtime_profile_invalid'],
+    ['network_policy', 'codex_worker_docker_policy_unavailable'],
+    ['allowed_scopes', 'codex_runtime_profile_invalid'],
+  ] as const)('rejects malformed strict profile without TypeError when %s is missing', (field, code) => {
+    const malformed = { ...baseRevision(), [field]: undefined } as unknown as CodexRuntimeProfileRevision;
+
+    expectDomainErrorCode(() => validateCodexRuntimeProfileRevision(malformed, { strictRealDogfood: true }), code);
   });
 
   it.each([

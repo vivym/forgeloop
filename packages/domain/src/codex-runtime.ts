@@ -851,7 +851,7 @@ const displayIpv6TokenPattern = /\b(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.]+(?:%[A-Za-z0
 const displayLeadingCompressedIpv6TokenPattern = /(?<![A-Za-z0-9])::[0-9a-f:.]*(?:%[A-Za-z0-9_.-]+)?(?:\/\S*)?/gi;
 const displayLegacyIpv4TokenPattern = /\b(?:0x[0-9a-f]{7,8}|0[0-7]{8,11}|\d{8,10}|(?:\d{1,3}\.){1,3}\d{1,3})\b/gi;
 const displayHexRuntimeIdTokenPattern = /\b[a-f0-9]{12,64}\b/gi;
-const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
+const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=`])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
 const publicUnsafeSecretTokenPattern =
   /\b(?:(?:api[_-]?key|token|secret|password|authorization|auth(?:[_-]?header)?)\s*(?:[:=]|Bearer\b)|Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]+)/i;
 const isCodexRuntimeUnsafeDisplayTokenString = (value: string): boolean =>
@@ -951,14 +951,17 @@ const assertSha256Digest = (value: unknown, label: string, error: (message: stri
   }
 };
 
-const assertCodexRuntimeResourceLimits = (resourceLimits: CodexRuntimeResourceLimits): void => {
+function assertCodexRuntimeResourceLimits(resourceLimits: unknown): asserts resourceLimits is CodexRuntimeResourceLimits {
+  if (!isPlainObject(resourceLimits)) {
+    throw invalidProfile('Codex runtime resource_limits must be an object.');
+  }
   for (const key of runtimeResourceLimitKeys) {
     const value = resourceLimits[key];
-    if (!Number.isInteger(value) || value <= 0) {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
       throw invalidProfile(`Codex runtime resource limit ${key} must be a positive integer.`);
     }
   }
-};
+}
 
 const safeCodexRuntimeAllowlistHostPattern =
   /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$/i;
@@ -990,6 +993,43 @@ const assertStrictCodexRuntimeNetworkPolicy = (
   }
   return policy;
 };
+
+function assertCodexRuntimeNetworkPolicy(policy: unknown): asserts policy is CodexRuntimeNetworkPolicy {
+  if (!isPlainObject(policy)) {
+    throw dockerPolicyUnavailable('Codex runtime network policy must be an object.');
+  }
+  if (policy.mode === 'disabled') {
+    return;
+  }
+  if (policy.mode !== 'egress_allowlist') {
+    throw dockerPolicyUnavailable('Codex runtime network policy mode is invalid.');
+  }
+  if (!validRuntimeNetworkProviders.has(policy.provider as CodexRuntimeNetworkProvider)) {
+    throw dockerPolicyUnavailable('Codex runtime network policy provider is invalid.');
+  }
+  if (!Array.isArray(policy.allowlist_rules)) {
+    throw dockerPolicyUnavailable('Codex runtime network policy allowlist_rules must be an array.');
+  }
+  if (policy.provider === 'docker_network_proxy' && !isPlainObject(policy.provider_config)) {
+    throw dockerPolicyUnavailable('Docker network proxy provider_config is required.');
+  }
+}
+
+function assertCodexRuntimeScopes(scopes: unknown): asserts scopes is readonly CodexRuntimeScope[] {
+  if (!Array.isArray(scopes)) {
+    throw invalidProfile('Codex runtime allowed_scopes must be an array.');
+  }
+  for (const scope of scopes) {
+    if (
+      !isPlainObject(scope) ||
+      typeof scope.project_id !== 'string' ||
+      scope.project_id.length === 0 ||
+      (scope.repo_id !== undefined && typeof scope.repo_id !== 'string')
+    ) {
+      throw invalidProfile('Codex runtime allowed_scopes entries must identify project and optional repo scope.');
+    }
+  }
+}
 
 const dockerNetworkProxyConfigDigestInput = (config: CodexDockerNetworkProxyConfig): Omit<CodexDockerNetworkProxyConfig, 'provider_config_digest'> => ({
   proxy_image: config.proxy_image,
@@ -1443,6 +1483,8 @@ export const validateCodexRuntimeProfileRevision = (
     throw invalidProfile('Codex runtime profile environment is invalid.');
   }
   assertCodexRuntimeResourceLimits(revision.resource_limits);
+  assertCodexRuntimeNetworkPolicy(revision.network_policy);
+  assertCodexRuntimeScopes(revision.allowed_scopes);
   assertSha256Digest(revision.docker_image_digest, 'Docker image digest');
   assertSha256Digest(revision.codex_config_digest, 'Codex config digest');
   assertSha256Digest(revision.expected_effective_config_digest, 'Expected effective config digest');
