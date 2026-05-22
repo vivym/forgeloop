@@ -484,6 +484,24 @@ const normalizeRuntimePublicKey = (key: string): string =>
     .toLowerCase();
 
 const compactRuntimePublicKey = (key: string): string => normalizeRuntimePublicKey(key).replace(/_/g, '');
+const unsafeRuntimePublicCompactKeys = new Set([
+  'prompt',
+  'prompts',
+  'systemprompt',
+  'developerprompt',
+  'userprompt',
+  'workerprompt',
+  'log',
+  'logs',
+  'stdout',
+  'stderr',
+  'appserverlog',
+  'appserverlogs',
+  'workerlog',
+  'workerlogs',
+  'containerlog',
+  'containerlogs',
+]);
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -871,6 +889,9 @@ const isRawRuntimePublicString = (
   if (options.allowDisplayText === true) {
     return isCodexRuntimeUnsafeDisplayString(value);
   }
+  if (/[\s()[\]{}'"=;]/.test(value) && isCodexRuntimeUnsafeDisplayString(value)) {
+    return true;
+  }
   return isCodexRuntimeLocalPathString(value);
 };
 
@@ -961,6 +982,7 @@ const isUnsafeCodexRuntimePublicKey = (key: string): boolean => {
     rawRuntimePublicFieldPattern.test(normalizedKey) ||
     rawRuntimePublicFieldPattern.test(compactKey) ||
     compactKey.startsWith('raw') ||
+    unsafeRuntimePublicCompactKeys.has(compactKey) ||
     /(?:apikey|token|secret|auth(?:orization)?(?:header)?|password|endpoint|socket(?:path|ref)?|container(?:id|name|ref)?|workspacepath|sourcerepopath)$/.test(
       compactKey,
     ) ||
@@ -1498,6 +1520,7 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
       !key.endsWith('_digest') &&
       (isRawPathEndpointOrContainerId(value) ||
         isCodexRuntimeEndpointOrContainerString(value) ||
+        isCodexRuntimeUnsafeDisplayString(value) ||
         isBareDnsHostString(value) ||
         publicUnsafeSecretTokenPattern.test(value) ||
         isCodexRuntimeLocalPathString(value))

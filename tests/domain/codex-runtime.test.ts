@@ -749,6 +749,44 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('rejects endpoint leakage embedded in generated payload fields', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'spec_draft',
+          prompt_version: 'generation-prompt-v1',
+          output_schema_version: 'spec-draft-output.v1',
+          generated_payload: {
+            title: 'Public spec title',
+            description: 'Provider endpoint api.openai.com failed before draft publication',
+          },
+          generated_payload_digest: digestA,
+          generation_artifacts: [],
+          public_summary: 'Generated a spec draft.',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it.each([{ prompt: 'write private implementation details' }, { log: 'raw stdout from worker' }, { logs: ['raw worker log line'] }])(
+    'rejects nested raw prompt or log keys %#',
+    (generatedPayload) => {
+      expectDomainErrorCode(
+        () =>
+          validateCodexRuntimeJobTerminalResult({
+            task_kind: 'spec_draft',
+            prompt_version: 'generation-prompt-v1',
+            output_schema_version: 'spec-draft-output.v1',
+            generated_payload: generatedPayload,
+            generated_payload_digest: digestA,
+            generation_artifacts: [],
+            public_summary: 'Generated a spec draft.',
+          }),
+        'codex_docker_runtime_evidence_unsafe',
+      );
+    },
+  );
+
   it.each([
     'runtime_job_id',
     'launch_lease_id',
@@ -1113,6 +1151,7 @@ describe('codex runtime domain contracts', () => {
       'unix:/tmp/private/codex.sock',
       'codex.sock',
       '4f1e2d3c4f1e',
+      'worker api.openai.com',
     ]) {
       expectDomainErrorCode(
         () =>
