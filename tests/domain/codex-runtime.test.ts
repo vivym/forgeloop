@@ -231,6 +231,7 @@ describe('codex runtime domain contracts', () => {
       size_limit_bytes: 1_000_000,
     };
     const envelopeInput = {
+      id: 'envelope-1',
       runtime_job_id: 'runtime-job-1',
       launch_lease_id: 'lease-1',
       worker_id: 'worker-1',
@@ -243,12 +244,49 @@ describe('codex runtime domain contracts', () => {
         launch_lease_id: 'lease-1',
       },
       aad_digest: digestA,
-    };
+      envelope_digest: digestB,
+      status: 'available',
+      claim_request_id: 'claim-request-1',
+      claim_request_digest: digestC,
+      claimed_worker_session_digest: digestB,
+      claimed_key_id: 'claimed-key-1',
+      claimed_at: '2026-05-20T00:01:00.000Z',
+      expires_at: '2026-05-20T00:10:00.000Z',
+      created_at: '2026-05-20T00:00:00.000Z',
+    } satisfies CodexLaunchTokenEnvelope;
+    const expectedEnvelopeDigest = codexCanonicalDigest({
+      id: envelopeInput.id,
+      runtime_job_id: envelopeInput.runtime_job_id,
+      launch_lease_id: envelopeInput.launch_lease_id,
+      worker_id: envelopeInput.worker_id,
+      key_id: envelopeInput.key_id,
+      algorithm: envelopeInput.algorithm,
+      ciphertext: envelopeInput.ciphertext,
+      encryption_nonce: envelopeInput.encryption_nonce,
+      aad_json: envelopeInput.aad_json,
+      aad_digest: envelopeInput.aad_digest,
+      expires_at: envelopeInput.expires_at,
+    });
 
     expect(codexRuntimeJobInputDigest(workloadInput)).toBe(codexRuntimeJobInputDigest(sameInputWithDifferentOrder));
     expect(codexWorkspaceAcquisitionDigest(workspaceAcquisition)).toBe(codexCanonicalDigest(workspaceAcquisition));
     expect(codexWorkspaceAcquisitionDigest(undefined)).toBeUndefined();
-    expect(codexLaunchTokenEnvelopeDigest(envelopeInput)).toBe(codexCanonicalDigest(envelopeInput));
+    expect(codexLaunchTokenEnvelopeDigest(envelopeInput)).toBe(expectedEnvelopeDigest);
+    expect(
+      codexLaunchTokenEnvelopeDigest({
+        ...envelopeInput,
+        envelope_digest: digestA,
+        status: 'claimed',
+        claim_request_id: 'claim-request-2',
+        claim_request_digest: digestA,
+        claimed_worker_session_digest: digestC,
+        claimed_key_id: 'claimed-key-2',
+        claimed_at: '2026-05-20T00:02:00.000Z',
+        created_at: '2026-05-20T00:03:00.000Z',
+      }),
+    ).toBe(expectedEnvelopeDigest);
+    expect(codexLaunchTokenEnvelopeDigest({ ...envelopeInput, ciphertext: 'different-sealed-token' })).not.toBe(expectedEnvelopeDigest);
+    expect(codexLaunchTokenEnvelopeDigest({ ...envelopeInput, aad_digest: digestC })).not.toBe(expectedEnvelopeDigest);
   });
 
   it('identifies active runtime jobs before terminal status', () => {
@@ -353,6 +391,20 @@ describe('codex runtime domain contracts', () => {
     ]) {
       expectDomainErrorCode(() => assertCodexRuntimePublicSafeValue(unsafeValue, 'runtime result'), 'codex_docker_runtime_evidence_unsafe');
     }
+  });
+
+  it.each([
+    ['href', 'localhost:3000/internal'],
+    ['url', '127.0.0.1:4555/internal'],
+    ['internal_ref', '[::1]:4555/internal'],
+    ['href', '::1:4555/internal'],
+    ['url', 'control.internal/runtime-jobs'],
+    ['internal_ref', 'app-server.internal/jobs'],
+  ])('rejects host-like runtime endpoint string in %s', (field, value) => {
+    expectDomainErrorCode(
+      () => assertCodexRuntimePublicSafeValue({ [field]: value }, 'runtime result'),
+      'codex_docker_runtime_evidence_unsafe',
+    );
   });
 
   it('treats project-only scope as project-wide while repo scope is repo-specific', () => {

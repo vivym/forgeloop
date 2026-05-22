@@ -532,12 +532,16 @@ const isRawRuntimePublicString = (value: string): boolean => {
   if (/^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
     return false;
   }
+  const loopbackEndpointPattern = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)(:\d{1,5})?(\/|$)/i;
+  const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
   return (
     /^(\/|~\/|\.{1,2}\/|[A-Za-z]:[\\/])/i.test(value) ||
     /^https?:\/\//i.test(value) ||
     /^(app-server|control-plane):\/\//i.test(value) ||
     /^unix:/i.test(value) ||
     /\.sock(?:$|[/?#])/i.test(value) ||
+    loopbackEndpointPattern.test(value) ||
+    hostWithPortOrPathPattern.test(value) ||
     /^[a-f0-9]{12,64}$/i.test(value)
   );
 };
@@ -671,7 +675,24 @@ export const codexWorkspaceAcquisitionDigest = (input: unknown | undefined): str
   return codexCanonicalDigest(input);
 };
 
-export const codexLaunchTokenEnvelopeDigest = (input: unknown): string => codexCanonicalDigest(input);
+export const codexLaunchTokenEnvelopeDigest = (input: unknown): string => {
+  if (!isPlainObject(input)) {
+    throw unsupportedJsonValue();
+  }
+  return codexCanonicalDigest({
+    id: input.id,
+    runtime_job_id: input.runtime_job_id,
+    launch_lease_id: input.launch_lease_id,
+    worker_id: input.worker_id,
+    key_id: input.key_id,
+    algorithm: input.algorithm,
+    ciphertext: input.ciphertext,
+    encryption_nonce: input.encryption_nonce,
+    aad_json: input.aad_json,
+    aad_digest: input.aad_digest,
+    expires_at: input.expires_at,
+  });
+};
 
 export const validateCodexRuntimeJobTerminalResult = (input: unknown): Record<string, unknown> => {
   if (!isPlainObject(input)) {
