@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
 
 import { DomainError, type IsoDateTime, type RunDriverKind } from './types.js';
 
@@ -525,6 +526,36 @@ const isSha256Digest = (value: unknown): value is string => typeof value === 'st
 const isRawPathEndpointOrContainerId = (value: string): boolean =>
   /^\/|https?:\/\/|^unix:|\.sock$/i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);
 
+const rawEndpointHostCandidate = (value: string): string | undefined => {
+  const withoutPath = value.split(/[/?#]/, 1)[0] ?? value;
+  const bracketed = withoutPath.match(/^\[([^\]]+)\](?::\d{1,5})?$/);
+  if (bracketed?.[1] !== undefined) {
+    return bracketed[1];
+  }
+  const ipv4Mapped = withoutPath.match(/^((?:::ffff:|(?:0{1,4}:){5}ffff:)\d{1,3}(?:\.\d{1,3}){3})(?::\d{1,5})?$/i);
+  if (ipv4Mapped?.[1] !== undefined) {
+    return ipv4Mapped[1];
+  }
+  if (isIP(withoutPath) !== 0) {
+    return withoutPath;
+  }
+  const hostPort = withoutPath.match(/^([^:]+):\d{1,5}$/);
+  return hostPort?.[1];
+};
+
+const isIpEndpointString = (value: string): boolean => {
+  const candidate = rawEndpointHostCandidate(value);
+  if (candidate === undefined) {
+    return false;
+  }
+  const withoutZone = candidate.toLowerCase().replace(/%.+$/, '');
+  const ipv4Mapped = withoutZone.match(/^(?:::ffff:|(?:0{1,4}:){5}ffff:)(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (ipv4Mapped?.[1] !== undefined) {
+    return isIP(ipv4Mapped[1]) === 4;
+  }
+  return isIP(withoutZone) !== 0;
+};
+
 const isRawRuntimePublicString = (value: string): boolean => {
   if (/^artifact:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
     return false;
@@ -562,6 +593,7 @@ const isRawRuntimePublicString = (value: string): boolean => {
     /^(app-server|control-plane):\/\//i.test(value) ||
     /^unix:/i.test(value) ||
     /\.sock(?:$|[/?#])/i.test(value) ||
+    isIpEndpointString(value) ||
     loopbackEndpointPattern.test(value) ||
     privateIpv4EndpointPattern.test(value) ||
     ipv4MappedPrivateEndpointPattern.test(value) ||
