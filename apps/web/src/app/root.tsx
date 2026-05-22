@@ -1,7 +1,7 @@
 import type { LinksFunction } from 'react-router';
 import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration, useRouteError } from 'react-router';
 import { AppProviders } from './providers';
-import '../shared/design-system/theme/css-variables.css';
+import '../shared/styles/theme.css';
 
 export const links: LinksFunction = () => [];
 

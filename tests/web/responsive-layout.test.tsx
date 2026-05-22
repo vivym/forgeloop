@@ -4,6 +4,7 @@ import { waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -17,7 +18,7 @@ describe('responsive layout contract', () => {
     expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
     expect(screen.getByRole('main')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
-    expect(document.body.innerHTML).not.toContain('fl-app-shell');
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('renders dense tables with a card fallback contract', async () => {

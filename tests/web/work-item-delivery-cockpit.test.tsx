@@ -14,6 +14,7 @@ import {
 } from '../../apps/web/src/features/work-items/delivery-cockpit';
 import type { DeliveryPackageDisplayRow } from '../../apps/web/src/features/work-items/work-item-view-model';
 import type { ProductAction, WorkItemDeliveryReadiness } from '../../apps/web/src/shared/api/types';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 const readinessFixture: WorkItemDeliveryReadiness = {
   work_item_id: 'wi-1',
@@ -220,7 +221,7 @@ describe('Delivery Cockpit presentational components', () => {
     const openPackageLinks = screen.getAllByRole('link', { name: /Open package/i });
     expect(openPackageLinks).toHaveLength(1);
     expect(openPackageLinks[0]?.getAttribute('href')).toBe('/packages/pkg-1');
-    expect(openPackageLinks[0]?.getAttribute('class')).not.toContain('fl-');
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('renders command actions as disabled unless a command handler is supplied', () => {

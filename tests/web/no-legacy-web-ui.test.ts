@@ -2,6 +2,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { legacyClassTokenMatches } from './helpers/no-legacy-class-scan';
+
 const textFiles = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {
     const path = join(dir, entry);
@@ -145,8 +147,13 @@ describe('no legacy Web UI baggage', () => {
       'apps/web/src/api',
       'apps/web/src/styles.css',
       'apps/web/src/workbenchState.ts',
+      'apps/web/src/shared/design-system/theme/css-variables.css',
     ]) {
       expect(existsSync(path), path).toBe(false);
     }
+  });
+
+  it('does not use old global visual class tokens on active Web surfaces', () => {
+    expect(legacyClassTokenMatches()).toEqual([]);
   });
 });

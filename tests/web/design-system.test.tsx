@@ -32,6 +32,7 @@ import {
   ToastProvider,
   Textarea,
 } from '../../apps/web/src/shared/ui';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 afterEach(() => {
   cleanup();
@@ -43,7 +44,7 @@ describe('design system primitives', () => {
 
     const button = screen.getByRole('button', { name: 'Create Spec' });
     expect(button).toBeTruthy();
-    expect(button.className).not.toContain('fl-');
+    expectNoLegacyRenderedClasses();
   });
 
   it('preserves button action context while loading and disabled', () => {
@@ -76,7 +77,7 @@ describe('design system primitives', () => {
     expect(notice.getAttribute('data-testid')).toBe('readiness-notice');
     expect(screen.getByRole('note', { name: 'Custom readiness' })).toBeTruthy();
     expect(screen.getByRole('alert', { name: 'Gate blocked' })).toBeTruthy();
-    expect(document.body.innerHTML).not.toContain('fl-');
+    expectNoLegacyRenderedClasses();
   });
 
   it('renders fields with label, hint, required marker, and alert errors', () => {
@@ -115,7 +116,7 @@ describe('design system primitives', () => {
     const input = screen.getByLabelText('Release owner');
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(input.hasAttribute('disabled')).toBe(true);
-    expect(input.className).not.toContain('fl-');
+    expectNoLegacyRenderedClasses();
   });
 
   it('keeps explicit aria-invalid false out of danger state', () => {
@@ -135,8 +136,8 @@ describe('design system primitives', () => {
 
     for (const control of [input, select, textarea, checkbox]) {
       expect(control.getAttribute('aria-invalid')).toBe('false');
-      expect(control.className).not.toContain('fl-');
     }
+    expectNoLegacyRenderedClasses();
 
     expect(resolveAriaInvalid(false, 'false')).toEqual({ isInvalid: false, value: 'false' });
     expect(resolveAriaInvalid(false, 'grammar')).toEqual({ isInvalid: true, value: 'grammar' });
@@ -149,7 +150,7 @@ describe('design system primitives', () => {
     const group = container.firstElementChild;
     expect(group?.getAttribute('aria-hidden')).toBe('true');
     expect(container.querySelectorAll('[data-skeleton-line]').length).toBe(3);
-    expect(container.innerHTML).not.toContain('fl-');
+    expectNoLegacyRenderedClasses();
   });
 
   it('renders page sections without nested card markup', () => {
@@ -159,7 +160,7 @@ describe('design system primitives', () => {
     const section = heading.closest('section');
     expect(section).toBeTruthy();
     expect(section?.querySelector('section')).toBeNull();
-    expect(document.body.innerHTML).not.toContain('fl-');
+    expectNoLegacyRenderedClasses();
   });
 
   it('keeps detail layout rail inline before content without legacy classes', () => {
@@ -172,7 +173,7 @@ describe('design system primitives', () => {
     const rail = screen.getByRole('complementary', { name: 'Release actions' });
     const content = screen.getByRole('article', { name: 'Release detail' });
     expect(rail.compareDocumentPosition(content)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(document.body.innerHTML).not.toContain('fl-');
+    expectNoLegacyRenderedClasses();
   });
 
   it('exports semantic layout primitives without legacy classes', () => {
@@ -202,7 +203,7 @@ describe('design system primitives', () => {
     expect(screen.getByText('Project').tagName).toBe('DT');
     expect(screen.getByText('project-web-product').tagName).toBe('DD');
     expect(screen.getByRole('heading', { name: 'Product shell' })).toBeTruthy();
-    expect(document.body.innerHTML).not.toContain('fl-');
+    expectNoLegacyRenderedClasses();
   });
 
   it('exports dialog close semantics that can dismiss uncontrolled content', () => {
@@ -253,12 +254,14 @@ describe('design system primitives', () => {
 
     expect(screen.getByRole('button', { name: 'Undo archive' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Dismiss notification' })).toBeTruthy();
-    expect(document.body.innerHTML).not.toContain('fl-dialog');
-    expect(document.body.innerHTML).not.toContain('fl-drawer');
-    expect(document.body.innerHTML).not.toContain('fl-toast');
+    expectNoLegacyRenderedClasses();
   });
 });
 
 function PageHeaderForTest() {
   return <h1>Release shell</h1>;
+}
+
+function expectNoLegacyRenderedClasses() {
+  expect(legacyRenderedClassTokens(document.body)).toEqual([]);
 }

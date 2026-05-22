@@ -106,8 +106,9 @@ describe('web accessibility gates', () => {
   });
 
   it('keeps design tokens above minimum contrast for product UI states', () => {
-    const css = readFileSync('apps/web/src/shared/design-system/theme/css-variables.css', 'utf8');
+    const css = readFileSync('apps/web/src/shared/styles/theme.css', 'utf8');
     const tokens = cssTokenMap(css);
+    const legacyTokenPrefix = ['--', 'fl'].join('');
 
     expect(tokens['--color-background']).toBe('#f6f8fb');
     expect(tokens['--color-surface']).toBe('#ffffff');
@@ -122,7 +123,7 @@ describe('web accessibility gates', () => {
     expect(tokens['--transition-duration-slow']).toBe('260ms');
     expect(tokens['--ease-standard']).toBe('cubic-bezier(0.2, 0, 0, 1)');
     expect(tokens['--ease-out']).toBe('cubic-bezier(0, 0, 0.2, 1)');
-    expect(Object.keys(tokens).some((key) => key.includes('-fl-'))).toBe(false);
+    expect(Object.keys(tokens).some((key) => key.startsWith(legacyTokenPrefix))).toBe(false);
     expect(css).toContain('@media (prefers-reduced-motion: reduce)');
     expect(contrast(tokens['--color-text-primary'], tokens['--color-background'])).toBeGreaterThanOrEqual(7);
     expect(contrast(tokens['--color-text-secondary'], tokens['--color-surface'])).toBeGreaterThanOrEqual(4.5);
