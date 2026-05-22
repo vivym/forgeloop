@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   Artifact,
+  AutomationActionRun,
   Decision,
   ExecutionPackage,
   ExecutionPackageDependency,
@@ -1158,6 +1159,39 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
     expect(mappedRunSession?.updated_at).toBe('2026-05-08T03:01:00.010Z');
     expect(mappedRunSession?.started_at).toBe('2026-05-08T03:02:00.123Z');
     expect(mappedRunSession?.finished_at).toBe('2026-05-08T03:03:00.456Z');
+  });
+
+  it('normalizes PostgreSQL locked-until timestamp strings back to ISO datetime strings', async () => {
+    const actionRun: AutomationActionRun = {
+      id: 'automation-action-1',
+      action_type: 'codex_generation',
+      target_object_type: 'generation_request',
+      target_object_id: 'generation-1',
+      target_status: 'running',
+      idempotency_key: 'automation-action-key-1',
+      automation_scope: 'repo:project-1:repo-1',
+      automation_settings_version: 1,
+      capability_fingerprint: 'capability-1',
+      precondition_fingerprint: 'precondition-1',
+      action_input_json: {},
+      status: 'running',
+      claim_token: 'claim-token-1',
+      attempt: 1,
+      locked_until: '2026-05-08T03:10:00.000Z',
+      claimed_at: '2026-05-08T03:00:00.000Z',
+      started_at: '2026-05-08T03:00:00.000Z',
+      created_at: '2026-05-08T03:00:00.000Z',
+      updated_at: '2026-05-08T03:00:00.000Z',
+    };
+
+    const mappedActionRun = await createSingleRowRepository({
+      ...actionRun,
+      lockedUntil: '2026-05-08 03:10:00+00',
+      claimedAt: '2026-05-08 03:00:00+00',
+    }).getClaimedAutomationActionRun({ id: actionRun.id, claim_token: actionRun.claim_token! });
+
+    expect(mappedActionRun.locked_until).toBe('2026-05-08T03:10:00.000Z');
+    expect(mappedActionRun.claimed_at).toBe('2026-05-08T03:00:00.000Z');
   });
 });
 

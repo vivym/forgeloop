@@ -194,7 +194,7 @@ export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 
 const snakeToCamel = (value: string) => value.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
 const camelToSnake = (value: string) => value.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
-const timestampKeyPattern = /(?:^|_)at$|At$/;
+const timestampKeyPattern = /(?:^|_)(?:at|until|timestamp)$|(?:At|Until|Timestamp)$/;
 const postgresTimestampPattern = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)([+-]\d{2})(?::?(\d{2}))?$/;
 
 const toDbRecord = (record: object, table?: AnyPgTable): Record<string, unknown> => {
@@ -239,6 +239,17 @@ const fromDbRecord = <T>(record: Record<string, unknown>): T =>
       .filter(([, value]) => value !== null)
       .map(([key, value]) => [camelToSnake(key), normalizeTimestampValue(key, value)]),
   ) as T;
+
+const normalizedTimestampString = (value: string): string => {
+  const normalized = normalizeTimestampValue('timestamp', value);
+  return typeof normalized === 'string' ? normalized : value;
+};
+
+const timestampIsAfter = (left: string, right: string): boolean => {
+  const leftMs = Date.parse(normalizedTimestampString(left));
+  const rightMs = Date.parse(normalizedTimestampString(right));
+  return Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs > rightMs;
+};
 
 type CanonicalJsonValue =
   | string
@@ -4781,7 +4792,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (
       row === undefined ||
       row.sessionTokenHash !== codexCredentialPayloadDigest(sessionToken) ||
-      row.sessionTokenExpiresAt <= now ||
+      !timestampIsAfter(row.sessionTokenExpiresAt, now) ||
       (requireConnected && ((row.status !== 'online' && row.status !== 'draining') || row.controlChannelStatus !== 'connected'))
     ) {
       throw codexDenied(deniedCode, 'Codex worker session proof was rejected.');

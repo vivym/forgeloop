@@ -16,6 +16,20 @@ jobs:
     name: Test and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: forgeloop_test
+          POSTGRES_USER: forgeloop
+          POSTGRES_PASSWORD: forgeloop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U forgeloop -d forgeloop_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -34,6 +48,17 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Prepare Codex runtime concurrency database
+        env:
+          FORGELOOP_DATABASE_URL: postgresql://forgeloop:forgeloop@127.0.0.1:5432/forgeloop_test
+        run: pnpm db:push
+
+      - name: Run Codex runtime Drizzle concurrency tests
+        env:
+          FORGELOOP_REQUIRE_DB_CONCURRENCY: '1'
+          FORGELOOP_TEST_DATABASE_URL: postgresql://forgeloop:forgeloop@127.0.0.1:5432/forgeloop_test
+        run: pnpm vitest run tests/db/codex-runtime-drizzle-concurrency.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 
       - name: Run build
         run: pnpm build
