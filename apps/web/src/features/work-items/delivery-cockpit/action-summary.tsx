@@ -1,4 +1,5 @@
 import type { ProductAction, WorkItemDeliveryReadiness } from '../../../shared/api/types';
+import { Metric, MetricGrid } from '../../../shared/layout';
 import { Badge, StatusPill } from '../../../shared/ui';
 import { productLaneDefinition } from '../../product-lanes/product-lanes';
 import { deliveryOverallLabel, formatValue, groupDeliveryActionsByPriority, sanitizeDeliveryActionsForDisplay } from '../work-item-view-model';
@@ -14,43 +15,29 @@ export function DeliveryActionSummary({ readiness }: DeliveryActionSummaryProps)
   const primaryAction = actionGroups.primary[0] ?? actionGroups.secondary[0];
 
   return (
-    <section aria-label="Delivery action summary" className="delivery-action-summary" data-testid="delivery-action-summary">
-      <div className="state-grid">
-        <div className="metric">
-          <span>Active lane</span>
-          <strong>{lane.label}</strong>
-          <p className="empty">{lane.description}</p>
-        </div>
-        <div className="metric">
-          <span>Readiness</span>
-          <StatusPill tone={readiness.overall_state === 'blocked' ? 'danger' : 'info'}>{deliveryOverallLabel(readiness)}</StatusPill>
-        </div>
-        <div className="metric">
-          <span>Blockers</span>
-          <strong>{`${blockerCount} ${blockerCount === 1 ? 'blocker' : 'blockers'}`}</strong>
-        </div>
-        <div className="metric">
-          <span>Primary action</span>
-          <strong>{primaryAction?.label ?? 'No primary action'}</strong>
-          <PrimaryActionState action={primaryAction} />
-        </div>
-        <div className="metric">
-          <span>Work type</span>
-          <Badge tone="info">{formatValue(readiness.work_item_kind)}</Badge>
-        </div>
-      </div>
+    <section aria-label="Delivery action summary" data-testid="delivery-action-summary">
+      <MetricGrid className="xl:grid-cols-5">
+        <Metric description={lane.description} label="Active lane" value={lane.label} />
+        <Metric
+          label="Readiness"
+          value={<StatusPill tone={readiness.overall_state === 'blocked' ? 'danger' : 'info'}>{deliveryOverallLabel(readiness)}</StatusPill>}
+        />
+        <Metric label="Blockers" value={`${blockerCount} ${blockerCount === 1 ? 'blocker' : 'blockers'}`} />
+        <Metric label="Primary action" value={primaryAction?.label ?? 'No primary action'} description={<PrimaryActionState action={primaryAction} />} />
+        <Metric label="Work type" value={<Badge tone="info">{formatValue(readiness.work_item_kind)}</Badge>} />
+      </MetricGrid>
     </section>
   );
 }
 
 function PrimaryActionState({ action }: { action: ProductAction | undefined }) {
   if (action === undefined) {
-    return <p className="empty">No lane action is available.</p>;
+    return <>No lane action is available.</>;
   }
 
   if (!action.enabled) {
-    return <p className="empty">{action.disabled_reason ?? action.blocked_reason ?? 'Disabled'}</p>;
+    return <>{action.disabled_reason ?? action.blocked_reason ?? 'Disabled'}</>;
   }
 
-  return <p className="empty">Available</p>;
+  return <>Available</>;
 }

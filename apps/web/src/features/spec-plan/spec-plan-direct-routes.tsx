@@ -16,11 +16,18 @@ import {
 import type { PlanRevision, ProductListItem, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, DataTable, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
+import { ActionRail, DetailLayout, InlineActions, Metric, MetricGrid, PageHeader, Section } from '../../shared/layout';
+import { Badge, Button, DataTable, InlineNotice, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
 import { SpecPlanLifecycleActions } from './spec-plan-lifecycle-actions';
 
 type ArtifactKind = 'spec' | 'plan';
+
+const primaryLinkClass =
+  'inline-flex min-h-10 items-center justify-center rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white transition-colors duration-base ease-standard hover:bg-primary-hover';
+const selectedSegmentClass =
+  'inline-flex min-h-9 items-center justify-center rounded-md border border-primary bg-primary px-3 text-sm font-semibold text-white transition-colors duration-base ease-standard';
+const unselectedSegmentClass =
+  'inline-flex min-h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-border-strong hover:bg-surface-muted';
 
 interface RegistryFilters {
   status?: string;
@@ -38,7 +45,7 @@ export function SpecsRegistry() {
     <>
       <PageHeader
         actions={
-          <Link className="fl-button fl-button--primary" to="/work-items">
+          <Link className={primaryLinkClass} to="/work-items">
             Create from Work Item
           </Link>
         }
@@ -74,7 +81,7 @@ export function PlansRegistry() {
     <>
       <PageHeader
         actions={
-          <Link className="fl-button fl-button--primary" to="/work-items">
+          <Link className={primaryLinkClass} to="/work-items">
             Create from Work Item
           </Link>
         }
@@ -219,7 +226,7 @@ function ArtifactDetailView({
     return (
       <DetailLayout header={<PageHeader subtitle={`${artifactName} detail could not be loaded.`} title={artifactName} />}>
         <Section title="Unavailable">
-          <p className="empty">{artifactName} data is temporarily unavailable.</p>
+          <InlineNotice title={`${artifactName} data is temporarily unavailable.`} tone="danger" />
         </Section>
       </DetailLayout>
     );
@@ -229,7 +236,7 @@ function ArtifactDetailView({
     return (
       <DetailLayout header={<PageHeader subtitle={`No ${artifactName.toLowerCase()} was found for this route.`} title={artifactName} />}>
         <Section title="Empty">
-          <p className="empty">No {artifactName} data is available.</p>
+          <InlineNotice title={`No ${artifactName} data is available.`} />
         </Section>
       </DetailLayout>
     );
@@ -242,10 +249,10 @@ function ArtifactDetailView({
     <DetailLayout
       actionRail={
         <ActionRail title={`${artifactName} actions`}>
-          <div className="stack-form compact">
+          <div className="grid gap-3">
             {artifact.current_revision_id ? (
               <Link
-                className="fl-button fl-button--primary"
+                className={primaryLinkClass}
                 to={`${revisionBasePath}/revisions/${encodeURIComponent(artifact.current_revision_id)}`}
               >
                 Open current revision
@@ -256,7 +263,7 @@ function ArtifactDetailView({
               </Button>
             )}
             <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} workItemId={artifact.work_item_id} />
-            <p className="status-line">Creation and edits start from the parent Work Item planning flow.</p>
+            <InlineNotice title="Creation and edits start from the parent Work Item planning flow." tone="info" />
           </div>
         </ActionRail>
       }
@@ -269,39 +276,39 @@ function ArtifactDetailView({
       }
     >
       <Section title="Overview">
-        <div className="state-grid">
+        <MetricGrid>
           <Metric label="Status" value={formatValue(artifact.status)} />
           <Metric label="Gate" value={formatValue(artifact.gate_state)} />
           <Metric label="Resolution" value={formatValue(artifact.resolution)} />
           <Metric label="Current revision" value={currentRevision ? revisionLabel(currentRevision) : artifact.current_revision_id ? 'Current revision' : 'Not created'} />
-        </div>
+        </MetricGrid>
       </Section>
       <Section title="Parent context">
-        <div className="artifact-list">
+        <InlineActions>
           <Link to={`/work-items/${encodeURIComponent(artifact.work_item_id)}`}>Work Item</Link>
-        </div>
+        </InlineActions>
       </Section>
       {kind === 'plan' ? <PlanPackageState plan={artifact} /> : null}
       <Section
         description="Direct route history uses product replay events. Revision state remains available separately when replay cannot be loaded."
         title="History / Timeline"
       >
-        {replayStatus === 'pending' ? <p className="empty">Loading event timeline.</p> : null}
+        {replayStatus === 'pending' ? <InlineNotice title="Loading event timeline." tone="info" /> : null}
         {replayIsError ? (
           <>
-            <p className="empty">History / Timeline replay is temporarily unavailable.</p>
-            <p className="status-line">Revision list remains available, but the full event timeline could not be loaded.</p>
+            <InlineNotice title="History / Timeline replay is temporarily unavailable." tone="danger" />
+            <InlineNotice title="Revision list remains available, but the full event timeline could not be loaded." tone="info" />
           </>
         ) : null}
         {replayStatus !== 'pending' && !replayIsError ? (
           replay?.length ? (
             <Timeline items={replayTimelineItems(replay, artifact.work_item_id)} />
           ) : (
-            <p className="empty">No replay events are available for this direct route yet.</p>
+            <InlineNotice title="No replay events are available for this direct route yet." />
           )
         ) : null}
-        {revisionsStatus === 'pending' ? <p className="empty">Loading revision list.</p> : null}
-        {revisionsIsError ? <p className="status-line">Revision list is temporarily unavailable.</p> : null}
+        {revisionsStatus === 'pending' ? <InlineNotice title="Loading revision list." tone="info" /> : null}
+        {revisionsIsError ? <InlineNotice title="Revision list is temporarily unavailable." tone="warning" /> : null}
         {revisionsStatus !== 'pending' && !revisionsIsError && revisionList.length ? <RevisionSummaryList revisions={revisionList} /> : null}
       </Section>
     </DetailLayout>
@@ -331,7 +338,7 @@ function SpecRevisionReadOnly({ revisionId, specId }: { revisionId: string; spec
       workItemId={revision.work_item_id}
     >
       <Section title="Document">
-        <div className="detail-block">
+        <div className="grid gap-2 rounded-card border border-border bg-surface p-4">
           <p>{revision.content}</p>
         </div>
       </Section>
@@ -373,7 +380,7 @@ function PlanRevisionReadOnly({ planId, revisionId }: { planId: string; revision
       workItemId={revision.work_item_id}
     >
       <Section title="Document">
-        <div className="detail-block">
+        <div className="grid gap-2 rounded-card border border-border bg-surface p-4">
           <p>{revision.content}</p>
         </div>
       </Section>
@@ -422,10 +429,10 @@ function ReadOnlyRevisionLayout({
     >
       <Section title="Revision metadata">
         {meta}
-        <div className="artifact-list">
+        <InlineActions>
           <Link to={`/work-items/${encodeURIComponent(workItemId)}`}>Work Item</Link>
           <Link to={artifactLink}>{artifactLabel}</Link>
-        </div>
+        </InlineActions>
       </Section>
       {children}
     </DetailLayout>
@@ -469,31 +476,31 @@ function RegistryFiltersBar({ basePath, selectedStatus }: { basePath: '/specs' |
 
   return (
     <Section title="Filters">
-      <div className="pill-list" aria-label="Status filters">
-        <Link className={selectedStatus === undefined ? 'fl-button fl-button--primary' : 'fl-button fl-button--secondary'} to={basePath}>
+      <InlineActions aria-label="Status filters">
+        <Link className={selectedStatus === undefined ? selectedSegmentClass : unselectedSegmentClass} to={basePath}>
           All
         </Link>
         {statuses.map((status) => (
           <Link
-            className={selectedStatus === status ? 'fl-button fl-button--primary' : 'fl-button fl-button--secondary'}
+            className={selectedStatus === status ? selectedSegmentClass : unselectedSegmentClass}
             key={status}
             to={`${basePath}?status=${encodeURIComponent(status)}`}
           >
             {formatValue(status)}
           </Link>
         ))}
-      </div>
+      </InlineActions>
     </Section>
   );
 }
 
 function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
   if (isPending) {
-    return <p className="empty">Loading {kind.toLowerCase()} registry.</p>;
+    return <InlineNotice title={`Loading ${kind.toLowerCase()} registry.`} tone="info" />;
   }
 
   if (isError) {
-    return <p className="empty">{kind} registry data is temporarily unavailable.</p>;
+    return <InlineNotice title={`${kind} registry data is temporarily unavailable.`} tone="danger" />;
   }
 
   return null;
@@ -505,9 +512,10 @@ function DegradedNotice({ hasDegradedSources }: { hasDegradedSources: boolean })
   }
 
   return (
-    <p className="status-line">
-      Registry data is available, but History / Timeline detail may be incomplete until parent Work Item replay is available.
-    </p>
+    <InlineNotice
+      title="Registry data is available, but History / Timeline detail may be incomplete until parent Work Item replay is available."
+      tone="warning"
+    />
   );
 }
 
@@ -515,7 +523,7 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
   if (plan.status !== 'approved') {
     return (
       <Section title="Downstream package">
-        <p className="empty">Package generation becomes available after Plan approval.</p>
+        <InlineNotice title="Package generation becomes available after Plan approval." />
       </Section>
     );
   }
@@ -523,22 +531,22 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
   if (plan.approved_revision_id === undefined) {
     return (
       <Section title="Downstream package">
-        <div className="artifact-list">
+        <InlineActions>
           <span>This approved Plan does not have an approved revision recorded yet.</span>
           <Link to="/packages">View package inventory</Link>
-        </div>
-        <p className="status-line">Open the package inventory to find packages that may already exist for this work.</p>
+        </InlineActions>
+        <InlineNotice title="Open the package inventory to find packages that may already exist for this work." tone="info" />
       </Section>
     );
   }
 
   return (
     <Section title="Downstream package">
-      <div className="artifact-list">
+      <InlineActions>
         <span>Package generation starts from the Packages workspace.</span>
         <Link to={`/packages?plan_revision_id=${encodeURIComponent(plan.approved_revision_id)}`}>View package readiness</Link>
-      </div>
-      <p className="status-line">Package generation is ready for this approved Plan. Open package readiness to continue.</p>
+      </InlineActions>
+      <InlineNotice title="Package generation is ready for this approved Plan. Open package readiness to continue." tone="success" />
     </Section>
   );
 }
@@ -547,7 +555,7 @@ function LoadingDetail({ title }: { title: string }) {
   return (
     <DetailLayout header={<PageHeader subtitle="Loading product context." title={title} />}>
       <Section title="Loading">
-        <p className="empty">Loading {title.toLowerCase()}.</p>
+        <InlineNotice title={`Loading ${title.toLowerCase()}.`} tone="info" />
       </Section>
     </DetailLayout>
   );
@@ -557,7 +565,7 @@ function InvalidRoute({ message, title }: { message: string; title: string }) {
   return (
     <DetailLayout header={<PageHeader subtitle="Route context is required for this page." title={title} />}>
       <Section title="Invalid route">
-        <p className="empty">{message}</p>
+        <InlineNotice title={message} />
       </Section>
     </DetailLayout>
   );
@@ -567,7 +575,7 @@ function RevisionUnavailable({ title }: { title: string }) {
   return (
     <DetailLayout header={<PageHeader subtitle="The revision could not be loaded." title={title} />}>
       <Section title="Unavailable">
-        <p className="empty">Revision data is temporarily unavailable.</p>
+        <InlineNotice title="Revision data is temporarily unavailable." tone="danger" />
       </Section>
     </DetailLayout>
   );
@@ -583,11 +591,11 @@ function RevisionMeta({
   revisionNumber: number;
 }) {
   return (
-    <div className="state-grid">
+    <MetricGrid>
       <Metric label="Revision" value={`Revision ${revisionNumber}`} />
       <Metric label="Created" value={formatDate(createdAt)} />
       <Metric label="Artifact status" value={formatValue(artifactStatus)} />
-    </div>
+    </MetricGrid>
   );
 }
 
@@ -601,18 +609,9 @@ function StructuredList({ items, title }: { items: string[]; title: string }) {
           ))}
         </ul>
       ) : (
-        <p className="empty">No {title.toLowerCase()} are recorded for this revision.</p>
+        <InlineNotice title={`No ${title.toLowerCase()} are recorded for this revision.`} />
       )}
     </Section>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
   );
 }
 
@@ -655,7 +654,7 @@ function revisionLabel(revision: SpecRevision | PlanRevision) {
 
 function RevisionSummaryList({ revisions }: { revisions: Array<SpecRevision | PlanRevision> }) {
   return (
-    <div className="detail-block">
+    <div className="grid gap-2 rounded-card border border-border bg-surface p-4">
       <strong>Revision list</strong>
       <ul>
         {revisions.map((revision) => (

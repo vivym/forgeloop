@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProductAction } from '../../apps/web/src/shared/api/types';
 import { primaryActionForItem, sortProductActions } from '../../apps/web/src/features/product-actions/product-actions';
 import { deletedProductLaneRoot } from './deleted-route-guards';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 import { projectId } from './fixtures/product-data';
 
@@ -23,6 +24,7 @@ describe('Product Lanes route', () => {
     );
     expect(screen.queryByText(/unsupported_view/i)).toBeNull();
     expect(document.body.innerHTML).not.toContain(deletedProductLaneRoot);
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('renders all canonical lane navigation entries as enabled links', async () => {

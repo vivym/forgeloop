@@ -9,8 +9,8 @@ import { createForgeloopCommandApi } from '../../shared/api/commands';
 import type { CreateWorkItemBody, WorkItemKind } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { PageHeader, Section } from '../../shared/layout';
-import { Button, Input, Select } from '../../shared/ui';
+import { InlineActions, Metric, MetricGrid, PageHeader, Section } from '../../shared/layout';
+import { Button, Field, InlineNotice, Input, Select } from '../../shared/ui';
 import { IntakeFields } from './intake/intake-fields';
 import {
   createDefaultIntakeDrafts,
@@ -182,54 +182,51 @@ export function CreateWorkItemForm() {
     <>
       <PageHeader subtitle="Capture typed intake context and the expected validation outcome." title="New Work Item" />
       <Section title="Create work item">
-        <form className="stack-form" onSubmit={(event) => void onSubmit(event)}>
-          <div className="state-grid" aria-label="Product context">
-            <ContextMetric label="Workspace" value="Current project" />
-            <ContextMetric label="Driver" value="Signed-in driver" />
+        <form className="grid gap-5" onSubmit={(event) => void onSubmit(event)}>
+          <div aria-label="Product context">
+            <MetricGrid>
+              <Metric label="Workspace" value="Current project" />
+              <Metric label="Driver" value="Signed-in driver" />
+            </MetricGrid>
           </div>
-          <div className="form-grid two">
-            <label>
-              Kind
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Kind">
               <Select
                 {...form.register('kind')}
                 options={workItemKindValues.map((value) => ({ label: workItemKindLabels[value], value }))}
               />
-            </label>
-            <label>
-              Priority
+            </Field>
+            <Field error={form.formState.errors.priority?.message} label="Priority">
               <Input {...form.register('priority')} invalid={Boolean(form.formState.errors.priority)} />
-              <FieldError message={form.formState.errors.priority?.message} />
-            </label>
-            <label>
-              Risk
+            </Field>
+            <Field error={form.formState.errors.risk?.message} label="Risk">
               <Input {...riskRegistration} invalid={Boolean(form.formState.errors.risk)} />
-              <FieldError message={form.formState.errors.risk?.message} />
-            </label>
+            </Field>
           </div>
-          <label>
-            Title
+          <Field error={form.formState.errors.title?.message} label="Title">
             <Input {...form.register('title')} invalid={Boolean(form.formState.errors.title)} />
-            <FieldError message={form.formState.errors.title?.message} />
-          </label>
+          </Field>
           <IntakeFields kind={kind} register={form.register} errors={form.formState.errors} />
           {preview.goal || preview.successCriteria.length > 0 ? (
-            <div className="state-grid" aria-label="Derived Work Item brief">
-              <ContextMetric label="Derived goal" value={preview.goal || 'Add intake context'} />
-              <ContextMetric
-                label="Derived criteria"
-                value={preview.successCriteria.length > 0 ? preview.successCriteria.join('; ') : 'Add required outcomes'}
-              />
+            <div aria-label="Derived Work Item brief">
+              <MetricGrid>
+                <Metric label="Derived goal" value={preview.goal || 'Add intake context'} />
+                <Metric
+                  label="Derived criteria"
+                  value={preview.successCriteria.length > 0 ? preview.successCriteria.join('; ') : 'Add required outcomes'}
+                />
+              </MetricGrid>
             </div>
           ) : null}
-          {submitError ? <p className="danger-text">{submitError}</p> : null}
-          <div className="button-row">
+          {submitError ? <InlineNotice title={submitError} tone="danger" /> : null}
+          <InlineActions>
             <Button loading={form.formState.isSubmitting} type="submit" variant="primary">
               Create Work Item
             </Button>
             <Button onClick={() => navigate('/work-items')} variant="ghost">
               Cancel
             </Button>
-          </div>
+          </InlineActions>
         </form>
       </Section>
     </>
@@ -246,21 +243,4 @@ function requireList(ctx: z.RefinementCtx, path: (string | number)[], value: str
   if (normalizeList(value).length === 0) {
     ctx.addIssue({ code: 'custom', path, message: `${label} is required.` });
   }
-}
-
-function FieldError({ message }: { message: string | undefined }) {
-  return message ? (
-    <span className="danger-text" role="alert">
-      {message}
-    </span>
-  ) : null;
-}
-
-function ContextMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
 }

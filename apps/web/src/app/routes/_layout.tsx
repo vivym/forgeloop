@@ -1,5 +1,7 @@
 import { Outlet, useLocation } from 'react-router';
 
+import { useActorContext } from '../../shared/context/actor-context';
+import { useProjectContext } from '../../shared/context/project-context';
 import { useRuntimeFlags } from '../../shared/context/runtime-flags';
 import { AppShell, SidebarNav, Topbar } from '../../shared/layout';
 
@@ -21,6 +23,8 @@ function isNavItemActive(pathname: string, item: { to: string; activeOn?: string
 
 export default function ProductLayoutRoute() {
   const location = useLocation();
+  const { actorId } = useActorContext();
+  const { projectId } = useProjectContext();
   const runtimeFlags = useRuntimeFlags();
   const items = runtimeFlags.devToolsEnabled ? [...navItems, { label: 'Dev Tools', to: '/dev-tools' }] : navItems;
 
@@ -36,7 +40,7 @@ export default function ProductLayoutRoute() {
           }))}
         />
       }
-      topbar={<Topbar>Product workspace</Topbar>}
+      topbar={<Topbar actorId={actorId} devToolsEnabled={runtimeFlags.devToolsEnabled} projectId={projectId} />}
     >
       <Outlet />
     </AppShell>

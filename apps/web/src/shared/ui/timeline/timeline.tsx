@@ -15,14 +15,14 @@ export interface TimelineProps extends HTMLAttributes<HTMLOListElement> {
 
 export function Timeline({ items, className, ...props }: TimelineProps) {
   return (
-    <ol className={cn('fl-timeline', className)} {...props}>
+    <ol className={cn('m-0 grid list-none gap-4 p-0', className)} {...props}>
       {items.map((item) => (
-        <li className="fl-timeline__item" key={item.id}>
-          <div aria-hidden="true" className="fl-timeline__marker" />
-          <div className="fl-timeline__content">
-            <div className="fl-timeline__title">{item.title}</div>
-            {item.description ? <div className="fl-timeline__description">{item.description}</div> : null}
-            {item.meta ? <div className="fl-timeline__meta">{item.meta}</div> : null}
+        <li className="grid grid-cols-[auto_minmax(0,1fr)] gap-3" key={item.id}>
+          <div aria-hidden="true" className="mt-1.5 size-2.5 rounded-pill bg-primary" />
+          <div className="min-w-0">
+            <div className="font-semibold text-text-primary">{item.title}</div>
+            {item.description ? <div className="text-sm text-text-secondary">{item.description}</div> : null}
+            {item.meta ? <div className="text-sm text-text-secondary">{item.meta}</div> : null}
           </div>
         </li>
       ))}

@@ -4,6 +4,7 @@ import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import WorkItemSpecPlanRoute from '../../apps/web/src/app/routes/work-items/$workItemId/spec-plan';
 import type { WorkItemDeliveryReadiness } from '../../apps/web/src/shared/api/types';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 
 const cockpitReadiness = (workItemId = 'wi-1'): WorkItemDeliveryReadiness => ({
@@ -46,11 +47,12 @@ const requirementIntakeContext = {
 describe('Work Item scoped Spec & Plan route', () => {
   it('renders Work Item scoped Spec & Plan actions without raw loaders', async () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan');
-    expect(screen.getByRole('heading', { name: 'Spec & Plan' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Spec & Plan' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Create Spec' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Create Plan' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open revision history' })).toBeTruthy();
     expect(screen.queryByText('actor-owner')).toBeNull();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('runs create spec when no spec exists and refreshes the work item cockpit', async () => {

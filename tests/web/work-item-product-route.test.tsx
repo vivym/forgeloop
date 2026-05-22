@@ -9,6 +9,7 @@ import { ProductActionList } from '../../apps/web/src/features/product-actions/p
 import { WorkItemNextActions } from '../../apps/web/src/features/work-items/work-item-next-actions';
 import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
 import type { ProductAction, ProductLaneId, WorkItemIntakeContext } from '../../apps/web/src/shared/api/types';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 import {
   cockpitFixtureWithDegradedRunSource,
@@ -61,6 +62,7 @@ describe('Work Item product route', () => {
     expect(screen.queryByText(`${'Available after a draft'} exists.`)).toBeNull();
     expect(screen.queryByText(new RegExp(`Pending command ${'wir'}${'ing'}`, 'i'))).toBeNull();
     expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('uses cockpit readiness as the Work Item action source', async () => {
@@ -227,6 +229,7 @@ describe('Work Item product route', () => {
     const screen = await renderRoute('/work-items');
 
     expect(await screen.findByText('Ship route-backed product lane')).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       'http://localhost:3000/work-items?project_id=project-web-product',
       expect.objectContaining({ method: 'GET' }),

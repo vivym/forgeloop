@@ -4,7 +4,7 @@ import { useWorkItemsQuery } from '../../shared/api/hooks';
 import type { WorkItem } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { PageHeader, Section } from '../../shared/layout';
-import { DataTable, StatusPill } from '../../shared/ui';
+import { DataTable, InlineNotice, StatusPill } from '../../shared/ui';
 import { formatValue } from './work-item-view-model';
 
 export function WorkItemsList() {
@@ -18,7 +18,10 @@ export function WorkItemsList() {
     <>
       <PageHeader
         actions={
-          <Link className="fl-button fl-button--primary" to="/work-items/new">
+          <Link
+            className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white transition-colors duration-base ease-standard hover:bg-primary-hover motion-reduce:transition-none"
+            to="/work-items/new"
+          >
             New Work Item
           </Link>
         }
@@ -26,8 +29,8 @@ export function WorkItemsList() {
         title="Work Items"
       />
       <Section title="Active work">
-        {query.status === 'pending' ? <p className="empty">Loading work items.</p> : null}
-        {query.isError ? <p className="empty">Work item data is temporarily unavailable.</p> : null}
+        {query.status === 'pending' ? <InlineNotice title="Loading work items." tone="info" /> : null}
+        {query.isError ? <InlineNotice title="Work item data is temporarily unavailable." tone="danger" /> : null}
         {query.status !== 'pending' && !query.isError ? (
           <DataTable
             columns={[
@@ -35,9 +38,9 @@ export function WorkItemsList() {
                 key: 'title',
                 header: 'Work item',
                 cell: (item) => (
-                  <div className="entity-summary">
+                  <div className="grid min-w-0 gap-1">
                     <Link to={`/work-items/${encodeURIComponent(item.id)}`}>{item.title}</Link>
-                    <span>{item.goal}</span>
+                    <span className="text-sm text-text-secondary">{item.goal}</span>
                   </div>
                 ),
               },

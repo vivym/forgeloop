@@ -9,8 +9,9 @@ import {
 } from '../../shared/api/types';
 import type { ProductLaneId } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button } from '../../shared/ui';
+import { ActionRail, DetailLayout, Metric, MetricGrid, PageHeader, PillGroup, Section } from '../../shared/layout';
+import { Badge, Button, InlineNotice } from '../../shared/ui';
+import { cn } from '../../shared/utils/cn';
 import { ProductActionList } from '../product-actions/product-action-list';
 import {
   defaultProductLaneId,
@@ -80,42 +81,42 @@ function ProductLaneRouteContent({ laneId }: { laneId: NonNullable<ReturnType<ty
       }
     >
       <Section title="Lanes">
-        <nav aria-label="Product lanes" className="pill-list">
+        <PillGroup aria-label="Product lanes" role="navigation">
           {productLanes.map((candidate) => (
             <Link
               aria-current={candidate.id === laneId ? 'page' : undefined}
-              className={candidate.id === laneId ? 'fl-button fl-button--primary' : 'fl-button fl-button--secondary'}
+              className={laneLinkClass(candidate.id === laneId)}
               key={candidate.id}
               to={laneHref(candidate.id, searchParams, projectId)}
             >
               {candidate.label}
             </Link>
           ))}
-        </nav>
+        </PillGroup>
       </Section>
       <Section title="Lane summary">
-        {query.status === 'pending' ? <p className="empty">Loading product lane.</p> : null}
-        {query.isError ? <p className="empty">Product lane data is temporarily unavailable.</p> : null}
+        {query.status === 'pending' ? <InlineNotice title="Loading product lane." tone="info" /> : null}
+        {query.isError ? <InlineNotice title="Product lane data is temporarily unavailable." tone="danger" /> : null}
         {query.data !== undefined ? (
           <>
-            <div className="state-grid">
+            <MetricGrid>
               <Metric label="Total" value={String(query.data.summary.total)} />
               <Metric label="Blocked" value={String(query.data.summary.blocked)} />
               <Metric label="High risk" value={String(query.data.summary.high_risk)} />
               <Metric label="Stale" value={String(query.data.summary.stale)} />
-            </div>
+            </MetricGrid>
             {query.data.unsupported_filters.length ? (
-              <p className="empty">Unsupported filters: {query.data.unsupported_filters.join(', ')}</p>
+              <InlineNotice title={`Unsupported filters: ${query.data.unsupported_filters.join(', ')}`} tone="warning" />
             ) : null}
           </>
         ) : null}
       </Section>
       <Section title="Queue">
         {selectedItem !== undefined ? (
-          <div className="pill-list" aria-label="Selected item state">
+          <PillGroup aria-label="Selected item state">
             <Badge tone="primary">{selectedItem.title}</Badge>
             {selectedItem.risk !== undefined ? <Badge tone="warning">{selectedItem.risk} risk</Badge> : null}
-          </div>
+          </PillGroup>
         ) : null}
         <ProductLaneTable onSelect={setSelectedItemId} rows={viewModel.rows} selectedItemId={selectedItem?.id} />
       </Section>
@@ -127,7 +128,7 @@ function UnknownProductLane() {
   return (
     <DetailLayout header={<PageHeader subtitle="This Product Lane is not available." title="Lane unavailable" />}>
       <Section title="Open a canonical lane">
-        <Link className="fl-button fl-button--primary" to={`/lanes/${defaultProductLaneId}`}>
+        <Link className={laneLinkClass(true)} to={`/lanes/${defaultProductLaneId}`}>
           Open Requirements
         </Link>
       </Section>
@@ -151,11 +152,11 @@ function laneHref(laneId: ProductLaneId, searchParams: URLSearchParams, projectI
   return `/lanes/${laneId}${encoded ? `?${encoded}` : ''}`;
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+function laneLinkClass(active: boolean) {
+  return cn(
+    'inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition-colors duration-base ease-standard motion-reduce:transition-none',
+    active
+      ? 'border-primary bg-primary text-white hover:bg-primary-hover'
+      : 'border-border bg-surface text-text-primary hover:border-border-strong hover:bg-surface-muted',
   );
 }

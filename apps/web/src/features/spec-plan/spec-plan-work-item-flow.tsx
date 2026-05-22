@@ -10,8 +10,8 @@ import {
   useWorkItemCockpitQuery,
 } from '../../shared/api/hooks';
 import { useActorContext } from '../../shared/context/actor-context';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, Drawer, DrawerClose, StatusPill } from '../../shared/ui';
+import { ActionRail, DetailLayout, InlineActions, MetadataGrid, Metric, MetricGrid, PageHeader, Section } from '../../shared/layout';
+import { Badge, Button, Drawer, DrawerClose, InlineNotice, StatusPill } from '../../shared/ui';
 import { createWorkItemDetailViewModel, formatValue } from '../work-items/work-item-view-model';
 import { isStrictlyApproved, SpecPlanLifecycleActions } from './spec-plan-lifecycle-actions';
 
@@ -49,7 +49,7 @@ export function SpecPlanWorkItemFlow() {
     return (
       <DetailLayout header={<PageHeader subtitle="No work item route parameter was provided." title="Spec & Plan" />}>
         <Section title="Invalid route">
-          <p className="empty">This Spec & Plan route is missing a work item.</p>
+          <InlineNotice title="This Spec & Plan route is missing a work item." />
         </Section>
       </DetailLayout>
     );
@@ -60,19 +60,19 @@ export function SpecPlanWorkItemFlow() {
       actionRail={
         <ActionRail title="Approval actions">
           {hasPlanningContext ? (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               <SpecPlanLifecycleActions actorId={actorId} artifact={viewModel.spec} kind="spec" workItemId={workItemId} />
               <SpecPlanLifecycleActions actorId={actorId} artifact={viewModel.plan} kind="plan" workItemId={workItemId} />
             </div>
           ) : (
-            <p className="empty">Approval actions load with the work item planning context.</p>
+            <InlineNotice title="Approval actions load with the work item planning context." />
           )}
         </ActionRail>
       }
       header={
         <PageHeader
           actions={
-            <div className="button-row">
+            <InlineActions>
               <Button
                 disabled={!hasPlanningContext || cockpitRefreshing || hasSpec || createSpec.isPending}
                 onClick={() => createSpec.mutate()}
@@ -90,11 +90,11 @@ export function SpecPlanWorkItemFlow() {
                 {createPlan.isPending ? 'Creating plan...' : 'Create Plan'}
               </Button>
               {hasPlanningContext && hasSpec && !hasPlan && !specApprovedForPlan ? (
-                <p className="status-line">{createPlanBlockedReason}</p>
+                <InlineNotice title={createPlanBlockedReason} tone="warning" />
               ) : null}
               <Drawer
                 content={
-                  <div className="stack-form compact">
+                  <div className="grid gap-3">
                     <RevisionStatus
                       available={Boolean(viewModel.spec?.current_revision_id)}
                       label="Spec"
@@ -125,14 +125,14 @@ export function SpecPlanWorkItemFlow() {
                   Open revision history
                 </Button>
               </Drawer>
-              {!hasPlanningContext ? <p className="status-line">{revisionHistoryPendingReason}</p> : null}
+              {!hasPlanningContext ? <InlineNotice title={revisionHistoryPendingReason} tone="info" /> : null}
               <CommandFeedback
                 messages={[
                   mutationFeedback(createSpec, 'Spec is being created.', 'Spec could not be created.'),
                   mutationFeedback(createPlan, 'Plan is being created.', 'Plan could not be created.'),
                 ]}
               />
-            </div>
+            </InlineActions>
           }
           eyebrow={workItemTitle}
           subtitle="Create, draft, and approve product planning artifacts from the work item context."
@@ -142,34 +142,34 @@ export function SpecPlanWorkItemFlow() {
     >
       {cockpit.status === 'pending' ? (
         <Section title="Loading">
-          <p className="empty">Loading Spec & Plan context.</p>
+          <InlineNotice title="Loading Spec & Plan context." tone="info" />
         </Section>
       ) : null}
       {cockpit.isError ? (
         <Section title="Unavailable">
-          <p className="empty">Spec & Plan data is temporarily unavailable.</p>
+          <InlineNotice title="Spec & Plan data is temporarily unavailable." tone="danger" />
         </Section>
       ) : null}
       {cockpit.status !== 'pending' && !cockpit.isError && viewModel.workItem === null ? (
         <Section title="Empty">
-          <p className="empty">No work item planning context is available.</p>
+          <InlineNotice title="No work item planning context is available." />
         </Section>
       ) : null}
       {cockpit.status !== 'pending' && !cockpit.isError && viewModel.workItem !== null ? (
         <>
           <Section title="Work item context">
-            <div className="state-grid">
+            <MetricGrid>
               <Metric label="Kind" value={formatValue(viewModel.workItem.kind)} />
               <Metric label="Risk" value={formatValue(viewModel.workItem.risk)} />
               <Metric label="Driver" value={`${formatValue(viewModel.workItem.kind)} Driver`} />
               <Metric label="Phase" value={formatValue(viewModel.workItem.phase)} />
-            </div>
+            </MetricGrid>
           </Section>
           <Section title="Spec">
             <ArtifactState
               action={
                 hasSpec ? (
-                  <div className="stack-form compact">
+                  <div className="grid gap-3">
                     <Button
                       disabled={cockpitRefreshing || generateSpecDraft.isPending}
                       onClick={() => generateSpecDraft.mutate()}
@@ -202,7 +202,7 @@ export function SpecPlanWorkItemFlow() {
             <ArtifactState
               action={
                 hasPlan ? (
-                  <div className="stack-form compact">
+                  <div className="grid gap-3">
                     <Button
                       disabled={cockpitRefreshing || !specApprovedForPlan || generatePlanDraft.isPending}
                       onClick={() => generatePlanDraft.mutate()}
@@ -235,13 +235,13 @@ export function SpecPlanWorkItemFlow() {
             />
           </Section>
           <Section title="Planning readiness">
-            <div className="pill-list">
+            <InlineActions>
               <Badge tone={hasSpec ? 'success' : 'warning'}>{hasSpec ? 'Spec exists' : 'Spec needed'}</Badge>
               <Badge tone={hasPlan ? 'success' : 'warning'}>{hasPlan ? 'Plan exists' : 'Plan needed'}</Badge>
               <StatusPill tone={planApprovedForPackages ? 'success' : 'warning'}>
                 {planApprovedForPackages ? 'Ready for packages' : 'Planning in progress'}
               </StatusPill>
-            </div>
+            </InlineActions>
           </Section>
         </>
       ) : null}
@@ -288,9 +288,7 @@ function CommandFeedback({ messages }: { messages: Array<string | null> }) {
       {messages
         .filter((message): message is string => message !== null)
         .map((message) => (
-          <p className="status-line" key={message}>
-            {message}
-          </p>
+          <InlineNotice key={message} title={message} tone="info" />
         ))}
     </>
   );
@@ -307,14 +305,14 @@ function PlanPackageHandoff({
 
   if (plan.approved_revision_id) {
     return (
-      <Link className="fl-button fl-button--primary" to={`/packages?plan_revision_id=${encodeURIComponent(plan.approved_revision_id)}`}>
+      <Link className="inline-flex min-h-10 items-center justify-center rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white transition-colors duration-base ease-standard hover:bg-primary-hover" to={`/packages?plan_revision_id=${encodeURIComponent(plan.approved_revision_id)}`}>
         Continue to Packages
       </Link>
     );
   }
 
   return (
-    <Link className="fl-button fl-button--secondary" to="/packages">
+    <Link className="inline-flex min-h-10 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-border-strong hover:bg-surface-muted" to="/packages">
       View package inventory
     </Link>
   );
@@ -332,30 +330,25 @@ function ArtifactState({
   status: string | undefined;
 }) {
   return (
-    <div className="detail-block">
-      <div className="state-grid">
+    <div className="grid gap-4">
+      <MetricGrid>
         <Metric label="Status" value={created ? formatValue(status) : 'Not created'} />
         <Metric label="Gate" value={created ? formatValue(gate) : 'Waiting'} />
-      </div>
-      {action === null ? null : <div className="button-row">{action}</div>}
+      </MetricGrid>
+      {action === null ? null : <InlineActions>{action}</InlineActions>}
     </div>
   );
 }
 
 function RevisionStatus({ available, label, status }: { available: boolean; label: string; status: string | undefined }) {
   return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{available ? `${formatValue(status)} revision available` : 'No revision yet'}</strong>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <MetadataGrid
+      items={[
+        {
+          label,
+          value: available ? `${formatValue(status)} revision available` : 'No revision yet',
+        },
+      ]}
+    />
   );
 }

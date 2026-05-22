@@ -5,6 +5,7 @@ import type { ProductLaneId, WorkItemKind } from '@forgeloop/contracts';
 
 import { renderRoute } from './router-test-utils';
 import { deliveryReadiness, projectId, workItem } from './fixtures/product-data';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 type RouteScreen = Awaited<ReturnType<typeof renderRoute>>;
 type User = ReturnType<typeof userEvent.setup>;
@@ -47,6 +48,7 @@ describe('Work Item typed intake form', () => {
     expect(screen.queryByLabelText('Goal')).toBeNull();
     expect(screen.queryByLabelText('Success criteria')).toBeNull();
     expect(document.body.textContent).not.toMatch(/Owner/);
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('switches to Bug fields and applies the Bug risk default', async () => {

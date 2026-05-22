@@ -1,6 +1,6 @@
 import type { DeliveryStage } from '../../../shared/api/types';
 import { Section } from '../../../shared/layout';
-import { StatusPill } from '../../../shared/ui';
+import { InlineNotice, StatusPill } from '../../../shared/ui';
 import { deliveryStageTargetId, deliveryStageTone, formatValue } from '../work-item-view-model';
 
 export interface ReleaseReadinessPanelProps {
@@ -14,7 +14,7 @@ export function ReleaseReadinessPanel({ stage }: ReleaseReadinessPanelProps) {
     <Section id={targetId} tabIndex={-1} title={stage?.label ?? 'Release Readiness'} description="Pre-release scope, blocker, and release evidence state.">
       <StatusPill tone={stage === undefined ? 'neutral' : deliveryStageTone(stage.state)}>{formatValue(stage?.state, 'Unavailable')}</StatusPill>
       {stage === undefined || stage.blockers.length === 0 ? (
-        <p className="empty">No release readiness blockers reported.</p>
+        <InlineNotice title="No release readiness blockers reported." />
       ) : (
         <ul>
           {stage.blockers.map((blocker) => (

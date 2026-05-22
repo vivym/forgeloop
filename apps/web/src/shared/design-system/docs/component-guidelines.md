@@ -6,14 +6,14 @@ This design system layer is shared infrastructure. Keep primitives business-agno
 
 - Do not build card-in-card page composition. `Section` is a page or layout section, not a nested card container.
 - Keep route shell navigation out of UI primitives. `AppShell`, `SidebarNav`, and `Topbar` provide structure only.
-- Use `fl-*` classes for layout primitives and shared UI.
+- Use Tailwind theme utilities inside layout primitives and shared UI. Do not add new global visual class APIs.
 - Use `Section`, `DetailLayout`, `SplitPane`, `ActionRail`, `Table`, `DataTable`, and `Drawer` according to page intent instead of route-local container patterns.
 - Keep developer payload inspection in the gated Dev Tools route.
-- Keep all global CSS in `apps/web/src/shared/design-system/theme/css-variables.css`.
+- Keep global CSS limited to Tailwind import, theme variables, base reset, focus, motion, and unavoidable portal constraints.
 
 ## Accessibility Rules
 
-- Import shared primitives from the public barrels: `shared/ui`, `shared/layout`, and `shared/design-system`.
+- Import shared primitives from the public barrels: `shared/ui` and `shared/layout`.
 - `IconButton` always requires a stable accessible `label`.
 - Buttons must keep semantic button markup and clear accessible names.
 - Loading buttons must preserve the action context in their accessible name.
@@ -23,6 +23,6 @@ This design system layer is shared infrastructure. Keep primitives business-agno
 
 ## Token Rules
 
-- Prefer token CSS variables and Tailwind `fl-*` theme names over raw values.
+- Prefer Tailwind theme utilities and neutral product token names over raw values.
 - Keep colors balanced across neutral, blue, green, amber, and red families; avoid one-hue page themes.
 - Add tokens only when two or more components share the need.

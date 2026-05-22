@@ -2,8 +2,8 @@ import { Link, useParams, useSearchParams } from 'react-router';
 
 import type { DeliveryStage, SpecPlan, WorkItemDeliveryReadiness } from '../../shared/api/types';
 import { useWorkItemCockpitQuery, useWorkItemReplayQuery } from '../../shared/api/hooks';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Skeleton, StatusPill } from '../../shared/ui';
+import { ActionRail, DetailLayout, PageHeader, PillGroup, Section } from '../../shared/layout';
+import { Badge, InlineNotice, Skeleton, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
 import {
   DeliveryActionRail,
   DeliveryActionSummary,
@@ -37,7 +37,7 @@ export function WorkItemDetail() {
     return (
       <DetailLayout header={<PageHeader subtitle="No work item route parameter was provided." title="Work Item" />}>
         <Section title="Invalid route">
-          <p className="empty">This Work Item route is missing a work item.</p>
+          <InlineNotice title="This Work Item route is missing a work item." />
         </Section>
       </DetailLayout>
     );
@@ -51,7 +51,7 @@ export function WorkItemDetail() {
     return (
       <DetailLayout header={<PageHeader subtitle="The work item could not be loaded." title="Work Item" />}>
         <Section title="Unavailable">
-          <p className="empty">Work item data is temporarily unavailable.</p>
+          <InlineNotice title="Work item data is temporarily unavailable." tone="danger" />
         </Section>
       </DetailLayout>
     );
@@ -61,7 +61,7 @@ export function WorkItemDetail() {
     return (
       <DetailLayout header={<PageHeader subtitle="No work item was found for this route." title="Work Item" />}>
         <Section title="Empty">
-          <p className="empty">No work item data is available.</p>
+          <InlineNotice title="No work item data is available." />
         </Section>
       </DetailLayout>
     );
@@ -143,9 +143,9 @@ function DeliveryCockpitSkeleton() {
 function UnsupportedLaneActionRail({ activeLane, workItemId }: { activeLane: WorkItemDeliveryReadiness['active_lane']; workItemId: string }) {
   return (
     <ActionRail title="Delivery actions">
-      <p className="empty">This lane is not available for this Work Item.</p>
-      <Link className="fl-button fl-button--primary" to={`/work-items/${encodeURIComponent(workItemId)}?lane=${activeLane}`}>
-        <span className="fl-button__label">Open default lane</span>
+      <InlineNotice title="This lane is not available for this Work Item." tone="warning" />
+      <Link className={linkButtonClass('primary')} to={`/work-items/${encodeURIComponent(workItemId)}?lane=${activeLane}`}>
+        Open default lane
       </Link>
     </ActionRail>
   );
@@ -159,13 +159,13 @@ function DeliveryDegradedNotice({ readiness }: { readiness: WorkItemDeliveryRead
       description="Some delivery evidence sources could not be loaded, so readiness is intentionally conservative."
       title="Delivery readiness degraded"
     >
-      <div className="pill-list">
+      <PillGroup aria-label="Degraded delivery sources">
         {readiness.degraded_sources.map((source) => (
           <Badge key={source} tone="warning">
             {source}
           </Badge>
         ))}
-      </div>
+      </PillGroup>
       {readiness.blockers.length === 0 ? null : (
         <ul>
           {readiness.blockers.map((blocker) => (
@@ -192,18 +192,18 @@ function ArtifactStageSection({
 
   return (
     <Section id={targetId} tabIndex={-1} title={stage?.label ?? formatValue(fallbackId)} description={description}>
-      <div className="pill-list">
+      <PillGroup aria-label={`${stage?.label ?? formatValue(fallbackId)} state`}>
         <StatusPill tone={stage === undefined ? 'neutral' : deliveryStageTone(stage.state)}>{formatValue(stage?.state, 'Unavailable')}</StatusPill>
         <Badge tone={artifact === null ? 'warning' : 'info'}>{artifact === null ? 'Missing artifact' : formatValue(artifact.status)}</Badge>
         {artifact?.gate_state === undefined ? null : <Badge>{formatValue(artifact.gate_state)}</Badge>}
-      </div>
+      </PillGroup>
       <ArtifactStageBlockers stage={stage} fallbackLabel={`No ${formatValue(fallbackId).toLowerCase()} blockers reported.`} />
     </Section>
   );
 }
 
 function ArtifactStageBlockers({ fallbackLabel, stage }: { fallbackLabel: string; stage: DeliveryStage | undefined }) {
-  if (stage === undefined || stage.blockers.length === 0) return <p className="empty">{fallbackLabel}</p>;
+  if (stage === undefined || stage.blockers.length === 0) return <InlineNotice title={fallbackLabel} />;
 
   return (
     <ul>
@@ -215,24 +215,35 @@ function ArtifactStageBlockers({ fallbackLabel, stage }: { fallbackLabel: string
 }
 
 function ActivityTimeline({ isError, timeline }: { isError: boolean; timeline: readonly { id: string; summary: string; created_at: string }[] }) {
+  const items: TimelineItem[] = timeline.map((entry) => ({
+    id: entry.id,
+    title: entry.summary,
+    meta: entry.created_at,
+  }));
+
   return (
     <Section title="Activity timeline">
       {isError ? (
-        <p className="empty">Timeline is temporarily unavailable.</p>
+        <InlineNotice title="Timeline is temporarily unavailable." tone="danger" />
       ) : timeline.length ? (
-        <div className="timeline-list">
-          {timeline.map((entry) => (
-            <div className="timeline-entry" key={entry.id}>
-              <strong>{entry.summary}</strong>
-              <time>{entry.created_at}</time>
-            </div>
-          ))}
-        </div>
+        <Timeline items={items} />
       ) : (
-        <p className="empty">No timeline events have been published for this product view.</p>
+        <InlineNotice title="No timeline events have been published for this product view." />
       )}
     </Section>
   );
+}
+
+function linkButtonClass(variant: 'primary' | 'secondary') {
+  const variantClass =
+    variant === 'primary'
+      ? 'border-primary bg-primary text-white hover:bg-primary-hover'
+      : 'border-border bg-surface text-text-primary hover:border-border-strong hover:bg-surface-muted';
+
+  return [
+    'inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition-colors duration-base ease-standard motion-reduce:transition-none',
+    variantClass,
+  ].join(' ');
 }
 
 function stageFinder(readiness: WorkItemDeliveryReadiness) {

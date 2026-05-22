@@ -1,10 +1,33 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { cva, type VariantProps } from 'class-variance-authority';
 
 import { cn } from '../../utils/cn';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+const buttonStyles = cva(
+  'inline-flex min-w-0 items-center justify-center gap-2 rounded-md border text-sm font-semibold transition-colors duration-base ease-standard motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-60',
+  {
+    variants: {
+      variant: {
+        primary: 'border-primary bg-primary text-white hover:bg-primary-hover',
+        secondary: 'border-border bg-surface text-text-primary hover:border-border-strong hover:bg-surface-muted',
+        ghost: 'border-transparent bg-transparent text-text-secondary hover:bg-surface-muted hover:text-text-primary',
+        danger: 'border-danger bg-danger text-white hover:bg-danger/90',
+      },
+      size: {
+        sm: 'min-h-9 px-3',
+        md: 'min-h-10 px-4',
+      },
+    },
+    defaultVariants: {
+      variant: 'secondary',
+      size: 'md',
+    },
+  },
+);
+
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonStyles> {
   variant?: ButtonVariant;
   loading?: boolean;
   iconLeading?: ReactNode;
@@ -16,6 +39,7 @@ export function Button({
   loading = false,
   iconLeading,
   iconTrailing,
+  size,
   className,
   children,
   disabled,
@@ -23,9 +47,9 @@ export function Button({
   ...props
 }: ButtonProps) {
   return (
-    <button {...props} aria-busy={loading || props['aria-busy'] || undefined} className={cn('fl-button', `fl-button--${variant}`, className)} disabled={loading || disabled} type={type}>
-      {iconLeading !== undefined ? <span className="fl-button__slot">{iconLeading}</span> : null}
-      <span className="fl-button__label">
+    <button {...props} aria-busy={loading || props['aria-busy'] || undefined} className={cn(buttonStyles({ variant, size }), className)} disabled={loading || disabled} type={type}>
+      {iconLeading !== undefined ? <span className="inline-flex min-w-0 shrink-0 items-center">{iconLeading}</span> : null}
+      <span className="inline-flex min-w-0 items-center gap-1.5">
         {loading ? (
           <>
             <span>Loading</span>
@@ -36,7 +60,7 @@ export function Button({
           children
         )}
       </span>
-      {iconTrailing !== undefined ? <span className="fl-button__slot">{iconTrailing}</span> : null}
+      {iconTrailing !== undefined ? <span className="inline-flex min-w-0 shrink-0 items-center">{iconTrailing}</span> : null}
     </button>
   );
 }

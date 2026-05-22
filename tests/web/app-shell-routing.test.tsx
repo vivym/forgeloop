@@ -31,6 +31,19 @@ describe('React Router product shell', () => {
     expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
   });
 
+  it('shows real topbar context without placeholder workspace copy', async () => {
+    const screen = await renderRoute('/lanes');
+    const topbarContext = document.body.querySelector('[data-topbar-context]');
+
+    expect(screen.getByText('Context active')).toBeTruthy();
+    expect(screen.getByText('Authenticated')).toBeTruthy();
+    expect(topbarContext?.getAttribute('data-project-context')).toBe('active');
+    expect(topbarContext?.getAttribute('data-actor-context')).toBe('active');
+    expect(topbarContext?.hasAttribute('data-project-id')).toBe(false);
+    expect(topbarContext?.hasAttribute('data-actor-id')).toBe(false);
+    expect(screen.queryByText('Product workspace')).toBeNull();
+  });
+
   it('routes sidebar clicks through React Router without document navigation', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute('/lanes');

@@ -27,16 +27,21 @@ export function Tabs({ items, defaultValue, value, onValueChange, className }: T
   };
 
   return (
-    <RadixTabs.Root className={cn('fl-tabs', className)} {...rootProps}>
-      <RadixTabs.List className="fl-tabs__list">
+    <RadixTabs.Root className={cn('grid min-w-0 gap-4', className)} {...rootProps}>
+      <RadixTabs.List className="flex flex-wrap gap-1 border-b border-border">
         {items.map((item) => (
-          <RadixTabs.Trigger className="fl-tabs__trigger" disabled={item.disabled} key={item.value} value={item.value}>
+          <RadixTabs.Trigger
+            className="border-0 border-b-2 border-transparent bg-transparent px-4 py-3 text-sm font-semibold text-text-muted transition-colors duration-base ease-standard motion-reduce:transition-none data-[state=active]:border-primary data-[state=active]:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={item.disabled}
+            key={item.value}
+            value={item.value}
+          >
             {item.label}
           </RadixTabs.Trigger>
         ))}
       </RadixTabs.List>
       {items.map((item) => (
-        <RadixTabs.Content className="fl-tabs__content" key={item.value} value={item.value}>
+        <RadixTabs.Content className="min-w-0" key={item.value} value={item.value}>
           {item.content}
         </RadixTabs.Content>
       ))}

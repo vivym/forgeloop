@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
 import { actorId, executionPackage, projectId, release, reviewPacket, runSession, timeline, workItem } from './fixtures/product-data';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 const reviewListResponse = {
   items: [
@@ -247,6 +248,7 @@ describe('review and release product routes', () => {
 
     expect(await screen.findByRole('heading', { name: 'Reviews' })).toBeTruthy();
     expect(await screen.findByText(reviewPacket.summary)).toBeTruthy();
+    expectNoLegacyRenderedClasses();
     expect(screen.getByText(/Package filter applied/)).toBeTruthy();
     expect(screen.getByText(/Run filter applied/)).toBeTruthy();
     expect(screen.getByText('Package unavailable')).toBeTruthy();
@@ -304,6 +306,7 @@ describe('review and release product routes', () => {
     expect(document.body.textContent).not.toContain(executionPackage.id);
     expect(document.body.textContent).not.toContain(runSession.id);
     expectNoRawReviewClosureText([reviewPacket.id, executionPackage.id, runSession.id]);
+    expectNoLegacyRenderedClasses();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/reviews/${reviewPacket.id}`,
       expect.objectContaining({ method: 'GET' }),
@@ -430,6 +433,7 @@ describe('review and release product routes', () => {
     expect(screen.getByText('Packages: 1')).toBeTruthy();
     expect(screen.getByText('Acceptance summary unavailable from release list API.')).toBeTruthy();
     expect(screen.getByText(/release_type and updated_age are not applied to the release inventory yet/i)).toBeTruthy();
+    expectNoLegacyRenderedClasses();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=awaiting_approval&resolution=none&limit=25`,
       expect.objectContaining({ method: 'GET' }),
@@ -515,14 +519,15 @@ describe('review and release product routes', () => {
     expect(screen.queryByRole('button', { name: 'Submit for approval' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Acknowledge test acceptance' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Request changes' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Override approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review override approval' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Start observing' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Close release' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review release closure' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Submit observation evidence' })).toBeTruthy();
     expect(screen.queryByLabelText('Override rationale')).toBeNull();
     expect(screen.queryByLabelText('Close confirmation')).toBeNull();
     expect(document.body.textContent).not.toContain(release.release_owner_actor_id);
     expectNoRawReleaseClosureText([release.id, releaseCockpitResponse.blocker_snapshot.blocker_fingerprint]);
+    expectNoLegacyRenderedClasses();
   });
 
   it('disables release submission until planning is complete and keeps draft planning editable', async () => {
@@ -565,10 +570,10 @@ describe('review and release product routes', () => {
     expect(screen.getByText(/Complete scope summary, rollout strategy, rollback plan, and observation plan before submitting./i)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Edit release' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Override approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review override approval' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Start observing' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Close release' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review release closure' })).toBeNull();
     expect(document.body.textContent).not.toContain('raw-planning-fingerprint');
 
     await user.click(screen.getByRole('button', { name: 'Edit release' }));
@@ -642,15 +647,17 @@ describe('review and release product routes', () => {
     });
 
     expect(await screen.findByRole('heading', { name: release.title })).toBeTruthy();
-    const overrideButton = screen.getByRole('button', { name: 'Override approve' }) as HTMLButtonElement;
+    await user.click(screen.getByRole('button', { name: 'Review override approval' }));
+    const overrideDialog = within(screen.getByRole('dialog', { name: 'Override approve' }));
+    const overrideButton = overrideDialog.getByRole('button', { name: 'Override approve' }) as HTMLButtonElement;
     expect(overrideButton.disabled).toBe(true);
     expect(screen.getByText('risk_check: Risk sign-off is still pending.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Acknowledge test acceptance' })).toBeNull();
     expect(document.body.textContent).not.toContain('raw-override-fingerprint');
 
-    await user.type(screen.getByLabelText('Override rationale'), 'Accepted for controlled rollout.');
+    await user.type(overrideDialog.getByLabelText('Override rationale'), 'Accepted for controlled rollout.');
     expect(overrideButton.disabled).toBe(true);
-    await user.type(screen.getByLabelText('Override confirmation'), 'override approve');
+    await user.type(overrideDialog.getByLabelText('Override confirmation'), 'override approve');
     expect(overrideButton.disabled).toBe(false);
     await user.click(overrideButton);
 
@@ -741,7 +748,7 @@ describe('review and release product routes', () => {
     expect(approvedScreen.getByRole('button', { name: 'Start observing' })).toBeTruthy();
     expect(approvedScreen.queryByRole('button', { name: 'Edit release' })).toBeNull();
     expect(approvedScreen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(approvedScreen.queryByRole('button', { name: 'Close release' })).toBeNull();
+    expect(approvedScreen.queryByRole('button', { name: 'Review release closure' })).toBeNull();
     expect(approvedScreen.getByRole('button', { name: 'Acknowledge test acceptance' })).toBeTruthy();
 
     await user.type(approvedScreen.getByLabelText('Test acceptance summary'), 'QA accepted route-backed release controls.');
@@ -801,7 +808,7 @@ describe('review and release product routes', () => {
     });
 
     expect(await observingScreen.findByRole('heading', { name: release.title })).toBeTruthy();
-    expect(observingScreen.queryByRole('button', { name: 'Close release' })).toBeNull();
+    expect(observingScreen.queryByRole('button', { name: 'Review release closure' })).toBeNull();
   });
 
   it('gates release closure with confirmation after rollout succeeds', async () => {
@@ -827,9 +834,11 @@ describe('review and release product routes', () => {
     expect(await observingScreen.findByRole('heading', { name: release.title })).toBeTruthy();
     expect(observingScreen.queryByRole('button', { name: 'Start observing' })).toBeNull();
     expect(observingScreen.queryByRole('button', { name: 'Edit release' })).toBeNull();
-    const closeButton = observingScreen.getByRole('button', { name: 'Close release' }) as HTMLButtonElement;
+    await user.click(observingScreen.getByRole('button', { name: 'Review release closure' }));
+    const closeDialog = within(observingScreen.getByRole('dialog', { name: 'Close release' }));
+    const closeButton = closeDialog.getByRole('button', { name: 'Close release' }) as HTMLButtonElement;
     expect(closeButton.disabled).toBe(true);
-    await user.type(observingScreen.getByLabelText('Close confirmation'), 'close release');
+    await user.type(closeDialog.getByLabelText('Close confirmation'), 'close release');
     expect(closeButton.disabled).toBe(false);
     await user.click(closeButton);
 
@@ -864,11 +873,13 @@ describe('review and release product routes', () => {
     });
 
     expect(await observingScreen.findByRole('heading', { name: release.title })).toBeTruthy();
-    const closeButton = observingScreen.getByRole('button', { name: 'Close release' }) as HTMLButtonElement;
+    await user.click(observingScreen.getByRole('button', { name: 'Review release closure' }));
+    const closeDialog = within(observingScreen.getByRole('dialog', { name: 'Close release' }));
+    const closeButton = closeDialog.getByRole('button', { name: 'Close release' }) as HTMLButtonElement;
     expect(closeButton.disabled).toBe(true);
-    await user.type(observingScreen.getByLabelText('Close confirmation'), 'close release');
+    await user.type(closeDialog.getByLabelText('Close confirmation'), 'close release');
     expect(closeButton.disabled).toBe(true);
-    await user.type(observingScreen.getByLabelText('Observation override rationale'), 'No issues found in external monitoring.');
+    await user.type(closeDialog.getByLabelText('Observation override rationale'), 'No issues found in external monitoring.');
     expect(closeButton.disabled).toBe(false);
     await user.click(closeButton);
 
@@ -1024,17 +1035,18 @@ describe('review and release product routes', () => {
 });
 
 function expectStatusPillText(value: string) {
-  const statusPills = Array.from(document.body.querySelectorAll('.fl-status-pill'));
-  expect(statusPills.some((pill) => pill.textContent?.includes(value))).toBe(true);
+  const header = document.body.querySelector('[data-page-header]');
+  expect(header).toBeTruthy();
+  expect(header?.textContent).toContain(value);
 }
 
 function expectPageHeaderText(pattern: RegExp) {
-  expect(document.body.querySelector('.fl-page-header')?.textContent).toMatch(pattern);
+  expect(document.body.querySelector('[data-page-header]')?.textContent).toMatch(pattern);
 }
 
 function expectActionRailBeforeDetailContent() {
-  const rail = document.body.querySelector('.fl-detail-layout__rail');
-  const content = document.body.querySelector('.fl-detail-layout__content');
+  const rail = document.body.querySelector('[data-detail-layout-rail]');
+  const content = document.body.querySelector('[data-detail-layout-content]');
   expect(rail).toBeTruthy();
   expect(content).toBeTruthy();
   if (rail === null || content === null) throw new Error('Detail layout did not render action rail and content regions.');
@@ -1046,7 +1058,11 @@ function expectNoLegacyWorkbenchText() {
 }
 
 function expectNoNestedCards() {
-  expect(document.body.querySelector('.fl-card .fl-card, .card .card')).toBeNull();
+  expect(document.body.querySelector('[data-layout-section] [data-layout-section]')).toBeNull();
+}
+
+function expectNoLegacyRenderedClasses() {
+  expect(legacyRenderedClassTokens(document.body)).toEqual([]);
 }
 
 function expectNoRawReviewClosureText(hiddenValues: string[]) {

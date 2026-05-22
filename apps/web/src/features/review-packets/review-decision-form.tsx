@@ -2,7 +2,8 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 
 import type { RequestedChange } from '../../shared/api/types';
-import { Button, Input, Select, Textarea } from '../../shared/ui';
+import { InlineActions } from '../../shared/layout';
+import { Button, Field, InlineNotice, Input, Select, Textarea } from '../../shared/ui';
 
 type DecisionMode = 'approve' | 'request_changes';
 type RequestedChangeSeverity = NonNullable<RequestedChange['severity']>;
@@ -69,8 +70,8 @@ export function ReviewDecisionForm({
   };
 
   return (
-    <div className="stack-form compact">
-      <div aria-label="Review decision" className="fl-inline-actions" role="tablist">
+    <div className="grid gap-3">
+      <InlineActions aria-label="Review decision" role="tablist">
         <Button
           aria-selected={mode === 'approve'}
           disabled={disabled || isSubmitting}
@@ -89,13 +90,12 @@ export function ReviewDecisionForm({
         >
           Request changes
         </Button>
-      </div>
-      {disabled && disabledReason ? <p className="empty">{disabledReason}</p> : null}
-      {error ? <p className="empty">{error.message}</p> : null}
+      </InlineActions>
+      {disabled && disabledReason ? <InlineNotice title={disabledReason} tone="warning" /> : null}
+      {error ? <InlineNotice title={error.message} tone="danger" /> : null}
       {mode === 'approve' ? (
-        <form className="stack-form compact" onSubmit={submitApproval}>
-          <label className="field">
-            Approval summary
+        <form className="grid gap-3" onSubmit={submitApproval}>
+          <Field label="Approval summary">
             <Textarea
               disabled={disabled || isSubmitting}
               onChange={(event) => setApprovalSummary(event.currentTarget.value)}
@@ -103,15 +103,14 @@ export function ReviewDecisionForm({
               rows={4}
               value={approvalSummary}
             />
-          </label>
+          </Field>
           <Button disabled={disabled || !approvalSummary.trim()} loading={isSubmitting} type="submit" variant="primary">
             Submit approval
           </Button>
         </form>
       ) : (
-        <form className="stack-form compact" onSubmit={submitRequestedChanges}>
-          <label className="field">
-            Change request summary
+        <form className="grid gap-3" onSubmit={submitRequestedChanges}>
+          <Field label="Change request summary">
             <Textarea
               disabled={disabled || isSubmitting}
               onChange={(event) => setChangeSummary(event.currentTarget.value)}
@@ -119,21 +118,19 @@ export function ReviewDecisionForm({
               rows={4}
               value={changeSummary}
             />
-          </label>
-          <div className="stack-form compact">
+          </Field>
+          <div className="grid gap-3">
             {changes.map((change, index) => (
-              <div className="stack-form compact" key={index}>
-                <label className="field">
-                  Requested change title
+              <div className="grid gap-3 rounded-card border border-border bg-surface-muted p-3" key={index}>
+                <Field label="Requested change title">
                   <Input
                     disabled={disabled || isSubmitting}
                     onChange={(event) => updateChange(index, { title: event.currentTarget.value })}
                     required
                     value={change.title}
                   />
-                </label>
-                <label className="field">
-                  Requested change description
+                </Field>
+                <Field label="Requested change description">
                   <Textarea
                     disabled={disabled || isSubmitting}
                     onChange={(event) => updateChange(index, { description: event.currentTarget.value })}
@@ -141,9 +138,8 @@ export function ReviewDecisionForm({
                     rows={3}
                     value={change.description}
                   />
-                </label>
-                <label className="field">
-                  Requested change severity
+                </Field>
+                <Field label="Requested change severity">
                   <Select
                     disabled={disabled || isSubmitting}
                     onChange={(event) => updateChange(index, { severity: event.currentTarget.value as RequestedChangeSeverity })}
@@ -151,7 +147,7 @@ export function ReviewDecisionForm({
                     required
                     value={change.severity}
                   />
-                </label>
+                </Field>
                 <Button disabled={disabled || isSubmitting || changes.length === 1} onClick={() => removeChange(index)} variant="ghost">
                   Remove requested change
                 </Button>

@@ -1,6 +1,6 @@
 import type { DeliveryStage } from '../../../shared/api/types';
-import { Section } from '../../../shared/layout';
-import { Badge, StatusPill } from '../../../shared/ui';
+import { PillGroup, Section } from '../../../shared/layout';
+import { Badge, InlineNotice, StatusPill } from '../../../shared/ui';
 import { deliveryStageTargetId, deliveryStageTone, formatValue } from '../work-item-view-model';
 
 export interface ReviewSummaryProps {
@@ -13,12 +13,12 @@ export function ReviewSummary({ stage, reviewCount = 0 }: ReviewSummaryProps) {
 
   return (
     <Section id={targetId} tabIndex={-1} title={stage?.label ?? 'Review'} description="Review packet decision state and required reviewer evidence.">
-      <div className="pill-list">
+      <PillGroup aria-label="Review state">
         <StatusPill tone={stage === undefined ? 'neutral' : deliveryStageTone(stage.state)}>{formatValue(stage?.state, 'Unavailable')}</StatusPill>
         <Badge tone="info">{`${reviewCount} reviews`}</Badge>
-      </div>
+      </PillGroup>
       {stage === undefined || stage.blockers.length === 0 ? (
-        <p className="empty">No review blockers reported.</p>
+        <InlineNotice title="No review blockers reported." />
       ) : (
         <ul>
           {stage.blockers.map((blocker) => (

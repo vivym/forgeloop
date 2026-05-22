@@ -24,8 +24,8 @@ import type {
 } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Button, DataTable, Drawer, Input, Select, StatusPill, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
+import { DetailLayout, InlineActions, MetadataGrid, PageHeader, PillGroup, Section } from '../../shared/layout';
+import { Badge, Button, DataTable, Drawer, Field, InlineNotice, Input, Select, StatusPill, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
 import { releaseActionModel } from './release-action-model';
 import { ReleaseActionRail } from './release-action-rail';
 
@@ -119,12 +119,12 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
       header={
         <PageHeader
           eyebrow={
-            <span className="fl-inline-actions">
+            <InlineActions>
               <span>Release</span>
               <StatusPill tone={releaseStateTone(release.phase)}>{release.phase}</StatusPill>
               <StatusPill tone={releaseStateTone(release.gate_state)}>{release.gate_state}</StatusPill>
               <StatusPill tone={releaseStateTone(release.resolution)}>{release.resolution}</StatusPill>
-            </span>
+            </InlineActions>
           }
           subtitle={`${release.release_owner_actor_id ? 'Release owner assigned' : 'Release owner unassigned'} / ${actionModel.hasBlockers ? 'Active blockers need review' : 'No active blockers'}`}
           title={release.title}
@@ -133,12 +133,14 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
     >
       <Section title="Scope summary" description="Release scope, rollout, rollback, and observation planning.">
         <p>{release.scope_summary ?? 'Scope summary unavailable from release API.'}</p>
-        <dl className="fl-metadata-grid">
-          <Metadata label="Rollout strategy" value={release.rollout_strategy ?? 'not recorded'} />
-          <Metadata label="Rollback plan" value={release.rollback_plan ?? 'not recorded'} />
-          <Metadata label="Observation plan" value={release.observation_plan ?? 'not recorded'} />
-          <Metadata label="Release type" value={release.release_type ?? 'unavailable'} />
-        </dl>
+        <MetadataGrid
+          items={[
+            { label: 'Rollout strategy', value: release.rollout_strategy ?? 'not recorded' },
+            { label: 'Rollback plan', value: release.rollback_plan ?? 'not recorded' },
+            { label: 'Observation plan', value: release.observation_plan ?? 'not recorded' },
+            { label: 'Release type', value: release.release_type ?? 'unavailable' },
+          ]}
+        />
       </Section>
       <Section title="Linked Work Items" description="Work Items in this release scope.">
         <ReleaseWorkItems releaseId={release.id} actorId={actorId} projectId={release.project_id} workItems={cockpit.work_items} />
@@ -217,32 +219,26 @@ function CreateReleaseForm({ actorId, onCreated, projectId }: { actorId: string;
   }
 
   return (
-    <form className="stack-form compact" onSubmit={onSubmit}>
-      <label className="field">
-        Release title
+    <form className="grid gap-3" onSubmit={onSubmit}>
+      <Field label="Release title">
         <Input onChange={(event) => setTitle(event.currentTarget.value)} value={title} />
-      </label>
-      <label className="field">
-        Scope summary
+      </Field>
+      <Field label="Scope summary">
         <Textarea onChange={(event) => setScopeSummary(event.currentTarget.value)} rows={3} value={scopeSummary} />
-      </label>
-      <label className="field">
-        Release owner
+      </Field>
+      <Field label="Release owner">
         <Input onChange={(event) => setReleaseOwner(event.currentTarget.value)} value={releaseOwner} />
-      </label>
-      <label className="field">
-        Rollout strategy
+      </Field>
+      <Field label="Rollout strategy">
         <Textarea onChange={(event) => setRolloutStrategy(event.currentTarget.value)} rows={2} value={rolloutStrategy} />
-      </label>
-      <label className="field">
-        Rollback plan
+      </Field>
+      <Field label="Rollback plan">
         <Textarea onChange={(event) => setRollbackPlan(event.currentTarget.value)} rows={2} value={rollbackPlan} />
-      </label>
-      <label className="field">
-        Observation plan
+      </Field>
+      <Field label="Observation plan">
         <Textarea onChange={(event) => setObservationPlan(event.currentTarget.value)} rows={2} value={observationPlan} />
-      </label>
-      {createRelease.isError ? <p className="empty">Release creation is temporarily unavailable.</p> : null}
+      </Field>
+      {createRelease.isError ? <InlineNotice title="Release creation is temporarily unavailable." tone="danger" /> : null}
       <Button disabled={!title.trim()} loading={createRelease.isPending} type="submit" variant="primary">
         Submit release
       </Button>
@@ -260,7 +256,7 @@ function ReleaseTable({ response }: { response: ReleaseListResponse | undefined 
           key: 'title',
           header: 'Release',
           cell: (release) => (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               {release.key ? <strong>{release.key}</strong> : null}
               <Link to={`/releases/${encodeURIComponent(release.id)}`}>{release.title}</Link>
             </div>
@@ -274,7 +270,7 @@ function ReleaseTable({ response }: { response: ReleaseListResponse | undefined 
           key: 'scope',
           header: 'Linked scope',
           cell: (release) => (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               <span>Work Items: {release.work_item_ids.length}</span>
               <span>Packages: {release.execution_package_ids.length}</span>
             </div>
@@ -284,7 +280,7 @@ function ReleaseTable({ response }: { response: ReleaseListResponse | undefined 
           key: 'completeness',
           header: 'Completeness',
           cell: (release) => (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               <span>Rollout {release.rollout_strategy ? 'complete' : 'missing'}</span>
               <span>Rollback {release.rollback_plan ? 'complete' : 'missing'}</span>
               <span>Observation {release.observation_plan ? 'complete' : 'missing'}</span>
@@ -322,9 +318,9 @@ function ReleaseWorkItems({
     .map((item) => ({ label: workItemPickerLabel(item), value: item.object.id }));
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       <form
-        className="fl-inline-actions"
+        className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (!selectedWorkItemId) return;
@@ -334,8 +330,7 @@ function ReleaseWorkItems({
           );
         }}
       >
-        <label className="field">
-          Work Item
+        <Field className="min-w-64 flex-1" label="Work Item">
           <Select
             disabled={workItemsQuery.status === 'pending' || workItemsQuery.isError || workItemOptions.length === 0}
             onChange={(event) => setSelectedWorkItemId(event.currentTarget.value)}
@@ -351,7 +346,7 @@ function ReleaseWorkItems({
             required
             value={selectedWorkItemId}
           />
-        </label>
+        </Field>
         <Button disabled={!selectedWorkItemId} loading={linkWorkItem.isPending} type="submit" variant="secondary">
           Add Work Item
         </Button>
@@ -404,9 +399,9 @@ function ReleaseExecutionPackages({
     .map((item) => ({ label: packagePickerLabel(item), value: item.object.id }));
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       <form
-        className="fl-inline-actions"
+        className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (!selectedPackageId) return;
@@ -416,8 +411,7 @@ function ReleaseExecutionPackages({
           );
         }}
       >
-        <label className="field">
-          Execution Package
+        <Field className="min-w-64 flex-1" label="Execution Package">
           <Select
             disabled={packagesQuery.status === 'pending' || packagesQuery.isError || packageOptions.length === 0}
             onChange={(event) => setSelectedPackageId(event.currentTarget.value)}
@@ -433,7 +427,7 @@ function ReleaseExecutionPackages({
             required
             value={selectedPackageId}
           />
-        </label>
+        </Field>
         <Button disabled={!selectedPackageId} loading={linkPackage.isPending} type="submit" variant="secondary">
           Add Execution Package
         </Button>
@@ -481,16 +475,14 @@ function TestAcceptanceForm({ actorId, disabledReason, releaseId }: { actorId: s
   }
 
   return (
-    <form className="stack-form compact" onSubmit={onSubmit}>
-      <label className="field">
-        Test acceptance summary
+    <form className="grid gap-3" onSubmit={onSubmit}>
+      <Field label="Test acceptance summary">
         <Textarea onChange={(event) => setSummary(event.currentTarget.value)} rows={3} value={summary} />
-      </label>
-      <label className="field">
-        Acceptance evidence reference
+      </Field>
+      <Field label="Acceptance evidence reference">
         <Input onChange={(event) => setEvidenceRef(event.currentTarget.value)} value={evidenceRef} />
-      </label>
-      {disabledReason ? <p className="empty">{disabledReason}</p> : null}
+      </Field>
+      {disabledReason ? <InlineNotice title={disabledReason} tone="warning" /> : null}
       <Button disabled={!summary.trim() || disabledReason !== undefined} loading={acknowledge.isPending} type="submit" variant="primary">
         Acknowledge test acceptance
       </Button>
@@ -505,7 +497,7 @@ function ObservationEvidenceForm({ actorId, releaseId }: { actorId: string; rele
 
   return (
     <form
-      className="stack-form compact"
+      className="grid gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         if (!summary.trim()) return;
@@ -525,12 +517,10 @@ function ObservationEvidenceForm({ actorId, releaseId }: { actorId: string; rele
         });
       }}
     >
-      <label className="field">
-        Observation summary
+      <Field label="Observation summary">
         <Textarea onChange={(event) => setSummary(event.currentTarget.value)} rows={3} value={summary} />
-      </label>
-      <label className="field">
-        Observation severity
+      </Field>
+      <Field label="Observation severity">
         <Select
           onChange={(event) => setSeverity(event.currentTarget.value as 'info' | 'warning' | 'failure')}
           options={[
@@ -540,7 +530,7 @@ function ObservationEvidenceForm({ actorId, releaseId }: { actorId: string; rele
           ]}
           value={severity}
         />
-      </label>
+      </Field>
       <Button disabled={!summary.trim()} loading={createEvidence.isPending} type="submit" variant="secondary">
         Submit observation evidence
       </Button>
@@ -552,7 +542,7 @@ function BlockerPanel({ cockpit }: { cockpit: ReleaseCockpitResponse }) {
   const blockers = cockpit.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`);
   const overridden = cockpit.overridden_blockers.map((blocker) => `${blocker.code}: ${blocker.message}`);
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       <PillList empty="No active blockers." values={blockers} />
       <PillList empty="No overridden blockers." values={overridden} />
     </div>
@@ -561,23 +551,24 @@ function BlockerPanel({ cockpit }: { cockpit: ReleaseCockpitResponse }) {
 
 function RiskSummary({ cockpit }: { cockpit: ReleaseCockpitResponse }) {
   return (
-    <dl className="fl-metadata-grid">
-      {Object.entries(cockpit.risk_summary).map(([key, value]) => (
-        <Metadata key={key} label={key.replaceAll('_', ' ')} value={String(value)} />
-      ))}
-    </dl>
+    <MetadataGrid
+      items={Object.entries(cockpit.risk_summary).map(([key, value]) => ({
+        label: key.replaceAll('_', ' '),
+        value: String(value),
+      }))}
+    />
   );
 }
 
 function EvidenceList({ empty, evidences }: { empty: string; evidences: CockpitEvidence[] }) {
-  if (!evidences.length) return <p className="empty">{empty}</p>;
+  if (!evidences.length) return <InlineNotice title={empty} />;
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       {evidences.map((evidence) => (
-        <article className="fl-card" key={evidence.id}>
-          <h3>{evidence.summary}</h3>
-          <p>{evidence.evidence_type}</p>
-          <p>{evidence.artifact?.name ?? evidence.artifact?.storage_uri ?? 'No public artifact reference.'}</p>
+        <article className="grid gap-2 rounded-card border border-border bg-surface p-4" key={evidence.id}>
+          <h3 className="text-sm font-semibold text-text-primary">{evidence.summary}</h3>
+          <p className="text-sm text-text-secondary">{evidence.evidence_type}</p>
+          <p className="text-sm text-text-secondary">{evidence.artifact?.name ?? evidence.artifact?.storage_uri ?? 'No public artifact reference.'}</p>
         </article>
       ))}
     </div>
@@ -585,13 +576,13 @@ function EvidenceList({ empty, evidences }: { empty: string; evidences: CockpitE
 }
 
 function DecisionList({ decisions }: { decisions: CockpitDecision[] }) {
-  if (!decisions.length) return <p className="empty">No release decisions recorded.</p>;
+  if (!decisions.length) return <InlineNotice title="No release decisions recorded." />;
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       {decisions.map((decision) => (
-        <article className="fl-card" key={decision.id}>
-          <h3>{decision.summary}</h3>
-          <p>{decision.rationale ?? decision.decision}</p>
+        <article className="grid gap-2 rounded-card border border-border bg-surface p-4" key={decision.id}>
+          <h3 className="text-sm font-semibold text-text-primary">{decision.summary}</h3>
+          <p className="text-sm text-text-secondary">{decision.rationale ?? decision.decision}</p>
         </article>
       ))}
     </div>
@@ -599,8 +590,8 @@ function DecisionList({ decisions }: { decisions: CockpitDecision[] }) {
 }
 
 function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
-  if (isPending) return <p className="empty">Loading {kind}.</p>;
-  if (isError) return <p className="empty">The {kind} inventory is temporarily unavailable.</p>;
+  if (isPending) return <InlineNotice title={`Loading ${kind}.`} tone="info" />;
+  if (isError) return <InlineNotice title={`The ${kind} inventory is temporarily unavailable.`} tone="danger" />;
   return null;
 }
 
@@ -610,37 +601,30 @@ function FilterSummary({ filters, unsupportedFilters }: { filters: ReleaseFilter
     .map(([key, value]) => `${key}: ${String(value)}`);
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       {supported.length ? <p>Applied filters: {supported.join(', ')}</p> : <p>No release filters applied.</p>}
-      {unsupportedFilters.length ? <p className="empty">{formatList(unsupportedFilters)} are not applied to the release inventory yet.</p> : null}
+      {unsupportedFilters.length ? (
+        <InlineNotice title={`${formatList(unsupportedFilters)} are not applied to the release inventory yet.`} tone="warning" />
+      ) : null}
     </div>
   );
 }
 
 function ReplayState({ isError, isPending, timeline }: { isError: boolean; isPending: boolean; timeline: TimelineEntry[] }) {
-  if (isPending) return <p className="empty">Loading timeline.</p>;
-  if (isError) return <p className="empty">Timeline is temporarily unavailable.</p>;
-  if (!timeline.length) return <p className="empty">No timeline events recorded.</p>;
+  if (isPending) return <InlineNotice title="Loading timeline." tone="info" />;
+  if (isError) return <InlineNotice title="Timeline is temporarily unavailable." tone="danger" />;
+  if (!timeline.length) return <InlineNotice title="No timeline events recorded." />;
   return <Timeline items={timeline.map(timelineItem)} />;
 }
 
 function PillList({ empty, values }: { empty: string; values: string[] }) {
-  if (!values.length) return <p className="empty">{empty}</p>;
+  if (!values.length) return <InlineNotice title={empty} />;
   return (
-    <ul className="fl-pill-list">
+    <PillGroup>
       {values.map((value) => (
-        <li key={value}>{value}</li>
+        <Badge key={value}>{value}</Badge>
       ))}
-    </ul>
-  );
-}
-
-function Metadata({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
+    </PillGroup>
   );
 }
 
@@ -649,7 +633,7 @@ function InvalidDetail({ message, title }: { message: string; title: string }) {
     <>
       <PageHeader title={title} />
       <Section title="Unavailable">
-        <p className="empty">{message}</p>
+        <InlineNotice title={message} tone="danger" />
       </Section>
     </>
   );
