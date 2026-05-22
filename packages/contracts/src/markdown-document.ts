@@ -547,7 +547,8 @@ function unsupportedBlockKinds(markdown: string, allowedBlocks: ReadonlySet<Mark
 
 function detectedBlockKinds(markdown: string): Set<DetectedMarkdownKind> {
   const blockKinds = new Set<DetectedMarkdownKind>();
-  const activeMarkdown = stripFencedCodeBlocks(markdown);
+  const unmaskedActiveMarkdown = stripFencedCodeBlocks(markdown);
+  const activeMarkdown = stripInlineCodeSpans(unmaskedActiveMarkdown);
   const lines = activeMarkdown.split(/\r?\n/);
 
   if (/!\[[^\]]*](?:\([^)]*\)|\[[^\]]+])/.test(activeMarkdown)) {
@@ -572,10 +573,10 @@ function detectedBlockKinds(markdown: string): Set<DetectedMarkdownKind> {
   if (/~~[^~\n]+~~/.test(activeMarkdown)) {
     blockKinds.add('strikethrough');
   }
-  if (/(^|[^`])`[^`\n]+`([^`]|$)/.test(activeMarkdown)) {
+  if (/(^|[^`])`[^`\n]+`([^`]|$)/.test(unmaskedActiveMarkdown)) {
     blockKinds.add('inline_code');
   }
-  if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m.test(activeMarkdown)) {
+  if (hasHorizontalRule(activeMarkdown)) {
     blockKinds.add('horizontal_rule');
   }
   if (/^\s{0,3}#{1,4}\s+\S/m.test(activeMarkdown)) {
@@ -618,6 +619,17 @@ function hasTable(markdown: string): boolean {
       nextLine !== undefined &&
       /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(nextLine)
     );
+  });
+}
+
+function hasHorizontalRule(markdown: string): boolean {
+  const lines = markdown.split(/\r?\n/);
+  return lines.some((line, index) => {
+    if (!/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      return false;
+    }
+    const previousLine = index > 0 ? lines[index - 1] : undefined;
+    return previousLine === undefined || !isParagraphLine(previousLine);
   });
 }
 

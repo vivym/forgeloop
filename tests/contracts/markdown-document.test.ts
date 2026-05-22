@@ -285,13 +285,15 @@ describe('MarkdownDocument validation', () => {
   });
 
   it('masks inline code contents during safety scans while enforcing inline_code policy', () => {
-    expect(
-      validateMarkdownDocument({
-        ...baseDocument,
-        allowed_blocks: ['paragraph', 'inline_code'],
-        markdown: '`<div>`',
-      }).ok,
-    ).toBe(true);
+    for (const markdown of ['`<div>`', '`[x](https://example.com/docs)`', '`**bold**`']) {
+      expect(
+        validateMarkdownDocument({
+          ...baseDocument,
+          allowed_blocks: ['paragraph', 'inline_code'],
+          markdown,
+        }).ok,
+      ).toBe(true);
+    }
 
     const result = validateMarkdownDocument({
       ...baseDocument,
@@ -302,6 +304,36 @@ describe('MarkdownDocument validation', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
+    }
+  });
+
+  it('does not treat setext heading underlines as horizontal rules', () => {
+    expect(
+      validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph', 'heading'],
+        markdown: 'Heading\n---',
+      }).ok,
+    ).toBe(true);
+
+    const paragraphOnly = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['paragraph'],
+      markdown: 'Heading\n---',
+    });
+    expect(paragraphOnly.ok).toBe(false);
+    if (!paragraphOnly.ok) {
+      expect(paragraphOnly.issues.map((issue) => issue.code)).toContain('unsupported_block');
+    }
+
+    const standaloneRule = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['paragraph'],
+      markdown: '---',
+    });
+    expect(standaloneRule.ok).toBe(false);
+    if (!standaloneRule.ok) {
+      expect(standaloneRule.issues.map((issue) => issue.code)).toContain('unsupported_block');
     }
   });
 
