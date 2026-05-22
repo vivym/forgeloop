@@ -62,7 +62,6 @@ const rawStorageMarkerPattern = /(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
 const canonicalAttachmentDestinationPattern = /^attachment:\/\/([A-Za-z0-9_-]+)$/;
-const fencedCodeBlockPattern = /^\s{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s{0,3}\1[ \t]*$/gm;
 
 export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValidationResult {
   const parsed = markdownDocumentSchema.safeParse(input);
@@ -148,7 +147,51 @@ type ParsedMarkdownUrl = {
 type MarkdownUrlConstructor = new (input: string) => ParsedMarkdownUrl;
 
 function stripFencedCodeBlocks(markdown: string): string {
-  return markdown.replace(fencedCodeBlockPattern, '\n');
+  const lines = markdown.split(/(\r?\n)/);
+  const maskedParts: string[] = [];
+  let activeFence: { char: '`' | '~'; length: number } | undefined;
+
+  for (let index = 0; index < lines.length; index += 2) {
+    const line = lines[index] ?? '';
+    const newline = lines[index + 1] ?? '';
+
+    if (activeFence) {
+      const closingFence = parseClosingFence(line, activeFence.char);
+      maskedParts.push(newline === '' ? '' : newline);
+      if (closingFence !== undefined && closingFence >= activeFence.length) {
+        activeFence = undefined;
+      }
+      continue;
+    }
+
+    const openingFence = parseOpeningFence(line);
+    if (openingFence) {
+      activeFence = openingFence;
+      maskedParts.push(newline === '' ? '' : newline);
+      continue;
+    }
+
+    maskedParts.push(line, newline);
+  }
+
+  return maskedParts.join('');
+}
+
+function parseOpeningFence(line: string): { char: '`' | '~'; length: number } | undefined {
+  const match = /^( {0,3})(`{3,}|~{3,})[^\r\n]*$/.exec(line);
+  const fence = match?.[2];
+  if (!fence) {
+    return undefined;
+  }
+  const char = fence[0] as '`' | '~';
+  return { char, length: fence.length };
+}
+
+function parseClosingFence(line: string, char: '`' | '~'): number | undefined {
+  const escapedChar = char === '`' ? '`' : '~';
+  const match = new RegExp(`^ {0,3}(${escapedChar}{3,})[\\t ]*$`).exec(line);
+  const fence = match?.[1];
+  return fence?.length;
 }
 
 function markdownDestinations(markdown: string): MarkdownDestination[] {

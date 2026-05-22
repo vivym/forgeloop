@@ -129,6 +129,16 @@ describe('MarkdownDocument validation', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('allows closing fences longer than the opening fence when masking code block contents', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['code_block'],
+      markdown: '```html\n<iframe src="https://example.com"></iframe>\nhttps://bucket.example.com/private/key?signature=raw\n````',
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it('still rejects raw html and unsafe links outside fenced code blocks', () => {
     for (const markdown of [
       '```html\n<iframe src="https://example.com"></iframe>\n```\n\n<iframe src="https://example.com"></iframe>',
