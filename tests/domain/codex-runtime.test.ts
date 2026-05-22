@@ -387,6 +387,12 @@ describe('codex runtime domain contracts', () => {
       { container_id: '4f1e2d3c4f1e' },
       { auth_token: 'raw-token' },
       { raw_context: { project_id: 'project-1' } },
+      { changed_file: 'packages/domain/src/codex-runtime.ts' },
+      { workspace_file: 'tmp/workspace/file.txt' },
+      { local_url: 'file:///etc/passwd' },
+      { event_stream: 'ws://127.0.0.1:4555/events' },
+      { tcp_endpoint: 'tcp://10.0.0.5:1234' },
+      { source_url: 'ssh://internal.example/repo' },
       'codex.sock',
     ]) {
       expectDomainErrorCode(() => assertCodexRuntimePublicSafeValue(unsafeValue, 'runtime result'), 'codex_docker_runtime_evidence_unsafe');

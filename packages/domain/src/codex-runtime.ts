@@ -532,15 +532,23 @@ const isRawRuntimePublicString = (value: string): boolean => {
   if (/^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
     return false;
   }
+  if (/^(application|audio|font|image|message|model|multipart|text|video)\/[A-Za-z0-9.+-]+$/i.test(value)) {
+    return false;
+  }
   const loopbackEndpointPattern = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)(:\d{1,5})?(\/|$)/i;
   const privateIpv4EndpointPattern =
     /^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2})(:\d{1,5})?(\/|$)/i;
   const privateIpv6EndpointPattern = /^\[?(?:fc|fd)[0-9a-f]{0,2}:[0-9a-f:]+\]?(:\d{1,5})?(\/|$)/i;
   const internalHostEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal(:\d{1,5})?(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
+  const relativeLocalPathPattern = /^(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+(?:$|[?#])/;
+  const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
   return (
     /^(\/|~\/|\.{1,2}\/|[A-Za-z]:[\\/])/i.test(value) ||
+    relativeLocalPathPattern.test(value) ||
+    rawUrlSchemePattern.test(value) ||
+    /^file:\//i.test(value) ||
     /^https?:\/\//i.test(value) ||
     /^(app-server|control-plane):\/\//i.test(value) ||
     /^unix:/i.test(value) ||
