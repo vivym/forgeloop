@@ -608,6 +608,7 @@ export const seedSingleCredentialBinding = async (
     },
     secret_payload_json: secretPayload,
   });
+  return { bindingId, versionId };
 };
 
 const seedCodexWorker = async (

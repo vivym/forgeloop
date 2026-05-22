@@ -7,6 +7,7 @@ import {
   type RunDurabilityMode,
 } from './control-plane-tokens';
 import { ControlPlaneRuntimeService } from './control-plane-runtime.service';
+import { RunExecutionRuntimeConfigService } from './run-execution-runtime-config.service';
 
 const createRepository = (): DeliveryRepository => {
   const databaseUrl = process.env.FORGELOOP_DATABASE_URL;
@@ -27,7 +28,8 @@ const durabilityMode = (): RunDurabilityMode =>
     { provide: DELIVERY_REPOSITORY, useFactory: createRepository },
     { provide: RUN_DURABILITY_MODE, useFactory: durabilityMode },
     ControlPlaneRuntimeService,
+    RunExecutionRuntimeConfigService,
   ],
-  exports: [DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, ControlPlaneRuntimeService],
+  exports: [DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, ControlPlaneRuntimeService, RunExecutionRuntimeConfigService],
 })
 export class ControlPlaneCoreModule {}

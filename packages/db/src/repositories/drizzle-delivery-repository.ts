@@ -925,7 +925,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const rows = await this.db
       .select()
       .from(codex_runtime_profile_revisions)
-      .where(eq(codex_runtime_profile_revisions.status, 'active'))
+      .where(
+        and(
+          eq(codex_runtime_profile_revisions.status, 'active'),
+          ...(input.runtime_profile_id === undefined
+            ? []
+            : [eq(codex_runtime_profile_revisions.profileId, input.runtime_profile_id)]),
+        ),
+      )
       .orderBy(desc(codex_runtime_profile_revisions.createdAt), desc(codex_runtime_profile_revisions.revisionNumber));
     return rows
       .map((row) => fromDbRecord<CodexRuntimeProfileRevision>(row))
@@ -964,6 +971,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         and(
           eq(codex_credential_bindings.projectId, input.project_id),
           eq(codex_credential_bindings.profileId, input.runtime_profile_id),
+          ...(input.credential_binding_id === undefined ? [] : [eq(codex_credential_bindings.id, input.credential_binding_id)]),
         ),
       );
 

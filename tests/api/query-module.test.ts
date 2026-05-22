@@ -6,6 +6,7 @@ import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../../apps/control-plane-api/src/modules/core/control-plane-runtime.service';
 import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
@@ -70,6 +71,7 @@ describe('query module', () => {
 
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
+    vi.unstubAllEnvs();
   });
 
   it('allows AppModule to override core query providers without QueryModule owning delivery wiring', async () => {
@@ -93,8 +95,9 @@ describe('query module', () => {
     expect(coreTokensModule).toHaveProperty('RUN_DURABILITY_MODE');
   });
 
-  const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {
+  const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo'; now?: string } = {}) => {
     const repo = new InMemoryDeliveryRepository();
+    let idCounter = 0;
     let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
@@ -102,6 +105,12 @@ describe('query module', () => {
       .useValue({ kick: () => undefined, drainOnce: async () => undefined });
     if (options.durabilityMode !== undefined) {
       moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);
+    }
+    if (options.now !== undefined) {
+      moduleBuilder = moduleBuilder.overrideProvider(ControlPlaneRuntimeService).useValue({
+        id: (prefix: string) => `${prefix}-test-${++idCounter}`,
+        now: () => options.now,
+      });
     }
     const moduleRef = await moduleBuilder.compile();
     const app = moduleRef.createNestApplication();
@@ -351,6 +360,37 @@ describe('query module', () => {
     ]) {
       expect(serialized).not.toContain(unsafeText);
     }
+  });
+
+  it('uses server run execution runtime config for readiness without exposing raw selection ids', async () => {
+    const { app, repo } = await track(createTestApp({ now: '2026-05-20T00:00:00.000Z' }));
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
+    const profile = await seedActiveRunExecutionProfile(repo, executionPackage);
+    const configuredBinding = await seedSingleCredentialBinding(repo, profile, executionPackage, 'configured');
+    await seedSingleCredentialBinding(repo, profile, executionPackage, 'rotation');
+    await seedOnlineCompatibleCodexWorker(repo, profile, executionPackage);
+    vi.stubEnv('FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID', profile.profile_id);
+    vi.stubEnv('FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID', configuredBinding.bindingId);
+
+    const readiness = await request(app.getHttpServer())
+      .get(`/query/execution-packages/${executionPackage.id}/runtime-readiness`)
+      .expect(200);
+    expect(readiness.body).toMatchObject({ state: 'ready', blockers: [] });
+
+    const cockpit = await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .expect(200);
+    const runAction = cockpit.body.delivery_readiness.next_actions.find(
+      (candidate: { kind: string; command?: { type: string } }) =>
+        candidate.kind === 'command' && candidate.command?.type === 'run_package',
+    );
+    expect(runAction).toMatchObject({ enabled: true });
+
+    const serialized = `${JSON.stringify(readiness.body)} ${JSON.stringify(cockpit.body)}`;
+    expect(serialized).not.toContain(profile.profile_id);
+    expect(serialized).not.toContain(configuredBinding.bindingId);
+    expect(serialized).not.toContain('runtime_profile_id');
+    expect(serialized).not.toContain('credential_binding_id');
   });
 
   it('uses runtime readiness blockers to disable cockpit run package next actions', async () => {

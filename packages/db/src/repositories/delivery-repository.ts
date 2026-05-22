@@ -122,6 +122,7 @@ export interface GetCodexRuntimeStatusInput {
 export interface ListActiveCodexRuntimeProfileReadinessDiagnosticsInput {
   project_id: string;
   repo_id?: string;
+  runtime_profile_id?: string;
   now: string;
 }
 
@@ -138,6 +139,7 @@ export interface ListCodexCredentialBindingReadinessCandidatesInput {
   project_id: string;
   repo_id?: string;
   runtime_profile_id: string;
+  credential_binding_id?: string;
   target_kind: CodexRuntimeTargetKind;
   now: string;
 }

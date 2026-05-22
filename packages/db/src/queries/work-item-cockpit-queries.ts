@@ -21,7 +21,7 @@ import {
 } from '@forgeloop/contracts';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
-import { deriveDeliveryRunReadiness } from './delivery-runtime-readiness';
+import { deriveDeliveryRunReadiness, type DeliveryRunReadinessRuntimeSelection } from './delivery-runtime-readiness';
 import { serializePublicArtifactRef, serializePublicArtifactRefs } from './public-evidence-serialization';
 import { selectWorkItemRunSession } from './work-item-delivery-selection';
 import { deriveWorkItemDeliveryReadiness } from './work-item-delivery-readiness';
@@ -31,6 +31,7 @@ export interface WorkItemCockpitOptions {
   run_session_metadata_fallback: RunRuntimeMetadata;
   lane?: ProductLaneId;
   now?: string;
+  runtime_selection?: DeliveryRunReadinessRuntimeSelection;
 }
 
 const withWorkerLeaseMetadata = async (
@@ -458,6 +459,7 @@ export async function getWorkItemCockpit(
             await deriveDeliveryRunReadiness(repository, {
               executionPackage: runPackageReadinessCandidate,
               now: readinessNow,
+              ...(options.runtime_selection === undefined ? {} : { runtime_selection: options.runtime_selection }),
             }),
           ] as const,
         ]

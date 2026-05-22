@@ -11,6 +11,12 @@ import type { CodexRuntimeProfileReadinessDiagnostic, DeliveryRepository } from 
 export interface DeriveDeliveryRunReadinessInput {
   executionPackage: ExecutionPackage;
   now: string;
+  runtime_selection?: DeliveryRunReadinessRuntimeSelection;
+}
+
+export interface DeliveryRunReadinessRuntimeSelection {
+  runtime_profile_id?: string;
+  credential_binding_id?: string;
 }
 
 const requiredTargetKind = 'run_execution' as const;
@@ -109,6 +115,9 @@ export async function deriveDeliveryRunReadiness(
   const profiles = await repository.listActiveCodexRuntimeProfileReadinessDiagnostics({
     project_id: executionPackage.project_id,
     repo_id: executionPackage.repo_id,
+    ...(input.runtime_selection?.runtime_profile_id === undefined
+      ? {}
+      : { runtime_profile_id: input.runtime_selection.runtime_profile_id }),
     now,
   });
   const profile = selectRunProfile(profiles);
@@ -122,6 +131,9 @@ export async function deriveDeliveryRunReadiness(
       repo_id: executionPackage.repo_id,
       runtime_profile_id: profile.profile_id,
       target_kind: requiredTargetKind,
+      ...(input.runtime_selection?.credential_binding_id === undefined
+        ? {}
+        : { credential_binding_id: input.runtime_selection.credential_binding_id }),
       now,
     });
     if (credentialCandidates.length === 0) {

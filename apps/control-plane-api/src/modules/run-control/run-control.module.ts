@@ -32,6 +32,7 @@ import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
 import { AuditModule } from '../audit/audit.module';
 import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
+import { RunExecutionRuntimeConfigService } from '../core/run-execution-runtime-config.service';
 import { CodexRuntimeModule } from '../codex-runtime/codex-runtime.module';
 import { CodexRuntimeService } from '../codex-runtime/codex-runtime.service';
 import { ExecutionPackagesModule } from '../execution-packages/execution-packages.module';
@@ -366,6 +367,7 @@ class GovernedCodexDriver implements CodexSessionDriver {
 const createLocalDockerLeasedDriverFactory = (input: {
   repository: DeliveryRepository;
   codexRuntimeService: CodexRuntimeService;
+  runExecutionRuntimeConfig: RunExecutionRuntimeConfigService;
   artifactRoot: string;
   rawLogStore: LocalCodexRawLogStore;
   runWorkerId: string;
@@ -390,8 +392,7 @@ const createLocalDockerLeasedDriverFactory = (input: {
   const dockerImageDigests = firstDigestList('FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST', 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS');
   const networkPolicyDigests = firstDigestList('FORGELOOP_CODEX_NETWORK_POLICY_DIGEST', 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS');
   const networkProviderConfigDigests = stringListEnv('FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS');
-  const runtimeProfileId = optionalEnv('FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID') ?? optionalEnv('FORGELOOP_CODEX_RUNTIME_PROFILE_ID');
-  const credentialBindingId = requiredEnv('FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID');
+  const runtimeSelection = input.runExecutionRuntimeConfig.launchSelection();
   const maxConcurrency = positiveIntEnv('FORGELOOP_WORKER_MAX_CONCURRENCY', 1);
   const capabilities = workerCapabilitiesEnv(['run_execution']);
   const authorizedScopes = runtimeScopesEnv();
@@ -467,8 +468,8 @@ const createLocalDockerLeasedDriverFactory = (input: {
             project_id: runSpec.project_id,
             repo_id: runSpec.repo.repo_id,
             target_kind: 'run_execution',
-            ...(runtimeProfileId === undefined ? {} : { runtime_profile_id: runtimeProfileId }),
-            credential_binding_id: credentialBindingId,
+            ...(runtimeSelection.runtime_profile_id === undefined ? {} : { runtime_profile_id: runtimeSelection.runtime_profile_id }),
+            credential_binding_id: runtimeSelection.credential_binding_id,
           });
           if (
             status.runtime_profile_revision_id === undefined ||
@@ -519,7 +520,11 @@ const createLocalDockerLeasedDriverFactory = (input: {
     );
 };
 
-const createRunWorker = (repository: DeliveryRepository, codexRuntimeService: CodexRuntimeService): RunWorker => {
+const createRunWorker = (
+  repository: DeliveryRepository,
+  codexRuntimeService: CodexRuntimeService,
+  runExecutionRuntimeConfig: RunExecutionRuntimeConfigService,
+): RunWorker => {
   const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
   mkdirSync(artifactRoot, { recursive: true });
   const rawLogStore = new LocalCodexRawLogStore({ artifactRoot: join(artifactRoot, 'raw-logs') });
@@ -527,6 +532,7 @@ const createRunWorker = (repository: DeliveryRepository, codexRuntimeService: Co
   const leasedDriverFactory = createLocalDockerLeasedDriverFactory({
     repository,
     codexRuntimeService,
+    runExecutionRuntimeConfig,
     artifactRoot,
     rawLogStore,
     runWorkerId,
@@ -586,7 +592,7 @@ const createRunWorker = (repository: DeliveryRepository, codexRuntimeService: Co
     {
       provide: DELIVERY_RUN_WORKER,
       useFactory: createRunWorker,
-      inject: [DELIVERY_REPOSITORY, CodexRuntimeService],
+      inject: [DELIVERY_REPOSITORY, CodexRuntimeService, RunExecutionRuntimeConfigService],
     },
     RunControlService,
     RunWorkerLifecycleService,

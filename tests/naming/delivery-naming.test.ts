@@ -193,7 +193,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^tests\/domain\/(?:release-gates|release-states|states|validators)\.test\.ts$/,
     /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
     /^tests\/smoke\/(?:delivery-dogfood-script|delivery-dogfood-work-items-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
-    /^tests\/web\/(?:api|package-run-product-routes|review-release-product-routes)\.test\.tsx?$/,
+    /^tests\/web\/(?:api|api-hooks|package-run-product-routes|review-release-product-routes)\.test\.tsx?$/,
     /^tests\/web\/fixtures\/product-(?:api-mock|data)\.ts$/,
     /^tests\/workflow\/package-execution-workflow\.test\.ts$/,
   ];

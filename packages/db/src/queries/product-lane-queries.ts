@@ -16,6 +16,7 @@ import { isOpenReviewPacketStatus } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
 import {
+  type DeliveryRunReadinessRuntimeSelection,
   deliveryRunReadinessDisabledReason,
   deriveDeliveryRunReadiness,
 } from './delivery-runtime-readiness';
@@ -44,6 +45,7 @@ import {
 
 export interface ProductLaneQueryOptions {
   now?: string;
+  runtime_selection?: DeliveryRunReadinessRuntimeSelection;
 }
 
 const staleAfterMs = 7 * 24 * 60 * 60 * 1000;
@@ -631,7 +633,11 @@ const gateVisibleRunPackageActions = async (
           executionPackage === undefined
             ? undefined
             : deliveryRunReadinessDisabledReason(
-                await deriveDeliveryRunReadiness(repository, { executionPackage, now: readinessNow }),
+                await deriveDeliveryRunReadiness(repository, {
+                  executionPackage,
+                  now: readinessNow,
+                  ...(options.runtime_selection === undefined ? {} : { runtime_selection: options.runtime_selection }),
+                }),
               ),
         ] as const;
       }),

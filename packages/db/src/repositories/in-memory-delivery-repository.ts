@@ -627,6 +627,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       .filter(
         (revision) =>
           revision.status === 'active' &&
+          (input.runtime_profile_id === undefined || revision.profile_id === input.runtime_profile_id) &&
           codexRuntimeScopeMatches(revision.allowed_scopes, codexScope(input.project_id, input.repo_id)),
       )
       .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.revision_number - left.revision_number)
@@ -650,7 +651,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   ): Promise<CodexCredentialBindingReadinessCandidate[]> {
     return valuesFor(this.codexCredentialBindings)
       .filter((binding) => {
-        if (binding.project_id !== input.project_id || binding.profile_id !== input.runtime_profile_id) {
+        if (
+          binding.project_id !== input.project_id ||
+          binding.profile_id !== input.runtime_profile_id ||
+          (input.credential_binding_id !== undefined && binding.id !== input.credential_binding_id)
+        ) {
           return false;
         }
         if (binding.repo_id !== undefined && binding.repo_id !== input.repo_id) {
