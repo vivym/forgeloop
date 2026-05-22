@@ -181,6 +181,7 @@ export interface CodexWorkerRegistration {
   control_channel_status: 'connected' | 'disconnected';
   session_id?: string;
   session_expires_at?: IsoDateTime;
+  session_epoch: number;
   bootstrap_token_hash?: string;
   capabilities: readonly CodexRuntimeTargetKind[];
   uid: number;
@@ -1763,11 +1764,20 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
     if (key === 'runtime_target_kind' && !validRuntimeTargetKinds.has(value as CodexRuntimeTargetKind)) {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence runtime_target_kind is invalid.', { field: key });
     }
-    if (key === 'source_access_mode' && !validSourceAccessModes.has(value as CodexSourceAccessMode)) {
-      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence source_access_mode is invalid.', { field: key });
+    if (key === 'runtime_target_kind') {
+      continue;
     }
-    if (key === 'environment' && !validRuntimeEnvironments.has(value as CodexRuntimeEnvironment)) {
-      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence environment is invalid.', { field: key });
+    if (key === 'source_access_mode') {
+      if (!validSourceAccessModes.has(value as CodexSourceAccessMode)) {
+        throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence source_access_mode is invalid.', { field: key });
+      }
+      continue;
+    }
+    if (key === 'environment') {
+      if (!validRuntimeEnvironments.has(value as CodexRuntimeEnvironment)) {
+        throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence environment is invalid.', { field: key });
+      }
+      continue;
     }
     if (key.endsWith('_digest') && !isSha256Digest(value)) {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence digest fields must be sha256 digests.', {

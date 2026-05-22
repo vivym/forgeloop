@@ -134,6 +134,7 @@ export const codex_worker_registrations = pgTable(
     controlChannelStatus: text('control_channel_status').notNull(),
     sessionTokenHash: text('session_token_hash').notNull(),
     sessionTokenExpiresAt: timestampColumn('session_token_expires_at').notNull(),
+    sessionEpoch: integer('session_epoch').notNull().default(1),
     bootstrapTokenHash: text('bootstrap_token_hash').notNull(),
     bootstrapTokenVersion: integer('bootstrap_token_version').notNull(),
     allowedScopesJson: jsonb('allowed_scopes_json').$type<readonly CodexRuntimeScope[]>().notNull(),
@@ -167,10 +168,17 @@ export const codex_worker_session_nonces = pgTable(
       .references(() => codex_worker_registrations.id, { onDelete: 'cascade' }),
     sessionTokenHash: text('session_token_hash').notNull(),
     nonceHash: text('nonce_hash').notNull(),
+    sessionEpoch: integer('session_epoch').notNull(),
+    requestBindingDigest: text('request_binding_digest').notNull(),
+    replayKeyHash: text('replay_key_hash').notNull(),
     nonceTimestamp: timestampColumn('nonce_timestamp').notNull(),
     createdAt: timestampColumn('created_at').notNull(),
   },
-  (table) => [uniqueIndex('codex_worker_session_nonces_worker_session_nonce_idx').on(table.workerId, table.sessionTokenHash, table.nonceHash)],
+  (table) => [
+    uniqueIndex('codex_worker_session_nonces_worker_session_nonce_idx').on(table.workerId, table.sessionTokenHash, table.nonceHash),
+    uniqueIndex('codex_worker_session_nonces_worker_epoch_nonce_idx').on(table.workerId, table.sessionEpoch, table.nonceHash),
+    uniqueIndex('codex_worker_session_nonces_replay_key_idx').on(table.replayKeyHash),
+  ],
 );
 
 export const codex_runtime_setup_nonces = pgTable(

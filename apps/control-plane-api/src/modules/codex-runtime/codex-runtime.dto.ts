@@ -19,6 +19,7 @@ const createdByFields = {
 
 const runtimeTargetKindSchema = z.enum(['generation', 'run_execution']);
 const runSessionFenceStatusSchema = z.enum(['queued', 'running', 'resuming']);
+const terminalRuntimeJobStatusSchema = z.enum(['succeeded', 'failed', 'cancelled', 'expired']);
 
 const launchTargetSchema = z.object({
   target_type: z.enum(['automation_action_run', 'run_session']),
@@ -236,6 +237,164 @@ export const heartbeatCodexWorkerSchema = z.object({
   capabilities: z.array(runtimeTargetKindSchema),
 }).strict();
 
+const workerSessionRequestSchema = z.object({
+  worker_session_token: z.string().min(1),
+  nonce: z.string().min(1),
+  nonce_timestamp: z.string().min(1),
+  body_digest: sha256DigestSchema,
+}).strict();
+
+const runtimeJobInputSchema = z.record(z.string(), z.unknown());
+
+export const createCodexRuntimeJobSchema = z.object({
+  runtime_job_id: z.string().min(1),
+  launch_lease_id: z.string().min(1),
+  envelope_id: z.string().min(1),
+  job_request_id: z.string().min(1),
+  target: launchTargetSchema,
+  runtime_profile_revision_id: z.string().min(1),
+  credential_binding_id: z.string().min(1),
+  credential_binding_version_id: z.string().min(1),
+  credential_payload_digest: sha256DigestSchema,
+  input_json: runtimeJobInputSchema,
+  workspace_acquisition_json: runtimeJobInputSchema.optional(),
+  pending_workspace_bundle: z.object({
+    bundle_id: z.string().min(1),
+    pending_artifact_ref: z.string().min(1),
+    archive_digest: sha256DigestSchema,
+    manifest_digest: sha256DigestSchema,
+    run_worker_lease_id: z.string().min(1),
+    workspace_acquisition_digest: sha256DigestSchema,
+    workspace_acquisition_json: runtimeJobInputSchema,
+    expires_at: z.string().min(1),
+  }).strict().optional(),
+  launch_attempt: z.number().int().nonnegative(),
+  action_type: z.string().min(1).optional(),
+  action_attempt: z.number().int().nonnegative().optional(),
+  action_claim_token: z.string().min(1).optional(),
+  precondition_fingerprint: z.string().min(1).optional(),
+  execution_package_id: z.string().min(1).optional(),
+  run_session_id: z.string().min(1).optional(),
+  run_worker_lease_id: z.string().min(1).optional(),
+  run_worker_lease_token: z.string().min(1).optional(),
+  run_session_status: runSessionFenceStatusSchema.optional(),
+  run_session_updated_at: z.string().min(1).optional(),
+  execution_package_version: z.number().int().nonnegative().optional(),
+  expires_at: z.string().min(1),
+}).strict().superRefine((value, context) => {
+  if (value.target.target_kind !== 'run_execution') {
+    return;
+  }
+  const requiredFields = [
+    'execution_package_id',
+    'run_session_id',
+    'run_worker_lease_id',
+    'run_worker_lease_token',
+    'run_session_status',
+    'run_session_updated_at',
+    'execution_package_version',
+  ] as const;
+  for (const field of requiredFields) {
+    if (value[field] === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `${field} is required for run_execution runtime jobs`,
+      });
+    }
+  }
+});
+
+export const cancelCodexRuntimeJobSchema = z.object({
+  reason_code: z.string().min(1),
+  idempotency_key: z.string().min(1),
+}).strict();
+
+export const recoverStaleCodexRuntimeJobsSchema = z.object({
+  stale_before: z.string().min(1),
+  now: z.string().min(1).optional(),
+  worker_id: z.string().min(1).optional(),
+  reason_code: z.string().min(1),
+}).strict();
+
+export const renewAutomationActionRunClaimSchema = z.object({
+  claim_token: z.string().min(1),
+  locked_until: z.string().min(1),
+  now: z.string().min(1).optional(),
+}).strict();
+
+export const refreshCodexWorkerSessionSchema = workerSessionRequestSchema.extend({
+  next_session_public_key_id: z.string().min(1),
+  next_session_public_key_algorithm: z.literal('x25519'),
+  next_session_public_key_material: z.string().min(1),
+  next_session_public_key_expires_at: z.string().min(1),
+  refresh_idempotency_key: z.string().min(1),
+});
+
+export const pollCodexRuntimeJobsSchema = workerSessionRequestSchema.extend({
+  target_kinds: z.array(runtimeTargetKindSchema).optional(),
+  limit: z.number().int().positive().max(50),
+  current_runtime_job_ids: z.array(z.string().min(1)).optional(),
+});
+
+export const acceptCodexRuntimeJobSchema = workerSessionRequestSchema.extend({
+  accept_idempotency_key: z.string().min(1),
+  accepted_worker_session_digest: sha256DigestSchema,
+  accepted_session_public_key_id: z.string().min(1),
+  accepted_session_epoch: z.number().int().positive(),
+});
+
+export const claimCodexRuntimeJobEnvelopeSchema = workerSessionRequestSchema.extend({
+  envelope_id: z.string().min(1),
+  claim_request_id: z.string().min(1),
+  accepted_worker_session_digest: sha256DigestSchema,
+  accepted_session_public_key_id: z.string().min(1),
+  accepted_session_epoch: z.number().int().positive(),
+});
+
+export const codexRuntimeWorkerQuerySchema = workerSessionRequestSchema;
+
+export const materializeCodexRuntimeJobSchema = workerSessionRequestSchema.extend({
+  launch_lease_id: z.string().min(1),
+  launch_token: z.string().min(1),
+  materialization_request_id: z.string().min(1),
+  accepted_worker_session_digest: sha256DigestSchema,
+  accepted_session_public_key_id: z.string().min(1),
+  accepted_session_epoch: z.number().int().positive(),
+});
+
+export const startCodexRuntimeJobSchema = workerSessionRequestSchema.extend({
+  start_idempotency_key: z.string().min(1),
+  runtime_evidence_digest: sha256DigestSchema,
+  launch_materialization_digest: sha256DigestSchema,
+});
+
+export const appendCodexRuntimeJobEventSchema = workerSessionRequestSchema.extend({
+  event_id: z.string().min(1),
+  event_idempotency_key: z.string().min(1),
+  event_type: z.string().min(1),
+  event_payload_json: runtimeJobInputSchema,
+  event_payload_digest: sha256DigestSchema,
+});
+
+export const createCodexRuntimeJobArtifactSchema = workerSessionRequestSchema.extend({
+  artifact_idempotency_key: z.string().min(1),
+  kind: z.string().min(1),
+  name: z.string().min(1),
+  content_type: z.string().min(1),
+  digest: sha256DigestSchema,
+  size_bytes: z.number().int().nonnegative(),
+  metadata_json: runtimeJobInputSchema.optional(),
+});
+
+export const terminalizeCodexRuntimeJobSchema = workerSessionRequestSchema.extend({
+  launch_lease_id: z.string().min(1),
+  terminal_status: terminalRuntimeJobStatusSchema,
+  reason_code: z.string().min(1),
+  terminal_result_json: runtimeJobInputSchema.optional(),
+  terminal_idempotency_key: z.string().min(1),
+});
+
 export const createCodexLaunchLeaseSchema = z.object({
   id: z.string().min(1),
   lease_request_id: z.string().min(1),
@@ -288,24 +447,18 @@ export const revokeCodexLaunchLeaseSchema = z.object({
   idempotency_key: z.string().min(1),
 }).strict();
 
-export const materializeCodexLaunchLeaseSchema = z.object({
+export const materializeCodexLaunchLeaseSchema = workerSessionRequestSchema.extend({
   launch_token: z.string().min(1),
-  worker_session_token: z.string().min(1),
-  nonce: z.string().min(1),
-  nonce_timestamp: z.string().min(1),
   materialization_request_hash: sha256DigestSchema,
-}).strict();
+});
 
-export const terminalizeCodexLaunchLeaseSchema = z.object({
-  worker_session_token: z.string().min(1),
-  nonce: z.string().min(1),
-  nonce_timestamp: z.string().min(1),
+export const terminalizeCodexLaunchLeaseSchema = workerSessionRequestSchema.extend({
   terminal_status: z.literal('terminal'),
   reason_code: z.string().min(1),
   evidence_summary: z.record(z.string(), z.unknown()).optional(),
   runtime_job_id: z.string().min(1).optional(),
   idempotency_key: z.string().min(1),
-}).strict();
+});
 
 export type CreateCodexRuntimeProfileDto = z.infer<typeof createCodexRuntimeProfileSchema>;
 export type CreateCodexCredentialDto = z.infer<typeof createCodexCredentialSchema>;
@@ -314,6 +467,20 @@ export type CodexRuntimeStatusQuery = z.infer<typeof codexRuntimeStatusQuerySche
 export type RecoverStaleCodexWorkersDto = z.infer<typeof recoverStaleCodexWorkersSchema>;
 export type RegisterCodexWorkerDto = z.infer<typeof registerCodexWorkerSchema>;
 export type HeartbeatCodexWorkerDto = z.infer<typeof heartbeatCodexWorkerSchema>;
+export type CreateCodexRuntimeJobDto = z.infer<typeof createCodexRuntimeJobSchema>;
+export type CancelCodexRuntimeJobDto = z.infer<typeof cancelCodexRuntimeJobSchema>;
+export type RecoverStaleCodexRuntimeJobsDto = z.infer<typeof recoverStaleCodexRuntimeJobsSchema>;
+export type RenewAutomationActionRunClaimDto = z.infer<typeof renewAutomationActionRunClaimSchema>;
+export type RefreshCodexWorkerSessionDto = z.infer<typeof refreshCodexWorkerSessionSchema>;
+export type PollCodexRuntimeJobsDto = z.infer<typeof pollCodexRuntimeJobsSchema>;
+export type AcceptCodexRuntimeJobDto = z.infer<typeof acceptCodexRuntimeJobSchema>;
+export type ClaimCodexRuntimeJobEnvelopeDto = z.infer<typeof claimCodexRuntimeJobEnvelopeSchema>;
+export type CodexRuntimeWorkerQueryDto = z.infer<typeof codexRuntimeWorkerQuerySchema>;
+export type MaterializeCodexRuntimeJobDto = z.infer<typeof materializeCodexRuntimeJobSchema>;
+export type StartCodexRuntimeJobDto = z.infer<typeof startCodexRuntimeJobSchema>;
+export type AppendCodexRuntimeJobEventDto = z.infer<typeof appendCodexRuntimeJobEventSchema>;
+export type CreateCodexRuntimeJobArtifactDto = z.infer<typeof createCodexRuntimeJobArtifactSchema>;
+export type TerminalizeCodexRuntimeJobDto = z.infer<typeof terminalizeCodexRuntimeJobSchema>;
 export type CreateCodexLaunchLeaseDto = z.infer<typeof createCodexLaunchLeaseSchema>;
 export type RevokeCodexLaunchLeaseDto = z.infer<typeof revokeCodexLaunchLeaseSchema>;
 export type MaterializeCodexLaunchLeaseDto = z.infer<typeof materializeCodexLaunchLeaseSchema>;

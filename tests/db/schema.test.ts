@@ -432,6 +432,29 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(codex_launch_leases, 'terminalRuntimeJobId')).toBe('PgText');
     expect(columnType(codex_launch_leases, 'terminalIdempotencyKey')).toBe('PgText');
     expect(columnType(codex_worker_session_nonces, 'nonceHash')).toBe('PgText');
+    expect(columnType(codex_worker_registrations, 'sessionEpoch')).toBe('PgInteger');
+    expect(columnNotNull(codex_worker_registrations, 'sessionEpoch')).toBe(true);
+    expect(columnType(codex_worker_session_nonces, 'sessionEpoch')).toBe('PgInteger');
+    expect(columnNotNull(codex_worker_session_nonces, 'sessionEpoch')).toBe(true);
+    expect(columnType(codex_worker_session_nonces, 'requestBindingDigest')).toBe('PgText');
+    expect(columnNotNull(codex_worker_session_nonces, 'requestBindingDigest')).toBe(true);
+    expect(columnType(codex_worker_session_nonces, 'replayKeyHash')).toBe('PgText');
+    expect(columnNotNull(codex_worker_session_nonces, 'replayKeyHash')).toBe(true);
+    expect(
+      hasUniqueIndex(codex_worker_session_nonces, 'codex_worker_session_nonces_worker_session_nonce_idx', [
+        'worker_id',
+        'session_token_hash',
+        'nonce_hash',
+      ]),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(codex_worker_session_nonces, 'codex_worker_session_nonces_worker_epoch_nonce_idx', [
+        'worker_id',
+        'session_epoch',
+        'nonce_hash',
+      ]),
+    ).toBe(true);
+    expect(hasUniqueIndex(codex_worker_session_nonces, 'codex_worker_session_nonces_replay_key_idx', ['replay_key_hash'])).toBe(true);
     expect(columnNotNull(codex_worker_registrations, 'sessionTokenExpiresAt')).toBe(true);
     expect(columnNotNull(codex_worker_session_nonces, 'sessionTokenHash')).toBe(true);
     expect(Object.keys(getTableColumns(codex_worker_session_nonces))).not.toContain('nonce');
