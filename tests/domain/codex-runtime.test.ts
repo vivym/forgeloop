@@ -31,6 +31,7 @@ import {
   type CodexLaunchMaterialization,
   type CodexLaunchTarget,
   type CodexLaunchTokenEnvelope,
+  type CodexNetworkAllowlistRule,
   type CodexRunExecutionRuntimeJobResult,
   type CodexRunExecutionWorkloadV1,
   type CodexRuntimeJob,
@@ -99,7 +100,7 @@ const modelProviderRule = {
   purpose: 'model_provider',
 } as const;
 
-const hostFirewallPolicy = (rules = [modelProviderRule]) => ({
+const hostFirewallPolicy = (rules: readonly CodexNetworkAllowlistRule[] = [modelProviderRule]) => ({
   mode: 'egress_allowlist' as const,
   provider: 'host_firewall' as const,
   allowlist_rules: rules,
@@ -365,6 +366,42 @@ describe('codex runtime domain contracts', () => {
         }),
       'codex_docker_runtime_evidence_unsafe',
     );
+  });
+
+  it.each([
+    {
+      task_kind: 'spec_draft',
+      public_summary: 'ok',
+    },
+    {
+      task_kind: 'run_execution',
+      changed_files: [],
+      public_summary: 'ok',
+    },
+    {
+      task_kind: 'run_execution',
+      execution_package_id: 'package-1',
+      execution_package_version: 1,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: 'not-a-digest',
+      changed_files: [],
+      check_results: [],
+      execution_artifacts: [],
+      public_summary: 'ok',
+    },
+    {
+      task_kind: 'run_execution',
+      execution_package_id: 'package-1',
+      execution_package_version: 1,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      changed_files: [],
+      check_results: [{ name: 'unit', status: 'unknown', summary: 'ok' }],
+      execution_artifacts: [],
+      public_summary: 'ok',
+    },
+  ])('rejects malformed terminal runtime job result %#', (result) => {
+    expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
   });
 
   it('allows public-safe run-execution terminal result changed files and display summaries', () => {
@@ -815,12 +852,12 @@ describe('codex runtime domain contracts', () => {
 
   it('redacts launch materialization without leaking raw secret payloads', () => {
     const payload = { api_key: 'super-secret-key', token: 'raw-token' };
-    const materialization = {
-      launch_target: {
-        target_type: 'execution_package',
-        target_id: 'package-1',
-        target_kind: 'run_execution',
-        project_id: 'project-1',
+      const materialization = {
+        launch_target: {
+        target_type: 'run_session',
+          target_id: 'package-1',
+          target_kind: 'run_execution',
+          project_id: 'project-1',
         repo_id: 'repo-1',
       },
       profile_revision: baseRevision({ target_kind: 'run_execution', source_access_mode: 'path_policy_scoped' }),
@@ -833,6 +870,7 @@ describe('codex runtime domain contracts', () => {
         },
       ],
       lease_id: 'lease-1',
+      expires_at: '2026-05-20T00:10:00.000Z',
       materialized_at: '2026-05-20T00:00:00.000Z',
     } satisfies CodexLaunchMaterialization;
 

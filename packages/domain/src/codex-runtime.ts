@@ -909,6 +909,120 @@ const requireCodexLaunchTokenEnvelopeDigestAad = (input: Record<string, unknown>
   return value as Record<string, string>;
 };
 
+const requireCodexRuntimeResultString = (input: Record<string, unknown>, field: string): string => {
+  const value = input[field];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} is required.`);
+  }
+  return value;
+};
+
+const requireCodexRuntimeResultDigest = (input: Record<string, unknown>, field: string): string => {
+  const value = requireCodexRuntimeResultString(input, field);
+  if (!isSha256Digest(value)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must be a sha256 digest.`);
+  }
+  return value;
+};
+
+const requireCodexRuntimeResultInteger = (input: Record<string, unknown>, field: string): number => {
+  const value = input[field];
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must be a non-negative integer.`);
+  }
+  return value;
+};
+
+const requireCodexRuntimeResultRecord = (input: Record<string, unknown>, field: string): Record<string, unknown> => {
+  const value = input[field];
+  if (!isPlainObject(value)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must be an object.`);
+  }
+  return value;
+};
+
+const requireCodexRuntimeResultArray = (input: Record<string, unknown>, field: string): unknown[] => {
+  const value = input[field];
+  if (!Array.isArray(value)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must be an array.`);
+  }
+  return value;
+};
+
+const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<string, unknown> => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must contain artifact objects.`);
+  }
+  requireCodexRuntimeResultString(input, 'kind');
+  requireCodexRuntimeResultString(input, 'name');
+  requireCodexRuntimeResultString(input, 'content_type');
+  if (input.digest !== undefined) {
+    requireCodexRuntimeResultDigest(input, 'digest');
+  }
+  if (input.internal_ref !== undefined) {
+    requireCodexRuntimeResultString(input, 'internal_ref');
+  }
+  return input;
+};
+
+const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>): CodexGenerationRuntimeJobResult => {
+  if (!['spec_draft', 'plan_draft', 'package_drafts'].includes(String(input.task_kind))) {
+    throw unsafeCodexRuntimePublicValue('Codex generation terminal result task_kind is invalid.');
+  }
+  requireCodexRuntimeResultString(input, 'prompt_version');
+  requireCodexRuntimeResultString(input, 'output_schema_version');
+  requireCodexRuntimeResultRecord(input, 'generated_payload');
+  requireCodexRuntimeResultDigest(input, 'generated_payload_digest');
+  requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) =>
+    requireCodexRuntimeArtifact(artifact, 'generation_artifacts'),
+  );
+  requireCodexRuntimeResultString(input, 'public_summary');
+  return input as unknown as CodexGenerationRuntimeJobResult;
+};
+
+const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>): CodexRunExecutionRuntimeJobResult => {
+  if (input.task_kind !== 'run_execution') {
+    throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result task_kind is invalid.');
+  }
+  requireCodexRuntimeResultString(input, 'execution_package_id');
+  requireCodexRuntimeResultInteger(input, 'execution_package_version');
+  requireCodexRuntimeResultString(input, 'run_session_id');
+  requireCodexRuntimeResultDigest(input, 'workspace_bundle_digest');
+  const changedFiles = requireCodexRuntimeResultArray(input, 'changed_files');
+  if (changedFiles.some((entry) => typeof entry !== 'string' || !isSafeCodexRuntimeRepoRelativePath(entry))) {
+    throw unsafeCodexRuntimePublicValue('Codex run-execution changed_files must be safe repository-relative paths.');
+  }
+  if (input.patch_artifact !== undefined) {
+    const patchArtifact = requireCodexRuntimeResultRecord(input, 'patch_artifact');
+    if (patchArtifact.content_type !== 'text/x-diff') {
+      throw unsafeCodexRuntimePublicValue('Codex run-execution patch_artifact content_type is invalid.');
+    }
+    requireCodexRuntimeResultDigest(patchArtifact, 'digest');
+    requireCodexRuntimeResultString(patchArtifact, 'internal_ref');
+  }
+  requireCodexRuntimeResultArray(input, 'check_results').forEach((entry) => {
+    if (!isPlainObject(entry)) {
+      throw unsafeCodexRuntimePublicValue('Codex run-execution check_results must contain objects.');
+    }
+    requireCodexRuntimeResultString(entry, 'name');
+    if (!['passed', 'failed', 'skipped'].includes(String(entry.status))) {
+      throw unsafeCodexRuntimePublicValue('Codex run-execution check result status is invalid.');
+    }
+    requireCodexRuntimeResultString(entry, 'summary');
+    if (entry.output_digest !== undefined) {
+      requireCodexRuntimeResultDigest(entry, 'output_digest');
+    }
+    if (entry.output_internal_ref !== undefined) {
+      requireCodexRuntimeResultString(entry, 'output_internal_ref');
+    }
+  });
+  requireCodexRuntimeResultArray(input, 'execution_artifacts').forEach((artifact) =>
+    requireCodexRuntimeArtifact(artifact, 'execution_artifacts'),
+  );
+  requireCodexRuntimeResultString(input, 'public_summary');
+  return input as unknown as CodexRunExecutionRuntimeJobResult;
+};
+
 export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDigestInput | CodexLaunchTokenEnvelope): string => {
   if (!isPlainObject(input)) {
     throw unsupportedJsonValue();
@@ -932,14 +1046,20 @@ export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDi
   });
 };
 
-export const validateCodexRuntimeJobTerminalResult = (input: unknown): Record<string, unknown> => {
+export const validateCodexRuntimeJobTerminalResult = (
+  input: unknown,
+): CodexGenerationRuntimeJobResult | CodexRunExecutionRuntimeJobResult => {
   if (!isPlainObject(input)) {
     throw unsafeCodexRuntimePublicValue('Codex runtime terminal result must be an object.');
   }
+  const result =
+    input.task_kind === 'run_execution'
+      ? requireCodexRunExecutionRuntimeJobResult(input)
+      : requireCodexGenerationRuntimeJobResult(input);
   assertCodexRuntimePublicSafeRecord(input, 'terminal result', [], {
     allowRunExecutionChangedFiles: input.task_kind === 'run_execution',
   });
-  return input;
+  return result;
 };
 
 export const validateCodexDockerNetworkProxyConfig = (config: CodexDockerNetworkProxyConfig): CodexDockerNetworkProxyConfig => {
