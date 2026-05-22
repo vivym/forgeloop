@@ -1023,6 +1023,56 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it.each([
+    [
+      'loopback model provider',
+      { ...modelProviderRule, protocol: 'tcp', host: '127.0.0.1', port: 1 },
+    ],
+    ['internal metadata host', { ...modelProviderRule, protocol: 'http', host: 'metadata.google.internal' }],
+    ['wildcard host', { ...modelProviderRule, host: '*.example.com' }],
+    ['invalid port', { ...modelProviderRule, port: -1 }],
+    ['invalid protocol', { ...modelProviderRule, protocol: 'ftp' }],
+  ])('rejects unsafe strict real dogfood allowlist rule %s', (_label, rule) => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            network_policy: hostFirewallPolicy([rule as CodexNetworkAllowlistRule]),
+          }),
+          { strictRealDogfood: true },
+        ),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it.each([
+    'cpu_ms',
+    'memory_mb',
+    'pids',
+    'fds',
+    'workspace_bytes',
+    'artifact_bytes',
+    'timeout_ms',
+    'output_limit_bytes',
+    'run_output_limit_bytes',
+  ] as const)('rejects strict real dogfood profile with invalid resource limit %s', (field) => {
+    const validRevision = baseRevision();
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            resource_limits: {
+              ...validRevision.resource_limits,
+              [field]: 0,
+            },
+          }),
+          { strictRealDogfood: true },
+        ),
+      'codex_runtime_profile_invalid',
+    );
+  });
+
   it('rejects strict real dogfood egress allowlist profiles without a model provider rule', () => {
     const revision = baseRevision({
       network_policy: hostFirewallPolicy([

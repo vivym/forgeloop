@@ -475,6 +475,18 @@ const rawRuntimePublicFieldPattern = /^raw(?:_|[A-Z]|$)/;
 const validRuntimeTargetKinds = new Set<CodexRuntimeTargetKind>(['generation', 'run_execution']);
 const validSourceAccessModes = new Set<CodexSourceAccessMode>(['artifact_only', 'path_policy_scoped']);
 const validRuntimeEnvironments = new Set<CodexRuntimeEnvironment>(['local_dogfood', 'test']);
+const validNetworkAllowlistProtocols = new Set<CodexNetworkAllowlistRule['protocol']>(['https', 'http', 'tcp']);
+const runtimeResourceLimitKeys: Array<keyof CodexRuntimeResourceLimits> = [
+  'cpu_ms',
+  'memory_mb',
+  'pids',
+  'fds',
+  'workspace_bytes',
+  'artifact_bytes',
+  'timeout_ms',
+  'output_limit_bytes',
+  'run_output_limit_bytes',
+];
 const singleLabelHostPortPattern = /^[a-z][a-z0-9_-]*:\d{1,5}(\/|$)/i;
 
 const normalizeRuntimePublicKey = (key: string): string =>
@@ -934,6 +946,34 @@ const assertSha256Digest = (value: unknown, label: string, error: (message: stri
   }
 };
 
+const assertCodexRuntimeResourceLimits = (resourceLimits: CodexRuntimeResourceLimits): void => {
+  for (const key of runtimeResourceLimitKeys) {
+    const value = resourceLimits[key];
+    if (!Number.isInteger(value) || value <= 0) {
+      throw invalidProfile(`Codex runtime resource limit ${key} must be a positive integer.`);
+    }
+  }
+};
+
+const safeCodexRuntimeAllowlistHostPattern =
+  /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$/i;
+
+const assertStrictCodexRuntimeNetworkAllowlistRule = (rule: CodexNetworkAllowlistRule): void => {
+  if (!validNetworkAllowlistProtocols.has(rule.protocol)) {
+    throw dockerPolicyUnavailable('Strict real dogfood egress allowlist rules must use a supported protocol.');
+  }
+  if (
+    !safeCodexRuntimeAllowlistHostPattern.test(rule.host) ||
+    isCodexRuntimeEndpointOrContainerString(rule.host) ||
+    rule.host.includes('*')
+  ) {
+    throw dockerPolicyUnavailable('Strict real dogfood egress allowlist rules must use public DNS hosts only.');
+  }
+  if (rule.port !== undefined && (!Number.isInteger(rule.port) || rule.port < 1 || rule.port > 65535)) {
+    throw dockerPolicyUnavailable('Strict real dogfood egress allowlist rule ports must be valid TCP ports.');
+  }
+};
+
 const dockerNetworkProxyConfigDigestInput = (config: CodexDockerNetworkProxyConfig): Omit<CodexDockerNetworkProxyConfig, 'provider_config_digest'> => ({
   proxy_image: config.proxy_image,
   proxy_image_digest: config.proxy_image_digest,
@@ -1382,6 +1422,7 @@ export const validateCodexRuntimeProfileRevision = (
   if (!validRuntimeEnvironments.has(revision.environment)) {
     throw invalidProfile('Codex runtime profile environment is invalid.');
   }
+  assertCodexRuntimeResourceLimits(revision.resource_limits);
   assertSha256Digest(revision.docker_image_digest, 'Docker image digest');
   assertSha256Digest(revision.codex_config_digest, 'Codex config digest');
   assertSha256Digest(revision.expected_effective_config_digest, 'Expected effective config digest');
@@ -1410,6 +1451,7 @@ export const validateCodexRuntimeProfileRevision = (
     if (networkPolicy.mode === 'disabled') {
       throw dockerPolicyUnavailable('Strict real dogfood profiles require a model_provider egress allowlist network policy.');
     }
+    networkPolicy.allowlist_rules.forEach(assertStrictCodexRuntimeNetworkAllowlistRule);
     if (revision.docker_policy.network_disabled === true) {
       throw dockerPolicyUnavailable('Strict real dogfood profiles must not disable Docker networking when using an egress allowlist network policy.');
     }
