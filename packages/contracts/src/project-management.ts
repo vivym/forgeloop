@@ -135,6 +135,44 @@ export const evidenceRequirementStatusSchema = z
       return;
     }
 
+    if (!objectRefsMatch(requirement.evidence_ref.scope_ref, requirement.scope_ref)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence_ref', 'scope_ref'],
+        message: 'passed readiness evidence must match the gate scope',
+      });
+    }
+    if (requirement.current_spec_revision_id !== undefined) {
+      if (requirement.evidence_spec_revision_id === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_spec_revision_id'],
+          message: 'passed readiness gates require evidence Spec revision authority',
+        });
+      } else if (requirement.evidence_spec_revision_id !== requirement.current_spec_revision_id) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_spec_revision_id'],
+          message: 'passed readiness evidence must match the current Spec revision',
+        });
+      }
+    }
+    if (requirement.current_plan_revision_id !== undefined) {
+      if (requirement.evidence_plan_revision_id === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_plan_revision_id'],
+          message: 'passed readiness gates require evidence Plan revision authority',
+        });
+      } else if (requirement.evidence_plan_revision_id !== requirement.current_plan_revision_id) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_plan_revision_id'],
+          message: 'passed readiness evidence must match the current Plan revision',
+        });
+      }
+    }
+
     if (requirement.kind === 'review') {
       const reviewEvidence = reviewEvidenceRefSchema.safeParse(requirement.evidence_ref);
       if (!reviewEvidence.success) {
@@ -189,6 +227,10 @@ function isTestAcceptanceRequirementKind(
   return (testAcceptanceRequirementKinds as readonly string[]).includes(kind);
 }
 
+function objectRefsMatch(left: z.infer<typeof objectRefSchema>, right: z.infer<typeof objectRefSchema>): boolean {
+  return left.type === right.type && left.id === right.id;
+}
+
 export const releaseReadinessDetailSchema = z
   .object({
     release_id: nonEmpty,
@@ -241,6 +283,76 @@ const objectDetailBaseSchema = objectListItemBaseSchema
     attachment_refs: z.array(attachmentRefSchema).default([]),
   })
   .strict();
+
+const specObjectRefSchema = z.object({ type: z.literal('spec'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const planObjectRefSchema = z.object({ type: z.literal('plan'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+
+const revisionSummarySchema = z
+  .object({
+    id: nonEmpty,
+    revision_number: z.number().int().min(1),
+    summary: nonEmpty,
+    author_actor_id: nonEmpty.optional(),
+    created_at: isoDateTimeSchema.optional(),
+    approved_at: isoDateTimeSchema.optional(),
+    approved_by_actor_id: nonEmpty.optional(),
+    attachment_refs: z.array(attachmentRefSchema).default([]),
+  })
+  .strict();
+
+export const specPlanQueueItemSchema = z
+  .object({
+    id: nonEmpty,
+    entity_type: z.enum(['spec', 'plan']),
+    title: nonEmpty,
+    source_ref: objectRefSchema,
+    status: nonEmpty,
+    gate_state: nonEmpty,
+    current_revision_id: nonEmpty.optional(),
+    approved_revision_id: nonEmpty.optional(),
+    updated_at: isoDateTimeSchema.optional(),
+    href: nonEmpty.optional(),
+  })
+  .strict();
+export type SpecPlanQueueItem = z.infer<typeof specPlanQueueItemSchema>;
+
+export const specDetailSchema = z
+  .object({
+    id: nonEmpty,
+    ref: specObjectRefSchema,
+    source_ref: objectRefSchema,
+    title: nonEmpty,
+    status: nonEmpty,
+    gate_state: nonEmpty,
+    current_revision_id: nonEmpty.optional(),
+    approved_revision_id: nonEmpty.optional(),
+    current_revision: revisionSummarySchema.optional(),
+    revisions: z.array(revisionSummarySchema).default([]),
+    narrative_markdown: z.string().default(''),
+    attachment_refs: z.array(attachmentRefSchema).default([]),
+  })
+  .strict();
+export type SpecDetail = z.infer<typeof specDetailSchema>;
+
+export const planDetailSchema = z
+  .object({
+    id: nonEmpty,
+    ref: planObjectRefSchema,
+    source_ref: objectRefSchema,
+    title: nonEmpty,
+    status: nonEmpty,
+    gate_state: nonEmpty,
+    current_revision_id: nonEmpty.optional(),
+    approved_revision_id: nonEmpty.optional(),
+    current_revision: revisionSummarySchema.optional(),
+    revisions: z.array(revisionSummarySchema).default([]),
+    narrative_markdown: z.string().default(''),
+    attachment_refs: z.array(attachmentRefSchema).default([]),
+    based_on_spec_revision_id: nonEmpty.optional(),
+    task_refs: z.array(objectRefSchema).default([]),
+  })
+  .strict();
+export type PlanDetail = z.infer<typeof planDetailSchema>;
 
 export const myWorkQueueItemSchema = z
   .object({
@@ -336,6 +448,13 @@ export const taskDetailSchema = taskListItemSchema
   .omit({ ref: true, status: true, updated_at: true, driver_actor_id: true })
   .strict()
   .superRefine((task, ctx) => {
+    if (task.stale_state === 'manual_exception' && !task.audited_exception) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['audited_exception'],
+        message: 'manual_exception tasks require an audited_exception block',
+      });
+    }
     if (task.package_generation_eligible) {
       if (!task.controlling_spec_revision_id || !task.controlling_plan_revision_id || task.stale_state !== 'current') {
         ctx.addIssue({

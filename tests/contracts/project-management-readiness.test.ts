@@ -130,6 +130,89 @@ describe('project management release readiness contracts', () => {
     ).toBe(true);
   });
 
+  it('rejects passed readiness gates with evidence outside the gate scope', () => {
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        evidence_ref: {
+          ...approvedReviewEvidence,
+          scope_ref: { type: 'requirement', id: 'req-other' },
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'qa-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'qa_acceptance',
+        status: 'passed',
+        evidence_ref: {
+          ...passedQaEvidence,
+          scope_ref: { type: 'task', id: 'task-1' },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('requires current Spec and Plan revision authority for passed readiness gates', () => {
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        current_spec_revision_id: 'spec-rev-2',
+        evidence_ref: approvedReviewEvidence,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        current_spec_revision_id: 'spec-rev-2',
+        evidence_spec_revision_id: 'spec-rev-1',
+        current_plan_revision_id: 'plan-rev-2',
+        evidence_plan_revision_id: 'plan-rev-1',
+        evidence_ref: approvedReviewEvidence,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        current_spec_revision_id: 'spec-rev-2',
+        evidence_spec_revision_id: 'spec-rev-2',
+        current_plan_revision_id: 'plan-rev-2',
+        evidence_plan_revision_id: 'plan-rev-2',
+        evidence_ref: approvedReviewEvidence,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'qa-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'qa_acceptance',
+        status: 'passed',
+        current_spec_revision_id: 'spec-rev-2',
+        evidence_spec_revision_id: 'spec-rev-2',
+        current_plan_revision_id: 'plan-rev-2',
+        evidence_plan_revision_id: 'plan-rev-2',
+        evidence_ref: passedQaEvidence,
+      }).success,
+    ).toBe(true);
+  });
+
   it('rejects freeform notes, ai self-review, and bare attachments as gate authority', () => {
     expect(() =>
       reviewEvidenceRefSchema.parse({
