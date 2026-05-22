@@ -55,10 +55,13 @@ export function ReleaseActionRail({
     model.groups.close_release.enabled &&
     closeConfirmation.trim().toLowerCase() === model.closeConfirmationText &&
     (!requiresObservationOverride || closeObservationOverrideRationale.trim().length > 0);
+  const hasVisibleDecisionGroup = Object.values(model.groups).some((group) => group.visible);
 
   return (
     <ActionRail title="Release decisions">
       <div className="grid gap-3">
+        {!hasVisibleDecisionGroup ? <InlineNotice title="No release decisions are available for the current release state." /> : null}
+
         {model.groups.edit_planning.visible ? (
           <Drawer
             content={<EditReleaseForm actorId={actorId} onSaved={() => setShowEditRelease(false)} release={cockpit.release} />}

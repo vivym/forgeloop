@@ -18,7 +18,7 @@ export function PageHeader({ actions, className, eyebrow, subtitle, title }: Pag
         <h1 className="text-2xl font-semibold text-text-primary">{title}</h1>
         {subtitle ? <p className="mt-2 max-w-3xl text-sm text-text-secondary">{subtitle}</p> : null}
       </div>
-      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? <div className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-1 sm:justify-end">{actions}</div> : null}
     </div>
   );
 }
