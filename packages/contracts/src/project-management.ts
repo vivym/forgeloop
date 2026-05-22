@@ -11,6 +11,7 @@ const taskStaleStateSchema = z.enum(['current', 'stale_spec', 'stale_plan', 'sta
 const taskStatusSchema = z.enum(['todo', 'ready', 'in_progress', 'blocked', 'review', 'done', 'canceled']);
 const objectLifecycleStatusSchema = z.string().trim().min(1);
 const evidenceRunStatusSchema = z.enum(['missing', 'pending', 'passed', 'failed', 'stale', 'blocked']);
+const revisionAuthoritySchema = z.enum(['current_approved', 'missing', 'stale', 'unapproved']);
 
 const humanReviewDecisionRefSchema = z.object({ type: z.literal('human_review_decision'), id: nonEmpty }).strict();
 const reviewPacketAuthorityRefSchema = z.object({ type: z.literal('review_packet'), id: nonEmpty }).strict();
@@ -237,6 +238,28 @@ export const evidenceRequirementStatusSchema = z
           code: 'custom',
           path: ['evidence_ref', 'status'],
           message: 'passed review readiness gates require approved review evidence',
+        });
+      }
+      if (
+        reviewEvidence.data.spec_revision_id !== undefined &&
+        requirement.evidence_spec_revision_id !== undefined &&
+        reviewEvidence.data.spec_revision_id !== requirement.evidence_spec_revision_id
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref', 'spec_revision_id'],
+          message: 'review evidence Spec revision must match the gate evidence Spec revision',
+        });
+      }
+      if (
+        reviewEvidence.data.plan_revision_id !== undefined &&
+        requirement.evidence_plan_revision_id !== undefined &&
+        reviewEvidence.data.plan_revision_id !== requirement.evidence_plan_revision_id
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref', 'plan_revision_id'],
+          message: 'review evidence Plan revision must match the gate evidence Plan revision',
         });
       }
       return;
@@ -535,6 +558,8 @@ export const taskDetailSchema = taskListItemSchema
     acceptance_checklist: z.array(nonEmpty).default([]),
     controlling_spec_revision_id: nonEmpty.optional(),
     controlling_plan_revision_id: nonEmpty.optional(),
+    controlling_spec_revision_authority: revisionAuthoritySchema.optional(),
+    controlling_plan_revision_authority: revisionAuthoritySchema.optional(),
     stale_state: taskStaleStateSchema,
     audited_exception: auditedExceptionSchema.optional(),
     attachment_refs: z.array(attachmentRefSchema).default([]),
@@ -550,7 +575,13 @@ export const taskDetailSchema = taskListItemSchema
       });
     }
     if (task.package_generation_eligible) {
-      if (!task.controlling_spec_revision_id || !task.controlling_plan_revision_id || task.stale_state !== 'current') {
+      if (
+        !task.controlling_spec_revision_id ||
+        !task.controlling_plan_revision_id ||
+        task.stale_state !== 'current' ||
+        task.controlling_spec_revision_authority !== 'current_approved' ||
+        task.controlling_plan_revision_authority !== 'current_approved'
+      ) {
         ctx.addIssue({
           code: 'custom',
           path: ['package_generation_eligible'],

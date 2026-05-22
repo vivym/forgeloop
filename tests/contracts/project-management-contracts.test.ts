@@ -69,10 +69,72 @@ describe('project management typed object contracts', () => {
       parent_ref: { type: 'requirement', id: 'req-1' },
       controlling_spec_revision_id: 'spec-rev-1',
       controlling_plan_revision_id: 'plan-rev-1',
+      controlling_spec_revision_authority: 'current_approved',
+      controlling_plan_revision_authority: 'current_approved',
       stale_state: 'current',
       package_generation_eligible: true,
     });
     expect(task.package_generation_eligible).toBe(true);
+  });
+
+  it('requires current approved revision authority for package generation eligible tasks', () => {
+    expect(() =>
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'task', id: 'task-1' },
+        title: 'Implement checkout validation',
+        controlling_spec_revision_id: 'spec-rev-1',
+        controlling_plan_revision_id: 'plan-rev-1',
+        stale_state: 'current',
+        package_generation_eligible: true,
+      }),
+    ).toThrow(/current approved/i);
+
+    expect(() =>
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'task', id: 'task-1' },
+        title: 'Implement checkout validation',
+        controlling_spec_revision_id: 'spec-rev-1',
+        controlling_plan_revision_id: 'plan-rev-1',
+        controlling_spec_revision_authority: 'current_approved',
+        controlling_plan_revision_authority: 'stale',
+        stale_state: 'current',
+        package_generation_eligible: true,
+      }),
+    ).toThrow(/current approved/i);
+
+    expect(() =>
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'task', id: 'task-1' },
+        title: 'Implement checkout validation',
+        controlling_spec_revision_id: 'spec-rev-1',
+        controlling_plan_revision_id: 'plan-rev-1',
+        controlling_spec_revision_authority: 'unapproved',
+        controlling_plan_revision_authority: 'current_approved',
+        stale_state: 'current',
+        package_generation_eligible: true,
+      }),
+    ).toThrow(/current approved/i);
+
+    expect(
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'task', id: 'task-1' },
+        title: 'Implement checkout validation',
+        controlling_spec_revision_id: 'spec-rev-1',
+        controlling_plan_revision_id: 'plan-rev-1',
+        controlling_spec_revision_authority: 'current_approved',
+        controlling_plan_revision_authority: 'current_approved',
+        stale_state: 'current',
+        package_generation_eligible: true,
+      }),
+    ).toMatchObject({
+      package_generation_eligible: true,
+      controlling_spec_revision_authority: 'current_approved',
+      controlling_plan_revision_authority: 'current_approved',
+    });
   });
 
   it('does not let manual exceptions authorize runtime packages', () => {

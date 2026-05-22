@@ -304,6 +304,62 @@ describe('project management release readiness contracts', () => {
     ).toBe(true);
   });
 
+  it('rejects passed review gates with conflicting nested revision evidence', () => {
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        current_spec_revision_id: 'spec-rev-2',
+        evidence_spec_revision_id: 'spec-rev-2',
+        current_plan_revision_id: 'plan-rev-2',
+        evidence_plan_revision_id: 'plan-rev-2',
+        evidence_ref: {
+          ...approvedReviewEvidence,
+          spec_revision_id: 'spec-rev-1',
+          plan_revision_id: 'plan-rev-2',
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        current_spec_revision_id: 'spec-rev-2',
+        evidence_spec_revision_id: 'spec-rev-2',
+        current_plan_revision_id: 'plan-rev-2',
+        evidence_plan_revision_id: 'plan-rev-2',
+        evidence_ref: {
+          ...approvedReviewEvidence,
+          spec_revision_id: 'spec-rev-2',
+          plan_revision_id: 'plan-rev-1',
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'review-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'review',
+        status: 'passed',
+        current_spec_revision_id: 'spec-rev-2',
+        evidence_spec_revision_id: 'spec-rev-2',
+        current_plan_revision_id: 'plan-rev-2',
+        evidence_plan_revision_id: 'plan-rev-2',
+        evidence_ref: {
+          ...approvedReviewEvidence,
+          spec_revision_id: 'spec-rev-2',
+          plan_revision_id: 'plan-rev-2',
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it('rejects freeform notes, ai self-review, and bare attachments as gate authority', () => {
     expect(() =>
       reviewEvidenceRefSchema.parse({
