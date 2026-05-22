@@ -220,7 +220,7 @@ describe('Delivery Cockpit presentational components', () => {
     const openPackageLinks = screen.getAllByRole('link', { name: /Open package/i });
     expect(openPackageLinks).toHaveLength(1);
     expect(openPackageLinks[0]?.getAttribute('href')).toBe('/packages/pkg-1');
-    expect(openPackageLinks[0]?.getAttribute('class')).toContain('fl-button--secondary');
+    expect(openPackageLinks[0]?.getAttribute('class')).not.toContain('fl-');
   });
 
   it('renders command actions as disabled unless a command handler is supplied', () => {

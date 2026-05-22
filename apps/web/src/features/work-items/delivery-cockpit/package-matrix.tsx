@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 
-import { Section } from '../../../shared/layout';
-import { StatusPill } from '../../../shared/ui';
+import { Metric, MetricGrid, Section } from '../../../shared/layout';
+import { InlineNotice, StatusPill } from '../../../shared/ui';
 import { deliveryStageTargetId, type DeliveryPackageDisplayRow } from '../work-item-view-model';
 
 export interface PackageMatrixProps {
@@ -17,7 +17,7 @@ export function PackageMatrix({ packages }: PackageMatrixProps) {
       title="Package matrix"
     >
       {packages.length === 0 ? (
-        <p className="empty">No execution packages have been generated for this work item.</p>
+        <InlineNotice title="No execution packages have been generated for this work item." />
       ) : (
         <div className="artifact-list">
           {packages.map((executionPackage) => (
@@ -26,24 +26,15 @@ export function PackageMatrix({ packages }: PackageMatrixProps) {
                 <strong>{executionPackage.label}</strong>
                 <StatusPill tone={executionPackage.stateTone}>{executionPackage.stateLabel}</StatusPill>
               </div>
-              <dl className="state-grid">
-                <div className="metric">
-                  <dt>Owner</dt>
-                  <dd>{executionPackage.owner}</dd>
-                </div>
-                <div className="metric">
-                  <dt>Latest run</dt>
-                  <dd>{executionPackage.latestRun}</dd>
-                </div>
+              <MetricGrid>
+                <Metric label="Owner" value={executionPackage.owner} />
+                <Metric label="Latest run" value={executionPackage.latestRun} />
                 {executionPackage.blockingReason === undefined ? null : (
-                  <div className="metric">
-                    <dt>Blocking reason</dt>
-                    <dd>{executionPackage.blockingReason}</dd>
-                  </div>
+                  <Metric label="Blocking reason" value={executionPackage.blockingReason} />
                 )}
-              </dl>
-              <Link className="fl-button fl-button--secondary" to={executionPackage.href}>
-                <span className="fl-button__label">Open package</span>
+              </MetricGrid>
+              <Link className={linkButtonClass('secondary')} to={executionPackage.href}>
+                Open package
               </Link>
             </article>
           ))}
@@ -51,4 +42,16 @@ export function PackageMatrix({ packages }: PackageMatrixProps) {
       )}
     </Section>
   );
+}
+
+function linkButtonClass(variant: 'primary' | 'secondary') {
+  const variantClass =
+    variant === 'primary'
+      ? 'border-primary bg-primary text-white hover:bg-primary-hover'
+      : 'border-border bg-surface text-text-primary hover:border-border-strong hover:bg-surface-muted';
+
+  return [
+    'inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition-colors duration-base ease-standard motion-reduce:transition-none',
+    variantClass,
+  ].join(' ');
 }

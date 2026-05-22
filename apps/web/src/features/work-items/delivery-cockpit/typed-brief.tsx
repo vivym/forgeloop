@@ -1,5 +1,5 @@
 import type { WorkItem } from '../../../shared/api/types';
-import { Section } from '../../../shared/layout';
+import { PillGroup, Section } from '../../../shared/layout';
 import { Badge, Skeleton } from '../../../shared/ui';
 import { formatValue } from '../work-item-view-model';
 
@@ -19,11 +19,11 @@ export function TypedBrief({ workItem }: TypedBriefProps) {
   return (
     <Section description="Intake context, goal, and success criteria for this product work." title="Typed brief">
       <div className="detail-block">
-        <div className="pill-list">
+        <PillGroup aria-label="Work item attributes">
           <Badge tone="info">{formatValue(workItem.kind)}</Badge>
           <Badge>{workItem.priority}</Badge>
           <Badge tone={workItem.risk === 'high' ? 'warning' : 'neutral'}>{formatValue(workItem.risk)}</Badge>
-        </div>
+        </PillGroup>
         <strong>{workItem.goal}</strong>
         <ul>
           {workItem.success_criteria.map((criterion) => (

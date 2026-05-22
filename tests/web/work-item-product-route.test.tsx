@@ -62,6 +62,7 @@ describe('Work Item product route', () => {
     expect(screen.queryByText(`${'Available after a draft'} exists.`)).toBeNull();
     expect(screen.queryByText(new RegExp(`Pending command ${'wir'}${'ing'}`, 'i'))).toBeNull();
     expect(screen.queryByText(new RegExp(`${'wir'}${'ing'}`, 'i'))).toBeNull();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('uses cockpit readiness as the Work Item action source', async () => {

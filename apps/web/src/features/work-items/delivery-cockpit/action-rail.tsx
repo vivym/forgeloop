@@ -4,8 +4,7 @@ import { useProductActionCommandMutation } from '../../../shared/api/hooks';
 import type { ProductAction, ProductActionTarget, ProductCommandAction, ProductLaneId } from '../../../shared/api/types';
 import { useActorContext } from '../../../shared/context/actor-context';
 import { ActionRail as SharedActionRail } from '../../../shared/layout';
-import { Button } from '../../../shared/ui';
-import { cn } from '../../../shared/utils/cn';
+import { Button, InlineNotice } from '../../../shared/ui';
 import { groupDeliveryActionsByPriority, sanitizeDeliveryActionsForDisplay } from '../work-item-view-model';
 
 export interface DeliveryActionRailProps {
@@ -24,7 +23,7 @@ export function DeliveryActionRail({ actions, activeLane, onCommandAction, proje
       <SharedActionRail title={title}>
         <ActionGroup actions={groups.primary} label="Primary" onCommandAction={onCommandAction} projectId={projectId} />
         <ActionGroup actions={groups.secondary} label="Secondary" onCommandAction={onCommandAction} projectId={projectId} />
-        {groups.primary.length === 0 && groups.secondary.length === 0 ? <p className="empty">No delivery actions are available.</p> : null}
+        {groups.primary.length === 0 && groups.secondary.length === 0 ? <InlineNotice title="No delivery actions are available." /> : null}
       </SharedActionRail>
     </div>
   );
@@ -72,10 +71,10 @@ function ActionItem({
       ) : (
         <CommandAction action={action} onCommandAction={onCommandAction} projectId={projectId} />
       )}
-      <p className="empty">{effectiveEnabled ? 'Available' : 'Disabled'}</p>
-      {action.description === undefined ? null : <p className="empty">{action.description}</p>}
-      {action.disabled_reason === undefined ? null : <p className="empty">{action.disabled_reason}</p>}
-      {action.blocked_reason === undefined ? null : <p className="empty">{action.blocked_reason}</p>}
+      <p className="m-0 text-sm text-text-secondary">{effectiveEnabled ? 'Available' : 'Disabled'}</p>
+      {action.description === undefined ? null : <p className="m-0 text-sm text-text-secondary">{action.description}</p>}
+      {action.disabled_reason === undefined ? null : <InlineNotice title={action.disabled_reason} tone="warning" />}
+      {action.blocked_reason === undefined ? null : <InlineNotice title={action.blocked_reason} tone="warning" />}
     </div>
   );
 }
@@ -90,8 +89,8 @@ function NavigateAction({ action }: { action: Extract<ProductAction, { kind: 'na
   }
 
   return (
-    <Link className={cn('fl-button', action.priority === 'primary' ? 'fl-button--primary' : 'fl-button--secondary')} to={action.target.href}>
-      <span className="fl-button__label">{action.label}</span>
+    <Link className={linkButtonClass(action.priority === 'primary' ? 'primary' : 'secondary')} to={action.target.href}>
+      {action.label}
     </Link>
   );
 }
@@ -133,7 +132,7 @@ function ExecutableCommandAction({ action, projectId }: { action: ProductCommand
       >
         {action.label}
       </Button>
-      {mutation.isError ? <p className="empty">{mutation.error.message}</p> : null}
+      {mutation.isError ? <InlineNotice title={mutation.error.message} tone="danger" /> : null}
       {mutation.isSuccess && action.target !== undefined ? <FollowUpLink action={action} target={action.target} /> : null}
     </>
   );
@@ -141,8 +140,20 @@ function ExecutableCommandAction({ action, projectId }: { action: ProductCommand
 
 function FollowUpLink({ action, target }: { action: ProductCommandAction; target: ProductActionTarget }) {
   return (
-    <Link className="fl-button fl-button--secondary" to={target.href}>
-      <span className="fl-button__label">Open {action.label}</span>
+    <Link className={linkButtonClass('secondary')} to={target.href}>
+      Open {action.label}
     </Link>
   );
+}
+
+function linkButtonClass(variant: 'primary' | 'secondary') {
+  const variantClass =
+    variant === 'primary'
+      ? 'border-primary bg-primary text-white hover:bg-primary-hover'
+      : 'border-border bg-surface text-text-primary hover:border-border-strong hover:bg-surface-muted';
+
+  return [
+    'inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition-colors duration-base ease-standard motion-reduce:transition-none',
+    variantClass,
+  ].join(' ');
 }

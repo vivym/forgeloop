@@ -1,6 +1,6 @@
 import type { DeliveryEvidence } from '../../../shared/api/types';
 import { Section } from '../../../shared/layout';
-import { Timeline, type TimelineItem } from '../../../shared/ui';
+import { InlineNotice, Timeline, type TimelineItem } from '../../../shared/ui';
 import { formatValue } from '../work-item-view-model';
 
 export interface EvidenceTimelineProps {
@@ -17,7 +17,7 @@ export function EvidenceTimeline({ evidence }: EvidenceTimelineProps) {
 
   return (
     <Section description="Evidence supplied by backend delivery readiness." title="Evidence timeline">
-      {items.length === 0 ? <p className="empty">No delivery evidence has been reported.</p> : <Timeline items={items} />}
+      {items.length === 0 ? <InlineNotice title="No delivery evidence has been reported." /> : <Timeline items={items} />}
     </Section>
   );
 }

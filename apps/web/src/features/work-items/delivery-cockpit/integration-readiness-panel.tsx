@@ -1,6 +1,6 @@
 import type { DeliveryStage } from '../../../shared/api/types';
 import { Section } from '../../../shared/layout';
-import { StatusPill } from '../../../shared/ui';
+import { InlineNotice, StatusPill } from '../../../shared/ui';
 import { deliveryStageTargetId, deliveryStageTone, formatValue } from '../work-item-view-model';
 
 export interface IntegrationReadinessPanelProps {
@@ -19,7 +19,7 @@ export function IntegrationReadinessPanel({ stage }: IntegrationReadinessPanelPr
 }
 
 function BlockerList({ emptyLabel, stage }: { emptyLabel: string; stage: DeliveryStage | undefined }) {
-  if (stage === undefined || stage.blockers.length === 0) return <p className="empty">{emptyLabel}</p>;
+  if (stage === undefined || stage.blockers.length === 0) return <InlineNotice title={emptyLabel} />;
 
   return (
     <ul>
