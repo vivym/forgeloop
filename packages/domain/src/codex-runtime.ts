@@ -744,7 +744,7 @@ const isBareDnsHostString = (value: string): boolean => {
   return lastLabel !== undefined && !safePublicFilenameExtensions.has(lastLabel);
 };
 const displayUnsafeEndpointTokenPattern =
-  /\b(?:https?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:(?!\s)|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|[a-z0-9-]+:\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
+  /\b(?:https?:\/\/|(?:https?|wss?|tcp|ssh|redis|postgres(?:ql)?|mysql):\S+|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|(?:app-server|control-plane|redis|postgres|mysql):\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
 const displayBareDnsHostTokenPattern = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
 const displayUnsafeSecretTokenPattern =

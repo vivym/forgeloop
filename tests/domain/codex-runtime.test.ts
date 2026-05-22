@@ -476,7 +476,7 @@ describe('codex runtime domain contracts', () => {
           internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/junit',
         },
       ],
-      public_summary: 'Passed 3/4 checks and updated app/server documentation.',
+      public_summary: 'Checks:3 passed; Result:passed after updating app/server documentation.',
     } satisfies CodexRunExecutionRuntimeJobResult;
 
     expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
@@ -664,6 +664,8 @@ describe('codex runtime domain contracts', () => {
 
   it.each([
     'Provider endpoint api.openai.com failed before draft publication',
+    'Legacy endpoint http:127.0.0.1:4555 failed before draft publication',
+    'Cache endpoint redis:6379 failed before draft publication',
     'Generated draft; local app server was http://127.0.0.1:4555/internal',
     'Worker endpoint redis.default.svc returned an error',
     'Container socket unix:/tmp/codex.sock was unavailable',
