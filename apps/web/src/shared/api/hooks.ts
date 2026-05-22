@@ -854,6 +854,10 @@ function useReleaseCommandMutation<TBody>(releaseId: string, mutationFn: (body: 
         invalidateReleaseCockpit(queryClient, releaseId),
         queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
         queryClient.invalidateQueries({ queryKey: ['releases'] }),
+        queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
+        queryClient.invalidateQueries({ queryKey: ['packages'] }),
+        queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
       ]),
   });
 }

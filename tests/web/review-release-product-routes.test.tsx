@@ -88,10 +88,30 @@ const reviewWithRequestedChanges = {
 const releaseWithKey = {
   ...release,
   key: 'REL-WEB-1',
+  gate_state: 'awaiting_approval',
+  resolution: 'none',
 };
 
 const releaseListResponse = {
   releases: [releaseWithKey],
+};
+
+const highRiskQaAcknowledgementBlocker = {
+  code: 'missing_required_evidence_backlink',
+  category: 'evidence',
+  overrideable: true,
+  object_type: 'release',
+  object_id: release.id,
+  message: 'Release is missing high-risk QA acknowledgement.',
+};
+
+const releaseRiskBlocker = {
+  code: 'failed_required_check',
+  category: 'evidence',
+  overrideable: true,
+  object_type: 'release',
+  object_id: release.id,
+  message: 'Release required check failed.',
 };
 
 const releaseCockpitResponse = {
@@ -388,10 +408,10 @@ describe('review and release product routes', () => {
 
   it('renders release list from listReleases without manual release id loading', async () => {
     const screen = await renderRoute(
-      `/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=open&resolution=unresolved&release_type=standard&updated_age=7d&limit=25`,
+      `/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=awaiting_approval&resolution=none&release_type=standard&updated_age=7d&limit=25`,
       {
         apiOverrides: {
-          [`GET /query/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=open&resolution=unresolved&limit=25`]:
+          [`GET /query/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=awaiting_approval&resolution=none&limit=25`]:
             releaseListResponse,
         },
       },
@@ -402,15 +422,15 @@ describe('review and release product routes', () => {
     expect(await screen.findByText('REL-WEB-1')).toBeTruthy();
     expect(screen.getByText(release.title)).toBeTruthy();
     expect(screen.getByText('approval')).toBeTruthy();
-    expect(screen.getByText('open')).toBeTruthy();
-    expect(screen.getByText('unresolved')).toBeTruthy();
+    expect(screen.getByText('awaiting_approval')).toBeTruthy();
+    expect(screen.getByText('none')).toBeTruthy();
     expect(screen.getByText(release.release_owner_actor_id)).toBeTruthy();
     expect(screen.getByText('Work Items: 1')).toBeTruthy();
     expect(screen.getByText('Packages: 1')).toBeTruthy();
     expect(screen.getByText('Acceptance summary unavailable from release list API.')).toBeTruthy();
     expect(screen.getByText(/release_type and updated_age are not applied to the release inventory yet/i)).toBeTruthy();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
-      `http://localhost:3000/query/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=open&resolution=unresolved&limit=25`,
+      `http://localhost:3000/query/releases?project_id=${projectId}&release_owner_actor_id=${release.release_owner_actor_id}&phase=approval&gate_state=awaiting_approval&resolution=none&limit=25`,
       expect.objectContaining({ method: 'GET' }),
     );
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
@@ -462,39 +482,22 @@ describe('review and release product routes', () => {
     });
   });
 
-  it('renders Release Cockpit product governance actions', async () => {
-    const user = userEvent.setup();
+  it('renders Release Cockpit product governance actions as state-aware decisions', async () => {
     const screen = await renderRoute(`/releases/${release.id}`, {
       apiOverrides: {
         [`GET /query/release-cockpit/${release.id}`]: releaseCockpitResponse,
         [`GET /query/replay/release/${release.id}`]: timeline,
-        [`PATCH /releases/${release.id}`]: {
-          release: { ...releaseWithKey, title: 'Edited release cockpit' },
-          blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
-          blockers: [],
-          overridden_blockers: [],
-          decision_intents: [],
-          next_actions: [],
-        },
-        [`POST /releases/${release.id}/test-acceptance/acknowledge`]: {
-          release: releaseWithKey,
-          blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
-          blockers: [],
-          overridden_blockers: [],
-          decision_intents: [],
-          next_actions: [],
-        },
       },
     });
 
     expect(await screen.findByRole('heading', { name: release.title })).toBeTruthy();
     expectPageHeaderText(/Release/i);
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
     expectStatusPillText(release.phase);
     expectActionRailBeforeDetailContent();
     expectNoLegacyWorkbenchText();
     expectNoNestedCards();
-    expect(screen.getByText('fixture-release-ready')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('fixture-release-ready');
     expect(screen.getByText(release.scope_summary)).toBeTruthy();
     expect(screen.getByText(workItem.title)).toBeTruthy();
     expect(screen.getByText(executionPackage.objective)).toBeTruthy();
@@ -506,17 +509,65 @@ describe('review and release product routes', () => {
     expect(screen.getByText('Release owner approved readiness.')).toBeTruthy();
     expect(screen.getByText('Timeline / Replay')).toBeTruthy();
     expect(screen.getByText(timeline[0].summary)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Edit release' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Acknowledge test acceptance' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Override approve' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Edit release' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Submit for approval' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Acknowledge test acceptance' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Request changes' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Start observing' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Close release' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Override approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start observing' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close release' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Submit observation evidence' })).toBeTruthy();
-    expect(screen.getByLabelText('Override rationale')).toBeTruthy();
-    expect(screen.getByLabelText('Close confirmation')).toBeTruthy();
+    expect(screen.queryByLabelText('Override rationale')).toBeNull();
+    expect(screen.queryByLabelText('Close confirmation')).toBeNull();
+    expect(document.body.textContent).not.toContain(release.release_owner_actor_id);
+  });
+
+  it('disables release submission until planning is complete and keeps draft planning editable', async () => {
+    const user = userEvent.setup();
+    const draftRelease = {
+      ...releaseWithKey,
+      phase: 'draft',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      scope_summary: undefined,
+      rollout_strategy: '',
+      rollback_plan: '',
+      observation_plan: '',
+    };
+    const screen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: draftRelease,
+          blocker_snapshot: {
+            ...releaseCockpitResponse.blocker_snapshot,
+            blocker_fingerprint: 'raw-planning-fingerprint',
+          },
+          checklist: [{ id: 'planning-missing', label: 'Planning details missing', status: 'blocked', blocker_codes: ['planning'] }],
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+        [`PATCH /releases/${release.id}`]: {
+          release: { ...draftRelease, title: 'Edited release cockpit' },
+          blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
+          blockers: [],
+          overridden_blockers: [],
+          decision_intents: [],
+          next_actions: [],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Complete scope summary, rollout strategy, rollback plan, and observation plan before submitting./i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit release' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Override approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start observing' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close release' })).toBeNull();
+    expect(document.body.textContent).not.toContain('raw-planning-fingerprint');
 
     await user.click(screen.getByRole('button', { name: 'Edit release' }));
     const editDialog = screen.getByRole('dialog', { name: 'Edit release details' });
@@ -536,10 +587,164 @@ describe('review and release product routes', () => {
       expect(body).toEqual(expect.objectContaining({ actor_id: actorId, title: 'Edited release cockpit' }));
       expect(body).not.toHaveProperty('release_id');
     });
+  });
 
-    await user.type(screen.getByLabelText('Test acceptance summary'), 'QA accepted route-backed release controls.');
-    await user.type(screen.getByLabelText('Acceptance evidence reference'), 'artifacts/test-acceptance.md');
-    await user.click(screen.getByRole('button', { name: 'Acknowledge test acceptance' }));
+  it('allows release resubmission edits after approval requests changes', async () => {
+    const screen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: { ...releaseWithKey, phase: 'approval', gate_state: 'changes_requested', resolution: 'none' },
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit release' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull();
+  });
+
+  it('requires rationale and confirmation text before override approving blocked releases', async () => {
+    const user = userEvent.setup();
+    const blockedCockpit = {
+      ...releaseCockpitResponse,
+      blockers: [{ code: 'risk_check', message: 'Risk sign-off is still pending.' }],
+      blocker_snapshot: {
+        ...releaseCockpitResponse.blocker_snapshot,
+        blocker_fingerprint: 'raw-override-fingerprint',
+        blockers: [{ code: 'risk_check', message: 'Risk sign-off is still pending.' }],
+      },
+      risk_summary: {
+        ...releaseCockpitResponse.risk_summary,
+        risk_blocker_count: 1,
+        release_can_proceed_without_override: false,
+        release_can_proceed_with_override: true,
+      },
+    };
+    const screen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: blockedCockpit,
+        [`GET /query/replay/release/${release.id}`]: timeline,
+        [`POST /releases/${release.id}/override-approve`]: {
+          release: { ...releaseWithKey, phase: 'rollout', gate_state: 'approved', resolution: 'none' },
+          blocker_snapshot: blockedCockpit.blocker_snapshot,
+          blockers: [],
+          overridden_blockers: blockedCockpit.blockers,
+          decision_intents: [],
+          next_actions: [],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: release.title })).toBeTruthy();
+    const overrideButton = screen.getByRole('button', { name: 'Override approve' }) as HTMLButtonElement;
+    expect(overrideButton.disabled).toBe(true);
+    expect(screen.getByText('risk_check: Risk sign-off is still pending.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Acknowledge test acceptance' })).toBeNull();
+    expect(document.body.textContent).not.toContain('raw-override-fingerprint');
+
+    await user.type(screen.getByLabelText('Override rationale'), 'Accepted for controlled rollout.');
+    expect(overrideButton.disabled).toBe(true);
+    await user.type(screen.getByLabelText('Override confirmation'), 'override approve');
+    expect(overrideButton.disabled).toBe(false);
+    await user.click(overrideButton);
+
+    await waitFor(() => {
+      const [, init] =
+        vi.mocked(globalThis.fetch).mock.calls.find(([input]) => String(input).includes(`/releases/${release.id}/override-approve`)) ?? [];
+      expect(init).toBeDefined();
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual(
+        expect.objectContaining({
+          actor_id: actorId,
+          rationale: 'Accepted for controlled rollout.',
+          blocker_snapshot: expect.objectContaining({ blocker_fingerprint: 'raw-override-fingerprint' }),
+        }),
+      );
+    });
+  });
+
+  it('keeps high-risk QA acknowledgement available when it is the only candidate blocker', async () => {
+    const user = userEvent.setup();
+    const candidateScreen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: { ...releaseWithKey, phase: 'candidate', gate_state: 'not_submitted', resolution: 'none' },
+          blockers: [highRiskQaAcknowledgementBlocker],
+          blocker_snapshot: {
+            ...releaseCockpitResponse.blocker_snapshot,
+            blockers: [highRiskQaAcknowledgementBlocker],
+          },
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+      },
+    });
+
+    expect(await candidateScreen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect(candidateScreen.getByText('Review test acceptance')).toBeTruthy();
+    const acknowledgeButton = candidateScreen.getByRole('button', { name: 'Acknowledge test acceptance' }) as HTMLButtonElement;
+    expect(acknowledgeButton.disabled).toBe(true);
+    expect(candidateScreen.queryByText('Resolve upstream blockers before acknowledging test acceptance.')).toBeNull();
+    await user.type(candidateScreen.getByLabelText('Test acceptance summary'), 'High-risk QA acknowledgement is complete.');
+    expect(acknowledgeButton.disabled).toBe(false);
+  });
+
+  it('disables test acceptance when rollout has non-acknowledgement blockers', async () => {
+    const rolloutScreen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: { ...releaseWithKey, phase: 'rollout', gate_state: 'approved', resolution: 'none' },
+          blockers: [releaseRiskBlocker],
+          blocker_snapshot: {
+            ...releaseCockpitResponse.blocker_snapshot,
+            blockers: [releaseRiskBlocker],
+          },
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+      },
+    });
+
+    expect(await rolloutScreen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect(rolloutScreen.getAllByText('Resolve upstream blockers before acknowledging test acceptance.').length).toBeGreaterThan(0);
+    expect((rolloutScreen.getByRole('button', { name: 'Acknowledge test acceptance' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows only observation transition after approved rollout and hides planning edits', async () => {
+    const user = userEvent.setup();
+    const approvedRolloutCockpit = {
+      ...releaseCockpitResponse,
+      release: { ...releaseWithKey, phase: 'rollout', gate_state: 'approved', resolution: 'none' },
+    };
+    const approvedScreen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: approvedRolloutCockpit,
+        [`GET /query/replay/release/${release.id}`]: timeline,
+        [`POST /releases/${release.id}/test-acceptance/acknowledge`]: {
+          release: approvedRolloutCockpit.release,
+          blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
+          blockers: [],
+          overridden_blockers: [],
+          decision_intents: [],
+          next_actions: [],
+        },
+      },
+    });
+
+    expect(await approvedScreen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect(approvedScreen.getByRole('button', { name: 'Start observing' })).toBeTruthy();
+    expect(approvedScreen.queryByRole('button', { name: 'Edit release' })).toBeNull();
+    expect(approvedScreen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(approvedScreen.queryByRole('button', { name: 'Close release' })).toBeNull();
+    expect(approvedScreen.getByRole('button', { name: 'Acknowledge test acceptance' })).toBeTruthy();
+
+    await user.type(approvedScreen.getByLabelText('Test acceptance summary'), 'QA accepted route-backed release controls.');
+    await user.type(approvedScreen.getByLabelText('Acceptance evidence reference'), 'artifacts/test-acceptance.md');
+    await user.click(approvedScreen.getByRole('button', { name: 'Acknowledge test acceptance' }));
 
     await waitFor(() => {
       const [, init] =
@@ -562,6 +767,122 @@ describe('review and release product routes', () => {
       });
       expect(body).not.toHaveProperty('risk_notes');
       expect(body.evidence_refs[0]).not.toHaveProperty('ref');
+    });
+  });
+
+  it('keeps test acceptance visible during rollout without execution packages', async () => {
+    const rolloutScreen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: { ...releaseWithKey, phase: 'rollout', gate_state: 'approved', resolution: 'none' },
+          execution_packages: [],
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+      },
+    });
+
+    expect(await rolloutScreen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect(rolloutScreen.getByText('Review test acceptance')).toBeTruthy();
+    expect(rolloutScreen.getByRole('button', { name: 'Acknowledge test acceptance' })).toBeTruthy();
+  });
+
+  it('hides release closure while observation is not rollout-succeeded', async () => {
+    const observingScreen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: { ...releaseWithKey, phase: 'observing', gate_state: 'approved', resolution: 'none' },
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+      },
+    });
+
+    expect(await observingScreen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect(observingScreen.queryByRole('button', { name: 'Close release' })).toBeNull();
+  });
+
+  it('gates release closure with confirmation after rollout succeeds', async () => {
+    const user = userEvent.setup();
+    const observingScreen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: { ...releaseWithKey, phase: 'observing', gate_state: 'rollout_succeeded', resolution: 'none' },
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+        [`POST /releases/${release.id}/close`]: {
+          release: { ...releaseWithKey, phase: 'closed', gate_state: 'rollout_succeeded', resolution: 'completed' },
+          blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
+          blockers: [],
+          overridden_blockers: [],
+          decision_intents: [],
+          next_actions: [],
+        },
+      },
+    });
+
+    expect(await observingScreen.findByRole('heading', { name: release.title })).toBeTruthy();
+    expect(observingScreen.queryByRole('button', { name: 'Start observing' })).toBeNull();
+    expect(observingScreen.queryByRole('button', { name: 'Edit release' })).toBeNull();
+    const closeButton = observingScreen.getByRole('button', { name: 'Close release' }) as HTMLButtonElement;
+    expect(closeButton.disabled).toBe(true);
+    await user.type(observingScreen.getByLabelText('Close confirmation'), 'close release');
+    expect(closeButton.disabled).toBe(false);
+    await user.click(closeButton);
+
+    await waitFor(() => {
+      const [, init] =
+        vi.mocked(globalThis.fetch).mock.calls.find(([input]) => String(input).includes(`/releases/${release.id}/close`)) ?? [];
+      expect(init).toBeDefined();
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual(expect.objectContaining({ actor_id: actorId, resolution: 'completed', override_without_observation: false }));
+    });
+  });
+
+  it('requires observation override rationale when completing a release without observations', async () => {
+    const user = userEvent.setup();
+    const observingScreen = await renderRoute(`/releases/${release.id}`, {
+      apiOverrides: {
+        [`GET /query/release-cockpit/${release.id}`]: {
+          ...releaseCockpitResponse,
+          release: { ...releaseWithKey, phase: 'observing', gate_state: 'rollout_succeeded', resolution: 'none' },
+          observations: [],
+        },
+        [`GET /query/replay/release/${release.id}`]: timeline,
+        [`POST /releases/${release.id}/close`]: {
+          release: { ...releaseWithKey, phase: 'closed', gate_state: 'rollout_succeeded', resolution: 'completed' },
+          blocker_snapshot: releaseCockpitResponse.blocker_snapshot,
+          blockers: [],
+          overridden_blockers: [],
+          decision_intents: [],
+          next_actions: [],
+        },
+      },
+    });
+
+    expect(await observingScreen.findByRole('heading', { name: release.title })).toBeTruthy();
+    const closeButton = observingScreen.getByRole('button', { name: 'Close release' }) as HTMLButtonElement;
+    expect(closeButton.disabled).toBe(true);
+    await user.type(observingScreen.getByLabelText('Close confirmation'), 'close release');
+    expect(closeButton.disabled).toBe(true);
+    await user.type(observingScreen.getByLabelText('Observation override rationale'), 'No issues found in external monitoring.');
+    expect(closeButton.disabled).toBe(false);
+    await user.click(closeButton);
+
+    await waitFor(() => {
+      const [, init] =
+        vi.mocked(globalThis.fetch).mock.calls.find(([input]) => String(input).includes(`/releases/${release.id}/close`)) ?? [];
+      expect(init).toBeDefined();
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual(
+        expect.objectContaining({
+          actor_id: actorId,
+          resolution: 'completed',
+          override_without_observation: true,
+          override_rationale: 'No issues found in external monitoring.',
+        }),
+      );
     });
   });
 
