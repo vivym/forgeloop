@@ -1355,6 +1355,15 @@ export const validateCodexRuntimeProfileRevision = (
   revision: CodexRuntimeProfileRevision,
   options: { strictRealDogfood?: boolean } = {},
 ): CodexRuntimeProfileRevision => {
+  if (!validRuntimeTargetKinds.has(revision.target_kind)) {
+    throw invalidProfile('Codex runtime profile target_kind is invalid.');
+  }
+  if (!validSourceAccessModes.has(revision.source_access_mode)) {
+    throw invalidProfile('Codex runtime profile source_access_mode is invalid.');
+  }
+  if (!validRuntimeEnvironments.has(revision.environment)) {
+    throw invalidProfile('Codex runtime profile environment is invalid.');
+  }
   assertSha256Digest(revision.docker_image_digest, 'Docker image digest');
   assertSha256Digest(revision.codex_config_digest, 'Codex config digest');
   assertSha256Digest(revision.expected_effective_config_digest, 'Expected effective config digest');

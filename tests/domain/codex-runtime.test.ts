@@ -987,6 +987,20 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it.each([
+    ['target_kind', { target_kind: 'invalid_kind' }],
+    ['source_access_mode', { source_access_mode: 'unsafe_mode' }],
+    ['environment', { environment: 'prod' }],
+  ])('rejects strict real dogfood profile with invalid %s', (_field, overrides) => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(baseRevision(overrides as Partial<CodexRuntimeProfileRevision>), {
+          strictRealDogfood: true,
+        }),
+      'codex_runtime_profile_invalid',
+    );
+  });
+
   it('rejects strict real dogfood egress allowlist profiles without a model provider rule', () => {
     const revision = baseRevision({
       network_policy: hostFirewallPolicy([
