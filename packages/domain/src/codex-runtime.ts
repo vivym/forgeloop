@@ -1051,6 +1051,8 @@ function assertCodexRuntimeNetworkPolicy(policy: unknown): asserts policy is Cod
     throw dockerPolicyUnavailable('Codex runtime network policy allowlist_rules must be an array.');
   }
   policy.allowlist_rules.forEach(assertCodexRuntimeNetworkAllowlistRule);
+  assertSha256Digest(policy.egress_allowlist_digest, 'Codex runtime network policy egress allowlist digest', dockerPolicyUnavailable);
+  assertSha256Digest(policy.self_test_digest, 'Codex runtime network policy self-test digest', dockerPolicyUnavailable);
   if (policy.provider === 'docker_network_proxy' && !isPlainObject(policy.provider_config)) {
     throw dockerPolicyUnavailable('Docker network proxy provider_config is required.');
   }

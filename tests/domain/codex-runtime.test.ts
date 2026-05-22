@@ -1119,6 +1119,31 @@ describe('codex runtime domain contracts', () => {
   });
 
   it.each([
+    ['missing egress_allowlist_digest', { egress_allowlist_digest: undefined }],
+    ['missing self_test_digest', { self_test_digest: undefined }],
+    ['malformed egress_allowlist_digest', { egress_allowlist_digest: 'digest' }],
+    ['malformed self_test_digest', { self_test_digest: 'digest' }],
+  ])('rejects malformed non-strict egress allowlist network policy with %s', (_label, patch) => {
+    const networkPolicy = {
+      ...hostFirewallPolicy(),
+      ...patch,
+    };
+    const revisionWithoutDigest = {
+      ...baseRevision(),
+      network_policy: networkPolicy,
+    };
+    const malformed = {
+      ...revisionWithoutDigest,
+      profile_digest: codexRuntimeProfileRevisionDigest(revisionWithoutDigest),
+    } as unknown as CodexRuntimeProfileRevision;
+
+    expectDomainErrorCode(
+      () => validateCodexRuntimeProfileRevision(malformed),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it.each([
     ['empty id', { id: '' }],
     ['empty profile_id', { profile_id: '' }],
     ['invalid status', { status: 'draft' }],
