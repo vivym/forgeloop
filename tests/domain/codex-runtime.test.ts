@@ -433,6 +433,8 @@ describe('codex runtime domain contracts', () => {
     ['internal_ref', 'app-server.internal/jobs'],
     ['href', 'app-server:3845/internal'],
     ['url', 'control-plane:3845/runtime-jobs'],
+    ['url', 'redis:6379'],
+    ['url', 'redis.default.svc.cluster.local'],
     ['internal_ref', 'app-server/jobs'],
     ['href', 'control.internal'],
     ['url', 'app-server.internal'],

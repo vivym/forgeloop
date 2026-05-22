@@ -542,6 +542,8 @@ const isRawRuntimePublicString = (value: string): boolean => {
   const privateIpv6EndpointPattern =
     /^\[?(?:(?:fc|fd)[0-9a-f]{0,2}|fe80):[0-9a-f:]+(?:%[A-Za-z0-9_.-]+)?\]?(:\d{1,5})?(\/|$)/i;
   const internalHostEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal(:\d{1,5})?(\/|$)/i;
+  const clusterLocalEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc\.cluster\.local(:\d{1,5})?(\/|$)/i;
+  const singleLabelHostPortPattern = /^[a-z][a-z0-9-]*:\d{1,5}(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
   const relativeLocalPathPattern = /^(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]*(?:$|[?#])/;
   const singleSegmentLocalPathPattern =
@@ -562,6 +564,8 @@ const isRawRuntimePublicString = (value: string): boolean => {
     privateIpv4EndpointPattern.test(value) ||
     privateIpv6EndpointPattern.test(value) ||
     internalHostEndpointPattern.test(value) ||
+    clusterLocalEndpointPattern.test(value) ||
+    singleLabelHostPortPattern.test(value) ||
     rawRuntimeServiceEndpointPattern.test(value) ||
     hostWithPortOrPathPattern.test(value) ||
     /^[a-f0-9]{12,64}$/i.test(value)
