@@ -51,6 +51,7 @@ export type MarkdownValidationResult =
 
 const htmlPattern = /<\/?[a-z][\s\S]*?>/i;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
+const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
 const angleDestinationPattern = /<((?:https?:\/\/|javascript:|data:|file:|blob:|s3:|gs:)[^>\s]+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])((?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+)/gim;
@@ -86,8 +87,9 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
     });
   }
 
-  for (const destination of markdownDestinations(document.markdown)) {
-    const normalizedDestination = normalizeDestination(destination);
+  const destinations = markdownDestinations(document.markdown);
+  for (const destination of destinations) {
+    const normalizedDestination = normalizeDestination(destination.value);
     if (unsafeProtocolPattern.test(normalizedDestination)) {
       issues.push({ code: 'unsafe_protocol', message: 'Markdown links and images must use safe protocols.' });
     }
@@ -100,9 +102,15 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
     if (normalizedDestination.startsWith('attachment://') && !canonicalAttachmentDestinationPattern.test(normalizedDestination)) {
       issues.push({ code: 'unsafe_protocol', message: 'Attachment destinations must be canonical attachment://<id> refs.' });
     }
+    if (destination.kind === 'image' && !canonicalAttachmentDestinationPattern.test(normalizedDestination)) {
+      issues.push({ code: 'unsafe_protocol', message: 'Markdown images must use canonical attachment://<id> refs.' });
+    }
+    if (destination.kind !== 'image' && !linkDestinationAllowed(normalizedDestination)) {
+      issues.push({ code: 'unsafe_protocol', message: 'Markdown links must use allowed product, https, or attachment destinations.' });
+    }
   }
 
-  const referencedAttachmentIds = attachmentIdsReferencedBy(markdownDestinations(document.markdown));
+  const referencedAttachmentIds = attachmentIdsReferencedBy(destinations);
   const availableAttachments = new Map(document.attachment_refs.map((attachment) => [attachment.id, attachment]));
   for (const attachmentId of referencedAttachmentIds) {
     const attachment = availableAttachments.get(attachmentId);
@@ -121,22 +129,64 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
   return { ok: true, markdown: document.markdown, attachment_ids: [...new Set(referencedAttachmentIds)] };
 }
 
-function markdownDestinations(markdown: string): string[] {
-  const destinations: string[] = [];
+type MarkdownDestination = {
+  kind: 'image' | 'link' | 'bare';
+  value: string;
+};
 
-  collectCaptureGroup(markdown, inlineDestinationPattern, destinations);
-  collectCaptureGroup(markdown, referenceDefinitionPattern, destinations);
-  collectCaptureGroup(markdown, angleDestinationPattern, destinations);
-  collectCaptureGroup(markdown, bareUrlPattern, destinations);
+function markdownDestinations(markdown: string): MarkdownDestination[] {
+  const destinations: MarkdownDestination[] = [];
+  const referenceDefinitions = referenceDefinitionsByLabel(markdown);
+
+  for (const match of markdown.matchAll(inlineDestinationPattern)) {
+    const value = match[1];
+    if (value !== undefined) {
+      destinations.push({ kind: match[0].startsWith('!') ? 'image' : 'link', value });
+    }
+  }
+  for (const match of markdown.matchAll(referenceUsePattern)) {
+    const label = match[1];
+    const value = label === undefined ? undefined : referenceDefinitions.get(normalizeReferenceLabel(label));
+    if (value !== undefined) {
+      destinations.push({ kind: match[0].startsWith('!') ? 'image' : 'link', value });
+    }
+  }
+  for (const value of referenceDefinitions.values()) {
+    destinations.push({ kind: 'link', value });
+  }
+  collectCaptureGroup(markdown, angleDestinationPattern, destinations, 'link');
+  collectCaptureGroup(markdown, bareUrlPattern, destinations, 'bare');
 
   return destinations;
 }
 
-function collectCaptureGroup(markdown: string, pattern: RegExp, destinations: string[]): void {
+function referenceDefinitionsByLabel(markdown: string): Map<string, string> {
+  const definitions = new Map<string, string>();
+  for (const match of markdown.matchAll(referenceDefinitionPattern)) {
+    const labelMatch = /^\s{0,3}\[([^\]]+)]:/.exec(match[0]);
+    const label = labelMatch?.[1];
+    const destination = match[1];
+    if (label !== undefined && destination !== undefined) {
+      definitions.set(normalizeReferenceLabel(label), destination);
+    }
+  }
+  return definitions;
+}
+
+function normalizeReferenceLabel(label: string): string {
+  return label.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function collectCaptureGroup(
+  markdown: string,
+  pattern: RegExp,
+  destinations: MarkdownDestination[],
+  kind: MarkdownDestination['kind'],
+): void {
   for (const match of markdown.matchAll(pattern)) {
     const destination = match[1];
     if (destination !== undefined) {
-      destinations.push(destination);
+      destinations.push({ kind, value: destination });
     }
   }
 }
@@ -148,6 +198,24 @@ function normalizeDestination(destination: string): string {
   } catch {
     return trimmed;
   }
+}
+
+function linkDestinationAllowed(destination: string): boolean {
+  if (canonicalAttachmentDestinationPattern.test(destination)) {
+    return true;
+  }
+  if (isSafeProductRoute(destination)) {
+    return true;
+  }
+  return isSafeHttpsExternalLink(destination);
+}
+
+function isSafeProductRoute(destination: string): boolean {
+  return destination.startsWith('/') && !destination.startsWith('//') && !destination.startsWith('/api/attachments/');
+}
+
+function isSafeHttpsExternalLink(destination: string): boolean {
+  return /^https:\/\/[^\s/$.?#].[^\s]*$/i.test(destination) && !rawStoragePattern.test(destination);
 }
 
 function unsupportedBlockKinds(markdown: string, allowedBlocks: ReadonlySet<MarkdownBlockKind>): MarkdownBlockKind[] {
@@ -236,10 +304,10 @@ function isParagraphLine(line: string): boolean {
   return true;
 }
 
-function attachmentIdsReferencedBy(destinations: string[]): string[] {
+function attachmentIdsReferencedBy(destinations: MarkdownDestination[]): string[] {
   const attachmentIds: string[] = [];
   for (const destination of destinations) {
-    const match = canonicalAttachmentDestinationPattern.exec(normalizeDestination(destination));
+    const match = canonicalAttachmentDestinationPattern.exec(normalizeDestination(destination.value));
     if (match?.[1] !== undefined) {
       attachmentIds.push(match[1]);
     }

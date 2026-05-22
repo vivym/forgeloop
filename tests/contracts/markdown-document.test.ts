@@ -35,11 +35,45 @@ describe('MarkdownDocument validation', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts https external links and same-origin product links', () => {
+    for (const markdown of [
+      '[external](https://example.com/docs)',
+      '[task](/tasks/task-1)',
+      '[external][docs]\n\n[docs]: https://example.com/docs',
+    ]) {
+      expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(true);
+    }
+  });
+
+  it('rejects image destinations that are not canonical attachment refs', () => {
+    for (const markdown of [
+      '![remote](https://example.com/image.png)',
+      '![relative](/api/attachments/att-1/render/token)',
+      '![ref][img]\n\n[img]: https://example.com/image.png',
+    ]) {
+      expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
+    }
+  });
+
   it('rejects non-canonical attachment destinations', () => {
     for (const markdown of [
       '![bad](attachment://att-1?signature=raw)',
       '![bad](attachment://att-1#frag)',
       '![bad](attachment://att-1/private)',
+    ]) {
+      expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
+    }
+  });
+
+  it('rejects link destinations outside the allowlist', () => {
+    for (const markdown of [
+      '[http](http://example.com)',
+      '[ftp](ftp://example.com/file)',
+      '[attachment](attachment:/att-1)',
+      '[mail](mailto:test@example.com)',
+      '[api](/api/attachments/att-1/render/token)',
+      '[http][ref]\n\n[ref]: http://example.com',
+      '[api][ref]\n\n[ref]: /api/attachments/att-1/render/token',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }
