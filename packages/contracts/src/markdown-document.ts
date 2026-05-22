@@ -63,7 +63,6 @@ const allowedProductRoutePatterns = [
   /^\/plans\/[^/?#]+(?:\/revisions\/[^/?#]+)?$/,
   /^\/board$/,
   /^\/reports(?:\/(?:delivery|quality|release-readiness|observation|replay))?$/,
-  /^\/dev-tools$/,
 ] as const;
 
 const htmlPattern = /<\/?[a-z][\s\S]*?>/i;
@@ -72,6 +71,7 @@ const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
 const angleDestinationPattern = /<((?:https?:\/\/|javascript:|data:|file:|blob:|s3:|gs:)[^>\s]+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])((?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+)/gim;
+const bareAttachmentPattern = /(?:^|[\s(])(attachment:\/\/[A-Za-z0-9_-]+(?:[/?#][^\s<>)]+)?)/gim;
 const bareUrlBlockPattern = /(?:^|[\s(])(?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+/im;
 const rawStoragePattern =
   /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
@@ -175,6 +175,7 @@ function markdownDestinations(markdown: string): MarkdownDestination[] {
   }
   collectCaptureGroup(markdown, angleDestinationPattern, destinations, 'link');
   collectCaptureGroup(markdown, bareUrlPattern, destinations, 'link');
+  collectCaptureGroup(markdown, bareAttachmentPattern, destinations, 'link');
 
   return destinations;
 }

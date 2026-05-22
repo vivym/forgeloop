@@ -79,6 +79,7 @@ describe('MarkdownDocument validation', () => {
       '[api][ref]\n\n[ref]: /api/attachments/att-1/render/token',
       '[api](/api/secrets)',
       '[asset](/assets/app.js)',
+      '[dev tools](/dev-tools)',
       '[query](/tasks/task-1?token=secret)',
       '[hash](/tasks/task-1#frag)',
     ]) {
@@ -200,6 +201,37 @@ describe('MarkdownDocument validation', () => {
       markdown: '![missing](attachment://att-missing)',
     });
     expect(result.ok).toBe(false);
+  });
+
+  it('validates bare canonical attachment refs', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      markdown: 'Use attachment://att-1 for the flow.',
+    });
+
+    expect(result).toMatchObject({ ok: true, attachment_ids: ['att-1'] });
+  });
+
+  it('rejects unresolved bare attachment refs', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      markdown: 'Missing attachment://att-missing.',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toContain('unresolved_attachment');
+    }
+  });
+
+  it('rejects non-canonical bare attachment refs', () => {
+    for (const markdown of [
+      'Bad attachment://att-1?signature=raw',
+      'Bad attachment://att-1#frag',
+      'Bad attachment://att-1/private',
+    ]) {
+      expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
+    }
   });
 
   it('rejects active attachments that are not owned by or linked to the document object', () => {
