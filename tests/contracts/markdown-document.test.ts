@@ -39,6 +39,8 @@ describe('MarkdownDocument validation', () => {
     for (const markdown of [
       '[external](https://example.com/docs)',
       '<https://example.com/docs>',
+      '[base64 docs](https://example.com/base64-guide)',
+      '<https://example.com/base64-guide>',
       '[storage guide](https://example.com/storage-guide)',
       '[bucket list](https://example.com/bucket-list)',
       '[task](/tasks/task-1)',
