@@ -367,6 +367,72 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('allows public-safe run-execution terminal result changed files and display summaries', () => {
+    const runExecutionResult = {
+      task_kind: 'run_execution',
+      execution_package_id: 'package-1',
+      execution_package_version: 3,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      changed_files: ['src/index.ts', 'docs/release-notes.md'],
+      patch_artifact: {
+        content_type: 'text/x-diff',
+        digest: digestB,
+        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/patch',
+      },
+      check_results: [
+        {
+          name: 'unit',
+          status: 'passed',
+          summary: 'Passed 3/4 checks after updating app/server documentation',
+          output_digest: digestC,
+          output_internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/check-output',
+        },
+      ],
+      execution_artifacts: [
+        {
+          kind: 'log_summary',
+          name: 'run summary',
+          content_type: 'text/plain',
+          digest: digestA,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/summary',
+        },
+      ],
+      public_summary: 'Passed 3/4 checks and updated app/server documentation.',
+    } satisfies CodexRunExecutionRuntimeJobResult;
+
+    expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
+  });
+
+  it.each([
+    '/var/lib/forgeloop/workspaces/runtime-job-1/src/index.ts',
+    '../src/index.ts',
+    'src/../index.ts',
+    'C:\\workspace\\src\\index.ts',
+    'src\\index.ts',
+    'http://127.0.0.1:4555/internal',
+    'localhost:3000/internal',
+    'unix:/tmp/codex.sock',
+    'codex.sock',
+    '4f1e2d3c4f1e',
+  ])('rejects unsafe run-execution changed file %s', (changedFile) => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          execution_package_id: 'package-1',
+          execution_package_version: 3,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          changed_files: [changedFile],
+          check_results: [],
+          execution_artifacts: [],
+          public_summary: 'Run completed with public-safe summary.',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it('rejects unsafe public runtime values without blocking safe product refs', () => {
     expect(() =>
       assertCodexRuntimePublicSafeValue(
@@ -462,6 +528,43 @@ describe('codex runtime domain contracts', () => {
       () => assertCodexRuntimePublicSafeValue({ [field]: value }, 'runtime result'),
       'codex_docker_runtime_evidence_unsafe',
     );
+  });
+
+  it.each([
+    'runtime_job_id',
+    'launch_lease_id',
+    'worker_id',
+    'key_id',
+    'algorithm',
+    'ciphertext',
+    'encryption_nonce',
+    'aad_json',
+    'aad_digest',
+    'expires_at',
+  ])('requires launch token envelope digest field %s', (field) => {
+    const envelopeInput = {
+      id: 'envelope-1',
+      runtime_job_id: 'runtime-job-1',
+      launch_lease_id: 'lease-1',
+      worker_id: 'worker-1',
+      key_id: 'worker-key-1',
+      algorithm: 'x25519-hkdf-sha256-aes-256-gcm',
+      ciphertext: 'sealed-token',
+      encryption_nonce: 'nonce-1',
+      aad_json: {
+        runtime_job_id: 'runtime-job-1',
+        launch_lease_id: 'lease-1',
+      },
+      aad_digest: digestA,
+      envelope_digest: digestB,
+      status: 'available',
+      expires_at: '2026-05-20T00:10:00.000Z',
+      created_at: '2026-05-20T00:00:00.000Z',
+    } satisfies CodexLaunchTokenEnvelope;
+    const incompleteEnvelope = { ...envelopeInput };
+    delete (incompleteEnvelope as Record<string, unknown>)[field];
+
+    expect(() => codexLaunchTokenEnvelopeDigest(incompleteEnvelope)).toThrow(DomainError);
   });
 
   it('treats project-only scope as project-wide while repo scope is repo-specific', () => {

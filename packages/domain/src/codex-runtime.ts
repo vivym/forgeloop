@@ -292,6 +292,21 @@ export interface CodexLaunchTokenEnvelope {
   created_at: IsoDateTime;
 }
 
+export type CodexLaunchTokenEnvelopeDigestInput = Pick<
+  CodexLaunchTokenEnvelope,
+  | 'id'
+  | 'runtime_job_id'
+  | 'launch_lease_id'
+  | 'worker_id'
+  | 'key_id'
+  | 'algorithm'
+  | 'ciphertext'
+  | 'encryption_nonce'
+  | 'aad_json'
+  | 'aad_digest'
+  | 'expires_at'
+>;
+
 export interface CodexGenerationWorkloadV1 {
   schema_version: 'codex_generation_workload.v1';
   runtime_job_id: string;
@@ -556,14 +571,14 @@ const isIpEndpointString = (value: string): boolean => {
   return isIP(withoutZone) !== 0;
 };
 
-const isRawRuntimePublicString = (value: string): boolean => {
-  if (/^artifact:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
-    return false;
-  }
-  if (/^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
-    return false;
-  }
-  if (/^(application|audio|font|image|message|model|multipart|text|video)\/[A-Za-z0-9.+-]+$/i.test(value)) {
+const isCodexRuntimeProductSafeString = (value: string): boolean =>
+  /^artifact:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value) ||
+  /^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value) ||
+  /^(application|audio|font|image|message|model|multipart|text|video)\/[A-Za-z0-9.+-]+$/i.test(value) ||
+  isSha256Digest(value);
+
+const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
+  if (isCodexRuntimeProductSafeString(value)) {
     return false;
   }
   const loopbackEndpointPattern =
@@ -578,15 +593,9 @@ const isRawRuntimePublicString = (value: string): boolean => {
   const clusterLocalEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc\.cluster\.local(:\d{1,5})?(\/|$)/i;
   const singleLabelHostPortPattern = /^[a-z][a-z0-9-]*:\d{1,5}(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
-  const relativeLocalPathPattern = /[\\/]/;
-  const singleSegmentLocalPathPattern =
-    /^(?:\.[A-Za-z0-9._-]+|(?:Dockerfile|Makefile)(?:\.[A-Za-z0-9._-]+)?|README|LICENSE|CHANGELOG|[A-Za-z0-9._-]+\.(?:cjs|css|diff|env|js|json|jsx|lock|log|md|mjs|patch|py|sh|sql|toml|ts|tsx|txt|yaml|yml)|app|apps|backend|build|client|config|configs|dist|docs|frontend|lib|node_modules|packages|repo|repository|scripts|server|src|test|tests|tmp|workspace|workspaces)$/i;
   const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
   return (
-    /^(\/|\\{2}|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/i.test(value) ||
-    relativeLocalPathPattern.test(value) ||
-    singleSegmentLocalPathPattern.test(value) ||
     rawUrlSchemePattern.test(value) ||
     /^file:\//i.test(value) ||
     /^https?:\/\//i.test(value) ||
@@ -605,6 +614,56 @@ const isRawRuntimePublicString = (value: string): boolean => {
     hostWithPortOrPathPattern.test(value) ||
     /^[a-f0-9]{12,64}$/i.test(value)
   );
+};
+
+const isCodexRuntimeLocalPathString = (value: string): boolean => {
+  if (isCodexRuntimeProductSafeString(value)) {
+    return false;
+  }
+  const relativeLocalPathPattern = /[\\/]/;
+  const singleSegmentLocalPathPattern =
+    /^(?:\.[A-Za-z0-9._-]+|(?:Dockerfile|Makefile)(?:\.[A-Za-z0-9._-]+)?|README|LICENSE|CHANGELOG|[A-Za-z0-9._-]+\.(?:cjs|css|diff|env|js|json|jsx|lock|log|md|mjs|patch|py|sh|sql|toml|ts|tsx|txt|yaml|yml)|app|apps|backend|build|client|config|configs|dist|docs|frontend|lib|node_modules|packages|repo|repository|scripts|server|src|test|tests|tmp|workspace|workspaces)$/i;
+  return (
+    /^(\/|\\{2}|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/i.test(value) ||
+    relativeLocalPathPattern.test(value) ||
+    singleSegmentLocalPathPattern.test(value)
+  );
+};
+
+const isSafeCodexRuntimeRepoRelativePath = (value: string): boolean => {
+  if (
+    value.length === 0 ||
+    value.includes('\\') ||
+    value.includes('\0') ||
+    /^(\/|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/i.test(value) ||
+    isCodexRuntimeEndpointOrContainerString(value)
+  ) {
+    return false;
+  }
+  const segments = value.split('/');
+  return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+};
+
+const isRawRuntimePublicString = (
+  value: string,
+  options: { allowDisplayText?: boolean; allowRepoRelativePath?: boolean } = {},
+): boolean => {
+  if (/^artifact:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
+    return false;
+  }
+  if (/^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
+    return false;
+  }
+  if (isCodexRuntimeProductSafeString(value)) {
+    return false;
+  }
+  if (isCodexRuntimeEndpointOrContainerString(value)) {
+    return true;
+  }
+  if (options.allowRepoRelativePath) {
+    return !isSafeCodexRuntimeRepoRelativePath(value);
+  }
+  return options.allowDisplayText === true ? false : isCodexRuntimeLocalPathString(value);
 };
 
 const assertSha256Digest = (value: unknown, label: string, error: (message: string) => DomainError = invalidProfile): void => {
@@ -680,7 +739,25 @@ export const codexRuntimeJobIsActive = (job: Pick<CodexRuntimeJob, 'status'>): b
 const unsafeCodexRuntimePublicValue = (message: string, details?: Record<string, unknown>): DomainError =>
   new DomainError('codex_docker_runtime_evidence_unsafe', message, details);
 
-const assertCodexRuntimePublicSafeRecord = (value: unknown, label: string, path: readonly string[]): void => {
+const codexRuntimeDisplayStringKeys = new Set(['public_summary', 'summary']);
+const isCodexRuntimeDisplayStringPath = (path: readonly string[]): boolean => {
+  const key = path[path.length - 1];
+  return key !== undefined && codexRuntimeDisplayStringKeys.has(key);
+};
+
+const isCodexRuntimeChangedFilePath = (path: readonly string[]): boolean => {
+  if (path.length < 2 || !/^\d+$/.test(path[path.length - 1] ?? '')) {
+    return false;
+  }
+  return path[path.length - 2] === 'changed_files';
+};
+
+const assertCodexRuntimePublicSafeRecord = (
+  value: unknown,
+  label: string,
+  path: readonly string[],
+  options: { allowRunExecutionChangedFiles?: boolean } = {},
+): void => {
   if (
     value === null ||
     typeof value === 'boolean' ||
@@ -692,14 +769,20 @@ const assertCodexRuntimePublicSafeRecord = (value: unknown, label: string, path:
     if (typeof value === 'number' && !Number.isFinite(value)) {
       throw unsafeCodexRuntimePublicValue(`Codex runtime ${label} must be JSON-compatible.`, { field: path.join('.') });
     }
-    if (typeof value === 'string' && isRawRuntimePublicString(value)) {
+    if (
+      typeof value === 'string' &&
+      isRawRuntimePublicString(value, {
+        allowDisplayText: isCodexRuntimeDisplayStringPath(path),
+        allowRepoRelativePath: options.allowRunExecutionChangedFiles === true && isCodexRuntimeChangedFilePath(path),
+      })
+    ) {
       throw unsafeCodexRuntimePublicValue(
         'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
         { field: path.join('.') },
       );
     }
     if (Array.isArray(value)) {
-      value.forEach((entry, index) => assertCodexRuntimePublicSafeRecord(entry, label, [...path, String(index)]));
+      value.forEach((entry, index) => assertCodexRuntimePublicSafeRecord(entry, label, [...path, String(index)], options));
     }
     if (isPlainObject(value)) {
       for (const [key, entry] of Object.entries(value)) {
@@ -710,7 +793,7 @@ const assertCodexRuntimePublicSafeRecord = (value: unknown, label: string, path:
             { field: entryPath.join('.') },
           );
         }
-        assertCodexRuntimePublicSafeRecord(entry, label, entryPath);
+        assertCodexRuntimePublicSafeRecord(entry, label, entryPath, options);
       }
     }
     return;
@@ -736,22 +819,45 @@ export const codexWorkspaceAcquisitionDigest = (input: unknown | undefined): str
   return codexCanonicalDigest(input);
 };
 
-export const codexLaunchTokenEnvelopeDigest = (input: unknown): string => {
+const requireCodexLaunchTokenEnvelopeDigestString = (
+  input: Record<string, unknown>,
+  field: keyof CodexLaunchTokenEnvelopeDigestInput,
+): string => {
+  const value = input[field];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw invalidProfile(`Codex launch token envelope digest field ${field} is required.`);
+  }
+  return value;
+};
+
+const requireCodexLaunchTokenEnvelopeDigestAad = (input: Record<string, unknown>): Record<string, string> => {
+  const value = input.aad_json;
+  if (!isPlainObject(value) || Object.values(value).some((entry) => typeof entry !== 'string')) {
+    throw invalidProfile('Codex launch token envelope digest field aad_json is required.');
+  }
+  return value as Record<string, string>;
+};
+
+export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDigestInput | CodexLaunchTokenEnvelope): string => {
   if (!isPlainObject(input)) {
     throw unsupportedJsonValue();
   }
+  const algorithm = requireCodexLaunchTokenEnvelopeDigestString(input, 'algorithm');
+  if (algorithm !== 'x25519-hkdf-sha256-aes-256-gcm') {
+    throw invalidProfile('Codex launch token envelope digest field algorithm is invalid.');
+  }
   return codexCanonicalDigest({
-    id: input.id,
-    runtime_job_id: input.runtime_job_id,
-    launch_lease_id: input.launch_lease_id,
-    worker_id: input.worker_id,
-    key_id: input.key_id,
-    algorithm: input.algorithm,
-    ciphertext: input.ciphertext,
-    encryption_nonce: input.encryption_nonce,
-    aad_json: input.aad_json,
-    aad_digest: input.aad_digest,
-    expires_at: input.expires_at,
+    id: requireCodexLaunchTokenEnvelopeDigestString(input, 'id'),
+    runtime_job_id: requireCodexLaunchTokenEnvelopeDigestString(input, 'runtime_job_id'),
+    launch_lease_id: requireCodexLaunchTokenEnvelopeDigestString(input, 'launch_lease_id'),
+    worker_id: requireCodexLaunchTokenEnvelopeDigestString(input, 'worker_id'),
+    key_id: requireCodexLaunchTokenEnvelopeDigestString(input, 'key_id'),
+    algorithm,
+    ciphertext: requireCodexLaunchTokenEnvelopeDigestString(input, 'ciphertext'),
+    encryption_nonce: requireCodexLaunchTokenEnvelopeDigestString(input, 'encryption_nonce'),
+    aad_json: requireCodexLaunchTokenEnvelopeDigestAad(input),
+    aad_digest: requireCodexLaunchTokenEnvelopeDigestString(input, 'aad_digest'),
+    expires_at: requireCodexLaunchTokenEnvelopeDigestString(input, 'expires_at'),
   });
 };
 
@@ -759,7 +865,9 @@ export const validateCodexRuntimeJobTerminalResult = (input: unknown): Record<st
   if (!isPlainObject(input)) {
     throw unsafeCodexRuntimePublicValue('Codex runtime terminal result must be an object.');
   }
-  assertCodexRuntimePublicSafeValue(input, 'terminal result');
+  assertCodexRuntimePublicSafeRecord(input, 'terminal result', [], {
+    allowRunExecutionChangedFiles: input.task_kind === 'run_execution',
+  });
   return input;
 };
 
