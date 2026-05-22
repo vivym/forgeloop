@@ -55,10 +55,10 @@ const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
 const angleDestinationPattern = /<([A-Za-z][A-Za-z0-9+.-]*:\/\/[^>\s]+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+)/gim;
+const bareSchemePattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)[^\s<>)]+)/gim;
 const bareAttachmentPattern = /(?:^|[\s(])(attachment:\/\/[A-Za-z0-9_-]+(?:[/?#][^\s<>)]+)?)/gim;
 const bareUrlBlockPattern = /(?:^|[\s(])(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s<>)]+/im;
-const rawStoragePattern =
-  /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
+const rawStorageMarkerPattern = /(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
 const canonicalAttachmentDestinationPattern = /^attachment:\/\/([A-Za-z0-9_-]+)$/;
@@ -98,7 +98,7 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
     if (base64OrBlobPattern.test(normalizedDestination)) {
       issues.push({ code: 'base64_or_blob', message: 'Markdown must not contain data, file, blob, or base64 URLs.' });
     }
-    if (rawStoragePattern.test(normalizedDestination)) {
+    if (isRawStorageDestination(normalizedDestination)) {
       issues.push({ code: 'raw_storage_url', message: 'Markdown must not contain raw storage URLs.' });
     }
     if (normalizedDestination.startsWith('attachment://') && !canonicalAttachmentDestinationPattern.test(normalizedDestination)) {
@@ -136,6 +136,14 @@ type MarkdownDestination = {
   value: string;
 };
 type DetectedMarkdownKind = MarkdownBlockKind | 'unsupported_heading_level';
+type ParsedMarkdownUrl = {
+  protocol: string;
+  hostname: string;
+  searchParams: {
+    keys(): Iterable<string>;
+  };
+};
+type MarkdownUrlConstructor = new (input: string) => ParsedMarkdownUrl;
 
 function markdownDestinations(markdown: string): MarkdownDestination[] {
   const destinations: MarkdownDestination[] = [];
@@ -159,6 +167,7 @@ function markdownDestinations(markdown: string): MarkdownDestination[] {
   }
   collectCaptureGroup(markdown, angleDestinationPattern, destinations, 'link');
   collectCaptureGroup(markdown, bareUrlPattern, destinations, 'link');
+  collectCaptureGroup(markdown, bareSchemePattern, destinations, 'link');
   collectCaptureGroup(markdown, bareAttachmentPattern, destinations, 'link');
 
   return destinations;
@@ -228,7 +237,71 @@ function isSafeProductRoute(destination: string): boolean {
 }
 
 function isSafeHttpsExternalLink(destination: string): boolean {
-  return /^https:\/\/[^\s/$.?#].[^\s]*$/i.test(destination) && !rawStoragePattern.test(destination);
+  return /^https:\/\/[^\s/$.?#].[^\s]*$/i.test(destination) && !isRawStorageDestination(destination);
+}
+
+function isRawStorageDestination(destination: string): boolean {
+  if (rawStorageMarkerPattern.test(destination)) {
+    return true;
+  }
+
+  const URLConstructor = markdownUrlConstructor();
+  if (!URLConstructor) {
+    return false;
+  }
+
+  try {
+    const url = new URLConstructor(destination);
+    const protocol = url.protocol.toLowerCase();
+    if (protocol === 's3:' || protocol === 'gs:') {
+      return true;
+    }
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      return false;
+    }
+
+    return isRawStorageHost(url.hostname) || hasSignedStorageQuery(url);
+  } catch {
+    return false;
+  }
+}
+
+function isRawStorageHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  const labels = host.split('.');
+  return (
+    labels.includes('bucket') ||
+    labels.includes('storage') ||
+    host === 's3.amazonaws.com' ||
+    host.endsWith('.s3.amazonaws.com') ||
+    /\.s3[.-][a-z0-9-]+\.amazonaws\.com$/.test(host) ||
+    host === 'storage.googleapis.com' ||
+    host.endsWith('.storage.googleapis.com') ||
+    host.endsWith('.blob.core.windows.net') ||
+    host.endsWith('.digitaloceanspaces.com') ||
+    host.endsWith('.r2.cloudflarestorage.com')
+  );
+}
+
+function markdownUrlConstructor(): MarkdownUrlConstructor | undefined {
+  return (globalThis as { URL?: MarkdownUrlConstructor }).URL;
+}
+
+function hasSignedStorageQuery(url: ParsedMarkdownUrl): boolean {
+  for (const key of url.searchParams.keys()) {
+    const normalizedKey = key.toLowerCase();
+    if (
+      normalizedKey === 'token' ||
+      normalizedKey === 'signature' ||
+      normalizedKey === 'expires' ||
+      normalizedKey.includes('signature') ||
+      normalizedKey.startsWith('x-amz-') ||
+      normalizedKey.startsWith('x-goog-')
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function productRouteSegmentsAllowed(segments: string[]): boolean {

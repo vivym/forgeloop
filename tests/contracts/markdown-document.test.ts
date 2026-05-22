@@ -38,6 +38,8 @@ describe('MarkdownDocument validation', () => {
   it('accepts https external links and same-origin product links', () => {
     for (const markdown of [
       '[external](https://example.com/docs)',
+      '[storage guide](https://example.com/storage-guide)',
+      '[bucket list](https://example.com/bucket-list)',
       '[task](/tasks/task-1)',
       '[new requirement](/requirements/new)',
       '[new task](/tasks/new)',
@@ -108,6 +110,10 @@ describe('MarkdownDocument validation', () => {
       '![raw](gs://bucket/private.png)',
       'raw s3://bucket/private.txt',
       'Bad ftp://example.com/file',
+      'Bad javascript:alert(1)',
+      'Bad data:text/html;base64,aaaa',
+      'Bad blob:https://example.com/1',
+      'Bad attachment:/att-1',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }
