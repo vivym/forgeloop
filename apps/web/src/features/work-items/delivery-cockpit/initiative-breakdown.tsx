@@ -36,9 +36,9 @@ export function InitiativeBreakdown({ aggregation }: InitiativeBreakdownProps) {
       ) : aggregation.children.length === 0 ? (
         <InlineNotice title={aggregation.label ?? 'No child readiness summaries are available.'} />
       ) : (
-        <div className="artifact-list">
+        <div className="grid gap-3">
           {aggregation.children.map((child) => (
-            <div className="stack-form compact" key={child.id}>
+            <div className="grid gap-2 rounded-card border border-border bg-surface p-4 shadow-sm" key={child.id}>
               {child.href === undefined ? <strong>{child.label}</strong> : <Link to={child.href}>{child.label}</Link>}
               <StatusPill tone={child.stateTone}>{child.stateLabel}</StatusPill>
               {child.blockerCount === undefined ? null : <p className="m-0 text-sm text-text-secondary">{`${child.blockerCount} blockers`}</p>}

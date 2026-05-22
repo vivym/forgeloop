@@ -9,6 +9,9 @@ const forbiddenClassTokens = [
   /^danger-text$/,
   /^timeline-list$/,
   /^timeline-entry$/,
+  /^artifact-list$/,
+  /^detail-block$/,
+  /^delivery-action-summary$/,
 ];
 
 export function legacyRenderedClassTokens(root: ParentNode) {

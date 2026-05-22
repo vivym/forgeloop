@@ -15,7 +15,7 @@ export function DeliveryActionSummary({ readiness }: DeliveryActionSummaryProps)
   const primaryAction = actionGroups.primary[0] ?? actionGroups.secondary[0];
 
   return (
-    <section aria-label="Delivery action summary" className="delivery-action-summary" data-testid="delivery-action-summary">
+    <section aria-label="Delivery action summary" data-testid="delivery-action-summary">
       <MetricGrid className="xl:grid-cols-5">
         <Metric description={lane.description} label="Active lane" value={lane.label} />
         <Metric

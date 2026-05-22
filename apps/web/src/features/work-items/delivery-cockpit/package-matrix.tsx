@@ -19,11 +19,11 @@ export function PackageMatrix({ packages }: PackageMatrixProps) {
       {packages.length === 0 ? (
         <InlineNotice title="No execution packages have been generated for this work item." />
       ) : (
-        <div className="artifact-list">
+        <div className="grid gap-4">
           {packages.map((executionPackage) => (
-            <article className="stack-form compact" key={executionPackage.id}>
-              <div>
-                <strong>{executionPackage.label}</strong>
+            <article className="grid gap-3 rounded-card border border-border bg-surface p-4 shadow-sm" key={executionPackage.id}>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <strong className="text-text-primary">{executionPackage.label}</strong>
                 <StatusPill tone={executionPackage.stateTone}>{executionPackage.stateLabel}</StatusPill>
               </div>
               <MetricGrid>

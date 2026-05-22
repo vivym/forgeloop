@@ -43,8 +43,8 @@ function ActionGroup({
   if (actions.length === 0) return null;
 
   return (
-    <div className="stack-form compact">
-      <h3>{label}</h3>
+    <div className="grid gap-3">
+      <h3 className="m-0 text-sm font-semibold text-text-primary">{label}</h3>
       {actions.map((action) => (
         <ActionItem action={action} key={action.id} onCommandAction={onCommandAction} projectId={projectId} />
       ))}
@@ -65,7 +65,7 @@ function ActionItem({
   const effectiveEnabled = action.kind === 'command' ? action.enabled && commandCanExecute : action.enabled;
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-2">
       {action.kind === 'navigate' ? (
         <NavigateAction action={action} />
       ) : (

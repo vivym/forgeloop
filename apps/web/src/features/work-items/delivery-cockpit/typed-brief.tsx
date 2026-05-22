@@ -18,14 +18,14 @@ export function TypedBrief({ workItem }: TypedBriefProps) {
 
   return (
     <Section description="Intake context, goal, and success criteria for this product work." title="Typed brief">
-      <div className="detail-block">
+      <div className="grid gap-3">
         <PillGroup aria-label="Work item attributes">
           <Badge tone="info">{formatValue(workItem.kind)}</Badge>
           <Badge>{workItem.priority}</Badge>
           <Badge tone={workItem.risk === 'high' ? 'warning' : 'neutral'}>{formatValue(workItem.risk)}</Badge>
         </PillGroup>
-        <strong>{workItem.goal}</strong>
-        <ul>
+        <strong className="text-text-primary">{workItem.goal}</strong>
+        <ul className="m-0 grid gap-1 pl-5">
           {workItem.success_criteria.map((criterion) => (
             <li key={criterion}>{criterion}</li>
           ))}
