@@ -536,7 +536,7 @@ const isRawRuntimePublicString = (value: string): boolean => {
     return false;
   }
   const loopbackEndpointPattern =
-    /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?(?:::1|(?:0{1,4}:){7}0{0,3}1)\]?)(:\d{1,5})?(\/|$)/i;
+    /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?(?:::0*1|(?:0{1,4}:){7}0{0,3}1)(?:%[A-Za-z0-9_.-]+)?\]?)(:\d{1,5})?(\/|$)/i;
   const privateIpv4EndpointPattern =
     /^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2})(:\d{1,5})?(\/|$)/i;
   const privateIpv6EndpointPattern =
