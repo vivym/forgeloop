@@ -483,6 +483,8 @@ const normalizeRuntimePublicKey = (key: string): string =>
     .replace(/[-\s]+/g, '_')
     .toLowerCase();
 
+const compactRuntimePublicKey = (key: string): string => normalizeRuntimePublicKey(key).replace(/_/g, '');
+
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -951,6 +953,21 @@ const isCodexRuntimeDisplayStringPath = (path: readonly string[]): boolean => {
   return key !== undefined && codexRuntimeDisplayStringKeys.has(key);
 };
 
+const isUnsafeCodexRuntimePublicKey = (key: string): boolean => {
+  const normalizedKey = normalizeRuntimePublicKey(key);
+  const compactKey = compactRuntimePublicKey(key);
+  return (
+    unsafeRuntimePublicKeyPattern.test(normalizedKey) ||
+    rawRuntimePublicFieldPattern.test(normalizedKey) ||
+    rawRuntimePublicFieldPattern.test(compactKey) ||
+    compactKey.startsWith('raw') ||
+    /(?:apikey|token|secret|auth(?:orization)?(?:header)?|password|endpoint|socket(?:path|ref)?|container(?:id|name|ref)?|workspacepath|sourcerepopath)$/.test(
+      compactKey,
+    ) ||
+    isRawRuntimePublicString(key, { allowDisplayText: true })
+  );
+};
+
 const isCodexRuntimeChangedFilePath = (path: readonly string[]): boolean => {
   if (path.length !== 2 || !/^\d+$/.test(path[path.length - 1] ?? '')) {
     return false;
@@ -993,8 +1010,7 @@ const assertCodexRuntimePublicSafeRecord = (
     if (isPlainObject(value)) {
       for (const [key, entry] of Object.entries(value)) {
         const entryPath = [...path, key];
-        const normalizedKey = normalizeRuntimePublicKey(key);
-        if (unsafeRuntimePublicKeyPattern.test(normalizedKey) || rawRuntimePublicFieldPattern.test(normalizedKey)) {
+        if (isUnsafeCodexRuntimePublicKey(key)) {
           throw unsafeCodexRuntimePublicValue(
             'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
             { field: entryPath.join('.') },
