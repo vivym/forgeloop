@@ -578,13 +578,13 @@ const isRawRuntimePublicString = (value: string): boolean => {
   const clusterLocalEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc\.cluster\.local(:\d{1,5})?(\/|$)/i;
   const singleLabelHostPortPattern = /^[a-z][a-z0-9-]*:\d{1,5}(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
-  const relativeLocalPathPattern = /^(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]*(?:$|[?#])/;
+  const relativeLocalPathPattern = /[\\/]/;
   const singleSegmentLocalPathPattern =
     /^(?:\.[A-Za-z0-9._-]+|(?:Dockerfile|Makefile)(?:\.[A-Za-z0-9._-]+)?|README|LICENSE|CHANGELOG|[A-Za-z0-9._-]+\.(?:cjs|css|diff|env|js|json|jsx|lock|log|md|mjs|patch|py|sh|sql|toml|ts|tsx|txt|yaml|yml)|app|apps|backend|build|client|config|configs|dist|docs|frontend|lib|node_modules|packages|repo|repository|scripts|server|src|test|tests|tmp|workspace|workspaces)$/i;
   const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
   return (
-    /^(\/|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/i.test(value) ||
+    /^(\/|\\{2}|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/i.test(value) ||
     relativeLocalPathPattern.test(value) ||
     singleSegmentLocalPathPattern.test(value) ||
     rawUrlSchemePattern.test(value) ||
