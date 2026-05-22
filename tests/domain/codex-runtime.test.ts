@@ -773,6 +773,29 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it.each([
+    'http%3A%2F%2F127.0.0.1%3A4555%2Finternal',
+    'api%2Eopenai%2Ecom',
+    '%2Fvar%2Flib%2Fforgeloop%2Fworkspaces%2Fjob',
+    'Provider endpoint api%2Eopenai%2Ecom failed before draft publication',
+  ])('rejects percent-encoded public runtime leaks %s', (value) => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'spec_draft',
+          prompt_version: 'generation-prompt-v1',
+          output_schema_version: 'spec-draft-output.v1',
+          generated_payload: {
+            description: value,
+          },
+          generated_payload_digest: digestA,
+          generation_artifacts: [],
+          public_summary: 'Generated a spec draft.',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it.each([{ prompt: 'write private implementation details' }, { log: 'raw stdout from worker' }, { logs: ['raw worker log line'] }])(
     'rejects nested raw prompt or log keys %#',
     (generatedPayload) => {

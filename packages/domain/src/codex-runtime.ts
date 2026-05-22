@@ -832,6 +832,17 @@ const isCodexRuntimeUnsafeDisplayString = (value: string): boolean =>
   displayUnsafePathTokenPattern.test(value) ||
   publicUnsafeSecretTokenPattern.test(value);
 
+const decodeCodexRuntimePercentEncodedString = (value: string): string | undefined => {
+  if (!/%[0-9a-f]{2}/i.test(value)) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+  }
+};
+
 const isCodexRuntimeLocalPathString = (value: string): boolean => {
   if (isCodexRuntimeProductSafeString(value)) {
     return false;
@@ -875,6 +886,10 @@ const isRawRuntimePublicString = (
     return false;
   }
   if (publicUnsafeSecretTokenPattern.test(value)) {
+    return true;
+  }
+  const decodedValue = decodeCodexRuntimePercentEncodedString(value);
+  if (decodedValue !== undefined && decodedValue !== value && isRawRuntimePublicString(decodedValue, options)) {
     return true;
   }
   if (isCodexRuntimeEndpointOrContainerString(value)) {
