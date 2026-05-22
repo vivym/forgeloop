@@ -30,6 +30,7 @@
 - The remote worker never writes product-state tables directly.
 - Remote mode must not call the existing raw-token `createLaunchLease` API from orchestrators. Use `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope`.
 - Launch lease materialization remains the only path that returns raw Codex config and auth.
+- Worker materialization requests may contain the decrypted launch token at the HTTP boundary, but controllers/guards must immediately convert it to a hash/proof and scrub plaintext before calling `CodexRuntimeService` or `DeliveryRepository`.
 - Runtime-job rows, envelope rows, logs, poll responses, terminal responses, public events, and public summaries must not contain raw launch token, raw auth, raw prompts, raw app-server logs, local absolute paths, socket paths, raw endpoints, or raw container ids.
 - Creating or replaying a job first looks up existing rows by `job_request_id` and target plus launch attempt. Only confirmed new create paths mint launch tokens or envelopes.
 - Create lease, runtime job, and envelope in one repository transaction. Service-level coordination of three independently committed writes is not acceptable.
@@ -40,6 +41,7 @@
 - The remote launcher close path must not independently terminalize the launch lease before the runtime-job terminal endpoint.
 - Remote runtime-job recovery is separate from existing stale launch-lease recovery that may mutate automation actions or run sessions.
 - Internal artifact storage is the initial workspace bundle and runtime artifact storage backend.
+- Workspace bundle archives are first stored as pending run-worker artifacts, then atomically bound to the runtime job during `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope`. A remote worker can download only the bound runtime-job bundle, never an unbound pending artifact.
 - Tests may bootstrap profiles and unsafe DB auth from protected local `~/.codex`, but worker execution must consume config/auth only after central storage and launch-lease materialization into per-task `CODEX_HOME`.
 
 ## File Structure
@@ -56,7 +58,7 @@
 ### Database
 
 - Modify `packages/db/src/schema/codex-runtime.ts`
-  - Add `codex_runtime_jobs`, `codex_launch_token_envelopes`, and `codex_runtime_job_artifacts`.
+  - Add `codex_runtime_jobs`, `codex_launch_token_envelopes`, `codex_runtime_job_artifacts`, and `codex_pending_workspace_bundles`.
   - Extend worker nonce storage with method/path/body/session epoch binding if the current nonce table cannot enforce it.
 - Modify `packages/db/src/schema/index.ts`
   - Ensure the new tables remain exported through `./codex-runtime`.
@@ -283,7 +285,33 @@ export interface CodexLaunchTokenEnvelope {
 
 - [ ] **Step 4: Add result, workload, and bundle contracts**
 
-Add `CodexGenerationWorkloadV1`, `CodexGenerationRuntimeJobResult`, `WorkspaceBundleV1`, and `CodexRunExecutionRuntimeJobResult` with fields exactly matching the spec. Keep raw prompt/context/log fields out of these public-safe result types.
+Add `CodexGenerationWorkloadV1`, `CodexRunExecutionWorkloadV1`, `CodexGenerationRuntimeJobResult`, `WorkspaceBundleV1`, and `CodexRunExecutionRuntimeJobResult` with fields exactly matching the spec. Keep raw prompt/context/log fields out of public-safe input and result types.
+
+Use this run-execution workload shape for the worker-only workload endpoint:
+
+```ts
+export interface CodexRunExecutionWorkloadV1 {
+  schema_version: 'codex_run_execution_workload.v1';
+  runtime_job_id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  execution_package_version: number;
+  run_worker_lease_id: string;
+  workspace_bundle_id: string;
+  workspace_bundle_digest: string;
+  package_prompt_ref: string;
+  package_prompt_digest: string;
+  execution_context_ref: string;
+  execution_context_digest: string;
+  path_policy_digest: string;
+  required_checks_digest?: string;
+  output_schema_version: string;
+  created_at: string;
+  expires_at: string;
+}
+```
+
+`input_json` stores only this workload ref, schema version, ids, versions, and digests. Rendered package prompts, execution context, and check configuration are returned only by the worker-authenticated workload endpoint or by endpoint-issued internal artifact downloads bound to the runtime job.
 
 - [ ] **Step 5: Add domain helpers and redaction assertions**
 
@@ -296,7 +324,7 @@ Add helpers:
 - `validateCodexRuntimeJobTerminalResult(input): Record<string, unknown>`
 - `assertCodexRuntimePublicSafeValue(input, label): void`
 
-The public-safety assertion must reject strings that look like raw paths, URLs, `unix:` endpoints, `.sock`, raw container ids, and keys ending in `token`, `secret`, `auth`, `password`, `endpoint`, `container_id`, `workspace_path`, or `source_repo_path`.
+The public-safety assertion must reject strings that look like local paths, raw app-server/control-plane endpoints, host URLs, `unix:` endpoints, `.sock`, raw container ids, and keys ending in `token`, `secret`, `auth`, `password`, `endpoint`, `container_id`, `workspace_path`, or `source_repo_path`. It must still allow explicitly product-safe next-step links and control-plane-issued artifact refs.
 
 - [ ] **Step 6: Run domain tests**
 
@@ -324,7 +352,7 @@ git commit -m "feat: add codex runtime job domain contracts"
 
 - [ ] **Step 1: Write failing schema and repository contract tests**
 
-Add tests that assert the schema exports `codex_runtime_jobs`, `codex_launch_token_envelopes`, and `codex_runtime_job_artifacts`, and the repository interface has a `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope` method.
+Add tests that assert the schema exports `codex_runtime_jobs`, `codex_launch_token_envelopes`, `codex_runtime_job_artifacts`, and `codex_pending_workspace_bundles`, and the repository interface has a `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope` method.
 
 - [ ] **Step 2: Run focused DB tests and verify they fail**
 
@@ -350,13 +378,15 @@ index('codex_runtime_jobs_recovery_idx').on(table.status, table.expiresAt, table
 uniqueIndex('codex_launch_token_envelopes_runtime_job_idx').on(table.runtimeJobId),
 index('codex_launch_token_envelopes_worker_status_idx').on(table.workerId, table.status),
 uniqueIndex('codex_runtime_job_artifacts_job_digest_idx').on(table.runtimeJobId, table.digest, table.contentType),
+uniqueIndex('codex_pending_workspace_bundles_bundle_idx').on(table.bundleId),
+index('codex_pending_workspace_bundles_run_worker_lease_idx').on(table.runWorkerLeaseId, table.status),
 ```
 
 Fields must cover every idempotency key and digest in the spec, including accepted session/key fields and materialization/cancel/terminal request digests.
 
 - [ ] **Step 4: Update reset order**
 
-Add `codex_runtime_job_artifacts`, `codex_launch_token_envelopes`, and `codex_runtime_jobs` before `codex_launch_leases` in `packages/db/src/reset.ts`.
+Add `codex_runtime_job_artifacts`, `codex_launch_token_envelopes`, `codex_runtime_jobs`, and `codex_pending_workspace_bundles` before `codex_launch_leases` in `packages/db/src/reset.ts`.
 
 - [ ] **Step 5: Add repository input and result contracts**
 
@@ -371,6 +401,8 @@ Add repository types for:
 - `StartCodexRuntimeJobInput`
 - `AppendCodexRuntimeJobEventInput`
 - `CreateCodexRuntimeJobArtifactInput`
+- `CreatePendingWorkspaceBundleArtifactInput`
+- `GetWorkspaceBundleDownloadForRuntimeJobInput`
 - `CancelCodexRuntimeJobInput`
 - `TerminalizeCodexRuntimeJobInput`
 - `RecoverStaleCodexRuntimeJobsInput`
@@ -378,6 +410,8 @@ Add repository types for:
 - `RefreshCodexWorkerSessionInput`
 
 Include `request_digest` fields on all retryable mutating inputs.
+
+`MaterializeCodexRuntimeJobInput` must contain `launch_token_hash` or an equivalent proof digest, not raw `launch_token`. The raw token exists only in the worker HTTP request body and is scrubbed by the controller/guard before service and repository calls.
 
 - [ ] **Step 6: Run typecheck-level build**
 
@@ -409,7 +443,8 @@ Cover:
 - Replay by target plus launch attempt returns the same result when all fences match.
 - Conflicting `job_request_id`, input digest, workspace digest, worker id, lease id, profile fence, credential fence, or envelope digest fails with `codex_runtime_job_unavailable`.
 - Runtime job, launch lease, and envelope are all absent if create fails midway.
-- The raw launch token never leaves the atomic repository create callback and is never returned to the orchestrator or service caller.
+- The raw launch token never crosses the `DeliveryRepository` interface and is never returned to the orchestrator, `CodexRuntimeService`, or any service-level callback.
+- Pending workspace bundle artifacts can be bound to a runtime job only by the new-create transaction; replays must return the same bound bundle metadata and must reject mismatched pending bundle ids or digests.
 
 - [ ] **Step 2: Run and verify failure**
 
@@ -437,14 +472,27 @@ The method must:
 2. Look up by target plus launch attempt.
 3. Verify replay matches canonical fences and digests.
 4. Validate worker, active profile, active credential, scope, capability, Docker image digest, network policy digest, provider config digest, and active generation/run fence.
-5. On the new-create path only, generate the launch token inside the repository transaction or invoke a repository-injected sealer callback that receives the raw token and returns sealed envelope fields before commit.
+5. On the new-create path only, generate the launch token inside the repository transaction and call a repository-owned envelope sealer dependency before commit.
 6. Insert launch lease, runtime job, and sealed envelope records together.
 7. Return public-safe job, lease, and envelope metadata only. Do not return `lease_token` or raw launch token from this remote-mode method.
 8. Update worker durable slot count only for a confirmed new active lease/job.
 
-The repository contract should look like this shape rather than returning plaintext:
+The repository call contract should look like this shape rather than accepting or returning plaintext:
 
 ```ts
+export interface CodexLaunchTokenEnvelopeSealer {
+  sealLaunchTokenEnvelope(input: {
+    plaintext_launch_token: string;
+    runtime_job_id: string;
+    launch_lease_id: string;
+    envelope_id: string;
+    worker_id: string;
+    worker_public_key_material: string;
+    key_id: string;
+    expires_at: string;
+  }): Promise<Omit<CodexLaunchTokenEnvelope, 'status' | 'created_at'>>;
+}
+
 export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
   runtime_job_id: string;
   launch_lease_id: string;
@@ -457,15 +505,14 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
   input_digest: string;
   workspace_acquisition_json?: Record<string, unknown>;
   workspace_acquisition_digest?: string;
-  seal_launch_token(input: {
-    launch_token: string;
-    runtime_job_id: string;
-    launch_lease_id: string;
-    envelope_id: string;
-    worker_id: string;
-    key_id: string;
+  pending_workspace_bundle?: {
+    bundle_id: string;
+    pending_artifact_ref: string;
+    archive_digest: string;
+    manifest_digest: string;
+    run_worker_lease_id: string;
     expires_at: string;
-  }): Promise<Omit<CodexLaunchTokenEnvelope, 'status' | 'created_at'>>;
+  };
   now: string;
 }
 
@@ -477,7 +524,7 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult {
 }
 ```
 
-Implementation note: if keeping crypto out of `@forgeloop/db` is necessary, inject `seal_launch_token` into the repository method and call it before inserting rows inside the repository-managed transaction. The raw token still must not return to `CodexRuntimeService`.
+Implementation note: if keeping concrete crypto out of `@forgeloop/db` is necessary, inject `CodexLaunchTokenEnvelopeSealer` into the repository implementation or repository provider at construction time. Do not pass a sealer callback through `CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput`, because that would let `CodexRuntimeService` observe or capture the plaintext launch token.
 
 - [ ] **Step 5: Add replay-match helper**
 
@@ -495,6 +542,7 @@ Use canonical comparison of:
 - network policy digest
 - provider config digest
 - envelope digest
+- pending workspace bundle id, archive ref, archive digest, manifest digest, run-worker lease id, and expiry when `target_kind` is `run_execution`
 
 - [ ] **Step 6: Run repository tests**
 
@@ -524,7 +572,7 @@ Add tests that run two concurrent `createOrReplayCodexRuntimeJobWithLeaseAndEnve
 - exactly one launch lease row exists;
 - exactly one envelope row exists;
 - both callers observe the same job/envelope ids;
-- only one launch token callback or input token is consumed for the new create path;
+- only one repository-owned launch-token sealer dependency is invoked for the new create path;
 - conflicting concurrent replay fails closed.
 
 - [ ] **Step 2: Run and verify failure**
@@ -540,7 +588,7 @@ In `DrizzleDeliveryRepository`, implement the new repository method inside `with
 1. Lock or resolve existing job by `job_request_id`.
 2. Lock or resolve existing job by target plus launch attempt.
 3. On replay, verify all fences and return metadata without minting or storing a new launch token.
-4. On new create, validate profile/credential/worker/fence rows, insert launch lease, insert runtime job, insert envelope, and return the new records.
+4. On new create, validate profile/credential/worker/fence rows, generate the raw launch token inside the repository transaction, invoke the repository-owned sealer dependency before commit, insert launch lease, insert runtime job, insert sealed envelope, and return only public-safe records.
 
 - [ ] **Step 4: Avoid raw-token persistence**
 
@@ -642,6 +690,7 @@ Cover:
 - claim is single-use with same-claim replay;
 - wrong worker, stale session, expired key, cancelled job, and replayed nonce are denied without oracle detail;
 - materialization moves job to `materializing` and materializes lease in one operation;
+- materialization repository/service inputs receive only a launch-token hash/proof, never plaintext launch token;
 - materialization response-loss replay returns same raw config/auth until terminal or lease expiry;
 - start rejects cancelled jobs and moves `materializing` to `running`;
 - event endpoint deduplicates by sequence or idempotency key;
@@ -662,6 +711,8 @@ Use compare-and-set checks over current status, worker id, accepted session dige
 - [ ] **Step 4: Implement Drizzle state transitions**
 
 Each mutating method must run in one transaction and lock the runtime job row plus relevant envelope and lease rows before deciding. Do not terminalize the lease without terminalizing the runtime job for remote methods.
+
+For materialization, validate `launch_token_hash` against the lease token hash already stored on `codex_launch_leases`. Repository methods must not accept a plaintext `launch_token`.
 
 - [ ] **Step 5: Implement launch lease status lookup**
 
@@ -730,6 +781,8 @@ Add strict Zod schemas for each endpoint. Every worker mutation schema must incl
 - `body_digest`
 - operation idempotency key unless naturally sequence-numbered
 
+The worker-facing materialize HTTP DTO may include `launch_token` because the worker proves it decrypted the envelope. The controller or a dedicated guard must hash/scrub that field before calling `CodexRuntimeService`; service and repository DTOs use `launch_token_hash` or `launch_token_proof_digest` only.
+
 - [ ] **Step 4: Add nonce verification**
 
 Hash and store replay keys over canonical `{ method, path, body_digest, worker_id, session_epoch, nonce }`. Reusing the same nonce on a different method/path/body must be rejected because the bound digest differs.
@@ -739,11 +792,13 @@ Hash and store replay keys over canonical `{ method, path, body_digest, worker_i
 The service must:
 
 - create runtime jobs through `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope`;
-- seal launch tokens before persistence and never return raw launch tokens to orchestrators;
+- call `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope` without any plaintext token or sealer callback in the service input, persist only sealed envelope fields produced below the repository boundary, and never return raw launch tokens to orchestrators or service callers;
 - use worker selection based on online status, scope, capabilities, durable concurrency, image digest, network policy digest, and provider config digest;
 - return poll responses with only public-safe input, workspace metadata, envelope metadata, and intervals;
 - map envelope claim denial to `codex_launch_materialization_denied` or `codex_worker_unavailable`;
 - revalidate action claim or run-worker lease fences before materialization and before product writer consumption.
+
+For `GET /internal/codex-workers/:workerId/runtime-jobs/:jobId/workload`, return a `CodexGenerationWorkloadV1` payload for generation jobs and a `CodexRunExecutionWorkloadV1` payload for run-execution jobs. The endpoint must be accepted-job-bound, worker-session-authenticated, nonce-protected, and absent from product/public APIs.
 
 - [ ] **Step 6: Add action claim renewal endpoint**
 
@@ -1149,6 +1204,8 @@ Cover:
 - `.git` indirection outside bundle root fails;
 - unpack writes only under per-job temp root;
 - returned changed files and patch refs are path-policy checked;
+- run-worker can store bundle bytes as a pending artifact before the runtime job row exists;
+- pending bundle artifacts are atomically bound to the runtime job during runtime-job creation and only then become worker-downloadable;
 - worker downloads bundle bytes only through an authenticated runtime-job-bound bundle endpoint or expiring internal artifact URL;
 - download refuses wrong worker, wrong session, non-accepted job, expired job, cancelled job, digest mismatch, size mismatch, and bundle refs for another job.
 
@@ -1158,9 +1215,19 @@ Run: `pnpm vitest run tests/codex-worker-runtime/workspace-bundle.test.ts tests/
 
 Expected: FAIL because workspace bundle support is missing.
 
-- [ ] **Step 3: Define bundle storage and acquisition contract**
+- [ ] **Step 3: Define pending bundle storage and runtime-job binding contract**
 
-Use internal artifact storage as the first backend. Add a control-plane-issued `WorkspaceBundleV1` manifest where `archive_ref` is an internal artifact ref owned by the runtime job, and add an authenticated download contract:
+Use internal artifact storage as the first backend. The run-worker cannot create a runtime-job-owned artifact before the runtime job exists, so use this explicit sequence:
+
+1. Run-worker holds an active `RunWorkerLease`.
+2. Run-worker creates the archive bytes and manifest.
+3. Control plane stores archive bytes as a pending workspace bundle artifact bound to `run_session_id`, `execution_package_id`, `run_worker_lease_id`, `bundle_id`, `archive_digest`, `manifest_digest`, expiry, and byte limit. This pending artifact is not downloadable by remote workers.
+4. Run-worker calls `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope` with the pending bundle id and digests.
+5. The repository transaction validates the pending bundle against the active run-worker lease and binds it to the newly created or replayed runtime job.
+6. The runtime job stores `workspace_acquisition_json` containing only the now-bound `bundle_id`, `archive_ref`, digests, expiry, and size limits.
+7. Worker download is allowed only for the bound runtime-job bundle.
+
+Add an authenticated download contract:
 
 ```text
 GET /internal/codex-workers/:workerId/runtime-jobs/:jobId/workspace-bundle/:bundleId
@@ -1181,7 +1248,8 @@ If the existing internal artifact storage API cannot stream bytes directly, retu
 
 Add:
 
-- repository method `createWorkspaceBundleArtifactForRuntimeJob`
+- repository method `createPendingWorkspaceBundleArtifact`
+- repository binding path inside `createOrReplayCodexRuntimeJobWithLeaseAndEnvelope` that consumes a pending bundle and creates the runtime-job artifact binding in the same transaction as job/lease/envelope creation
 - repository method `getWorkspaceBundleDownloadForRuntimeJob`
 - DTO/schema for the bundle download endpoint
 - service method that validates the job and artifact binding
@@ -1205,7 +1273,7 @@ Use internal artifact refs and digests. Do not include raw archive bytes, local 
 
 - [ ] **Step 6: Add run-worker bundle creation**
 
-Run-worker creates the bundle only after it holds an active `RunWorkerLease`. The bundle must include enough Git metadata or patch base data to compute changed files and patch output after execution.
+Run-worker creates the bundle only after it holds an active `RunWorkerLease`. The bundle must include enough Git metadata or patch base data to compute changed files and patch output after execution. The run-worker then stores the bundle as a pending artifact and passes the pending bundle id/digests into runtime-job creation; it must not create a worker-downloadable runtime-job bundle outside the create/replay transaction.
 
 - [ ] **Step 7: Run bundle tests**
 
@@ -1236,6 +1304,8 @@ git commit -m "feat: add codex workspace bundle validation"
 Cover:
 
 - run-worker creates runtime job for `target_kind: 'run_execution'`;
+- workload endpoint returns `codex_run_execution_workload.v1` with run session id, execution package id/version, run-worker lease id, workspace bundle id/digest, package prompt ref/digest, execution context ref/digest, path policy digest, required checks digest, output schema version, and expiry;
+- poll responses do not include rendered package prompt, execution context, check configuration, or raw package instructions;
 - worker downloads/verifies/unpacks workspace bundle;
 - worker starts Dockerized app-server from already materialized launch lease;
 - run-session driver does not create or materialize a second launch lease;
@@ -1256,15 +1326,23 @@ Expose a worker-runtime entrypoint that accepts materialized runtime profile/aut
 
 - [ ] **Step 4: Add remote run execution branch in worker**
 
-For `target_kind: 'run_execution'`, the worker must fetch workload, acquire bundle, materialize lease, start app-server with `/workspace`, execute package prompt, upload artifacts, terminalize job, and clean up.
+For `target_kind: 'run_execution'`, the worker must fetch `CodexRunExecutionWorkloadV1`, download any endpoint-issued internal prompt/context refs, acquire bundle, materialize lease, start app-server with `/workspace`, execute the package prompt from the workload, upload artifacts, terminalize job, and clean up.
+
+The workload endpoint payload is the only worker contract for run instructions. It must include or issue internal downloads for:
+
+- rendered execution package prompt;
+- execution context needed by the app-server run-session driver;
+- path policy and required checks digests;
+- execution package id/version and run session fence data;
+- workspace bundle id and digest.
 
 - [ ] **Step 5: Add run-worker remote delegation**
 
 Run-worker must:
 
 1. Hold and renew `RunWorkerLease`.
-2. Create workspace bundle.
-3. Create/replay runtime job.
+2. Create workspace bundle archive and store it as a pending workspace bundle artifact bound to the run-worker lease.
+3. Create/replay runtime job with the pending bundle id and digests so the repository transaction binds the bundle to the runtime job while creating/replaying job, lease, and envelope.
 4. Wait for terminal result.
 5. Revalidate run-session status/update fence, execution package version, workspace bundle digest, and path policy.
 6. Write RunSession, artifacts, and ReviewPacket through existing writer path only.
