@@ -693,6 +693,8 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
   );
 };
 
+const isBareDnsHostString = (value: string): boolean => /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(value);
+
 const isCodexRuntimeLocalPathString = (value: string): boolean => {
   if (isCodexRuntimeProductSafeString(value)) {
     return false;
@@ -713,7 +715,8 @@ const isSafeCodexRuntimeRepoRelativePath = (value: string): boolean => {
     value.includes('\\') ||
     value.includes('\0') ||
     /^(\/|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:)/i.test(value) ||
-    isCodexRuntimeEndpointOrContainerString(value)
+    isCodexRuntimeEndpointOrContainerString(value) ||
+    isBareDnsHostString(value)
   ) {
     return false;
   }
@@ -829,6 +832,11 @@ const isCodexRuntimeChangedFilePath = (path: readonly string[]): boolean => {
   return path[path.length - 2] === 'changed_files';
 };
 
+const isCodexRuntimeAddressLikePath = (path: readonly string[]): boolean => {
+  const key = normalizeRuntimePublicKey(path[path.length - 1] ?? '');
+  return key === 'href' || key === 'url' || key.endsWith('_ref') || key.endsWith('_url');
+};
+
 const assertCodexRuntimePublicSafeRecord = (
   value: unknown,
   label: string,
@@ -845,6 +853,16 @@ const assertCodexRuntimePublicSafeRecord = (
   ) {
     if (typeof value === 'number' && !Number.isFinite(value)) {
       throw unsafeCodexRuntimePublicValue(`Codex runtime ${label} must be JSON-compatible.`, { field: path.join('.') });
+    }
+    if (
+      typeof value === 'string' &&
+      isCodexRuntimeAddressLikePath(path) &&
+      isBareDnsHostString(value)
+    ) {
+      throw unsafeCodexRuntimePublicValue(
+        'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
+        { field: path.join('.') },
+      );
     }
     if (
       typeof value === 'string' &&
@@ -914,6 +932,17 @@ const requireCodexLaunchTokenEnvelopeDigestAad = (input: Record<string, unknown>
     throw invalidProfile('Codex launch token envelope digest field aad_json is required.');
   }
   return value as Record<string, string>;
+};
+
+const requireCodexLaunchTokenEnvelopeDigestSha256 = (
+  input: Record<string, unknown>,
+  field: keyof CodexLaunchTokenEnvelopeDigestInput,
+): string => {
+  const value = requireCodexLaunchTokenEnvelopeDigestString(input, field);
+  if (!isSha256Digest(value)) {
+    throw invalidProfile(`Codex launch token envelope digest field ${field} must be a sha256 digest.`);
+  }
+  return value;
 };
 
 const requireCodexRuntimeResultString = (input: Record<string, unknown>, field: string): string => {
@@ -1048,7 +1077,7 @@ export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDi
     ciphertext: requireCodexLaunchTokenEnvelopeDigestString(input, 'ciphertext'),
     encryption_nonce: requireCodexLaunchTokenEnvelopeDigestString(input, 'encryption_nonce'),
     aad_json: requireCodexLaunchTokenEnvelopeDigestAad(input),
-    aad_digest: requireCodexLaunchTokenEnvelopeDigestString(input, 'aad_digest'),
+    aad_digest: requireCodexLaunchTokenEnvelopeDigestSha256(input, 'aad_digest'),
     expires_at: requireCodexLaunchTokenEnvelopeDigestString(input, 'expires_at'),
   });
 };

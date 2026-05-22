@@ -454,6 +454,7 @@ describe('codex runtime domain contracts', () => {
     'unix:/tmp/codex.sock',
     'codex.sock',
     '4f1e2d3c4f1e',
+    'api.openai.com',
   ])('rejects unsafe run-execution changed file %s', (changedFile) => {
     expectDomainErrorCode(
       () =>
@@ -599,6 +600,7 @@ describe('codex runtime domain contracts', () => {
     ['internal_ref', 'app-server/jobs'],
     ['href', 'control.internal'],
     ['url', 'app-server.internal'],
+    ['internal_ref', 'api.openai.com'],
     ['internal_ref', '10.0.0.5'],
     ['href', '192.168.1.10'],
     ['url', '172.16.0.2'],
@@ -650,6 +652,27 @@ describe('codex runtime domain contracts', () => {
     delete (incompleteEnvelope as Record<string, unknown>)[field];
 
     expect(() => codexLaunchTokenEnvelopeDigest(incompleteEnvelope)).toThrow(DomainError);
+  });
+
+  it('rejects malformed launch token envelope digest fields', () => {
+    expect(() =>
+      codexLaunchTokenEnvelopeDigest({
+        id: 'envelope-1',
+        runtime_job_id: 'runtime-job-1',
+        launch_lease_id: 'lease-1',
+        worker_id: 'worker-1',
+        key_id: 'worker-key-1',
+        algorithm: 'x25519-hkdf-sha256-aes-256-gcm',
+        ciphertext: 'sealed-token',
+        encryption_nonce: 'nonce-1',
+        aad_json: {
+          runtime_job_id: 'runtime-job-1',
+          launch_lease_id: 'lease-1',
+        },
+        aad_digest: 'not-a-digest',
+        expires_at: '2026-05-20T00:10:00.000Z',
+      }),
+    ).toThrow(DomainError);
   });
 
   it('treats project-only scope as project-wide while repo scope is repo-specific', () => {
