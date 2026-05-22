@@ -242,6 +242,8 @@ describe('MarkdownDocument validation', () => {
       '![flow](attachment://att-1)',
       '| Col |\n| --- |\n| Value |',
       '```ts\nconst bad = true;\n```',
+      '    const x = 1;',
+      'Heading\n=',
       'https://example.com',
       '**bold**',
       '*italic*',
@@ -259,6 +261,60 @@ describe('MarkdownDocument validation', () => {
       if (!result.ok) {
         expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
       }
+    }
+  });
+
+  it('treats indented code blocks as code_block policy', () => {
+    expect(
+      validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph', 'code_block'],
+        markdown: '    const x = 1;',
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('treats setext headings as heading policy', () => {
+    expect(
+      validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph', 'heading'],
+        markdown: 'Heading\n=',
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('masks inline code contents during safety scans while enforcing inline_code policy', () => {
+    expect(
+      validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph', 'inline_code'],
+        markdown: '`<div>`',
+      }).ok,
+    ).toBe(true);
+
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['paragraph'],
+      markdown: '`<div>`',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
+    }
+  });
+
+  it('rejects email autolinks as disallowed link destinations', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['paragraph', 'link'],
+      markdown: '<user@example.com>',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toContain('unsafe_protocol');
     }
   });
 

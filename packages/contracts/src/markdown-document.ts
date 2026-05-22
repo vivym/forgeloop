@@ -58,6 +58,7 @@ const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
 const angleDestinationPattern = /<([A-Za-z][A-Za-z0-9+.-]*:[^>\s]+)>/gi;
+const emailAutolinkPattern = /<([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+)/gim;
 const bareSchemePattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)[^\s<>)]+)/gim;
 const bareAttachmentPattern = /(?:^|[\s(])(attachment:\/\/[A-Za-z0-9_-]+(?:[/?#][^\s<>)]+)?)/gim;
@@ -83,7 +84,7 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
 
   const document = parsed.data;
   const issues: MarkdownValidationIssue[] = [];
-  const activeMarkdown = stripFencedCodeBlocks(document.markdown);
+  const activeMarkdown = stripInlineCodeSpans(stripFencedCodeBlocks(document.markdown));
 
   if (containsRawHtmlOrMdx(activeMarkdown)) {
     issues.push({ code: 'raw_html', message: 'Markdown must not contain raw HTML or MDX JSX.' });
@@ -187,6 +188,12 @@ function stripFencedCodeBlocks(markdown: string): string {
   }
 
   return maskedParts.join('');
+}
+
+function stripInlineCodeSpans(markdown: string): string {
+  return markdown.replace(/(`+)([\s\S]*?)\1/g, (_match, _ticks: string, contents: string) =>
+    contents.replace(/[^\r\n]/g, ' '),
+  );
 }
 
 function parseOpeningFence(line: string): { char: '`' | '~'; length: number } | undefined {
@@ -338,6 +345,7 @@ function markdownDestinations(markdown: string): MarkdownDestination[] {
     destinations.push({ kind: 'link', value });
   }
   collectCaptureGroup(markdown, angleDestinationPattern, destinations, 'link');
+  collectCaptureGroup(markdown, emailAutolinkPattern, destinations, 'link');
   collectCaptureGroup(markdown, bareUrlPattern, destinations, 'link');
   collectCaptureGroup(markdown, bareSchemePattern, destinations, 'link');
   collectCaptureGroup(markdown, bareAttachmentPattern, destinations, 'link');
@@ -573,6 +581,9 @@ function detectedBlockKinds(markdown: string): Set<DetectedMarkdownKind> {
   if (/^\s{0,3}#{1,4}\s+\S/m.test(activeMarkdown)) {
     blockKinds.add('heading');
   }
+  if (hasSetextHeading(activeMarkdown)) {
+    blockKinds.add('heading');
+  }
   if (/^\s{0,3}#{5,6}\s+\S/m.test(activeMarkdown)) {
     blockKinds.add('unsupported_heading_level');
   }
@@ -582,7 +593,7 @@ function detectedBlockKinds(markdown: string): Set<DetectedMarkdownKind> {
   if (/^\s{0,3}(?:[-+*]\s+|\d+[.)]\s+)\S/m.test(activeMarkdown)) {
     blockKinds.add('list');
   }
-  if (/^\s{0,3}(?:```|~~~)/m.test(markdown)) {
+  if (/^\s{0,3}(?:```|~~~)/m.test(markdown) || /^\s{4,}\S/m.test(activeMarkdown)) {
     blockKinds.add('code_block');
   }
   if (/^\s{0,3}>\s?/m.test(activeMarkdown)) {
@@ -610,6 +621,14 @@ function hasTable(markdown: string): boolean {
   });
 }
 
+function hasSetextHeading(markdown: string): boolean {
+  const lines = markdown.split(/\r?\n/);
+  return lines.some((line, index) => {
+    const nextLine = lines[index + 1];
+    return isParagraphLine(line) && nextLine !== undefined && /^\s{0,3}(?:=+|-+)\s*$/.test(nextLine);
+  });
+}
+
 function isParagraphLine(line: string): boolean {
   const trimmed = line.trim();
   if (trimmed.length === 0) {
@@ -618,6 +637,9 @@ function isParagraphLine(line: string): boolean {
   if (
     /^(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+|>\s?|```|~~~|\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$)/.test(trimmed)
   ) {
+    return false;
+  }
+  if (/^\s{4,}\S/.test(line)) {
     return false;
   }
   if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
