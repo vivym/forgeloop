@@ -1169,6 +1169,7 @@ git commit -m "feat: add task and attachment persistence foundation"
 - Create: `apps/control-plane-api/src/modules/markdown/markdown.module.ts`
 - Modify: `apps/control-plane-api/src/modules/work-items/work-items.controller.ts`
 - Modify: `apps/control-plane-api/src/modules/work-items/work-item.service.ts`
+- Modify: `apps/control-plane-api/src/modules/work-items/work-items.module.ts`
 - Modify: `apps/control-plane-api/src/modules/delivery/delivery.module.ts`
 - Test: `tests/api/attachments.test.ts`
 - Test: `tests/api/markdown-document.test.ts`
@@ -1211,6 +1212,65 @@ it('returns only opaque same-origin render urls', async () => {
   const response = await request(app.getHttpServer()).post('/attachments/att-1/render-url').send({ disposition: 'inline' }).expect(201);
   expect(response.body.render_url).toMatch(/^\/api\/attachments\/att-1\/render\//);
   expect(response.body.render_url).not.toMatch(/storage|bucket|s3|signature|https?:\/\//i);
+});
+
+it('serves binary content through the safe render url without exposing storage_uri', async () => {
+  await seedAttachmentBinary({
+    id: 'att-1',
+    owner_object_type: 'requirement',
+    owner_object_id: 'req-1',
+    content_type: 'image/png',
+    bytes: Buffer.from('png-bytes'),
+  });
+
+  const renderRef = await request(app.getHttpServer()).post('/attachments/att-1/render-url').send({ disposition: 'inline' }).expect(201);
+  const binary = await request(app.getHttpServer()).get(renderRef.body.render_url.replace(/^\/api/, '')).expect(200);
+
+  expect(binary.headers['content-type']).toContain('image/png');
+  expect(binary.headers['content-disposition']).toContain('inline');
+  expect(binary.text ?? binary.body.toString()).not.toContain('storage_uri');
+  expect(binary.text ?? binary.body.toString()).not.toContain('memory://attachments');
+});
+
+it('fetches metadata and lists object attachments without exposing storage_uri', async () => {
+  await seedAttachment({ id: 'att-1', owner_object_type: 'requirement', owner_object_id: 'req-1' });
+
+  const metadata = await request(app.getHttpServer()).get('/attachments/att-1').expect(200);
+  const list = await request(app.getHttpServer()).get('/attachments').query({ object_type: 'requirement', object_id: 'req-1' }).expect(200);
+
+  expect(metadata.body).toMatchObject({ id: 'att-1', owner_object_type: 'requirement' });
+  expect(JSON.stringify(metadata.body)).not.toContain('storage_uri');
+  expect(JSON.stringify(list.body)).not.toContain('storage_uri');
+});
+
+it('updates public metadata without replacing binary content', async () => {
+  await seedAttachment({ id: 'att-1', owner_object_type: 'requirement', owner_object_id: 'req-1' });
+
+  const response = await request(app.getHttpServer())
+    .patch('/attachments/att-1')
+    .send({ caption: 'Checkout failure', alt_text: 'Checkout modal error', visibility: 'project' })
+    .expect(200);
+
+  expect(response.body).toMatchObject({ caption: 'Checkout failure', alt_text: 'Checkout modal error', visibility: 'project' });
+  expect(response.body).not.toHaveProperty('storage_uri');
+});
+
+it('links reused evidence only through typed object refs', async () => {
+  await seedAttachment({ id: 'att-1', owner_object_type: 'requirement', owner_object_id: 'req-1' });
+
+  const response = await request(app.getHttpServer())
+    .post('/attachments/att-1/links')
+    .send({ object_ref: { type: 'task', id: 'task-1' } })
+    .expect(201);
+
+  expect(response.body.linked_object_refs).toEqual(expect.arrayContaining([{ type: 'task', id: 'task-1' }]));
+});
+
+it('archives referenced attachments instead of silently breaking Markdown references', async () => {
+  await seedAttachmentReferencedByMarkdown({ id: 'att-1', owner_object_type: 'requirement', owner_object_id: 'req-1' });
+
+  const response = await request(app.getHttpServer()).delete('/attachments/att-1').expect(200);
+  expect(response.body).toMatchObject({ id: 'att-1', reference_status: 'archived' });
 });
 ```
 
@@ -1273,11 +1333,17 @@ Implementation rules:
 - `POST /attachments` rejects non-`multipart/form-data`.
 - The file part must be named `file`.
 - The metadata part must be named `metadata` and parse with `attachmentUploadMetadataSchema`.
+- Reject empty files, unsupported content types, mismatched extension/content-type pairs, and oversized files according to first-phase category limits.
+- Enforce object write permission for upload/update/link/delete and object read permission for list/metadata/render-url creation.
 - Store binary content in the first implementation with a deterministic local/memory URI such as `memory://attachments/<id>` or an existing test storage helper. Do not expose that URI.
 - Compute `checksum_sha256`.
 - Return `AttachmentRef`.
 - `POST /attachments/:attachmentId/render-url` returns `/api/attachments/:attachmentId/render/:token`.
+- `GET /attachments/:attachmentId/render/:token` validates the token, permission, expiry, and disposition, then streams or returns binary content without exposing `storage_uri`.
 - `GET /attachments?object_type=&object_id=` lists public refs only.
+- `GET /attachments/:attachmentId` returns public metadata only.
+- `PATCH /attachments/:attachmentId` updates caption, alt text, category, and visibility metadata without replacing binary content.
+- `POST /attachments/:attachmentId/links` links reused evidence after validating a typed `ObjectRef`.
 - `DELETE /attachments/:attachmentId` archives referenced attachments and hard-deletes only unreferenced attachments if implemented.
 
 Controller method signatures:
@@ -1293,7 +1359,34 @@ uploadAttachment(@UploadedFile() file: Express.Multer.File, @Body('metadata') me
 createRenderUrl(@Param('attachmentId') attachmentId: string, @Body() body: { disposition?: 'inline' | 'download' }) {
   return this.service.createRenderUrl(attachmentId, body.disposition ?? 'inline');
 }
+
+@Get('attachments/:attachmentId/render/:token')
+renderAttachment(@Param('attachmentId') attachmentId: string, @Param('token') token: string, @Res() response: Response) {
+  return this.service.renderAttachment(attachmentId, token, response);
+}
+
+@Get('attachments/:attachmentId')
+getAttachment(@Param('attachmentId') attachmentId: string) {
+  return this.service.getPublicMetadata(attachmentId);
+}
+
+@Patch('attachments/:attachmentId')
+updateAttachment(@Param('attachmentId') attachmentId: string, @Body(new ZodValidationPipe(attachmentPatchSchema)) body: AttachmentPatch) {
+  return this.service.updateMetadata(attachmentId, body);
+}
+
+@Post('attachments/:attachmentId/links')
+linkAttachment(@Param('attachmentId') attachmentId: string, @Body(new ZodValidationPipe(attachmentLinkRequestSchema)) body: AttachmentLinkRequest) {
+  return this.service.linkToObject(attachmentId, body.object_ref);
+}
+
+@Delete('attachments/:attachmentId')
+deleteAttachment(@Param('attachmentId') attachmentId: string) {
+  return this.service.archiveOrDelete(attachmentId);
+}
 ```
+
+`renderAttachment` must not trust the token shape alone. It must resolve the render-token record or signed token payload, check the attachment id, actor/object read permission, expiry, safety status, reference status, and requested disposition before streaming bytes. Expired, mismatched, archived without tombstone rendering, unauthorized, or missing binary content must return product-safe 404/403/410 responses with no raw storage details.
 
 - [ ] **Step 4: Implement MarkdownDocument service and narrative write endpoints**
 
@@ -1339,7 +1432,12 @@ Do not add `/tasks/:taskId/narrative` here. Task narrative writes depend on `Tas
 
 - [ ] **Step 5: Wire modules**
 
-Import `AttachmentsModule` and `MarkdownModule` into `DeliveryModule`. Export services only when other modules need them.
+Wire provider visibility explicitly:
+
+- `MarkdownModule` must provide and export `MarkdownDocumentService`.
+- `AttachmentsModule` must provide and export `AttachmentsService` if `MarkdownDocumentService` resolves attachment metadata through it.
+- `WorkItemsModule` must import `MarkdownModule` because `WorkItemService.updateTypedNarrative` injects `MarkdownDocumentService`; importing `MarkdownModule` only into `DeliveryModule` is not enough for Nest provider visibility.
+- `DeliveryModule` must import `AttachmentsModule` and `MarkdownModule` so controllers and shared services are registered in the API slice.
 
 - [ ] **Step 6: Run API tests**
 
@@ -1369,6 +1467,7 @@ git commit -m "feat: enforce attachment and markdown api safety"
 - Create: `apps/control-plane-api/src/modules/tasks/tasks.controller.ts`
 - Create: `apps/control-plane-api/src/modules/tasks/tasks.service.ts`
 - Create: `apps/control-plane-api/src/modules/tasks/tasks.module.ts`
+- Modify: `apps/control-plane-api/src/modules/execution-packages/execution-packages.module.ts`
 - Modify: `apps/control-plane-api/src/modules/markdown/markdown.module.ts`
 - Modify: `apps/control-plane-api/src/modules/delivery/delivery.module.ts`
 - Test: `tests/api/project-management-query.test.ts`
@@ -1651,7 +1750,12 @@ It may reuse existing release gate/query helpers where they already encode the s
 
 - [ ] **Step 6: Implement Tasks module**
 
-`TasksModule` must import `MarkdownModule`. If `MarkdownDocumentService` is not exported yet, update `apps/control-plane-api/src/modules/markdown/markdown.module.ts` to export it.
+`TasksModule` provider wiring:
+
+- Import `MarkdownModule` so `TasksService.updateNarrative` can inject `MarkdownDocumentService`.
+- Import `ExecutionPackagesModule` so `TasksService.createPackageForTask` can delegate package generation through the existing `ExecutionPackageService`.
+- If `ExecutionPackageService` does not already expose a package-generation method that accepts explicit `spec_revision_id` and `plan_revision_id`, add a narrow method there rather than hand-rolling package creation inside `TasksService`.
+- Export `TasksService` only if another module needs it.
 
 `TasksService.createTask` must:
 
@@ -1674,8 +1778,9 @@ It may reuse existing release gate/query helpers where they already encode the s
 - reject when `stale_state !== 'current'`;
 - reject missing `controlling_spec_revision_id` or missing `controlling_plan_revision_id`;
 - reject `manual_exception`;
-- create or delegate to package generation using approved revisions only;
-- link generated package to the Task.
+- delegate package generation to `ExecutionPackageService` using the Task's approved `controlling_spec_revision_id` and `controlling_plan_revision_id`;
+- link the generated package to the Task through `repository.linkExecutionPackageToTask`;
+- return a Task-scoped package response or ProductAction target whose href is `/tasks/:taskId/packages/:packageId`, never `/packages/:packageId`.
 
 - [ ] **Step 7: Add query endpoints**
 
@@ -1731,7 +1836,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit query, Task API, and Release readiness API**
 
 ```bash
-git add packages/db/src/queries/project-management-queries.ts packages/db/src/index.ts apps/control-plane-api/src/modules/query apps/control-plane-api/src/modules/tasks apps/control-plane-api/src/modules/markdown apps/control-plane-api/src/modules/delivery tests/api/project-management-query.test.ts tests/api/tasks.test.ts tests/api/task-scoped-evidence.test.ts tests/api/project-management-release-readiness.test.ts
+git add packages/db/src/queries/project-management-queries.ts packages/db/src/index.ts apps/control-plane-api/src/modules/query apps/control-plane-api/src/modules/tasks apps/control-plane-api/src/modules/execution-packages apps/control-plane-api/src/modules/markdown apps/control-plane-api/src/modules/delivery tests/api/project-management-query.test.ts tests/api/tasks.test.ts tests/api/task-scoped-evidence.test.ts tests/api/project-management-release-readiness.test.ts
 git commit -m "feat: add project management queries task authority and release readiness"
 ```
 
@@ -1792,6 +1897,46 @@ describe('attachment Web API client', () => {
     const api = createForgeloopAttachmentApi({ baseUrl: 'http://api.test', fetch: fetch as typeof globalThis.fetch });
     await expect(api.createRenderUrl('att-1', { disposition: 'inline' })).rejects.toThrow();
   });
+
+  it('fetches safe render URLs as binary content without leaking raw storage details', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        attachment_id: 'att-1',
+        render_url: '/api/attachments/att-1/render/render-token',
+        expires_at: '2026-05-23T00:05:00.000Z',
+        content_type: 'image/png',
+        disposition: 'inline',
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Blob(['png-bytes'], { type: 'image/png' }), {
+        status: 200,
+        headers: { 'content-type': 'image/png', 'content-disposition': 'inline; filename=\"flow.png\"' },
+      }));
+    const api = createForgeloopAttachmentApi({ baseUrl: 'http://api.test', fetch: fetch as typeof globalThis.fetch });
+
+    const renderRef = await api.createRenderUrl('att-1', { disposition: 'inline' });
+    const binary = await api.fetchRenderContent(renderRef);
+
+    expect(binary.contentType).toBe('image/png');
+    expect(fetch.mock.calls[1][0]).toBe('http://api.test/api/attachments/att-1/render/render-token');
+  });
+
+  it('supports metadata fetch, patch, link, and archive/delete operations', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(publicAttachmentFixture({ id: 'att-1' })), { status: 200 }));
+    const api = createForgeloopAttachmentApi({ baseUrl: 'http://api.test', fetch: fetch as typeof globalThis.fetch });
+
+    await api.getAttachment('att-1');
+    await api.updateAttachment('att-1', { caption: 'Checkout failure', visibility: 'project' });
+    await api.linkAttachment('att-1', { type: 'task', id: 'task-1' });
+    await api.deleteAttachment('att-1');
+
+    expect(fetch.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`)).toEqual([
+      'GET http://api.test/attachments/att-1',
+      'PATCH http://api.test/attachments/att-1',
+      'POST http://api.test/attachments/att-1/links',
+      'DELETE http://api.test/attachments/att-1',
+    ]);
+  });
 });
 ```
 
@@ -1810,7 +1955,7 @@ In `tests/web/markdown-editor.test.tsx`, add:
 ```tsx
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ForgeMarkdownEditor } from '../../apps/web/src/shared/ui/markdown-editor';
@@ -1857,6 +2002,54 @@ describe('ForgeMarkdownEditor', () => {
     expect(onSave).not.toHaveBeenCalled();
     expect(screen.getByText(/unsafe/i)).toBeTruthy();
   });
+
+  it('autosaves drafts and guards navigation when edits are unsaved', async () => {
+    const user = userEvent.setup();
+    const onAutosaveDraft = vi.fn();
+    const onBeforeUnload = vi.spyOn(window, 'addEventListener');
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph']}
+        autosave={{ debounceMs: 10, onAutosaveDraft }}
+        mode="edit"
+        objectRef={{ type: 'task', id: 'task-1' }}
+        onChange={vi.fn()}
+        onUploadAttachment={vi.fn()}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="Initial"
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: /markdown editor/i }), ' updated');
+
+    await waitFor(() => expect(onAutosaveDraft).toHaveBeenCalledWith(expect.stringContaining('updated')));
+    expect(onBeforeUnload).toHaveBeenCalledWith('beforeunload', expect.any(Function));
+  });
+
+  it('shows revision history and Markdown diff without changing the saved body', async () => {
+    const user = userEvent.setup();
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph']}
+        mode="edit"
+        objectRef={{ type: 'requirement', id: 'req-1', driver_actor_id: 'actor-product' }}
+        onChange={vi.fn()}
+        onUploadAttachment={vi.fn()}
+        revisions={[
+          { revision_id: 'rev-1', markdown: 'Old body', created_at: '2026-05-22T00:00:00.000Z', author_actor_id: 'actor-product' },
+          { revision_id: 'rev-2', markdown: 'New body', created_at: '2026-05-23T00:00:00.000Z', author_actor_id: 'actor-product' },
+        ]}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="New body"
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /revision history/i }));
+    await user.click(screen.getByRole('button', { name: /compare rev-1 to rev-2/i }));
+
+    expect(screen.getByText(/Old body/)).toBeTruthy();
+    expect(screen.getByText(/New body/)).toBeTruthy();
+  });
 });
 ```
 
@@ -1898,6 +2091,37 @@ it('does not insert broken markdown when upload fails', async () => {
   expect(onChange).not.toHaveBeenCalledWith(expect.stringContaining('attachment://'));
   expect(screen.getByText(/upload failed/i)).toBeTruthy();
 });
+
+it('uploads dropped and toolbar-selected images before inserting attachment references', async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  const onUploadAttachment = vi.fn(async () => publicAttachmentFixture({ id: 'att-toolbar' }));
+  render(<EditableEditor onChange={onChange} onUploadAttachment={onUploadAttachment} />);
+
+  await user.click(screen.getByRole('button', { name: /insert image/i }));
+  await uploadFile(screen.getByLabelText(/image file/i), new File(['bytes'], 'toolbar.png', { type: 'image/png' }));
+  await dropImage(screen.getByRole('textbox', { name: /markdown editor/i }), new File(['bytes'], 'drop.png', { type: 'image/png' }));
+
+  expect(onUploadAttachment).toHaveBeenCalledTimes(2);
+  expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-toolbar'));
+});
+
+it('inserts non-image attachments through the attachment picker as link references', async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(
+    <EditableEditor
+      attachments={[publicAttachmentFixture({ id: 'att-log', filename: 'ci.log', content_type: 'text/plain', evidence_category: 'log' })]}
+      onChange={onChange}
+      onUploadAttachment={vi.fn()}
+    />,
+  );
+
+  await user.click(screen.getByRole('button', { name: /attachments/i }));
+  await user.click(screen.getByRole('menuitem', { name: /ci.log/i }));
+
+  expect(onChange).toHaveBeenCalledWith(expect.stringContaining('[ci.log](attachment://att-log)'));
+});
 ```
 
 Run:
@@ -1924,13 +2148,15 @@ export interface ApiRequestInit {
 
 When `rawBody` is present, do not set `content-type: application/json` and do not call `JSON.stringify`.
 
+Also expose a low-level `rawRequest(pathOrUrl, init?)` helper for same-origin binary fetches. It must use the same base URL and auth/actor headers as JSON requests, but it must not parse JSON. `attachments.ts` uses this for `fetchRenderContent`.
+
 - [ ] **Step 5: Implement attachment API client**
 
 In `apps/web/src/shared/api/attachments.ts`, implement:
 
 ```ts
 export function createForgeloopAttachmentApi(options: ForgeloopApiOptions = {}) {
-  const { request } = createApiContext(options);
+  const { request, rawRequest } = createApiContext(options);
   return {
     uploadAttachment: ({ file, metadata, actorId }: UploadAttachmentInput) => {
       const form = new FormData();
@@ -1940,6 +2166,25 @@ export function createForgeloopAttachmentApi(options: ForgeloopApiOptions = {}) 
     },
     listAttachments: (query: { object_type: string; object_id: string }) =>
       request<AttachmentRef[]>(`/attachments?${new URLSearchParams(query)}`),
+    getAttachment: (attachmentId: string) =>
+      request<AttachmentRef>(`/attachments/${encodeURIComponent(attachmentId)}`),
+    updateAttachment: (attachmentId: string, body: AttachmentPatch) =>
+      request<AttachmentRef>(`/attachments/${encodeURIComponent(attachmentId)}`, { method: 'PATCH', body }),
+    linkAttachment: (attachmentId: string, objectRef: ObjectRef) =>
+      request<AttachmentRef>(`/attachments/${encodeURIComponent(attachmentId)}/links`, {
+        method: 'POST',
+        body: { object_ref: objectRef },
+      }),
+    deleteAttachment: (attachmentId: string) =>
+      request<AttachmentRef | { deleted: true }>(`/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' }),
+    fetchRenderContent: async (renderRef: AttachmentRenderRef) => {
+      const response = await rawRequest(renderRef.render_url);
+      return {
+        blob: await response.blob(),
+        contentType: response.headers.get('content-type') ?? renderRef.content_type,
+        disposition: response.headers.get('content-disposition') ?? renderRef.disposition,
+      };
+    },
     createRenderUrl: async (attachmentId: string, body: { disposition: 'inline' | 'download' }) =>
       attachmentRenderRefSchema.parse(
         await request<unknown>(`/attachments/${encodeURIComponent(attachmentId)}/render-url`, { method: 'POST', body }),
@@ -2012,6 +2257,17 @@ plugins={[
 ```
 
 The `imageUploadHandler` must call `onUploadAttachment` and return `attachment://<attachment.id>`.
+
+The wrapper must also implement the first-phase authoring controls from the spec:
+
+- attachment picker that inserts image refs as `![alt](attachment://id)` and non-image refs as `[filename](attachment://id)`;
+- paste, drag/drop, and toolbar-selected image upload paths that all use the same upload-first helper;
+- autosave draft callback through the `autosave` prop without changing approved revisions;
+- explicit save/publish callback through `onSave`;
+- unsaved-change guard using `beforeunload` and route-transition blocking where available;
+- revision history panel from a `revisions` prop;
+- Markdown diff between two selected revisions using MDXEditor's `diffSourcePlugin` or a repo-local diff renderer;
+- keyboard labels/focus states for toolbar, source toggle, attachment picker, revision history, and save actions.
 
 - [ ] **Step 8: Implement EvidenceAttachments**
 
@@ -2128,6 +2384,7 @@ describe('project management route IA', () => {
 
   it.each(removedRoutes)('does not resolve removed product route %s', async (route) => {
     const screen = await renderRoute(route);
+    expect(screen.getByRole('heading', { name: /not found|404/i })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: /lanes|pipeline|work items|packages|runs|reviews/i })).toBeNull();
   });
 });
@@ -2205,7 +2462,7 @@ Remove imports from old route modules. Import new route modules. The route tree 
 
 - [ ] **Step 8: Delete old route modules from active config**
 
-After route tests pass, delete old route modules and any feature imports that become unreachable. If deleting now causes type errors in old tests, update or delete those old tests in the same task.
+After route tests pass, delete old route modules and any feature imports that become unreachable. If deleting now causes type errors in old tests, update or delete those old tests in the same task. Removed routes must resolve through the app's product-safe not-found state; they must not redirect to replacements and must not render hidden compatibility components.
 
 - [ ] **Step 9: Run route tests**
 
@@ -2306,6 +2563,22 @@ it('renders typed list and detail surfaces', async () => {
     expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
   }
 });
+
+it('renders typed create forms with structured fields and object templates', async () => {
+  for (const [route, fields] of [
+    ['/requirements/new', ['Stakeholder problem', 'Desired outcome', 'Acceptance criteria', 'Requirement Driver']],
+    ['/initiatives/new', ['Business outcome', 'Scope', 'Milestone intent', 'Initiative Driver']],
+    ['/tech-debt/new', ['Current pain', 'Desired invariant', 'Affected modules', 'Validation strategy', 'Tech Debt Driver']],
+    ['/tasks/new', ['Execution brief', 'Acceptance checklist', 'Parent context']],
+    ['/bugs/new', ['Observed behavior', 'Expected behavior', 'Reproduction steps', 'Environment', 'Severity', 'Bug Driver']],
+  ] as const) {
+    const screen = await renderRoute(route);
+    for (const field of fields) {
+      expect(await screen.findByLabelText(new RegExp(field, 'i'))).toBeTruthy();
+    }
+    expect(screen.getByRole('textbox', { name: /narrative markdown/i })).toBeTruthy();
+  }
+});
 ```
 
 Run:
@@ -2350,6 +2623,16 @@ In `hooks.ts`, add `useMyWorkQuery`, `useRequirementsQuery`, `useRequirementQuer
 - structured sections;
 - `EvidenceAttachments`.
 - explicit save behavior that calls the typed narrative mutation for the current object and invalidates the typed detail query key.
+
+`object-forms.tsx` should render typed create forms with structured fields that remain outside Markdown:
+
+- Requirement: stakeholder problem, desired outcome, acceptance criteria, in-scope/out-of-scope, Requirement Driver, narrative Markdown template.
+- Initiative: business outcome, scope, milestone intent, release intent, Initiative Driver, narrative Markdown template.
+- Tech Debt: current pain, desired invariant, affected modules, validation strategy, release impact, Tech Debt Driver, narrative Markdown template.
+- Task: execution brief, acceptance checklist, parent context, repo/package readiness context, narrative Markdown template.
+- Bug: observed behavior, expected behavior, reproduction steps, environment, severity, suspected area, verification path, Bug Driver, narrative Markdown template.
+
+Templates seed Markdown only for narrative context. Structured fields must remain validated form fields so filtering, reporting, acceptance, and workflow gates do not depend on parsing Markdown prose.
 
 - [ ] **Step 5: Implement My Work**
 
@@ -2673,7 +2956,7 @@ Update `tests/naming/delivery-naming.test.ts` to scan new project-management rou
 - `/releases/release-1`
 - `/reports`
 
-It must assert removed routes no-match. `tests/e2e/run-console.e2e.test.ts` should either move to task-scoped run evidence or become runtime-only non-product coverage.
+It must assert removed routes no-match. Refactor `tests/e2e/run-console.e2e.test.ts` to open the task-scoped run evidence route `/tasks/task-1/runs/run-1` for product navigation coverage. If runtime-only behavior still needs a separate e2e check, create a non-product API/runtime smoke under a different test name in the same commit; do not keep `/runs/:runSessionId` as a browser product route.
 
 - [ ] **Step 7: Run focused Web gates**
 
