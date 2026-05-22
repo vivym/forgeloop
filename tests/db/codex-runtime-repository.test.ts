@@ -39,6 +39,7 @@ const assertCodexRuntimeJobRepositoryContract = <T extends CodexRuntimeJobReposi
 
 const now = '2026-05-20T00:00:00.000Z';
 const later = '2026-05-20T00:01:00.000Z';
+const afterRuntimeJobExpiry = '2026-05-20T00:02:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
 
 const createRepository = (sealer?: CodexLaunchTokenEnvelopeSealer): DeliveryRepository =>
@@ -1830,6 +1831,57 @@ describe('codex runtime repository behavior', () => {
         idempotency_key: 'terminal-materializing-success',
         request_digest: tokenHash('terminal-materializing-success-request'),
         now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects new terminal results after runtime job or launch lease expiry', async () => {
+    const expired = await createRuntimeJobWithCapturedToken(
+      { expires_at: '2026-05-20T00:01:30.000Z' },
+      { session_expires_at: expiresAt, session_public_key_expires_at: expiresAt },
+    );
+    await acceptRuntimeJob(expired.repository);
+    await claimRuntimeJobEnvelope(expired.repository);
+    await materializeRuntimeJob(expired.repository, expired.launchToken);
+    await startRuntimeJob(expired.repository);
+
+    for (const terminalStatus of ['succeeded', 'failed'] as const) {
+      await expect(
+        terminalizeRuntimeJob(expired.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+          nonce: `terminal-expired-${terminalStatus}-nonce`,
+          terminal_status: terminalStatus,
+          reason_code: terminalStatus === 'succeeded' ? 'completed' : 'runtime_failed',
+          terminal_result_json:
+            terminalStatus === 'succeeded' ? validGenerationTerminalResult('completed-after-expiry') : undefined,
+          idempotency_key: `terminal-expired-${terminalStatus}`,
+          request_digest: tokenHash(`terminal-expired-${terminalStatus}-request`),
+          now: afterRuntimeJobExpiry,
+        }),
+      ).rejects.toMatchObject<Partial<DomainError>>({
+        name: 'DomainError',
+        code: 'codex_runtime_job_unavailable',
+      });
+    }
+
+    await expired.repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-1',
+      reason_code: 'user_cancelled',
+      idempotency_key: 'cancel-before-expired-terminal',
+      request_digest: tokenHash('cancel-before-expired-terminal-request'),
+      now: later,
+    });
+    await expect(
+      terminalizeRuntimeJob(expired.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-expired-cancelled-nonce',
+        terminal_status: 'cancelled',
+        reason_code: 'user_cancelled',
+        terminal_result_json: undefined,
+        idempotency_key: 'terminal-expired-cancelled',
+        request_digest: tokenHash('terminal-expired-cancelled-request'),
+        now: afterRuntimeJobExpiry,
       }),
     ).rejects.toMatchObject<Partial<DomainError>>({
       name: 'DomainError',

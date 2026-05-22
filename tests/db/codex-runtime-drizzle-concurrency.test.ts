@@ -37,6 +37,7 @@ const databaseUrl = process.env.FORGELOOP_TEST_DATABASE_URL?.trim() || process.e
 const requireConcurrencyDb = process.env.FORGELOOP_REQUIRE_DB_CONCURRENCY === '1';
 const now = '2026-05-20T00:00:00.000Z';
 const later = '2026-05-20T00:01:00.000Z';
+const afterRuntimeJobExpiry = '2026-05-20T00:02:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
@@ -1065,6 +1066,100 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         await expect(
           repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-valid-replay-after-start' }),
         ).resolves.toEqual(materialized);
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('rejects terminalization after runtime job expiry', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input, launchToken } = await createRuntimeJobWithCapturedToken(
+          repository,
+          seed,
+          sealerCalls,
+          { expires_at: '2026-05-20T00:01:30.000Z' },
+        );
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'expired-terminal-accept'));
+        await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'expired-terminal-claim'));
+        await repository.materializeCodexRuntimeJob(materializeRuntimeJobInput(input, seed, launchToken, 'expired-terminal-materialize'));
+        await repository.startCodexRuntimeJob({
+          runtime_job_id: input.runtime_job_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'start-expired-terminal',
+          nonce_timestamp: later,
+          idempotency_key: `start-${input.runtime_job_id}`,
+          request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+          runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+          now: later,
+        });
+
+        for (const terminalStatus of ['succeeded', 'failed'] as const) {
+          await expect(
+            repository.terminalizeCodexRuntimeJob({
+              runtime_job_id: input.runtime_job_id,
+              launch_lease_id: input.launch_lease_id,
+              worker_id: seed.workerId,
+              worker_session_token: seed.sessionToken,
+              nonce: `terminal-expired-${terminalStatus}`,
+              nonce_timestamp: afterRuntimeJobExpiry,
+              terminal_status: terminalStatus,
+              reason_code: terminalStatus === 'succeeded' ? 'completed' : 'runtime_failed',
+              terminal_result_json:
+                terminalStatus === 'succeeded'
+                  ? {
+                      task_kind: 'spec_draft',
+                      prompt_version: 'codex-generation-test-v1',
+                      output_schema_version: 'spec-draft-test-v1',
+                      generated_payload: { title: 'Generated spec' },
+                      generated_payload_digest: tokenHash('generated-spec-after-expiry'),
+                      generation_artifacts: [],
+                      public_summary: 'completed after expiry',
+                    }
+                  : undefined,
+              idempotency_key: `terminal-expired-${terminalStatus}-${input.runtime_job_id}`,
+              request_digest: tokenHash(`terminal-expired-${terminalStatus}-request-${input.runtime_job_id}`),
+              now: afterRuntimeJobExpiry,
+            }),
+          ).rejects.toMatchObject({
+            name: 'DomainError',
+            code: 'codex_runtime_job_unavailable',
+          });
+        }
+
+        await repository.cancelCodexRuntimeJob({
+          runtime_job_id: input.runtime_job_id,
+          reason_code: 'user_cancelled',
+          idempotency_key: `cancel-before-expired-terminal-${input.runtime_job_id}`,
+          request_digest: tokenHash(`cancel-before-expired-terminal-request-${input.runtime_job_id}`),
+          now: later,
+        });
+        await expect(
+          repository.terminalizeCodexRuntimeJob({
+            runtime_job_id: input.runtime_job_id,
+            launch_lease_id: input.launch_lease_id,
+            worker_id: seed.workerId,
+            worker_session_token: seed.sessionToken,
+            nonce: 'terminal-expired-cancelled',
+            nonce_timestamp: afterRuntimeJobExpiry,
+            terminal_status: 'cancelled',
+            reason_code: 'user_cancelled',
+            idempotency_key: `terminal-expired-cancelled-${input.runtime_job_id}`,
+            request_digest: tokenHash(`terminal-expired-cancelled-request-${input.runtime_job_id}`),
+            now: afterRuntimeJobExpiry,
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_runtime_job_unavailable',
+        });
       } finally {
         await client.pool.end();
       }

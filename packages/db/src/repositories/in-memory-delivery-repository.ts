@@ -1492,6 +1492,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (leaseRecord.lease.status !== 'active' && leaseRecord.lease.status !== 'materialized') {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
+    if (record.job.expires_at <= input.now || leaseRecord.lease.expires_at <= input.now) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
     if (record.job.cancel_requested_at !== undefined && input.terminal_status !== 'cancelled') {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }

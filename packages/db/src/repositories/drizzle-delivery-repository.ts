@@ -1853,6 +1853,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (bundle.lease.status !== 'active' && bundle.lease.status !== 'materialized') {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
+    if (bundle.job.expires_at <= input.now || bundle.lease.expires_at <= input.now) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
     if (bundle.job.cancel_requested_at !== undefined && input.terminal_status !== 'cancelled') {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
