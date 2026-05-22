@@ -716,6 +716,7 @@ const safePublicFilenameExtensions = new Set([
   'md',
   'mdx',
   'mjs',
+  'mts',
   'patch',
   'pdf',
   'png',
@@ -736,15 +737,24 @@ const safePublicFilenameExtensions = new Set([
   'yml',
   'zip',
 ]);
+const isCodexRuntimePublicFilenameToken = (value: string): boolean => {
+  if (value.includes('/') || value.includes('\\') || value.includes(':') || value.includes('\0')) {
+    return false;
+  }
+  if (/^(?:Dockerfile|Makefile)(?:\.[A-Za-z0-9._-]+)?$/i.test(value)) {
+    return true;
+  }
+  const extension = value.toLowerCase().split('.').at(-1);
+  return extension !== undefined && extension !== value.toLowerCase() && safePublicFilenameExtensions.has(extension);
+};
 const isBareDnsHostString = (value: string): boolean => {
   if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(value)) {
     return false;
   }
-  const lastLabel = value.toLowerCase().split('.').at(-1);
-  return lastLabel !== undefined && !safePublicFilenameExtensions.has(lastLabel);
+  return !isCodexRuntimePublicFilenameToken(value);
 };
 const displayUnsafeEndpointTokenPattern =
-  /\b(?:https?:\/\/|(?:https?|wss?|tcp|ssh|redis|postgres(?:ql)?|mysql):\S+|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|(?:app-server|control-plane|redis|postgres|mysql):\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
+  /\b(?:https?:\/\/|(?:https?|wss?|tcp|ssh|redis|postgres(?:ql)?|mysql|file):\S+|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|(?:app-server|control-plane|redis|postgres|mysql):\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
 const displayBareDnsHostTokenPattern = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
 const displayUnsafeSecretTokenPattern =

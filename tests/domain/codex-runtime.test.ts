@@ -433,8 +433,10 @@ describe('codex runtime domain contracts', () => {
       changed_files: [
         'index.html',
         'logo.svg',
+        'Dockerfile.dev',
         'package.json',
         'README.md',
+        'vite.config.mts',
         'vite.config.ts',
         'src/index.ts',
         'docs/release-notes.md',
@@ -476,7 +478,7 @@ describe('codex runtime domain contracts', () => {
           internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/junit',
         },
       ],
-      public_summary: 'Checks:3 passed; Result:passed after updating app/server documentation.',
+      public_summary: 'Checks:3 passed; Result:passed after updating Dockerfile.dev and vite.config.mts.',
     } satisfies CodexRunExecutionRuntimeJobResult;
 
     expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
@@ -666,6 +668,8 @@ describe('codex runtime domain contracts', () => {
     'Provider endpoint api.openai.com failed before draft publication',
     'Legacy endpoint http:127.0.0.1:4555 failed before draft publication',
     'Cache endpoint redis:6379 failed before draft publication',
+    'Worker read file:///etc/passwd during setup',
+    'Output at file:/tmp/codex.log before cleanup',
     'Generated draft; local app server was http://127.0.0.1:4555/internal',
     'Worker endpoint redis.default.svc returned an error',
     'Container socket unix:/tmp/codex.sock was unavailable',
