@@ -42,12 +42,38 @@ const reviewListResponse = {
       counts: {},
       updated_at: reviewPacket.updated_at,
     },
+    {
+      id: 'review-without-package-title',
+      object: {
+        type: 'review_packet',
+        id: 'review-without-package-title',
+        title: 'Review without package title',
+      },
+      title: 'Review without package title',
+      status: 'pending',
+      risk: workItem.risk,
+      reviewer_actor_id: reviewPacket.reviewer_actor_id,
+      related: [],
+      revision_state: {},
+      review_state: {
+        execution_package_id: 'package-raw-fallback',
+        run_session_id: 'run-raw-fallback',
+        decision: 'none',
+        changed_file_count: 0,
+      },
+      counts: {},
+      updated_at: reviewPacket.updated_at,
+    },
   ],
   degraded_sources: [],
 };
 
 const reviewWithRequestedChanges = {
   ...reviewPacket,
+  status: 'pending',
+  decision: 'none',
+  reviewed_by_actor_id: undefined,
+  reviewed_at: undefined,
   requested_changes: [
     {
       title: 'Clarify fallback state',
@@ -190,10 +216,10 @@ const releaseCockpitResponse = {
 describe('review and release product routes', () => {
   it('uses the Review Packets product endpoint with supported filters and reports unsupported filters', async () => {
     const screen = await renderRoute(
-      `/reviews?reviewer_actor_id=${reviewPacket.reviewer_actor_id}&decision=approved&execution_package_id=${executionPackage.id}&risk=high&stale=true&limit=25`,
+      `/reviews?reviewer_actor_id=${reviewPacket.reviewer_actor_id}&decision=approved&execution_package_id=${executionPackage.id}&run_session_id=${runSession.id}&risk=high&stale=true&limit=25`,
       {
         apiOverrides: {
-          [`GET /query/review-packets?project_id=${projectId}&reviewer_actor_id=${reviewPacket.reviewer_actor_id}&execution_package_id=${executionPackage.id}&decision=approved&limit=25`]:
+          [`GET /query/review-packets?project_id=${projectId}&reviewer_actor_id=${reviewPacket.reviewer_actor_id}&execution_package_id=${executionPackage.id}&run_session_id=${runSession.id}&decision=approved&limit=25`]:
             reviewListResponse,
         },
       },
@@ -201,9 +227,15 @@ describe('review and release product routes', () => {
 
     expect(await screen.findByRole('heading', { name: 'Reviews' })).toBeTruthy();
     expect(await screen.findByText(reviewPacket.summary)).toBeTruthy();
+    expect(screen.getByText(/Package filter applied/)).toBeTruthy();
+    expect(screen.getByText(/Run filter applied/)).toBeTruthy();
+    expect(screen.getByText('Package unavailable')).toBeTruthy();
+    expect(document.body.textContent).not.toContain(executionPackage.id);
+    expect(document.body.textContent).not.toContain(runSession.id);
+    expect(document.body.textContent).not.toContain('package-raw-fallback');
     expect(screen.getByText(/risk and stale are not applied to the review packet inventory yet/i)).toBeTruthy();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
-      `http://localhost:3000/query/review-packets?project_id=${projectId}&reviewer_actor_id=${reviewPacket.reviewer_actor_id}&execution_package_id=${executionPackage.id}&decision=approved&limit=25`,
+      `http://localhost:3000/query/review-packets?project_id=${projectId}&reviewer_actor_id=${reviewPacket.reviewer_actor_id}&execution_package_id=${executionPackage.id}&run_session_id=${runSession.id}&decision=approved&limit=25`,
       expect.objectContaining({ method: 'GET' }),
     );
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
@@ -216,7 +248,7 @@ describe('review and release product routes', () => {
     );
   });
 
-  it('renders Review Packet detail with replay timeline and real decision actions', async () => {
+  it('renders Review Packet detail with replay timeline and decision forms', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/reviews/${reviewPacket.id}`, {
       apiOverrides: {
@@ -228,14 +260,19 @@ describe('review and release product routes', () => {
 
     expect(await screen.findByRole('heading', { name: reviewPacket.summary })).toBeTruthy();
     expectPageHeaderText(/Review/i);
-    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
-    expectStatusPillText(reviewPacket.decision);
+    expect(screen.getByRole('tab', { name: 'Approve' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Request changes' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Approval summary' })).toBeTruthy();
+    expect(screen.queryByLabelText('Requested change title')).toBeNull();
+    expectStatusPillText(reviewWithRequestedChanges.decision);
     expectActionRailBeforeDetailContent();
     expectNoLegacyWorkbenchText();
     expectNoNestedCards();
-    expect(screen.getAllByText('approved').length).toBeGreaterThan(0);
-    expect(screen.getByText('apps/web/src/shared/api/hooks.ts')).toBeTruthy();
-    expect(screen.getByText(reviewPacket.check_result_summary)).toBeTruthy();
+    expect(screen.getAllByText('none').length).toBeGreaterThan(0);
+    expect(screen.getByText('hooks.ts')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('apps/web/src/shared/api/hooks.ts');
+    expect(document.body.textContent).not.toContain('apps/web/src/app/routes/releases/index.tsx');
+    expect(screen.getAllByText(reviewPacket.check_result_summary).length).toBeGreaterThan(0);
     expect(screen.getByText(reviewPacket.self_review.summary)).toBeTruthy();
     expect(screen.getByText(reviewPacket.risk_notes[0])).toBeTruthy();
     expect(screen.getByText('Clarify fallback state')).toBeTruthy();
@@ -243,7 +280,9 @@ describe('review and release product routes', () => {
     expect(screen.getByRole('link', { name: 'Open package' }).getAttribute('href')).toBe(`/packages/${executionPackage.id}`);
     expect(screen.getByText('Timeline / Replay')).toBeTruthy();
     expect(screen.getByText(timeline[0].summary)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Request changes' })).toBeTruthy();
+    expect(document.body.textContent).not.toContain(reviewPacket.id);
+    expect(document.body.textContent).not.toContain(executionPackage.id);
+    expect(document.body.textContent).not.toContain(runSession.id);
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/reviews/${reviewPacket.id}`,
       expect.objectContaining({ method: 'GET' }),
@@ -253,7 +292,8 @@ describe('review and release product routes', () => {
       expect.objectContaining({ method: 'GET' }),
     );
 
-    await user.click(screen.getByRole('button', { name: 'Approve' }));
+    await user.type(screen.getByRole('textbox', { name: 'Approval summary' }), 'Ready to merge after review.');
+    await user.click(screen.getByRole('button', { name: 'Submit approval' }));
 
     await waitFor(() => {
       const [, init] =
@@ -264,12 +304,86 @@ describe('review and release product routes', () => {
       const body = JSON.parse(String(init?.body));
       expect(body).toEqual(
         expect.objectContaining({
-          summary: 'Approved from Reviews route.',
+          summary: 'Ready to merge after review.',
           reviewed_by_actor_id: actorId,
         }),
       );
+      expect(body.reviewed_at).toEqual(expect.any(String));
+      expect(body).not.toHaveProperty('requested_changes');
       expect(body).not.toHaveProperty('mutation');
     });
+  });
+
+  it('submits requested changes from editable rows and keeps form values after API errors', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute(`/reviews/${reviewPacket.id}`, {
+      apiOverrides: {
+        [`GET /query/reviews/${reviewPacket.id}`]: { ...reviewPacket, status: 'pending', decision: 'none' },
+        [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
+        [`POST /review-packets/${reviewPacket.id}/request-changes`]: () => {
+          throw new Error('Review service unavailable');
+        },
+      },
+    });
+
+    await screen.findByRole('heading', { name: reviewPacket.summary });
+    await user.click(screen.getByRole('tab', { name: 'Request changes' }));
+    expect(screen.queryByLabelText('Approval summary')).toBeNull();
+    await user.type(screen.getByRole('textbox', { name: 'Change request summary' }), 'Needs reviewer follow-up.');
+    await user.type(screen.getByLabelText('Requested change title'), 'Tighten empty state');
+    await user.type(screen.getByLabelText('Requested change description'), 'Explain what the reviewer should do when no evidence is present.');
+    await user.selectOptions(screen.getByLabelText('Requested change severity'), 'critical');
+    await user.click(screen.getByRole('button', { name: 'Add requested change' }));
+    expect(screen.getAllByLabelText('Requested change title')).toHaveLength(2);
+    await user.click(screen.getAllByRole('button', { name: 'Remove requested change' })[1]);
+    await user.click(screen.getByRole('button', { name: 'Submit requested changes' }));
+
+    await waitFor(() => {
+      const [, init] =
+        vi.mocked(globalThis.fetch).mock.calls.find(([input]) =>
+          String(input).includes(`/review-packets/${reviewPacket.id}/request-changes`),
+        ) ?? [];
+      expect(init).toBeDefined();
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual(
+        expect.objectContaining({
+          summary: 'Needs reviewer follow-up.',
+          reviewed_by_actor_id: actorId,
+          requested_changes: [
+            {
+              title: 'Tighten empty state',
+              description: 'Explain what the reviewer should do when no evidence is present.',
+              severity: 'critical',
+            },
+          ],
+        }),
+      );
+      expect(body.reviewed_at).toEqual(expect.any(String));
+    });
+    expect(await screen.findByText('Review service unavailable')).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: 'Change request summary' }) as HTMLTextAreaElement).value).toBe(
+      'Needs reviewer follow-up.',
+    );
+    expect((screen.getByLabelText('Requested change title') as HTMLInputElement).value).toBe('Tighten empty state');
+    expect((screen.getByLabelText('Requested change description') as HTMLTextAreaElement).value).toBe(
+      'Explain what the reviewer should do when no evidence is present.',
+    );
+    expect((screen.getByLabelText('Requested change severity') as HTMLSelectElement).value).toBe('critical');
+  });
+
+  it('disables review decisions when the review is already decided', async () => {
+    const screen = await renderRoute(`/reviews/${reviewPacket.id}`, {
+      apiOverrides: {
+        [`GET /query/reviews/${reviewPacket.id}`]: { ...reviewPacket, decision: 'approved', status: 'completed' },
+        [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
+      },
+    });
+
+    await screen.findByRole('heading', { name: reviewPacket.summary });
+    expect(screen.getByText(/Review decisions are disabled because this review is already completed./i)).toBeTruthy();
+    expect((screen.getByRole('tab', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('tab', { name: 'Request changes' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Submit approval' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('renders release list from listReleases without manual release id loading', async () => {

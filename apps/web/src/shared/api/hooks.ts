@@ -825,8 +825,14 @@ function invalidatePackages(queryClient: QueryClient) {
 
 function invalidateReviewPacketResources(queryClient: QueryClient, reviewPacketId: string) {
   return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['review'] }),
     queryClient.invalidateQueries({ queryKey: queryKeys.review(reviewPacketId) }),
+    queryClient.invalidateQueries({ queryKey: ['review-packet-replay'] }),
+    queryClient.invalidateQueries({ queryKey: ['replay'] }),
     queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
+    queryClient.invalidateQueries({ queryKey: ['packages'] }),
+    queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
+    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
   ]);
 }
 
