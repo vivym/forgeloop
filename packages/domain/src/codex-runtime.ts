@@ -694,8 +694,15 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
 };
 
 const isBareDnsHostString = (value: string): boolean => /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(value);
-const displayUnsafeTokenPattern =
+const displayUnsafeEndpointTokenPattern =
   /\b(?:https?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:(?!\s)|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|[a-z0-9-]+:\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
+const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
+const displayUnsafeSecretTokenPattern =
+  /\b(?:(?:api[_-]?key|token|secret|password|authorization|auth(?:[_-]?header)?)\s*(?:[:=]|Bearer\b)|Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]+)/i;
+const isCodexRuntimeUnsafeDisplayString = (value: string): boolean =>
+  displayUnsafeEndpointTokenPattern.test(value) ||
+  displayUnsafePathTokenPattern.test(value) ||
+  displayUnsafeSecretTokenPattern.test(value);
 
 const isCodexRuntimeLocalPathString = (value: string): boolean => {
   if (isCodexRuntimeProductSafeString(value)) {
@@ -749,7 +756,7 @@ const isRawRuntimePublicString = (
     return !isSafeCodexRuntimeRepoRelativePath(value);
   }
   if (options.allowDisplayText === true) {
-    return displayUnsafeTokenPattern.test(value);
+    return isCodexRuntimeUnsafeDisplayString(value);
   }
   return isCodexRuntimeLocalPathString(value);
 };

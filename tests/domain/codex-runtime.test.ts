@@ -645,6 +645,10 @@ describe('codex runtime domain contracts', () => {
     'Generated draft; local app server was http://127.0.0.1:4555/internal',
     'Worker endpoint redis.default.svc returned an error',
     'Container socket unix:/tmp/codex.sock was unavailable',
+    'Worker wrote temporary files under /tmp/workspace',
+    'Worker read ../src/index before cleanup',
+    'Model response contained api_key=sk-test',
+    'Authorization: Bearer raw-token appeared in summary',
   ])('rejects endpoint leakage embedded in display text %#', (publicSummary) => {
     expectDomainErrorCode(
       () =>
