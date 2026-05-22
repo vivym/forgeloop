@@ -361,6 +361,17 @@ describe('codex runtime domain contracts', () => {
       () =>
         validateCodexRuntimeJobTerminalResult({
           ...generationResult,
+          generated_payload: {
+            title: 'Public spec title',
+            artifact_ref: 'artifact://http://127.0.0.1:4555/raw',
+          },
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...generationResult,
           next_step_links: [
             {
               label: 'Open generated draft',
@@ -575,6 +586,9 @@ describe('codex runtime domain contracts', () => {
       { api_key: 'sk-test' },
       { apiKey: 'sk-test' },
       { description: 'Authorization: Bearer raw-token' },
+      { artifact_ref: 'artifact://http://127.0.0.1:4555/raw' },
+      { artifact_ref: 'artifact:///var/lib/forgeloop/workspaces/job' },
+      { next_step: 'forgeloop://http://127.0.0.1:4555/raw' },
       { socket_path: 'artifact://ok' },
       { socketPath: 'artifact://ok' },
       { socket_ref: 'artifact://ok' },

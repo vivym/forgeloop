@@ -644,10 +644,42 @@ const isPrivateLegacyIpv4Endpoint = (value: string): boolean => {
   );
 };
 
+const safeProductRefPathPattern = /^[A-Za-z0-9._~!$&'()*+,;=%-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=%-]+)*$/;
+const isSafeProductRefPath = (path: string): boolean =>
+  path.length > 0 &&
+  safeProductRefPathPattern.test(path) &&
+  !path.includes('..') &&
+  !path.includes('\\') &&
+  !/[A-Za-z][A-Za-z0-9+.-]*:/.test(path);
+
+const isCodexRuntimeArtifactRefString = (value: string): boolean => {
+  const prefix = 'artifact://';
+  if (!value.startsWith(prefix)) {
+    return false;
+  }
+  const body = value.slice(prefix.length);
+  return (
+    (body.startsWith('codex-runtime-jobs/') || body.startsWith('automation/') || body.startsWith('runs/')) &&
+    isSafeProductRefPath(body)
+  );
+};
+
+const isCodexRuntimeForgeloopRefString = (value: string): boolean => {
+  const prefix = 'forgeloop://';
+  if (!value.startsWith(prefix)) {
+    return false;
+  }
+  const body = value.slice(prefix.length);
+  return /^(?:automation|runs|specs|plans|execution-packages|review-packets|releases)\//.test(body) && isSafeProductRefPath(body);
+};
+
+const isCodexRuntimeMimeTypeString = (value: string): boolean =>
+  /^(application|audio|font|image|message|model|multipart|text|video)\/[A-Za-z0-9.+-]+$/i.test(value);
+
 const isCodexRuntimeProductSafeString = (value: string): boolean =>
-  /^artifact:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value) ||
-  /^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value) ||
-  /^(application|audio|font|image|message|model|multipart|text|video)\/[A-Za-z0-9.+-]+$/i.test(value) ||
+  isCodexRuntimeArtifactRefString(value) ||
+  isCodexRuntimeForgeloopRefString(value) ||
+  isCodexRuntimeMimeTypeString(value) ||
   isSha256Digest(value);
 
 const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
@@ -813,10 +845,10 @@ const isRawRuntimePublicString = (
   value: string,
   options: { allowDisplayText?: boolean; allowRepoRelativePath?: boolean } = {},
 ): boolean => {
-  if (/^artifact:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
+  if (isCodexRuntimeArtifactRefString(value)) {
     return false;
   }
-  if (/^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
+  if (isCodexRuntimeForgeloopRefString(value)) {
     return false;
   }
   if (isCodexRuntimeProductSafeString(value)) {
