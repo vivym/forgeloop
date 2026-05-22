@@ -539,7 +539,7 @@ export const taskDetailSchema = taskListItemSchema
     audited_exception: auditedExceptionSchema.optional(),
     attachment_refs: z.array(attachmentRefSchema).default([]),
   })
-  .omit({ ref: true, status: true, updated_at: true, driver_actor_id: true })
+  .omit({ status: true, updated_at: true, driver_actor_id: true })
   .strict()
   .superRefine((task, ctx) => {
     if (task.stale_state === 'manual_exception' && !task.audited_exception) {

@@ -64,6 +64,7 @@ describe('project management typed object contracts', () => {
   it('requires approved Spec and Plan authority for runtime package eligible tasks', () => {
     const task = taskDetailSchema.parse({
       id: 'task-1',
+      ref: { type: 'task', id: 'task-1' },
       title: 'Implement checkout validation',
       parent_ref: { type: 'requirement', id: 'req-1' },
       controlling_spec_revision_id: 'spec-rev-1',
@@ -78,6 +79,7 @@ describe('project management typed object contracts', () => {
     expect(() =>
       taskDetailSchema.parse({
         id: 'task-manual',
+        ref: { type: 'task', id: 'task-manual' },
         title: 'Emergency manual follow-up',
         stale_state: 'manual_exception',
         package_generation_eligible: true,
@@ -100,6 +102,7 @@ describe('project management typed object contracts', () => {
     expect(() =>
       taskDetailSchema.parse({
         id: 'task-manual',
+        ref: { type: 'task', id: 'task-manual' },
         title: 'Emergency manual follow-up',
         stale_state: 'manual_exception',
         package_generation_eligible: false,
@@ -109,6 +112,7 @@ describe('project management typed object contracts', () => {
     expect(
       taskDetailSchema.parse({
         id: 'task-manual',
+        ref: { type: 'task', id: 'task-manual' },
         title: 'Emergency manual follow-up',
         stale_state: 'manual_exception',
         package_generation_eligible: false,
@@ -135,6 +139,37 @@ describe('project management typed object contracts', () => {
       stale_state: 'manual_exception',
       package_generation_eligible: false,
     });
+  });
+
+  it('exposes a type-specific ref on task detail read models', () => {
+    expect(
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'task', id: 'task-1' },
+        title: 'Implement checkout validation',
+        stale_state: 'current',
+      }),
+    ).toMatchObject({
+      ref: { type: 'task', id: 'task-1' },
+    });
+
+    expect(() =>
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'requirement', id: 'req-1' },
+        title: 'Implement checkout validation',
+        stale_state: 'current',
+      }),
+    ).toThrow();
+
+    expect(() =>
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'release', id: 'rel-1' },
+        title: 'Implement checkout validation',
+        stale_state: 'current',
+      }),
+    ).toThrow();
   });
 
   it('rejects public product list items that expose work_item refs or owner_actor_id', () => {
