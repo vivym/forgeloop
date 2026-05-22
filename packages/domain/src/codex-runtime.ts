@@ -560,6 +560,10 @@ const rawEndpointHostCandidate = (value: string): string | undefined => {
 
 const isIpEndpointString = (value: string): boolean => {
   const candidate = rawEndpointHostCandidate(value);
+  const legacyCandidate = value.split(/[/?#]/, 1)[0]?.toLowerCase().replace(/%.+$/, '') ?? value;
+  if (isPrivateLegacyIpv4Endpoint(legacyCandidate)) {
+    return true;
+  }
   if (candidate === undefined) {
     return false;
   }
@@ -568,7 +572,62 @@ const isIpEndpointString = (value: string): boolean => {
   if (ipv4Mapped?.[1] !== undefined) {
     return isIP(ipv4Mapped[1]) === 4;
   }
-  return isIP(withoutZone) !== 0;
+  return isIP(withoutZone) !== 0 || isPrivateLegacyIpv4Endpoint(withoutZone);
+};
+
+const parseLegacyIpv4Part = (part: string): number | undefined => {
+  const radix = /^0x/i.test(part) ? 16 : /^0[0-7]+$/.test(part) ? 8 : 10;
+  if (radix === 10 && !/^\d+$/.test(part)) {
+    return undefined;
+  }
+  if (radix === 16 && !/^0x[0-9a-f]+$/i.test(part)) {
+    return undefined;
+  }
+  if (radix === 8 && !/^0[0-7]+$/.test(part)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(part, radix);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+};
+
+const parseLegacyIpv4Number = (value: string): number | undefined => {
+  if (!/^(?:0x[0-9a-f]+|0[0-7]+|\d+)(?:\.(?:0x[0-9a-f]+|0[0-7]+|\d+)){0,3}$/i.test(value)) {
+    return undefined;
+  }
+  const parts = value.split('.').map(parseLegacyIpv4Part);
+  if (parts.some((part) => part === undefined)) {
+    return undefined;
+  }
+  const [first = 0, second = 0, third = 0, fourth = 0] = parts as [number?, number?, number?, number?];
+  if (parts.length === 1) {
+    return first <= 0xffffffff ? first : undefined;
+  }
+  if (parts.length === 2) {
+    return first <= 0xff && second <= 0xffffff ? first * 0x1000000 + second : undefined;
+  }
+  if (parts.length === 3) {
+    return first <= 0xff && second <= 0xff && third <= 0xffff ? first * 0x1000000 + second * 0x10000 + third : undefined;
+  }
+  return first <= 0xff && second <= 0xff && third <= 0xff && fourth <= 0xff
+    ? first * 0x1000000 + second * 0x10000 + third * 0x100 + fourth
+    : undefined;
+};
+
+const isPrivateLegacyIpv4Endpoint = (value: string): boolean => {
+  const parsed = parseLegacyIpv4Number(value);
+  if (parsed === undefined) {
+    return false;
+  }
+  const first = Math.floor(parsed / 0x1000000) & 0xff;
+  const second = Math.floor(parsed / 0x10000) & 0xff;
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
 };
 
 const isCodexRuntimeProductSafeString = (value: string): boolean =>
@@ -591,6 +650,7 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
     /^\[?(?:(?:fc|fd)[0-9a-f]{0,2}|fe80):[0-9a-f:]+(?:%[A-Za-z0-9_.-]+)?\]?(:\d{1,5})?(\/|$)/i;
   const internalHostEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal(:\d{1,5})?(\/|$)/i;
   const clusterLocalEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc\.cluster\.local(:\d{1,5})?(\/|$)/i;
+  const clusterShortServiceEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc(:\d{1,5})?(\/|$)/i;
   const singleLabelHostPortPattern = /^[a-z][a-z0-9-]*:\d{1,5}(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
   const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
@@ -609,6 +669,7 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
     privateIpv6EndpointPattern.test(value) ||
     internalHostEndpointPattern.test(value) ||
     clusterLocalEndpointPattern.test(value) ||
+    clusterShortServiceEndpointPattern.test(value) ||
     singleLabelHostPortPattern.test(value) ||
     rawRuntimeServiceEndpointPattern.test(value) ||
     hostWithPortOrPathPattern.test(value) ||

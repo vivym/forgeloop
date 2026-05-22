@@ -515,6 +515,9 @@ describe('codex runtime domain contracts', () => {
     ['href', 'app-server:3845/internal'],
     ['url', 'control-plane:3845/runtime-jobs'],
     ['url', 'redis:6379'],
+    ['url', 'redis.default.svc'],
+    ['url', 'control-plane.default.svc'],
+    ['url', 'app-server.default.svc'],
     ['url', 'redis.default.svc.cluster.local'],
     ['internal_ref', 'app-server/jobs'],
     ['href', 'control.internal'],
@@ -522,6 +525,11 @@ describe('codex runtime domain contracts', () => {
     ['internal_ref', '10.0.0.5'],
     ['href', '192.168.1.10'],
     ['url', '172.16.0.2'],
+    ['href', '127.1'],
+    ['href', '127.0.1'],
+    ['href', '0177.0.0.1'],
+    ['href', '0x7f.0.0.1'],
+    ['href', '2130706433'],
     ['internal_ref', 'fd00::1'],
   ])('rejects host-like runtime endpoint string in %s', (field, value) => {
     expectDomainErrorCode(
