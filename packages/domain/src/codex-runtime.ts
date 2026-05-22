@@ -470,7 +470,7 @@ const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
 const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[_-]?key|token|secret|auth)[A-Za-z0-9_.-]*\b)/i;
 const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
 const unsafeRuntimePublicKeyPattern =
-  /(api[_-]?key|token|secret|auth|password|endpoint|container_id|workspace_path|source_repo_path)$/i;
+  /(api[_-]?key|token|secret|auth(?:orization)?(?:_header)?|password|endpoint|socket(?:_path)?|container(?:_id|_name)?|workspace_path|source_repo_path)$/i;
 const rawRuntimePublicFieldPattern = /^raw_(prompt|context|log|logs|notification|notifications|headers?)$/i;
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
