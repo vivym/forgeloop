@@ -619,6 +619,8 @@ const seedCodexWorker = async (
     targetKinds?: readonly ('generation' | 'run_execution')[];
     dockerImageDigests?: readonly string[];
     networkPolicyDigests?: readonly string[];
+    activeLeaseCount?: number;
+    maxConcurrency?: number;
   } = {},
 ) => {
   const bootstrapToken = `bootstrap-token-${suffix}-${executionPackage.id}`;
@@ -656,8 +658,8 @@ const seedCodexWorker = async (
     network_policy_digests: overrides.networkPolicyDigests ?? [networkPolicyDigest],
     host_worker_uid: 501,
     host_worker_gid: 20,
-    lease_count: 0,
-    max_concurrency: 2,
+    lease_count: overrides.activeLeaseCount ?? 0,
+    max_concurrency: overrides.maxConcurrency ?? 2,
     session_public_key_id: `session-key-${suffix}`,
     session_public_key_algorithm: 'x25519',
     session_public_key_material: 'base64-public-key-material',
@@ -671,7 +673,7 @@ const seedCodexWorker = async (
     nonce_timestamp: runtimeNow,
     status: 'online',
     control_channel_status: 'connected',
-    active_lease_count: 0,
+    active_lease_count: overrides.activeLeaseCount ?? 0,
     capabilities: overrides.targetKinds ?? [profileRevision.target_kind],
     now: runtimeNow,
   });
@@ -681,7 +683,8 @@ export const seedOnlineCompatibleCodexWorker = (
   repository: DeliveryRepository,
   profileRevision: CodexRuntimeProfileRevision,
   executionPackage: ExecutionPackage,
-) => seedCodexWorker(repository, profileRevision, executionPackage, 'compatible');
+  overrides: { activeLeaseCount?: number; maxConcurrency?: number } = {},
+) => seedCodexWorker(repository, profileRevision, executionPackage, 'compatible', overrides);
 
 export const seedOnlineCodexWorkerWithDockerMismatch = (
   repository: DeliveryRepository,

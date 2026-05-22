@@ -401,7 +401,7 @@ export function useGeneratePackagesMutation(planRevisionId: string | undefined) 
 
   return useMutation({
     mutationFn: () => createCommandApi().generatePackages(requiredId(planRevisionId, 'planRevisionId')),
-    onSuccess: () => invalidatePackages(queryClient),
+    onSuccess: () => invalidatePackageDeliveryCollections(queryClient),
   });
 }
 
@@ -413,7 +413,7 @@ export function useCreateExecutionPackageMutation(planRevisionId: string | undef
       createCommandApi().createExecutionPackage(requiredId(planRevisionId, 'planRevisionId'), body),
     onSuccess: (executionPackage) => {
       setPackageDetail(queryClient, executionPackage.id, executionPackage);
-      return invalidatePackages(queryClient);
+      return invalidatePackageResources(queryClient, executionPackage.id);
     },
   });
 }
@@ -470,7 +470,7 @@ export function useLinkReleaseWorkItemMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { workItemId: string; body: LinkReleaseScopeBody }) =>
       createCommandApi().linkReleaseWorkItem(releaseId, input.workItemId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -480,7 +480,7 @@ export function useUnlinkReleaseWorkItemMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { workItemId: string; body: UnlinkReleaseScopeBody }) =>
       createCommandApi().unlinkReleaseWorkItem(releaseId, input.workItemId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -490,7 +490,7 @@ export function useLinkReleaseExecutionPackageMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { packageId: string; body: LinkReleaseScopeBody }) =>
       createCommandApi().linkReleaseExecutionPackage(releaseId, input.packageId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -500,7 +500,7 @@ export function useUnlinkReleaseExecutionPackageMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { packageId: string; body: UnlinkReleaseScopeBody }) =>
       createCommandApi().unlinkReleaseExecutionPackage(releaseId, input.packageId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -640,7 +640,7 @@ export function useApprovePlanMutation(input: { planId: string; workItemId?: str
     onSuccess: (plan) =>
       Promise.all([
         invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
-        plan.approved_revision_id === undefined ? Promise.resolve() : invalidatePackages(queryClient),
+        plan.approved_revision_id === undefined ? Promise.resolve() : invalidatePackageDeliveryCollections(queryClient),
       ]),
   });
 }
@@ -711,7 +711,7 @@ function invalidateCommandDerivedResources(queryClient: QueryClient, command: Pr
     case 'generate_plan_draft':
       return queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(command.plan_id) });
     case 'generate_packages':
-      return invalidatePackages(queryClient);
+      return invalidatePackageDeliveryCollections(queryClient);
     case 'mark_package_ready':
     case 'run_package':
       return Promise.resolve();
@@ -821,12 +821,25 @@ function invalidatePackageResources(queryClient: QueryClient, packageId: string)
     invalidatePackageDetail(queryClient, packageId),
     queryClient.invalidateQueries({ queryKey: queryKeys.packageRuntimeReadiness(packageId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.executionPackageReplay(packageId) }),
-    invalidatePackages(queryClient),
+    invalidatePackageDeliveryCollections(queryClient),
   ]);
 }
 
 function invalidatePackages(queryClient: QueryClient) {
   return queryClient.invalidateQueries({ queryKey: ['packages'] });
+}
+
+function invalidateDeliverySurfaces(queryClient: QueryClient) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
+    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
+    queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
+  ]);
+}
+
+function invalidatePackageDeliveryCollections(queryClient: QueryClient) {
+  return Promise.all([invalidatePackages(queryClient), invalidateDeliverySurfaces(queryClient)]);
 }
 
 function invalidateReviewPacketResources(queryClient: QueryClient, reviewPacketId: string) {
@@ -850,21 +863,21 @@ function invalidateReleaseCockpit(queryClient: QueryClient, releaseId: string) {
   return queryClient.invalidateQueries({ queryKey: queryKeys.releaseCockpit(releaseId) });
 }
 
+function invalidateReleaseDeliveryResources(queryClient: QueryClient, releaseId: string) {
+  return Promise.all([
+    invalidateReleaseCockpit(queryClient, releaseId),
+    queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
+    queryClient.invalidateQueries({ queryKey: ['releases'] }),
+    invalidatePackageDeliveryCollections(queryClient),
+  ]);
+}
+
 function useReleaseCommandMutation<TBody>(releaseId: string, mutationFn: (body: TBody) => Promise<unknown>) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn,
-    onSuccess: () =>
-      Promise.all([
-        invalidateReleaseCockpit(queryClient, releaseId),
-        queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
-        queryClient.invalidateQueries({ queryKey: ['releases'] }),
-        queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
-        queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
-        queryClient.invalidateQueries({ queryKey: ['packages'] }),
-        queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
-      ]),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 

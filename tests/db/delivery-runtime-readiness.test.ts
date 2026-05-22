@@ -104,6 +104,24 @@ describe('delivery runtime readiness query', () => {
     expectPublicSafe(response);
   });
 
+  it('does not treat saturated worker launch capacity as a pre-run readiness blocker', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repository);
+    const profile = await seedActiveRunExecutionProfile(repository, executionPackage);
+    await seedSingleCredentialBinding(repository, profile, executionPackage);
+    await seedOnlineCompatibleCodexWorker(repository, profile, executionPackage, { activeLeaseCount: 2, maxConcurrency: 2 });
+
+    const response = await derive(repository, executionPackage);
+
+    expect(response).toEqual({
+      executor_type: 'local_codex',
+      target_kind: 'run_execution',
+      state: 'ready',
+      blockers: [],
+      generated_at: now,
+    });
+  });
+
   it('distinguishes incompatible runtime profile and package policy targets', async () => {
     const profileRepository = new InMemoryDeliveryRepository();
     const profilePackage = await seedReadyLocalCodexExecutionPackage(profileRepository);

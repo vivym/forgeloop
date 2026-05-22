@@ -675,7 +675,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         record.registration.control_channel_status === 'connected' &&
         record.session_expires_at > input.now &&
         codexWorkerHeartbeatIsFresh(record.registration.last_heartbeat_at, input.now) &&
-        record.registration.active_lease_count < record.registration.max_concurrency &&
         codexRuntimeScopeMatches(record.allowed_scopes, codexScope(input.project_id, input.repo_id)),
     );
 

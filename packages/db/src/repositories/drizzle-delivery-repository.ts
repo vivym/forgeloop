@@ -1002,7 +1002,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .filter(
         (record) =>
           codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
-          record.lease_count < record.max_concurrency &&
           codexRuntimeScopeMatches(record.allowed_scopes_json, codexScope(input.project_id, input.repo_id)),
       );
 

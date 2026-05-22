@@ -8,10 +8,16 @@ import type { ReactNode } from 'react';
 import {
   useApprovePlanMutation,
   useApproveSpecMutation,
+  useCreateExecutionPackageMutation,
   useCreateSpecMutation,
   useGeneratePlanDraftMutation,
+  useGeneratePackagesMutation,
   useGenerateSpecDraftMutation,
+  useLinkReleaseExecutionPackageMutation,
+  useLinkReleaseWorkItemMutation,
+  useMarkPackageReadyMutation,
   usePipelineQuery,
+  useRunPackageMutation,
   useProductActionCommandMutation,
   useProductLaneQuery,
   useProductWorkItemsQuery,
@@ -20,12 +26,14 @@ import {
   useSpecsQuery,
   useSubmitPlanForApprovalMutation,
   useSubmitSpecForApprovalMutation,
+  useUnlinkReleaseExecutionPackageMutation,
+  useUnlinkReleaseWorkItemMutation,
   useWorkItemCockpitQuery,
   useWorkItemsQuery,
 } from '../../apps/web/src/shared/api/hooks';
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
 import { installProductApiMock } from './fixtures/product-api-mock';
-import { projectId, workItem } from './fixtures/product-data';
+import { actorId, executionPackage, planRevision, projectId, release, workItem } from './fixtures/product-data';
 
 type InvalidationInput = {
   predicate?: (query: { queryKey: readonly unknown[] }) => boolean;
@@ -51,6 +59,13 @@ const expectWorkItemCockpitInvalidation = (
   expect(input).toBeDefined();
   expect(input?.predicate?.({ queryKey: queryKeys.workItemCockpit('other-work-item', 'reviewer') })).toBe(false);
   expect(input?.predicate?.({ queryKey: queryKeys.productLane('requirements', { project_id: projectId }) })).toBe(false);
+};
+
+const expectDeliverySurfaceInvalidation = (invalidateSpy: ReturnType<typeof vi.spyOn<QueryClient, 'invalidateQueries'>>) => {
+  expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['product-lanes'] });
+  expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-item-cockpit'] });
+  expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['runs'] });
+  expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['review-packets'] });
 };
 
 describe('Web product API hooks', () => {
@@ -422,6 +437,145 @@ describe('Web product API hooks', () => {
     );
 
     mutation.unmount();
+    queryClient.clear();
+  });
+
+  it('invalidates delivery surfaces after package lifecycle hooks change package state', async () => {
+    const fetchMock = installProductApiMock({
+      [`POST /plan-revisions/${planRevision.id}/generate-packages`]: [],
+      [`POST /plan-revisions/${planRevision.id}/execution-packages`]: {
+        ...executionPackage,
+        id: 'package-created-cache-refresh',
+      },
+      [`POST /execution-packages/${executionPackage.id}/mark-ready`]: {
+        ...executionPackage,
+        phase: 'ready',
+        gate_state: 'not_submitted',
+        version: executionPackage.version + 1,
+      },
+      [`POST /execution-packages/${executionPackage.id}/run`]: { run_session_id: 'run-cache-refresh' },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const generatePackages = renderHook(() => useGeneratePackagesMutation(planRevision.id), { wrapper });
+    await generatePackages.result.current.mutateAsync();
+    const createPackage = renderHook(() => useCreateExecutionPackageMutation(planRevision.id), { wrapper });
+    await createPackage.result.current.mutateAsync({
+      repo_id: executionPackage.repo_id,
+      objective: executionPackage.objective,
+      owner_actor_id: executionPackage.owner_actor_id,
+      reviewer_actor_id: executionPackage.reviewer_actor_id,
+      qa_owner_actor_id: executionPackage.qa_owner_actor_id,
+      required_checks: executionPackage.required_checks,
+      required_artifact_kinds: executionPackage.required_artifact_kinds,
+      allowed_paths: executionPackage.allowed_paths,
+      forbidden_paths: executionPackage.forbidden_paths,
+    });
+    const markReady = renderHook(() => useMarkPackageReadyMutation(executionPackage.id), { wrapper });
+    await markReady.result.current.mutateAsync({ actor_id: actorId, expected_package_version: executionPackage.version });
+    const runPackage = renderHook(() => useRunPackageMutation(executionPackage.id), { wrapper });
+    await runPackage.result.current.mutateAsync({ actorId });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/plan-revisions/${planRevision.id}/generate-packages`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/plan-revisions/${planRevision.id}/execution-packages`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/execution-packages/${executionPackage.id}/mark-ready`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/execution-packages/${executionPackage.id}/run`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expectDeliverySurfaceInvalidation(invalidateSpy);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.package(executionPackage.id) });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.packageRuntimeReadiness(executionPackage.id) });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.executionPackageReplay(executionPackage.id) });
+
+    generatePackages.unmount();
+    createPackage.unmount();
+    markReady.unmount();
+    runPackage.unmount();
+    queryClient.clear();
+  });
+
+  it('invalidates release delivery surfaces after release scope links change', async () => {
+    const fetchMock = installProductApiMock({
+      [`POST /releases/${release.id}/work-items/${workItem.id}`]: {
+        release_id: release.id,
+        object_type: 'work_item',
+        object_id: workItem.id,
+        linked: true,
+      },
+      [`DELETE /releases/${release.id}/work-items/${workItem.id}`]: {
+        release_id: release.id,
+        object_type: 'work_item',
+        object_id: workItem.id,
+        linked: false,
+      },
+      [`POST /releases/${release.id}/execution-packages/${executionPackage.id}`]: {
+        release_id: release.id,
+        object_type: 'execution_package',
+        object_id: executionPackage.id,
+        linked: true,
+      },
+      [`DELETE /releases/${release.id}/execution-packages/${executionPackage.id}`]: {
+        release_id: release.id,
+        object_type: 'execution_package',
+        object_id: executionPackage.id,
+        linked: false,
+      },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const linkWorkItem = renderHook(() => useLinkReleaseWorkItemMutation(release.id), { wrapper });
+    await linkWorkItem.result.current.mutateAsync({ workItemId: workItem.id, body: { actor_id: actorId } });
+    const unlinkWorkItem = renderHook(() => useUnlinkReleaseWorkItemMutation(release.id), { wrapper });
+    await unlinkWorkItem.result.current.mutateAsync({ workItemId: workItem.id, body: { actor_id: actorId } });
+    const linkPackage = renderHook(() => useLinkReleaseExecutionPackageMutation(release.id), { wrapper });
+    await linkPackage.result.current.mutateAsync({ packageId: executionPackage.id, body: { actor_id: actorId } });
+    const unlinkPackage = renderHook(() => useUnlinkReleaseExecutionPackageMutation(release.id), { wrapper });
+    await unlinkPackage.result.current.mutateAsync({ packageId: executionPackage.id, body: { actor_id: actorId } });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/releases/${release.id}/work-items/${workItem.id}`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/releases/${release.id}/work-items/${workItem.id}`,
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/releases/${release.id}/execution-packages/${executionPackage.id}`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/releases/${release.id}/execution-packages/${executionPackage.id}`,
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.releaseCockpit(release.id) });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.releaseReplay(release.id) });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['releases'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
+    expectDeliverySurfaceInvalidation(invalidateSpy);
+
+    linkWorkItem.unmount();
+    unlinkWorkItem.unmount();
+    linkPackage.unmount();
+    unlinkPackage.unmount();
     queryClient.clear();
   });
 
