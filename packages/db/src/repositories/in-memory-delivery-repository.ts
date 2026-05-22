@@ -1179,11 +1179,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       lease === undefined ||
       record.envelope_id !== input.envelope_id ||
       record.job.worker_id !== input.worker_id ||
-      record.job.status !== 'accepted' ||
-      record.job.cancel_requested_at !== undefined ||
       record.job.expires_at <= input.now ||
       envelope.expires_at <= input.now ||
-      lease.lease.status !== 'active' ||
       record.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
       record.job.accepted_session_public_key_id !== input.key_id ||
       record.job.accepted_session_epoch !== input.accepted_session_epoch ||
@@ -1194,6 +1191,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
     if (envelope.status === 'claimed') {
       if (
+        record.job.status !== 'terminal' &&
+        lease.lease.expires_at > input.now &&
+        (lease.lease.status === 'active' || lease.lease.status === 'materialized') &&
         envelope.claim_request_id === input.claim_request_id &&
         envelope.claim_request_digest === input.request_digest &&
         envelope.claimed_worker_session_digest === input.accepted_worker_session_digest &&
@@ -1204,6 +1204,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
     }
     if (envelope.status !== 'available') {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
+    }
+    if (record.job.status !== 'accepted' || record.job.cancel_requested_at !== undefined || lease.lease.status !== 'active') {
       throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
     }
     const claimed: CodexLaunchTokenEnvelope = {
@@ -1239,7 +1242,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       record.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
       record.job.accepted_session_public_key_id !== input.accepted_session_public_key_id ||
       record.job.accepted_session_epoch !== input.accepted_session_epoch ||
-      record.job.cancel_requested_at !== undefined ||
       record.job.expires_at <= input.now ||
       leaseRecord.lease.expires_at <= input.now ||
       leaseRecord.lease.worker_id !== input.worker_id ||
@@ -1251,13 +1253,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
     }
-    if (record.job.status === 'materializing') {
+    if (record.job.status === 'materializing' || record.job.status === 'running') {
       if (
         record.job.materialization_request_id === input.materialization_request_id &&
-        record.job.materialization_request_digest === input.request_digest
+        record.job.materialization_request_digest === input.request_digest &&
+        leaseRecord.lease.status === 'materialized'
       ) {
         return this.codexRuntimeJobMaterialization(record, leaseRecord, input.now);
       }
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
+    }
+    if (record.job.cancel_requested_at !== undefined) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
     }
     if (record.job.status !== 'accepted' || leaseRecord.lease.status !== 'active') {

@@ -1457,7 +1457,7 @@ describe('codex runtime repository behavior', () => {
   it('materializes runtime jobs by launch-token hash only and replays materialization response loss until terminal', async () => {
     const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
     await acceptRuntimeJob(repository);
-    await claimRuntimeJobEnvelope(repository);
+    const claimed = await claimRuntimeJobEnvelope(repository);
 
     const materializeInput: Parameters<DeliveryRepository['materializeCodexRuntimeJob']>[0] = {
       runtime_job_id: 'runtime-job-1',
@@ -1510,6 +1510,11 @@ describe('codex runtime repository behavior', () => {
     await expect(
       repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-replay-nonce-runtime-job-1' }),
     ).resolves.toEqual(materialized);
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-replay-after-materialize-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(claimed);
 
     await expect(
       repository.materializeCodexRuntimeJob({
@@ -1531,6 +1536,16 @@ describe('codex runtime repository behavior', () => {
       name: 'DomainError',
       code: 'codex_launch_materialization_denied',
     });
+
+    await startRuntimeJob(repository);
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-replay-after-start-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(claimed);
+    await expect(
+      repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-replay-after-start-nonce-runtime-job-1' }),
+    ).resolves.toEqual(materialized);
 
     await terminalizeRuntimeJob(repository);
     await expect(

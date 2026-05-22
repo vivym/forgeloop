@@ -968,7 +968,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
         const { input, launchToken } = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls);
         await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'materialize-accept'));
-        await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'));
+        const claimed = await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'));
         const materializeInput = materializeRuntimeJobInput(input, seed, launchToken, 'materialize-valid');
 
         await expect(
@@ -986,6 +986,12 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         await expect(
           repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-valid-replay' }),
         ).resolves.toEqual(materialized);
+        await expect(
+          repository.claimCodexLaunchTokenEnvelope({
+            ...claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'),
+            nonce: 'claim-replay-after-materialize',
+          }),
+        ).resolves.toEqual(claimed);
         expect(materialized).toMatchObject({
           lease_id: input.launch_lease_id,
           materialized_at: later,
@@ -1004,6 +1010,28 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           .limit(1);
         expect(jobRow).toEqual({ status: 'materializing', materializationRequestDigest: materializeInput.request_digest });
         expect(leaseRow).toEqual({ status: 'materialized', materializationRequestHash: materializeInput.request_digest });
+
+        await repository.startCodexRuntimeJob({
+          runtime_job_id: input.runtime_job_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'start-materialization-replay',
+          nonce_timestamp: later,
+          idempotency_key: `start-${input.runtime_job_id}`,
+          request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+          runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+          now: later,
+        });
+        await expect(
+          repository.claimCodexLaunchTokenEnvelope({
+            ...claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'),
+            nonce: 'claim-replay-after-start',
+          }),
+        ).resolves.toEqual(claimed);
+        await expect(
+          repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-valid-replay-after-start' }),
+        ).resolves.toEqual(materialized);
       } finally {
         await client.pool.end();
       }
