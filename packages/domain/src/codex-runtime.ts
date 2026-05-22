@@ -706,10 +706,11 @@ const isCodexRuntimeProductSafeString = (value: string): boolean =>
 const normalizeCodexRuntimeEndpointCandidate = (value: string): string => {
   const [withoutQuery = value] = value.split(/[?#]/, 1);
   const slashIndex = withoutQuery.indexOf('/');
+  const stripHostRootDot = (host: string): string => host.replace(/\.(?=:\d{1,5}$)/, '').replace(/\.$/, '');
   if (slashIndex < 0) {
-    return withoutQuery.replace(/\.$/, '');
+    return stripHostRootDot(withoutQuery);
   }
-  return `${withoutQuery.slice(0, slashIndex).replace(/\.$/, '')}${withoutQuery.slice(slashIndex)}`;
+  return `${stripHostRootDot(withoutQuery.slice(0, slashIndex))}${withoutQuery.slice(slashIndex)}`;
 };
 
 const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {

@@ -521,6 +521,8 @@ describe('codex runtime domain contracts', () => {
     'codex.sock',
     '4f1e2d3c4f1e',
     'api.openai.com',
+    '127.0.0.1.:4555',
+    '10.0.0.5.:1234',
   ])('rejects unsafe run-execution changed file %s', (changedFile) => {
     expectDomainErrorCode(
       () =>
@@ -675,7 +677,9 @@ describe('codex runtime domain contracts', () => {
     ['href', 'localhost.'],
     ['href', 'localhost?x'],
     ['href', '127.0.0.1.'],
+    ['href', '127.0.0.1.:4555'],
     ['href', '10.0.0.5.'],
+    ['href', '10.0.0.5.:1234'],
     ['url', 'control.internal/runtime-jobs'],
     ['internal_ref', 'app-server.internal/jobs'],
     ['href', 'app-server:3845/internal'],
