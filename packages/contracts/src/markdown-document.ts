@@ -62,9 +62,8 @@ const rawStorageMarkerPattern = /(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
 const canonicalAttachmentDestinationPattern = /^attachment:\/\/([A-Za-z0-9_-]+)$/;
-const mdxEsmPattern =
-  /^\s{0,3}(?:import(?:\s+type)?(?:\s+.+\s+from\s+|\s*)["'][^"']+["'];?|export\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|\{|\*)[^\n]*)$/m;
-const mdxDirectivePattern = /(?:^\s{0,3}::+[A-Za-z][\w-]*(?:[\s{].*)?$|(?:^|[\s([{]):[A-Za-z][\w-]*(?:\[[^\]\n]*]|\{[^}\n]*}))/m;
+const mdxDirectivePattern =
+  /(?:^\s{0,3}::+[A-Za-z][\w-]*(?:\[[^\]\n]*]|\{[^}\n]*}|\s.*)?\s*$|(?:^|[\s([{]):[A-Za-z][\w-]*(?:\[[^\]\n]*]|\{[^}\n]*}))/m;
 
 export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValidationResult {
   const parsed = markdownDocumentSchema.safeParse(input);
@@ -85,7 +84,7 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
   if (htmlPattern.test(activeMarkdown)) {
     issues.push({ code: 'raw_html', message: 'Markdown must not contain raw HTML or MDX JSX.' });
   }
-  if (mdxEsmPattern.test(activeMarkdown)) {
+  if (containsMdxEsm(activeMarkdown)) {
     issues.push({ code: 'unsupported_block', message: 'Markdown must not contain MDX ESM import or export syntax.' });
   }
   if (mdxDirectivePattern.test(activeMarkdown)) {
@@ -201,6 +200,29 @@ function parseClosingFence(line: string, char: '`' | '~'): number | undefined {
   const match = new RegExp(`^ {0,3}(${escapedChar}{3,})[\\t ]*$`).exec(line);
   const fence = match?.[1];
   return fence?.length;
+}
+
+function containsMdxEsm(markdown: string): boolean {
+  for (const line of markdown.split(/\r?\n/)) {
+    const match = /^( {0,3})(\S.*)$/.exec(line);
+    const blockLine = match?.[2];
+    if (!blockLine) {
+      continue;
+    }
+    if (isMdxImportLine(blockLine) || isMdxExportLine(blockLine)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isMdxImportLine(line: string): boolean {
+  return /^import(?:\s+type)?(?:\s+[\w*{},\s]+(?:\s+from\s+["'][^"']+["'];?)?|\s*{\s*|\s*["'][^"']+["'];?)$/.test(line);
+}
+
+function isMdxExportLine(line: string): boolean {
+  return /^export\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|\{|\*)/.test(line);
 }
 
 function markdownDestinations(markdown: string): MarkdownDestination[] {

@@ -124,8 +124,11 @@ describe('MarkdownDocument validation', () => {
       'import Alert from "./Alert"',
       'export const x = 1',
       '::note',
+      '::note[Title]',
       ':::note',
+      ':::note[Title]',
       ':badge[Text]',
+      'import {\n  Alert\n} from "./Alert"',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }
@@ -135,7 +138,8 @@ describe('MarkdownDocument validation', () => {
     const result = validateMarkdownDocument({
       ...baseDocument,
       allowed_blocks: ['code_block'],
-      markdown: '```mdx\nimport Alert from "./Alert"\nexport const x = 1\n::note\n:::note\n:badge[Text]\n```',
+      markdown:
+        '```mdx\nimport Alert from "./Alert"\nimport {\n  Alert\n} from "./Alert"\nexport const x = 1\n::note\n::note[Title]\n:::note\n:::note[Title]\n:badge[Text]\n```',
     });
 
     expect(result.ok).toBe(true);
