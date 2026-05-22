@@ -127,6 +127,8 @@ describe('MarkdownDocument validation', () => {
       'Hello{foo}',
       'a{props.children}b',
       'x={`foo`}',
+      '{fn({})}',
+      '{\nfoo\n}',
       '[bad](javascript:alert(1))',
       '![bad](data:image/png;base64,aaaa)',
       '![bad](blob:https://example.com/1)',
@@ -135,6 +137,9 @@ describe('MarkdownDocument validation', () => {
       '![bad][img]\n\n[img]: data:image/png;base64,aaaa',
       'raw https://bucket.example.com/private/key?signature=raw',
       '<https://bucket.example.com/private/key?signature=raw>',
+      '<javascript:alert(1)>',
+      '<file:/etc/passwd>',
+      '<mailto:test@example.com>',
       '[encoded](java%73cript:alert(1))',
       '[raw](s3://bucket/private.txt)',
       '![raw](gs://bucket/private.png)',
@@ -188,7 +193,7 @@ describe('MarkdownDocument validation', () => {
       ...baseDocument,
       allowed_blocks: ['code_block'],
       markdown:
-        '```html\n<iframe src="https://example.com"></iframe>\n<>fragment</>\n<></>\n<!-- raw html comment -->\n<!doctype html>\n<?xml version="1.0"?>\n<svg:path />\n<Foo_Bar />\n<_Private />\n<$Icon />\n{1 + 1}\n{/* comment */}\n{foo}\n{props.children}\n{ready ? yes : no}\nHello{foo}\na{props.children}b\nx={`foo`}\nhttps://bucket.example.com/private/key?signature=raw\n```',
+        '```html\n<iframe src="https://example.com"></iframe>\n<>fragment</>\n<></>\n<!-- raw html comment -->\n<!doctype html>\n<?xml version="1.0"?>\n<svg:path />\n<Foo_Bar />\n<_Private />\n<$Icon />\n{1 + 1}\n{/* comment */}\n{foo}\n{props.children}\n{ready ? yes : no}\nHello{foo}\na{props.children}b\nx={`foo`}\n{fn({})}\n{\nfoo\n}\nhttps://bucket.example.com/private/key?signature=raw\n```',
     });
 
     expect(result.ok).toBe(true);

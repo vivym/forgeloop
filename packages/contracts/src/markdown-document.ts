@@ -54,11 +54,10 @@ const htmlDeclarationPattern = /<![A-Za-z][^>]*>/;
 const htmlProcessingInstructionPattern = /<\?[\s\S]*?\?>/;
 const mdxFragmentPattern = /<>[\s\S]*?<\/>/;
 const htmlTagPattern = /<\/?[$_A-Za-z][$_A-Za-z0-9.-]*(?::[$_A-Za-z][$_A-Za-z0-9.-]*)?(?=[\s/>])[^>]*>/;
-const mdxExpressionPattern = /\{[^{}\n]+}/;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
-const angleDestinationPattern = /<([A-Za-z][A-Za-z0-9+.-]*:\/\/[^>\s]+)>/gi;
+const angleDestinationPattern = /<([A-Za-z][A-Za-z0-9+.-]*:[^>\s]+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+)/gim;
 const bareSchemePattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)[^\s<>)]+)/gim;
 const bareAttachmentPattern = /(?:^|[\s(])(attachment:\/\/[A-Za-z0-9_-]+(?:[/?#][^\s<>)]+)?)/gim;
@@ -214,8 +213,40 @@ function containsRawHtmlOrMdx(markdown: string): boolean {
     htmlProcessingInstructionPattern.test(markdown) ||
     mdxFragmentPattern.test(markdown) ||
     htmlTagPattern.test(markdown) ||
-    mdxExpressionPattern.test(markdown)
+    containsMdxExpression(markdown)
   );
+}
+
+function containsMdxExpression(markdown: string): boolean {
+  for (let index = 0; index < markdown.length; index += 1) {
+    if (markdown[index] !== '{') {
+      continue;
+    }
+
+    const endIndex = balancedBraceEnd(markdown, index);
+    if (endIndex !== undefined && markdown.slice(index + 1, endIndex).trim().length > 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function balancedBraceEnd(markdown: string, startIndex: number): number | undefined {
+  let depth = 0;
+  for (let index = startIndex; index < markdown.length; index += 1) {
+    const character = markdown[index];
+    if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function containsMdxEsm(markdown: string): boolean {
