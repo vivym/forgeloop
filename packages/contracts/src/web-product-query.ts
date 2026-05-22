@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { objectRefSchema } from './product-object-ref.js';
+
 const isoDateTimeSchema = z.string().datetime();
 const queryBooleanSchema = z.preprocess((value) => {
   if (typeof value === 'boolean') {
@@ -19,13 +21,7 @@ const queryBooleanSchema = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
-export const productObjectRefSchema = z
-  .object({
-    type: z.enum(['work_item', 'spec', 'plan', 'execution_package', 'run_session', 'review_packet', 'release']),
-    id: z.string().min(1),
-    title: z.string().min(1).optional(),
-  })
-  .strict();
+export const productObjectRefSchema = objectRefSchema;
 export type ProductObjectRef = z.infer<typeof productObjectRefSchema>;
 
 export const productListQuerySchema = z
@@ -73,7 +69,6 @@ export const productListItemSchema = z
     resolution: z.string().min(1).optional(),
     risk: z.string().min(1).optional(),
     driver_actor_id: z.string().min(1).optional(),
-    owner_actor_id: z.string().min(1).optional(),
     reviewer_actor_id: z.string().min(1).optional(),
     qa_owner_actor_id: z.string().min(1).optional(),
     release_owner_actor_id: z.string().min(1).optional(),
