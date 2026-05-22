@@ -521,11 +521,14 @@ describe('codex runtime domain contracts', () => {
       { apiKey: 'sk-test' },
       { socket_path: 'artifact://ok' },
       { socketPath: 'artifact://ok' },
+      { socket_ref: 'artifact://ok' },
       { container_name: 'artifact://ok' },
       { containerName: 'artifact://ok' },
+      { container_ref: 'artifact://ok' },
       { raw_context: { project_id: 'project-1' } },
       { raw_output: 'public text' },
       { rawPatch: 'public text' },
+      { 'raw-patch': 'public text' },
       { changed_file: 'packages/domain/src/codex-runtime.ts' },
       { changed_file_windows: 'packages\\domain\\src\\codex-runtime.ts' },
       { spaced_file: 'foo bar/baz.txt' },
@@ -601,6 +604,7 @@ describe('codex runtime domain contracts', () => {
     ['href', 'control.internal'],
     ['url', 'app-server.internal'],
     ['internal_ref', 'api.openai.com'],
+    ['host', 'api.openai.com'],
     ['internal_ref', '10.0.0.5'],
     ['href', '192.168.1.10'],
     ['url', '172.16.0.2'],
@@ -613,6 +617,28 @@ describe('codex runtime domain contracts', () => {
   ])('rejects host-like runtime endpoint string in %s', (field, value) => {
     expectDomainErrorCode(
       () => assertCodexRuntimePublicSafeValue({ [field]: value }, 'runtime result'),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it.each([
+    'Generated draft; local app server was http://127.0.0.1:4555/internal',
+    'Worker endpoint redis.default.svc returned an error',
+    'Container socket unix:/tmp/codex.sock was unavailable',
+  ])('rejects endpoint leakage embedded in display text %#', (publicSummary) => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'spec_draft',
+          prompt_version: 'generation-prompt-v1',
+          output_schema_version: 'spec-draft-output.v1',
+          generated_payload: {
+            title: 'Public spec title',
+          },
+          generated_payload_digest: digestA,
+          generation_artifacts: [],
+          public_summary: publicSummary,
+        }),
       'codex_docker_runtime_evidence_unsafe',
     );
   });

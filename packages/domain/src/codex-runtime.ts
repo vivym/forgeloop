@@ -470,7 +470,7 @@ const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
 const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[_-]?key|token|secret|auth)[A-Za-z0-9_.-]*\b)/i;
 const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
 const unsafeRuntimePublicKeyPattern =
-  /(api[_-]?key|token|secret|auth(?:orization)?(?:_header)?|password|endpoint|socket(?:_path)?|container(?:_id|_name)?|workspace_path|source_repo_path)$/i;
+  /(api[_-]?key|token|secret|auth(?:orization)?(?:_header)?|password|endpoint|socket(?:_path|_ref)?|container(?:_id|_name|_ref)?|workspace_path|source_repo_path)$/i;
 const rawRuntimePublicFieldPattern = /^raw(?:_|[A-Z]|$)/;
 
 const normalizeRuntimePublicKey = (key: string): string =>
@@ -693,7 +693,9 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
   );
 };
 
-const isBareDnsHostString = (value: string): boolean => /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(value);
+const isBareDnsHostString = (value: string): boolean => /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(value);
+const displayUnsafeTokenPattern =
+  /\b(?:https?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:(?!\s)|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|[a-z0-9-]+:\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
 
 const isCodexRuntimeLocalPathString = (value: string): boolean => {
   if (isCodexRuntimeProductSafeString(value)) {
@@ -740,10 +742,16 @@ const isRawRuntimePublicString = (
   if (isCodexRuntimeEndpointOrContainerString(value)) {
     return true;
   }
+  if (isBareDnsHostString(value)) {
+    return true;
+  }
   if (options.allowRepoRelativePath) {
     return !isSafeCodexRuntimeRepoRelativePath(value);
   }
-  return options.allowDisplayText === true ? false : isCodexRuntimeLocalPathString(value);
+  if (options.allowDisplayText === true) {
+    return displayUnsafeTokenPattern.test(value);
+  }
+  return isCodexRuntimeLocalPathString(value);
 };
 
 const assertSha256Digest = (value: unknown, label: string, error: (message: string) => DomainError = invalidProfile): void => {
@@ -832,11 +840,6 @@ const isCodexRuntimeChangedFilePath = (path: readonly string[]): boolean => {
   return path[path.length - 2] === 'changed_files';
 };
 
-const isCodexRuntimeAddressLikePath = (path: readonly string[]): boolean => {
-  const key = normalizeRuntimePublicKey(path[path.length - 1] ?? '');
-  return key === 'href' || key === 'url' || key.endsWith('_ref') || key.endsWith('_url');
-};
-
 const assertCodexRuntimePublicSafeRecord = (
   value: unknown,
   label: string,
@@ -853,16 +856,6 @@ const assertCodexRuntimePublicSafeRecord = (
   ) {
     if (typeof value === 'number' && !Number.isFinite(value)) {
       throw unsafeCodexRuntimePublicValue(`Codex runtime ${label} must be JSON-compatible.`, { field: path.join('.') });
-    }
-    if (
-      typeof value === 'string' &&
-      isCodexRuntimeAddressLikePath(path) &&
-      isBareDnsHostString(value)
-    ) {
-      throw unsafeCodexRuntimePublicValue(
-        'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
-        { field: path.join('.') },
-      );
     }
     if (
       typeof value === 'string' &&
@@ -883,7 +876,7 @@ const assertCodexRuntimePublicSafeRecord = (
       for (const [key, entry] of Object.entries(value)) {
         const entryPath = [...path, key];
         const normalizedKey = normalizeRuntimePublicKey(key);
-        if (unsafeRuntimePublicKeyPattern.test(normalizedKey) || rawRuntimePublicFieldPattern.test(key)) {
+        if (unsafeRuntimePublicKeyPattern.test(normalizedKey) || rawRuntimePublicFieldPattern.test(normalizedKey)) {
           throw unsafeCodexRuntimePublicValue(
             'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
             { field: entryPath.join('.') },
