@@ -1385,7 +1385,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       return clone(record.job);
     }
     const leaseRecord = this.codexLaunchLeases.get(record.job.launch_lease_id);
-    if (record.job.status === 'queued') {
+    const envelope = this.codexLaunchTokenEnvelopes.get(record.envelope_id);
+    const terminalizeImmediately =
+      record.job.status === 'queued' ||
+      (record.job.status === 'accepted' && envelope !== undefined && envelope.status === 'available');
+    if (terminalizeImmediately) {
       const cancelled: CodexRuntimeJobPrivateRecord = {
         ...record,
         job: {
@@ -1412,7 +1416,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         this.codexLaunchLeases.set(leaseRecord.lease.id, clone(revoked));
         this.releaseCodexRuntimeWorkerSlot(leaseRecord);
       }
-      const envelope = this.codexLaunchTokenEnvelopes.get(record.envelope_id);
       if (envelope !== undefined && envelope.status === 'available') {
         this.codexLaunchTokenEnvelopes.set(envelope.id, { ...clone(envelope), status: 'revoked' });
       }
@@ -1466,6 +1469,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
     if (leaseRecord.lease.status !== 'active' && leaseRecord.lease.status !== 'materialized') {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (record.job.cancel_requested_at !== undefined && input.terminal_status !== 'cancelled') {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
     const terminalResultJson =
@@ -1840,6 +1846,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       }
     }
     for (const [id, record] of this.codexLaunchLeases.entries()) {
+      if (this.codexLaunchLeaseBelongsToRuntimeJob(record)) {
+        continue;
+      }
       const recoverableLease =
         record.lease.status === 'active' ||
         (record.lease.status === 'materialized' && record.materialized_at !== undefined && record.terminal_reason_code === undefined);
@@ -1925,6 +1934,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   private codexLaunchLeaseHasOwningAutomationAction(record: CodexLaunchLeasePrivateRecord): boolean {
     return record.action_type !== undefined || record.lease.target.target_type === 'automation_action_run';
+  }
+
+  private codexLaunchLeaseBelongsToRuntimeJob(record: CodexLaunchLeasePrivateRecord): boolean {
+    return (
+      record.lease_request_id.startsWith('runtime-job:') ||
+      [...this.codexRuntimeJobs.values()].some((runtimeJobRecord) => runtimeJobRecord.job.launch_lease_id === record.lease.id)
+    );
   }
 
   private markCodexRecoveredRunSession(runWorkerLeaseId: string | undefined, reasonCode: string, now: string): string | undefined {

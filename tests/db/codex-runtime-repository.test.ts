@@ -9,6 +9,7 @@ import {
   type CodexCredentialBindingVersion,
   type CodexDockerNetworkProxyConfig,
   type CodexLaunchLease,
+  type CodexLaunchTokenEnvelope,
   type ExecutionPackage,
   type CodexLaunchLeaseWithToken,
   type CodexLaunchTarget,
@@ -673,6 +674,9 @@ const terminalizeRuntimeJob = (
 
 const runtimeLaunchLeases = (repository: DeliveryRepository): Map<string, { lease: CodexLaunchLease }> =>
   (repository as unknown as { codexLaunchLeases: Map<string, { lease: CodexLaunchLease }> }).codexLaunchLeases;
+
+const runtimeTokenEnvelopes = (repository: DeliveryRepository): Map<string, CodexLaunchTokenEnvelope> =>
+  (repository as unknown as { codexLaunchTokenEnvelopes: Map<string, CodexLaunchTokenEnvelope> }).codexLaunchTokenEnvelopes;
 
 const claimGenerationAction = (
   repository: DeliveryRepository,
@@ -1735,7 +1739,7 @@ describe('codex runtime repository behavior', () => {
     ).resolves.toMatchObject<CodexLaunchLease>({ id: 'runtime-launch-lease-1', status: 'revoked' });
   });
 
-  it('records durable monotonic cancel requests after accept, materialize, or start', async () => {
+  it('terminalizes accepted unclaimed cancels and records durable monotonic cancel requests after claim, materialize, or start', async () => {
     const accepted = await createRuntimeJobWithCapturedToken();
     await acceptRuntimeJob(accepted.repository);
     const acceptedCancel = await accepted.repository.cancelCodexRuntimeJob({
@@ -1746,11 +1750,24 @@ describe('codex runtime repository behavior', () => {
       now: later,
     });
     expect(acceptedCancel).toMatchObject({
-      status: 'accepted',
+      status: 'terminal',
+      terminal_status: 'cancelled',
+      terminal_reason_code: 'user_cancelled',
       cancel_requested_at: later,
       cancel_idempotency_key: 'cancel-accepted',
       cancel_request_digest: tokenHash('cancel-accepted-request'),
     });
+    await expect(
+      accepted.repository.getCodexLaunchLeaseStatus({
+        launch_lease_id: 'runtime-launch-lease-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'lease-status-accepted-cancel-nonce',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).resolves.toMatchObject<CodexLaunchLease>({ id: 'runtime-launch-lease-1', status: 'revoked' });
+    expect(runtimeTokenEnvelopes(accepted.repository).get('runtime-envelope-1')).toMatchObject({ status: 'revoked' });
     await expect(
       accepted.repository.cancelCodexRuntimeJob({
         runtime_job_id: 'runtime-job-1',
@@ -1760,6 +1777,52 @@ describe('codex runtime repository behavior', () => {
         now: '2026-05-20T00:02:00.000Z',
       }),
     ).resolves.toEqual(acceptedCancel);
+
+    const acceptedClaimed = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+        launch_lease_id: 'runtime-launch-lease-accepted-claimed-cancel',
+        envelope_id: 'runtime-envelope-accepted-claimed-cancel',
+        job_request_id: 'runtime-job-request-accepted-claimed-cancel',
+        target: generationTarget({ target_id: 'generation-accepted-claimed-cancel' }),
+      },
+      { worker_id: 'worker-accepted-claimed-cancel', session_token: 'session-token-accepted-claimed-cancel' },
+    );
+    await acceptedClaimed.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+      worker_id: 'worker-accepted-claimed-cancel',
+      worker_session_token: 'session-token-accepted-claimed-cancel',
+      nonce: 'accept-accepted-claimed-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-accepted-claimed-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-accepted-claimed-cancel',
+      request_digest: tokenHash('accept-accepted-claimed-cancel-request'),
+      now: later,
+    });
+    await acceptedClaimed.repository.claimCodexLaunchTokenEnvelope({
+      runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+      envelope_id: 'runtime-envelope-accepted-claimed-cancel',
+      worker_id: 'worker-accepted-claimed-cancel',
+      worker_session_token: 'session-token-accepted-claimed-cancel',
+      nonce: 'claim-accepted-claimed-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-accepted-claimed-cancel'),
+      key_id: 'session-key-1',
+      claim_request_id: 'claim-accepted-claimed-cancel',
+      request_digest: tokenHash('claim-accepted-claimed-cancel-request'),
+      now: later,
+    });
+    await expect(
+      acceptedClaimed.repository.cancelCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+        reason_code: 'user_cancelled',
+        idempotency_key: 'cancel-accepted-claimed',
+        request_digest: tokenHash('cancel-accepted-claimed-request'),
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'accepted', cancel_idempotency_key: 'cancel-accepted-claimed' });
 
     const materializing = await createRuntimeJobWithCapturedToken(
       {
@@ -1897,6 +1960,40 @@ describe('codex runtime repository behavior', () => {
         now: later,
       }),
     ).resolves.toMatchObject({ status: 'running', cancel_idempotency_key: 'cancel-running' });
+    await expect(
+      running.repository.terminalizeCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-running-cancel',
+        launch_lease_id: 'runtime-launch-lease-running-cancel',
+        worker_id: 'worker-running-cancel',
+        worker_session_token: 'session-token-running-cancel',
+        nonce: 'terminal-running-cancel-success-race-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'succeeded',
+        reason_code: 'completed_after_cancel',
+        terminal_result_json: validGenerationTerminalResult('completed-after-cancel'),
+        idempotency_key: 'terminal-running-cancel-success-race',
+        request_digest: tokenHash('terminal-running-cancel-success-race-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+    await expect(
+      running.repository.terminalizeCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-running-cancel',
+        launch_lease_id: 'runtime-launch-lease-running-cancel',
+        worker_id: 'worker-running-cancel',
+        worker_session_token: 'session-token-running-cancel',
+        nonce: 'terminal-running-cancelled-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'cancelled',
+        reason_code: 'user_cancelled',
+        idempotency_key: 'terminal-running-cancelled',
+        request_digest: tokenHash('terminal-running-cancelled-request'),
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'cancelled' });
   });
 
   it('recovers stale runtime jobs and associated leases without writing product state', async () => {
@@ -1929,6 +2026,38 @@ describe('codex runtime repository behavior', () => {
         claim_token: 'runtime-action-claim-token-1',
       }),
     ).resolves.toMatchObject({ id: 'generation-1', status: 'running' });
+  });
+
+  it('keeps runtime job launch leases out of legacy stale worker recovery', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await acceptRuntimeJob(repository);
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'legacy_stale_worker',
+      }),
+    ).resolves.toEqual({ recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] });
+    await expect(
+      repository.getClaimedAutomationActionRun({
+        id: 'generation-1',
+        claim_token: 'runtime-action-claim-token-1',
+      }),
+    ).resolves.toMatchObject({ id: 'generation-1', status: 'running' });
+    await expect(
+      repository.getCodexLaunchLeaseStatus({
+        launch_lease_id: 'runtime-launch-lease-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'lease-status-after-legacy-recovery-nonce',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).resolves.toMatchObject<CodexLaunchLease>({ id: 'runtime-launch-lease-1', status: 'active' });
   });
 
   it('returns only public-safe launch lease status for runtime jobs', async () => {

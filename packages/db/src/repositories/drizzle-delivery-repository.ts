@@ -1725,7 +1725,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (bundle.job.cancel_requested_at !== undefined) {
       return runtimeJobFromDbRecord(bundle.job);
     }
-    if (bundle.job.status === 'queued') {
+    const terminalizeImmediately =
+      bundle.job.status === 'queued' ||
+      (bundle.job.status === 'accepted' && bundle.envelope !== undefined && bundle.envelope.status === 'available');
+    if (terminalizeImmediately) {
       const [jobRow] = await this.db
         .update(codex_runtime_jobs)
         .set({
@@ -1740,7 +1743,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           terminalReasonCode: input.reason_code,
           updatedAt: input.now,
         } as never)
-        .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), eq(codex_runtime_jobs.status, 'queued')))
+        .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), eq(codex_runtime_jobs.status, bundle.job.status)))
         .returning();
       if (jobRow === undefined) {
         throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
@@ -1813,6 +1816,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
     if (bundle.lease.status !== 'active' && bundle.lease.status !== 'materialized') {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (bundle.job.cancel_requested_at !== undefined && input.terminal_status !== 'cancelled') {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
     const terminalResultJson =
@@ -2896,6 +2902,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .where(
           and(
             inArray(codex_launch_leases.workerId, staleWorkerIds),
+            sql`${codex_launch_leases.leaseRequestId} not like 'runtime-job:%'`,
             or(
               eq(codex_launch_leases.status, 'active'),
               and(

@@ -14,6 +14,7 @@ import {
   type CodexRuntimeProfileRevision,
 } from '../../packages/domain/src/index';
 import {
+  automation_action_runs,
   codex_credential_bindings,
   assertResettableDatabaseUrl,
   codex_credential_binding_versions,
@@ -807,6 +808,147 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         await expectWorkerLeaseCount(firstClient, seed.workerId, 0);
       } finally {
         await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('terminalizes accepted unclaimed cancels and rejects success terminals after durable cancel', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const accepted = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls);
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(accepted.input, seed, 'accepted-cancel'));
+
+        await expect(
+          repository.cancelCodexRuntimeJob({
+            runtime_job_id: accepted.input.runtime_job_id,
+            reason_code: 'user_cancelled',
+            idempotency_key: `cancel-${accepted.input.runtime_job_id}`,
+            request_digest: tokenHash(`cancel-request-${accepted.input.runtime_job_id}`),
+            now: later,
+          }),
+        ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'cancelled' });
+        const [acceptedJobRow] = await client.db
+          .select({ status: codex_runtime_jobs.status, terminalStatus: codex_runtime_jobs.terminalStatus })
+          .from(codex_runtime_jobs)
+          .where(eq(codex_runtime_jobs.id, accepted.input.runtime_job_id))
+          .limit(1);
+        const [acceptedLeaseRow] = await client.db
+          .select({ status: codex_launch_leases.status })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, accepted.input.launch_lease_id))
+          .limit(1);
+        const [acceptedEnvelopeRow] = await client.db
+          .select({ status: codex_launch_token_envelopes.status })
+          .from(codex_launch_token_envelopes)
+          .where(eq(codex_launch_token_envelopes.id, accepted.input.envelope_id))
+          .limit(1);
+        expect(acceptedJobRow).toEqual({ status: 'terminal', terminalStatus: 'cancelled' });
+        expect(acceptedLeaseRow).toEqual({ status: 'revoked' });
+        expect(acceptedEnvelopeRow).toEqual({ status: 'revoked' });
+
+        const running = await createRuntimeJobWithCapturedToken(
+          repository,
+          seed,
+          sealerCalls,
+          {
+            runtime_job_id: randomUUID(),
+            launch_lease_id: randomUUID(),
+            envelope_id: randomUUID(),
+            job_request_id: `runtime-job-request-${randomUUID()}`,
+            launch_attempt: 2,
+          },
+        );
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(running.input, seed, 'running-cancel-accept'));
+        await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(running.input, seed, 'running-cancel-claim'));
+        await repository.materializeCodexRuntimeJob(materializeRuntimeJobInput(running.input, seed, running.launchToken, 'running-cancel-materialize'));
+        await repository.startCodexRuntimeJob({
+          runtime_job_id: running.input.runtime_job_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'start-running-cancel',
+          nonce_timestamp: later,
+          idempotency_key: `start-${running.input.runtime_job_id}`,
+          request_digest: tokenHash(`start-request-${running.input.runtime_job_id}`),
+          runtime_evidence_digest: tokenHash(`runtime-evidence-${running.input.runtime_job_id}`),
+          now: later,
+        });
+        await repository.cancelCodexRuntimeJob({
+          runtime_job_id: running.input.runtime_job_id,
+          reason_code: 'user_cancelled',
+          idempotency_key: `cancel-${running.input.runtime_job_id}`,
+          request_digest: tokenHash(`cancel-request-${running.input.runtime_job_id}`),
+          now: later,
+        });
+        await expect(
+          repository.terminalizeCodexRuntimeJob({
+            runtime_job_id: running.input.runtime_job_id,
+            launch_lease_id: running.input.launch_lease_id,
+            worker_id: seed.workerId,
+            worker_session_token: seed.sessionToken,
+            nonce: 'terminal-running-cancel-success-race',
+            nonce_timestamp: later,
+            terminal_status: 'succeeded',
+            reason_code: 'completed_after_cancel',
+            terminal_result_json: {
+              task_kind: 'spec_draft',
+              prompt_version: 'codex-generation-test-v1',
+              output_schema_version: 'spec-draft-test-v1',
+              generated_payload: { title: 'Generated spec' },
+              generated_payload_digest: tokenHash('generated-spec-after-cancel'),
+              generation_artifacts: [],
+              public_summary: 'completed after cancel',
+            },
+            idempotency_key: `terminal-success-after-cancel-${running.input.runtime_job_id}`,
+            request_digest: tokenHash(`terminal-success-after-cancel-request-${running.input.runtime_job_id}`),
+            now: later,
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('keeps runtime job launch leases out of legacy stale worker recovery', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input } = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls, {
+          expires_at: '2026-05-20T00:30:00.000Z',
+        });
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'legacy-recovery-skip'));
+
+        await expect(
+          repository.recoverStaleCodexWorkerLeases({
+            stale_before: later,
+            now: later,
+            worker_id: seed.workerId,
+            reason_code: 'legacy_stale_worker',
+          }),
+        ).resolves.toEqual({ recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] });
+        const [leaseRow] = await client.db
+          .select({ status: codex_launch_leases.status })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, input.launch_lease_id))
+          .limit(1);
+        const [actionRow] = await client.db
+          .select({ status: automation_action_runs.status })
+          .from(automation_action_runs)
+          .where(eq(automation_action_runs.id, seed.generationAction.id))
+          .limit(1);
+        expect(leaseRow).toEqual({ status: 'active' });
+        expect(actionRow).toEqual({ status: 'running' });
+      } finally {
+        await client.pool.end();
       }
     });
 
