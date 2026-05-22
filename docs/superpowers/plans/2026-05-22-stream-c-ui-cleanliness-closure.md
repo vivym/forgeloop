@@ -224,7 +224,7 @@ In `tests/web/a11y-gates.test.tsx`, replace the old `--fl-color-*` token asserti
 ```ts
 function cssTokenMap(css: string) {
   return Object.fromEntries(
-    [...css.matchAll(/(--(?:color|shadow|radius|font|text|spacing|z|duration|ease)-[\w-]+):\s*([^;]+);/g)].map((match) => [
+    [...css.matchAll(/(--(?:color|shadow|radius|font|text|spacing|z|transition-duration|ease)-[\w-]+):\s*([^;]+);/g)].map((match) => [
       match[1],
       match[2].trim(),
     ]),
@@ -238,14 +238,14 @@ Assert:
 expect(tokens['--color-background']).toBe('#f6f8fb');
 expect(tokens['--color-surface']).toBe('#ffffff');
 expect(tokens['--color-primary']).toBe('#2563eb');
-expect(tokens['--z-sticky']).toBe('10');
-expect(tokens['--z-overlay']).toBe('40');
-expect(tokens['--z-drawer']).toBe('50');
-expect(tokens['--z-modal']).toBe('60');
-expect(tokens['--z-toast']).toBe('70');
-expect(tokens['--duration-fast']).toBe('120ms');
-expect(tokens['--duration-base']).toBe('180ms');
-expect(tokens['--duration-slow']).toBe('260ms');
+expect(tokens['--z-index-sticky']).toBe('10');
+expect(tokens['--z-index-overlay']).toBe('40');
+expect(tokens['--z-index-drawer']).toBe('50');
+expect(tokens['--z-index-modal']).toBe('60');
+expect(tokens['--z-index-toast']).toBe('70');
+expect(tokens['--transition-duration-fast']).toBe('120ms');
+expect(tokens['--transition-duration-base']).toBe('180ms');
+expect(tokens['--transition-duration-slow']).toBe('260ms');
 expect(tokens['--ease-standard']).toBe('cubic-bezier(0.2, 0, 0, 1)');
 expect(tokens['--ease-out']).toBe('cubic-bezier(0, 0, 0.2, 1)');
 expect(Object.keys(tokens).some((key) => key.includes('-fl-'))).toBe(false);
@@ -308,14 +308,14 @@ Modify the top of `apps/web/src/shared/design-system/theme/css-variables.css` so
   --shadow-subtle: 0 1px 2px rgb(15 23 42 / 0.06);
   --shadow-elevated: 0 8px 24px rgb(15 23 42 / 0.08);
   --shadow-overlay: 0 18px 48px rgb(15 23 42 / 0.14);
-  --z-sticky: 10;
-  --z-overlay: 40;
-  --z-drawer: 50;
-  --z-modal: 60;
-  --z-toast: 70;
-  --duration-fast: 120ms;
-  --duration-base: 180ms;
-  --duration-slow: 260ms;
+  --z-index-sticky: 10;
+  --z-index-overlay: 40;
+  --z-index-drawer: 50;
+  --z-index-modal: 60;
+  --z-index-toast: 70;
+  --transition-duration-fast: 120ms;
+  --transition-duration-base: 180ms;
+  --transition-duration-slow: 260ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
 }

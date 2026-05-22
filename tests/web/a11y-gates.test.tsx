@@ -88,16 +88,36 @@ describe('web accessibility gates', () => {
     const css = readFileSync('apps/web/src/shared/design-system/theme/css-variables.css', 'utf8');
     const tokens = cssTokenMap(css);
 
-    expect(contrast(tokens['--fl-color-text-primary'], tokens['--fl-color-background'])).toBeGreaterThanOrEqual(7);
-    expect(contrast(tokens['--fl-color-text-secondary'], tokens['--fl-color-surface'])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast('#ffffff', tokens['--fl-color-primary'])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(tokens['--fl-color-danger'], tokens['--fl-color-danger-soft'])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(tokens['--fl-color-warning'], tokens['--fl-color-warning-soft'])).toBeGreaterThanOrEqual(4.5);
+    expect(tokens['--color-background']).toBe('#f6f8fb');
+    expect(tokens['--color-surface']).toBe('#ffffff');
+    expect(tokens['--color-primary']).toBe('#2563eb');
+    expect(tokens['--z-index-sticky']).toBe('10');
+    expect(tokens['--z-index-overlay']).toBe('40');
+    expect(tokens['--z-index-drawer']).toBe('50');
+    expect(tokens['--z-index-modal']).toBe('60');
+    expect(tokens['--z-index-toast']).toBe('70');
+    expect(tokens['--transition-duration-fast']).toBe('120ms');
+    expect(tokens['--transition-duration-base']).toBe('180ms');
+    expect(tokens['--transition-duration-slow']).toBe('260ms');
+    expect(tokens['--ease-standard']).toBe('cubic-bezier(0.2, 0, 0, 1)');
+    expect(tokens['--ease-out']).toBe('cubic-bezier(0, 0, 0.2, 1)');
+    expect(Object.keys(tokens).some((key) => key.includes('-fl-'))).toBe(false);
+    expect(css).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(contrast(tokens['--color-text-primary'], tokens['--color-background'])).toBeGreaterThanOrEqual(7);
+    expect(contrast(tokens['--color-text-secondary'], tokens['--color-surface'])).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#ffffff', tokens['--color-primary'])).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(tokens['--color-danger'], tokens['--color-danger-soft'])).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(tokens['--color-warning'], tokens['--color-warning-soft'])).toBeGreaterThanOrEqual(4.5);
   });
 });
 
 function cssTokenMap(css: string) {
-  return Object.fromEntries([...css.matchAll(/(--fl-[\w-]+):\s*(#[0-9a-fA-F]{6})/g)].map((match) => [match[1], match[2]]));
+  return Object.fromEntries(
+    [...css.matchAll(/(--(?:color|shadow|radius|font|text|spacing|z|transition-duration|ease)-[\w-]+):\s*([^;]+);/g)].map((match) => [
+      match[1],
+      match[2].trim(),
+    ]),
+  );
 }
 
 function contrast(foreground: string, background: string) {
