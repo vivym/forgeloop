@@ -672,6 +672,8 @@ describe('codex runtime domain contracts', () => {
     'Output at file:/tmp/codex.log before cleanup',
     'Local app server was [::1]:4555/internal',
     'Worker endpoint fe80::1 failed',
+    'Worker endpoint [fe80::1%lo0]:8080/path failed',
+    'Worker endpoint fe80::1%lo0 failed',
     'Worker endpoint 2130706433 failed',
     'Container 4f1e2d3c4f1e failed',
     'Generated draft; local app server was http://127.0.0.1:4555/internal',

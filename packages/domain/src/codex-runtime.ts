@@ -756,8 +756,8 @@ const isBareDnsHostString = (value: string): boolean => {
 const displayUnsafeEndpointTokenPattern =
   /\b(?:https?:\/\/|(?:https?|wss?|tcp|ssh|redis|postgres(?:ql)?|mysql|file):\S+|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|(?:app-server|control-plane|redis|postgres|mysql):\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
 const displayBareDnsHostTokenPattern = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi;
-const displayBracketedIpv6TokenPattern = /\[[0-9a-f:.%]+\](?::\d{1,5})?(?:\/\S*)?/gi;
-const displayIpv6TokenPattern = /\b(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.%]+(?:\/\S*)?/gi;
+const displayBracketedIpv6TokenPattern = /\[[0-9a-f:.]+(?:%[A-Za-z0-9_.-]+)?\](?::\d{1,5})?(?:\/\S*)?/gi;
+const displayIpv6TokenPattern = /\b(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.]+(?:%[A-Za-z0-9_.-]+)?(?:\/\S*)?/gi;
 const displayLegacyIpv4TokenPattern = /\b(?:0x[0-9a-f]{7,8}|0[0-7]{8,11}|\d{8,10}|(?:\d{1,3}\.){1,3}\d{1,3})\b/gi;
 const displayHexRuntimeIdTokenPattern = /\b[a-f0-9]{12,64}\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
