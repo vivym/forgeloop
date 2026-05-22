@@ -135,6 +135,8 @@ describe('MarkdownDocument validation', () => {
       'import\nAlert from "./Alert"',
       'import /*x*/ Alert from "./Alert"',
       'export /*x*/ const Alert = 1',
+      'export async function Alert() {}',
+      'export /*x*/ async function Alert() {}',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }
@@ -145,7 +147,7 @@ describe('MarkdownDocument validation', () => {
       ...baseDocument,
       allowed_blocks: ['code_block'],
       markdown:
-        '```mdx\nimport Alert from "./Alert"\nimport {\n  Alert\n} from "./Alert"\nimport\nAlert from "./Alert"\nimport /*x*/ Alert from "./Alert"\nexport const x = 1\nexport /*x*/ const Alert = 1\n::note\n::note[Title]\n::note[Title]{#id}\n:::note\n:::note[Title]\n:::note[Title]{#id}\n:badge\n:badge[Text]\n```',
+        '```mdx\nimport Alert from "./Alert"\nimport {\n  Alert\n} from "./Alert"\nimport\nAlert from "./Alert"\nimport /*x*/ Alert from "./Alert"\nexport const x = 1\nexport /*x*/ const Alert = 1\nexport async function Alert() {}\nexport /*x*/ async function Alert() {}\n::note\n::note[Title]\n::note[Title]{#id}\n:::note\n:::note[Title]\n:::note[Title]{#id}\n:badge\n:badge[Text]\n```',
     });
 
     expect(result.ok).toBe(true);

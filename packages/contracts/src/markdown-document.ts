@@ -252,7 +252,12 @@ function isMdxExportLine(line: string): boolean {
   }
   const afterExport = line.replace(/^export\b/, '').trimStart();
   const afterTrivia = stripLeadingJsBlockComments(afterExport).trimStart();
-  return afterTrivia === '' || /^(default\b|const\b|let\b|var\b|function\b|class\b|\{|\*)/.test(afterTrivia);
+  return (
+    afterTrivia === '' ||
+    /^(default\b|const\b|let\b|var\b|function\b|class\b|async\s+function\b|type\b|interface\b|enum\b|abstract\s+class\b|declare\b|\{|\*)/.test(
+      afterTrivia,
+    )
+  );
 }
 
 function stripLeadingJsBlockComments(value: string): string {
