@@ -16,7 +16,7 @@ import {
   type RunSession,
 } from '../../packages/domain/src/index';
 
-import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type CodexLaunchTokenEnvelopeSealer, type DeliveryRepository } from '../../packages/db/src/index';
 
 type CodexRuntimeJobRepositoryContract = Pick<DeliveryRepository, 'createOrReplayCodexRuntimeJobWithLeaseAndEnvelope'>;
 
@@ -26,7 +26,8 @@ const now = '2026-05-20T00:00:00.000Z';
 const later = '2026-05-20T00:01:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
 
-const createRepository = (): DeliveryRepository => new InMemoryDeliveryRepository();
+const createRepository = (sealer?: CodexLaunchTokenEnvelopeSealer): DeliveryRepository =>
+  new InMemoryDeliveryRepository({ codexLaunchTokenEnvelopeSealer: sealer });
 const runtimeMetadata = {
   durability_mode: 'durable',
   recovery_attempt_count: 0,
@@ -276,18 +277,27 @@ const seedWorker = async (
   repository: DeliveryRepository,
   overrides: {
     worker_id?: string;
+    worker_identity?: string;
+    bootstrap_token_id?: string;
+    bootstrap_token_raw?: string;
     session_token?: string;
     capabilities?: readonly CodexLaunchTarget['target_kind'][];
+    lease_count?: number;
     max_concurrency?: number;
   } = {},
 ) => {
   const workerId = overrides.worker_id ?? 'worker-1';
+  const workerIdentity = overrides.worker_identity ?? (workerId === 'worker-1' ? 'local-worker-1' : `local-${workerId}`);
+  const bootstrapTokenId =
+    overrides.bootstrap_token_id ?? (workerId === 'worker-1' ? 'bootstrap-token-1' : `bootstrap-token-${workerId}`);
+  const bootstrapTokenRaw =
+    overrides.bootstrap_token_raw ?? (workerId === 'worker-1' ? 'bootstrap-token-raw' : `bootstrap-token-${workerId}-raw`);
   const sessionToken = overrides.session_token ?? 'session-token-1';
   const capabilities = overrides.capabilities ?? ['generation'];
   await repository.createCodexWorkerBootstrapToken({
-    id: 'bootstrap-token-1',
-    worker_identity: 'local-worker-1',
-    bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
+    id: bootstrapTokenId,
+    worker_identity: workerIdentity,
+    bootstrap_token_hash: tokenHash(bootstrapTokenRaw),
     bootstrap_token_version: 1,
     status: 'active',
     allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
@@ -306,9 +316,9 @@ const seedWorker = async (
     sessionToken,
     worker: await repository.upsertCodexWorkerRegistration({
       worker_id: workerId,
-      worker_identity: 'local-worker-1',
+      worker_identity: workerIdentity,
       version: '0.1.0',
-      bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
+      bootstrap_token_hash: tokenHash(bootstrapTokenRaw),
       bootstrap_token_version: 1,
       session_token: sessionToken,
       session_expires_at: expiresAt,
@@ -321,7 +331,7 @@ const seedWorker = async (
       network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
       host_worker_uid: 501,
       host_worker_gid: 20,
-      lease_count: 0,
+      lease_count: overrides.lease_count ?? 0,
       max_concurrency: overrides.max_concurrency ?? 2,
       labels: { host: 'test-host' },
       session_public_key_id: 'session-key-1',
@@ -392,6 +402,115 @@ const createLaunchLease = async (
     ...overrides,
   });
 };
+
+const createEnvelopeSealer = (
+  calls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [],
+  options: { failFirst?: boolean } = {},
+): CodexLaunchTokenEnvelopeSealer => ({
+  async sealLaunchTokenEnvelope(input) {
+    calls.push(input);
+    if (options.failFirst === true && calls.length === 1) {
+      throw new Error('seal failed');
+    }
+    return {
+      id: input.envelope_id,
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: input.worker_id,
+      key_id: input.key_id,
+      algorithm: 'x25519-hkdf-sha256-aes-256-gcm',
+      ciphertext: `sealed:${input.runtime_job_id}`,
+      encryption_nonce: `nonce:${input.envelope_id}`,
+      aad_json: {
+        runtime_job_id: input.runtime_job_id,
+        launch_lease_id: input.launch_lease_id,
+        envelope_id: input.envelope_id,
+        worker_id: input.worker_id,
+        key_id: input.key_id,
+        expires_at: input.expires_at,
+      },
+      aad_digest: codexCanonicalDigest({
+        runtime_job_id: input.runtime_job_id,
+        launch_lease_id: input.launch_lease_id,
+        envelope_id: input.envelope_id,
+        worker_id: input.worker_id,
+        key_id: input.key_id,
+        expires_at: input.expires_at,
+      }),
+      envelope_digest: tokenHash(`envelope:${input.runtime_job_id}:${input.launch_lease_id}:${input.envelope_id}`),
+      expires_at: input.expires_at,
+    };
+  },
+});
+
+const runtimeJobInput = async (
+  repository: DeliveryRepository,
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
+  workerOverrides: Parameters<typeof seedWorker>[1] = {},
+): Promise<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> => {
+  const target = overrides.target ?? generationTarget();
+  const seeded = await seedProfileAndCredential(repository, target.target_kind);
+  const { worker, sessionToken } = await seedWorker(repository, { capabilities: [target.target_kind], ...workerOverrides });
+  await repository.heartbeatCodexWorker({
+    worker_id: worker.id,
+    session_token: sessionToken,
+    nonce: `runtime-job-heartbeat-${overrides.runtime_job_id ?? 'runtime-job-1'}`,
+    nonce_timestamp: now,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: 0,
+    capabilities: [target.target_kind],
+    now,
+  });
+  const defaultActionClaimToken = 'runtime-action-claim-token-1';
+  const actionClaimTokenHash = overrides.action_claim_token_hash ?? tokenHash(defaultActionClaimToken);
+  if (target.target_kind === 'generation' && actionClaimTokenHash === tokenHash(defaultActionClaimToken)) {
+    try {
+      await repository.getClaimedAutomationActionRun({ id: target.target_id, claim_token: defaultActionClaimToken });
+    } catch {
+      await claimGenerationAction(repository, {
+        id: target.target_id,
+        idempotency_key: `runtime-${target.target_id}-claim-idem`,
+        action_type: overrides.action_type ?? 'codex_generation',
+        target_object_id: target.target_id,
+        claim_token: defaultActionClaimToken,
+        precondition_fingerprint: overrides.precondition_fingerprint ?? 'runtime-precondition-1',
+      });
+    }
+  }
+
+  return {
+    runtime_job_id: 'runtime-job-1',
+    launch_lease_id: 'runtime-launch-lease-1',
+    envelope_id: 'runtime-envelope-1',
+    job_request_id: 'runtime-job-request-1',
+    target,
+    launch_attempt: 1,
+    worker_id: worker.id,
+    runtime_profile_revision_id: seeded.revision.id,
+    runtime_profile_digest: seeded.revision.profile_digest,
+    credential_binding_id: seeded.binding.id,
+    credential_binding_version_id: seeded.version.id,
+    credential_payload_digest: seeded.version.payload_digest,
+    docker_image_digest: seeded.revision.docker_image_digest,
+    network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+    network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+    input_json: { task: 'draft spec', public_ref: 'artifact://runtime/input' },
+    input_digest: tokenHash('runtime-input-1'),
+    workspace_acquisition_json: { bundle_id: 'workspace-bundle-1', archive_ref: 'artifact://runtime/workspace' },
+    workspace_acquisition_digest: tokenHash('workspace-acquisition-1'),
+    action_type: 'codex_generation',
+    action_attempt: 1,
+    action_claim_token_hash: tokenHash(defaultActionClaimToken),
+    precondition_fingerprint: 'runtime-precondition-1',
+    expires_at: expiresAt,
+    now,
+    ...overrides,
+  };
+};
+
+const runtimeJobArtifactBindings = (repository: DeliveryRepository): Map<string, Record<string, unknown>> =>
+  (repository as unknown as { codexRuntimeJobArtifacts: Map<string, Record<string, unknown>> }).codexRuntimeJobArtifacts;
 
 const claimGenerationAction = (
   repository: DeliveryRepository,
@@ -922,6 +1041,355 @@ describe('codex runtime repository behavior', () => {
 
     expect(assertCodexRuntimeJobRepositoryContract<DeliveryRepository>()).toBeUndefined();
     expect(typeof repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope).toBe('function');
+  });
+
+  it('creates runtime jobs with a repository-owned sealed envelope and no raw launch token in the result', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository);
+
+    const result = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    expect(result.replayed).toBe(false);
+    expect(result.runtime_job).toMatchObject({
+      id: input.runtime_job_id,
+      job_request_id: input.job_request_id,
+      status: 'queued',
+      input_digest: input.input_digest,
+      workspace_acquisition_digest: input.workspace_acquisition_digest,
+    });
+    expect(result.launch_lease).toMatchObject({
+      id: input.launch_lease_id,
+      status: 'active',
+      lease_token_hash: expect.stringMatching(/^sha256:/),
+    });
+    expect(result.envelope).toMatchObject({
+      id: input.envelope_id,
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: input.worker_id,
+      status: 'available',
+    });
+    expect(sealerCalls).toHaveLength(1);
+    expect(sealerCalls[0]).toMatchObject({
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      worker_id: input.worker_id,
+      worker_public_key_material: 'public-key-material',
+      key_id: 'session-key-1',
+      expires_at: input.expires_at,
+    });
+    expect(sealerCalls[0]?.plaintext_launch_token).toEqual(expect.any(String));
+    expect(JSON.stringify(result)).not.toContain(sealerCalls[0]!.plaintext_launch_token);
+    expect(result.launch_lease).not.toHaveProperty('lease_token');
+  });
+
+  it('replays runtime jobs by job_request_id without resealing a new launch token', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository);
+    const first = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    const second = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      runtime_job_id: 'runtime-job-replay-ignored',
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+    });
+
+    expect(second).toEqual({ ...first, replayed: true });
+    expect(sealerCalls).toHaveLength(1);
+  });
+
+  it('replays runtime jobs by target plus launch attempt when fences match', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository);
+    const first = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    const second = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      runtime_job_id: 'runtime-job-target-replay',
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      job_request_id: 'runtime-job-request-target-replay',
+    });
+
+    expect(second).toEqual({ ...first, replayed: true });
+    expect(sealerCalls).toHaveLength(1);
+  });
+
+  it('creates runtime jobs for the selected eligible worker even when another worker has more free slots', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository, {}, { lease_count: 1, max_concurrency: 2 });
+    const { worker: emptierWorker, sessionToken: emptierSessionToken } = await seedWorker(repository, {
+      worker_id: 'worker-with-more-free-slots',
+      session_token: 'session-token-more-free-slots',
+      capabilities: ['generation'],
+      lease_count: 0,
+      max_concurrency: 2,
+    });
+    await repository.heartbeatCodexWorker({
+      worker_id: emptierWorker.id,
+      session_token: emptierSessionToken,
+      nonce: 'runtime-job-emptier-worker-heartbeat',
+      nonce_timestamp: now,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now,
+    });
+
+    const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    expect(created.runtime_job.worker_id).toBe(input.worker_id);
+    expect(sealerCalls).toHaveLength(1);
+  });
+
+  it('rejects runtime job create when a non-runtime launch lease already owns the target attempt', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    await createLaunchLease(repository);
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-launch-lease-conflict',
+        launch_lease_id: 'runtime-launch-lease-conflict',
+        envelope_id: 'runtime-envelope-launch-lease-conflict',
+        job_request_id: 'runtime-job-request-launch-lease-conflict',
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+      },
+      {
+        worker_id: 'worker-runtime-launch-lease-conflict',
+        session_token: 'session-token-runtime-launch-lease-conflict',
+      },
+    );
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('requires generation runtime jobs to carry strong action claim fences', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await runtimeJobInput(repository, {
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+    });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it.each([
+    ['input digest', { input_digest: tokenHash('other-input') }],
+    ['workspace digest', { workspace_acquisition_digest: tokenHash('other-workspace') }],
+    ['worker id', { worker_id: 'worker-other' }],
+    ['launch lease id', { launch_lease_id: 'runtime-launch-lease-other' }],
+    ['profile fence', { runtime_profile_digest: tokenHash('other-profile') }],
+    ['credential fence', { credential_payload_digest: tokenHash('other-credential') }],
+    ['envelope id', { envelope_id: 'runtime-envelope-other' }],
+  ])('rejects runtime job replay with conflicting %s', async (_label, patch) => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await runtimeJobInput(repository);
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        ...patch,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('does not persist runtime job, launch lease, or envelope when envelope sealing fails', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls, { failFirst: true }));
+    const input = await runtimeJobInput(repository, {}, { max_concurrency: 1 });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toThrow('seal failed');
+
+    const retried = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+    expect(retried.replayed).toBe(false);
+    expect(retried.runtime_job.id).toBe(input.runtime_job_id);
+    expect(sealerCalls).toHaveLength(2);
+  });
+
+  it('binds pending workspace bundles on create and rejects mismatched bundle replays', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const run = runSession({
+      id: 'runtime-run-session-1',
+      execution_package_id: 'runtime-execution-package-1',
+    });
+    await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-1',
+      lease_token: 'run-worker-token-1',
+      now,
+      expires_at: expiresAt,
+    });
+    const target = generationTarget({
+      target_type: 'run_session',
+      target_kind: 'run_execution',
+      target_id: run.id,
+    });
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-1',
+      pending_artifact_ref: 'artifact://runtime/pending-bundle-1',
+      archive_digest: tokenHash('bundle-archive-1'),
+      manifest_digest: tokenHash('bundle-manifest-1'),
+      run_worker_lease_id: runWorkerLease.id,
+      workspace_acquisition_digest: tokenHash('pending-workspace-1'),
+      workspace_acquisition_json: {
+        bundle_id: 'pending-bundle-1',
+        archive_ref: 'artifact://runtime/pending-bundle-1',
+      },
+      expires_at: expiresAt,
+    };
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-run-execution-1',
+        launch_lease_id: 'runtime-launch-lease-run-execution-1',
+        envelope_id: 'runtime-envelope-run-execution-1',
+        job_request_id: 'runtime-job-request-run-execution-1',
+        target,
+        action_type: undefined,
+        action_attempt: undefined,
+        action_claim_token_hash: undefined,
+        precondition_fingerprint: undefined,
+        execution_package_id: run.execution_package_id,
+        run_worker_lease_id: runWorkerLease.id,
+        run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
+        run_session_status: 'running',
+        run_session_updated_at: now,
+        execution_package_version: 1,
+        input_json: { task: 'run package', public_ref: 'artifact://runtime/run-input' },
+        input_digest: tokenHash('runtime-run-input-1'),
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+        workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        pending_workspace_bundle: pendingBundle,
+      },
+      { capabilities: ['run_execution'] },
+    );
+
+    const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+    const replayed = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      job_request_id: 'runtime-job-request-run-execution-replay',
+    });
+
+    expect(created.runtime_job.workspace_acquisition_digest).toBe(pendingBundle.workspace_acquisition_digest);
+    expect([...runtimeJobArtifactBindings(repository).values()]).toContainEqual(
+      expect.objectContaining({
+        runtime_job_id: created.runtime_job.id,
+        kind: 'workspace_bundle',
+        name: pendingBundle.bundle_id,
+        digest: pendingBundle.archive_digest,
+        internal_ref: pendingBundle.pending_artifact_ref,
+        metadata_json: expect.objectContaining({
+          bundle_id: pendingBundle.bundle_id,
+          manifest_digest: pendingBundle.manifest_digest,
+          run_worker_lease_id: pendingBundle.run_worker_lease_id,
+          workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        }),
+      }),
+    );
+    expect(replayed).toEqual({ ...created, replayed: true });
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        job_request_id: 'runtime-job-request-run-execution-conflict',
+        pending_workspace_bundle: {
+          ...pendingBundle,
+          archive_digest: tokenHash('bundle-archive-conflict'),
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('requires run-execution runtime jobs to carry strong run-worker fences', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const run = runSession({
+      id: 'runtime-run-session-missing-fence',
+      execution_package_id: 'runtime-execution-package-missing-fence',
+    });
+    await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-missing-fence',
+      lease_token: 'run-worker-token-missing-fence',
+      now,
+      expires_at: expiresAt,
+    });
+    const target = generationTarget({
+      target_type: 'run_session',
+      target_kind: 'run_execution',
+      target_id: run.id,
+    });
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-missing-fence',
+      pending_artifact_ref: 'artifact://runtime/pending-bundle-missing-fence',
+      archive_digest: tokenHash('bundle-archive-missing-fence'),
+      manifest_digest: tokenHash('bundle-manifest-missing-fence'),
+      run_worker_lease_id: runWorkerLease.id,
+      workspace_acquisition_digest: tokenHash('pending-workspace-missing-fence'),
+      workspace_acquisition_json: {
+        bundle_id: 'pending-bundle-missing-fence',
+        archive_ref: 'artifact://runtime/pending-bundle-missing-fence',
+      },
+      expires_at: expiresAt,
+    };
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-run-execution-missing-fence',
+        launch_lease_id: 'runtime-launch-lease-run-execution-missing-fence',
+        envelope_id: 'runtime-envelope-run-execution-missing-fence',
+        job_request_id: 'runtime-job-request-run-execution-missing-fence',
+        target,
+        action_type: undefined,
+        action_attempt: undefined,
+        action_claim_token_hash: undefined,
+        precondition_fingerprint: undefined,
+        execution_package_id: run.execution_package_id,
+        run_worker_lease_id: runWorkerLease.id,
+        run_worker_lease_token_hash: undefined,
+        run_session_status: 'running',
+        run_session_updated_at: now,
+        execution_package_version: 1,
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+        workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        pending_workspace_bundle: pendingBundle,
+      },
+      { capabilities: ['run_execution'] },
+    );
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
   });
 
   it('replays launch leases idempotently for the same lease_request_id', async () => {

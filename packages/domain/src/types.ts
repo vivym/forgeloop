@@ -53,6 +53,7 @@ export type DomainErrorCode =
   | 'codex_app_server_effective_config_mismatch'
   | 'codex_worker_nonce_replay'
   | 'codex_worker_registration_denied'
+  | 'codex_runtime_job_unavailable'
   | 'codex_launch_lease_denied'
   | 'codex_launch_materialization_denied';
 
