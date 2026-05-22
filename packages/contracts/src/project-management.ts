@@ -10,9 +10,23 @@ const reviewedAuthoritySchema = z.enum(['review_packet_approval', 'human_review_
 const taskStaleStateSchema = z.enum(['current', 'stale_spec', 'stale_plan', 'stale_parent', 'manual_exception']);
 const taskStatusSchema = z.enum(['todo', 'ready', 'in_progress', 'blocked', 'review', 'done', 'canceled']);
 const objectLifecycleStatusSchema = z.string().trim().min(1);
+const evidenceRunStatusSchema = z.enum(['missing', 'pending', 'passed', 'failed', 'stale', 'blocked']);
 
 const humanReviewDecisionRefSchema = z.object({ type: z.literal('human_review_decision'), id: nonEmpty }).strict();
 const reviewPacketAuthorityRefSchema = z.object({ type: z.literal('review_packet'), id: nonEmpty }).strict();
+const initiativeObjectRefSchema = z.object({ type: z.literal('initiative'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const requirementObjectRefSchema = z.object({ type: z.literal('requirement'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const techDebtObjectRefSchema = z.object({ type: z.literal('tech_debt'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const bugObjectRefSchema = z.object({ type: z.literal('bug'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const taskObjectRefSchema = z.object({ type: z.literal('task'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const specObjectRefSchema = z.object({ type: z.literal('spec'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const planObjectRefSchema = z.object({ type: z.literal('plan'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const releaseObjectRefSchema = z.object({ type: z.literal('release'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const executionPackageObjectRefSchema = z
+  .object({ type: z.literal('execution_package'), id: nonEmpty, title: nonEmpty.optional() })
+  .strict();
+const runSessionObjectRefSchema = z.object({ type: z.literal('run_session'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const reviewPacketObjectRefSchema = z.object({ type: z.literal('review_packet'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 
 export const reviewEvidenceRefSchema = z
   .object({
@@ -56,7 +70,7 @@ export const testAcceptanceEvidenceRefSchema = z
     id: nonEmpty,
     scope_ref: objectRefSchema,
     evidence_type: z.enum(['test_result', 'qa_acceptance', 'product_acceptance', 'regression', 'integration_validation']),
-    status: z.enum(['missing', 'pending', 'passed', 'failed', 'stale', 'blocked']),
+    status: evidenceRunStatusSchema,
     required: z.boolean(),
     actor_id: nonEmpty.optional(),
     attachment_refs: z.array(attachmentRefSchema).default([]),
@@ -68,6 +82,39 @@ export const testAcceptanceEvidenceRefSchema = z
   })
   .strict();
 export type TestAcceptanceEvidenceRef = z.infer<typeof testAcceptanceEvidenceRefSchema>;
+
+export const packageRunEvidenceRefSchema = z
+  .object({
+    id: nonEmpty,
+    scope_ref: objectRefSchema,
+    evidence_type: z.literal('package_run'),
+    status: evidenceRunStatusSchema,
+    required: z.boolean(),
+    package_ref: executionPackageObjectRefSchema,
+    run_session_ref: runSessionObjectRefSchema.optional(),
+    created_at: isoDateTimeSchema.optional(),
+    completed_at: isoDateTimeSchema.optional(),
+    stale_reason: nonEmpty.optional(),
+    attachment_refs: z.array(attachmentRefSchema).default([]),
+  })
+  .strict();
+export type PackageRunEvidenceRef = z.infer<typeof packageRunEvidenceRefSchema>;
+
+export const observationEvidenceRefSchema = z
+  .object({
+    id: nonEmpty,
+    scope_ref: objectRefSchema,
+    evidence_type: z.literal('observation'),
+    status: evidenceRunStatusSchema,
+    required: z.boolean(),
+    observation_ref: z.union([releaseObjectRefSchema, reviewPacketObjectRefSchema]),
+    created_at: isoDateTimeSchema.optional(),
+    completed_at: isoDateTimeSchema.optional(),
+    stale_reason: nonEmpty.optional(),
+    attachment_refs: z.array(attachmentRefSchema).default([]),
+  })
+  .strict();
+export type ObservationEvidenceRef = z.infer<typeof observationEvidenceRefSchema>;
 
 export const productSafeDisabledReasonSchema = z
   .object({
@@ -116,7 +163,9 @@ export const evidenceRequirementStatusSchema = z
     evidence_spec_revision_id: nonEmpty.optional(),
     current_plan_revision_id: nonEmpty.optional(),
     evidence_plan_revision_id: nonEmpty.optional(),
-    evidence_ref: z.union([reviewEvidenceRefSchema, testAcceptanceEvidenceRefSchema]).optional(),
+    evidence_ref: z
+      .union([reviewEvidenceRefSchema, testAcceptanceEvidenceRefSchema, packageRunEvidenceRefSchema, observationEvidenceRefSchema])
+      .optional(),
     supporting_attachment_refs: z.array(attachmentRefSchema).optional(),
     disabled_reason: productSafeDisabledReasonSchema.optional(),
   })
@@ -217,6 +266,46 @@ export const evidenceRequirementStatusSchema = z
           message: 'test readiness evidence type must match the readiness gate kind',
         });
       }
+      return;
+    }
+
+    if (requirement.kind === 'package_run') {
+      const packageRunEvidence = packageRunEvidenceRefSchema.safeParse(requirement.evidence_ref);
+      if (!packageRunEvidence.success) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref'],
+          message: 'passed package run readiness gates require package run evidence authority',
+        });
+        return;
+      }
+      if (packageRunEvidence.data.status !== 'passed') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref', 'status'],
+          message: 'passed package run readiness gates require passed package run evidence',
+        });
+      }
+      return;
+    }
+
+    if (requirement.kind === 'observation') {
+      const observationEvidence = observationEvidenceRefSchema.safeParse(requirement.evidence_ref);
+      if (!observationEvidence.success) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref'],
+          message: 'passed observation readiness gates require observation evidence authority',
+        });
+        return;
+      }
+      if (observationEvidence.data.status !== 'passed') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence_ref', 'status'],
+          message: 'passed observation readiness gates require passed observation evidence',
+        });
+      }
     }
   });
 export type EvidenceRequirementStatus = z.infer<typeof evidenceRequirementStatusSchema>;
@@ -283,9 +372,6 @@ const objectDetailBaseSchema = objectListItemBaseSchema
     attachment_refs: z.array(attachmentRefSchema).default([]),
   })
   .strict();
-
-const specObjectRefSchema = z.object({ type: z.literal('spec'), id: nonEmpty, title: nonEmpty.optional() }).strict();
-const planObjectRefSchema = z.object({ type: z.literal('plan'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 
 const revisionSummarySchema = z
   .object({
@@ -369,11 +455,13 @@ export const myWorkQueueItemSchema = z
 export type MyWorkQueueItem = z.infer<typeof myWorkQueueItemSchema>;
 
 export const initiativeListItemSchema = objectListItemBaseSchema.extend({
+  ref: initiativeObjectRefSchema,
   business_outcome: nonEmpty.optional(),
 });
 export type InitiativeListItem = z.infer<typeof initiativeListItemSchema>;
 
 export const initiativeDetailSchema = objectDetailBaseSchema.extend({
+  ref: initiativeObjectRefSchema,
   child_refs: z.array(objectRefSchema).default([]),
   milestone_intent: nonEmpty.optional(),
   release_refs: z.array(objectRefSchema).default([]),
@@ -381,11 +469,13 @@ export const initiativeDetailSchema = objectDetailBaseSchema.extend({
 export type InitiativeDetail = z.infer<typeof initiativeDetailSchema>;
 
 export const requirementListItemSchema = objectListItemBaseSchema.extend({
+  ref: requirementObjectRefSchema,
   phase: nonEmpty.optional(),
 });
 export type RequirementListItem = z.infer<typeof requirementListItemSchema>;
 
 export const requirementDetailSchema = objectDetailBaseSchema.extend({
+  ref: requirementObjectRefSchema,
   spec_ref: objectRefSchema.optional(),
   plan_ref: objectRefSchema.optional(),
   task_refs: z.array(objectRefSchema).default([]),
@@ -395,11 +485,13 @@ export const requirementDetailSchema = objectDetailBaseSchema.extend({
 export type RequirementDetail = z.infer<typeof requirementDetailSchema>;
 
 export const techDebtListItemSchema = objectListItemBaseSchema.extend({
+  ref: techDebtObjectRefSchema,
   affected_modules: z.array(nonEmpty).default([]),
 });
 export type TechDebtListItem = z.infer<typeof techDebtListItemSchema>;
 
 export const techDebtDetailSchema = objectDetailBaseSchema.extend({
+  ref: techDebtObjectRefSchema,
   affected_modules: z.array(nonEmpty).default([]),
   validation_strategy: nonEmpty.optional(),
   spec_ref: objectRefSchema.optional(),
@@ -409,11 +501,13 @@ export const techDebtDetailSchema = objectDetailBaseSchema.extend({
 export type TechDebtDetail = z.infer<typeof techDebtDetailSchema>;
 
 export const bugListItemSchema = objectListItemBaseSchema.extend({
+  ref: bugObjectRefSchema,
   severity: nonEmpty.optional(),
 });
 export type BugListItem = z.infer<typeof bugListItemSchema>;
 
 export const bugDetailSchema = objectDetailBaseSchema.extend({
+  ref: bugObjectRefSchema,
   observed_behavior: nonEmpty.optional(),
   expected_behavior: nonEmpty.optional(),
   reproduction_steps: z.array(nonEmpty).default([]),
@@ -424,7 +518,7 @@ export type BugDetail = z.infer<typeof bugDetailSchema>;
 export const taskListItemSchema = z
   .object({
     id: nonEmpty,
-    ref: objectRefSchema,
+    ref: taskObjectRefSchema,
     title: nonEmpty,
     status: taskStatusSchema,
     parent_ref: objectRefSchema.optional(),

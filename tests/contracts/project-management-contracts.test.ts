@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bugDetailSchema,
+  bugListItemSchema,
   editableObjectRefSchema,
+  initiativeDetailSchema,
+  initiativeListItemSchema,
   legacyWorkItemStorageRefSchema,
   objectRefSchema,
   planDetailSchema,
   productListItemSchema,
+  requirementDetailSchema,
+  requirementListItemSchema,
   specDetailSchema,
   specPlanQueueItemSchema,
+  taskListItemSchema,
+  techDebtDetailSchema,
+  techDebtListItemSchema,
   taskDetailSchema,
 } from '@forgeloop/contracts';
 
@@ -272,5 +281,70 @@ describe('project management typed object contracts', () => {
         gate_state: 'ready',
       }),
     ).toThrow();
+  });
+
+  it('enforces typed refs on object-specific list read models', () => {
+    const listCases = [
+      {
+        schema: initiativeListItemSchema,
+        valid: { id: 'init-1', ref: { type: 'initiative', id: 'init-1' }, title: 'Initiative', status: 'active' },
+        invalid: { id: 'init-1', ref: { type: 'task', id: 'task-1' }, title: 'Initiative', status: 'active' },
+      },
+      {
+        schema: requirementListItemSchema,
+        valid: { id: 'req-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Requirement', status: 'ready' },
+        invalid: { id: 'req-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Requirement', status: 'ready' },
+      },
+      {
+        schema: techDebtListItemSchema,
+        valid: { id: 'td-1', ref: { type: 'tech_debt', id: 'td-1' }, title: 'Tech debt', status: 'ready' },
+        invalid: { id: 'td-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Tech debt', status: 'ready' },
+      },
+      {
+        schema: bugListItemSchema,
+        valid: { id: 'bug-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Bug', status: 'open' },
+        invalid: { id: 'bug-1', ref: { type: 'release', id: 'release-1' }, title: 'Bug', status: 'open' },
+      },
+      {
+        schema: taskListItemSchema,
+        valid: { id: 'task-1', ref: { type: 'task', id: 'task-1' }, title: 'Task', status: 'todo' },
+        invalid: { id: 'task-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Task', status: 'todo' },
+      },
+    ] as const;
+
+    for (const { schema, valid, invalid } of listCases) {
+      expect(schema.parse(valid)).toMatchObject({ ref: valid.ref });
+      expect(() => schema.parse(invalid)).toThrow();
+    }
+  });
+
+  it('enforces typed refs on object-specific detail read models', () => {
+    const detailCases = [
+      {
+        schema: initiativeDetailSchema,
+        valid: { id: 'init-1', ref: { type: 'initiative', id: 'init-1' }, title: 'Initiative', status: 'active' },
+        invalid: { id: 'init-1', ref: { type: 'task', id: 'task-1' }, title: 'Initiative', status: 'active' },
+      },
+      {
+        schema: requirementDetailSchema,
+        valid: { id: 'req-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Requirement', status: 'ready' },
+        invalid: { id: 'req-1', ref: { type: 'release', id: 'release-1' }, title: 'Requirement', status: 'ready' },
+      },
+      {
+        schema: techDebtDetailSchema,
+        valid: { id: 'td-1', ref: { type: 'tech_debt', id: 'td-1' }, title: 'Tech debt', status: 'ready' },
+        invalid: { id: 'td-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Tech debt', status: 'ready' },
+      },
+      {
+        schema: bugDetailSchema,
+        valid: { id: 'bug-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Bug', status: 'open' },
+        invalid: { id: 'bug-1', ref: { type: 'initiative', id: 'init-1' }, title: 'Bug', status: 'open' },
+      },
+    ] as const;
+
+    for (const { schema, valid, invalid } of detailCases) {
+      expect(schema.parse(valid)).toMatchObject({ ref: valid.ref });
+      expect(() => schema.parse(invalid)).toThrow();
+    }
   });
 });

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   evidenceRequirementStatusSchema,
+  observationEvidenceRefSchema,
+  packageRunEvidenceRefSchema,
   releaseReadinessDetailSchema,
   reviewEvidenceRefSchema,
   testAcceptanceEvidenceRefSchema,
@@ -59,11 +61,34 @@ const passedQaEvidence = {
   attachment_refs: [],
 } as const;
 
+const passedPackageRunEvidence = {
+  id: 'package-run-evidence-1',
+  scope_ref: { type: 'requirement', id: 'req-1' },
+  evidence_type: 'package_run',
+  status: 'passed',
+  required: true,
+  package_ref: { type: 'execution_package', id: 'pkg-1' },
+  run_session_ref: { type: 'run_session', id: 'run-1' },
+  attachment_refs: [],
+} as const;
+
+const passedObservationEvidence = {
+  id: 'observation-evidence-1',
+  scope_ref: { type: 'requirement', id: 'req-1' },
+  evidence_type: 'observation',
+  status: 'passed',
+  required: true,
+  observation_ref: { type: 'release', id: 'release-1' },
+  attachment_refs: [],
+} as const;
+
 describe('project management release readiness contracts', () => {
   it('accepts typed review and test evidence authority', () => {
     expect(reviewEvidenceRefSchema.parse(approvedReviewEvidence)).toMatchObject({ status: 'approved' });
 
     expect(testAcceptanceEvidenceRefSchema.parse(passedQaEvidence)).toMatchObject({ status: 'passed' });
+    expect(packageRunEvidenceRefSchema.parse(passedPackageRunEvidence)).toMatchObject({ evidence_type: 'package_run' });
+    expect(observationEvidenceRefSchema.parse(passedObservationEvidence)).toMatchObject({ evidence_type: 'observation' });
   });
 
   it('requires typed evidence authority for passed readiness gates', () => {
@@ -106,6 +131,26 @@ describe('project management release readiness contracts', () => {
         evidence_ref: approvedReviewEvidence,
       }).success,
     ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'package-run-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'package_run',
+        status: 'passed',
+        evidence_ref: approvedReviewEvidence,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'observation-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'observation',
+        status: 'passed',
+        evidence_ref: passedQaEvidence,
+      }).success,
+    ).toBe(false);
   });
 
   it('accepts passed readiness gates backed by matching approved or passed evidence authority', () => {
@@ -126,6 +171,26 @@ describe('project management release readiness contracts', () => {
         kind: 'qa_acceptance',
         status: 'passed',
         evidence_ref: passedQaEvidence,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'package-run-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'package_run',
+        status: 'passed',
+        evidence_ref: passedPackageRunEvidence,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'observation-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'observation',
+        status: 'passed',
+        evidence_ref: passedObservationEvidence,
       }).success,
     ).toBe(true);
   });
@@ -153,6 +218,32 @@ describe('project management release readiness contracts', () => {
         evidence_ref: {
           ...passedQaEvidence,
           scope_ref: { type: 'task', id: 'task-1' },
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'package-run-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'package_run',
+        status: 'passed',
+        evidence_ref: {
+          ...passedPackageRunEvidence,
+          scope_ref: { type: 'requirement', id: 'req-other' },
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      evidenceRequirementStatusSchema.safeParse({
+        requirement_id: 'observation-gate',
+        scope_ref: { type: 'requirement', id: 'req-1' },
+        kind: 'observation',
+        status: 'passed',
+        evidence_ref: {
+          ...passedObservationEvidence,
+          scope_ref: { type: 'bug', id: 'bug-1' },
         },
       }).success,
     ).toBe(false);
