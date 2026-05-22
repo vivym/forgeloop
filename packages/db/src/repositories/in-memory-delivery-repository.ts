@@ -63,6 +63,7 @@ import {
   codexRuntimeScopeMatches,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
+  validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
   isActiveRunSessionStatus,
   isOpenReviewPacketStatus,
@@ -1287,9 +1288,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable');
     this.recordCodexWorkerNonce(input.worker_id, input.worker_session_token, input.nonce, input.nonce_timestamp, input.now);
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
     if (
       record === undefined ||
+      leaseRecord === undefined ||
       record.job.worker_id !== input.worker_id ||
+      leaseRecord.lease.worker_id !== input.worker_id ||
+      leaseRecord.lease.status !== 'materialized' ||
       record.job.cancel_requested_at !== undefined ||
       record.job.expires_at <= input.now
     ) {
@@ -1463,6 +1468,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (leaseRecord.lease.status !== 'active' && leaseRecord.lease.status !== 'materialized') {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
+    const terminalResultJson =
+      input.terminal_result_json === undefined
+        ? undefined
+        : clone(validateCodexRuntimeJobTerminalResult(input.terminal_result_json) as unknown as Record<string, unknown>);
     const terminalJob: CodexRuntimeJobPrivateRecord = {
       ...record,
       job: {
@@ -1473,7 +1482,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         terminal_at: input.now,
         terminal_status: input.terminal_status,
         terminal_reason_code: input.reason_code,
-        ...(input.terminal_result_json === undefined ? {} : { terminal_result_json: clone(input.terminal_result_json) }),
+        ...(terminalResultJson === undefined ? {} : { terminal_result_json: terminalResultJson }),
         updated_at: input.now,
       },
     };
@@ -1486,12 +1495,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         terminal_reason_code: input.reason_code,
         terminal_runtime_job_id: input.runtime_job_id,
         terminal_idempotency_key: input.idempotency_key,
-        ...(input.terminal_result_json === undefined ? {} : { terminal_evidence_summary: clone(input.terminal_result_json) }),
+        ...(terminalResultJson === undefined ? {} : { terminal_evidence_summary: clone(terminalResultJson) }),
       },
       terminal_reason_code: input.reason_code,
       terminal_runtime_job_id: input.runtime_job_id,
       terminal_idempotency_key: input.idempotency_key,
-      ...(input.terminal_result_json === undefined ? {} : { terminal_evidence_summary: clone(input.terminal_result_json) }),
+      ...(terminalResultJson === undefined ? {} : { terminal_evidence_summary: clone(terminalResultJson) }),
     };
     this.codexRuntimeJobs.set(input.runtime_job_id, clone(terminalJob));
     this.codexLaunchLeases.set(input.launch_lease_id, clone(terminalLease));

@@ -621,6 +621,16 @@ const materializeRuntimeJob = (
     ...patch,
   });
 
+const validGenerationTerminalResult = (summary = 'completed') => ({
+  task_kind: 'spec_draft' as const,
+  prompt_version: 'prompt-v1',
+  output_schema_version: 'spec-draft.v1',
+  generated_payload: { summary },
+  generated_payload_digest: tokenHash(`generated-payload-${summary}`),
+  generation_artifacts: [],
+  public_summary: summary,
+});
+
 const startRuntimeJob = (
   repository: DeliveryRepository,
   runtimeJobId = 'runtime-job-1',
@@ -654,12 +664,15 @@ const terminalizeRuntimeJob = (
     nonce_timestamp: later,
     terminal_status: 'succeeded',
     reason_code: 'completed',
-    terminal_result_json: { public_summary: 'completed' },
+    terminal_result_json: validGenerationTerminalResult(),
     idempotency_key: `terminal-${runtimeJobId}`,
     request_digest: tokenHash(`terminal-request-${runtimeJobId}`),
     now: later,
     ...patch,
   });
+
+const runtimeLaunchLeases = (repository: DeliveryRepository): Map<string, { lease: CodexLaunchLease }> =>
+  (repository as unknown as { codexLaunchLeases: Map<string, { lease: CodexLaunchLease }> }).codexLaunchLeases;
 
 const claimGenerationAction = (
   repository: DeliveryRepository,
@@ -1555,6 +1568,33 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it('rejects start when the coupled launch lease is no longer materialized for the worker', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    const leaseRecord = runtimeLaunchLeases(repository).get('runtime-launch-lease-1');
+    expect(leaseRecord).toBeDefined();
+    runtimeLaunchLeases(repository).set('runtime-launch-lease-1', {
+      ...leaseRecord!,
+      lease: {
+        ...leaseRecord!.lease,
+        status: 'revoked',
+        revoked_at: later,
+        terminal_reason_code: 'revoked-for-test',
+      },
+    });
+
+    await expect(
+      startRuntimeJob(repository, 'runtime-job-1', {
+        nonce: 'start-revoked-lease-nonce',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
   it('deduplicates runtime job events and updates last_event_at', async () => {
     const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
     await acceptRuntimeJob(repository);
@@ -1639,6 +1679,29 @@ describe('codex runtime repository behavior', () => {
     ).rejects.toMatchObject<Partial<DomainError>>({
       name: 'DomainError',
       code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects unsafe runtime job terminal result payloads before persistence', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-unsafe-result-nonce',
+        terminal_result_json: {
+          ...validGenerationTerminalResult('unsafe'),
+          generated_payload: {
+            raw_endpoint: 'http://127.0.0.1:8080/internal',
+          },
+          generated_payload_digest: tokenHash('unsafe-generated-payload'),
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
     });
   });
 
