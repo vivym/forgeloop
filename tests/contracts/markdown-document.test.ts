@@ -35,6 +35,16 @@ describe('MarkdownDocument validation', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('rejects non-canonical attachment destinations', () => {
+    for (const markdown of [
+      '![bad](attachment://att-1?signature=raw)',
+      '![bad](attachment://att-1#frag)',
+      '![bad](attachment://att-1/private)',
+    ]) {
+      expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
+    }
+  });
+
   it('rejects raw html, javascript links, data urls, blob urls, and raw storage urls', () => {
     for (const markdown of [
       '<iframe src="https://example.com"></iframe>',

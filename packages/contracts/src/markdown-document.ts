@@ -58,7 +58,7 @@ const rawStoragePattern =
   /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
-const attachmentRefPattern = /attachment:\/\/([A-Za-z0-9_-]+)/g;
+const canonicalAttachmentDestinationPattern = /^attachment:\/\/([A-Za-z0-9_-]+)$/;
 
 export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValidationResult {
   const parsed = markdownDocumentSchema.safeParse(input);
@@ -97,9 +97,12 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
     if (rawStoragePattern.test(normalizedDestination)) {
       issues.push({ code: 'raw_storage_url', message: 'Markdown must not contain raw storage URLs.' });
     }
+    if (normalizedDestination.startsWith('attachment://') && !canonicalAttachmentDestinationPattern.test(normalizedDestination)) {
+      issues.push({ code: 'unsafe_protocol', message: 'Attachment destinations must be canonical attachment://<id> refs.' });
+    }
   }
 
-  const referencedAttachmentIds = attachmentIdsReferencedBy(document.markdown);
+  const referencedAttachmentIds = attachmentIdsReferencedBy(markdownDestinations(document.markdown));
   const availableAttachments = new Map(document.attachment_refs.map((attachment) => [attachment.id, attachment]));
   for (const attachmentId of referencedAttachmentIds) {
     const attachment = availableAttachments.get(attachmentId);
@@ -233,12 +236,12 @@ function isParagraphLine(line: string): boolean {
   return true;
 }
 
-function attachmentIdsReferencedBy(markdown: string): string[] {
+function attachmentIdsReferencedBy(destinations: string[]): string[] {
   const attachmentIds: string[] = [];
-  for (const match of markdown.matchAll(attachmentRefPattern)) {
-    const attachmentId = match[1];
-    if (attachmentId !== undefined) {
-      attachmentIds.push(attachmentId);
+  for (const destination of destinations) {
+    const match = canonicalAttachmentDestinationPattern.exec(normalizeDestination(destination));
+    if (match?.[1] !== undefined) {
+      attachmentIds.push(match[1]);
     }
   }
   return attachmentIds;
