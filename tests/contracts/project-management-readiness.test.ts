@@ -82,6 +82,13 @@ const passedObservationEvidence = {
   attachment_refs: [],
 } as const;
 
+const matchingRevisionAuthority = {
+  current_spec_revision_id: 'spec-rev-2',
+  evidence_spec_revision_id: 'spec-rev-2',
+  current_plan_revision_id: 'plan-rev-2',
+  evidence_plan_revision_id: 'plan-rev-2',
+} as const;
+
 describe('project management release readiness contracts', () => {
   it('accepts typed review and test evidence authority', () => {
     expect(reviewEvidenceRefSchema.parse(approvedReviewEvidence)).toMatchObject({ status: 'approved' });
@@ -118,6 +125,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'review',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: passedQaEvidence,
       }).success,
     ).toBe(false);
@@ -128,6 +136,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'qa_acceptance',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: approvedReviewEvidence,
       }).success,
     ).toBe(false);
@@ -138,6 +147,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'package_run',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: approvedReviewEvidence,
       }).success,
     ).toBe(false);
@@ -148,6 +158,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'observation',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: passedQaEvidence,
       }).success,
     ).toBe(false);
@@ -160,6 +171,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'review',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: approvedReviewEvidence,
       }).success,
     ).toBe(true);
@@ -170,6 +182,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'qa_acceptance',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: passedQaEvidence,
       }).success,
     ).toBe(true);
@@ -180,6 +193,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'package_run',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: passedPackageRunEvidence,
       }).success,
     ).toBe(true);
@@ -190,9 +204,27 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'observation',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: passedObservationEvidence,
       }).success,
     ).toBe(true);
+  });
+
+  it('rejects revisionless passed readiness gates even with typed evidence authority', () => {
+    for (const gate of [
+      { requirement_id: 'review-gate', kind: 'review', evidence_ref: approvedReviewEvidence },
+      { requirement_id: 'qa-gate', kind: 'qa_acceptance', evidence_ref: passedQaEvidence },
+      { requirement_id: 'package-run-gate', kind: 'package_run', evidence_ref: passedPackageRunEvidence },
+      { requirement_id: 'observation-gate', kind: 'observation', evidence_ref: passedObservationEvidence },
+    ] as const) {
+      expect(
+        evidenceRequirementStatusSchema.safeParse({
+          ...gate,
+          scope_ref: { type: 'requirement', id: 'req-1' },
+          status: 'passed',
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('rejects passed readiness gates with evidence outside the gate scope', () => {
@@ -202,6 +234,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'review',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: {
           ...approvedReviewEvidence,
           scope_ref: { type: 'requirement', id: 'req-other' },
@@ -215,6 +248,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'qa_acceptance',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: {
           ...passedQaEvidence,
           scope_ref: { type: 'task', id: 'task-1' },
@@ -228,6 +262,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'package_run',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: {
           ...passedPackageRunEvidence,
           scope_ref: { type: 'requirement', id: 'req-other' },
@@ -241,6 +276,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'observation',
         status: 'passed',
+        ...matchingRevisionAuthority,
         evidence_ref: {
           ...passedObservationEvidence,
           scope_ref: { type: 'bug', id: 'bug-1' },
@@ -281,10 +317,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'review',
         status: 'passed',
-        current_spec_revision_id: 'spec-rev-2',
-        evidence_spec_revision_id: 'spec-rev-2',
-        current_plan_revision_id: 'plan-rev-2',
-        evidence_plan_revision_id: 'plan-rev-2',
+        ...matchingRevisionAuthority,
         evidence_ref: approvedReviewEvidence,
       }).success,
     ).toBe(true);
@@ -295,10 +328,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'qa_acceptance',
         status: 'passed',
-        current_spec_revision_id: 'spec-rev-2',
-        evidence_spec_revision_id: 'spec-rev-2',
-        current_plan_revision_id: 'plan-rev-2',
-        evidence_plan_revision_id: 'plan-rev-2',
+        ...matchingRevisionAuthority,
         evidence_ref: passedQaEvidence,
       }).success,
     ).toBe(true);
@@ -311,10 +341,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'review',
         status: 'passed',
-        current_spec_revision_id: 'spec-rev-2',
-        evidence_spec_revision_id: 'spec-rev-2',
-        current_plan_revision_id: 'plan-rev-2',
-        evidence_plan_revision_id: 'plan-rev-2',
+        ...matchingRevisionAuthority,
         evidence_ref: {
           ...approvedReviewEvidence,
           spec_revision_id: 'spec-rev-1',
@@ -329,10 +356,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'review',
         status: 'passed',
-        current_spec_revision_id: 'spec-rev-2',
-        evidence_spec_revision_id: 'spec-rev-2',
-        current_plan_revision_id: 'plan-rev-2',
-        evidence_plan_revision_id: 'plan-rev-2',
+        ...matchingRevisionAuthority,
         evidence_ref: {
           ...approvedReviewEvidence,
           spec_revision_id: 'spec-rev-2',
@@ -347,10 +371,7 @@ describe('project management release readiness contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
         kind: 'review',
         status: 'passed',
-        current_spec_revision_id: 'spec-rev-2',
-        evidence_spec_revision_id: 'spec-rev-2',
-        current_plan_revision_id: 'plan-rev-2',
-        evidence_plan_revision_id: 'plan-rev-2',
+        ...matchingRevisionAuthority,
         evidence_ref: {
           ...approvedReviewEvidence,
           spec_revision_id: 'spec-rev-2',

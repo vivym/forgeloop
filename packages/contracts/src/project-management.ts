@@ -192,35 +192,55 @@ export const evidenceRequirementStatusSchema = z
         message: 'passed readiness evidence must match the gate scope',
       });
     }
-    if (requirement.current_spec_revision_id !== undefined) {
-      if (requirement.evidence_spec_revision_id === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['evidence_spec_revision_id'],
-          message: 'passed readiness gates require evidence Spec revision authority',
-        });
-      } else if (requirement.evidence_spec_revision_id !== requirement.current_spec_revision_id) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['evidence_spec_revision_id'],
-          message: 'passed readiness evidence must match the current Spec revision',
-        });
-      }
+    if (!requirement.current_spec_revision_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['current_spec_revision_id'],
+        message: 'passed readiness gates require current Spec revision authority',
+      });
     }
-    if (requirement.current_plan_revision_id !== undefined) {
-      if (requirement.evidence_plan_revision_id === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['evidence_plan_revision_id'],
-          message: 'passed readiness gates require evidence Plan revision authority',
-        });
-      } else if (requirement.evidence_plan_revision_id !== requirement.current_plan_revision_id) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['evidence_plan_revision_id'],
-          message: 'passed readiness evidence must match the current Plan revision',
-        });
-      }
+    if (!requirement.evidence_spec_revision_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence_spec_revision_id'],
+        message: 'passed readiness gates require evidence Spec revision authority',
+      });
+    }
+    if (
+      requirement.current_spec_revision_id !== undefined &&
+      requirement.evidence_spec_revision_id !== undefined &&
+      requirement.evidence_spec_revision_id !== requirement.current_spec_revision_id
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence_spec_revision_id'],
+        message: 'passed readiness evidence must match the current Spec revision',
+      });
+    }
+    if (!requirement.current_plan_revision_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['current_plan_revision_id'],
+        message: 'passed readiness gates require current Plan revision authority',
+      });
+    }
+    if (!requirement.evidence_plan_revision_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence_plan_revision_id'],
+        message: 'passed readiness gates require evidence Plan revision authority',
+      });
+    }
+    if (
+      requirement.current_plan_revision_id !== undefined &&
+      requirement.evidence_plan_revision_id !== undefined &&
+      requirement.evidence_plan_revision_id !== requirement.current_plan_revision_id
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence_plan_revision_id'],
+        message: 'passed readiness evidence must match the current Plan revision',
+      });
     }
 
     if (requirement.kind === 'review') {
