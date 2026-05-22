@@ -803,10 +803,11 @@ const isCodexRuntimePublicFilenameToken = (value: string): boolean => {
   return extension !== undefined && extension !== value.toLowerCase() && safePublicFilenameExtensions.has(extension);
 };
 const isBareDnsHostString = (value: string): boolean => {
-  if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(value)) {
+  const candidate = value.split(/[?#]/, 1)[0]?.replace(/\.$/, '') ?? value;
+  if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(candidate)) {
     return false;
   }
-  return !isCodexRuntimePublicFilenameToken(value);
+  return !isCodexRuntimePublicFilenameToken(candidate);
 };
 const displayUnsafeEndpointTokenPattern =
   /\b(?:https?:\/\/|(?:https?|wss?|tcp|ssh|redis|postgres(?:ql)?|mysql|file):\S+|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|(?:(?:app|control)[-_](?:server|plane)|[a-z][a-z0-9-]*_[a-z0-9_-]*|redis|postgres|mysql):\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
