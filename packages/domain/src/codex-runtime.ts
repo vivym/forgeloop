@@ -765,7 +765,7 @@ const displayLeadingCompressedIpv6TokenPattern = /(?<![A-Za-z0-9])::[0-9a-f:.]*(
 const displayLegacyIpv4TokenPattern = /\b(?:0x[0-9a-f]{7,8}|0[0-7]{8,11}|\d{8,10}|(?:\d{1,3}\.){1,3}\d{1,3})\b/gi;
 const displayHexRuntimeIdTokenPattern = /\b[a-f0-9]{12,64}\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
-const displayUnsafeSecretTokenPattern =
+const publicUnsafeSecretTokenPattern =
   /\b(?:(?:api[_-]?key|token|secret|password|authorization|auth(?:[_-]?header)?)\s*(?:[:=]|Bearer\b)|Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]+)/i;
 const isCodexRuntimeUnsafeDisplayTokenString = (value: string): boolean =>
   [...value.matchAll(displayBracketedIpv6TokenPattern)].some(([candidate]) => isCodexRuntimeEndpointOrContainerString(candidate)) ||
@@ -778,7 +778,7 @@ const isCodexRuntimeUnsafeDisplayString = (value: string): boolean =>
   [...value.matchAll(displayBareDnsHostTokenPattern)].some(([candidate]) => isBareDnsHostString(candidate)) ||
   isCodexRuntimeUnsafeDisplayTokenString(value) ||
   displayUnsafePathTokenPattern.test(value) ||
-  displayUnsafeSecretTokenPattern.test(value);
+  publicUnsafeSecretTokenPattern.test(value);
 
 const isCodexRuntimeLocalPathString = (value: string): boolean => {
   if (isCodexRuntimeProductSafeString(value)) {
@@ -821,6 +821,9 @@ const isRawRuntimePublicString = (
   }
   if (isCodexRuntimeProductSafeString(value)) {
     return false;
+  }
+  if (publicUnsafeSecretTokenPattern.test(value)) {
+    return true;
   }
   if (isCodexRuntimeEndpointOrContainerString(value)) {
     return true;
@@ -1448,6 +1451,7 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
       (isRawPathEndpointOrContainerId(value) ||
         isCodexRuntimeEndpointOrContainerString(value) ||
         isBareDnsHostString(value) ||
+        publicUnsafeSecretTokenPattern.test(value) ||
         isCodexRuntimeLocalPathString(value))
     ) {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {

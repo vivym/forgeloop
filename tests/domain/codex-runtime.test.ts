@@ -20,6 +20,7 @@ import {
   validateCodexDockerRuntimeEvidence,
   validateCodexEffectiveConfigAssertions,
   validateCodexRuntimeProfileRevision,
+  type CodexDockerRuntimeEvidence,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
   type CodexDockerNetworkProxyConfig,
@@ -324,12 +325,12 @@ describe('codex runtime domain contracts', () => {
       },
       generated_payload_digest: digestA,
       generation_artifacts: [
-          {
-            kind: 'generated_payload',
-            name: 'generated payload',
-            content_type: 'application/json',
-            digest: digestA,
-            internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
+        {
+          kind: 'generated_payload',
+          name: 'generated payload',
+          content_type: 'application/json',
+          digest: digestA,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
         },
       ],
       public_summary: 'Generated a spec draft.',
@@ -342,6 +343,17 @@ describe('codex runtime domain contracts', () => {
         validateCodexRuntimeJobTerminalResult({
           ...generationResult,
           raw_prompt: 'write the private implementation details',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...generationResult,
+          generated_payload: {
+            title: 'Public spec title',
+            description: 'api_key=sk-test',
+          },
         }),
       'codex_docker_runtime_evidence_unsafe',
     );
@@ -562,6 +574,7 @@ describe('codex runtime domain contracts', () => {
       { authHeader: 'artifact://ok' },
       { api_key: 'sk-test' },
       { apiKey: 'sk-test' },
+      { description: 'Authorization: Bearer raw-token' },
       { socket_path: 'artifact://ok' },
       { socketPath: 'artifact://ok' },
       { socket_ref: 'artifact://ok' },
@@ -1003,30 +1016,30 @@ describe('codex runtime domain contracts', () => {
   });
 
   it('accepts only public-safe Docker runtime evidence', () => {
-    expect(() =>
-      validateCodexDockerRuntimeEvidence({
-        runtime_profile_id: 'profile-1',
-        runtime_profile_revision_id: 'revision-1',
-        runtime_profile_digest: digestA,
-        runtime_target_kind: 'run_execution',
-        source_access_mode: 'path_policy_scoped',
-        environment: 'local_dogfood',
-        credential_binding_id: 'credential-binding-1',
-        credential_binding_version_id: 'credential-version-1',
-        credential_payload_digest: digestB,
-        launch_lease_id: 'lease-1',
-        worker_id: 'worker-1',
-        docker_image_digest: digestA,
-        container_id_digest: digestB,
-        app_server_effective_config_digest: digestC,
-        network_policy_digest: digestA,
-        network_policy_self_test_digest: digestB,
-        docker_policy_self_check_digest: digestC,
-        workspace_isolation_digest: digestA,
-        app_server_attempted: true,
-        selected_execution_mode: 'app_server',
-      }),
-    ).not.toThrow();
+    const validDockerRuntimeEvidence = {
+      runtime_profile_id: 'profile-1',
+      runtime_profile_revision_id: 'revision-1',
+      runtime_profile_digest: digestA,
+      runtime_target_kind: 'run_execution',
+      source_access_mode: 'path_policy_scoped',
+      environment: 'local_dogfood',
+      credential_binding_id: 'credential-binding-1',
+      credential_binding_version_id: 'credential-version-1',
+      credential_payload_digest: digestB,
+      launch_lease_id: 'lease-1',
+      worker_id: 'worker-1',
+      docker_image_digest: digestA,
+      container_id_digest: digestB,
+      app_server_effective_config_digest: digestC,
+      network_policy_digest: digestA,
+      network_policy_self_test_digest: digestB,
+      docker_policy_self_check_digest: digestC,
+      workspace_isolation_digest: digestA,
+      app_server_attempted: true,
+      selected_execution_mode: 'app_server',
+    } satisfies CodexDockerRuntimeEvidence;
+
+    expect(() => validateCodexDockerRuntimeEvidence(validDockerRuntimeEvidence)).not.toThrow();
 
     expectDomainErrorCode(
       () =>
@@ -1067,12 +1080,21 @@ describe('codex runtime domain contracts', () => {
       expectDomainErrorCode(
         () =>
           validateCodexDockerRuntimeEvidence({
-            runtime_profile_id: unsafePublicId,
-            docker_image_digest: digestA,
+            ...validDockerRuntimeEvidence,
+            worker_id: unsafePublicId,
           }),
         'codex_docker_runtime_evidence_unsafe',
       );
     }
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexDockerRuntimeEvidence({
+          ...validDockerRuntimeEvidence,
+          launch_lease_id: 'Bearer raw-token',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
 
     for (const unsafeEnumPatch of [
       { runtime_target_kind: 'not_a_kind' },
@@ -1082,20 +1104,7 @@ describe('codex runtime domain contracts', () => {
       expectDomainErrorCode(
         () =>
           validateCodexDockerRuntimeEvidence({
-            runtime_profile_id: 'profile-1',
-            runtime_profile_revision_id: 'revision-1',
-            runtime_profile_digest: digestA,
-            runtime_target_kind: 'run_execution',
-            source_access_mode: 'path_policy_scoped',
-            environment: 'local_dogfood',
-            launch_lease_id: 'lease-1',
-            worker_id: 'worker-1',
-            docker_image_digest: digestA,
-            container_id_digest: digestB,
-            app_server_effective_config_digest: digestC,
-            docker_policy_self_check_digest: digestC,
-            app_server_attempted: true,
-            selected_execution_mode: 'app_server',
+            ...validDockerRuntimeEvidence,
             ...unsafeEnumPatch,
           }),
         'codex_docker_runtime_evidence_unsafe',
