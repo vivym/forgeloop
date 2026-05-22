@@ -403,6 +403,12 @@ describe('codex runtime domain contracts', () => {
     ['href', 'app-server:3845/internal'],
     ['url', 'control-plane:3845/runtime-jobs'],
     ['internal_ref', 'app-server/jobs'],
+    ['href', 'control.internal'],
+    ['url', 'app-server.internal'],
+    ['internal_ref', '10.0.0.5'],
+    ['href', '192.168.1.10'],
+    ['url', '172.16.0.2'],
+    ['internal_ref', 'fd00::1'],
   ])('rejects host-like runtime endpoint string in %s', (field, value) => {
     expectDomainErrorCode(
       () => assertCodexRuntimePublicSafeValue({ [field]: value }, 'runtime result'),

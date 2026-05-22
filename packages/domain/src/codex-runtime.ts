@@ -533,6 +533,10 @@ const isRawRuntimePublicString = (value: string): boolean => {
     return false;
   }
   const loopbackEndpointPattern = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)(:\d{1,5})?(\/|$)/i;
+  const privateIpv4EndpointPattern =
+    /^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2})(:\d{1,5})?(\/|$)/i;
+  const privateIpv6EndpointPattern = /^\[?(?:fc|fd)[0-9a-f]{0,2}:[0-9a-f:]+\]?(:\d{1,5})?(\/|$)/i;
+  const internalHostEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal(:\d{1,5})?(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
   return (
@@ -542,6 +546,9 @@ const isRawRuntimePublicString = (value: string): boolean => {
     /^unix:/i.test(value) ||
     /\.sock(?:$|[/?#])/i.test(value) ||
     loopbackEndpointPattern.test(value) ||
+    privateIpv4EndpointPattern.test(value) ||
+    privateIpv6EndpointPattern.test(value) ||
+    internalHostEndpointPattern.test(value) ||
     rawRuntimeServiceEndpointPattern.test(value) ||
     hostWithPortOrPathPattern.test(value) ||
     /^[a-f0-9]{12,64}$/i.test(value)
