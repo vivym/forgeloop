@@ -475,6 +475,7 @@ const rawRuntimePublicFieldPattern = /^raw(?:_|[A-Z]|$)/;
 const validRuntimeTargetKinds = new Set<CodexRuntimeTargetKind>(['generation', 'run_execution']);
 const validSourceAccessModes = new Set<CodexSourceAccessMode>(['artifact_only', 'path_policy_scoped']);
 const validRuntimeEnvironments = new Set<CodexRuntimeEnvironment>(['local_dogfood', 'test']);
+const singleLabelHostPortPattern = /^[a-z][a-z0-9_-]*:\d{1,5}(\/|$)/i;
 
 const normalizeRuntimePublicKey = (key: string): string =>
   key
@@ -697,7 +698,6 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
   const internalHostEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal(:\d{1,5})?(\/|$)/i;
   const clusterLocalEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc\.cluster\.local(:\d{1,5})?(\/|$)/i;
   const clusterShortServiceEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc(:\d{1,5})?(\/|$)/i;
-  const singleLabelHostPortPattern = /^[a-z][a-z0-9-]*:\d{1,5}(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
   const legacySchemeEndpointPattern = /^[A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)(.+)$/;
   const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
@@ -789,7 +789,7 @@ const isBareDnsHostString = (value: string): boolean => {
   return !isCodexRuntimePublicFilenameToken(value);
 };
 const displayUnsafeEndpointTokenPattern =
-  /\b(?:https?:\/\/|(?:https?|wss?|tcp|ssh|redis|postgres(?:ql)?|mysql|file):\S+|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|(?:app-server|control-plane|redis|postgres|mysql):\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
+  /\b(?:https?:\/\/|(?:https?|wss?|tcp|ssh|redis|postgres(?:ql)?|mysql|file):\S+|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|(?:(?:app|control)[-_](?:server|plane)|[a-z][a-z0-9-]*_[a-z0-9_-]*|redis|postgres|mysql):\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
 const displayBareDnsHostTokenPattern = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi;
 const displayBracketedIpv6TokenPattern = /\[[0-9a-f:.]+(?:%[A-Za-z0-9_.-]+)?\](?::\d{1,5})?(?:\/\S*)?/gi;
 const displayIpv6TokenPattern = /\b(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.]+(?:%[A-Za-z0-9_.-]+)?(?:\/\S*)?/gi;
