@@ -47,6 +47,9 @@ describe('MarkdownDocument validation', () => {
       'raw https://bucket.example.com/private/key?signature=raw',
       '<https://bucket.example.com/private/key?signature=raw>',
       '[encoded](java%73cript:alert(1))',
+      '[raw](s3://bucket/private.txt)',
+      '![raw](gs://bucket/private.png)',
+      'raw s3://bucket/private.txt',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }
@@ -72,6 +75,11 @@ describe('MarkdownDocument validation', () => {
       '![flow](attachment://att-1)',
       '| Col |\n| --- |\n| Value |',
       '```ts\nconst bad = true;\n```',
+      '**bold**',
+      '*italic*',
+      '~~strike~~',
+      '`inline`',
+      '---',
     ]) {
       const result = validateMarkdownDocument({
         ...baseDocument,
@@ -84,6 +92,29 @@ describe('MarkdownDocument validation', () => {
         expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
       }
     }
+  });
+
+  it('requires task_list policy for task list syntax', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['paragraph', 'list'],
+      markdown: '- [ ] task',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toContain('unsupported_block');
+    }
+  });
+
+  it('accepts task list syntax when task_list and list are allowed', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['paragraph', 'list', 'task_list'],
+      markdown: '- [ ] task',
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it('rejects unresolved attachment refs', () => {

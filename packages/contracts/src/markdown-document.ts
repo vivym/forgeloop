@@ -52,9 +52,10 @@ export type MarkdownValidationResult =
 const htmlPattern = /<\/?[a-z][\s\S]*?>/i;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
-const angleDestinationPattern = /<((?:https?:\/\/|javascript:|data:|file:|blob:)[^>\s]+)>/gi;
-const bareUrlPattern = /(?:^|[\s(])((?:https?:\/\/|javascript:|data:|file:|blob:)[^\s<>)]+)/gim;
-const rawStoragePattern = /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)/i;
+const angleDestinationPattern = /<((?:https?:\/\/|javascript:|data:|file:|blob:|s3:|gs:)[^>\s]+)>/gi;
+const bareUrlPattern = /(?:^|[\s(])((?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+)/gim;
+const rawStoragePattern =
+  /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
 const attachmentRefPattern = /attachment:\/\/([A-Za-z0-9_-]+)/g;
@@ -161,8 +162,26 @@ function detectedBlockKinds(markdown: string): Set<MarkdownBlockKind> {
   if (/(^|[^!])\[[^\]]+](?:\([^)]*\)|\[[^\]]+])/.test(markdown) || /<https?:\/\/[^>]+>/.test(markdown)) {
     blockKinds.add('link');
   }
+  if (/(^|[^*_])\*\*[^*\n]+\*\*([^*_]|$)/.test(markdown) || /(^|[^_])__[^_\n]+__([^_]|$)/.test(markdown)) {
+    blockKinds.add('bold');
+  }
+  if (/(^|[^*_])\*[^*\n]+\*([^*_]|$)/.test(markdown) || /(^|[^_])_[^_\n]+_([^_]|$)/.test(markdown)) {
+    blockKinds.add('italic');
+  }
+  if (/~~[^~\n]+~~/.test(markdown)) {
+    blockKinds.add('strikethrough');
+  }
+  if (/(^|[^`])`[^`\n]+`([^`]|$)/.test(markdown)) {
+    blockKinds.add('inline_code');
+  }
+  if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m.test(markdown)) {
+    blockKinds.add('horizontal_rule');
+  }
   if (/^\s{0,3}#{1,6}\s+\S/m.test(markdown)) {
     blockKinds.add('heading');
+  }
+  if (/^\s{0,3}[-+*]\s+\[[ xX]\]\s+\S/m.test(markdown)) {
+    blockKinds.add('task_list');
   }
   if (/^\s{0,3}(?:[-+*]\s+|\d+[.)]\s+)\S/m.test(markdown)) {
     blockKinds.add('list');
@@ -200,7 +219,12 @@ function isParagraphLine(line: string): boolean {
   if (trimmed.length === 0) {
     return false;
   }
-  if (/^(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+|>\s?|```|~~~|\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$)/.test(trimmed)) {
+  if (
+    /^(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+|>\s?|```|~~~|\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$)/.test(trimmed)
+  ) {
+    return false;
+  }
+  if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
     return false;
   }
   if (trimmed.includes('|')) {
