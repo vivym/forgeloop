@@ -4,16 +4,24 @@ import {
   DomainError,
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexLaunchTokenEnvelopeDigest,
   codexNetworkPolicyDigestInput,
   codexPublicBlockerCodes,
+  codexRuntimeJobInputDigest,
+  codexRuntimeJobIsActive,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   codexRuntimeScopeMatches,
+  codexWorkspaceAcquisitionDigest,
+  assertCodexRuntimePublicSafeValue,
   redactCodexLaunchMaterialization,
+  validateCodexRuntimeJobTerminalResult,
   validateCodexDockerNetworkProxyConfig,
   validateCodexDockerRuntimeEvidence,
   validateCodexEffectiveConfigAssertions,
   validateCodexRuntimeProfileRevision,
+  type CodexGenerationRuntimeJobResult,
+  type CodexGenerationWorkloadV1,
   type CodexDockerNetworkProxyConfig,
   type CodexCredentialBinding,
   type CodexCredentialBindingPublic,
@@ -22,13 +30,19 @@ import {
   type CodexLaunchLeaseWithToken,
   type CodexLaunchMaterialization,
   type CodexLaunchTarget,
+  type CodexLaunchTokenEnvelope,
+  type CodexRunExecutionRuntimeJobResult,
+  type CodexRunExecutionWorkloadV1,
+  type CodexRuntimeJob,
+  type CodexRuntimeJobStatus,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
   type CodexRuntimeStatusProjection,
   type CodexWorkerBootstrapToken,
   type CodexWorkerRegistration,
+  type WorkspaceBundleV1,
   type ResolvedCodexCredential,
-} from '../../packages/domain/src/index';
+} from '@forgeloop/domain';
 
 type ExportedCodexRuntimeContracts = {
   profile: CodexRuntimeProfile;
@@ -44,6 +58,14 @@ type ExportedCodexRuntimeContracts = {
   launchLeaseWithToken: CodexLaunchLeaseWithToken;
   launchMaterialization: CodexLaunchMaterialization;
   statusProjection: CodexRuntimeStatusProjection;
+  runtimeJob: CodexRuntimeJob;
+  runtimeJobStatus: CodexRuntimeJobStatus;
+  launchTokenEnvelope: CodexLaunchTokenEnvelope;
+  generationWorkload: CodexGenerationWorkloadV1;
+  generationResult: CodexGenerationRuntimeJobResult;
+  workspaceBundle: WorkspaceBundleV1;
+  runExecutionWorkload: CodexRunExecutionWorkloadV1;
+  runExecutionResult: CodexRunExecutionRuntimeJobResult;
 };
 
 const assertCodexRuntimeTypeExports = <T extends ExportedCodexRuntimeContracts>() => undefined;
@@ -170,6 +192,167 @@ const validDockerProxyConfig = (): CodexDockerNetworkProxyConfig => {
 describe('codex runtime domain contracts', () => {
   it('exports object model contracts for downstream packages', () => {
     expect(assertCodexRuntimeTypeExports()).toBeUndefined();
+  });
+
+  it('allows runtime job public blocker codes', () => {
+    expect(codexPublicBlockerCodes).toEqual(
+      expect.arrayContaining([
+        'codex_runtime_job_unavailable',
+        'codex_runtime_job_expired',
+        'codex_runtime_job_cancelled',
+        'codex_workspace_bundle_invalid',
+      ]),
+    );
+  });
+
+  it('creates stable runtime job and envelope digests', () => {
+    const workloadInput = {
+      schema_version: 'codex_generation_workload_ref.v1',
+      runtime_job_id: 'runtime-job-1',
+      task_kind: 'spec_draft',
+      workload_ref: 'artifact://codex-runtime-jobs/runtime-job-1/workload',
+      signed_context_digest: digestA,
+      prompt_template_digest: digestB,
+    };
+    const sameInputWithDifferentOrder = {
+      prompt_template_digest: digestB,
+      signed_context_digest: digestA,
+      workload_ref: 'artifact://codex-runtime-jobs/runtime-job-1/workload',
+      task_kind: 'spec_draft',
+      runtime_job_id: 'runtime-job-1',
+      schema_version: 'codex_generation_workload_ref.v1',
+    };
+    const workspaceAcquisition = {
+      bundle_id: 'bundle-1',
+      archive_ref: 'artifact://codex-runtime-jobs/runtime-job-1/workspace-bundle',
+      archive_digest: digestA,
+      manifest_digest: digestB,
+      expires_at: '2026-05-20T00:10:00.000Z',
+      size_limit_bytes: 1_000_000,
+    };
+    const envelopeInput = {
+      runtime_job_id: 'runtime-job-1',
+      launch_lease_id: 'lease-1',
+      worker_id: 'worker-1',
+      key_id: 'worker-key-1',
+      algorithm: 'x25519-hkdf-sha256-aes-256-gcm',
+      ciphertext: 'sealed-token',
+      encryption_nonce: 'nonce-1',
+      aad_json: {
+        runtime_job_id: 'runtime-job-1',
+        launch_lease_id: 'lease-1',
+      },
+      aad_digest: digestA,
+    };
+
+    expect(codexRuntimeJobInputDigest(workloadInput)).toBe(codexRuntimeJobInputDigest(sameInputWithDifferentOrder));
+    expect(codexWorkspaceAcquisitionDigest(workspaceAcquisition)).toBe(codexCanonicalDigest(workspaceAcquisition));
+    expect(codexWorkspaceAcquisitionDigest(undefined)).toBeUndefined();
+    expect(codexLaunchTokenEnvelopeDigest(envelopeInput)).toBe(codexCanonicalDigest(envelopeInput));
+  });
+
+  it('identifies active runtime jobs before terminal status', () => {
+    const baseJob = {
+      id: 'runtime-job-1',
+      job_request_id: 'job-request-1',
+      target_type: 'automation_action_run',
+      target_id: 'action-run-1',
+      target_kind: 'generation',
+      project_id: 'project-1',
+      worker_id: 'worker-1',
+      launch_lease_id: 'lease-1',
+      launch_attempt: 1,
+      input_digest: digestA,
+      input_json: {},
+      expires_at: '2026-05-20T00:10:00.000Z',
+      created_at: '2026-05-20T00:00:00.000Z',
+      updated_at: '2026-05-20T00:00:00.000Z',
+    } satisfies Omit<CodexRuntimeJob, 'status'>;
+
+    expect(codexRuntimeJobIsActive({ ...baseJob, status: 'queued' })).toBe(true);
+    expect(codexRuntimeJobIsActive({ ...baseJob, status: 'running' })).toBe(true);
+    expect(codexRuntimeJobIsActive({ ...baseJob, status: 'terminal' })).toBe(false);
+  });
+
+  it('validates public-safe terminal runtime job results', () => {
+    const generationResult = {
+      task_kind: 'spec_draft',
+      prompt_version: 'generation-prompt-v1',
+      output_schema_version: 'spec-draft-output.v1',
+      generated_payload: {
+        title: 'Public spec title',
+        artifact_ref: 'artifact://codex-runtime-jobs/runtime-job-1/generated-payload',
+      },
+      generated_payload_digest: digestA,
+      generation_artifacts: [
+        {
+          kind: 'generated_payload',
+          name: 'spec-draft.json',
+          content_type: 'application/json',
+          digest: digestA,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
+        },
+      ],
+      next_step_links: [
+        {
+          label: 'Open generated draft',
+          href: 'forgeloop://automation/action-runs/action-run-1',
+        },
+      ],
+      public_summary: 'Generated a spec draft.',
+    };
+
+    expect(validateCodexRuntimeJobTerminalResult(generationResult)).toEqual(generationResult);
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...generationResult,
+          raw_prompt: 'write the private implementation details',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...generationResult,
+          generation_artifacts: [
+            {
+              kind: 'log',
+              name: 'app-server.log',
+              content_type: 'text/plain',
+              internal_ref: 'http://127.0.0.1:3845/internal/logs/raw',
+            },
+          ],
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('rejects unsafe public runtime values without blocking safe product refs', () => {
+    expect(() =>
+      assertCodexRuntimePublicSafeValue(
+        {
+          next_step_links: [{ label: 'Open run', href: 'forgeloop://runs/run-1' }],
+          artifact_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
+          digest: digestA,
+        },
+        'runtime result',
+      ),
+    ).not.toThrow();
+
+    for (const unsafeValue of [
+      { workspace_path: '/var/lib/forgeloop/workspaces/runtime-job-1' },
+      { app_server_endpoint: 'http://127.0.0.1:4555' },
+      { control_plane_endpoint: 'https://control.internal/runtime-jobs' },
+      { socket_ref: 'unix:/tmp/codex.sock' },
+      { container_id: '4f1e2d3c4f1e' },
+      { auth_token: 'raw-token' },
+      { raw_context: { project_id: 'project-1' } },
+      'codex.sock',
+    ]) {
+      expectDomainErrorCode(() => assertCodexRuntimePublicSafeValue(unsafeValue, 'runtime result'), 'codex_docker_runtime_evidence_unsafe');
+    }
   });
 
   it('treats project-only scope as project-wide while repo scope is repo-specific', () => {

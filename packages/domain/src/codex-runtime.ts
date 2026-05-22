@@ -222,6 +222,171 @@ export interface CodexLaunchLeaseWithToken extends CodexLaunchLease {
   lease_token: string;
 }
 
+export type CodexRuntimeJobStatus = 'queued' | 'accepted' | 'materializing' | 'running' | 'terminal';
+export type CodexRuntimeJobTerminalStatus = 'succeeded' | 'failed' | 'cancelled' | 'expired';
+
+export interface CodexRuntimeJob {
+  id: string;
+  job_request_id: string;
+  target_type: CodexLaunchTarget['target_type'];
+  target_id: string;
+  target_kind: CodexRuntimeTargetKind;
+  project_id: string;
+  repo_id?: string;
+  worker_id: string;
+  launch_lease_id: string;
+  launch_attempt: number;
+  status: CodexRuntimeJobStatus;
+  input_digest: string;
+  input_json: Record<string, unknown>;
+  workspace_acquisition_digest?: string;
+  workspace_acquisition_json?: Record<string, unknown>;
+  accept_idempotency_key?: string;
+  accept_request_digest?: string;
+  accepted_at?: IsoDateTime;
+  accepted_worker_session_digest?: string;
+  accepted_session_public_key_id?: string;
+  accepted_session_epoch?: number;
+  materializing_at?: IsoDateTime;
+  materialization_request_id?: string;
+  materialization_request_digest?: string;
+  start_idempotency_key?: string;
+  start_request_digest?: string;
+  started_at?: IsoDateTime;
+  last_event_at?: IsoDateTime;
+  cancel_requested_at?: IsoDateTime;
+  cancel_idempotency_key?: string;
+  cancel_request_digest?: string;
+  drain_requested_at?: IsoDateTime;
+  terminal_idempotency_key?: string;
+  terminal_request_digest?: string;
+  terminal_at?: IsoDateTime;
+  terminal_status?: CodexRuntimeJobTerminalStatus;
+  terminal_reason_code?: string;
+  terminal_result_json?: Record<string, unknown>;
+  expires_at: IsoDateTime;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface CodexLaunchTokenEnvelope {
+  id: string;
+  runtime_job_id: string;
+  launch_lease_id: string;
+  worker_id: string;
+  key_id: string;
+  algorithm: 'x25519-hkdf-sha256-aes-256-gcm';
+  ciphertext: string;
+  encryption_nonce: string;
+  aad_json: Record<string, string>;
+  aad_digest: string;
+  envelope_digest: string;
+  status: 'available' | 'claimed' | 'expired' | 'revoked';
+  claim_request_id?: string;
+  claim_request_digest?: string;
+  claimed_worker_session_digest?: string;
+  claimed_key_id?: string;
+  claimed_at?: IsoDateTime;
+  expires_at: IsoDateTime;
+  created_at: IsoDateTime;
+}
+
+export interface CodexGenerationWorkloadV1 {
+  schema_version: 'codex_generation_workload.v1';
+  runtime_job_id: string;
+  action_run_id: string;
+  task_kind: 'spec_draft' | 'plan_draft' | 'package_drafts';
+  prompt_version: string;
+  output_schema_version: string;
+  signed_context_ref: string;
+  signed_context_digest: string;
+  prompt_template_digest: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface CodexRunExecutionWorkloadV1 {
+  schema_version: 'codex_run_execution_workload.v1';
+  runtime_job_id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  execution_package_version: number;
+  run_worker_lease_id: string;
+  workspace_bundle_id: string;
+  workspace_bundle_digest: string;
+  package_prompt_ref: string;
+  package_prompt_digest: string;
+  execution_context_ref: string;
+  execution_context_digest: string;
+  path_policy_digest: string;
+  required_checks_digest?: string;
+  output_schema_version: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface CodexGenerationRuntimeJobResult {
+  task_kind: 'spec_draft' | 'plan_draft' | 'package_drafts';
+  prompt_version: string;
+  output_schema_version: string;
+  generated_payload: Record<string, unknown>;
+  generated_payload_digest: string;
+  generation_artifacts: Array<{
+    kind: string;
+    name: string;
+    content_type: string;
+    digest?: string;
+    internal_ref?: string;
+  }>;
+  public_summary: string;
+}
+
+export interface WorkspaceBundleV1 {
+  schema_version: 'workspace_bundle.v1';
+  bundle_id: string;
+  project_id: string;
+  repo_id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  base_commit_sha: string;
+  allowed_paths: string[];
+  forbidden_paths: string[];
+  source_mutation_policy: 'path_policy_scoped';
+  archive_ref: string;
+  archive_digest: string;
+  manifest_digest: string;
+  created_at: string;
+}
+
+export interface CodexRunExecutionRuntimeJobResult {
+  task_kind: 'run_execution';
+  execution_package_id: string;
+  execution_package_version: number;
+  run_session_id: string;
+  workspace_bundle_digest: string;
+  changed_files: string[];
+  patch_artifact?: {
+    content_type: 'text/x-diff';
+    digest: string;
+    internal_ref: string;
+  };
+  check_results: Array<{
+    name: string;
+    status: 'passed' | 'failed' | 'skipped';
+    summary: string;
+    output_digest?: string;
+    output_internal_ref?: string;
+  }>;
+  execution_artifacts: Array<{
+    kind: string;
+    name: string;
+    content_type: string;
+    digest?: string;
+    internal_ref?: string;
+  }>;
+  public_summary: string;
+}
+
 export interface CodexLaunchMaterialization {
   launch_target: CodexLaunchTarget;
   profile_revision: CodexRuntimeProfileRevision;
@@ -275,6 +440,10 @@ export const codexPublicBlockerCodes = [
   'codex_credential_unavailable',
   'codex_launch_lease_denied',
   'codex_launch_materialization_denied',
+  'codex_runtime_job_unavailable',
+  'codex_runtime_job_expired',
+  'codex_runtime_job_cancelled',
+  'codex_workspace_bundle_invalid',
 ] as const;
 
 export type CodexPublicBlockerCode = (typeof codexPublicBlockerCodes)[number];
@@ -284,6 +453,8 @@ type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[
 const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
 const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[_-]?key|token|secret|auth)[A-Za-z0-9_.-]*\b)/i;
 const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
+const unsafeRuntimePublicKeyPattern = /(token|secret|auth|password|endpoint|container_id|workspace_path|source_repo_path)$/i;
+const rawRuntimePublicFieldPattern = /^raw_(prompt|context|log|logs|notification|notifications|headers?)$/i;
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -354,6 +525,23 @@ const isSha256Digest = (value: unknown): value is string => typeof value === 'st
 const isRawPathEndpointOrContainerId = (value: string): boolean =>
   /^\/|https?:\/\/|^unix:|\.sock$/i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);
 
+const isRawRuntimePublicString = (value: string): boolean => {
+  if (/^artifact:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
+    return false;
+  }
+  if (/^forgeloop:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/i.test(value)) {
+    return false;
+  }
+  return (
+    /^(\/|~\/|\.{1,2}\/|[A-Za-z]:[\\/])/i.test(value) ||
+    /^https?:\/\//i.test(value) ||
+    /^(app-server|control-plane):\/\//i.test(value) ||
+    /^unix:/i.test(value) ||
+    /\.sock(?:$|[/?#])/i.test(value) ||
+    /^[a-f0-9]{12,64}$/i.test(value)
+  );
+};
+
 const assertSha256Digest = (value: unknown, label: string, error: (message: string) => DomainError = invalidProfile): void => {
   if (!isSha256Digest(value)) {
     throw error(`${label} must be a pinned sha256 digest.`);
@@ -421,6 +609,77 @@ export const codexRuntimeProfileRevisionDigest = (revision: CodexRuntimeProfileR
     docker_policy: revision.docker_policy,
     allowed_scopes: sortedScopes(revision.allowed_scopes),
   });
+
+export const codexRuntimeJobIsActive = (job: Pick<CodexRuntimeJob, 'status'>): boolean => job.status !== 'terminal';
+
+const unsafeCodexRuntimePublicValue = (message: string, details?: Record<string, unknown>): DomainError =>
+  new DomainError('codex_docker_runtime_evidence_unsafe', message, details);
+
+const assertCodexRuntimePublicSafeRecord = (value: unknown, label: string, path: readonly string[]): void => {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'string' ||
+    Array.isArray(value) ||
+    isPlainObject(value)
+  ) {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw unsafeCodexRuntimePublicValue(`Codex runtime ${label} must be JSON-compatible.`, { field: path.join('.') });
+    }
+    if (typeof value === 'string' && isRawRuntimePublicString(value)) {
+      throw unsafeCodexRuntimePublicValue(
+        'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
+        { field: path.join('.') },
+      );
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => assertCodexRuntimePublicSafeRecord(entry, label, [...path, String(index)]));
+    }
+    if (isPlainObject(value)) {
+      for (const [key, entry] of Object.entries(value)) {
+        const entryPath = [...path, key];
+        if (unsafeRuntimePublicKeyPattern.test(key) || rawRuntimePublicFieldPattern.test(key)) {
+          throw unsafeCodexRuntimePublicValue(
+            'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
+            { field: entryPath.join('.') },
+          );
+        }
+        assertCodexRuntimePublicSafeRecord(entry, label, entryPath);
+      }
+    }
+    return;
+  }
+
+  throw unsafeCodexRuntimePublicValue(`Codex runtime ${label} must be JSON-compatible.`, { field: path.join('.') });
+};
+
+export const assertCodexRuntimePublicSafeValue = (input: unknown, label: string): void => {
+  assertCodexRuntimePublicSafeRecord(input, label, []);
+};
+
+export const codexRuntimeJobInputDigest = (input: unknown): string => {
+  assertCodexRuntimePublicSafeValue(input, 'job input');
+  return codexCanonicalDigest(input);
+};
+
+export const codexWorkspaceAcquisitionDigest = (input: unknown | undefined): string | undefined => {
+  if (input === undefined) {
+    return undefined;
+  }
+  assertCodexRuntimePublicSafeValue(input, 'workspace acquisition');
+  return codexCanonicalDigest(input);
+};
+
+export const codexLaunchTokenEnvelopeDigest = (input: unknown): string => codexCanonicalDigest(input);
+
+export const validateCodexRuntimeJobTerminalResult = (input: unknown): Record<string, unknown> => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result must be an object.');
+  }
+  assertCodexRuntimePublicSafeValue(input, 'terminal result');
+  return input;
+};
 
 export const validateCodexDockerNetworkProxyConfig = (config: CodexDockerNetworkProxyConfig): CodexDockerNetworkProxyConfig => {
   assertSha256Digest(config.proxy_image_digest, 'Docker proxy image digest', dockerPolicyUnavailable);
