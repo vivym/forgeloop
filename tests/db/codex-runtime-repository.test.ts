@@ -18,6 +18,10 @@ import {
 
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 
+type CodexRuntimeJobRepositoryContract = Pick<DeliveryRepository, 'createOrReplayCodexRuntimeJobWithLeaseAndEnvelope'>;
+
+const assertCodexRuntimeJobRepositoryContract = <T extends CodexRuntimeJobRepositoryContract>() => undefined;
+
 const now = '2026-05-20T00:00:00.000Z';
 const later = '2026-05-20T00:01:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
@@ -911,6 +915,13 @@ describe('codex runtime repository behavior', () => {
       name: 'DomainError',
       code: 'codex_worker_nonce_replay',
     });
+  });
+
+  it('exposes the remote runtime job create/replay repository contract', () => {
+    const repository = createRepository() as unknown as Record<string, unknown>;
+
+    expect(assertCodexRuntimeJobRepositoryContract<DeliveryRepository>()).toBeUndefined();
+    expect(typeof repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope).toBe('function');
   });
 
   it('replays launch leases idempotently for the same lease_request_id', async () => {

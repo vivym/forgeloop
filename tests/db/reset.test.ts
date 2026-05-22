@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertResettableDatabaseUrl } from '../../packages/db/src/index';
+import { assertResettableDatabaseUrl, resettableTables } from '../../packages/db/src/index';
 
 describe('database reset guard', () => {
   it.each([
@@ -30,5 +30,23 @@ describe('database reset guard', () => {
     expect(() => assertResettableDatabaseUrl('not a database url', { FORGELOOP_CONFIRM_DB_RESET: '1' })).toThrow(
       /could not parse/i,
     );
+  });
+
+  it('truncates Codex runtime job tables before launch leases', () => {
+    expect(resettableTables).toEqual(
+      expect.arrayContaining([
+        'codex_runtime_job_artifacts',
+        'codex_launch_token_envelopes',
+        'codex_runtime_jobs',
+        'codex_pending_workspace_bundles',
+        'codex_launch_leases',
+      ]),
+    );
+
+    const launchLeaseIndex = resettableTables.indexOf('codex_launch_leases');
+    expect(resettableTables.indexOf('codex_runtime_job_artifacts')).toBeLessThan(launchLeaseIndex);
+    expect(resettableTables.indexOf('codex_launch_token_envelopes')).toBeLessThan(launchLeaseIndex);
+    expect(resettableTables.indexOf('codex_runtime_jobs')).toBeLessThan(launchLeaseIndex);
+    expect(resettableTables.indexOf('codex_pending_workspace_bundles')).toBeLessThan(launchLeaseIndex);
   });
 });

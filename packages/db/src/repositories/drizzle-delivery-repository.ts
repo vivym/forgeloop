@@ -127,6 +127,8 @@ import type {
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   CreateCodexWorkerBootstrapTokenInput,
+  CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
   CreateOrReplayCodexLaunchLeaseInput,
   CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
@@ -1149,6 +1151,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
             capabilityList(record.capabilities_json, 'network_provider_config_digests').includes(input.network_provider_config_digest)),
       );
     return matched === undefined ? undefined : registrationFromDbRecord(matched);
+  }
+
+  async createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
+    _input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult> {
+    throw codexDenied('codex_launch_lease_denied', 'Codex runtime job create/replay is not implemented.');
   }
 
   async createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLease & { lease_token: string }> {

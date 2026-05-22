@@ -12,7 +12,9 @@ import type {
   CodexLaunchLease,
   CodexLaunchLeaseWithToken,
   CodexLaunchMaterialization,
+  CodexLaunchTokenEnvelope,
   CodexLaunchTarget,
+  CodexRuntimeJob,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
   CodexRuntimeScope,
@@ -217,6 +219,221 @@ export interface CreateOrReplayCodexLaunchLeaseInput {
   run_session_updated_at?: string;
   execution_package_version?: number;
   expires_at: string;
+  now: string;
+}
+
+export interface CodexLaunchTokenEnvelopeSealer {
+  sealLaunchTokenEnvelope(input: {
+    plaintext_launch_token: string;
+    runtime_job_id: string;
+    launch_lease_id: string;
+    envelope_id: string;
+    worker_id: string;
+    worker_public_key_material: string;
+    key_id: string;
+    expires_at: string;
+  }): Promise<Omit<CodexLaunchTokenEnvelope, 'status' | 'created_at'>>;
+}
+
+export interface PendingWorkspaceBundleInput {
+  bundle_id: string;
+  pending_artifact_ref: string;
+  archive_digest: string;
+  manifest_digest: string;
+  run_worker_lease_id: string;
+  workspace_acquisition_digest: string;
+  workspace_acquisition_json: Record<string, unknown>;
+  expires_at: string;
+}
+
+export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
+  runtime_job_id: string;
+  launch_lease_id: string;
+  envelope_id: string;
+  job_request_id: string;
+  target: CodexLaunchTarget;
+  launch_attempt: number;
+  worker_id: string;
+  runtime_profile_revision_id: string;
+  runtime_profile_digest: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  credential_payload_digest: string;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+  input_json: Record<string, unknown>;
+  input_digest: string;
+  workspace_acquisition_json?: Record<string, unknown>;
+  workspace_acquisition_digest?: string;
+  pending_workspace_bundle?: PendingWorkspaceBundleInput;
+  action_type?: string;
+  action_attempt?: number;
+  action_claim_token_hash?: string;
+  precondition_fingerprint?: string;
+  execution_package_id?: string;
+  run_worker_lease_id?: string;
+  run_worker_lease_token_hash?: string;
+  run_session_status?: string;
+  run_session_updated_at?: string;
+  execution_package_version?: number;
+  expires_at: string;
+  now: string;
+}
+
+export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult {
+  runtime_job: CodexRuntimeJob;
+  launch_lease: CodexLaunchLease;
+  envelope: CodexLaunchTokenEnvelope;
+  replayed: boolean;
+}
+
+export interface PollCodexRuntimeJobsInput {
+  worker_id: string;
+  worker_session_token: string;
+  target_kinds?: readonly CodexRuntimeTargetKind[];
+  limit: number;
+  now: string;
+}
+
+export interface AcceptCodexRuntimeJobInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  accepted_worker_session_digest: string;
+  accepted_session_public_key_id: string;
+  accepted_session_epoch: number;
+  idempotency_key: string;
+  request_digest: string;
+  now: string;
+}
+
+export interface ClaimCodexLaunchTokenEnvelopeInput {
+  runtime_job_id: string;
+  envelope_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  accepted_worker_session_digest: string;
+  key_id: string;
+  claim_request_id: string;
+  request_digest: string;
+  now: string;
+}
+
+export interface MaterializeCodexRuntimeJobInput {
+  runtime_job_id: string;
+  launch_lease_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  launch_token_hash: string;
+  accepted_worker_session_digest: string;
+  materialization_request_id: string;
+  request_digest: string;
+  active_fence?: CodexLaunchFenceSnapshot;
+  now: string;
+}
+
+export interface StartCodexRuntimeJobInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  idempotency_key: string;
+  request_digest: string;
+  runtime_evidence_digest: string;
+  now: string;
+}
+
+export interface AppendCodexRuntimeJobEventInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  event_id: string;
+  event_type: string;
+  event_payload_json: Record<string, unknown>;
+  request_digest: string;
+  now: string;
+}
+
+export interface CreateCodexRuntimeJobArtifactInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  artifact_id: string;
+  artifact_idempotency_key: string;
+  kind: string;
+  name: string;
+  content_type: string;
+  digest: string;
+  internal_ref: string;
+  size_bytes: number;
+  metadata_json: Record<string, unknown>;
+  request_digest: string;
+  now: string;
+}
+
+export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleInput {
+  id: string;
+  request_digest: string;
+  created_at: string;
+}
+
+export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
+  runtime_job_id: string;
+  bundle_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  now: string;
+}
+
+export interface CancelCodexRuntimeJobInput {
+  runtime_job_id: string;
+  reason_code: string;
+  idempotency_key: string;
+  request_digest: string;
+  now: string;
+}
+
+export interface TerminalizeCodexRuntimeJobInput {
+  runtime_job_id: string;
+  launch_lease_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  terminal_status: NonNullable<CodexRuntimeJob['terminal_status']>;
+  reason_code: string;
+  terminal_result_json?: Record<string, unknown>;
+  idempotency_key: string;
+  request_digest: string;
+  now: string;
+}
+
+export interface RecoverStaleCodexRuntimeJobsInput {
+  stale_before: string;
+  now: string;
+  worker_id?: string;
+  reason_code: string;
+}
+
+export interface RecoverStaleCodexRuntimeJobsResult {
+  recovered_runtime_jobs: CodexRuntimeJob[];
+  recovered_launch_leases: CodexLaunchLease[];
+}
+
+export interface GetCodexLaunchLeaseStatusInput {
+  launch_lease_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  now: string;
+}
+
+export interface RefreshCodexWorkerSessionInput {
+  worker_id: string;
+  current_session_token: string;
+  next_session_token: string;
+  next_session_expires_at: string;
+  next_session_public_key_id: string;
+  next_session_public_key_material: string;
+  next_session_public_key_expires_at: string;
+  request_digest: string;
   now: string;
 }
 
@@ -880,6 +1097,9 @@ export interface DeliveryRepository {
   upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration>;
   heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration>;
   findAvailableCodexWorker(input: FindAvailableCodexWorkerInput): Promise<CodexWorkerRegistration | undefined>;
+  createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult>;
   createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLeaseWithToken>;
   materializeCodexLaunchLease(input: MaterializeCodexLaunchLeaseInput): Promise<CodexLaunchMaterialization>;
   terminalizeCodexLaunchLease(input: TerminalizeCodexLaunchLeaseInput): Promise<CodexLaunchLease>;

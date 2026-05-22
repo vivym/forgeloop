@@ -45,6 +45,10 @@ import {
   codex_credential_bindings,
   codex_credential_binding_versions,
   codex_launch_leases,
+  codex_launch_token_envelopes,
+  codex_pending_workspace_bundles,
+  codex_runtime_job_artifacts,
+  codex_runtime_jobs,
   codex_runtime_setup_nonces,
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
@@ -81,6 +85,10 @@ const requiredTables = {
   codex_worker_bootstrap_tokens,
   codex_worker_registrations,
   codex_worker_session_nonces,
+  codex_runtime_jobs,
+  codex_launch_token_envelopes,
+  codex_runtime_job_artifacts,
+  codex_pending_workspace_bundles,
   codex_launch_leases,
   codex_runtime_setup_nonces,
   automation_project_settings,
@@ -179,6 +187,10 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'codex_credential_bindings',
         'codex_credential_binding_versions',
         'codex_launch_leases',
+        'codex_launch_token_envelopes',
+        'codex_pending_workspace_bundles',
+        'codex_runtime_job_artifacts',
+        'codex_runtime_jobs',
         'codex_runtime_profiles',
         'codex_runtime_profile_revisions',
         'codex_runtime_setup_nonces',
@@ -453,6 +465,50 @@ describe('P1 core schema release flow Drizzle schema', () => {
       'target_id',
       'launch_attempt',
     ]);
+  });
+
+  it('defines Codex runtime job persistence tables and safety indexes', () => {
+    expect(columnType(codex_runtime_jobs, 'id')).toBe('PgUUID');
+    expect(columnType(codex_runtime_jobs, 'jobRequestId')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'inputJson')).toBe('PgJsonb');
+    expect(columnType(codex_runtime_jobs, 'workspaceAcquisitionJson')).toBe('PgJsonb');
+    expect(columnType(codex_runtime_jobs, 'terminalResultJson')).toBe('PgJsonb');
+    expect(columnType(codex_runtime_jobs, 'acceptedWorkerSessionDigest')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'acceptedSessionPublicKeyId')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'materializationRequestDigest')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'cancelRequestDigest')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'terminalRequestDigest')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'lastEventAt')).toBe('PgTimestampString');
+
+    expect(columnType(codex_launch_token_envelopes, 'id')).toBe('PgUUID');
+    expect(columnType(codex_launch_token_envelopes, 'runtimeJobId')).toBe('PgUUID');
+    expect(columnType(codex_launch_token_envelopes, 'aadJson')).toBe('PgJsonb');
+    expect(columnType(codex_launch_token_envelopes, 'claimRequestDigest')).toBe('PgText');
+    expect(columnType(codex_launch_token_envelopes, 'claimedWorkerSessionDigest')).toBe('PgText');
+    expect(Object.keys(getTableColumns(codex_launch_token_envelopes))).not.toContain('launchToken');
+    expect(Object.keys(getTableColumns(codex_launch_token_envelopes))).not.toContain('plaintextLaunchToken');
+
+    expect(columnType(codex_runtime_job_artifacts, 'runtimeJobId')).toBe('PgUUID');
+    expect(columnType(codex_runtime_job_artifacts, 'metadataJson')).toBe('PgJsonb');
+    expect(columnType(codex_pending_workspace_bundles, 'workspaceAcquisitionJson')).toBe('PgJsonb');
+    expect(columnType(codex_pending_workspace_bundles, 'runWorkerLeaseId')).toBe('PgText');
+
+    expect(hasUniqueIndex(codex_runtime_jobs, 'codex_runtime_jobs_job_request_idx', ['job_request_id'])).toBe(true);
+    const targetAttemptColumns = uniqueIndexColumns(codex_runtime_jobs, 'codex_runtime_jobs_target_attempt_idx');
+    expect(targetAttemptColumns.map((indexColumn) => (indexColumn as { name?: string }).name)).toEqual([
+      'project_id',
+      undefined,
+      'target_type',
+      'target_id',
+      'launch_attempt',
+    ]);
+    expect(hasUniqueIndex(codex_launch_token_envelopes, 'codex_launch_token_envelopes_runtime_job_idx', ['runtime_job_id'])).toBe(true);
+    expect(hasUniqueIndex(codex_runtime_job_artifacts, 'codex_runtime_job_artifacts_job_digest_idx', [
+      'runtime_job_id',
+      'digest',
+      'content_type',
+    ])).toBe(true);
+    expect(hasUniqueIndex(codex_pending_workspace_bundles, 'codex_pending_workspace_bundles_bundle_idx', ['bundle_id'])).toBe(true);
   });
 
   it('defines release uniqueness and evidence contract constraints', () => {

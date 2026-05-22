@@ -78,6 +78,8 @@ import type {
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   CreateCodexWorkerBootstrapTokenInput,
+  CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
   CreateOrReplayCodexLaunchLeaseInput,
   CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
@@ -767,6 +769,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       )
       .sort((left, right) => left.registration.active_lease_count - right.registration.active_lease_count)[0];
     return this.cloneMaybe(worker?.registration);
+  }
+
+  async createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
+    _input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult> {
+    throw codexDenied('codex_launch_lease_denied', 'Codex runtime job create/replay is not implemented.');
   }
 
   async createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLeaseWithToken> {

@@ -2,8 +2,10 @@ import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type {
   CodexCredentialBinding,
+  CodexLaunchTokenEnvelope,
   CodexDockerPolicy,
   CodexEffectiveConfigAssertions,
+  CodexRuntimeJob,
   CodexRuntimeNetworkPolicy,
   CodexRuntimeResourceLimits,
   CodexRuntimeScope,
@@ -243,5 +245,163 @@ export const codex_launch_leases = pgTable(
     ),
     index('codex_launch_leases_worker_status_idx').on(table.workerId, table.status),
     index('codex_launch_leases_target_fence_idx').on(table.targetType, table.targetId, table.targetKind),
+  ],
+);
+
+export const codex_runtime_jobs = pgTable(
+  'codex_runtime_jobs',
+  {
+    id: uuid('id').primaryKey(),
+    jobRequestId: text('job_request_id').notNull(),
+    targetType: text('target_type').notNull(),
+    targetId: text('target_id').notNull(),
+    targetKind: text('target_kind').$type<CodexRuntimeTargetKind>().notNull(),
+    projectId: uuid('project_id').notNull(),
+    repoId: text('repo_id'),
+    workerId: uuid('worker_id')
+      .notNull()
+      .references(() => codex_worker_registrations.id),
+    launchLeaseId: uuid('launch_lease_id')
+      .notNull()
+      .references(() => codex_launch_leases.id),
+    launchAttempt: integer('launch_attempt').notNull(),
+    status: text('status').$type<CodexRuntimeJob['status']>().notNull(),
+    inputDigest: text('input_digest').notNull(),
+    inputJson: jsonb('input_json').$type<Record<string, unknown>>().notNull(),
+    workspaceAcquisitionDigest: text('workspace_acquisition_digest'),
+    workspaceAcquisitionJson: jsonb('workspace_acquisition_json').$type<Record<string, unknown>>(),
+    runtimeProfileRevisionId: uuid('runtime_profile_revision_id')
+      .notNull()
+      .references(() => codex_runtime_profile_revisions.id),
+    runtimeProfileDigest: text('runtime_profile_digest').notNull(),
+    credentialBindingId: uuid('credential_binding_id')
+      .notNull()
+      .references(() => codex_credential_bindings.id),
+    credentialBindingVersionId: uuid('credential_binding_version_id')
+      .notNull()
+      .references(() => codex_credential_binding_versions.id),
+    credentialPayloadDigest: text('credential_payload_digest').notNull(),
+    dockerImageDigest: text('docker_image_digest').notNull(),
+    networkPolicyDigest: text('network_policy_digest').notNull(),
+    networkProviderConfigDigest: text('network_provider_config_digest'),
+    envelopeDigest: text('envelope_digest').notNull(),
+    acceptIdempotencyKey: text('accept_idempotency_key'),
+    acceptRequestDigest: text('accept_request_digest'),
+    acceptedAt: timestampColumn('accepted_at'),
+    acceptedWorkerSessionDigest: text('accepted_worker_session_digest'),
+    acceptedSessionPublicKeyId: text('accepted_session_public_key_id'),
+    acceptedSessionEpoch: integer('accepted_session_epoch'),
+    materializingAt: timestampColumn('materializing_at'),
+    materializationRequestId: text('materialization_request_id'),
+    materializationRequestDigest: text('materialization_request_digest'),
+    startIdempotencyKey: text('start_idempotency_key'),
+    startRequestDigest: text('start_request_digest'),
+    startedAt: timestampColumn('started_at'),
+    lastEventAt: timestampColumn('last_event_at'),
+    cancelRequestedAt: timestampColumn('cancel_requested_at'),
+    cancelIdempotencyKey: text('cancel_idempotency_key'),
+    cancelRequestDigest: text('cancel_request_digest'),
+    drainRequestedAt: timestampColumn('drain_requested_at'),
+    terminalIdempotencyKey: text('terminal_idempotency_key'),
+    terminalRequestDigest: text('terminal_request_digest'),
+    terminalAt: timestampColumn('terminal_at'),
+    terminalStatus: text('terminal_status'),
+    terminalReasonCode: text('terminal_reason_code'),
+    terminalResultJson: jsonb('terminal_result_json').$type<Record<string, unknown>>(),
+    expiresAt: timestampColumn('expires_at').notNull(),
+    createdAt: timestampColumn('created_at').notNull(),
+    updatedAt: timestampColumn('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('codex_runtime_jobs_job_request_idx').on(table.jobRequestId),
+    uniqueIndex('codex_runtime_jobs_target_attempt_idx').on(
+      table.projectId,
+      sql`coalesce(${table.repoId}, '')`,
+      table.targetType,
+      table.targetId,
+      table.launchAttempt,
+    ),
+    index('codex_runtime_jobs_worker_status_idx').on(table.workerId, table.status),
+    index('codex_runtime_jobs_recovery_idx').on(table.status, table.expiresAt, table.lastEventAt),
+  ],
+);
+
+export const codex_launch_token_envelopes = pgTable(
+  'codex_launch_token_envelopes',
+  {
+    id: uuid('id').primaryKey(),
+    runtimeJobId: uuid('runtime_job_id')
+      .notNull()
+      .references(() => codex_runtime_jobs.id, { onDelete: 'cascade' }),
+    launchLeaseId: uuid('launch_lease_id')
+      .notNull()
+      .references(() => codex_launch_leases.id),
+    workerId: uuid('worker_id')
+      .notNull()
+      .references(() => codex_worker_registrations.id),
+    keyId: text('key_id').notNull(),
+    algorithm: text('algorithm').$type<CodexLaunchTokenEnvelope['algorithm']>().notNull(),
+    ciphertext: text('ciphertext').notNull(),
+    encryptionNonce: text('encryption_nonce').notNull(),
+    aadJson: jsonb('aad_json').$type<Record<string, string>>().notNull(),
+    aadDigest: text('aad_digest').notNull(),
+    envelopeDigest: text('envelope_digest').notNull(),
+    status: text('status').$type<CodexLaunchTokenEnvelope['status']>().notNull(),
+    claimRequestId: text('claim_request_id'),
+    claimRequestDigest: text('claim_request_digest'),
+    claimedWorkerSessionDigest: text('claimed_worker_session_digest'),
+    claimedKeyId: text('claimed_key_id'),
+    claimedAt: timestampColumn('claimed_at'),
+    expiresAt: timestampColumn('expires_at').notNull(),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('codex_launch_token_envelopes_runtime_job_idx').on(table.runtimeJobId),
+    index('codex_launch_token_envelopes_worker_status_idx').on(table.workerId, table.status),
+  ],
+);
+
+export const codex_runtime_job_artifacts = pgTable(
+  'codex_runtime_job_artifacts',
+  {
+    id: uuid('id').primaryKey(),
+    runtimeJobId: uuid('runtime_job_id')
+      .notNull()
+      .references(() => codex_runtime_jobs.id, { onDelete: 'cascade' }),
+    artifactIdempotencyKey: text('artifact_idempotency_key').notNull(),
+    kind: text('kind').notNull(),
+    name: text('name').notNull(),
+    contentType: text('content_type').notNull(),
+    digest: text('digest').notNull(),
+    internalRef: text('internal_ref').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    metadataJson: jsonb('metadata_json').$type<Record<string, unknown>>().notNull(),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('codex_runtime_job_artifacts_job_digest_idx').on(table.runtimeJobId, table.digest, table.contentType),
+    uniqueIndex('codex_runtime_job_artifacts_idempotency_idx').on(table.runtimeJobId, table.artifactIdempotencyKey),
+  ],
+);
+
+export const codex_pending_workspace_bundles = pgTable(
+  'codex_pending_workspace_bundles',
+  {
+    id: uuid('id').primaryKey(),
+    bundleId: text('bundle_id').notNull(),
+    runtimeJobId: uuid('runtime_job_id').references(() => codex_runtime_jobs.id, { onDelete: 'set null' }),
+    runWorkerLeaseId: text('run_worker_lease_id').notNull(),
+    status: text('status').notNull(),
+    pendingArtifactRef: text('pending_artifact_ref').notNull(),
+    archiveDigest: text('archive_digest').notNull(),
+    manifestDigest: text('manifest_digest').notNull(),
+    workspaceAcquisitionDigest: text('workspace_acquisition_digest').notNull(),
+    workspaceAcquisitionJson: jsonb('workspace_acquisition_json').$type<Record<string, unknown>>().notNull(),
+    expiresAt: timestampColumn('expires_at').notNull(),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('codex_pending_workspace_bundles_bundle_idx').on(table.bundleId),
+    index('codex_pending_workspace_bundles_run_worker_lease_idx').on(table.runWorkerLeaseId, table.status),
   ],
 );
