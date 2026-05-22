@@ -1120,6 +1120,59 @@ describe('codex runtime repository behavior', () => {
     expect(sealerCalls).toHaveLength(1);
   });
 
+  it('rejects runtime job replay after the stored action claim fence expires', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await runtimeJobInput(repository, {
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        runtime_job_id: 'runtime-job-stale-action-replay',
+        now: '2026-05-20T00:11:00.000Z',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects runtime job replay after the stored launch lease expires', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const target = generationTarget({ target_id: 'generation-lease-expiry-replay' });
+    await claimGenerationAction(repository, {
+      id: target.target_id,
+      idempotency_key: 'runtime-generation-lease-expiry-replay-idem',
+      target_object_id: target.target_id,
+      action_input_json: { generation_id: target.target_id },
+      claim_token: 'runtime-action-claim-token-1',
+      precondition_fingerprint: 'runtime-precondition-1',
+      locked_until: '2026-05-20T00:30:00.000Z',
+    });
+    const input = await runtimeJobInput(repository, {
+      runtime_job_id: 'runtime-job-lease-expiry-replay',
+      launch_lease_id: 'runtime-launch-lease-expiry-replay',
+      envelope_id: 'runtime-envelope-lease-expiry-replay',
+      job_request_id: 'runtime-job-request-lease-expiry-replay',
+      target,
+      expires_at: expiresAt,
+    });
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        runtime_job_id: 'runtime-job-lease-expiry-replay-ignored',
+        now: '2026-05-20T00:11:00.000Z',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
   it('creates runtime jobs for the selected eligible worker even when another worker has more free slots', async () => {
     const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
     const repository = createRepository(createEnvelopeSealer(sealerCalls));

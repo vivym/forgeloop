@@ -3598,7 +3598,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (record === undefined || leaseRecord === undefined || envelope === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job replay record is inconsistent.');
     }
-    if (!this.codexRuntimeJobReplayMatches(record, leaseRecord, envelope, input)) {
+    if (
+      leaseRecord.lease.expires_at <= input.now ||
+      !this.codexLaunchFenceIsActive(leaseRecord, undefined, input.now) ||
+      !this.codexRuntimeJobReplayMatches(record, leaseRecord, envelope, input)
+    ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job replay did not match original request.');
     }
     return {
