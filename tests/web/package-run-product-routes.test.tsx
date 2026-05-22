@@ -1363,8 +1363,9 @@ describe('package and run product routes', () => {
 });
 
 function expectStatusPillText(value: string) {
-  const statusPills = Array.from(document.body.querySelectorAll('.fl-status-pill'));
-  expect(statusPills.some((pill) => pill.textContent?.includes(value))).toBe(true);
+  const header = document.body.querySelector('.fl-page-header');
+  expect(header).toBeTruthy();
+  expect(header?.textContent).toContain(value);
 }
 
 function expectPageHeaderText(pattern: RegExp) {

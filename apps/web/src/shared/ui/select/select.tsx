@@ -1,5 +1,6 @@
 import type { SelectHTMLAttributes } from 'react';
 
+import { resolveAriaInvalid } from '../form-control-state';
 import { cn } from '../../utils/cn';
 
 export interface SelectOption {
@@ -11,11 +12,22 @@ export interface SelectOption {
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   options: SelectOption[];
   placeholder?: string;
+  invalid?: boolean;
 }
 
-export function Select({ className, options, placeholder, ...props }: SelectProps) {
+export function Select({ className, options, placeholder, invalid = false, ...props }: SelectProps) {
+  const ariaInvalid = resolveAriaInvalid(invalid, props['aria-invalid']);
+
   return (
-    <select className={cn('fl-select', className)} {...props}>
+    <select
+      aria-invalid={ariaInvalid.value}
+      className={cn(
+        'min-h-10 w-full rounded-md border border-border bg-surface px-3 text-sm text-text-primary transition-colors duration-base ease-standard motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-60',
+        ariaInvalid.isInvalid ? 'border-danger' : null,
+        className,
+      )}
+      {...props}
+    >
       {placeholder ? (
         <option value="" disabled={props.required}>
           {placeholder}
