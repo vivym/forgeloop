@@ -119,6 +119,28 @@ describe('MarkdownDocument validation', () => {
     }
   });
 
+  it('rejects mdx esm and directive syntax outside fenced code blocks', () => {
+    for (const markdown of [
+      'import Alert from "./Alert"',
+      'export const x = 1',
+      '::note',
+      ':::note',
+      ':badge[Text]',
+    ]) {
+      expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
+    }
+  });
+
+  it('allows mdx-like examples inside fenced code blocks when code blocks are allowed', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['code_block'],
+      markdown: '```mdx\nimport Alert from "./Alert"\nexport const x = 1\n::note\n:::note\n:badge[Text]\n```',
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it('does not scan fenced code block contents as active destinations or raw html', () => {
     const result = validateMarkdownDocument({
       ...baseDocument,

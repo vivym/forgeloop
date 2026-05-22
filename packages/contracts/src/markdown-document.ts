@@ -62,6 +62,9 @@ const rawStorageMarkerPattern = /(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
 const canonicalAttachmentDestinationPattern = /^attachment:\/\/([A-Za-z0-9_-]+)$/;
+const mdxEsmPattern =
+  /^\s{0,3}(?:import(?:\s+type)?(?:\s+.+\s+from\s+|\s*)["'][^"']+["'];?|export\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|\{|\*)[^\n]*)$/m;
+const mdxDirectivePattern = /(?:^\s{0,3}::+[A-Za-z][\w-]*(?:[\s{].*)?$|(?:^|[\s([{]):[A-Za-z][\w-]*(?:\[[^\]\n]*]|\{[^}\n]*}))/m;
 
 export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValidationResult {
   const parsed = markdownDocumentSchema.safeParse(input);
@@ -81,6 +84,12 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
 
   if (htmlPattern.test(activeMarkdown)) {
     issues.push({ code: 'raw_html', message: 'Markdown must not contain raw HTML or MDX JSX.' });
+  }
+  if (mdxEsmPattern.test(activeMarkdown)) {
+    issues.push({ code: 'unsupported_block', message: 'Markdown must not contain MDX ESM import or export syntax.' });
+  }
+  if (mdxDirectivePattern.test(activeMarkdown)) {
+    issues.push({ code: 'unsupported_block', message: 'Markdown must not contain MDX or custom directive syntax.' });
   }
 
   for (const blockKind of unsupportedBlockKinds(document.markdown, new Set(document.allowed_blocks))) {
