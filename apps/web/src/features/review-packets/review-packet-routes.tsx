@@ -11,8 +11,8 @@ import {
 import type { ChangedFile, ProductListItem, ReviewPacket, RequestedChange, TimelineEntry } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { DataTable, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
+import { ActionRail, DetailLayout, InlineActions, MetadataGrid, PageHeader, PillGroup, Section } from '../../shared/layout';
+import { Badge, DataTable, InlineNotice, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
 import { ReviewDecisionForm } from './review-decision-form';
 
 const supportedReviewFilters = ['status', 'reviewer_actor_id', 'decision', 'execution_package_id', 'run_session_id', 'cursor', 'limit'];
@@ -118,11 +118,11 @@ function ReviewPacketDetailView({ reviewPacketId }: { reviewPacketId: string }) 
       header={
         <PageHeader
           eyebrow={
-            <span className="fl-inline-actions">
+            <InlineActions>
               <span>Review</span>
               <StatusPill tone={reviewDecisionTone(review.decision)}>{review.decision}</StatusPill>
               <StatusPill tone={reviewDecisionTone(review.status)}>{review.status}</StatusPill>
-            </span>
+            </InlineActions>
           }
           subtitle={review.check_result_summary ?? review.self_review?.summary ?? 'Review packet is ready for product decision.'}
           title={review.summary ?? 'Review packet'}
@@ -130,19 +130,21 @@ function ReviewPacketDetailView({ reviewPacketId }: { reviewPacketId: string }) 
       }
     >
       <Section title="Summary" description="Decision state, related package, and latest run context.">
-        <dl className="fl-metadata-grid">
-          <Metadata label="Review summary" value={review.summary ?? 'Review summary unavailable'} />
-          <Metadata label="Decision" value={review.decision} />
-          <Metadata label="Status" value={`Status: ${review.status}`} />
-          <Metadata label="Assigned reviewer" value={review.reviewer_actor_id ? 'Assigned' : 'Unassigned'} />
-          <Metadata label="Recorded decision" value={review.reviewed_by_actor_id ? 'Recorded' : 'Not recorded'} />
-          <Metadata label="Reviewed at" value={formatDate(review.reviewed_at)} />
-          <Metadata label="Run result" value={review.self_review?.status ?? review.check_result_summary ?? 'Run summary unavailable'} />
-        </dl>
-        <div className="fl-inline-actions">
+        <MetadataGrid
+          items={[
+            { label: 'Review summary', value: review.summary ?? 'Review summary unavailable' },
+            { label: 'Decision', value: review.decision },
+            { label: 'Status', value: `Status: ${review.status}` },
+            { label: 'Assigned reviewer', value: review.reviewer_actor_id ? 'Assigned' : 'Unassigned' },
+            { label: 'Recorded decision', value: review.reviewed_by_actor_id ? 'Recorded' : 'Not recorded' },
+            { label: 'Reviewed at', value: formatDate(review.reviewed_at) },
+            { label: 'Run result', value: review.self_review?.status ?? review.check_result_summary ?? 'Run summary unavailable' },
+          ]}
+        />
+        <InlineActions>
           <Link to={`/packages/${encodeURIComponent(review.execution_package_id)}`}>Open package</Link>
           <Link to={`/runs/${encodeURIComponent(review.run_session_id)}`}>Open run</Link>
-        </div>
+        </InlineActions>
       </Section>
       <Section title="Changed files" description="Files included in the review packet.">
         <PillList empty="No changed files recorded." values={(review.changed_files ?? []).map(changedFileLabel)} />
@@ -152,11 +154,13 @@ function ReviewPacketDetailView({ reviewPacketId }: { reviewPacketId: string }) 
       </Section>
       <Section title="Self-review" description="Implementer self-review and remaining risk notes.">
         <p>{review.self_review?.summary ?? 'Self-review summary unavailable.'}</p>
-        <dl className="fl-metadata-grid">
-          <Metadata label="Status" value={review.self_review?.status ?? 'unknown'} />
-          <Metadata label="Spec / Plan alignment" value={review.self_review?.spec_plan_alignment ?? 'unknown'} />
-          <Metadata label="Test assessment" value={review.self_review?.test_assessment ?? 'unknown'} />
-        </dl>
+        <MetadataGrid
+          items={[
+            { label: 'Status', value: review.self_review?.status ?? 'unknown' },
+            { label: 'Spec / Plan alignment', value: review.self_review?.spec_plan_alignment ?? 'unknown' },
+            { label: 'Test assessment', value: review.self_review?.test_assessment ?? 'unknown' },
+          ]}
+        />
         <PillList empty="No self-review risk notes." values={review.self_review?.risk_notes ?? []} />
       </Section>
       <Section title="Risk notes" description="Reviewer-visible product risk notes.">
@@ -180,7 +184,7 @@ function ReviewPacketTable({ items }: { items: ProductListItem[] }) {
           key: 'title',
           header: 'Review',
           cell: (item) => (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               <strong>{item.title}</strong>
               <Link to={`/reviews/${encodeURIComponent(item.object.id)}`}>Open review</Link>
             </div>
@@ -202,20 +206,22 @@ function ReviewPacketTable({ items }: { items: ProductListItem[] }) {
 
 function RequestedChangesList({ changes }: { changes: RequestedChange[] }) {
   if (!changes.length) {
-    return <p className="empty">No requested changes recorded.</p>;
+    return <InlineNotice title="No requested changes recorded." />;
   }
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       {changes.map((change) => (
-        <article className="fl-card" key={`${change.title}-${change.file_path ?? 'general'}`}>
-          <h3>{change.title}</h3>
-          <p>{change.description}</p>
-          <dl className="fl-metadata-grid">
-            <Metadata label="Severity" value={change.severity ?? 'unknown'} />
-            <Metadata label="File" value={change.file_path ? fileNameLabel(change.file_path) : 'not file-specific'} />
-            <Metadata label="Validation" value={change.suggested_validation ?? 'not recorded'} />
-          </dl>
+        <article className="grid gap-3 rounded-card border border-border bg-surface p-4" key={`${change.title}-${change.file_path ?? 'general'}`}>
+          <h3 className="text-sm font-semibold text-text-primary">{change.title}</h3>
+          <p className="text-sm text-text-secondary">{change.description}</p>
+          <MetadataGrid
+            items={[
+              { label: 'Severity', value: change.severity ?? 'unknown' },
+              { label: 'File', value: change.file_path ? fileNameLabel(change.file_path) : 'not file-specific' },
+              { label: 'Validation', value: change.suggested_validation ?? 'not recorded' },
+            ]}
+          />
         </article>
       ))}
     </div>
@@ -223,8 +229,8 @@ function RequestedChangesList({ changes }: { changes: RequestedChange[] }) {
 }
 
 function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
-  if (isPending) return <p className="empty">Loading {kind}.</p>;
-  if (isError) return <p className="empty">The {kind} inventory is temporarily unavailable.</p>;
+  if (isPending) return <InlineNotice title={`Loading ${kind}.`} tone="info" />;
+  if (isError) return <InlineNotice title={`The ${kind} inventory is temporarily unavailable.`} tone="danger" />;
   return null;
 }
 
@@ -234,10 +240,10 @@ function FilterSummary({ filters, unsupportedFilters }: { filters: ReviewFilters
     .map(([key, value]) => reviewFilterLabel(key, value));
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       {supported.length ? <p>Applied filters: {supported.join(', ')}</p> : <p>No review filters applied.</p>}
       {unsupportedFilters.length ? (
-        <p className="empty">{formatList(unsupportedFilters)} are not applied to the review packet inventory yet.</p>
+        <InlineNotice title={`${formatList(unsupportedFilters)} are not applied to the review packet inventory yet.`} tone="warning" />
       ) : null}
     </div>
   );
@@ -245,33 +251,24 @@ function FilterSummary({ filters, unsupportedFilters }: { filters: ReviewFilters
 
 function DegradedNotice({ degradedSources }: { degradedSources: string[] }) {
   if (!degradedSources.length) return null;
-  return <p className="empty">Some review data is incomplete: {degradedSources.join(', ')}.</p>;
+  return <InlineNotice title={`Some review data is incomplete: ${degradedSources.join(', ')}.`} tone="warning" />;
 }
 
 function ReplayState({ isError, isPending, timeline }: { isError: boolean; isPending: boolean; timeline: TimelineEntry[] }) {
-  if (isPending) return <p className="empty">Loading timeline.</p>;
-  if (isError) return <p className="empty">Timeline is temporarily unavailable.</p>;
-  if (!timeline.length) return <p className="empty">No timeline events recorded.</p>;
+  if (isPending) return <InlineNotice title="Loading timeline." tone="info" />;
+  if (isError) return <InlineNotice title="Timeline is temporarily unavailable." tone="danger" />;
+  if (!timeline.length) return <InlineNotice title="No timeline events recorded." />;
   return <Timeline items={timeline.map(timelineItem)} />;
 }
 
 function PillList({ empty, values }: { empty: string; values: string[] }) {
-  if (!values.length) return <p className="empty">{empty}</p>;
+  if (!values.length) return <InlineNotice title={empty} />;
   return (
-    <ul className="fl-pill-list">
+    <PillGroup>
       {values.map((value) => (
-        <li key={value}>{value}</li>
+        <Badge key={value}>{value}</Badge>
       ))}
-    </ul>
-  );
-}
-
-function Metadata({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
+    </PillGroup>
   );
 }
 
@@ -280,7 +277,7 @@ function InvalidDetail({ message, title }: { message: string; title: string }) {
     <>
       <PageHeader title={title} />
       <Section title="Unavailable">
-        <p className="empty">{message}</p>
+        <InlineNotice title={message} tone="danger" />
       </Section>
     </>
   );

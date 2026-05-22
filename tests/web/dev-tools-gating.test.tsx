@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { isDevToolsEnabled } from '../../apps/web/src/features/dev-tools/dev-tools-gate';
 import { renderRoute } from './router-test-utils';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 describe('Dev Tools gate', () => {
   it('is disabled in production unless explicitly enabled', () => {
@@ -16,6 +17,7 @@ describe('Dev Tools gate', () => {
     expect(screen.getByLabelText('Object ID')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Load raw replay' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Send API smoke request' })).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('does not show Dev Tools navigation or raw controls when disabled', async () => {

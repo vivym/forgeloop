@@ -18,7 +18,7 @@ export function MetadataGrid({ className, items }: MetadataGridProps) {
       {items.map((item, index) => (
         <div className="min-w-0" key={index}>
           <dt className="text-xs font-medium uppercase text-text-secondary">{item.label}</dt>
-          <dd className="mt-1 truncate text-sm text-text-primary">{item.value}</dd>
+          <dd className="mt-1 whitespace-normal break-words text-sm text-text-primary">{item.value}</dd>
         </div>
       ))}
     </dl>

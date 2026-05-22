@@ -15,8 +15,8 @@ import {
 import type { ArtifactRef, ProductListItem, RunEvent, RunEventStream, RunSession } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, DataTable, StatusPill, Textarea } from '../../shared/ui';
+import { ActionRail, DetailLayout, InlineActions, MetadataGrid, PageHeader, PillGroup, Section } from '../../shared/layout';
+import { Badge, Button, DataTable, Field, InlineNotice, StatusPill, Textarea } from '../../shared/ui';
 
 const emptyRunEvents: RunEvent[] = [];
 const supportedRunFilters = ['status', 'execution_package_id', 'run_session_id', 'executor_type', 'cursor', 'limit'] as const;
@@ -94,15 +94,18 @@ function RunConsoleRoute({ runSessionId }: { runSessionId: string }) {
       header={
         <PageHeader
           actions={
-            <Link className="fl-button fl-button--secondary" to={`/packages/${encodeURIComponent(run.execution_package_id)}`}>
+            <Link
+              className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-border-strong hover:bg-surface-muted"
+              to={`/packages/${encodeURIComponent(run.execution_package_id)}`}
+            >
               Open Package
             </Link>
           }
           eyebrow={
-            <span className="fl-inline-actions">
+            <InlineActions>
               <span>Run</span>
               <StatusPill tone={runStatusTone(run.status)}>{run.status}</StatusPill>
-            </span>
+            </InlineActions>
           }
           subtitle={`Package ${run.execution_package_id} / Executor ${run.executor_type ?? 'unknown'}`}
           title="Run Console"
@@ -130,7 +133,7 @@ function RunTable({ items }: { items: ProductListItem[] }) {
           key: 'title',
           header: 'Run',
           cell: (item) => (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               <strong>{item.title}</strong>
               <Link to={`/runs/${encodeURIComponent(item.object.id)}`} aria-label={`Open run ${item.object.id}`}>
                 Open run
@@ -188,11 +191,10 @@ function RunConsole({
       description="Run history, operator input, cancel, and resume controls."
       title="Run Console"
     >
-      <div className="fl-run-console" data-testid="run-console">
-        {error ? <p className="empty">{error}</p> : null}
-        <form className="fl-run-console__controls" data-testid="run-console-controls" onSubmit={onSubmit}>
-          <label className="field">
-            Input as {actorId}
+      <div className="grid gap-4" data-testid="run-console">
+        {error ? <InlineNotice title={error} tone="warning" /> : null}
+        <form className="grid gap-3" data-testid="run-console-controls" onSubmit={onSubmit}>
+          <Field label={`Input as ${actorId}`}>
             <Textarea
               data-testid="run-console-input"
               onChange={(event) => setInput(event.currentTarget.value)}
@@ -200,8 +202,8 @@ function RunConsole({
               rows={4}
               value={input}
             />
-          </label>
-          <div className="fl-run-console__actions">
+          </Field>
+          <InlineActions>
             <Button data-testid="run-console-send" disabled={!input.trim()} loading={sendInput.isPending} type="submit" variant="primary">
               Send
             </Button>
@@ -221,13 +223,13 @@ function RunConsole({
             >
               Resume
             </Button>
-          </div>
+          </InlineActions>
         </form>
-        <div className="fl-run-console__events" data-testid="run-console-events">
+        <div className="grid gap-3" data-testid="run-console-events">
           {visibleEvents.length ? (
             visibleEvents.map((event) => <RunEventRow event={event} key={event.id} />)
           ) : (
-            <p className="empty">{events.length ? 'No visible run events yet.' : 'No run events loaded.'}</p>
+            <InlineNotice title={events.length ? 'No visible run events yet.' : 'No run events loaded.'} />
           )}
         </div>
       </div>
@@ -250,15 +252,17 @@ function RunMetadata({
   const executor = run.executor_type ?? metadataText(metadata, 'driver_kind') ?? 'unknown';
 
   return (
-    <dl className="fl-metadata-grid">
-      <Metadata label="Package" value={run.execution_package_id} />
-      <Metadata label="Executor" value={executor} />
-      <Metadata label="Status" value={run.status} />
-      <Metadata label="Stream" value={streamStatus} />
-      <Metadata label="Last event" value={formatAge(lastEventAt)} />
-      <Metadata label="Current plan step" value={currentPlanStep ?? 'none'} />
-      <Metadata label="Summary" value={run.failure_reason ?? run.summary ?? 'none'} />
-    </dl>
+    <MetadataGrid
+      items={[
+        { label: 'Package', value: run.execution_package_id },
+        { label: 'Executor', value: executor },
+        { label: 'Status', value: run.status },
+        { label: 'Stream', value: streamStatus },
+        { label: 'Last event', value: formatAge(lastEventAt) },
+        { label: 'Current plan step', value: currentPlanStep ?? 'none' },
+        { label: 'Summary', value: run.failure_reason ?? run.summary ?? 'none' },
+      ]}
+    />
   );
 }
 
@@ -294,7 +298,7 @@ function RunEventRow({ event }: { event: RunEvent }) {
     'Run event';
 
   return (
-    <article className="fl-run-console__event" data-event-cursor={event.cursor} data-event-label={label}>
+    <article className="grid gap-1 rounded-card border border-border bg-surface-muted p-3" data-event-cursor={event.cursor} data-event-label={label}>
       <strong>{label}</strong>
       <p>{message}</p>
       <span>{formatDate(event.created_at)}</span>
@@ -444,14 +448,14 @@ function compareCursor(left: string, right: string) {
 }
 
 function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
-  if (isPending) return <p className="empty">Loading {kind}...</p>;
-  if (isError) return <p className="empty">{kind} are temporarily unavailable.</p>;
+  if (isPending) return <InlineNotice title={`Loading ${kind}...`} tone="info" />;
+  if (isError) return <InlineNotice title={`${kind} are temporarily unavailable.`} tone="danger" />;
   return null;
 }
 
 function DegradedNotice({ degradedSources }: { degradedSources: string[] }) {
   if (degradedSources.length === 0) return null;
-  return <p className="empty">The run list is degraded: {degradedSources.join(', ')}.</p>;
+  return <InlineNotice title={`The run list is degraded: ${degradedSources.join(', ')}.`} tone="warning" />;
 }
 
 function FilterSummary({
@@ -465,18 +469,19 @@ function FilterSummary({
   if (entries.length === 0 && unsupportedFilters.length === 0) return null;
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       {entries.length ? (
-        <div className="fl-inline-actions">
+        <PillGroup aria-label="Applied run filters">
           {entries.map(([key, value]) => (
             <Badge key={key}>{key}: {String(value)}</Badge>
           ))}
-        </div>
+        </PillGroup>
       ) : null}
       {unsupportedFilters.length ? (
-        <p className="empty">
-          {formatUnsupportedFilters(unsupportedFilters)} {unsupportedFilters.length === 1 ? 'is' : 'are'} not applied to the run inventory yet.
-        </p>
+        <InlineNotice
+          title={`${formatUnsupportedFilters(unsupportedFilters)} ${unsupportedFilters.length === 1 ? 'is' : 'are'} not applied to the run inventory yet.`}
+          tone="warning"
+        />
       ) : null}
     </div>
   );
@@ -486,7 +491,7 @@ function InvalidDetail({ title, message }: { title: string; message: string }) {
   return (
     <DetailLayout header={<PageHeader subtitle={message} title={title} />}>
       <Section title="Unavailable">
-        <p className="empty">{message}</p>
+        <InlineNotice title={message} tone="danger" />
       </Section>
     </DetailLayout>
   );
@@ -496,28 +501,19 @@ function LoadingDetail({ title }: { title: string }) {
   return (
     <DetailLayout header={<PageHeader subtitle="Loading data." title={title} />}>
       <Section title="Loading">
-        <p className="empty">Loading {title.toLowerCase()}...</p>
+        <InlineNotice title={`Loading ${title.toLowerCase()}...`} tone="info" />
       </Section>
     </DetailLayout>
   );
 }
 
-function Metadata({ label, value }: { label: string; value: string | number | boolean }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{String(value)}</dd>
-    </div>
-  );
-}
-
 function PillList({ empty, values }: { empty: string; values: string[] }) {
   return values.length ? (
-    <div className="fl-inline-actions">
+    <PillGroup>
       {values.map((value) => <Badge key={value}>{value}</Badge>)}
-    </div>
+    </PillGroup>
   ) : (
-    <p className="empty">{empty}</p>
+    <InlineNotice title={empty} />
   );
 }
 

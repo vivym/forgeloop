@@ -15,7 +15,7 @@ import type {
   ReleaseCockpitResponse,
 } from '../../shared/api/types';
 import { ActionRail } from '../../shared/layout';
-import { Button, Drawer, Input, Select, Textarea } from '../../shared/ui';
+import { Button, Dialog, DialogPanel, Drawer, Field, InlineNotice, Input, Select, Textarea } from '../../shared/ui';
 import type { ReleaseActionModel } from './release-action-model';
 
 export function ReleaseActionRail({
@@ -35,6 +35,8 @@ export function ReleaseActionRail({
   const startObserving = useStartReleaseObservingMutation(releaseId);
   const closeRelease = useCloseReleaseMutation(releaseId);
   const [showEditRelease, setShowEditRelease] = useState(false);
+  const [showOverrideApproval, setShowOverrideApproval] = useState(false);
+  const [showCloseRelease, setShowCloseRelease] = useState(false);
   const [approveRationale, setApproveRationale] = useState('');
   const [overrideRationale, setOverrideRationale] = useState('');
   const [overrideConfirmation, setOverrideConfirmation] = useState('');
@@ -56,7 +58,7 @@ export function ReleaseActionRail({
 
   return (
     <ActionRail title="Release decisions">
-      <div className="stack-form compact">
+      <div className="grid gap-3">
         {model.groups.edit_planning.visible ? (
           <Drawer
             content={<EditReleaseForm actorId={actorId} onSaved={() => setShowEditRelease(false)} release={cockpit.release} />}
@@ -73,8 +75,8 @@ export function ReleaseActionRail({
 
         {model.groups.submit_for_approval.visible ? (
           <DecisionGroup title="Submit for approval">
-            {model.groups.submit_for_approval.reason ? <p className="empty">{model.groups.submit_for_approval.reason}</p> : null}
-            {submit.isError ? <p className="empty">Release submission is temporarily unavailable.</p> : null}
+            {model.groups.submit_for_approval.reason ? <InlineNotice title={model.groups.submit_for_approval.reason} tone="warning" /> : null}
+            {submit.isError ? <InlineNotice title="Release submission is temporarily unavailable." tone="danger" /> : null}
             <Button
               disabled={!model.groups.submit_for_approval.enabled}
               loading={submit.isPending}
@@ -90,12 +92,11 @@ export function ReleaseActionRail({
           <DecisionGroup title="Approval decision">
             {model.approvalActions.approve.visible ? (
               <>
-                <label className="field">
-                  Approval rationale
+                <Field label="Approval rationale">
                   <Textarea onChange={(event) => setApproveRationale(event.currentTarget.value)} rows={2} value={approveRationale} />
-                </label>
-                {model.approvalActions.approve.reason ? <p className="empty">{model.approvalActions.approve.reason}</p> : null}
-                {approve.isError ? <p className="empty">Approval is temporarily unavailable.</p> : null}
+                </Field>
+                {model.approvalActions.approve.reason ? <InlineNotice title={model.approvalActions.approve.reason} tone="warning" /> : null}
+                {approve.isError ? <InlineNotice title="Approval is temporarily unavailable." tone="danger" /> : null}
                 <Button
                   disabled={!model.approvalActions.approve.enabled}
                   loading={approve.isPending}
@@ -114,43 +115,54 @@ export function ReleaseActionRail({
 
             {model.approvalActions.override_approve.visible ? (
               <>
-                <label className="field">
-                  Override rationale
-                  <Textarea onChange={(event) => setOverrideRationale(event.currentTarget.value)} rows={3} value={overrideRationale} />
-                </label>
-                <label className="field">
-                  Override confirmation
-                  <Input
-                    onChange={(event) => setOverrideConfirmation(event.currentTarget.value)}
-                    placeholder="Type override approve"
-                    value={overrideConfirmation}
-                  />
-                </label>
-                {overrideApprove.isError ? <p className="empty">Override approval is temporarily unavailable.</p> : null}
-                <Button
-                  disabled={!canOverrideApprove}
-                  loading={overrideApprove.isPending}
-                  onClick={() =>
-                    overrideApprove.mutate({
-                      actor_id: actorId,
-                      rationale: overrideRationale.trim(),
-                      blocker_snapshot: cockpit.blocker_snapshot as ReleaseBlockerSnapshot,
-                    })
+                <Dialog
+                  content={
+                    <DialogPanel>
+                      <Field label="Override rationale">
+                        <Textarea onChange={(event) => setOverrideRationale(event.currentTarget.value)} rows={3} value={overrideRationale} />
+                      </Field>
+                      <Field label="Override confirmation">
+                        <Input
+                          onChange={(event) => setOverrideConfirmation(event.currentTarget.value)}
+                          placeholder="Type override approve"
+                          value={overrideConfirmation}
+                        />
+                      </Field>
+                      {overrideApprove.isError ? <InlineNotice title="Override approval is temporarily unavailable." tone="danger" /> : null}
+                      <Button
+                        disabled={!canOverrideApprove}
+                        loading={overrideApprove.isPending}
+                        onClick={() =>
+                          overrideApprove.mutate({
+                            actor_id: actorId,
+                            rationale: overrideRationale.trim(),
+                            blocker_snapshot: cockpit.blocker_snapshot as ReleaseBlockerSnapshot,
+                          })
+                        }
+                        variant="danger"
+                      >
+                        Override approve
+                      </Button>
+                    </DialogPanel>
                   }
-                  variant="danger"
+                  description="Override approval requires explicit rationale and confirmation text."
+                  onOpenChange={setShowOverrideApproval}
+                  open={showOverrideApproval}
+                  title="Override approve"
                 >
-                  Override approve
-                </Button>
+                  <Button disabled={!model.approvalActions.override_approve.enabled} variant="danger">
+                    Review override approval
+                  </Button>
+                </Dialog>
               </>
             ) : null}
 
             {model.approvalActions.request_changes.visible ? (
               <>
-                <label className="field">
-                  Change request rationale
+                <Field label="Change request rationale">
                   <Textarea onChange={(event) => setChangesRationale(event.currentTarget.value)} rows={3} value={changesRationale} />
-                </label>
-                {requestChanges.isError ? <p className="empty">Change request is temporarily unavailable.</p> : null}
+                </Field>
+                {requestChanges.isError ? <InlineNotice title="Change request is temporarily unavailable." tone="danger" /> : null}
                 <Button
                   disabled={!canRequestChanges}
                   loading={requestChanges.isPending}
@@ -166,14 +178,14 @@ export function ReleaseActionRail({
 
         {model.groups.qa_test_acceptance.visible ? (
           <DecisionGroup title="Test acceptance">
-            {model.groups.qa_test_acceptance.reason ? <p className="empty">{model.groups.qa_test_acceptance.reason}</p> : null}
+            {model.groups.qa_test_acceptance.reason ? <InlineNotice title={model.groups.qa_test_acceptance.reason} tone="warning" /> : null}
             {model.groups.qa_test_acceptance.enabled ? <a href="#release-test-acceptance">Review test acceptance</a> : null}
           </DecisionGroup>
         ) : null}
 
         {model.groups.observation_transition.visible ? (
           <DecisionGroup title="Observation transition">
-            {startObserving.isError ? <p className="empty">Observation transition is temporarily unavailable.</p> : null}
+            {startObserving.isError ? <InlineNotice title="Observation transition is temporarily unavailable." tone="danger" /> : null}
             <Button
               disabled={!model.groups.observation_transition.enabled}
               loading={startObserving.isPending}
@@ -187,60 +199,70 @@ export function ReleaseActionRail({
 
         {model.groups.close_release.visible ? (
           <DecisionGroup title="Close release">
-            <label className="field">
-              Close resolution
-              <Select
-                onChange={(event) => setCloseResolution(event.currentTarget.value as 'completed' | 'rolled_back' | 'cancelled')}
-                options={[
-                  { label: 'Completed', value: 'completed' },
-                  { label: 'Rolled back', value: 'rolled_back' },
-                  { label: 'Cancelled', value: 'cancelled' },
-                ]}
-                value={closeResolution}
-              />
-            </label>
-            <label className="field">
-              Close summary
-              <Textarea onChange={(event) => setCloseSummary(event.currentTarget.value)} rows={2} value={closeSummary} />
-            </label>
-            <label className="field">
-              Close confirmation
-              <Input
-                onChange={(event) => setCloseConfirmation(event.currentTarget.value)}
-                placeholder="Type close release"
-                value={closeConfirmation}
-              />
-            </label>
-            {requiresObservationOverride ? (
-              <>
-                <p className="empty">Completion needs an observation override because no observation evidence is recorded.</p>
-                <label className="field">
-                  Observation override rationale
-                  <Textarea
-                    onChange={(event) => setCloseObservationOverrideRationale(event.currentTarget.value)}
-                    rows={3}
-                    value={closeObservationOverrideRationale}
-                  />
-                </label>
-              </>
-            ) : null}
-            {closeRelease.isError ? <p className="empty">Release closure is temporarily unavailable.</p> : null}
-            <Button
-              disabled={!canCloseRelease}
-              loading={closeRelease.isPending}
-              onClick={() =>
-                closeRelease.mutate({
-                  actor_id: actorId,
-                  resolution: closeResolution,
-                  ...(closeSummary.trim() ? { summary: closeSummary.trim() } : {}),
-                  override_without_observation: requiresObservationOverride,
-                  ...(requiresObservationOverride ? { override_rationale: closeObservationOverrideRationale.trim() } : {}),
-                })
+            <Dialog
+              content={
+                <DialogPanel>
+                  <Field label="Close resolution">
+                    <Select
+                      onChange={(event) => setCloseResolution(event.currentTarget.value as 'completed' | 'rolled_back' | 'cancelled')}
+                      options={[
+                        { label: 'Completed', value: 'completed' },
+                        { label: 'Rolled back', value: 'rolled_back' },
+                        { label: 'Cancelled', value: 'cancelled' },
+                      ]}
+                      value={closeResolution}
+                    />
+                  </Field>
+                  <Field label="Close summary">
+                    <Textarea onChange={(event) => setCloseSummary(event.currentTarget.value)} rows={2} value={closeSummary} />
+                  </Field>
+                  <Field label="Close confirmation">
+                    <Input
+                      onChange={(event) => setCloseConfirmation(event.currentTarget.value)}
+                      placeholder="Type close release"
+                      value={closeConfirmation}
+                    />
+                  </Field>
+                  {requiresObservationOverride ? (
+                    <>
+                      <InlineNotice title="Completion needs an observation override because no observation evidence is recorded." tone="warning" />
+                      <Field label="Observation override rationale">
+                        <Textarea
+                          onChange={(event) => setCloseObservationOverrideRationale(event.currentTarget.value)}
+                          rows={3}
+                          value={closeObservationOverrideRationale}
+                        />
+                      </Field>
+                    </>
+                  ) : null}
+                  {closeRelease.isError ? <InlineNotice title="Release closure is temporarily unavailable." tone="danger" /> : null}
+                  <Button
+                    disabled={!canCloseRelease}
+                    loading={closeRelease.isPending}
+                    onClick={() =>
+                      closeRelease.mutate({
+                        actor_id: actorId,
+                        resolution: closeResolution,
+                        ...(closeSummary.trim() ? { summary: closeSummary.trim() } : {}),
+                        override_without_observation: requiresObservationOverride,
+                        ...(requiresObservationOverride ? { override_rationale: closeObservationOverrideRationale.trim() } : {}),
+                      })
+                    }
+                    variant="danger"
+                  >
+                    Close release
+                  </Button>
+                </DialogPanel>
               }
-              variant="danger"
+              description="Closing a release requires confirmation text and any needed observation override."
+              onOpenChange={setShowCloseRelease}
+              open={showCloseRelease}
+              title="Close release"
             >
-              Close release
-            </Button>
+              <Button disabled={!model.groups.close_release.enabled} variant="danger">
+                Review release closure
+              </Button>
+            </Dialog>
           </DecisionGroup>
         ) : null}
       </div>
@@ -250,7 +272,7 @@ export function ReleaseActionRail({
 
 function DecisionGroup({ children, title }: { children: ReactNode; title: string }) {
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       <strong>{title}</strong>
       {children}
     </div>
@@ -288,28 +310,23 @@ function EditReleaseForm({
   }
 
   return (
-    <form className="stack-form compact" onSubmit={onSubmit}>
-      <label className="field">
-        Release title
+    <form className="grid gap-3" onSubmit={onSubmit}>
+      <Field label="Release title">
         <Input onChange={(event) => setTitle(event.currentTarget.value)} value={title} />
-      </label>
-      <label className="field">
-        Scope summary
+      </Field>
+      <Field label="Scope summary">
         <Textarea onChange={(event) => setScopeSummary(event.currentTarget.value)} rows={3} value={scopeSummary} />
-      </label>
-      <label className="field">
-        Rollout strategy
+      </Field>
+      <Field label="Rollout strategy">
         <Textarea onChange={(event) => setRolloutStrategy(event.currentTarget.value)} rows={2} value={rolloutStrategy} />
-      </label>
-      <label className="field">
-        Rollback plan
+      </Field>
+      <Field label="Rollback plan">
         <Textarea onChange={(event) => setRollbackPlan(event.currentTarget.value)} rows={2} value={rollbackPlan} />
-      </label>
-      <label className="field">
-        Observation plan
+      </Field>
+      <Field label="Observation plan">
         <Textarea onChange={(event) => setObservationPlan(event.currentTarget.value)} rows={2} value={observationPlan} />
-      </label>
-      {patchRelease.isError ? <p className="empty">Release update is temporarily unavailable.</p> : null}
+      </Field>
+      {patchRelease.isError ? <InlineNotice title="Release update is temporarily unavailable." tone="danger" /> : null}
       <Button
         disabled={releasePatchBody({ actorId, title, scopeSummary, rolloutStrategy, rollbackPlan, observationPlan }) === undefined}
         loading={patchRelease.isPending}

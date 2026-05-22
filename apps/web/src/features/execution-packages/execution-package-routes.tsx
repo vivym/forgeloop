@@ -26,8 +26,8 @@ import type {
 } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, Checkbox, DataTable, Input, StatusPill, Tabs, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
+import { ActionRail, DetailLayout, InlineActions, MetadataGrid, PageHeader, PillGroup, Section } from '../../shared/layout';
+import { Badge, Button, Checkbox, DataTable, Field, InlineNotice, Input, StatusPill, Tabs, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
 import { buildPackageActions, type PackageActionState } from './package-action-model';
 
 const supportedPackageFilters = [
@@ -162,7 +162,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
     <DetailLayout
       actionRail={
         <ActionRail title="Package actions">
-          <div className="stack-form compact">
+          <div className="grid gap-3">
             <Button
               disabled={actionPending || !actions.markReady.enabled}
               loading={markReady.isPending}
@@ -186,7 +186,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
               Run
             </Button>
             <ActionBlockerReason action={actions.run} />
-            {runPackage.isError ? <p className="empty">Run request failed. Check readiness and try again.</p> : null}
+            {runPackage.isError ? <InlineNotice title="Run request failed. Check readiness and try again." tone="danger" /> : null}
             <Button
               disabled={actionPending || !actions.rerun.enabled}
               loading={rerunPackage.isPending}
@@ -203,16 +203,15 @@ function PackageDetailView({ packageId }: { packageId: string }) {
               Rerun
             </Button>
             <ActionBlockerReason action={actions.rerun} />
-            {rerunPackage.isError ? <p className="empty">Rerun request failed. Check review state and try again.</p> : null}
-            <label className="field">
-              Force rerun reason
+            {rerunPackage.isError ? <InlineNotice title="Rerun request failed. Check review state and try again." tone="danger" /> : null}
+            <Field label="Force rerun reason">
               <Textarea
                 onChange={(event) => setForceReason(event.currentTarget.value)}
                 placeholder="Required for force rerun governance"
                 rows={4}
                 value={forceReason}
               />
-            </label>
+            </Field>
             <ActionBlockerReason action={actions.forceRerun} />
             <Button
               disabled={actionPending || !actions.forceRerun.enabled}
@@ -229,7 +228,9 @@ function PackageDetailView({ packageId }: { packageId: string }) {
             >
               Force rerun
             </Button>
-            {forceRerunPackage.isError ? <p className="empty">Force rerun request failed. Check review eligibility and try again.</p> : null}
+            {forceRerunPackage.isError ? (
+              <InlineNotice title="Force rerun request failed. Check review eligibility and try again." tone="danger" />
+            ) : null}
             <Button disabled={actionPending || !actions.edit.enabled} onClick={() => setShowEditPackage((current) => !current)} variant="secondary">
               Edit package details
             </Button>
@@ -237,7 +238,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
             {showEditPackage ? <PackageEditForm executionPackage={executionPackage} onSaved={() => setShowEditPackage(false)} /> : null}
           </div>
           {planRevisionId ? (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               <h3>Plan package actions</h3>
               <PlanRevisionPackageActions planRevisionId={planRevisionId} />
             </div>
@@ -247,16 +248,19 @@ function PackageDetailView({ packageId }: { packageId: string }) {
       header={
         <PageHeader
           actions={
-            <Link className="fl-button fl-button--secondary" to={`/work-items/${encodeURIComponent(executionPackage.work_item_id)}`}>
+            <Link
+              className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-border-strong hover:bg-surface-muted"
+              to={`/work-items/${encodeURIComponent(executionPackage.work_item_id)}`}
+            >
               Open Work Item
             </Link>
           }
           eyebrow={
-            <span className="fl-inline-actions">
+            <InlineActions>
               <span>Package</span>
               <StatusPill tone={deliverySurfaceStateTone(executionPackage.phase)}>{executionPackage.phase}</StatusPill>
               <StatusPill tone={deliverySurfaceStateTone(executionPackage.gate_state)}>{executionPackage.gate_state}</StatusPill>
-            </span>
+            </InlineActions>
           }
           subtitle="Execution package for approved delivery work."
           title={executionPackage.objective}
@@ -309,7 +313,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
 
 function ActionBlockerReason({ action }: { action: PackageActionState }) {
   if (action.enabled || action.reason === undefined) return null;
-  return <p className="empty">{action.reason}</p>;
+  return <InlineNotice title={action.reason} tone="warning" />;
 }
 
 function PlanRevisionPackageActions({ planRevisionId }: { planRevisionId: string }) {
@@ -317,8 +321,8 @@ function PlanRevisionPackageActions({ planRevisionId }: { planRevisionId: string
   const [showCreatePackage, setShowCreatePackage] = useState(false);
 
   return (
-    <div className="stack-form compact">
-      <div className="fl-inline-actions">
+    <div className="grid gap-3">
+      <InlineActions>
         <Button
           disabled={generatePackages.isPending}
           loading={generatePackages.isPending}
@@ -330,8 +334,8 @@ function PlanRevisionPackageActions({ planRevisionId }: { planRevisionId: string
         <Button onClick={() => setShowCreatePackage((current) => !current)} variant="secondary">
           Create package
         </Button>
-      </div>
-      {generatePackages.isError ? <p className="empty">Package generation is temporarily unavailable.</p> : null}
+      </InlineActions>
+      {generatePackages.isError ? <InlineNotice title="Package generation is temporarily unavailable." tone="danger" /> : null}
       {showCreatePackage ? <PackageCreateForm onCreated={() => setShowCreatePackage(false)} planRevisionId={planRevisionId} /> : null}
     </div>
   );
@@ -358,13 +362,12 @@ function PackageCreateForm({ onCreated, planRevisionId }: { onCreated: () => voi
   }
 
   return (
-    <form className="stack-form compact" onSubmit={onSubmit}>
-      <label className="field">
-        Repository
+    <form className="grid gap-3" onSubmit={onSubmit}>
+      <Field label="Repository">
         <Input onChange={(event) => update('repoId', event.currentTarget.value)} value={form.repoId} />
-      </label>
+      </Field>
       <PackageEditableFields form={form} onUpdate={update} />
-      {createPackage.isError ? <p className="empty">Package creation is temporarily unavailable.</p> : null}
+      {createPackage.isError ? <InlineNotice title="Package creation is temporarily unavailable." tone="danger" /> : null}
       <Button disabled={!canSubmit} loading={createPackage.isPending} type="submit" variant="primary">
         Create execution package
       </Button>
@@ -390,9 +393,9 @@ function PackageEditForm({ executionPackage, onSaved }: { executionPackage: Exec
   }
 
   return (
-    <form className="stack-form compact" onSubmit={onSubmit}>
+    <form className="grid gap-3" onSubmit={onSubmit}>
       <PackageEditableFields form={form} onUpdate={update} />
-      {patchPackage.isError ? <p className="empty">Package details are temporarily unavailable for editing.</p> : null}
+      {patchPackage.isError ? <InlineNotice title="Package details are temporarily unavailable for editing." tone="danger" /> : null}
       <Button disabled={!canSubmit} loading={patchPackage.isPending} type="submit" variant="primary">
         Save package details
       </Button>
@@ -409,75 +412,64 @@ function PackageEditableFields({
 }) {
   return (
     <>
-      <label className="field">
-        Objective
+      <Field label="Objective">
         <Textarea onChange={(event) => onUpdate('objective', event.currentTarget.value)} rows={3} value={form.objective} />
-      </label>
-      <label className="field">
-        Owner
+      </Field>
+      <Field label="Owner">
         <Input onChange={(event) => onUpdate('ownerActorId', event.currentTarget.value)} value={form.ownerActorId} />
-      </label>
-      <label className="field">
-        Reviewer
+      </Field>
+      <Field label="Reviewer">
         <Input onChange={(event) => onUpdate('reviewerActorId', event.currentTarget.value)} value={form.reviewerActorId} />
-      </label>
-      <label className="field">
-        QA owner
+      </Field>
+      <Field label="QA owner">
         <Input onChange={(event) => onUpdate('qaOwnerActorId', event.currentTarget.value)} value={form.qaOwnerActorId} />
-      </label>
-      <label className="field">
-        Check id
+      </Field>
+      <Field label="Check id">
         <Input onChange={(event) => onUpdate('checkId', event.currentTarget.value)} value={form.checkId} />
-      </label>
-      <label className="field">
-        Check name
+      </Field>
+      <Field label="Check name">
         <Input onChange={(event) => onUpdate('checkName', event.currentTarget.value)} value={form.checkName} />
-      </label>
-      <label className="field">
-        Check command
+      </Field>
+      <Field label="Check command">
         <Input onChange={(event) => onUpdate('checkCommand', event.currentTarget.value)} value={form.checkCommand} />
-      </label>
-      <label className="field">
-        Timeout seconds
+      </Field>
+      <Field label="Timeout seconds">
         <Input
           min={1}
           onChange={(event) => onUpdate('checkTimeoutSeconds', event.currentTarget.value)}
           type="number"
           value={form.checkTimeoutSeconds}
         />
-      </label>
+      </Field>
       <Checkbox
         checked={form.checkBlocksReview}
         label="Required before review"
         onChange={(event) => onUpdate('checkBlocksReview', event.currentTarget.checked)}
       />
-      <label className="field">
-        Required artifacts
+      <Field label="Required artifacts">
         <Textarea
           onChange={(event) => onUpdate('requiredArtifactKinds', event.currentTarget.value)}
           placeholder="One artifact kind per line"
           rows={3}
           value={form.requiredArtifactKinds}
         />
-      </label>
-      <label className="field">
-        Allowed paths
+      </Field>
+      <Field label="Allowed paths">
         <Textarea
           onChange={(event) => onUpdate('allowedPaths', event.currentTarget.value)}
           placeholder="One path pattern per line"
           rows={3}
           value={form.allowedPaths}
         />
-      </label>
-      <label className="field">
-        Forbidden paths
+      </Field>
+      <Field label="Forbidden paths">
         <Textarea
           onChange={(event) => onUpdate('forbiddenPaths', event.currentTarget.value)}
           placeholder="One path pattern per line"
           rows={3}
           value={form.forbiddenPaths}
         />
-      </label>
+      </Field>
     </>
   );
 }
@@ -490,7 +482,7 @@ function PackageTable({ items }: { items: ProductListItem[] }) {
           key: 'objective',
           header: 'Objective',
           cell: (item) => (
-            <div className="stack-form compact">
+            <div className="grid gap-3">
               <strong>{item.title}</strong>
               <Link to={`/packages/${encodeURIComponent(item.object.id)}`}>Open package</Link>
             </div>
@@ -520,15 +512,17 @@ function PackageTable({ items }: { items: ProductListItem[] }) {
 function PackageOverview({ executionPackage }: { executionPackage: ExecutionPackage }) {
   return (
     <Section description="Primary package state for execution owners, reviewers, and QA." title="Overview">
-      <dl className="fl-metadata-grid">
-        <Metadata label="Objective" value={executionPackage.objective} />
-        <Metadata label="Owner" value={executionPackage.owner_actor_id} />
-        <Metadata label="Reviewer" value={executionPackage.reviewer_actor_id} />
-        <Metadata label="QA owner" value={executionPackage.qa_owner_actor_id} />
-        <Metadata label="Lifecycle state" value={`${executionPackage.phase} / ${executionPackage.gate_state}`} />
-        <Metadata label="Blocked reason" value={executionPackage.blocked_reason ?? 'none'} />
-        <Metadata label="Last failure" value={executionPackage.last_failure_summary ?? 'none'} />
-      </dl>
+      <MetadataGrid
+        items={[
+          { label: 'Objective', value: executionPackage.objective },
+          { label: 'Owner', value: executionPackage.owner_actor_id },
+          { label: 'Reviewer', value: executionPackage.reviewer_actor_id },
+          { label: 'QA owner', value: executionPackage.qa_owner_actor_id },
+          { label: 'Lifecycle state', value: `${executionPackage.phase} / ${executionPackage.gate_state}` },
+          { label: 'Blocked reason', value: executionPackage.blocked_reason ?? 'none' },
+          { label: 'Last failure', value: executionPackage.last_failure_summary ?? 'none' },
+        ]}
+      />
     </Section>
   );
 }
@@ -537,11 +531,14 @@ function PackageRuns({ executionPackage }: { executionPackage: ExecutionPackage 
   return (
     <Section title="Runs" description="Latest run context for this package.">
       {executionPackage.last_run_session_id ? (
-        <Link className="fl-button fl-button--secondary" to={`/runs/${encodeURIComponent(executionPackage.last_run_session_id)}`}>
+        <Link
+          className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-border-strong hover:bg-surface-muted"
+          to={`/runs/${encodeURIComponent(executionPackage.last_run_session_id)}`}
+        >
           Open latest run
         </Link>
       ) : (
-        <p className="empty">No run has been recorded for this package.</p>
+        <InlineNotice title="No run has been recorded for this package." />
       )}
     </Section>
   );
@@ -550,11 +547,13 @@ function PackageRuns({ executionPackage }: { executionPackage: ExecutionPackage 
 function PackageReview({ executionPackage }: { executionPackage: ExecutionPackage }) {
   return (
     <Section title="Review" description="Review routing and handoff ownership.">
-      <dl className="fl-metadata-grid">
-        <Metadata label="Reviewer" value={executionPackage.reviewer_actor_id} />
-        <Metadata label="QA owner" value={executionPackage.qa_owner_actor_id} />
-        <Metadata label="Resolution" value={executionPackage.resolution} />
-      </dl>
+      <MetadataGrid
+        items={[
+          { label: 'Reviewer', value: executionPackage.reviewer_actor_id },
+          { label: 'QA owner', value: executionPackage.qa_owner_actor_id },
+          { label: 'Resolution', value: executionPackage.resolution },
+        ]}
+      />
     </Section>
   );
 }
@@ -582,11 +581,11 @@ function PackageTimeline({
   timeline: TimelineEntry[];
 }) {
   if (isPending) {
-    return <Section title="Timeline"><p className="empty">Loading package history...</p></Section>;
+    return <Section title="Timeline"><InlineNotice title="Loading package history..." tone="info" /></Section>;
   }
 
   if (isError) {
-    return <Section title="Timeline"><p className="empty">Package history is temporarily unavailable.</p></Section>;
+    return <Section title="Timeline"><InlineNotice title="Package history is temporarily unavailable." tone="danger" /></Section>;
   }
 
   const items: TimelineItem[] = timeline.map((entry) => ({
@@ -598,7 +597,7 @@ function PackageTimeline({
 
   return (
     <Section title="Timeline" description="Product history for this package.">
-      {items.length ? <Timeline items={items} /> : <p className="empty">No package timeline events are available yet.</p>}
+      {items.length ? <Timeline items={items} /> : <InlineNotice title="No package timeline events are available yet." />}
     </Section>
   );
 }
@@ -624,8 +623,8 @@ function PackagePolicy({ executionPackage }: { executionPackage: ExecutionPackag
 }
 
 function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
-  if (isPending) return <p className="empty">Loading {kind}...</p>;
-  if (isError) return <p className="empty">{kind} are temporarily unavailable.</p>;
+  if (isPending) return <InlineNotice title={`Loading ${kind}...`} tone="info" />;
+  if (isError) return <InlineNotice title={`${kind} are temporarily unavailable.`} tone="danger" />;
   return null;
 }
 
@@ -640,18 +639,19 @@ function FilterSummary({
   if (entries.length === 0 && unsupportedFilters.length === 0) return null;
 
   return (
-    <div className="stack-form compact">
+    <div className="grid gap-3">
       {entries.length ? (
-        <div className="fl-inline-actions">
+        <PillGroup aria-label="Applied package filters">
           {entries.map(([key, value]) => (
             <Badge key={key}>{key}: {String(value)}</Badge>
           ))}
-        </div>
+        </PillGroup>
       ) : null}
       {unsupportedFilters.length ? (
-        <p className="empty">
-          {formatUnsupportedFilters(unsupportedFilters)} {unsupportedFilters.length === 1 ? 'is' : 'are'} not applied to the package inventory yet.
-        </p>
+        <InlineNotice
+          title={`${formatUnsupportedFilters(unsupportedFilters)} ${unsupportedFilters.length === 1 ? 'is' : 'are'} not applied to the package inventory yet.`}
+          tone="warning"
+        />
       ) : null}
     </div>
   );
@@ -659,25 +659,16 @@ function FilterSummary({
 
 function DegradedNotice({ degradedSources }: { degradedSources: string[] }) {
   if (degradedSources.length === 0) return null;
-  return <p className="empty">This package list is degraded: {degradedSources.join(', ')}.</p>;
+  return <InlineNotice title={`This package list is degraded: ${degradedSources.join(', ')}.`} tone="warning" />;
 }
 
 function PillList({ empty, values }: { empty: string; values: string[] }) {
   return values.length ? (
-    <div className="fl-inline-actions">
+    <PillGroup>
       {values.map((value) => <Badge key={value}>{value}</Badge>)}
-    </div>
+    </PillGroup>
   ) : (
-    <p className="empty">{empty}</p>
-  );
-}
-
-function Metadata({ label, value }: { label: string; value: string | number | boolean }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{String(value)}</dd>
-    </div>
+    <InlineNotice title={empty} />
   );
 }
 
@@ -693,7 +684,7 @@ function LoadingDetail({ title }: { title: string }) {
   return (
     <DetailLayout header={<PageHeader subtitle="Loading data." title={title} />}>
       <Section title="Loading">
-        <p className="empty">Loading {title.toLowerCase()}...</p>
+        <InlineNotice title={`Loading ${title.toLowerCase()}...`} tone="info" />
       </Section>
     </DetailLayout>
   );
@@ -703,7 +694,7 @@ function InvalidDetail({ title, message }: { title: string; message: string }) {
   return (
     <DetailLayout header={<PageHeader subtitle={message} title={title} />}>
       <Section title="Unavailable">
-        <p className="empty">{message}</p>
+        <InlineNotice title={message} tone="danger" />
       </Section>
     </DetailLayout>
   );

@@ -10,6 +10,7 @@ import { buildPackageActions } from '../../apps/web/src/features/execution-packa
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
 import type { DeliveryRunReadiness, RunEvent } from '../../apps/web/src/shared/api/types';
 import { actorId, executionPackage, planRevision, projectId, reviewPacket, runSession, timeline, workItem } from './fixtures/product-data';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 const packageListResponse = {
   items: [
@@ -270,6 +271,7 @@ describe('package and run product routes', () => {
     );
 
     await waitFor(() => expect(screen.getByText(executionPackage.objective)).toBeTruthy());
+    expectNoLegacyRenderedClasses();
 
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/execution-packages?project_id=${projectId}&work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true&limit=100`,
@@ -463,6 +465,7 @@ describe('package and run product routes', () => {
     expect(screen.queryByText(/Dev Tools/i)).toBeNull();
     expect(screen.queryByText(/route-backed/i)).toBeNull();
     expect(screen.queryByText(/replay endpoint/i)).toBeNull();
+    expectNoLegacyRenderedClasses();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/execution-packages/${executionPackage.id}`,
       expect.objectContaining({ method: 'GET' }),
@@ -1201,6 +1204,7 @@ describe('package and run product routes', () => {
     });
 
     await waitFor(() => expect(screen.getByText(runSession.summary)).toBeTruthy());
+    expectNoLegacyRenderedClasses();
 
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/runs?project_id=${projectId}&limit=100`,
@@ -1254,6 +1258,7 @@ describe('package and run product routes', () => {
     expect(screen.getByTestId('run-console-events').innerHTML).not.toContain('agent_message');
     expect(screen.getByTestId('run-console-events').innerHTML).not.toContain('thread_started');
     expect(screen.getByTestId('run-console-events').innerHTML).not.toContain('turn_started');
+    expectNoLegacyRenderedClasses();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/run-sessions/${runSession.id}`,
       expect.objectContaining({ method: 'GET' }),
@@ -1387,6 +1392,10 @@ function expectNoLegacyWorkbenchText() {
 
 function expectNoNestedCards() {
   expect(document.body.querySelector('[data-layout-section] [data-layout-section]')).toBeNull();
+}
+
+function expectNoLegacyRenderedClasses() {
+  expect(legacyRenderedClassTokens(document.body)).toEqual([]);
 }
 
 function expectNoVisibleRawClosureText(hiddenValues: string[]) {
