@@ -1127,6 +1127,7 @@ describe('codex runtime domain contracts', () => {
     ['non-string codex_config_toml', { codex_config_toml: null }],
     ['empty created_by_actor_id', { created_by_actor_id: '' }],
     ['malformed created_at timestamp', { created_at: 'not-a-date' }],
+    ['impossible created_at timestamp', { created_at: '2026-02-30T00:00:00.000Z' }],
   ])('rejects malformed strict profile scalar field %s', (_label, overrides) => {
     const malformed = baseRevision(overrides as unknown as Partial<CodexRuntimeProfileRevision>);
 
@@ -1353,6 +1354,66 @@ describe('codex runtime domain contracts', () => {
           ...validDockerProxyConfig(),
           provider_config_digest: digestC,
         }),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it.each([
+    ['proxy_image', { proxy_image: null }],
+    ['self_test_image', { self_test_image: null }],
+  ])('rejects malformed Docker network proxy config image field %s', (_field, patch) => {
+    const config = {
+      ...validDockerProxyConfig(),
+      ...patch,
+    };
+    const digestInput = {
+      proxy_image: config.proxy_image,
+      proxy_image_digest: config.proxy_image_digest,
+      self_test_image: config.self_test_image,
+      self_test_image_digest: config.self_test_image_digest,
+    };
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexDockerNetworkProxyConfig({
+          ...config,
+          provider_config_digest: codexCanonicalDigest(digestInput),
+        } as unknown as CodexDockerNetworkProxyConfig),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it('rejects strict profiles with malformed Docker network proxy provider images', () => {
+    const providerConfig = {
+      ...validDockerProxyConfig(),
+      proxy_image: null,
+    };
+    const malformedProviderConfig = {
+      ...providerConfig,
+      provider_config_digest: codexCanonicalDigest({
+        proxy_image: providerConfig.proxy_image,
+        proxy_image_digest: providerConfig.proxy_image_digest,
+        self_test_image: providerConfig.self_test_image,
+        self_test_image_digest: providerConfig.self_test_image_digest,
+      }),
+    };
+    const rules = [modelProviderRule];
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            network_policy: {
+              mode: 'egress_allowlist',
+              provider: 'docker_network_proxy',
+              allowlist_rules: rules,
+              provider_config: malformedProviderConfig as unknown as CodexDockerNetworkProxyConfig,
+              egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('docker_network_proxy', rules)),
+              self_test_digest: digestA,
+            },
+          }),
+          { strictRealDogfood: true },
+        ),
       'codex_worker_docker_policy_unavailable',
     );
   });

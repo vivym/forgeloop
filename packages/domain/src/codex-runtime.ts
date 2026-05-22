@@ -968,7 +968,8 @@ const assertPositiveInteger = (value: unknown, label: string): void => {
 };
 
 const assertIsoDateTime = (value: unknown, label: string): void => {
-  if (typeof value !== 'string' || !isoDateTimePattern.test(value) || Number.isNaN(Date.parse(value))) {
+  const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  if (typeof value !== 'string' || !isoDateTimePattern.test(value) || Number.isNaN(parsed) || new Date(parsed).toISOString() !== value) {
     throw invalidProfile(`${label} must be an ISO datetime string.`);
   }
 };
@@ -1505,6 +1506,12 @@ export const validateCodexRuntimeJobTerminalResult = (
 export const validateCodexDockerNetworkProxyConfig = (config: CodexDockerNetworkProxyConfig): CodexDockerNetworkProxyConfig => {
   if (!isPlainObject(config)) {
     throw dockerPolicyUnavailable('Docker network proxy provider_config is required.');
+  }
+  if (typeof config.proxy_image !== 'string' || config.proxy_image.length === 0) {
+    throw dockerPolicyUnavailable('Docker proxy image must be a non-empty string.');
+  }
+  if (typeof config.self_test_image !== 'string' || config.self_test_image.length === 0) {
+    throw dockerPolicyUnavailable('Docker proxy self-test image must be a non-empty string.');
   }
   assertSha256Digest(config.proxy_image_digest, 'Docker proxy image digest', dockerPolicyUnavailable);
   assertSha256Digest(config.self_test_image_digest, 'Docker proxy self-test image digest', dockerPolicyUnavailable);
