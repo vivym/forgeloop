@@ -34,11 +34,9 @@ export const productListQuerySchema = z
     resolution: z.string().min(1).optional(),
     risk: z.string().min(1).optional(),
     driver_actor_id: z.string().min(1).optional(),
-    owner_actor_id: z.string().min(1).optional(),
     reviewer_actor_id: z.string().min(1).optional(),
     qa_owner_actor_id: z.string().min(1).optional(),
     release_owner_actor_id: z.string().min(1).optional(),
-    work_item_id: z.string().min(1).optional(),
     spec_id: z.string().min(1).optional(),
     plan_id: z.string().min(1).optional(),
     spec_revision_id: z.string().min(1).optional(),
@@ -57,6 +55,14 @@ export const productListQuerySchema = z
   })
   .strict();
 export type ProductListQuery = z.infer<typeof productListQuerySchema>;
+
+export const internalProductListQuerySchema = productListQuerySchema
+  .extend({
+    owner_actor_id: z.string().min(1).optional(),
+    work_item_id: z.string().min(1).optional(),
+  })
+  .strict();
+export type InternalProductListQuery = z.infer<typeof internalProductListQuerySchema>;
 
 export const productListItemSchema = z
   .object({

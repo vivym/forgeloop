@@ -56,6 +56,16 @@ describe('attachment contracts', () => {
         disposition: 'inline',
       }),
     ).toMatchObject({ render_url: '/api/attachments/att-1/render/token' });
+
+    expect(
+      attachmentRenderRefSchema.parse({
+        attachment_id: 'att-storage',
+        render_url: '/api/attachments/att-storage/render/token-storage',
+        expires_at: '2026-05-23T00:05:00.000Z',
+        content_type: 'image/png',
+        disposition: 'inline',
+      }),
+    ).toMatchObject({ render_url: '/api/attachments/att-storage/render/token-storage' });
   });
 
   it('parses upload metadata without accepting binary content in JSON', () => {

@@ -62,6 +62,7 @@ const rawStorageMarkerPattern = /(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
 const unsafeProtocolPattern = /^(?:javascript:|data:|file:|blob:)/i;
 const canonicalAttachmentDestinationPattern = /^attachment:\/\/([A-Za-z0-9_-]+)$/;
+const fencedCodeBlockPattern = /^\s{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s{0,3}\1[ \t]*$/gm;
 
 export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValidationResult {
   const parsed = markdownDocumentSchema.safeParse(input);
@@ -77,8 +78,9 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
 
   const document = parsed.data;
   const issues: MarkdownValidationIssue[] = [];
+  const activeMarkdown = stripFencedCodeBlocks(document.markdown);
 
-  if (htmlPattern.test(document.markdown)) {
+  if (htmlPattern.test(activeMarkdown)) {
     issues.push({ code: 'raw_html', message: 'Markdown must not contain raw HTML or MDX JSX.' });
   }
 
@@ -89,7 +91,7 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
     });
   }
 
-  const destinations = markdownDestinations(document.markdown);
+  const destinations = markdownDestinations(activeMarkdown);
   for (const destination of destinations) {
     const normalizedDestination = normalizeDestination(destination.value);
     if (unsafeProtocolPattern.test(normalizedDestination)) {
@@ -144,6 +146,10 @@ type ParsedMarkdownUrl = {
   };
 };
 type MarkdownUrlConstructor = new (input: string) => ParsedMarkdownUrl;
+
+function stripFencedCodeBlocks(markdown: string): string {
+  return markdown.replace(fencedCodeBlockPattern, '\n');
+}
 
 function markdownDestinations(markdown: string): MarkdownDestination[] {
   const destinations: MarkdownDestination[] = [];
@@ -367,52 +373,56 @@ function unsupportedBlockKinds(markdown: string, allowedBlocks: ReadonlySet<Mark
 
 function detectedBlockKinds(markdown: string): Set<DetectedMarkdownKind> {
   const blockKinds = new Set<DetectedMarkdownKind>();
-  const lines = markdown.split(/\r?\n/);
+  const activeMarkdown = stripFencedCodeBlocks(markdown);
+  const lines = activeMarkdown.split(/\r?\n/);
 
-  if (/!\[[^\]]*](?:\([^)]*\)|\[[^\]]+])/.test(markdown)) {
+  if (/!\[[^\]]*](?:\([^)]*\)|\[[^\]]+])/.test(activeMarkdown)) {
     blockKinds.add('image');
   }
   if (
-    /(^|[^!])\[[^\]]+](?:\([^)]*\)|\[[^\]]+])/.test(markdown) ||
-    /<https?:\/\/[^>]+>/.test(markdown) ||
-    bareUrlBlockPattern.test(markdown)
+    /(^|[^!])\[[^\]]+](?:\([^)]*\)|\[[^\]]+])/.test(activeMarkdown) ||
+    /<https?:\/\/[^>]+>/.test(activeMarkdown) ||
+    bareUrlBlockPattern.test(activeMarkdown)
   ) {
     blockKinds.add('link');
   }
-  if (/(^|[^*_])\*\*[^*\n]+\*\*([^*_]|$)/.test(markdown) || /(^|[^_])__[^_\n]+__([^_]|$)/.test(markdown)) {
+  if (
+    /(^|[^*_])\*\*[^*\n]+\*\*([^*_]|$)/.test(activeMarkdown) ||
+    /(^|[^_])__[^_\n]+__([^_]|$)/.test(activeMarkdown)
+  ) {
     blockKinds.add('bold');
   }
-  if (/(^|[^*_])\*[^*\n]+\*([^*_]|$)/.test(markdown) || /(^|[^_])_[^_\n]+_([^_]|$)/.test(markdown)) {
+  if (/(^|[^*_])\*[^*\n]+\*([^*_]|$)/.test(activeMarkdown) || /(^|[^_])_[^_\n]+_([^_]|$)/.test(activeMarkdown)) {
     blockKinds.add('italic');
   }
-  if (/~~[^~\n]+~~/.test(markdown)) {
+  if (/~~[^~\n]+~~/.test(activeMarkdown)) {
     blockKinds.add('strikethrough');
   }
-  if (/(^|[^`])`[^`\n]+`([^`]|$)/.test(markdown)) {
+  if (/(^|[^`])`[^`\n]+`([^`]|$)/.test(activeMarkdown)) {
     blockKinds.add('inline_code');
   }
-  if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m.test(markdown)) {
+  if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m.test(activeMarkdown)) {
     blockKinds.add('horizontal_rule');
   }
-  if (/^\s{0,3}#{1,4}\s+\S/m.test(markdown)) {
+  if (/^\s{0,3}#{1,4}\s+\S/m.test(activeMarkdown)) {
     blockKinds.add('heading');
   }
-  if (/^\s{0,3}#{5,6}\s+\S/m.test(markdown)) {
+  if (/^\s{0,3}#{5,6}\s+\S/m.test(activeMarkdown)) {
     blockKinds.add('unsupported_heading_level');
   }
-  if (/^\s{0,3}[-+*]\s+\[[ xX]\]\s+\S/m.test(markdown)) {
+  if (/^\s{0,3}[-+*]\s+\[[ xX]\]\s+\S/m.test(activeMarkdown)) {
     blockKinds.add('task_list');
   }
-  if (/^\s{0,3}(?:[-+*]\s+|\d+[.)]\s+)\S/m.test(markdown)) {
+  if (/^\s{0,3}(?:[-+*]\s+|\d+[.)]\s+)\S/m.test(activeMarkdown)) {
     blockKinds.add('list');
   }
   if (/^\s{0,3}(?:```|~~~)/m.test(markdown)) {
     blockKinds.add('code_block');
   }
-  if (/^\s{0,3}>\s?/m.test(markdown)) {
+  if (/^\s{0,3}>\s?/m.test(activeMarkdown)) {
     blockKinds.add('blockquote');
   }
-  if (hasTable(markdown)) {
+  if (hasTable(activeMarkdown)) {
     blockKinds.add('table');
   }
   if (lines.some((line) => isParagraphLine(line))) {

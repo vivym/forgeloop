@@ -89,6 +89,24 @@ const matchingRevisionAuthority = {
   evidence_plan_revision_id: 'plan-rev-2',
 } as const;
 
+const passedReviewGate = {
+  requirement_id: 'review-gate',
+  scope_ref: { type: 'requirement', id: 'req-1' },
+  kind: 'review',
+  status: 'passed',
+  ...matchingRevisionAuthority,
+  evidence_ref: approvedReviewEvidence,
+} as const;
+
+const passedQaGate = {
+  requirement_id: 'qa-gate',
+  scope_ref: { type: 'requirement', id: 'req-1' },
+  kind: 'qa_acceptance',
+  status: 'passed',
+  ...matchingRevisionAuthority,
+  evidence_ref: passedQaEvidence,
+} as const;
+
 describe('project management release readiness contracts', () => {
   it('accepts typed review and test evidence authority', () => {
     expect(reviewEvidenceRefSchema.parse(approvedReviewEvidence)).toMatchObject({ status: 'approved' });
@@ -96,6 +114,40 @@ describe('project management release readiness contracts', () => {
     expect(testAcceptanceEvidenceRefSchema.parse(passedQaEvidence)).toMatchObject({ status: 'passed' });
     expect(packageRunEvidenceRefSchema.parse(passedPackageRunEvidence)).toMatchObject({ evidence_type: 'package_run' });
     expect(observationEvidenceRefSchema.parse(passedObservationEvidence)).toMatchObject({ evidence_type: 'observation' });
+  });
+
+  it('rejects conflicting duplicate review authority ids', () => {
+    expect(() =>
+      reviewEvidenceRefSchema.parse({
+        ...approvedReviewEvidence,
+        authority_type: 'review_packet_approval',
+        authority_ref: { type: 'review_packet', id: 'review-packet-1' },
+        review_packet_id: 'review-packet-other',
+      }),
+    ).toThrow();
+
+    expect(() =>
+      reviewEvidenceRefSchema.parse({
+        ...approvedReviewEvidence,
+        decision_id: 'decision-other',
+      }),
+    ).toThrow();
+
+    expect(
+      reviewEvidenceRefSchema.parse({
+        ...approvedReviewEvidence,
+        decision_id: 'decision-1',
+      }),
+    ).toMatchObject({ decision_id: 'decision-1' });
+
+    expect(
+      reviewEvidenceRefSchema.parse({
+        ...approvedReviewEvidence,
+        authority_type: 'review_packet_approval',
+        authority_ref: { type: 'review_packet', id: 'review-packet-1' },
+        review_packet_id: 'review-packet-1',
+      }),
+    ).toMatchObject({ review_packet_id: 'review-packet-1' });
   });
 
   it('requires typed evidence authority for passed readiness gates', () => {
@@ -402,6 +454,68 @@ describe('project management release readiness contracts', () => {
         evidence_ref: { type: 'attachment', id: 'att-1' },
       }),
     ).toThrow();
+  });
+
+  it('rejects internally contradictory ready release readiness details', () => {
+    expect(() =>
+      releaseReadinessDetailSchema.parse({
+        release_id: 'release-1',
+        scope_refs: releaseScope,
+        ready: true,
+        required_review_evidence: [],
+        required_test_acceptance_evidence: [],
+        package_run_evidence: [],
+        observation_evidence: [],
+        disabled_reasons: [disabled('missing_required_review')],
+      }),
+    ).toThrow();
+
+    for (const evidenceGate of [
+      gate('missing_required_review', 'review', 'missing'),
+      { ...passedQaGate, status: 'failed' },
+      { ...passedReviewGate, status: 'stale' },
+    ] as const) {
+      expect(() =>
+        releaseReadinessDetailSchema.parse({
+          release_id: 'release-1',
+          scope_refs: releaseScope,
+          ready: true,
+          required_review_evidence: [evidenceGate],
+          required_test_acceptance_evidence: [],
+          package_run_evidence: [],
+          observation_evidence: [],
+          disabled_reasons: [],
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('accepts internally consistent ready release readiness details', () => {
+    expect(
+      releaseReadinessDetailSchema.parse({
+        release_id: 'release-1',
+        scope_refs: releaseScope,
+        ready: true,
+        required_review_evidence: [],
+        required_test_acceptance_evidence: [],
+        package_run_evidence: [],
+        observation_evidence: [],
+        disabled_reasons: [],
+      }),
+    ).toMatchObject({ ready: true });
+
+    expect(
+      releaseReadinessDetailSchema.parse({
+        release_id: 'release-1',
+        scope_refs: releaseScope,
+        ready: true,
+        required_review_evidence: [passedReviewGate],
+        required_test_acceptance_evidence: [passedQaGate],
+        package_run_evidence: [],
+        observation_evidence: [],
+        disabled_reasons: [],
+      }),
+    ).toMatchObject({ ready: true });
   });
 
   it('models disabled reasons for missing, stale, wrong-scope, unauthorized, and tombstoned evidence', () => {

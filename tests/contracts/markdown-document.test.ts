@@ -119,6 +119,27 @@ describe('MarkdownDocument validation', () => {
     }
   });
 
+  it('does not scan fenced code block contents as active destinations or raw html', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      allowed_blocks: ['code_block'],
+      markdown: '```html\n<iframe src="https://example.com"></iframe>\nhttps://bucket.example.com/private/key?signature=raw\n```',
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('still rejects raw html and unsafe links outside fenced code blocks', () => {
+    for (const markdown of [
+      '```html\n<iframe src="https://example.com"></iframe>\n```\n\n<iframe src="https://example.com"></iframe>',
+      '```txt\nhttps://bucket.example.com/private/key?signature=raw\n```\n\nhttps://bucket.example.com/private/key?signature=raw',
+    ]) {
+      expect(validateMarkdownDocument({ ...baseDocument, allowed_blocks: ['paragraph', 'code_block', 'link'], markdown }).ok).toBe(
+        false,
+      );
+    }
+  });
+
   it('returns all validation issues across inline, reference, bare, and attachment scans', () => {
     const result = validateMarkdownDocument({
       ...baseDocument,

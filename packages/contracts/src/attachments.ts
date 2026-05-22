@@ -83,9 +83,6 @@ const sameOriginRenderUrlSchema = z.string().trim().min(1).superRefine((value, c
   if (parsedUrl.search.length > 0 || parsedUrl.hash.length > 0) {
     ctx.addIssue({ code: 'custom', message: 'render_url must not include query string or fragment' });
   }
-  if (/storage|bucket|s3|signature|x-amz|https?:\/\//i.test(value)) {
-    ctx.addIssue({ code: 'custom', message: 'render_url must not expose raw storage details' });
-  }
 });
 
 function parseRelativeRenderUrl(value: string): { pathname: string; search: string; hash: string } | undefined {

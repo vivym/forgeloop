@@ -9,6 +9,7 @@ import {
   legacyWorkItemStorageRefSchema,
   objectRefSchema,
   planDetailSchema,
+  productListQuerySchema,
   productListItemSchema,
   requirementDetailSchema,
   requirementListItemSchema,
@@ -66,6 +67,7 @@ describe('project management typed object contracts', () => {
       id: 'task-1',
       ref: { type: 'task', id: 'task-1' },
       title: 'Implement checkout validation',
+      status: 'ready',
       parent_ref: { type: 'requirement', id: 'req-1' },
       controlling_spec_revision_id: 'spec-rev-1',
       controlling_plan_revision_id: 'plan-rev-1',
@@ -83,6 +85,7 @@ describe('project management typed object contracts', () => {
         id: 'task-1',
         ref: { type: 'task', id: 'task-1' },
         title: 'Implement checkout validation',
+        status: 'ready',
         controlling_spec_revision_id: 'spec-rev-1',
         controlling_plan_revision_id: 'plan-rev-1',
         stale_state: 'current',
@@ -95,6 +98,7 @@ describe('project management typed object contracts', () => {
         id: 'task-1',
         ref: { type: 'task', id: 'task-1' },
         title: 'Implement checkout validation',
+        status: 'ready',
         controlling_spec_revision_id: 'spec-rev-1',
         controlling_plan_revision_id: 'plan-rev-1',
         controlling_spec_revision_authority: 'current_approved',
@@ -109,6 +113,7 @@ describe('project management typed object contracts', () => {
         id: 'task-1',
         ref: { type: 'task', id: 'task-1' },
         title: 'Implement checkout validation',
+        status: 'ready',
         controlling_spec_revision_id: 'spec-rev-1',
         controlling_plan_revision_id: 'plan-rev-1',
         controlling_spec_revision_authority: 'unapproved',
@@ -123,6 +128,7 @@ describe('project management typed object contracts', () => {
         id: 'task-1',
         ref: { type: 'task', id: 'task-1' },
         title: 'Implement checkout validation',
+        status: 'ready',
         controlling_spec_revision_id: 'spec-rev-1',
         controlling_plan_revision_id: 'plan-rev-1',
         controlling_spec_revision_authority: 'current_approved',
@@ -143,6 +149,7 @@ describe('project management typed object contracts', () => {
         id: 'task-manual',
         ref: { type: 'task', id: 'task-manual' },
         title: 'Emergency manual follow-up',
+        status: 'blocked',
         stale_state: 'manual_exception',
         package_generation_eligible: true,
         audited_exception: {
@@ -166,6 +173,7 @@ describe('project management typed object contracts', () => {
         id: 'task-manual',
         ref: { type: 'task', id: 'task-manual' },
         title: 'Emergency manual follow-up',
+        status: 'blocked',
         stale_state: 'manual_exception',
         package_generation_eligible: false,
       }),
@@ -176,6 +184,7 @@ describe('project management typed object contracts', () => {
         id: 'task-manual',
         ref: { type: 'task', id: 'task-manual' },
         title: 'Emergency manual follow-up',
+        status: 'blocked',
         stale_state: 'manual_exception',
         package_generation_eligible: false,
         audited_exception: {
@@ -209,6 +218,7 @@ describe('project management typed object contracts', () => {
         id: 'task-1',
         ref: { type: 'task', id: 'task-1' },
         title: 'Implement checkout validation',
+        status: 'todo',
         stale_state: 'current',
       }),
     ).toMatchObject({
@@ -220,6 +230,7 @@ describe('project management typed object contracts', () => {
         id: 'task-1',
         ref: { type: 'requirement', id: 'req-1' },
         title: 'Implement checkout validation',
+        status: 'todo',
         stale_state: 'current',
       }),
     ).toThrow();
@@ -229,6 +240,35 @@ describe('project management typed object contracts', () => {
         id: 'task-1',
         ref: { type: 'release', id: 'rel-1' },
         title: 'Implement checkout validation',
+        status: 'todo',
+        stale_state: 'current',
+      }),
+    ).toThrow();
+  });
+
+  it('keeps task detail-page state on task detail read models', () => {
+    expect(
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'task', id: 'task-1' },
+        title: 'Implement checkout validation',
+        status: 'in_progress',
+        stale_state: 'current',
+        driver_actor_id: 'actor-driver',
+        updated_at: '2026-05-23T00:00:00.000Z',
+      }),
+    ).toMatchObject({
+      status: 'in_progress',
+      driver_actor_id: 'actor-driver',
+      updated_at: '2026-05-23T00:00:00.000Z',
+    });
+
+    expect(() =>
+      taskDetailSchema.parse({
+        id: 'task-1',
+        ref: { type: 'release', id: 'rel-1' },
+        title: 'Implement checkout validation',
+        status: 'in_progress',
         stale_state: 'current',
       }),
     ).toThrow();
@@ -244,6 +284,29 @@ describe('project management typed object contracts', () => {
         updated_at: '2026-05-23T00:00:00.000Z',
       }),
     ).toThrow();
+  });
+
+  it('rejects public product query filters with legacy owner or work item fields', () => {
+    expect(() =>
+      productListQuerySchema.parse({
+        project_id: 'project-1',
+        owner_actor_id: 'actor-owner',
+      }),
+    ).toThrow();
+
+    expect(() =>
+      productListQuerySchema.parse({
+        project_id: 'project-1',
+        work_item_id: 'wi-1',
+      }),
+    ).toThrow();
+
+    expect(
+      productListQuerySchema.parse({
+        project_id: 'project-1',
+        driver_actor_id: 'actor-driver',
+      }),
+    ).toMatchObject({ driver_actor_id: 'actor-driver' });
   });
 
   it('rejects nested package state that exposes legacy work_item_id', () => {

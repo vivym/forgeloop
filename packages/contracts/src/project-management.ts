@@ -63,6 +63,30 @@ export const reviewEvidenceRefSchema = z
         message: 'review packet evidence must reference a review packet',
       });
     }
+    if (
+      evidence.authority_type === 'human_review_decision' &&
+      evidence.authority_ref.type === 'human_review_decision' &&
+      evidence.decision_id !== undefined &&
+      evidence.decision_id !== evidence.authority_ref.id
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['decision_id'],
+        message: 'human review decision id must match authority_ref.id',
+      });
+    }
+    if (
+      evidence.authority_type === 'review_packet_approval' &&
+      evidence.authority_ref.type === 'review_packet' &&
+      evidence.review_packet_id !== undefined &&
+      evidence.review_packet_id !== evidence.authority_ref.id
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['review_packet_id'],
+        message: 'review packet id must match authority_ref.id',
+      });
+    }
   });
 export type ReviewEvidenceRef = z.infer<typeof reviewEvidenceRefSchema>;
 
@@ -374,7 +398,38 @@ export const releaseReadinessDetailSchema = z
     ready: z.boolean(),
     disabled_reasons: z.array(productSafeDisabledReasonSchema),
   })
-  .strict();
+  .strict()
+  .superRefine((readiness, ctx) => {
+    if (!readiness.ready) {
+      return;
+    }
+
+    if (readiness.disabled_reasons.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['disabled_reasons'],
+        message: 'ready release readiness details must not include disabled reasons',
+      });
+    }
+
+    const evidenceGroups = [
+      ['required_review_evidence', readiness.required_review_evidence],
+      ['required_test_acceptance_evidence', readiness.required_test_acceptance_evidence],
+      ['package_run_evidence', readiness.package_run_evidence],
+      ['observation_evidence', readiness.observation_evidence],
+    ] as const;
+    for (const [path, evidenceItems] of evidenceGroups) {
+      evidenceItems.forEach((evidence, index) => {
+        if (evidence.status !== 'passed') {
+          ctx.addIssue({
+            code: 'custom',
+            path: [path, index, 'status'],
+            message: 'ready release readiness details require every evidence gate to be passed',
+          });
+        }
+      });
+    }
+  });
 export type ReleaseReadinessDetail = z.infer<typeof releaseReadinessDetailSchema>;
 
 const auditedExceptionSchema = z
@@ -584,7 +639,6 @@ export const taskDetailSchema = taskListItemSchema
     audited_exception: auditedExceptionSchema.optional(),
     attachment_refs: z.array(attachmentRefSchema).default([]),
   })
-  .omit({ status: true, updated_at: true, driver_actor_id: true })
   .strict()
   .superRefine((task, ctx) => {
     if (task.stale_state === 'manual_exception' && !task.audited_exception) {
