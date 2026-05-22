@@ -469,7 +469,8 @@ type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[
 const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
 const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[_-]?key|token|secret|auth)[A-Za-z0-9_.-]*\b)/i;
 const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
-const unsafeRuntimePublicKeyPattern = /(token|secret|auth|password|endpoint|container_id|workspace_path|source_repo_path)$/i;
+const unsafeRuntimePublicKeyPattern =
+  /(api[_-]?key|token|secret|auth|password|endpoint|container_id|workspace_path|source_repo_path)$/i;
 const rawRuntimePublicFieldPattern = /^raw_(prompt|context|log|logs|notification|notifications|headers?)$/i;
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
@@ -694,7 +695,7 @@ const isCodexRuntimeLocalPathString = (value: string): boolean => {
   const singleSegmentLocalPathPattern =
     /^(?:\.[A-Za-z0-9._-]+|(?:Dockerfile|Makefile)(?:\.[A-Za-z0-9._-]+)?|README|LICENSE|CHANGELOG|[A-Za-z0-9._-]+\.(?:cjs|css|diff|env|js|json|jsx|lock|log|md|mjs|patch|py|sh|sql|toml|ts|tsx|txt|yaml|yml)|app|apps|backend|build|client|config|configs|dist|docs|frontend|lib|node_modules|packages|repo|repository|scripts|server|src|test|tests|tmp|workspace|workspaces)$/i;
   return (
-    /^(\/|\\{2}|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/i.test(value) ||
+    /^(\/|\\{2}|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:)/i.test(value) ||
     relativeLocalPathPattern.test(value) ||
     singleSegmentLocalPathPattern.test(value)
   );
@@ -705,7 +706,7 @@ const isSafeCodexRuntimeRepoRelativePath = (value: string): boolean => {
     value.length === 0 ||
     value.includes('\\') ||
     value.includes('\0') ||
-    /^(\/|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/i.test(value) ||
+    /^(\/|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:)/i.test(value) ||
     isCodexRuntimeEndpointOrContainerString(value)
   ) {
     return false;
