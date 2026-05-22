@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 
 describe('Spec and Plan direct routes', () => {
@@ -58,6 +59,7 @@ describe('Spec and Plan direct routes', () => {
     expect(document.body.textContent).not.toMatch(/actor_id/);
     expect(screen.queryByText('Revision 1 created')).toBeNull();
     expect(screen.getByRole('link', { name: 'Work Item' })).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
     await waitFor(() => {
       expect(vi.mocked(fetch)).toHaveBeenCalledWith('http://localhost:3000/specs/spec-1', expect.objectContaining({ method: 'GET' }));
       expect(vi.mocked(fetch)).toHaveBeenCalledWith(
@@ -334,6 +336,7 @@ describe('Spec and Plan direct routes', () => {
     const workItemLink = screen.getByRole('link', { name: 'Release cockpit work item' }) as HTMLAnchorElement;
     expect(workItemLink.getAttribute('href')).toBe('/work-items/wi-1');
     expect(screen.queryByRole('link', { name: 'Current revision' })).toBeNull();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
     await waitFor(() => {
       const specRegistryRequest = vi
         .mocked(fetch)
@@ -415,6 +418,38 @@ describe('Spec and Plan direct routes', () => {
     expect(screen.queryByRole('button', { name: 'Generate packages' })).toBeNull();
     expect(document.body.textContent).not.toMatch(/mutation|wiring/i);
     expect(screen.queryByText('Revision 1 created')).toBeNull();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
+  });
+
+  it('renders Plans registry without legacy visual classes', async () => {
+    const screen = await renderRoute('/plans?status=approved', {
+      apiOverrides: {
+        'GET /query/plans?project_id=project-web-product&status=approved&limit=100': {
+          items: [
+            {
+              id: 'plan-approved',
+              object: { type: 'plan', id: 'plan-approved', title: 'Approved Plan' },
+              title: 'Approved Plan',
+              status: 'approved',
+              gate_state: 'passed',
+              resolution: 'approved',
+              parent: { type: 'work_item', id: 'wi-1', title: 'Release cockpit work item' },
+              related: [],
+              revision_state: {
+                current_revision_id: 'plan-rev-approved',
+                revision_number: 1,
+              },
+              counts: {},
+              updated_at: '2026-05-18T00:00:00.000Z',
+            },
+          ],
+          degraded_sources: [],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('link', { name: 'Revision 1' })).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('shows package inventory fallback when an approved Plan has no approved revision id', async () => {
