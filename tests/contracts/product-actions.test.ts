@@ -22,6 +22,11 @@ const validLaneTarget = {
   href: '/lanes/bugs?project_id=p1',
 } as const;
 
+const validRouteTarget = {
+  kind: 'route',
+  href: '/releases',
+} as const;
+
 const validNavigateAction = {
   id: 'open-work-item',
   lane_id: 'bugs',
@@ -162,6 +167,18 @@ describe('ProductAction contracts', () => {
   it('requires navigate actions to carry a target and no command', () => {
     expect(productActionSchema.safeParse({ ...validNavigateAction, target: undefined }).success).toBe(false);
     expect(productActionSchema.safeParse({ ...validNavigateAction, command: validCommand }).success).toBe(false);
+  });
+
+  it('supports route targets for product collection pages without object identity', () => {
+    expect(productActionSchema.safeParse({ ...validNavigateAction, target: validRouteTarget }).success).toBe(true);
+    expect(
+      productActionSchema.safeParse({ ...validNavigateAction, target: { ...validRouteTarget, object_id: 'project-1' } })
+        .success,
+    ).toBe(false);
+    expect(
+      productActionSchema.safeParse({ ...validNavigateAction, target: { ...validRouteTarget, href: '/releases/create' } })
+        .success,
+    ).toBe(false);
   });
 
   it('requires command actions to carry a command', () => {

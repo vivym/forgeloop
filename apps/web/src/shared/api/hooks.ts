@@ -697,7 +697,7 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
 export function invalidateProductActionTargets(queryClient: QueryClient, input: ProductActionInvalidationInput) {
   return Promise.all([
     invalidateProductLaneProjectQueries(queryClient, input.projectId),
-    queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) }),
+    invalidateWorkItemCockpit(queryClient, input.workItemId),
     invalidateObjectQuery(queryClient, input.action.command.object_type, input.action.command.object_id),
     invalidateCommandDerivedResources(queryClient, input.action.command),
     input.action.target === undefined ? Promise.resolve() : invalidateTargetQuery(queryClient, input.action.target),
@@ -745,6 +745,10 @@ function invalidateTargetQuery(queryClient: QueryClient, target: ProductActionTa
     return queryClient.invalidateQueries({ queryKey: ['product-lanes', target.lane_id] });
   }
 
+  if (target.kind === 'route') {
+    return Promise.resolve();
+  }
+
   return invalidateObjectQuery(queryClient, target.object_type, target.object_id);
 }
 
@@ -753,7 +757,7 @@ function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObje
     case 'work_item':
       return Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(objectId) }),
+        invalidateWorkItemCockpit(queryClient, objectId),
       ]);
     case 'spec':
       return queryClient.invalidateQueries({ queryKey: queryKeys.spec(objectId) });
@@ -783,7 +787,9 @@ function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string 
     return Promise.resolve();
   }
 
-  return queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
+  return queryClient.invalidateQueries({
+    predicate: ({ queryKey }) => queryKey[0] === 'work-item-cockpit' && queryKey[1] === workItemId,
+  });
 }
 
 function invalidateSpecLifecycleResources(queryClient: QueryClient, specId: string, workItemId: string | undefined) {

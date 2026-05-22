@@ -79,6 +79,11 @@ export const laneTarget = (laneId: ProductLaneId, href = `/lanes/${laneId}`): Pr
   href,
 });
 
+export const routeTarget = (href: string): ProductActionTarget => ({
+  kind: 'route',
+  href,
+});
+
 export const navigateAction = (input: NavigateActionInput): ProductAction =>
   productActionSchema.parse({
     ...actionBase(input),

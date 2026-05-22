@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutionPackage, ExecutionPackageDependency, Release, ReviewPacket, RunSession, SpecRevision } from '@forgeloop/domain';
+import type { ProductLaneId } from '@forgeloop/contracts';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -204,6 +205,33 @@ const saveReviewPacket = async (
   return { runSession, reviewPacket };
 };
 
+const saveApprovedReviewPacket = async (
+  repo: InMemoryDeliveryRepository,
+  executionPackage: ExecutionPackage,
+): Promise<{ runSession: RunSession; reviewPacket: ReviewPacket }> => {
+  const { runSession, reviewPacket } = await saveReviewPacket(repo, executionPackage);
+  const approvedReviewPacket: ReviewPacket = {
+    ...reviewPacket,
+    status: 'completed',
+    decision: 'approved',
+    reviewed_by_actor_id: actorReviewer,
+    reviewed_at: now,
+    completed_at: now,
+    independent_ai_review: {
+      status: 'approved',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      summary: 'Independent review approved the selected run evidence.',
+    },
+    test_mapping: [{ gate_id: 'unit-tests', result: 'passed', evidence_ref: 'run-check:unit-tests' }],
+    requested_changes: [],
+    updated_at: now,
+  };
+  await repo.saveReviewPacket(approvedReviewPacket);
+
+  return { runSession, reviewPacket: approvedReviewPacket };
+};
+
 const seedLinkedRelease = async (app: INestApplication, executionPackage: ExecutionPackage) => {
   const server = app.getHttpServer();
   const release = (
@@ -250,6 +278,13 @@ const collectKeys = (value: unknown, keys = new Set<string>()): Set<string> => {
     collectKeys(child, keys);
   });
   return keys;
+};
+
+const getPrimaryCockpitAction = async (app: INestApplication, workItemId: string, lane: ProductLaneId) => {
+  const response = await request(app.getHttpServer()).get(`/query/work-item-cockpit/${workItemId}?lane=${lane}`).expect(200);
+  const action = response.body.delivery_readiness.next_actions[0];
+  expect(action).toBeDefined();
+  return action;
 };
 
 describe('product lane projections', () => {
@@ -374,6 +409,148 @@ describe('product lane projections', () => {
       expect(JSON.stringify(action)).not.toContain('sha256:');
       expect(JSON.stringify(action)).not.toContain('/workspace');
       expect(JSON.stringify(action)).not.toContain('codex_config');
+    }
+  });
+
+  it('returns reviewer Work Item Cockpit next actions that distinguish pending decisions from missing evidence', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+
+    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
+      kind: 'navigate',
+      label: 'Generate Review Packet evidence first',
+      description: expect.stringMatching(/review evidence must be generated before the reviewer can decide/i),
+      target: expect.objectContaining({
+        kind: 'object',
+        object_type: 'execution_package',
+        object_id: executionPackage.id,
+        href: `/packages/${executionPackage.id}`,
+      }),
+    });
+
+    const { reviewPacket } = await saveReviewPacket(repo, executionPackage);
+
+    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
+      kind: 'navigate',
+      label: 'Decide Review Packet',
+      description: expect.stringMatching(/approve.*request changes/i),
+      target: expect.objectContaining({
+        kind: 'object',
+        object_type: 'review_packet',
+        object_id: reviewPacket.id,
+        href: `/reviews/${reviewPacket.id}`,
+      }),
+    });
+  });
+
+  it('returns QA Work Item Cockpit next actions for blocked quality gates and release test acceptance handoff', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+
+    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'qa-test-owner')).resolves.toMatchObject({
+      kind: 'navigate',
+      label: 'Review Quality Gate blockers',
+      description: expect.stringMatching(/resolve.*quality gate blockers/i),
+      target: expect.objectContaining({
+        kind: 'object',
+        object_type: 'work_item',
+        object_id: executionPackage.work_item_id,
+      }),
+    });
+
+    await saveApprovedReviewPacket(repo, executionPackage);
+    const reviewedPackage = await repo.getExecutionPackage(executionPackage.id);
+    await repo.saveExecutionPackage({
+      ...(reviewedPackage ?? executionPackage),
+      required_artifact_kinds: [],
+      updated_at: now,
+    });
+
+    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'qa-test-owner')).resolves.toMatchObject({
+      kind: 'navigate',
+      label: 'Open Release inventory',
+      description: expect.stringMatching(/release scope.*established/i),
+      target: {
+        kind: 'route',
+        href: '/releases',
+      },
+    });
+
+    const createdRelease = await seedLinkedRelease(app, executionPackage);
+    const release = (await repo.getRelease(createdRelease.id)) ?? createdRelease;
+
+    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'qa-test-owner')).resolves.toMatchObject({
+      kind: 'navigate',
+      label: 'Acknowledge Release Test Acceptance',
+      description: expect.stringMatching(/acknowledge.*test acceptance/i),
+      target: expect.objectContaining({
+        kind: 'object',
+        object_type: 'release',
+        object_id: release.id,
+        href: `/releases/${release.id}#release-test-acceptance`,
+      }),
+    });
+  });
+
+  it('returns release-owner Work Item Cockpit next actions with state-specific decisions', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    await saveApprovedReviewPacket(repo, executionPackage);
+    const reviewedPackage = await repo.getExecutionPackage(executionPackage.id);
+    await repo.saveExecutionPackage({
+      ...(reviewedPackage ?? executionPackage),
+      required_artifact_kinds: [],
+      updated_at: now,
+    });
+
+    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'release-owner')).resolves.toMatchObject({
+      kind: 'navigate',
+      label: 'Create or link Release',
+      description: expect.stringMatching(/release scope must be established/i),
+      target: {
+        kind: 'route',
+        href: '/releases',
+      },
+    });
+
+    const createdRelease = await seedLinkedRelease(app, executionPackage);
+    const release = (await repo.getRelease(createdRelease.id)) ?? createdRelease;
+    const cases: Array<{ release: Release; label: string; description: RegExp }> = [
+      {
+        release: { ...release, phase: 'candidate', gate_state: 'not_submitted', activity_state: 'idle' },
+        label: 'Submit Release for Approval',
+        description: /submit.*release.*approval/i,
+      },
+      {
+        release: { ...release, phase: 'approval', gate_state: 'awaiting_approval', activity_state: 'awaiting_human' },
+        label: 'Approve or Request Release Changes',
+        description: /approve.*request changes/i,
+      },
+      {
+        release: { ...release, phase: 'rollout', gate_state: 'approved', activity_state: 'idle' },
+        label: 'Start Release Observation',
+        description: /start.*observation/i,
+      },
+      {
+        release: { ...release, phase: 'observing', gate_state: 'rollout_succeeded', activity_state: 'idle' },
+        label: 'Close Release',
+        description: /close.*release/i,
+      },
+    ];
+
+    for (const entry of cases) {
+      await repo.saveRelease(entry.release);
+      await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'release-owner')).resolves.toMatchObject({
+        kind: 'navigate',
+        label: entry.label,
+        description: expect.stringMatching(entry.description),
+        target: expect.objectContaining({
+          kind: 'object',
+          object_type: 'release',
+          object_id: release.id,
+          href: `/releases/${release.id}`,
+        }),
+      });
     }
   });
 

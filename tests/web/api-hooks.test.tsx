@@ -27,6 +27,32 @@ import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { projectId, workItem } from './fixtures/product-data';
 
+type InvalidationInput = {
+  predicate?: (query: { queryKey: readonly unknown[] }) => boolean;
+  queryKey?: readonly unknown[];
+};
+
+const expectWorkItemCockpitInvalidation = (
+  calls: readonly (readonly [unknown, ...unknown[]])[],
+  workItemId: string,
+) => {
+  const input = calls
+    .map(([candidate]) => candidate as InvalidationInput)
+    .find((candidate) => {
+      if (typeof candidate.predicate !== 'function') {
+        return false;
+      }
+      return (
+        candidate.predicate({ queryKey: queryKeys.workItemCockpit(workItemId) }) === true &&
+        candidate.predicate({ queryKey: queryKeys.workItemCockpit(workItemId, 'reviewer') }) === true
+      );
+    });
+
+  expect(input).toBeDefined();
+  expect(input?.predicate?.({ queryKey: queryKeys.workItemCockpit('other-work-item', 'reviewer') })).toBe(false);
+  expect(input?.predicate?.({ queryKey: queryKeys.productLane('requirements', { project_id: projectId }) })).toBe(false);
+};
+
 describe('Web product API hooks', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -381,7 +407,7 @@ describe('Web product API hooks', () => {
       'http://localhost:3000/plan-revisions/plan-rev-product-action/generate-packages',
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.workItemCockpit(workItem.id) });
+    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevision('plan-rev-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 
@@ -441,7 +467,7 @@ describe('Web product API hooks', () => {
       'http://localhost:3000/plan-revisions/plan-rev-product-action/generate-packages',
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.workItemCockpit(workItem.id) });
+    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevision('plan-rev-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 
@@ -596,7 +622,7 @@ describe('Web product API hooks', () => {
       'http://localhost:3000/plans/plan-product-action/generate-draft',
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.workItemCockpit(workItem.id) });
+    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.specRevisions('spec-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevisions('plan-product-action') });
 
@@ -760,7 +786,7 @@ describe('Web product API hooks', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.specRevisions('spec-1') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.specReplay('spec-1') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['specs'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.workItemCockpit(workItem.id) });
+    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
 
     queryClient.clear();
   });
@@ -852,7 +878,7 @@ describe('Web product API hooks', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevisions('plan-1') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planReplay('plan-1') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['plans'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.workItemCockpit(workItem.id) });
+    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 
     queryClient.clear();

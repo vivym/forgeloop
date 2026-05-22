@@ -336,9 +336,17 @@ const productActionLaneTargetSchema = z
     }
   });
 
+const productActionRouteTargetSchema = z
+  .object({
+    kind: z.literal('route'),
+    href: productHrefSchema,
+  })
+  .strict();
+
 export const productActionTargetSchema = z.discriminatedUnion('kind', [
   productActionObjectTargetSchema,
   productActionLaneTargetSchema,
+  productActionRouteTargetSchema,
 ]);
 export type ProductActionTarget = z.infer<typeof productActionTargetSchema>;
 
