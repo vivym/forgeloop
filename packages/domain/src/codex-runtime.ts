@@ -703,9 +703,22 @@ const isCodexRuntimeProductSafeString = (value: string): boolean =>
   isCodexRuntimeMimeTypeString(value) ||
   isSha256Digest(value);
 
+const normalizeCodexRuntimeEndpointCandidate = (value: string): string => {
+  const [withoutQuery = value] = value.split(/[?#]/, 1);
+  const slashIndex = withoutQuery.indexOf('/');
+  if (slashIndex < 0) {
+    return withoutQuery.replace(/\.$/, '');
+  }
+  return `${withoutQuery.slice(0, slashIndex).replace(/\.$/, '')}${withoutQuery.slice(slashIndex)}`;
+};
+
 const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
   if (isCodexRuntimeProductSafeString(value)) {
     return false;
+  }
+  const normalizedValue = normalizeCodexRuntimeEndpointCandidate(value);
+  if (normalizedValue !== value && isCodexRuntimeEndpointOrContainerString(normalizedValue)) {
+    return true;
   }
   const loopbackEndpointPattern =
     /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?(?:::0*1|(?:0{1,4}:){7}0{0,3}1)(?:%[A-Za-z0-9_.-]+)?\]?)(:\d{1,5})?(\/|$)/i;
@@ -719,6 +732,8 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
   const clusterLocalEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc\.cluster\.local(:\d{1,5})?(\/|$)/i;
   const clusterShortServiceEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc(:\d{1,5})?(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
+  const rawRuntimeContainerNamePattern =
+    /^(?:app_server|control_plane|forgeloop_(?:app|control)[-_](?:server|plane)_\d+)(:\d{1,5})?(\/|$)/i;
   const legacySchemeEndpointPattern = /^[A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)(.+)$/;
   const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
@@ -743,6 +758,7 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
     clusterShortServiceEndpointPattern.test(value) ||
     singleLabelHostPortPattern.test(value) ||
     rawRuntimeServiceEndpointPattern.test(value) ||
+    rawRuntimeContainerNamePattern.test(value) ||
     hostWithPortOrPathPattern.test(value) ||
     /^[a-f0-9]{12,64}$/i.test(value)
   );
