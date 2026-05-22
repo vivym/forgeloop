@@ -970,6 +970,33 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'materialize-accept'));
         const claimed = await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'));
         const materializeInput = materializeRuntimeJobInput(input, seed, launchToken, 'materialize-valid');
+        const terminalSuccessInput = {
+          runtime_job_id: input.runtime_job_id,
+          launch_lease_id: input.launch_lease_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'terminal-before-start',
+          nonce_timestamp: later,
+          terminal_status: 'succeeded' as const,
+          reason_code: 'completed',
+          terminal_result_json: {
+            task_kind: 'spec_draft',
+            prompt_version: 'codex-generation-test-v1',
+            output_schema_version: 'spec-draft-test-v1',
+            generated_payload: { title: 'Generated spec' },
+            generated_payload_digest: tokenHash('generated-spec-before-start'),
+            generation_artifacts: [],
+            public_summary: 'completed',
+          },
+          idempotency_key: `terminal-${input.runtime_job_id}`,
+          request_digest: tokenHash(`terminal-request-${input.runtime_job_id}`),
+          now: later,
+        };
+
+        await expect(repository.terminalizeCodexRuntimeJob(terminalSuccessInput)).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_runtime_job_unavailable',
+        });
 
         await expect(
           repository.materializeCodexRuntimeJob({
@@ -983,6 +1010,12 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         });
 
         const materialized = await repository.materializeCodexRuntimeJob(materializeInput);
+        await expect(
+          repository.terminalizeCodexRuntimeJob({ ...terminalSuccessInput, nonce: 'terminal-materializing-before-start' }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_runtime_job_unavailable',
+        });
         await expect(
           repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-valid-replay' }),
         ).resolves.toEqual(materialized);

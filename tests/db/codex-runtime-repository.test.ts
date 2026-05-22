@@ -1748,6 +1748,95 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it('rejects successful terminal results before the runtime job starts', async () => {
+    const accepted = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(accepted.repository);
+    await expect(
+      terminalizeRuntimeJob(accepted.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-accepted-success-nonce',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+
+    const materializing = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-materializing-success-terminal',
+        launch_lease_id: 'runtime-launch-lease-materializing-success-terminal',
+        envelope_id: 'runtime-envelope-materializing-success-terminal',
+        job_request_id: 'runtime-job-request-materializing-success-terminal',
+        target: generationTarget({ target_id: 'generation-materializing-success-terminal' }),
+      },
+      { worker_id: 'worker-materializing-success-terminal', session_token: 'session-token-materializing-success-terminal' },
+    );
+    await materializing.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-materializing-success-terminal',
+      worker_id: 'worker-materializing-success-terminal',
+      worker_session_token: 'session-token-materializing-success-terminal',
+      nonce: 'accept-materializing-success-terminal-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-materializing-success-terminal'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-materializing-success-terminal',
+      request_digest: tokenHash('accept-materializing-success-terminal-request'),
+      now: later,
+    });
+    await materializing.repository.claimCodexLaunchTokenEnvelope({
+      runtime_job_id: 'runtime-job-materializing-success-terminal',
+      envelope_id: 'runtime-envelope-materializing-success-terminal',
+      worker_id: 'worker-materializing-success-terminal',
+      worker_session_token: 'session-token-materializing-success-terminal',
+      nonce: 'claim-materializing-success-terminal-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-materializing-success-terminal'),
+      key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      claim_request_id: 'claim-materializing-success-terminal',
+      request_digest: tokenHash('claim-materializing-success-terminal-request'),
+      now: later,
+    });
+    await materializing.repository.materializeCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-materializing-success-terminal',
+      launch_lease_id: 'runtime-launch-lease-materializing-success-terminal',
+      worker_id: 'worker-materializing-success-terminal',
+      worker_session_token: 'session-token-materializing-success-terminal',
+      nonce: 'materialize-materializing-success-terminal-nonce',
+      nonce_timestamp: later,
+      launch_token_hash: tokenHash(materializing.launchToken),
+      accepted_worker_session_digest: tokenHash('session-token-materializing-success-terminal'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      materialization_request_id: 'materialize-materializing-success-terminal',
+      request_digest: tokenHash('materialize-materializing-success-terminal-request'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('runtime-action-claim-token-1'),
+        precondition_fingerprint: 'runtime-precondition-1',
+      },
+      now: later,
+    });
+    await expect(
+      materializing.repository.terminalizeCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-materializing-success-terminal',
+        launch_lease_id: 'runtime-launch-lease-materializing-success-terminal',
+        worker_id: 'worker-materializing-success-terminal',
+        worker_session_token: 'session-token-materializing-success-terminal',
+        nonce: 'terminal-materializing-success-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'succeeded',
+        reason_code: 'completed',
+        terminal_result_json: validGenerationTerminalResult('completed-before-start'),
+        idempotency_key: 'terminal-materializing-success',
+        request_digest: tokenHash('terminal-materializing-success-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
   it('rejects unsafe runtime job terminal result payloads before persistence', async () => {
     const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
     await acceptRuntimeJob(repository);
