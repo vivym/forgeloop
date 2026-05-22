@@ -539,12 +539,13 @@ const isRawRuntimePublicString = (value: string): boolean => {
     /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?(?:::1|0:0:0:0:0:0:0:1)\]?)(:\d{1,5})?(\/|$)/i;
   const privateIpv4EndpointPattern =
     /^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2})(:\d{1,5})?(\/|$)/i;
-  const privateIpv6EndpointPattern = /^\[?(?:(?:fc|fd)[0-9a-f]{0,2}|fe80):[0-9a-f:]+\]?(:\d{1,5})?(\/|$)/i;
+  const privateIpv6EndpointPattern =
+    /^\[?(?:(?:fc|fd)[0-9a-f]{0,2}|fe80):[0-9a-f:]+(?:%[A-Za-z0-9_.-]+)?\]?(:\d{1,5})?(\/|$)/i;
   const internalHostEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal(:\d{1,5})?(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
-  const relativeLocalPathPattern = /^(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+(?:$|[?#])/;
+  const relativeLocalPathPattern = /^(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]*(?:$|[?#])/;
   const singleSegmentLocalPathPattern =
-    /^(?:[A-Za-z0-9._-]+\.(?:cjs|css|diff|env|js|json|jsx|lock|log|md|mjs|patch|py|sh|sql|toml|ts|tsx|txt|yaml|yml)|apps|build|config|configs|dist|docs|node_modules|packages|repo|repository|scripts|src|test|tests|tmp|workspace|workspaces)$/i;
+    /^(?:\.[A-Za-z0-9._-]+|Dockerfile|Makefile|[A-Za-z0-9._-]+\.(?:cjs|css|diff|env|js|json|jsx|lock|log|md|mjs|patch|py|sh|sql|toml|ts|tsx|txt|yaml|yml)|app|apps|backend|build|client|config|configs|dist|docs|frontend|lib|node_modules|packages|repo|repository|scripts|server|src|test|tests|tmp|workspace|workspaces)$/i;
   const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
   return (
