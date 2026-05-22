@@ -54,7 +54,7 @@ const htmlDeclarationPattern = /<![A-Za-z][^>]*>/;
 const htmlProcessingInstructionPattern = /<\?[\s\S]*?\?>/;
 const mdxFragmentPattern = /<>[\s\S]*?<\/>/;
 const htmlTagPattern = /<\/?[$_A-Za-z][$_A-Za-z0-9.-]*(?::[$_A-Za-z][$_A-Za-z0-9.-]*)?(?=[\s/>])[^>]*>/;
-const mdxExpressionPattern = /(?:^|[\s([{])\{[^{}\n]+}(?=$|[\s)\]},.!?;:])/;
+const mdxExpressionPattern = /\{[^{}\n]+}/;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
