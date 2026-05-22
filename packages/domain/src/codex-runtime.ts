@@ -1031,6 +1031,53 @@ function assertCodexRuntimeScopes(scopes: unknown): asserts scopes is readonly C
   }
 }
 
+function assertCodexDockerPolicy(policy: unknown): asserts policy is CodexDockerPolicy {
+  if (!isPlainObject(policy)) {
+    throw dockerPolicyUnavailable('Codex runtime docker_policy must be an object.');
+  }
+  if (policy.network_disabled !== undefined && typeof policy.network_disabled !== 'boolean') {
+    throw dockerPolicyUnavailable('Codex runtime docker_policy network_disabled must be a boolean.');
+  }
+  for (const key of ['app_server_only', 'rootless', 'read_only_rootfs', 'no_new_privileges'] as const) {
+    if (typeof policy[key] !== 'boolean') {
+      throw dockerPolicyUnavailable(`Codex runtime docker_policy ${key} must be a boolean.`);
+    }
+  }
+  if (!Array.isArray(policy.drop_capabilities) || policy.drop_capabilities.some((capability) => typeof capability !== 'string')) {
+    throw dockerPolicyUnavailable('Codex runtime docker_policy drop_capabilities must be an array of strings.');
+  }
+}
+
+function assertCodexEffectiveConfigAssertions(
+  assertions: unknown,
+  targetKind: CodexRuntimeTargetKind,
+): asserts assertions is CodexEffectiveConfigAssertions {
+  if (!isPlainObject(assertions)) {
+    throw invalidProfile('Codex runtime effective_config_assertions must be an object.');
+  }
+  if (assertions.approval_policy !== 'never') {
+    throw invalidProfile('Codex runtime effective_config_assertions approval_policy must be never.');
+  }
+  if (targetKind === 'generation') {
+    if (
+      assertions.target_kind !== 'generation' ||
+      assertions.source_write_policy !== 'artifact_only' ||
+      !Array.isArray(assertions.forbidden_writable_roots) ||
+      assertions.forbidden_writable_roots.some((root) => typeof root !== 'string')
+    ) {
+      throw invalidProfile('Codex runtime generation effective_config_assertions are invalid.');
+    }
+    return;
+  }
+  if (
+    assertions.target_kind !== 'run_execution' ||
+    !['danger-full-access', 'dangerFullAccess'].includes(String(assertions.sandbox_type)) ||
+    assertions.writable_roots_policy !== 'task_workspace_only'
+  ) {
+    throw invalidProfile('Codex runtime run-execution effective_config_assertions are invalid.');
+  }
+}
+
 const dockerNetworkProxyConfigDigestInput = (config: CodexDockerNetworkProxyConfig): Omit<CodexDockerNetworkProxyConfig, 'provider_config_digest'> => ({
   proxy_image: config.proxy_image,
   proxy_image_digest: config.proxy_image_digest,
@@ -1470,81 +1517,88 @@ export const validateCodexLaunchTargetKind = (
 };
 
 export const validateCodexRuntimeProfileRevision = (
-  revision: CodexRuntimeProfileRevision,
+  revision: unknown,
   options: { strictRealDogfood?: boolean } = {},
 ): CodexRuntimeProfileRevision => {
-  if (!validRuntimeTargetKinds.has(revision.target_kind)) {
+  if (!isPlainObject(revision)) {
+    throw invalidProfile('Codex runtime profile revision must be an object.');
+  }
+  if (!validRuntimeTargetKinds.has(revision.target_kind as CodexRuntimeTargetKind)) {
     throw invalidProfile('Codex runtime profile target_kind is invalid.');
   }
-  if (!validSourceAccessModes.has(revision.source_access_mode)) {
+  if (!validSourceAccessModes.has(revision.source_access_mode as CodexSourceAccessMode)) {
     throw invalidProfile('Codex runtime profile source_access_mode is invalid.');
   }
-  if (!validRuntimeEnvironments.has(revision.environment)) {
+  if (!validRuntimeEnvironments.has(revision.environment as CodexRuntimeEnvironment)) {
     throw invalidProfile('Codex runtime profile environment is invalid.');
   }
+  const targetKind = revision.target_kind as CodexRuntimeTargetKind;
   assertCodexRuntimeResourceLimits(revision.resource_limits);
   assertCodexRuntimeNetworkPolicy(revision.network_policy);
   assertCodexRuntimeScopes(revision.allowed_scopes);
+  assertCodexDockerPolicy(revision.docker_policy);
+  assertCodexEffectiveConfigAssertions(revision.effective_config_assertions, targetKind);
   assertSha256Digest(revision.docker_image_digest, 'Docker image digest');
   assertSha256Digest(revision.codex_config_digest, 'Codex config digest');
   assertSha256Digest(revision.expected_effective_config_digest, 'Expected effective config digest');
 
-  const expectedCodexConfigDigest = codexCanonicalDigest(revision.codex_config_toml);
-  if (revision.codex_config_digest !== expectedCodexConfigDigest) {
+  const validatedRevision = revision as unknown as CodexRuntimeProfileRevision;
+  const expectedCodexConfigDigest = codexCanonicalDigest(validatedRevision.codex_config_toml);
+  if (validatedRevision.codex_config_digest !== expectedCodexConfigDigest) {
     throw invalidProfile('Codex runtime profile config digest does not match normalized Codex config.');
   }
 
-  const expectedProfileDigest = codexRuntimeProfileRevisionDigest(revision);
-  if (revision.profile_digest !== expectedProfileDigest) {
+  const expectedProfileDigest = codexRuntimeProfileRevisionDigest(validatedRevision);
+  if (validatedRevision.profile_digest !== expectedProfileDigest) {
     throw invalidProfile('Codex runtime profile digest does not match runtime-affecting profile data.');
   }
 
-  if (secretConfigPattern.test(revision.codex_config_toml)) {
+  if (secretConfigPattern.test(validatedRevision.codex_config_toml)) {
     throw invalidProfile('Codex config TOML must not contain secret-looking keys or environment interpolation channels.');
   }
 
-  if (revision.app_server_required !== true || revision.allowed_driver_kind !== 'app_server') {
+  if (validatedRevision.app_server_required !== true || validatedRevision.allowed_driver_kind !== 'app_server') {
     throw invalidProfile('Codex runtime profiles must require the app-server driver.');
   }
 
   const strict = options.strictRealDogfood === true;
   if (strict) {
-    const networkPolicy = assertStrictCodexRuntimeNetworkPolicy(normalizeCodexRuntimeNetworkPolicy(revision.network_policy));
+    const networkPolicy = assertStrictCodexRuntimeNetworkPolicy(normalizeCodexRuntimeNetworkPolicy(validatedRevision.network_policy));
     networkPolicy.allowlist_rules.forEach(assertStrictCodexRuntimeNetworkAllowlistRule);
-    if (revision.docker_policy.network_disabled === true) {
+    if (validatedRevision.docker_policy.network_disabled === true) {
       throw dockerPolicyUnavailable('Strict real dogfood profiles must not disable Docker networking when using an egress allowlist network policy.');
     }
 
     if (
-      revision.docker_policy.app_server_only !== true ||
-      revision.docker_policy.rootless !== true ||
-      revision.docker_policy.read_only_rootfs !== true ||
-      revision.docker_policy.no_new_privileges !== true ||
-      !revision.docker_policy.drop_capabilities.includes('ALL')
+      validatedRevision.docker_policy.app_server_only !== true ||
+      validatedRevision.docker_policy.rootless !== true ||
+      validatedRevision.docker_policy.read_only_rootfs !== true ||
+      validatedRevision.docker_policy.no_new_privileges !== true ||
+      !validatedRevision.docker_policy.drop_capabilities.includes('ALL')
     ) {
       throw dockerPolicyUnavailable('Strict real dogfood profiles require Docker app-server-only, rootless, read-only, no-new-privileges policy with all capabilities dropped.');
     }
 
-    if (revision.effective_config_assertions.approval_policy !== 'never') {
+    if (validatedRevision.effective_config_assertions.approval_policy !== 'never') {
       throw invalidProfile('Strict Codex runtime profiles must assert approval_policy never.');
     }
-    if (revision.target_kind === 'generation') {
+    if (validatedRevision.target_kind === 'generation') {
       if (
-        revision.source_access_mode !== 'artifact_only' ||
-        revision.effective_config_assertions.target_kind !== 'generation' ||
-        revision.effective_config_assertions.source_write_policy !== 'artifact_only' ||
-        revision.effective_config_assertions.forbidden_writable_roots.length !== 1 ||
-        revision.effective_config_assertions.forbidden_writable_roots[0] !== 'workspace'
+        validatedRevision.source_access_mode !== 'artifact_only' ||
+        validatedRevision.effective_config_assertions.target_kind !== 'generation' ||
+        validatedRevision.effective_config_assertions.source_write_policy !== 'artifact_only' ||
+        validatedRevision.effective_config_assertions.forbidden_writable_roots.length !== 1 ||
+        validatedRevision.effective_config_assertions.forbidden_writable_roots[0] !== 'workspace'
       ) {
         throw invalidProfile('Strict generation profiles must assert artifact-only source access and no source workspace writes.');
       }
     }
-    if (revision.target_kind === 'run_execution') {
+    if (validatedRevision.target_kind === 'run_execution') {
       if (
-        revision.source_access_mode !== 'path_policy_scoped' ||
-        revision.effective_config_assertions.target_kind !== 'run_execution' ||
-        !['danger-full-access', 'dangerFullAccess'].includes(revision.effective_config_assertions.sandbox_type) ||
-        revision.effective_config_assertions.writable_roots_policy !== 'task_workspace_only'
+        validatedRevision.source_access_mode !== 'path_policy_scoped' ||
+        validatedRevision.effective_config_assertions.target_kind !== 'run_execution' ||
+        !['danger-full-access', 'dangerFullAccess'].includes(validatedRevision.effective_config_assertions.sandbox_type) ||
+        validatedRevision.effective_config_assertions.writable_roots_policy !== 'task_workspace_only'
       ) {
         throw invalidProfile('Strict run-execution profiles must assert task-workspace-only sandbox access.');
       }
@@ -1561,12 +1615,12 @@ export const validateCodexRuntimeProfileRevision = (
     }
   }
 
-  const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+  const networkPolicy = normalizeCodexRuntimeNetworkPolicy(validatedRevision.network_policy);
   if (networkPolicy.mode === 'egress_allowlist' && networkPolicy.provider === 'docker_network_proxy') {
     validateCodexDockerNetworkProxyConfig(networkPolicy.provider_config);
   }
 
-  return revision;
+  return validatedRevision;
 };
 
 export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDockerRuntimeEvidence => {

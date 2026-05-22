@@ -1048,11 +1048,45 @@ describe('codex runtime domain contracts', () => {
   });
 
   it.each([
+    ['undefined revision', undefined],
+    ['null revision', null],
+  ])('rejects malformed strict profile object without TypeError when %s', (_label, revision) => {
+    expectDomainErrorCode(
+      () => validateCodexRuntimeProfileRevision(revision as unknown as CodexRuntimeProfileRevision, { strictRealDogfood: true }),
+      'codex_runtime_profile_invalid',
+    );
+  });
+
+  it.each([
     ['resource_limits', 'codex_runtime_profile_invalid'],
     ['network_policy', 'codex_worker_docker_policy_unavailable'],
+    ['docker_policy', 'codex_worker_docker_policy_unavailable'],
+    ['effective_config_assertions', 'codex_runtime_profile_invalid'],
     ['allowed_scopes', 'codex_runtime_profile_invalid'],
   ] as const)('rejects malformed strict profile without TypeError when %s is missing', (field, code) => {
     const malformed = { ...baseRevision(), [field]: undefined } as unknown as CodexRuntimeProfileRevision;
+
+    expectDomainErrorCode(() => validateCodexRuntimeProfileRevision(malformed, { strictRealDogfood: true }), code);
+  });
+
+  it.each([
+    [
+      'docker_policy.drop_capabilities',
+      { docker_policy: { ...baseRevision().docker_policy, drop_capabilities: undefined } },
+      'codex_worker_docker_policy_unavailable',
+    ],
+    [
+      'effective_config_assertions.forbidden_writable_roots',
+      {
+        effective_config_assertions: {
+          ...baseRevision().effective_config_assertions,
+          forbidden_writable_roots: undefined,
+        },
+      },
+      'codex_runtime_profile_invalid',
+    ],
+  ] as const)('rejects malformed strict profile without TypeError when %s is missing', (_field, overrides, code) => {
+    const malformed = baseRevision(overrides as unknown as Partial<CodexRuntimeProfileRevision>);
 
     expectDomainErrorCode(() => validateCodexRuntimeProfileRevision(malformed, { strictRealDogfood: true }), code);
   });
