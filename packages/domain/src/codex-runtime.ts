@@ -471,7 +471,13 @@ const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[
 const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
 const unsafeRuntimePublicKeyPattern =
   /(api[_-]?key|token|secret|auth(?:orization)?(?:_header)?|password|endpoint|socket(?:_path)?|container(?:_id|_name)?|workspace_path|source_repo_path)$/i;
-const rawRuntimePublicFieldPattern = /^raw_(prompt|context|log|logs|notification|notifications|headers?)$/i;
+const rawRuntimePublicFieldPattern = /^raw(?:_|[A-Z]|$)/;
+
+const normalizeRuntimePublicKey = (key: string): string =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[-\s]+/g, '_')
+    .toLowerCase();
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -858,7 +864,8 @@ const assertCodexRuntimePublicSafeRecord = (
     if (isPlainObject(value)) {
       for (const [key, entry] of Object.entries(value)) {
         const entryPath = [...path, key];
-        if (unsafeRuntimePublicKeyPattern.test(key) || rawRuntimePublicFieldPattern.test(key)) {
+        const normalizedKey = normalizeRuntimePublicKey(key);
+        if (unsafeRuntimePublicKeyPattern.test(normalizedKey) || rawRuntimePublicFieldPattern.test(key)) {
           throw unsafeCodexRuntimePublicValue(
             'Codex runtime public-safe values cannot include raw paths, endpoints, container IDs, socket paths, or secrets.',
             { field: entryPath.join('.') },
