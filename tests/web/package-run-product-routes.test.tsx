@@ -556,6 +556,32 @@ describe('package and run product routes', () => {
     await waitFor(() => expect(readyScreen.getByRole('button', { name: 'Run' })).toHaveProperty('disabled', false));
   });
 
+  it('renders the ready package closure route without raw ids or debug surfaces', async () => {
+    const readyPackage = {
+      ...executionPackage,
+      id: 'package-hidden-route-closure',
+      work_item_id: 'work-item-hidden-route-closure',
+      repo_id: 'repo-hidden-route-closure',
+      phase: 'ready',
+      gate_state: 'not_submitted',
+      last_run_session_id: undefined,
+    };
+    const screen = await renderRoute(`/packages/${readyPackage.id}`, {
+      apiOverrides: {
+        [`GET /execution-packages/${readyPackage.id}`]: readyPackage,
+        [`GET /query/execution-packages/${readyPackage.id}/runtime-readiness`]: readyRuntimeReadiness,
+        [`GET /query/replay/execution_package/${readyPackage.id}`]: timeline,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: readyPackage.objective })).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run' })).toHaveProperty('disabled', false));
+    expect(screen.getByRole('link', { name: /Open Work Item/i }).getAttribute('href')).toBe(
+      `/work-items/${readyPackage.work_item_id}`,
+    );
+    expectNoVisibleRawClosureText([readyPackage.id, readyPackage.work_item_id, readyPackage.repo_id]);
+  });
+
   it('keeps run actions disabled while stale runtime readiness is refetching', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(queryKeys.packageRuntimeReadiness(executionPackage.id), readyRuntimeReadiness);
@@ -1360,4 +1386,16 @@ function expectNoLegacyWorkbenchText() {
 
 function expectNoNestedCards() {
   expect(document.body.querySelector('.fl-card .fl-card, .card .card')).toBeNull();
+}
+
+function expectNoVisibleRawClosureText(hiddenValues: string[]) {
+  const text = document.body.textContent ?? '';
+  for (const value of hiddenValues) {
+    expect(text).not.toContain(value);
+  }
+  expect(text).not.toMatch(/Dev Tools/i);
+  expect(text).not.toMatch(/raw\s+JSON/i);
+  expect(text).not.toMatch(/\bexecutionPackage\.(?:id|work_item_id|repo_id)\b/);
+  expect(text).not.toMatch(/\b(?:execution_package_id|work_item_id|repo_id)\b/);
+  expect(text).not.toMatch(/runtime_profile_id|credential_binding_id|worker_id|launch_lease|lease_token/i);
 }

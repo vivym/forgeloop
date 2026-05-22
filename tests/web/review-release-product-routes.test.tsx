@@ -303,6 +303,7 @@ describe('review and release product routes', () => {
     expect(document.body.textContent).not.toContain(reviewPacket.id);
     expect(document.body.textContent).not.toContain(executionPackage.id);
     expect(document.body.textContent).not.toContain(runSession.id);
+    expectNoRawReviewClosureText([reviewPacket.id, executionPackage.id, runSession.id]);
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/reviews/${reviewPacket.id}`,
       expect.objectContaining({ method: 'GET' }),
@@ -521,6 +522,7 @@ describe('review and release product routes', () => {
     expect(screen.queryByLabelText('Override rationale')).toBeNull();
     expect(screen.queryByLabelText('Close confirmation')).toBeNull();
     expect(document.body.textContent).not.toContain(release.release_owner_actor_id);
+    expectNoRawReleaseClosureText([release.id, releaseCockpitResponse.blocker_snapshot.blocker_fingerprint]);
   });
 
   it('disables release submission until planning is complete and keeps draft planning editable', async () => {
@@ -1045,4 +1047,27 @@ function expectNoLegacyWorkbenchText() {
 
 function expectNoNestedCards() {
   expect(document.body.querySelector('.fl-card .fl-card, .card .card')).toBeNull();
+}
+
+function expectNoRawReviewClosureText(hiddenValues: string[]) {
+  const text = document.body.textContent ?? '';
+  for (const value of hiddenValues) {
+    expect(text).not.toContain(value);
+  }
+  expect(text).not.toMatch(/Dev Tools/i);
+  expect(text).not.toMatch(/raw\s+JSON/i);
+  expect(text).not.toMatch(/\breviewPacket\.(?:id|execution_package_id|run_session_id)\b/);
+  expect(text).not.toMatch(/\b(?:review_packet_id|execution_package_id|run_session_id)\b/);
+}
+
+function expectNoRawReleaseClosureText(hiddenValues: string[]) {
+  const text = document.body.textContent ?? '';
+  for (const value of hiddenValues) {
+    expect(text).not.toContain(value);
+  }
+  expect(text).not.toMatch(/Dev Tools/i);
+  expect(text).not.toMatch(/raw\s+JSON/i);
+  expect(text).not.toMatch(/\brelease\.id\b/);
+  expect(text).not.toMatch(/\bblocker_fingerprint\b/);
+  expect(text).not.toMatch(/\bblocker_snapshot\.blocker_fingerprint\b/);
 }
