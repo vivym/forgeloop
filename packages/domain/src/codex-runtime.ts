@@ -644,7 +644,7 @@ const isPrivateLegacyIpv4Endpoint = (value: string): boolean => {
   );
 };
 
-const safeProductRefPathPattern = /^[A-Za-z0-9._~!$&'()*+,;=%-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=%-]+)*$/;
+const safeProductRefPathPattern = /^[A-Za-z0-9._~!$&'()*+,;=-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=-]+)*$/;
 const isSafeProductRefPath = (path: string): boolean =>
   path.length > 0 &&
   safeProductRefPathPattern.test(path) &&
