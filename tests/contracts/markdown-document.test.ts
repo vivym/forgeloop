@@ -202,6 +202,64 @@ describe('MarkdownDocument validation', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('rejects active attachments that are not owned by or linked to the document object', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      markdown: '![other](attachment://att-other)',
+      attachment_refs: [
+        {
+          ...baseDocument.attachment_refs[0],
+          id: 'att-other',
+          owner_object_type: 'task',
+          owner_object_id: 'task-other',
+          linked_object_refs: [],
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('accepts active attachments linked to the document object', () => {
+    const result = validateMarkdownDocument({
+      ...baseDocument,
+      markdown: '![other](attachment://att-other)',
+      attachment_refs: [
+        {
+          ...baseDocument.attachment_refs[0],
+          id: 'att-other',
+          owner_object_type: 'task',
+          owner_object_id: 'task-other',
+          linked_object_refs: [{ type: 'requirement', id: 'req-1' }],
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects archived, tombstoned, or blocked attachments', () => {
+    for (const attachmentOverride of [
+      { reference_status: 'archived' },
+      { reference_status: 'tombstoned' },
+      { safety_status: 'blocked' },
+      { safety_status: 'unavailable' },
+    ] as const) {
+      const result = validateMarkdownDocument({
+        ...baseDocument,
+        markdown: '![flow](attachment://att-1)',
+        attachment_refs: [
+          {
+            ...baseDocument.attachment_refs[0],
+            ...attachmentOverride,
+          },
+        ],
+      });
+
+      expect(result.ok).toBe(false);
+    }
+  });
+
   it('exposes a strict persisted document schema', () => {
     expect(() => markdownDocumentSchema.parse({ ...baseDocument, markdown: 'body', raw_html: '<b>bad</b>' })).toThrow();
   });

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { attachmentRefSchema, type AttachmentRef } from './attachments.js';
-import { editableObjectRefSchema } from './product-object-ref.js';
+import { editableObjectRefSchema, type EditableObjectRef } from './product-object-ref.js';
 
 const nonEmpty = z.string().trim().min(1);
 
@@ -132,7 +132,7 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
   const availableAttachments = new Map(document.attachment_refs.map((attachment) => [attachment.id, attachment]));
   for (const attachmentId of referencedAttachmentIds) {
     const attachment = availableAttachments.get(attachmentId);
-    if (!attachment || !attachmentRefCanBeReferenced(attachment)) {
+    if (!attachment || !attachmentRefCanBeReferenced(attachment, document.object_ref)) {
       issues.push({
         code: 'unresolved_attachment',
         message: `Attachment reference ${attachmentId} is not available for this document.`,
@@ -347,6 +347,18 @@ function attachmentIdsReferencedBy(destinations: MarkdownDestination[]): string[
   return attachmentIds;
 }
 
-function attachmentRefCanBeReferenced(attachment: AttachmentRef): boolean {
-  return attachment.reference_status === 'active' && attachment.safety_status === 'passed';
+function attachmentRefCanBeReferenced(attachment: AttachmentRef, documentObjectRef: EditableObjectRef): boolean {
+  return (
+    attachment.reference_status === 'active' &&
+    attachment.safety_status === 'passed' &&
+    attachmentIsScopedToDocumentObject(attachment, documentObjectRef)
+  );
+}
+
+function attachmentIsScopedToDocumentObject(attachment: AttachmentRef, documentObjectRef: EditableObjectRef): boolean {
+  if (attachment.owner_object_type === documentObjectRef.type && attachment.owner_object_id === documentObjectRef.id) {
+    return true;
+  }
+
+  return attachment.linked_object_refs.some((linkedRef) => linkedRef.type === documentObjectRef.type && linkedRef.id === documentObjectRef.id);
 }
