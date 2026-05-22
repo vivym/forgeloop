@@ -695,7 +695,7 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
 
 const isBareDnsHostString = (value: string): boolean => /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(value);
 const displayUnsafeTokenPattern =
-  /\b(?:https?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:(?!\s)|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|[a-z0-9-]+:\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
+  /\b(?:https?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:(?!\s)|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|[a-z0-9-]+:\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
 
 const isCodexRuntimeLocalPathString = (value: string): boolean => {
   if (isCodexRuntimeProductSafeString(value)) {
@@ -978,10 +978,44 @@ const requireCodexRuntimeResultArray = (input: Record<string, unknown>, field: s
   return value;
 };
 
+const assertCodexRuntimeResultKeys = (input: Record<string, unknown>, allowedKeys: ReadonlySet<string>, label: string): void => {
+  for (const key of Object.keys(input)) {
+    if (!allowedKeys.has(key)) {
+      throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result ${label} contains unsupported field ${key}.`);
+    }
+  }
+};
+
+const codexRuntimeArtifactResultKeys = new Set(['kind', 'name', 'content_type', 'digest', 'internal_ref']);
+const codexGenerationRuntimeJobResultKeys = new Set([
+  'task_kind',
+  'prompt_version',
+  'output_schema_version',
+  'generated_payload',
+  'generated_payload_digest',
+  'generation_artifacts',
+  'public_summary',
+]);
+const codexRunExecutionPatchArtifactKeys = new Set(['content_type', 'digest', 'internal_ref']);
+const codexRunExecutionCheckResultKeys = new Set(['name', 'status', 'summary', 'output_digest', 'output_internal_ref']);
+const codexRunExecutionRuntimeJobResultKeys = new Set([
+  'task_kind',
+  'execution_package_id',
+  'execution_package_version',
+  'run_session_id',
+  'workspace_bundle_digest',
+  'changed_files',
+  'patch_artifact',
+  'check_results',
+  'execution_artifacts',
+  'public_summary',
+]);
+
 const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<string, unknown> => {
   if (!isPlainObject(input)) {
     throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must contain artifact objects.`);
   }
+  assertCodexRuntimeResultKeys(input, codexRuntimeArtifactResultKeys, field);
   requireCodexRuntimeResultString(input, 'kind');
   requireCodexRuntimeResultString(input, 'name');
   requireCodexRuntimeResultString(input, 'content_type');
@@ -995,6 +1029,7 @@ const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<stri
 };
 
 const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>): CodexGenerationRuntimeJobResult => {
+  assertCodexRuntimeResultKeys(input, codexGenerationRuntimeJobResultKeys, 'generation result');
   if (!['spec_draft', 'plan_draft', 'package_drafts'].includes(String(input.task_kind))) {
     throw unsafeCodexRuntimePublicValue('Codex generation terminal result task_kind is invalid.');
   }
@@ -1010,6 +1045,7 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
 };
 
 const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>): CodexRunExecutionRuntimeJobResult => {
+  assertCodexRuntimeResultKeys(input, codexRunExecutionRuntimeJobResultKeys, 'run-execution result');
   if (input.task_kind !== 'run_execution') {
     throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result task_kind is invalid.');
   }
@@ -1023,6 +1059,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   }
   if (input.patch_artifact !== undefined) {
     const patchArtifact = requireCodexRuntimeResultRecord(input, 'patch_artifact');
+    assertCodexRuntimeResultKeys(patchArtifact, codexRunExecutionPatchArtifactKeys, 'patch_artifact');
     if (patchArtifact.content_type !== 'text/x-diff') {
       throw unsafeCodexRuntimePublicValue('Codex run-execution patch_artifact content_type is invalid.');
     }
@@ -1033,6 +1070,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
     if (!isPlainObject(entry)) {
       throw unsafeCodexRuntimePublicValue('Codex run-execution check_results must contain objects.');
     }
+    assertCodexRuntimeResultKeys(entry, codexRunExecutionCheckResultKeys, 'check_results');
     requireCodexRuntimeResultString(entry, 'name');
     if (!['passed', 'failed', 'skipped'].includes(String(entry.status))) {
       throw unsafeCodexRuntimePublicValue('Codex run-execution check result status is invalid.');

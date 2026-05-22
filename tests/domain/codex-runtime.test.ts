@@ -332,12 +332,6 @@ describe('codex runtime domain contracts', () => {
             internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
         },
       ],
-      next_step_links: [
-        {
-          label: 'Open generated draft',
-          href: 'forgeloop://automation/action-runs/action-run-1',
-        },
-      ],
       public_summary: 'Generated a spec draft.',
     };
 
@@ -348,6 +342,19 @@ describe('codex runtime domain contracts', () => {
         validateCodexRuntimeJobTerminalResult({
           ...generationResult,
           raw_prompt: 'write the private implementation details',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...generationResult,
+          next_step_links: [
+            {
+              label: 'Open generated draft',
+              href: 'forgeloop://automation/action-runs/action-run-1',
+            },
+          ],
         }),
       'codex_docker_runtime_evidence_unsafe',
     );
@@ -399,6 +406,18 @@ describe('codex runtime domain contracts', () => {
       check_results: [{ name: 'unit', status: 'unknown', summary: 'ok' }],
       execution_artifacts: [],
       public_summary: 'ok',
+    },
+    {
+      task_kind: 'run_execution',
+      execution_package_id: 'package-1',
+      execution_package_version: 1,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      changed_files: [],
+      check_results: [],
+      execution_artifacts: [],
+      public_summary: 'ok',
+      metadata: { changed_files: ['safe'] },
     },
   ])('rejects malformed terminal runtime job result %#', (result) => {
     expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
@@ -622,6 +641,7 @@ describe('codex runtime domain contracts', () => {
   });
 
   it.each([
+    'Provider endpoint api.openai.com failed before draft publication',
     'Generated draft; local app server was http://127.0.0.1:4555/internal',
     'Worker endpoint redis.default.svc returned an error',
     'Container socket unix:/tmp/codex.sock was unavailable',
