@@ -710,10 +710,14 @@ const isCodexRuntimeForgeloopRefString = (value: string): boolean => {
 const isCodexRuntimeMimeTypeString = (value: string): boolean =>
   /^(application|audio|font|image|message|model|multipart|text|video)\/[A-Za-z0-9.+-]+$/i.test(value);
 
+const isCodexRuntimeIsoDateTimeString = (value: string): boolean =>
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value);
+
 const isCodexRuntimeProductSafeString = (value: string): boolean =>
   isCodexRuntimeArtifactRefString(value) ||
   isCodexRuntimeForgeloopRefString(value) ||
   isCodexRuntimeMimeTypeString(value) ||
+  isCodexRuntimeIsoDateTimeString(value) ||
   isSha256Digest(value);
 
 const normalizeCodexRuntimeEndpointCandidate = (value: string): string => {
@@ -935,7 +939,7 @@ const isRawRuntimePublicString = (
   if (options.allowDisplayText === true) {
     return isCodexRuntimeUnsafeDisplayString(value);
   }
-  if (/[\s()[\]{}'"=;]/.test(value) && isCodexRuntimeUnsafeDisplayString(value)) {
+  if (/[\s()[\]{}'"=;:,|@<>]/.test(value) && isCodexRuntimeUnsafeDisplayString(value)) {
     return true;
   }
   return isCodexRuntimeLocalPathString(value);
@@ -1372,6 +1376,9 @@ export const validateCodexRuntimeJobTerminalResult = (
 };
 
 export const validateCodexDockerNetworkProxyConfig = (config: CodexDockerNetworkProxyConfig): CodexDockerNetworkProxyConfig => {
+  if (!isPlainObject(config)) {
+    throw dockerPolicyUnavailable('Docker network proxy provider_config is required.');
+  }
   assertSha256Digest(config.proxy_image_digest, 'Docker proxy image digest', dockerPolicyUnavailable);
   assertSha256Digest(config.self_test_image_digest, 'Docker proxy self-test image digest', dockerPolicyUnavailable);
 

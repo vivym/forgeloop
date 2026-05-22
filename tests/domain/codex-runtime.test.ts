@@ -795,6 +795,27 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it.each(['endpoint:api.openai.com', 'endpoint,api.openai.com', 'endpoint|api.openai.com', 'endpoint@api.openai.com'])(
+    'rejects punctuation-adjacent endpoint leakage in generated payload fields %s',
+    (description) => {
+      expectDomainErrorCode(
+        () =>
+          validateCodexRuntimeJobTerminalResult({
+            task_kind: 'spec_draft',
+            prompt_version: 'generation-prompt-v1',
+            output_schema_version: 'spec-draft-output.v1',
+            generated_payload: {
+              description,
+            },
+            generated_payload_digest: digestA,
+            generation_artifacts: [],
+            public_summary: 'Generated a spec draft.',
+          }),
+        'codex_docker_runtime_evidence_unsafe',
+      );
+    },
+  );
+
   it.each([
     'http%3A%2F%2F127.0.0.1%3A4555%2Finternal',
     'api%2Eopenai%2Ecom',
@@ -1069,6 +1090,27 @@ describe('codex runtime domain contracts', () => {
       ...hostFirewallPolicy(rules),
       provider: 'noop_provider',
       egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('noop_provider' as never, rules)),
+    };
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeProfileRevision(
+          baseRevision({
+            network_policy: policy as CodexRuntimeProfileRevision['network_policy'],
+          }),
+          { strictRealDogfood: true },
+        ),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it('rejects strict real dogfood docker network proxy policy without provider config', () => {
+    const rules = [modelProviderRule];
+    const policy = {
+      ...hostFirewallPolicy(rules),
+      provider: 'docker_network_proxy',
+      egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('docker_network_proxy', rules)),
+      provider_config: undefined,
     };
 
     expectDomainErrorCode(
