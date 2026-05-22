@@ -1092,6 +1092,51 @@ describe('codex runtime domain contracts', () => {
   });
 
   it.each([
+    ['null allowlist entry', null],
+    ['non-object allowlist entry', 42],
+  ])('rejects malformed strict profile network policy without TypeError when it contains %s', (_label, entry) => {
+    const rules = [entry as unknown as CodexNetworkAllowlistRule];
+    const networkPolicy = {
+      mode: 'egress_allowlist' as const,
+      provider: 'host_firewall' as const,
+      allowlist_rules: rules,
+      egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('host_firewall', rules)),
+      self_test_digest: digestA,
+    };
+    const revisionWithoutDigest = {
+      ...baseRevision(),
+      network_policy: networkPolicy,
+    };
+    const malformed = {
+      ...revisionWithoutDigest,
+      profile_digest: codexRuntimeProfileRevisionDigest(revisionWithoutDigest),
+    } as unknown as CodexRuntimeProfileRevision;
+
+    expectDomainErrorCode(
+      () => validateCodexRuntimeProfileRevision(malformed, { strictRealDogfood: true }),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it.each([
+    ['empty id', { id: '' }],
+    ['empty profile_id', { profile_id: '' }],
+    ['invalid status', { status: 'draft' }],
+    ['zero revision_number', { revision_number: 0 }],
+    ['non-string docker_image', { docker_image: null }],
+    ['non-string codex_config_toml', { codex_config_toml: null }],
+    ['empty created_by_actor_id', { created_by_actor_id: '' }],
+    ['malformed created_at timestamp', { created_at: 'not-a-date' }],
+  ])('rejects malformed strict profile scalar field %s', (_label, overrides) => {
+    const malformed = baseRevision(overrides as unknown as Partial<CodexRuntimeProfileRevision>);
+
+    expectDomainErrorCode(
+      () => validateCodexRuntimeProfileRevision(malformed, { strictRealDogfood: true }),
+      'codex_runtime_profile_invalid',
+    );
+  });
+
+  it.each([
     [
       'loopback model provider',
       { ...modelProviderRule, protocol: 'tcp', host: '127.0.0.1', port: 1 },

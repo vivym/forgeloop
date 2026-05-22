@@ -475,7 +475,9 @@ const rawRuntimePublicFieldPattern = /^raw(?:_|[A-Z]|$)/;
 const validRuntimeTargetKinds = new Set<CodexRuntimeTargetKind>(['generation', 'run_execution']);
 const validSourceAccessModes = new Set<CodexSourceAccessMode>(['artifact_only', 'path_policy_scoped']);
 const validRuntimeEnvironments = new Set<CodexRuntimeEnvironment>(['local_dogfood', 'test']);
+const validRuntimeProfileRevisionStatuses = new Set<CodexRuntimeProfileRevision['status']>(['active', 'superseded']);
 const validNetworkAllowlistProtocols = new Set<CodexNetworkAllowlistRule['protocol']>(['https', 'http', 'tcp']);
+const validNetworkAllowlistPurposes = new Set<CodexNetworkAllowlistRule['purpose']>(['model_provider', 'package_registry', 'git_remote', 'other']);
 const validRuntimeNetworkProviders = new Set<CodexRuntimeNetworkProvider>(['host_firewall', 'docker_network_proxy']);
 const runtimeResourceLimitKeys: Array<keyof CodexRuntimeResourceLimits> = [
   'cpu_ms',
@@ -951,6 +953,26 @@ const assertSha256Digest = (value: unknown, label: string, error: (message: stri
   }
 };
 
+const isoDateTimePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+const assertNonEmptyString = (value: unknown, label: string): void => {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw invalidProfile(`${label} must be a non-empty string.`);
+  }
+};
+
+const assertPositiveInteger = (value: unknown, label: string): void => {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw invalidProfile(`${label} must be a positive integer.`);
+  }
+};
+
+const assertIsoDateTime = (value: unknown, label: string): void => {
+  if (typeof value !== 'string' || !isoDateTimePattern.test(value) || Number.isNaN(Date.parse(value))) {
+    throw invalidProfile(`${label} must be an ISO datetime string.`);
+  }
+};
+
 function assertCodexRuntimeResourceLimits(resourceLimits: unknown): asserts resourceLimits is CodexRuntimeResourceLimits {
   if (!isPlainObject(resourceLimits)) {
     throw invalidProfile('Codex runtime resource_limits must be an object.');
@@ -965,6 +987,23 @@ function assertCodexRuntimeResourceLimits(resourceLimits: unknown): asserts reso
 
 const safeCodexRuntimeAllowlistHostPattern =
   /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$/i;
+
+function assertCodexRuntimeNetworkAllowlistRule(rule: unknown): asserts rule is CodexNetworkAllowlistRule {
+  const port = isPlainObject(rule) ? rule.port : undefined;
+  if (
+    !isPlainObject(rule) ||
+    typeof rule.id !== 'string' ||
+    rule.id.length === 0 ||
+    !validNetworkAllowlistProtocols.has(rule.protocol as CodexNetworkAllowlistRule['protocol']) ||
+    typeof rule.host !== 'string' ||
+    rule.host.length === 0 ||
+    !validNetworkAllowlistPurposes.has(rule.purpose as CodexNetworkAllowlistRule['purpose']) ||
+    (rule.path_prefix !== undefined && typeof rule.path_prefix !== 'string') ||
+    (port !== undefined && (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535))
+  ) {
+    throw dockerPolicyUnavailable('Codex runtime network policy allowlist_rules entries are invalid.');
+  }
+}
 
 const assertStrictCodexRuntimeNetworkAllowlistRule = (rule: CodexNetworkAllowlistRule): void => {
   if (!validNetworkAllowlistProtocols.has(rule.protocol)) {
@@ -1010,6 +1049,7 @@ function assertCodexRuntimeNetworkPolicy(policy: unknown): asserts policy is Cod
   if (!Array.isArray(policy.allowlist_rules)) {
     throw dockerPolicyUnavailable('Codex runtime network policy allowlist_rules must be an array.');
   }
+  policy.allowlist_rules.forEach(assertCodexRuntimeNetworkAllowlistRule);
   if (policy.provider === 'docker_network_proxy' && !isPlainObject(policy.provider_config)) {
     throw dockerPolicyUnavailable('Docker network proxy provider_config is required.');
   }
@@ -1532,6 +1572,16 @@ export const validateCodexRuntimeProfileRevision = (
   if (!validRuntimeEnvironments.has(revision.environment as CodexRuntimeEnvironment)) {
     throw invalidProfile('Codex runtime profile environment is invalid.');
   }
+  if (!validRuntimeProfileRevisionStatuses.has(revision.status as CodexRuntimeProfileRevision['status'])) {
+    throw invalidProfile('Codex runtime profile status is invalid.');
+  }
+  assertNonEmptyString(revision.id, 'Codex runtime profile revision id');
+  assertNonEmptyString(revision.profile_id, 'Codex runtime profile id');
+  assertPositiveInteger(revision.revision_number, 'Codex runtime profile revision_number');
+  assertNonEmptyString(revision.docker_image, 'Codex runtime profile docker_image');
+  assertNonEmptyString(revision.codex_config_toml, 'Codex runtime profile codex_config_toml');
+  assertNonEmptyString(revision.created_by_actor_id, 'Codex runtime profile created_by_actor_id');
+  assertIsoDateTime(revision.created_at, 'Codex runtime profile created_at');
   const targetKind = revision.target_kind as CodexRuntimeTargetKind;
   assertCodexRuntimeResourceLimits(revision.resource_limits);
   assertCodexRuntimeNetworkPolicy(revision.network_policy);
