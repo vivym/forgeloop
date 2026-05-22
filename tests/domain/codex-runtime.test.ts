@@ -671,6 +671,8 @@ describe('codex runtime domain contracts', () => {
     'Worker read file:///etc/passwd during setup',
     'Output at file:/tmp/codex.log before cleanup',
     'Local app server was [::1]:4555/internal',
+    'Worker endpoint ::1 failed',
+    'Worker endpoint ::0001 failed',
     'Worker endpoint fe80::1 failed',
     'Worker endpoint [fe80::1%lo0]:8080/path failed',
     'Worker endpoint fe80::1%lo0 failed',
@@ -1054,6 +1056,10 @@ describe('codex runtime domain contracts', () => {
     for (const unsafePublicId of [
       '/var/lib/forgeloop/workspaces/package-1',
       'http://127.0.0.1:4555',
+      '127.0.0.1:4555',
+      '::1',
+      'control.internal',
+      'api.openai.com',
       'unix:/tmp/private/codex.sock',
       'codex.sock',
       '4f1e2d3c4f1e',
@@ -1063,6 +1069,34 @@ describe('codex runtime domain contracts', () => {
           validateCodexDockerRuntimeEvidence({
             runtime_profile_id: unsafePublicId,
             docker_image_digest: digestA,
+          }),
+        'codex_docker_runtime_evidence_unsafe',
+      );
+    }
+
+    for (const unsafeEnumPatch of [
+      { runtime_target_kind: 'not_a_kind' },
+      { source_access_mode: 'anything' },
+      { environment: 'prod' },
+    ]) {
+      expectDomainErrorCode(
+        () =>
+          validateCodexDockerRuntimeEvidence({
+            runtime_profile_id: 'profile-1',
+            runtime_profile_revision_id: 'revision-1',
+            runtime_profile_digest: digestA,
+            runtime_target_kind: 'run_execution',
+            source_access_mode: 'path_policy_scoped',
+            environment: 'local_dogfood',
+            launch_lease_id: 'lease-1',
+            worker_id: 'worker-1',
+            docker_image_digest: digestA,
+            container_id_digest: digestB,
+            app_server_effective_config_digest: digestC,
+            docker_policy_self_check_digest: digestC,
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+            ...unsafeEnumPatch,
           }),
         'codex_docker_runtime_evidence_unsafe',
       );

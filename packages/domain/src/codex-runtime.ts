@@ -472,6 +472,9 @@ const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_
 const unsafeRuntimePublicKeyPattern =
   /(api[_-]?key|token|secret|auth(?:orization)?(?:_header)?|password|endpoint|socket(?:_path|_ref)?|container(?:_id|_name|_ref)?|workspace_path|source_repo_path)$/i;
 const rawRuntimePublicFieldPattern = /^raw(?:_|[A-Z]|$)/;
+const validRuntimeTargetKinds = new Set<CodexRuntimeTargetKind>(['generation', 'run_execution']);
+const validSourceAccessModes = new Set<CodexSourceAccessMode>(['artifact_only', 'path_policy_scoped']);
+const validRuntimeEnvironments = new Set<CodexRuntimeEnvironment>(['local_dogfood', 'test']);
 
 const normalizeRuntimePublicKey = (key: string): string =>
   key
@@ -758,6 +761,7 @@ const displayUnsafeEndpointTokenPattern =
 const displayBareDnsHostTokenPattern = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi;
 const displayBracketedIpv6TokenPattern = /\[[0-9a-f:.]+(?:%[A-Za-z0-9_.-]+)?\](?::\d{1,5})?(?:\/\S*)?/gi;
 const displayIpv6TokenPattern = /\b(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.]+(?:%[A-Za-z0-9_.-]+)?(?:\/\S*)?/gi;
+const displayLeadingCompressedIpv6TokenPattern = /(?<![A-Za-z0-9])::[0-9a-f:.]*(?:%[A-Za-z0-9_.-]+)?(?:\/\S*)?/gi;
 const displayLegacyIpv4TokenPattern = /\b(?:0x[0-9a-f]{7,8}|0[0-7]{8,11}|\d{8,10}|(?:\d{1,3}\.){1,3}\d{1,3})\b/gi;
 const displayHexRuntimeIdTokenPattern = /\b[a-f0-9]{12,64}\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
@@ -766,6 +770,7 @@ const displayUnsafeSecretTokenPattern =
 const isCodexRuntimeUnsafeDisplayTokenString = (value: string): boolean =>
   [...value.matchAll(displayBracketedIpv6TokenPattern)].some(([candidate]) => isCodexRuntimeEndpointOrContainerString(candidate)) ||
   [...value.matchAll(displayIpv6TokenPattern)].some(([candidate]) => isCodexRuntimeEndpointOrContainerString(candidate)) ||
+  [...value.matchAll(displayLeadingCompressedIpv6TokenPattern)].some(([candidate]) => isCodexRuntimeEndpointOrContainerString(candidate)) ||
   [...value.matchAll(displayLegacyIpv4TokenPattern)].some(([candidate]) => isPrivateLegacyIpv4Endpoint(candidate)) ||
   [...value.matchAll(displayHexRuntimeIdTokenPattern)].some((match) => value.slice(Math.max(0, match.index - 7), match.index).toLowerCase() !== 'sha256:');
 const isCodexRuntimeUnsafeDisplayString = (value: string): boolean =>
@@ -1391,7 +1396,6 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
     'app_server_attempted',
     'selected_execution_mode',
   ];
-
   for (const key of requiredKeys) {
     if (!(key in evidence)) {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence is missing required app-server proof.', {
@@ -1425,12 +1429,27 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
     if (typeof value !== 'string') {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence values must be strings.', { field: key });
     }
+    if (key === 'runtime_target_kind' && !validRuntimeTargetKinds.has(value as CodexRuntimeTargetKind)) {
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence runtime_target_kind is invalid.', { field: key });
+    }
+    if (key === 'source_access_mode' && !validSourceAccessModes.has(value as CodexSourceAccessMode)) {
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence source_access_mode is invalid.', { field: key });
+    }
+    if (key === 'environment' && !validRuntimeEnvironments.has(value as CodexRuntimeEnvironment)) {
+      throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence environment is invalid.', { field: key });
+    }
     if (key.endsWith('_digest') && !isSha256Digest(value)) {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence digest fields must be sha256 digests.', {
         field: key,
       });
     }
-    if (isRawPathEndpointOrContainerId(value) && !key.endsWith('_digest')) {
+    if (
+      !key.endsWith('_digest') &&
+      (isRawPathEndpointOrContainerId(value) ||
+        isCodexRuntimeEndpointOrContainerString(value) ||
+        isBareDnsHostString(value) ||
+        isCodexRuntimeLocalPathString(value))
+    ) {
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence cannot include raw paths, endpoints, container IDs, or secrets.', {
         field: key,
       });
