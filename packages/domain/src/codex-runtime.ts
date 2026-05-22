@@ -533,6 +533,7 @@ const isRawRuntimePublicString = (value: string): boolean => {
     return false;
   }
   const loopbackEndpointPattern = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)(:\d{1,5})?(\/|$)/i;
+  const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
   return (
     /^(\/|~\/|\.{1,2}\/|[A-Za-z]:[\\/])/i.test(value) ||
@@ -541,6 +542,7 @@ const isRawRuntimePublicString = (value: string): boolean => {
     /^unix:/i.test(value) ||
     /\.sock(?:$|[/?#])/i.test(value) ||
     loopbackEndpointPattern.test(value) ||
+    rawRuntimeServiceEndpointPattern.test(value) ||
     hostWithPortOrPathPattern.test(value) ||
     /^[a-f0-9]{12,64}$/i.test(value)
   );
