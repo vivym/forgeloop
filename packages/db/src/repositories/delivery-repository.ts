@@ -335,6 +335,8 @@ export interface MaterializeCodexRuntimeJobInput {
   nonce_timestamp: string;
   launch_token_hash: string;
   accepted_worker_session_digest: string;
+  accepted_session_public_key_id: string;
+  accepted_session_epoch: number;
   materialization_request_id: string;
   request_digest: string;
   active_fence?: CodexLaunchFenceSnapshot;

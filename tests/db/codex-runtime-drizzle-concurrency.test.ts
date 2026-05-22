@@ -527,6 +527,8 @@ const materializeRuntimeJobInput = (
   nonce_timestamp: later,
   launch_token_hash: tokenHash(launchToken),
   accepted_worker_session_digest: tokenHash(seed.sessionToken),
+  accepted_session_public_key_id: 'session-key-1',
+  accepted_session_epoch: 1,
   materialization_request_id: `materialize-${input.runtime_job_id}`,
   request_digest: tokenHash(`materialize-request-${input.runtime_job_id}`),
   active_fence: {

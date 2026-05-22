@@ -1566,12 +1566,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       bundle.job.launch_lease_id !== input.launch_lease_id ||
       bundle.job.worker_id !== input.worker_id ||
       bundle.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
+      bundle.job.accepted_session_public_key_id !== input.accepted_session_public_key_id ||
+      bundle.job.accepted_session_epoch !== input.accepted_session_epoch ||
       bundle.job.cancel_requested_at !== undefined ||
       bundle.job.expires_at <= input.now ||
       bundle.lease.expires_at <= input.now ||
       bundle.lease.worker_id !== input.worker_id ||
       bundle.lease.lease_token_hash !== input.launch_token_hash ||
       bundle.envelope.status !== 'claimed' ||
+      bundle.envelope.claimed_worker_session_digest !== input.accepted_worker_session_digest ||
+      bundle.envelope.claimed_key_id !== input.accepted_session_public_key_id ||
       worker.session_public_key_expires_at <= input.now
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
@@ -1745,6 +1749,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
     }
     if (bundle.job.cancel_requested_at !== undefined) {
+      if (bundle.job.cancel_idempotency_key !== input.idempotency_key || bundle.job.cancel_request_digest !== input.request_digest) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
+      }
       return runtimeJobFromDbRecord(bundle.job);
     }
     const terminalizeImmediately =

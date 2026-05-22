@@ -1236,12 +1236,16 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       record.job.launch_lease_id !== input.launch_lease_id ||
       record.job.worker_id !== input.worker_id ||
       record.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
+      record.job.accepted_session_public_key_id !== input.accepted_session_public_key_id ||
+      record.job.accepted_session_epoch !== input.accepted_session_epoch ||
       record.job.cancel_requested_at !== undefined ||
       record.job.expires_at <= input.now ||
       leaseRecord.lease.expires_at <= input.now ||
       leaseRecord.lease.worker_id !== input.worker_id ||
       leaseRecord.lease.lease_token_hash !== input.launch_token_hash ||
       envelope.status !== 'claimed' ||
+      envelope.claimed_worker_session_digest !== input.accepted_worker_session_digest ||
+      envelope.claimed_key_id !== input.accepted_session_public_key_id ||
       worker.session_public_key_expires_at <= input.now
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
@@ -1389,6 +1393,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
     }
     if (record.job.cancel_requested_at !== undefined) {
+      if (record.job.cancel_idempotency_key !== input.idempotency_key || record.job.cancel_request_digest !== input.request_digest) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
+      }
       return clone(record.job);
     }
     const leaseRecord = this.codexLaunchLeases.get(record.job.launch_lease_id);

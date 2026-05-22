@@ -612,6 +612,8 @@ const materializeRuntimeJob = (
     nonce_timestamp: later,
     launch_token_hash: tokenHash(launchToken),
     accepted_worker_session_digest: tokenHash('session-token-1'),
+    accepted_session_public_key_id: 'session-key-1',
+    accepted_session_epoch: 1,
     materialization_request_id: `materialize-${runtimeJobId}`,
     request_digest: tokenHash(`materialize-request-${runtimeJobId}`),
     active_fence: {
@@ -1462,6 +1464,8 @@ describe('codex runtime repository behavior', () => {
       nonce_timestamp: later,
       launch_token_hash: tokenHash(launchToken),
       accepted_worker_session_digest: tokenHash('session-token-1'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
       materialization_request_id: 'materialize-runtime-job-1',
       request_digest: tokenHash('materialize-request-runtime-job-1'),
       active_fence: {
@@ -1502,6 +1506,27 @@ describe('codex runtime repository behavior', () => {
     await expect(
       repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-replay-nonce-runtime-job-1' }),
     ).resolves.toEqual(materialized);
+
+    await expect(
+      repository.materializeCodexRuntimeJob({
+        ...materializeInput,
+        nonce: 'materialize-wrong-accepted-key-nonce-runtime-job-1',
+        accepted_session_public_key_id: 'session-key-rotated',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+    await expect(
+      repository.materializeCodexRuntimeJob({
+        ...materializeInput,
+        nonce: 'materialize-wrong-accepted-epoch-nonce-runtime-job-1',
+        accepted_session_epoch: 2,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
 
     await terminalizeRuntimeJob(repository);
     await expect(
@@ -1789,12 +1814,24 @@ describe('codex runtime repository behavior', () => {
     await expect(
       accepted.repository.cancelCodexRuntimeJob({
         runtime_job_id: 'runtime-job-1',
-        reason_code: 'different_cancel',
-        idempotency_key: 'cancel-accepted-conflict',
-        request_digest: tokenHash('cancel-accepted-conflict-request'),
+        reason_code: 'user_cancelled',
+        idempotency_key: 'cancel-accepted',
+        request_digest: tokenHash('cancel-accepted-request'),
         now: '2026-05-20T00:02:00.000Z',
       }),
     ).resolves.toEqual(acceptedCancel);
+    await expect(
+      accepted.repository.cancelCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-1',
+        reason_code: 'different_cancel',
+        idempotency_key: 'cancel-accepted-conflict',
+        request_digest: tokenHash('cancel-accepted-conflict-request'),
+        now: '2026-05-20T00:03:00.000Z',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
 
     const acceptedClaimed = await createRuntimeJobWithCapturedToken(
       {
@@ -1887,6 +1924,8 @@ describe('codex runtime repository behavior', () => {
       nonce_timestamp: later,
       launch_token_hash: tokenHash(materializing.launchToken),
       accepted_worker_session_digest: tokenHash('session-token-materializing-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
       materialization_request_id: 'materialize-materializing-cancel',
       request_digest: tokenHash('materialize-materializing-cancel-request'),
       active_fence: {
@@ -1950,6 +1989,8 @@ describe('codex runtime repository behavior', () => {
       nonce_timestamp: later,
       launch_token_hash: tokenHash(running.launchToken),
       accepted_worker_session_digest: tokenHash('session-token-running-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
       materialization_request_id: 'materialize-running-cancel',
       request_digest: tokenHash('materialize-running-cancel-request'),
       active_fence: {
