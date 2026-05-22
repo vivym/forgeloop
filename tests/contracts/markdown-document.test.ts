@@ -39,6 +39,8 @@ describe('MarkdownDocument validation', () => {
     for (const markdown of [
       '[external](https://example.com/docs)',
       '[task](/tasks/task-1)',
+      '[new requirement](/requirements/new)',
+      '[new task](/tasks/new)',
       '[requirement evidence](/requirements/req-1/evidence)',
       '[task package](/tasks/task-1/packages/pkg-1)',
       '[release readiness](/reports/release-readiness)',
@@ -80,6 +82,9 @@ describe('MarkdownDocument validation', () => {
       '[api](/api/secrets)',
       '[asset](/assets/app.js)',
       '[dev tools](/dev-tools)',
+      '[bad requirement new evidence](/requirements/new/evidence)',
+      '[bad task new package](/tasks/new/packages/pkg-1)',
+      '[bad spec new](/specs/new)',
       '[query](/tasks/task-1?token=secret)',
       '[hash](/tasks/task-1#frag)',
     ]) {
@@ -102,6 +107,7 @@ describe('MarkdownDocument validation', () => {
       '[raw](s3://bucket/private.txt)',
       '![raw](gs://bucket/private.png)',
       'raw s3://bucket/private.txt',
+      'Bad ftp://example.com/file',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }

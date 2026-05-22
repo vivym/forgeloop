@@ -49,30 +49,14 @@ export type MarkdownValidationResult =
   | { ok: true; markdown: string; attachment_ids: string[] }
   | { ok: false; issues: MarkdownValidationIssue[] };
 
-const allowedProductRoutePatterns = [
-  /^\/dashboard$/,
-  /^\/my-work$/,
-  /^\/requirements(?:\/new|\/[^/?#]+(?:\/(?:spec|plan|evidence))?)?$/,
-  /^\/initiatives(?:\/new|\/[^/?#]+(?:\/evidence)?)?$/,
-  /^\/tech-debt(?:\/new|\/[^/?#]+(?:\/evidence)?)?$/,
-  /^\/tasks(?:\/new|\/[^/?#]+(?:\/packages\/[^/?#]+|\/runs\/[^/?#]+|\/reviews\/[^/?#]+)?)?$/,
-  /^\/bugs(?:\/new|\/[^/?#]+(?:\/evidence)?)?$/,
-  /^\/releases(?:\/[^/?#]+(?:\/evidence)?)?$/,
-  /^\/specs-plans$/,
-  /^\/specs\/[^/?#]+(?:\/revisions\/[^/?#]+)?$/,
-  /^\/plans\/[^/?#]+(?:\/revisions\/[^/?#]+)?$/,
-  /^\/board$/,
-  /^\/reports(?:\/(?:delivery|quality|release-readiness|observation|replay))?$/,
-] as const;
-
 const htmlPattern = /<\/?[a-z][\s\S]*?>/i;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
-const angleDestinationPattern = /<((?:https?:\/\/|javascript:|data:|file:|blob:|s3:|gs:)[^>\s]+)>/gi;
-const bareUrlPattern = /(?:^|[\s(])((?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+)/gim;
+const angleDestinationPattern = /<([A-Za-z][A-Za-z0-9+.-]*:\/\/[^>\s]+)>/gi;
+const bareUrlPattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+)/gim;
 const bareAttachmentPattern = /(?:^|[\s(])(attachment:\/\/[A-Za-z0-9_-]+(?:[/?#][^\s<>)]+)?)/gim;
-const bareUrlBlockPattern = /(?:^|[\s(])(?:https?:\/\/|javascript:|data:|file:|blob:|s3:\/\/|gs:\/\/)[^\s<>)]+/im;
+const bareUrlBlockPattern = /(?:^|[\s(])(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s<>)]+/im;
 const rawStoragePattern =
   /(?:https?:\/\/[^)\s]*(?:bucket|storage|s3|signature|x-amz)[^)\s]*)|(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
 const base64OrBlobPattern = /(?:data:|file:|blob:|base64)/i;
@@ -231,17 +215,76 @@ function linkDestinationAllowed(destination: string): boolean {
 }
 
 function isSafeProductRoute(destination: string): boolean {
-  return (
-    destination.startsWith('/') &&
-    !destination.startsWith('//') &&
-    !destination.includes('?') &&
-    !destination.includes('#') &&
-    allowedProductRoutePatterns.some((pattern) => pattern.test(destination))
-  );
+  if (!destination.startsWith('/') || destination.startsWith('//') || destination.includes('?') || destination.includes('#')) {
+    return false;
+  }
+
+  const segments = destination.split('/').filter((segment) => segment.length > 0);
+  if (segments.length === 0) {
+    return false;
+  }
+
+  return productRouteSegmentsAllowed(segments);
 }
 
 function isSafeHttpsExternalLink(destination: string): boolean {
   return /^https:\/\/[^\s/$.?#].[^\s]*$/i.test(destination) && !rawStoragePattern.test(destination);
+}
+
+function productRouteSegmentsAllowed(segments: string[]): boolean {
+  const [root, second, third, fourth] = segments;
+
+  switch (root) {
+    case 'dashboard':
+    case 'my-work':
+    case 'board':
+    case 'specs-plans':
+      return segments.length === 1;
+    case 'requirements':
+      return segmentedObjectRouteAllowed(segments, { allowNew: true, childRoutes: ['spec', 'plan', 'evidence'] });
+    case 'initiatives':
+    case 'tech-debt':
+    case 'bugs':
+      return segmentedObjectRouteAllowed(segments, { allowNew: true, childRoutes: ['evidence'] });
+    case 'tasks':
+      if (segments.length === 1) {
+        return true;
+      }
+      if (segments.length === 2) {
+        return second === 'new' || isDynamicIdSegment(second);
+      }
+      return segments.length === 4 && isDynamicIdSegment(second) && ['packages', 'runs', 'reviews'].includes(third ?? '') && isDynamicIdSegment(fourth);
+    case 'releases':
+      return segments.length === 1 || (isDynamicIdSegment(second) && (segments.length === 2 || (segments.length === 3 && third === 'evidence')));
+    case 'specs':
+    case 'plans':
+      return (
+        (segments.length === 2 && isDynamicIdSegment(second)) ||
+        (segments.length === 4 && isDynamicIdSegment(second) && third === 'revisions' && isDynamicIdSegment(fourth))
+      );
+    case 'reports':
+      return segments.length === 1 || (segments.length === 2 && ['delivery', 'quality', 'release-readiness', 'observation', 'replay'].includes(second ?? ''));
+    default:
+      return false;
+  }
+}
+
+function segmentedObjectRouteAllowed(
+  segments: string[],
+  options: { allowNew: boolean; childRoutes: readonly string[] },
+): boolean {
+  const [, idOrNew, childRoute] = segments;
+  if (segments.length === 1) {
+    return true;
+  }
+  if (segments.length === 2) {
+    return (options.allowNew && idOrNew === 'new') || isDynamicIdSegment(idOrNew);
+  }
+  return segments.length === 3 && isDynamicIdSegment(idOrNew) && options.childRoutes.includes(childRoute ?? '');
+}
+
+function isDynamicIdSegment(segment: string | undefined): segment is string {
+  return segment !== undefined && segment.length > 0 && segment !== 'new';
 }
 
 function unsupportedBlockKinds(markdown: string, allowedBlocks: ReadonlySet<MarkdownBlockKind>): DetectedMarkdownKind[] {
