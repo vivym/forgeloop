@@ -44,6 +44,11 @@ export class QueryController {
     return this.service.listExecutionPackages(query);
   }
 
+  @Get('execution-packages/:packageId/runtime-readiness')
+  getExecutionPackageRuntimeReadiness(@Param('packageId') packageId: string) {
+    return this.service.getExecutionPackageRuntimeReadiness(packageId);
+  }
+
   @Get('runs')
   listRuns(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listRuns(query);

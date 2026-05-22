@@ -4,10 +4,12 @@ import {
   pipelineResponseSchema,
   productLaneResponseSchema,
   productListResponseSchema,
+  deliveryRunReadinessResponseSchema,
   workItemCockpitResponseSchema,
 } from '@forgeloop/contracts';
 import type {
   CockpitResponse,
+  DeliveryRunReadiness,
   ListProductQuery,
   PipelineResponse,
   ProductLaneId,
@@ -87,6 +89,10 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
     getPlanReplay: (planId: string) => request<TimelineEntry[]>(`/query/replay/plan/${encodeURIComponent(planId)}`),
     getExecutionPackageReplay: (executionPackageId: string) =>
       request<TimelineEntry[]>(`/query/replay/execution_package/${encodeURIComponent(executionPackageId)}`),
+    getExecutionPackageRuntimeReadiness: async (executionPackageId: string) =>
+      deliveryRunReadinessResponseSchema.parse(
+        await request<unknown>(`/query/execution-packages/${encodeURIComponent(executionPackageId)}/runtime-readiness`),
+      ) as DeliveryRunReadiness,
     getReviewPacketReplay: (reviewPacketId: string) =>
       request<TimelineEntry[]>(`/query/replay/review_packet/${encodeURIComponent(reviewPacketId)}`),
     getReleaseCockpit: (releaseId: string) =>

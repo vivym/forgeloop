@@ -478,6 +478,24 @@ describe('Forgeloop web API client', () => {
     await expect(queryApi.getWorkItemCockpit(workItem.id)).rejects.toThrow();
   });
 
+  it('routes package runtime readiness through the query API', async () => {
+    const readiness = {
+      executor_type: 'local_codex',
+      target_kind: 'run_execution',
+      state: 'ready',
+      blockers: [],
+      generated_at: '2026-05-18T00:23:00.000Z',
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(readiness), { status: 200 }));
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    await expect(queryApi.getExecutionPackageRuntimeReadiness('package/1')).resolves.toEqual(readiness);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/root/query/execution-packages/package%2F1/runtime-readiness',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('hardens bad manager cockpit command actions before strict response parsing', async () => {
     const response = cockpitResponse('manager');
     response.delivery_readiness.next_actions = [productActionFixtures.commandTargetFollowUp];
@@ -694,6 +712,7 @@ describe('Forgeloop web API client', () => {
     expect(commandMethods).not.toContain('getWorkItemReplay');
     expect(Object.keys(queryApi).sort()).toEqual([
       'getExecutionPackageReplay',
+      'getExecutionPackageRuntimeReadiness',
       'getPlanReplay',
       'getProductLane',
       'getReleaseCockpit',

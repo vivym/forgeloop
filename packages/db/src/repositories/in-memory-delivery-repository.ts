@@ -86,8 +86,11 @@ import type {
   FindAvailableCodexWorkerInput,
   GetClaimedAutomationActionRunInput,
   GetCodexRuntimeStatusInput,
+  GetCodexWorkerReadinessDiagnosticInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
+  ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ListCodexCredentialBindingReadinessCandidatesInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
@@ -99,6 +102,9 @@ import type {
   RevokeCodexLaunchLeaseInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
+  CodexCredentialBindingReadinessCandidate,
+  CodexRuntimeProfileReadinessDiagnostic,
+  CodexWorkerReadinessDiagnostic,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
   ResolveAutomationProjectSettingsInput,
@@ -612,6 +618,89 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       ...(worker !== undefined ? { worker_status: worker.status } : {}),
       blocker_codes: blockerCodes,
     };
+  }
+
+  async listActiveCodexRuntimeProfileReadinessDiagnostics(
+    input: ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ): Promise<CodexRuntimeProfileReadinessDiagnostic[]> {
+    return valuesFor(this.codexRuntimeProfileRevisions)
+      .filter(
+        (revision) =>
+          revision.status === 'active' &&
+          (input.runtime_profile_id === undefined || revision.profile_id === input.runtime_profile_id) &&
+          codexRuntimeScopeMatches(revision.allowed_scopes, codexScope(input.project_id, input.repo_id)),
+      )
+      .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.revision_number - left.revision_number)
+      .map((revision) => {
+        const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+        return {
+          profile_id: revision.profile_id,
+          target_kind: revision.target_kind,
+          source_access_mode: revision.source_access_mode,
+          docker_image_digest: revision.docker_image_digest,
+          network_policy_digest: codexRuntimeNetworkPolicyDigest(networkPolicy),
+          ...(networkPolicy.mode === 'egress_allowlist' && networkPolicy.provider === 'docker_network_proxy'
+            ? { network_provider_config_digest: networkPolicy.provider_config.provider_config_digest }
+            : {}),
+        };
+      });
+  }
+
+  async listCodexCredentialBindingReadinessCandidates(
+    input: ListCodexCredentialBindingReadinessCandidatesInput,
+  ): Promise<CodexCredentialBindingReadinessCandidate[]> {
+    return valuesFor(this.codexCredentialBindings)
+      .filter((binding) => {
+        if (
+          binding.project_id !== input.project_id ||
+          binding.profile_id !== input.runtime_profile_id ||
+          (input.credential_binding_id !== undefined && binding.id !== input.credential_binding_id)
+        ) {
+          return false;
+        }
+        if (binding.repo_id !== undefined && binding.repo_id !== input.repo_id) {
+          return false;
+        }
+        const profile = this.codexRuntimeProfiles.get(binding.profile_id);
+        if (profile?.target_kind !== input.target_kind || binding.active_version_id === undefined) {
+          return false;
+        }
+        const activeVersion = this.codexCredentialBindingVersions.get(binding.active_version_id)?.version;
+        return activeVersion?.status === 'active';
+      })
+      .map((binding) => ({ purpose: binding.purpose }));
+  }
+
+  async getCodexWorkerReadinessDiagnostic(
+    input: GetCodexWorkerReadinessDiagnosticInput,
+  ): Promise<CodexWorkerReadinessDiagnostic> {
+    const available = valuesFor(this.codexWorkerRegistrations).filter(
+      (record) =>
+        record.registration.status === 'online' &&
+        record.registration.control_channel_status === 'connected' &&
+        record.session_expires_at > input.now &&
+        codexWorkerHeartbeatIsFresh(record.registration.last_heartbeat_at, input.now) &&
+        codexRuntimeScopeMatches(record.allowed_scopes, codexScope(input.project_id, input.repo_id)),
+    );
+
+    if (available.length === 0) {
+      return 'worker_unavailable';
+    }
+    const targetCompatible = available.filter((record) => record.registration.capabilities.includes(input.target_kind));
+    if (targetCompatible.length === 0) {
+      return 'worker_target_unsupported';
+    }
+    const dockerCompatible = targetCompatible.filter((record) => record.docker_image_digests.includes(input.docker_image_digest));
+    if (dockerCompatible.length === 0) {
+      return 'worker_docker_capability_mismatch';
+    }
+    const networkCompatible = dockerCompatible.filter(
+      (record) =>
+        record.network_policy_digests.includes(input.network_policy_digest) &&
+        (input.network_provider_config_digest === undefined ||
+          record.network_provider_config_digests.includes(input.network_provider_config_digest)),
+    );
+    return networkCompatible.length === 0 ? 'worker_network_policy_mismatch' : 'ready';
   }
 
   async createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken> {

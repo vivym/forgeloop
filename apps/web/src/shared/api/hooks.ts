@@ -206,6 +206,13 @@ export function usePackageQuery(packageId: string) {
   });
 }
 
+export function usePackageRuntimeReadinessQuery(packageId: string) {
+  return useQuery({
+    queryKey: queryKeys.packageRuntimeReadiness(packageId),
+    queryFn: () => createQueryApi().getExecutionPackageRuntimeReadiness(packageId),
+  });
+}
+
 export function useRunsQuery(query: ListProductQuery) {
   const normalizedQuery = normalizePackageRunQuery(query);
 
@@ -245,10 +252,11 @@ export function useReviewPacketsQuery(query: ListProductQuery) {
   });
 }
 
-export function useReviewQuery(reviewPacketId: string) {
+export function useReviewQuery(reviewPacketId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.review(reviewPacketId),
-    queryFn: () => createQueryApi().getReview(reviewPacketId),
+    queryFn: () => createQueryApi().getReview(requiredId(reviewPacketId, 'reviewPacketId')),
+    enabled: reviewPacketId !== undefined,
   });
 }
 
@@ -278,7 +286,7 @@ export function useMarkPackageReadyMutation(packageId: string) {
       createCommandApi().markPackageReady(packageId, body),
     onSuccess: (executionPackage) => {
       setPackageDetail(queryClient, packageId, executionPackage);
-      return invalidatePackages(queryClient);
+      return invalidatePackageResources(queryClient, packageId);
     },
   });
 }
@@ -393,7 +401,7 @@ export function useGeneratePackagesMutation(planRevisionId: string | undefined) 
 
   return useMutation({
     mutationFn: () => createCommandApi().generatePackages(requiredId(planRevisionId, 'planRevisionId')),
-    onSuccess: () => invalidatePackages(queryClient),
+    onSuccess: () => invalidatePackageDeliveryCollections(queryClient),
   });
 }
 
@@ -405,7 +413,7 @@ export function useCreateExecutionPackageMutation(planRevisionId: string | undef
       createCommandApi().createExecutionPackage(requiredId(planRevisionId, 'planRevisionId'), body),
     onSuccess: (executionPackage) => {
       setPackageDetail(queryClient, executionPackage.id, executionPackage);
-      return invalidatePackages(queryClient);
+      return invalidatePackageResources(queryClient, executionPackage.id);
     },
   });
 }
@@ -417,7 +425,7 @@ export function usePatchExecutionPackageMutation(packageId: string) {
     mutationFn: (body: PatchExecutionPackageBody) => createCommandApi().patchExecutionPackage(packageId, body),
     onSuccess: (executionPackage) => {
       setPackageDetail(queryClient, packageId, executionPackage);
-      return invalidatePackages(queryClient);
+      return invalidatePackageResources(queryClient, packageId);
     },
   });
 }
@@ -462,7 +470,7 @@ export function useLinkReleaseWorkItemMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { workItemId: string; body: LinkReleaseScopeBody }) =>
       createCommandApi().linkReleaseWorkItem(releaseId, input.workItemId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -472,7 +480,7 @@ export function useUnlinkReleaseWorkItemMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { workItemId: string; body: UnlinkReleaseScopeBody }) =>
       createCommandApi().unlinkReleaseWorkItem(releaseId, input.workItemId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -482,7 +490,7 @@ export function useLinkReleaseExecutionPackageMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { packageId: string; body: LinkReleaseScopeBody }) =>
       createCommandApi().linkReleaseExecutionPackage(releaseId, input.packageId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -492,7 +500,7 @@ export function useUnlinkReleaseExecutionPackageMutation(releaseId: string) {
   return useMutation({
     mutationFn: (input: { packageId: string; body: UnlinkReleaseScopeBody }) =>
       createCommandApi().unlinkReleaseExecutionPackage(releaseId, input.packageId, input.body),
-    onSuccess: () => invalidateReleaseCockpit(queryClient, releaseId),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 
@@ -632,7 +640,7 @@ export function useApprovePlanMutation(input: { planId: string; workItemId?: str
     onSuccess: (plan) =>
       Promise.all([
         invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
-        plan.approved_revision_id === undefined ? Promise.resolve() : invalidatePackages(queryClient),
+        plan.approved_revision_id === undefined ? Promise.resolve() : invalidatePackageDeliveryCollections(queryClient),
       ]),
   });
 }
@@ -689,7 +697,7 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
 export function invalidateProductActionTargets(queryClient: QueryClient, input: ProductActionInvalidationInput) {
   return Promise.all([
     invalidateProductLaneProjectQueries(queryClient, input.projectId),
-    queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(input.workItemId) }),
+    invalidateWorkItemCockpit(queryClient, input.workItemId),
     invalidateObjectQuery(queryClient, input.action.command.object_type, input.action.command.object_id),
     invalidateCommandDerivedResources(queryClient, input.action.command),
     input.action.target === undefined ? Promise.resolve() : invalidateTargetQuery(queryClient, input.action.target),
@@ -703,7 +711,7 @@ function invalidateCommandDerivedResources(queryClient: QueryClient, command: Pr
     case 'generate_plan_draft':
       return queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(command.plan_id) });
     case 'generate_packages':
-      return invalidatePackages(queryClient);
+      return invalidatePackageDeliveryCollections(queryClient);
     case 'mark_package_ready':
     case 'run_package':
       return Promise.resolve();
@@ -737,6 +745,10 @@ function invalidateTargetQuery(queryClient: QueryClient, target: ProductActionTa
     return queryClient.invalidateQueries({ queryKey: ['product-lanes', target.lane_id] });
   }
 
+  if (target.kind === 'route') {
+    return Promise.resolve();
+  }
+
   return invalidateObjectQuery(queryClient, target.object_type, target.object_id);
 }
 
@@ -745,7 +757,7 @@ function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObje
     case 'work_item':
       return Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(objectId) }),
+        invalidateWorkItemCockpit(queryClient, objectId),
       ]);
     case 'spec':
       return queryClient.invalidateQueries({ queryKey: queryKeys.spec(objectId) });
@@ -775,7 +787,9 @@ function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string 
     return Promise.resolve();
   }
 
-  return queryClient.invalidateQueries({ queryKey: queryKeys.workItemCockpit(workItemId) });
+  return queryClient.invalidateQueries({
+    predicate: ({ queryKey }) => queryKey[0] === 'work-item-cockpit' && queryKey[1] === workItemId,
+  });
 }
 
 function invalidateSpecLifecycleResources(queryClient: QueryClient, specId: string, workItemId: string | undefined) {
@@ -803,17 +817,41 @@ function invalidatePackageDetail(queryClient: QueryClient, packageId: string) {
 }
 
 function invalidatePackageResources(queryClient: QueryClient, packageId: string) {
-  return Promise.all([invalidatePackageDetail(queryClient, packageId), invalidatePackages(queryClient)]);
+  return Promise.all([
+    invalidatePackageDetail(queryClient, packageId),
+    queryClient.invalidateQueries({ queryKey: queryKeys.packageRuntimeReadiness(packageId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.executionPackageReplay(packageId) }),
+    invalidatePackageDeliveryCollections(queryClient),
+  ]);
 }
 
 function invalidatePackages(queryClient: QueryClient) {
   return queryClient.invalidateQueries({ queryKey: ['packages'] });
 }
 
+function invalidateDeliverySurfaces(queryClient: QueryClient) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
+    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
+    queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
+  ]);
+}
+
+function invalidatePackageDeliveryCollections(queryClient: QueryClient) {
+  return Promise.all([invalidatePackages(queryClient), invalidateDeliverySurfaces(queryClient)]);
+}
+
 function invalidateReviewPacketResources(queryClient: QueryClient, reviewPacketId: string) {
   return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['review'] }),
     queryClient.invalidateQueries({ queryKey: queryKeys.review(reviewPacketId) }),
+    queryClient.invalidateQueries({ queryKey: ['review-packet-replay'] }),
+    queryClient.invalidateQueries({ queryKey: ['replay'] }),
     queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
+    queryClient.invalidateQueries({ queryKey: ['packages'] }),
+    queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
+    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
   ]);
 }
 
@@ -825,17 +863,21 @@ function invalidateReleaseCockpit(queryClient: QueryClient, releaseId: string) {
   return queryClient.invalidateQueries({ queryKey: queryKeys.releaseCockpit(releaseId) });
 }
 
+function invalidateReleaseDeliveryResources(queryClient: QueryClient, releaseId: string) {
+  return Promise.all([
+    invalidateReleaseCockpit(queryClient, releaseId),
+    queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
+    queryClient.invalidateQueries({ queryKey: ['releases'] }),
+    invalidatePackageDeliveryCollections(queryClient),
+  ]);
+}
+
 function useReleaseCommandMutation<TBody>(releaseId: string, mutationFn: (body: TBody) => Promise<unknown>) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn,
-    onSuccess: () =>
-      Promise.all([
-        invalidateReleaseCockpit(queryClient, releaseId),
-        queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
-        queryClient.invalidateQueries({ queryKey: ['releases'] }),
-      ]),
+    onSuccess: () => invalidateReleaseDeliveryResources(queryClient, releaseId),
   });
 }
 

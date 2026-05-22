@@ -647,7 +647,7 @@ describe('Work Item delivery readiness', () => {
       { lane: 'spec-approver', label: /spec|plan|test strategy/i, objectType: 'spec' },
       { lane: 'execution-owner', label: /package|run/i, objectType: 'execution_package' },
       { lane: 'reviewer', label: /review/i, objectType: 'review_packet' },
-      { lane: 'qa-test-owner', label: /quality|gate|acceptance/i, objectType: 'work_item' },
+      { lane: 'qa-test-owner', label: /quality|gate|acceptance/i, objectType: 'release' },
       { lane: 'release-owner', label: /release/i, objectType: 'release' },
     ] as const;
 

@@ -14,12 +14,15 @@ import {
   listProductRuns,
   listProductSpecs,
   listProductWorkItems,
+  deriveDeliveryRunReadiness,
   getWorkItemCockpit,
 } from '@forgeloop/db';
 import { productLaneResponseSchema, type ProductLaneId, type ProductListQuery } from '@forgeloop/contracts';
 import type { RunRuntimeMetadata } from '@forgeloop/domain';
 
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, type RunDurabilityMode } from '../core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
+import { RunExecutionRuntimeConfigService } from '../core/run-execution-runtime-config.service';
 import { ReviewEvidenceService } from '../review-evidence/review-evidence.service';
 import {
   parseProductLaneIdOrThrowBadRequest,
@@ -34,13 +37,19 @@ export class QueryService {
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    @Inject(ControlPlaneRuntimeService) private readonly runtime: ControlPlaneRuntimeService,
+    @Inject(RunExecutionRuntimeConfigService)
+    private readonly runExecutionRuntimeConfig: RunExecutionRuntimeConfigService,
     @Inject(ReviewEvidenceService)
     private readonly reviewEvidenceService: ReviewEvidenceService,
   ) {}
 
   async getWorkItemCockpit(workItemId: string, options: { lane?: ProductLaneId } = {}) {
+    const runtimeSelection = this.runExecutionRuntimeConfig.selection();
     const cockpit = await getWorkItemCockpit(this.repository, workItemId, {
       run_session_metadata_fallback: this.initialRuntimeMetadata(),
+      now: this.runtime.now(),
+      ...(runtimeSelection === undefined ? {} : { runtime_selection: runtimeSelection }),
       ...(options.lane === undefined ? {} : { lane: options.lane }),
     });
     if (cockpit === undefined) {
@@ -113,6 +122,19 @@ export class QueryService {
     return listProductExecutionPackages(this.repository, query);
   }
 
+  async getExecutionPackageRuntimeReadiness(packageId: string) {
+    const executionPackage = await this.repository.getExecutionPackage(packageId);
+    if (executionPackage === undefined) {
+      throw new NotFoundException(`ExecutionPackage ${packageId} not found`);
+    }
+    const runtimeSelection = this.runExecutionRuntimeConfig.selection();
+    return deriveDeliveryRunReadiness(this.repository, {
+      executionPackage,
+      now: this.runtime.now(),
+      ...(runtimeSelection === undefined ? {} : { runtime_selection: runtimeSelection }),
+    });
+  }
+
   listRuns(query: ProductListQuery) {
     return listProductRuns(this.repository, query);
   }
@@ -128,7 +150,13 @@ export class QueryService {
   async getProductLane(laneId: string, rawQuery: RawQuery) {
     const parsedLaneId = parseProductLaneIdOrThrowBadRequest(laneId);
     const filters = parseProductLaneQuery(parsedLaneId, rawQuery);
-    return productLaneResponseSchema.parse(await getProductLaneQuery(this.repository, parsedLaneId, filters));
+    const runtimeSelection = this.runExecutionRuntimeConfig.selection();
+    return productLaneResponseSchema.parse(
+      await getProductLaneQuery(this.repository, parsedLaneId, filters, {
+        now: this.runtime.now(),
+        ...(runtimeSelection === undefined ? {} : { runtime_selection: runtimeSelection }),
+      }),
+    );
   }
 
   private initialRuntimeMetadata(): RunRuntimeMetadata {

@@ -431,55 +431,51 @@ describe('Work Item delivery readiness contracts', () => {
         durability_mode: 'durable',
         driver_kind: 'app_server',
         driver_status: 'active',
-        worker_id: 'worker-1',
-        worker_lease_status: 'active',
-        worker_lease_heartbeat_at: '2026-05-20T00:00:00.000Z',
-        worker_lease_expires_at: '2026-05-20T00:05:00.000Z',
-        last_event_cursor: 'cursor-1',
         last_event_at: '2026-05-20T00:00:01.000Z',
         recovery_attempt_count: 0,
       },
     };
 
     expect(workItemCockpitResponseSchema.parse(cockpitResponse({ run_sessions: [runSession] })).run_sessions[0]).toMatchObject({
-      runtime_metadata: { driver_kind: 'app_server', last_event_cursor: 'cursor-1' },
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        last_event_at: '2026-05-20T00:00:01.000Z',
+        recovery_attempt_count: 0,
+      },
     });
-    expect(
-      workItemCockpitResponseSchema.safeParse(
-        cockpitResponse({
-          run_sessions: [
-            {
-              ...runSession,
-              runtime_metadata: { ...runSession.runtime_metadata, active_turn_id: 'turn-1' },
-            },
-          ],
-        }),
-      ).success,
-    ).toBe(false);
-    expect(
-      workItemCockpitResponseSchema.safeParse(
-        cockpitResponse({
-          run_sessions: [
-            {
-              ...runSession,
-              runtime_metadata: { ...runSession.runtime_metadata, workspace_path: '/tmp/workspace' },
-            },
-          ],
-        }),
-      ).success,
-    ).toBe(false);
-    expect(
-      workItemCockpitResponseSchema.safeParse(
-        cockpitResponse({
-          run_sessions: [
-            {
-              ...runSession,
-              runtime_metadata: { ...runSession.runtime_metadata, effective_dangerous_mode: true },
-            },
-          ],
-        }),
-      ).success,
-    ).toBe(false);
+
+    for (const [field, value] of [
+      ['worker_id', 'worker-1'],
+      ['worker_lease_status', 'active'],
+      ['worker_lease_heartbeat_at', '2026-05-20T00:00:00.000Z'],
+      ['worker_lease_expires_at', '2026-05-20T00:05:00.000Z'],
+      ['last_event_cursor', 'cursor-1'],
+      ['runtime_profile_id', 'profile-1'],
+      ['runtime_profile_revision_id', 'profile-revision-1'],
+      ['credential_binding_id', 'credential-binding-1'],
+      ['credential_binding_version_id', 'credential-version-1'],
+      ['launch_lease_id', 'lease-1'],
+      ['workspace_path', '/tmp/workspace'],
+      ['source_repo_path', '/tmp/repo'],
+      ['codex_config_toml', 'approval_policy = "never"'],
+      ['active_turn_id', 'turn-1'],
+      ['effective_dangerous_mode', 'confirmed'],
+    ] as const) {
+      expect(
+        workItemCockpitResponseSchema.safeParse(
+          cockpitResponse({
+            run_sessions: [
+              {
+                ...runSession,
+                runtime_metadata: { ...runSession.runtime_metadata, [field]: value },
+              },
+            ],
+          }),
+        ).success,
+      ).toBe(false);
+    }
   });
 
   it('rejects unknown fields inside cockpit nested evidence arrays and review objects', () => {

@@ -9,6 +9,7 @@ import {
   type DeliveryStage,
   type DeliveryStageId,
   type DeliveryStageState,
+  type DeliveryRunReadinessResponse,
   type ProductAction,
   type ProductLaneId,
   type ProductObjectType,
@@ -37,8 +38,10 @@ import {
   generateSpecDraftAction,
   navigateAction,
   objectTarget,
+  routeTarget,
   runPackageAction,
 } from './product-action-builders';
+import { deliveryRunReadinessDisabledReason } from './delivery-runtime-readiness';
 import { laneForWorkItemKind } from './product-lane-types';
 import {
   currentApprovedPlanPackages,
@@ -72,6 +75,7 @@ export interface WorkItemDeliveryReadinessInput {
   releaseEvidence: readonly ReleaseEvidenceLike[];
   decisions: readonly DecisionLike[];
   degradedSources?: readonly DegradedSourceKey[];
+  packageRunReadinessByPackageId?: ReadonlyMap<string, DeliveryRunReadinessResponse>;
 }
 
 type StageInput = Omit<DeliveryStage, 'label' | 'blockers' | 'evidence_refs' | 'object_refs'> & {
@@ -890,6 +894,55 @@ const openWorkItemAction = (laneId: ProductLaneId, workItem: WorkItem): ProductA
     target: objectTarget('work_item', workItem.id, `/work-items/${workItem.id}`),
   });
 
+const releaseOwnerActionCopy = (release: Release | undefined): { label: string; description: string } => {
+  if (release === undefined) {
+    return {
+      label: 'Create or link Release',
+      description: 'Create or link a Release because release scope must be established before the owner can submit or approve handoff.',
+    };
+  }
+
+  if (release.phase === 'candidate' || release.gate_state === 'changes_requested') {
+    return {
+      label: 'Submit Release for Approval',
+      description: 'Submit the Release for approval after confirming scope, rollout, rollback, and QA handoff are ready.',
+    };
+  }
+
+  if (release.phase === 'approval' && release.gate_state === 'awaiting_approval') {
+    return {
+      label: 'Approve or Request Release Changes',
+      description: 'Approve the Release or request changes after reviewing blockers, risk, and test acceptance evidence.',
+    };
+  }
+
+  if (release.phase === 'rollout' && release.gate_state === 'approved') {
+    return {
+      label: 'Start Release Observation',
+      description: 'Start observation when rollout evidence is ready to monitor before closeout.',
+    };
+  }
+
+  if (release.phase === 'observing' && release.gate_state === 'rollout_succeeded') {
+    return {
+      label: 'Close Release',
+      description: 'Close the Release as completed, or choose rollback/cancel if observation did not meet release criteria.',
+    };
+  }
+
+  if (release.phase === 'completed' || release.phase === 'closed') {
+    return {
+      label: 'Review Release Outcome',
+      description: 'Review the final Release outcome and confirm the recorded resolution matches the delivery decision.',
+    };
+  }
+
+  return {
+    label: 'Review Release Readiness',
+    description: 'Review release blockers and decide the next release-owner action for this handoff.',
+  };
+};
+
 const actionForLane = (
   input: WorkItemDeliveryReadinessInput,
   evaluation: StageEvaluation,
@@ -934,12 +987,15 @@ const actionForLane = (
 
   if (laneId === 'execution-owner') {
     if (firstPackage !== undefined && firstRun === undefined && firstPackage.phase === 'ready') {
+      const disabledReason = deliveryRunReadinessDisabledReason(input.packageRunReadinessByPackageId?.get(firstPackage.id));
       return [
         runPackageAction({
           id: `run-package-${firstPackage.id}`,
           laneId,
           priority: 'primary',
           label: 'Run package',
+          enabled: disabledReason === undefined,
+          ...(disabledReason === undefined ? {} : { disabledReason, blockedReason: disabledReason }),
           workItemId: input.workItem.id,
           packageId: firstPackage.id,
           target: objectTarget('execution_package', firstPackage.id, `/packages/${firstPackage.id}`),
@@ -961,42 +1017,87 @@ const actionForLane = (
   }
 
   if (laneId === 'reviewer') {
+    if (firstReview === undefined) {
+      const target =
+        firstPackage === undefined
+          ? objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`)
+          : objectTarget('execution_package', firstPackage.id, `/packages/${firstPackage.id}`);
+      return [
+        navigateAction({
+          id: `open-review-evidence-prerequisite-${firstPackage?.id ?? input.workItem.id}`,
+          laneId,
+          priority: 'primary',
+          label: 'Generate Review Packet evidence first',
+          description: 'Review evidence must be generated before the reviewer can decide to approve or request changes.',
+          target,
+        }),
+      ];
+    }
+
     return [
       navigateAction({
-        id: `open-review-readiness-${firstReview?.id ?? input.workItem.id}`,
+        id: `decide-review-packet-${firstReview.id}`,
         laneId,
         priority: 'primary',
-        label: 'Open Review evidence',
-        target:
-          firstReview === undefined
-            ? objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`)
-            : objectTarget('review_packet', firstReview.id, `/reviews/${firstReview.id}`),
+        label: 'Decide Review Packet',
+        description: 'Approve the Review Packet or request changes based on the selected run evidence.',
+        target: objectTarget('review_packet', firstReview.id, `/reviews/${firstReview.id}`),
       }),
     ];
   }
 
   if (laneId === 'qa-test-owner') {
+    const qualityStage = stageById(evaluation.stages, 'quality_gate');
+    if (!isStagePassing(qualityStage)) {
+      return [
+        navigateAction({
+          id: `review-quality-gate-blockers-${input.workItem.id}`,
+          laneId,
+          priority: 'primary',
+          label: 'Review Quality Gate blockers',
+          description: 'Resolve the quality gate blockers before release test acceptance can be acknowledged.',
+          target: objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`),
+        }),
+      ];
+    }
+
+    if (linkedRelease !== undefined) {
+      return [
+        navigateAction({
+          id: `acknowledge-release-test-acceptance-${linkedRelease.id}`,
+          laneId,
+          priority: 'primary',
+          label: 'Acknowledge Release Test Acceptance',
+          description: 'Acknowledge the Release test acceptance decision for the current package scope.',
+          target: objectTarget('release', linkedRelease.id, `/releases/${linkedRelease.id}#release-test-acceptance`),
+        }),
+      ];
+    }
+
     return [
       navigateAction({
-        id: `open-quality-gate-${input.workItem.id}`,
+        id: `open-release-inventory-for-test-acceptance-${input.workItem.id}`,
         laneId,
         priority: 'primary',
-        label: 'Open Quality Gate and acceptance context',
-        target: objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`),
+        label: 'Open Release inventory',
+        description: 'Open the Release inventory because release scope must be established before test acceptance acknowledgement.',
+        target: routeTarget('/releases'),
       }),
     ];
   }
 
   if (laneId === 'release-owner') {
+    const copy = releaseOwnerActionCopy(linkedRelease);
     return [
       navigateAction({
         id: `open-release-readiness-${linkedRelease?.id ?? input.workItem.id}`,
         laneId,
         priority: 'primary',
-        label: linkedRelease === undefined ? 'Open Release inventory' : 'Open Release readiness',
+        label: copy.label,
+        description: copy.description,
         target:
           linkedRelease === undefined
-            ? { kind: 'object', object_type: 'release', object_id: input.workItem.project_id, href: '/releases' }
+            ? routeTarget('/releases')
             : objectTarget('release', linkedRelease.id, `/releases/${linkedRelease.id}`),
       }),
     ];

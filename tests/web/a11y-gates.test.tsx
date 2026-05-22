@@ -64,13 +64,13 @@ describe('web accessibility gates', () => {
   it('allows tabs and action rail controls to receive keyboard focus', async () => {
     const screen = await renderRoute('/packages/package-web-product');
     const overviewTab = await screen.findByRole('tab', { name: 'Overview' });
-    const markReady = screen.getByRole('button', { name: 'Mark ready' });
+    const forceRerunReason = screen.getByLabelText('Force rerun reason');
 
     overviewTab.focus();
     expect(document.activeElement).toBe(overviewTab);
 
-    markReady.focus();
-    expect(document.activeElement).toBe(markReady);
+    forceRerunReason.focus();
+    expect(document.activeElement).toBe(forceRerunReason);
   });
 
   it('announces form validation with text alerts', async () => {

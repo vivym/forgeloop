@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 
 import {
@@ -11,7 +12,8 @@ import type { ChangedFile, ProductListItem, ReviewPacket, RequestedChange, Timel
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
-import { Button, DataTable, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
+import { DataTable, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
+import { ReviewDecisionForm } from './review-decision-form';
 
 const supportedReviewFilters = ['status', 'reviewer_actor_id', 'decision', 'execution_package_id', 'run_session_id', 'cursor', 'limit'];
 
@@ -69,6 +71,7 @@ function ReviewPacketDetailView({ reviewPacketId }: { reviewPacketId: string }) 
   const replayQuery = useReviewPacketReplayQuery(reviewPacketId);
   const approveReview = useApproveReviewPacketMutation(reviewPacketId);
   const requestChanges = useRequestReviewChangesMutation(reviewPacketId);
+  const [decisionMode, setDecisionMode] = useState<'approve' | 'request_changes'>('approve');
 
   if (reviewQuery.status === 'pending') {
     return <InvalidDetail title="Review" message="Loading review packet." />;
@@ -80,48 +83,36 @@ function ReviewPacketDetailView({ reviewPacketId }: { reviewPacketId: string }) 
 
   const review = reviewQuery.data;
   const actionPending = approveReview.isPending || requestChanges.isPending;
+  const disabledReason = reviewDecisionDisabledReason(review);
+  const decisionsDisabled = disabledReason !== undefined;
 
   return (
     <DetailLayout
       actionRail={
         <ActionRail title="Review actions">
-          <div className="stack-form compact">
-            <Button
-              disabled={actionPending}
-              loading={approveReview.isPending}
-              onClick={() =>
-                approveReview.mutate({
-                  summary: 'Approved from Reviews route.',
-                  reviewed_by_actor_id: actorId,
-                  reviewed_at: new Date().toISOString(),
-                })
-              }
-              variant="primary"
-            >
-              Approve
-            </Button>
-            <Button
-              disabled={actionPending}
-              loading={requestChanges.isPending}
-              onClick={() =>
-                requestChanges.mutate({
-                  summary: 'Changes requested from Reviews route.',
-                  reviewed_by_actor_id: actorId,
-                  reviewed_at: new Date().toISOString(),
-                  requested_changes: [
-                    {
-                      title: 'Address review packet feedback',
-                      description: 'Review packet requires changes before approval.',
-                      severity: 'major',
-                    },
-                  ],
-                })
-              }
-              variant="secondary"
-            >
-              Request changes
-            </Button>
-          </div>
+          <ReviewDecisionForm
+            disabled={decisionsDisabled}
+            disabledReason={disabledReason}
+            error={(decisionMode === 'approve' ? approveReview.error : requestChanges.error) ?? null}
+            isSubmitting={actionPending}
+            mode={decisionMode}
+            onApprove={({ summary }) =>
+              approveReview.mutate({
+                summary,
+                reviewed_by_actor_id: actorId,
+                reviewed_at: new Date().toISOString(),
+              })
+            }
+            onModeChange={setDecisionMode}
+            onRequestChanges={({ summary, requested_changes }) =>
+              requestChanges.mutate({
+                summary,
+                reviewed_by_actor_id: actorId,
+                reviewed_at: new Date().toISOString(),
+                requested_changes,
+              })
+            }
+          />
         </ActionRail>
       }
       header={
@@ -133,18 +124,20 @@ function ReviewPacketDetailView({ reviewPacketId }: { reviewPacketId: string }) 
               <StatusPill tone={reviewDecisionTone(review.status)}>{review.status}</StatusPill>
             </span>
           }
-          subtitle={`Package ${review.execution_package_id} / Run ${review.run_session_id}`}
-          title={review.summary ?? review.id}
+          subtitle={review.check_result_summary ?? review.self_review?.summary ?? 'Review packet is ready for product decision.'}
+          title={review.summary ?? 'Review packet'}
         />
       }
     >
-      <Section title="Summary" description="Decision state, related package, and related run.">
+      <Section title="Summary" description="Decision state, related package, and latest run context.">
         <dl className="fl-metadata-grid">
+          <Metadata label="Review summary" value={review.summary ?? 'Review summary unavailable'} />
           <Metadata label="Decision" value={review.decision} />
           <Metadata label="Status" value={`Status: ${review.status}`} />
-          <Metadata label="Reviewer" value={review.reviewer_actor_id} />
-          <Metadata label="Reviewed by" value={review.reviewed_by_actor_id ?? 'not recorded'} />
+          <Metadata label="Assigned reviewer" value={review.reviewer_actor_id ? 'Assigned' : 'Unassigned'} />
+          <Metadata label="Recorded decision" value={review.reviewed_by_actor_id ? 'Recorded' : 'Not recorded'} />
           <Metadata label="Reviewed at" value={formatDate(review.reviewed_at)} />
+          <Metadata label="Run result" value={review.self_review?.status ?? review.check_result_summary ?? 'Run summary unavailable'} />
         </dl>
         <div className="fl-inline-actions">
           <Link to={`/packages/${encodeURIComponent(review.execution_package_id)}`}>Open package</Link>
@@ -196,7 +189,7 @@ function ReviewPacketTable({ items }: { items: ProductListItem[] }) {
         { key: 'decision', header: 'Decision', cell: (item) => <StatusPill>{item.review_state?.decision ?? 'none'}</StatusPill> },
         { key: 'status', header: 'Status', cell: (item) => item.status ?? 'unknown' },
         { key: 'reviewer', header: 'Reviewer', cell: (item) => item.reviewer_actor_id ?? 'unassigned' },
-        { key: 'package', header: 'Package', cell: (item) => item.parent?.title ?? item.review_state?.execution_package_id ?? 'unknown' },
+        { key: 'package', header: 'Package', cell: (item) => item.parent?.title ?? 'Package unavailable' },
         { key: 'changed', header: 'Changed files', cell: (item) => item.review_state?.changed_file_count ?? 0 },
         { key: 'updated', header: 'Updated', cell: (item) => formatAge(item.updated_at) },
       ]}
@@ -220,7 +213,7 @@ function RequestedChangesList({ changes }: { changes: RequestedChange[] }) {
           <p>{change.description}</p>
           <dl className="fl-metadata-grid">
             <Metadata label="Severity" value={change.severity ?? 'unknown'} />
-            <Metadata label="File" value={change.file_path ?? 'not file-specific'} />
+            <Metadata label="File" value={change.file_path ? fileNameLabel(change.file_path) : 'not file-specific'} />
             <Metadata label="Validation" value={change.suggested_validation ?? 'not recorded'} />
           </dl>
         </article>
@@ -238,7 +231,7 @@ function RegistryState({ isError, isPending, kind }: { isError: boolean; isPendi
 function FilterSummary({ filters, unsupportedFilters }: { filters: ReviewFilters; unsupportedFilters: string[] }) {
   const supported = Object.entries(filters)
     .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `${key}: ${String(value)}`);
+    .map(([key, value]) => reviewFilterLabel(key, value));
 
   return (
     <div className="stack-form compact">
@@ -331,13 +324,28 @@ function timelineItem(entry: TimelineEntry): TimelineItem {
 }
 
 function changedFileLabel(file: ChangedFile) {
-  return file.path;
+  return fileNameLabel(file.path);
+}
+
+function fileNameLabel(path: string) {
+  return path.split('/').filter(Boolean).at(-1) ?? 'file';
 }
 
 function formatList(values: string[]) {
   if (values.length <= 1) return values[0] ?? '';
   if (values.length === 2) return `${values[0]} and ${values[1]}`;
   return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
+}
+
+function reviewFilterLabel(key: string, value: unknown) {
+  if (key === 'execution_package_id') return 'Package filter applied';
+  if (key === 'run_session_id') return 'Run filter applied';
+  if (key === 'reviewer_actor_id') return 'Reviewer filter applied';
+  if (key === 'decision') return `Decision: ${String(value)}`;
+  if (key === 'status') return `Status: ${String(value)}`;
+  if (key === 'limit') return `Limit: ${String(value)}`;
+  if (key === 'cursor') return 'Cursor filter applied';
+  return `${key}: ${String(value)}`;
 }
 
 function formatDate(value: string | undefined) {
@@ -360,4 +368,17 @@ function reviewDecisionTone(value: string | undefined) {
   if (['changes_requested', 'failed', 'rejected'].includes(normalized)) return 'danger';
   if (['pending', 'requested'].includes(normalized)) return 'warning';
   return 'info';
+}
+
+function reviewDecisionDisabledReason(review: ReviewPacket) {
+  if (review.status === 'completed') {
+    return 'Review decisions are disabled because this review is already completed.';
+  }
+  if (review.status === 'archived') {
+    return 'Review decisions are disabled because this review is archived.';
+  }
+  if (review.decision !== 'none') {
+    return 'Review decisions are disabled because this review already has a recorded decision.';
+  }
+  return undefined;
 }

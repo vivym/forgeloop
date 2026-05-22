@@ -3,38 +3,31 @@ import { Link, useParams, useSearchParams } from 'react-router';
 
 import {
   useAcknowledgeReleaseTestAcceptanceMutation,
-  useApproveReleaseMutation,
-  useCloseReleaseMutation,
   useCreateReleaseEvidenceMutation,
   useCreateReleaseMutation,
   useLinkReleaseExecutionPackageMutation,
   useLinkReleaseWorkItemMutation,
   usePackagesQuery,
-  useOverrideApproveReleaseMutation,
-  usePatchReleaseMutation,
   useProductWorkItemsQuery,
   useReleaseCockpitQuery,
   useReleaseReplayQuery,
   useReleasesQuery,
-  useRequestReleaseChangesMutation,
-  useStartReleaseObservingMutation,
-  useSubmitReleaseMutation,
   useUnlinkReleaseExecutionPackageMutation,
   useUnlinkReleaseWorkItemMutation,
 } from '../../shared/api/hooks';
 import type {
   AcknowledgeReleaseTestAcceptanceBody,
-  PatchReleaseBody,
   ProductListItem,
-  ReleaseBlockerSnapshot,
   ReleaseCockpitResponse,
   ReleaseListResponse,
   TimelineEntry,
 } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
+import { DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Button, DataTable, Drawer, Input, Select, StatusPill, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
+import { releaseActionModel } from './release-action-model';
+import { ReleaseActionRail } from './release-action-rail';
 
 const supportedReleaseFilters = ['release_owner_actor_id', 'phase', 'gate_state', 'resolution', 'cursor', 'limit'];
 type ReleaseFilters = {
@@ -115,10 +108,14 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
 
   const cockpit = cockpitQuery.data;
   const release = cockpit.release;
+  const actionModel = releaseActionModel(cockpit);
+  const testAcceptanceDisabledReason = actionModel.groups.qa_test_acceptance.enabled
+    ? undefined
+    : actionModel.groups.qa_test_acceptance.reason;
 
   return (
     <DetailLayout
-      actionRail={<ReleaseActionRail actorId={actorId} cockpit={cockpit} />}
+      actionRail={<ReleaseActionRail actorId={actorId} cockpit={cockpit} model={actionModel} />}
       header={
         <PageHeader
           eyebrow={
@@ -129,7 +126,7 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
               <StatusPill tone={releaseStateTone(release.resolution)}>{release.resolution}</StatusPill>
             </span>
           }
-          subtitle={`Owner ${release.release_owner_actor_id ?? 'unassigned'} / Blocker fingerprint ${cockpit.blocker_snapshot.blocker_fingerprint}`}
+          subtitle={`${release.release_owner_actor_id ? 'Release owner assigned' : 'Release owner unassigned'} / ${actionModel.hasBlockers ? 'Active blockers need review' : 'No active blockers'}`}
           title={release.title}
         />
       }
@@ -167,9 +164,15 @@ function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
       <Section title="Decisions" description="Governance decisions recorded for this release.">
         <DecisionList decisions={cockpit.decisions} />
       </Section>
-      <Section title="Test Acceptance" description="QA acceptance is acknowledged with summary and artifact references.">
-        <TestAcceptanceForm actorId={actorId} releaseId={release.id} />
-      </Section>
+      {actionModel.groups.qa_test_acceptance.visible ? (
+        <Section id="release-test-acceptance" title="Test Acceptance" description="QA acceptance is acknowledged with summary and artifact references.">
+          <TestAcceptanceForm
+            actorId={actorId}
+            releaseId={release.id}
+            {...(testAcceptanceDisabledReason === undefined ? {} : { disabledReason: testAcceptanceDisabledReason })}
+          />
+        </Section>
+      ) : null}
       <Section title="Observation evidence" description="Submit governed release observations through summary and evidence fields.">
         <ObservationEvidenceForm actorId={actorId} releaseId={release.id} />
       </Section>
@@ -462,188 +465,7 @@ function ReleaseExecutionPackages({
   );
 }
 
-function ReleaseActionRail({ actorId, cockpit }: { actorId: string; cockpit: ReleaseCockpitResponse }) {
-  const releaseId = cockpit.release.id;
-  const submit = useSubmitReleaseMutation(releaseId);
-  const approve = useApproveReleaseMutation(releaseId);
-  const overrideApprove = useOverrideApproveReleaseMutation(releaseId);
-  const requestChanges = useRequestReleaseChangesMutation(releaseId);
-  const startObserving = useStartReleaseObservingMutation(releaseId);
-  const closeRelease = useCloseReleaseMutation(releaseId);
-  const [showEditRelease, setShowEditRelease] = useState(false);
-  const [approveRationale, setApproveRationale] = useState('');
-  const [overrideRationale, setOverrideRationale] = useState('');
-  const [changesRationale, setChangesRationale] = useState('');
-  const [closeSummary, setCloseSummary] = useState('');
-  const [closeConfirmation, setCloseConfirmation] = useState('');
-  const [closeResolution, setCloseResolution] = useState<'completed' | 'rolled_back' | 'cancelled'>('completed');
-
-  return (
-    <ActionRail title="Release actions">
-      <div className="stack-form compact">
-        <Drawer
-          content={
-            <EditReleaseForm
-              actorId={actorId}
-              onSaved={() => setShowEditRelease(false)}
-              release={cockpit.release}
-            />
-          }
-          description="Update release title and planning details."
-          onOpenChange={setShowEditRelease}
-          open={showEditRelease}
-          title="Edit release details"
-        >
-          <Button variant="secondary">Edit release</Button>
-        </Drawer>
-        <Button loading={submit.isPending} onClick={() => submit.mutate({ actor_id: actorId })} variant="primary">
-          Submit
-        </Button>
-        <label className="field">
-          Approval rationale
-          <Textarea onChange={(event) => setApproveRationale(event.currentTarget.value)} rows={2} value={approveRationale} />
-        </label>
-        <Button
-          loading={approve.isPending}
-          onClick={() => approve.mutate({ actor_id: actorId, ...(approveRationale.trim() ? { rationale: approveRationale.trim() } : {}) })}
-          variant="primary"
-        >
-          Approve
-        </Button>
-        <label className="field">
-          Override rationale
-          <Textarea onChange={(event) => setOverrideRationale(event.currentTarget.value)} rows={3} value={overrideRationale} />
-        </label>
-        <Button
-          disabled={!overrideRationale.trim()}
-          loading={overrideApprove.isPending}
-          onClick={() =>
-            overrideApprove.mutate({
-              actor_id: actorId,
-              rationale: overrideRationale.trim(),
-              blocker_snapshot: cockpit.blocker_snapshot as ReleaseBlockerSnapshot,
-            })
-          }
-          variant="danger"
-        >
-          Override approve
-        </Button>
-        <label className="field">
-          Change request rationale
-          <Textarea onChange={(event) => setChangesRationale(event.currentTarget.value)} rows={3} value={changesRationale} />
-        </label>
-        <Button
-          disabled={!changesRationale.trim()}
-          loading={requestChanges.isPending}
-          onClick={() => requestChanges.mutate({ actor_id: actorId, rationale: changesRationale.trim() })}
-          variant="secondary"
-        >
-          Request changes
-        </Button>
-        <Button loading={startObserving.isPending} onClick={() => startObserving.mutate({ actor_id: actorId })} variant="secondary">
-          Start observing
-        </Button>
-        <label className="field">
-          Close resolution
-          <Select
-            onChange={(event) => setCloseResolution(event.currentTarget.value as 'completed' | 'rolled_back' | 'cancelled')}
-            options={[
-              { label: 'Completed', value: 'completed' },
-              { label: 'Rolled back', value: 'rolled_back' },
-              { label: 'Cancelled', value: 'cancelled' },
-            ]}
-            value={closeResolution}
-          />
-        </label>
-        <label className="field">
-          Close summary
-          <Textarea onChange={(event) => setCloseSummary(event.currentTarget.value)} rows={2} value={closeSummary} />
-        </label>
-        <label className="field">
-          Close confirmation
-          <Input onChange={(event) => setCloseConfirmation(event.currentTarget.value)} placeholder="Type close release" value={closeConfirmation} />
-        </label>
-        <Button
-          disabled={closeConfirmation.trim().toLowerCase() !== 'close release'}
-          loading={closeRelease.isPending}
-          onClick={() =>
-            closeRelease.mutate({
-              actor_id: actorId,
-              resolution: closeResolution,
-              ...(closeSummary.trim() ? { summary: closeSummary.trim() } : {}),
-              override_without_observation: false,
-            })
-          }
-          variant="danger"
-        >
-          Close release
-        </Button>
-      </div>
-    </ActionRail>
-  );
-}
-
-function EditReleaseForm({
-  actorId,
-  onSaved,
-  release,
-}: {
-  actorId: string;
-  onSaved: () => void;
-  release: ReleaseCockpitResponse['release'];
-}) {
-  const patchRelease = usePatchReleaseMutation(release.id);
-  const [title, setTitle] = useState(release.title);
-  const [scopeSummary, setScopeSummary] = useState(release.scope_summary ?? '');
-  const [rolloutStrategy, setRolloutStrategy] = useState(release.rollout_strategy ?? '');
-  const [rollbackPlan, setRollbackPlan] = useState(release.rollback_plan ?? '');
-  const [observationPlan, setObservationPlan] = useState(release.observation_plan ?? '');
-
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    const body = releasePatchBody({
-      actorId,
-      title,
-      scopeSummary,
-      rolloutStrategy,
-      rollbackPlan,
-      observationPlan,
-    });
-    if (body === undefined) return;
-    patchRelease.mutate(body, { onSuccess: onSaved });
-  }
-
-  return (
-    <form className="stack-form compact" onSubmit={onSubmit}>
-      <label className="field">
-        Release title
-        <Input onChange={(event) => setTitle(event.currentTarget.value)} value={title} />
-      </label>
-      <label className="field">
-        Scope summary
-        <Textarea onChange={(event) => setScopeSummary(event.currentTarget.value)} rows={3} value={scopeSummary} />
-      </label>
-      <label className="field">
-        Rollout strategy
-        <Textarea onChange={(event) => setRolloutStrategy(event.currentTarget.value)} rows={2} value={rolloutStrategy} />
-      </label>
-      <label className="field">
-        Rollback plan
-        <Textarea onChange={(event) => setRollbackPlan(event.currentTarget.value)} rows={2} value={rollbackPlan} />
-      </label>
-      <label className="field">
-        Observation plan
-        <Textarea onChange={(event) => setObservationPlan(event.currentTarget.value)} rows={2} value={observationPlan} />
-      </label>
-      {patchRelease.isError ? <p className="empty">Release update is temporarily unavailable.</p> : null}
-      <Button disabled={releasePatchBody({ actorId, title, scopeSummary, rolloutStrategy, rollbackPlan, observationPlan }) === undefined} loading={patchRelease.isPending} type="submit" variant="primary">
-        Save release
-      </Button>
-    </form>
-  );
-}
-
-function TestAcceptanceForm({ actorId, releaseId }: { actorId: string; releaseId: string }) {
+function TestAcceptanceForm({ actorId, disabledReason, releaseId }: { actorId: string; disabledReason?: string; releaseId: string }) {
   const acknowledge = useAcknowledgeReleaseTestAcceptanceMutation(releaseId);
   const [summary, setSummary] = useState('');
   const [evidenceRef, setEvidenceRef] = useState('');
@@ -668,7 +490,8 @@ function TestAcceptanceForm({ actorId, releaseId }: { actorId: string; releaseId
         Acceptance evidence reference
         <Input onChange={(event) => setEvidenceRef(event.currentTarget.value)} value={evidenceRef} />
       </label>
-      <Button disabled={!summary.trim()} loading={acknowledge.isPending} type="submit" variant="primary">
+      {disabledReason ? <p className="empty">{disabledReason}</p> : null}
+      <Button disabled={!summary.trim() || disabledReason !== undefined} loading={acknowledge.isPending} type="submit" variant="primary">
         Acknowledge test acceptance
       </Button>
     </form>
@@ -730,7 +553,6 @@ function BlockerPanel({ cockpit }: { cockpit: ReleaseCockpitResponse }) {
   const overridden = cockpit.overridden_blockers.map((blocker) => `${blocker.code}: ${blocker.message}`);
   return (
     <div className="stack-form compact">
-      <Metadata label="Blocker fingerprint" value={cockpit.blocker_snapshot.blocker_fingerprint} />
       <PillList empty="No active blockers." values={blockers} />
       <PillList empty="No overridden blockers." values={overridden} />
     </div>
@@ -873,26 +695,6 @@ function artifactRefsFromInput(value: string): AcknowledgeReleaseTestAcceptanceB
       local_ref: trimmed,
     },
   ];
-}
-
-function releasePatchBody(input: {
-  actorId: string;
-  title: string;
-  scopeSummary: string;
-  rolloutStrategy: string;
-  rollbackPlan: string;
-  observationPlan: string;
-}): PatchReleaseBody | undefined {
-  const body = {
-    actor_id: input.actorId,
-    ...(input.title.trim() ? { title: input.title.trim() } : {}),
-    ...(input.scopeSummary.trim() ? { scope_summary: input.scopeSummary.trim() } : {}),
-    ...(input.rolloutStrategy.trim() ? { rollout_strategy: input.rolloutStrategy.trim() } : {}),
-    ...(input.rollbackPlan.trim() ? { rollback_plan: input.rollbackPlan.trim() } : {}),
-    ...(input.observationPlan.trim() ? { observation_plan: input.observationPlan.trim() } : {}),
-  };
-
-  return Object.keys(body).length > 1 ? body : undefined;
 }
 
 function workItemPickerLabel(item: ProductListItem) {

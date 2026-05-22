@@ -16,6 +16,7 @@ import type {
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
   CodexRuntimeScope,
+  CodexSourceAccessMode,
   CodexRuntimeStatusProjection,
   CodexRuntimeTargetKind,
   CodexWorkerBootstrapToken,
@@ -115,6 +116,52 @@ export interface GetCodexRuntimeStatusInput {
   target_kind: CodexRuntimeTargetKind;
   runtime_profile_id?: string;
   credential_binding_id?: string;
+  now: string;
+}
+
+export interface ListActiveCodexRuntimeProfileReadinessDiagnosticsInput {
+  project_id: string;
+  repo_id?: string;
+  runtime_profile_id?: string;
+  now: string;
+}
+
+export interface CodexRuntimeProfileReadinessDiagnostic {
+  profile_id: string;
+  target_kind: CodexRuntimeTargetKind;
+  source_access_mode: CodexSourceAccessMode;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+}
+
+export interface ListCodexCredentialBindingReadinessCandidatesInput {
+  project_id: string;
+  repo_id?: string;
+  runtime_profile_id: string;
+  credential_binding_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  now: string;
+}
+
+export interface CodexCredentialBindingReadinessCandidate {
+  purpose: CodexCredentialBinding['purpose'];
+}
+
+export type CodexWorkerReadinessDiagnostic =
+  | 'ready'
+  | 'worker_unavailable'
+  | 'worker_target_unsupported'
+  | 'worker_docker_capability_mismatch'
+  | 'worker_network_policy_mismatch';
+
+export interface GetCodexWorkerReadinessDiagnosticInput {
+  project_id: string;
+  repo_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
   now: string;
 }
 
@@ -876,6 +923,13 @@ export interface DeliveryRepository {
   getCodexCredentialBindingPublic(id: string): Promise<CodexCredentialBindingPublic | undefined>;
   resolveCodexCredentialForLaunch(input: ResolveCodexCredentialForLaunchInput): Promise<ResolvedCodexCredential | undefined>;
   getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection>;
+  listActiveCodexRuntimeProfileReadinessDiagnostics(
+    input: ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ): Promise<CodexRuntimeProfileReadinessDiagnostic[]>;
+  listCodexCredentialBindingReadinessCandidates(
+    input: ListCodexCredentialBindingReadinessCandidatesInput,
+  ): Promise<CodexCredentialBindingReadinessCandidate[]>;
+  getCodexWorkerReadinessDiagnostic(input: GetCodexWorkerReadinessDiagnosticInput): Promise<CodexWorkerReadinessDiagnostic>;
   createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken>;
   upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration>;
   heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration>;

@@ -21,35 +21,30 @@ import {
 } from '@forgeloop/contracts';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
+import { deriveDeliveryRunReadiness, type DeliveryRunReadinessRuntimeSelection } from './delivery-runtime-readiness';
 import { serializePublicArtifactRef, serializePublicArtifactRefs } from './public-evidence-serialization';
+import { selectWorkItemRunSession } from './work-item-delivery-selection';
 import { deriveWorkItemDeliveryReadiness } from './work-item-delivery-readiness';
 import type { ReleaseBlockerLike, ReleaseTestAcceptanceEvidenceLike } from './work-item-release-readiness';
 
 export interface WorkItemCockpitOptions {
   run_session_metadata_fallback: RunRuntimeMetadata;
   lane?: ProductLaneId;
+  now?: string;
+  runtime_selection?: DeliveryRunReadinessRuntimeSelection;
 }
 
 const withWorkerLeaseMetadata = async (
-  repository: DeliveryRepository,
+  _repository: DeliveryRepository,
   runSession: RunSession,
   fallbackRuntimeMetadata: RunRuntimeMetadata,
 ): Promise<RunSession> => {
-  const lease = await repository.getRunWorkerLease(runSession.id);
-  if (lease === undefined) {
-    return runSession;
-  }
-
-  return {
-    ...runSession,
-    runtime_metadata: {
-      ...(runSession.runtime_metadata ?? fallbackRuntimeMetadata),
-      worker_id: lease.worker_id,
-      worker_lease_status: lease.status,
-      worker_lease_heartbeat_at: lease.heartbeat_at,
-      worker_lease_expires_at: lease.expires_at,
-    },
-  };
+  return runSession.runtime_metadata === undefined
+    ? {
+        ...runSession,
+        runtime_metadata: fallbackRuntimeMetadata,
+      }
+    : runSession;
 };
 
 const projectWorkItem = (workItem: WorkItem) => ({
@@ -114,6 +109,11 @@ const projectExecutionPackage = (executionPackage: ExecutionPackage) => ({
   allowed_paths: executionPackage.allowed_paths,
   forbidden_paths: executionPackage.forbidden_paths,
   version: executionPackage.version,
+  ...(executionPackage.current_run_session_id === undefined ? {} : { current_run_session_id: executionPackage.current_run_session_id }),
+  ...(executionPackage.current_review_packet_id === undefined
+    ? {}
+    : { current_review_packet_id: executionPackage.current_review_packet_id }),
+  ...(executionPackage.current_release_id === undefined ? {} : { current_release_id: executionPackage.current_release_id }),
   ...(executionPackage.last_run_session_id === undefined ? {} : { last_run_session_id: executionPackage.last_run_session_id }),
   ...(executionPackage.last_failure_summary === undefined ? {} : { last_failure_summary: executionPackage.last_failure_summary }),
   ...(executionPackage.blocked_reason === undefined ? {} : { blocked_reason: executionPackage.blocked_reason }),
@@ -143,15 +143,6 @@ const projectRuntimeMetadata = (runtimeMetadata: RunSession['runtime_metadata'])
         ...(runtimeMetadata.durability_mode === undefined ? {} : { durability_mode: runtimeMetadata.durability_mode }),
         ...(runtimeMetadata.driver_kind === undefined ? {} : { driver_kind: runtimeMetadata.driver_kind }),
         ...(runtimeMetadata.driver_status === undefined ? {} : { driver_status: runtimeMetadata.driver_status }),
-        ...(runtimeMetadata.worker_id === undefined ? {} : { worker_id: runtimeMetadata.worker_id }),
-        ...(runtimeMetadata.worker_lease_status === undefined ? {} : { worker_lease_status: runtimeMetadata.worker_lease_status }),
-        ...(runtimeMetadata.worker_lease_heartbeat_at === undefined
-          ? {}
-          : { worker_lease_heartbeat_at: runtimeMetadata.worker_lease_heartbeat_at }),
-        ...(runtimeMetadata.worker_lease_expires_at === undefined
-          ? {}
-          : { worker_lease_expires_at: runtimeMetadata.worker_lease_expires_at }),
-        ...(runtimeMetadata.last_event_cursor === undefined ? {} : { last_event_cursor: runtimeMetadata.last_event_cursor }),
         ...(runtimeMetadata.last_event_at === undefined ? {} : { last_event_at: runtimeMetadata.last_event_at }),
         ...(runtimeMetadata.recovery_attempt_count === undefined
           ? {}
@@ -454,6 +445,26 @@ export async function getWorkItemCockpit(
   ).flat();
   const releaseBlockers = safeReleaseBlockers(degradedSources, scopedReleases);
   const releaseTestAcceptance = releaseEvidences.flatMap(releaseTestAcceptanceFromEvidence);
+  const readinessNow = options.now ?? new Date().toISOString();
+  const runPackageReadinessCandidate = options.lane === 'execution-owner' ? currentPackages[0] : undefined;
+  const shouldDeriveRunPackageReadiness =
+    runPackageReadinessCandidate !== undefined &&
+    runPackageReadinessCandidate.phase === 'ready' &&
+    selectWorkItemRunSession(runPackageReadinessCandidate, runSessions) === undefined;
+  const packageRunReadinessByPackageId = new Map(
+    shouldDeriveRunPackageReadiness
+      ? [
+          [
+            runPackageReadinessCandidate.id,
+            await deriveDeliveryRunReadiness(repository, {
+              executionPackage: runPackageReadinessCandidate,
+              now: readinessNow,
+              ...(options.runtime_selection === undefined ? {} : { runtime_selection: options.runtime_selection }),
+            }),
+          ] as const,
+        ]
+      : [],
+  );
 
   return workItemCockpitResponseSchema.parse({
     work_item: projectWorkItem(workItem),
@@ -485,6 +496,7 @@ export async function getWorkItemCockpit(
       releaseEvidence: releaseEvidences.map(releaseEvidenceLike),
       decisions,
       degradedSources: [...degradedSources],
+      packageRunReadinessByPackageId,
     }),
   });
 }

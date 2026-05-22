@@ -135,8 +135,11 @@ import type {
   FindAvailableCodexWorkerInput,
   GetClaimedAutomationActionRunInput,
   GetCodexRuntimeStatusInput,
+  GetCodexWorkerReadinessDiagnosticInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
+  ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ListCodexCredentialBindingReadinessCandidatesInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
@@ -145,6 +148,9 @@ import type {
   RecoverStaleCodexWorkerLeasesInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
+  CodexCredentialBindingReadinessCandidate,
+  CodexRuntimeProfileReadinessDiagnostic,
+  CodexWorkerReadinessDiagnostic,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
   ResolveCodexCredentialForLaunchInput,
@@ -911,6 +917,124 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...(worker === undefined ? {} : { worker_status: worker.status }),
       blocker_codes: blockerCodes,
     };
+  }
+
+  async listActiveCodexRuntimeProfileReadinessDiagnostics(
+    input: ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ): Promise<CodexRuntimeProfileReadinessDiagnostic[]> {
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_profile_revisions)
+      .where(
+        and(
+          eq(codex_runtime_profile_revisions.status, 'active'),
+          ...(input.runtime_profile_id === undefined
+            ? []
+            : [eq(codex_runtime_profile_revisions.profileId, input.runtime_profile_id)]),
+        ),
+      )
+      .orderBy(desc(codex_runtime_profile_revisions.createdAt), desc(codex_runtime_profile_revisions.revisionNumber));
+    return rows
+      .map((row) => fromDbRecord<CodexRuntimeProfileRevision>(row))
+      .filter((revision) => codexRuntimeScopeMatches(revision.allowed_scopes, codexScope(input.project_id, input.repo_id)))
+      .map((revision) => {
+        const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+        return {
+          profile_id: revision.profile_id,
+          target_kind: revision.target_kind,
+          source_access_mode: revision.source_access_mode,
+          docker_image_digest: revision.docker_image_digest,
+          network_policy_digest: codexRuntimeNetworkPolicyDigest(networkPolicy),
+          ...(networkPolicy.mode === 'egress_allowlist' && networkPolicy.provider === 'docker_network_proxy'
+            ? { network_provider_config_digest: networkPolicy.provider_config.provider_config_digest }
+            : {}),
+        };
+      });
+  }
+
+  async listCodexCredentialBindingReadinessCandidates(
+    input: ListCodexCredentialBindingReadinessCandidatesInput,
+  ): Promise<CodexCredentialBindingReadinessCandidate[]> {
+    const rows = await this.db
+      .select({
+        binding: codex_credential_bindings,
+        versionStatus: codex_credential_binding_versions.status,
+        profileTargetKind: codex_runtime_profiles.targetKind,
+      })
+      .from(codex_credential_bindings)
+      .innerJoin(codex_runtime_profiles, eq(codex_runtime_profiles.id, codex_credential_bindings.profileId))
+      .innerJoin(
+        codex_credential_binding_versions,
+        eq(codex_credential_binding_versions.id, codex_credential_bindings.activeVersionId),
+      )
+      .where(
+        and(
+          eq(codex_credential_bindings.projectId, input.project_id),
+          eq(codex_credential_bindings.profileId, input.runtime_profile_id),
+          ...(input.credential_binding_id === undefined ? [] : [eq(codex_credential_bindings.id, input.credential_binding_id)]),
+        ),
+      );
+
+    return rows
+      .map((row) => ({
+        binding: fromDbRecord<CodexCredentialBinding>(row.binding),
+        versionStatus: row.versionStatus,
+        profileTargetKind: row.profileTargetKind,
+      }))
+      .filter(
+        ({ binding, versionStatus, profileTargetKind }) =>
+          (binding.repo_id === undefined || binding.repo_id === input.repo_id) &&
+          profileTargetKind === input.target_kind &&
+          versionStatus === 'active',
+      )
+      .map(({ binding }) => ({ purpose: binding.purpose }));
+  }
+
+  async getCodexWorkerReadinessDiagnostic(
+    input: GetCodexWorkerReadinessDiagnosticInput,
+  ): Promise<CodexWorkerReadinessDiagnostic> {
+    const rows = await this.db
+      .select()
+      .from(codex_worker_registrations)
+      .where(
+        and(
+          eq(codex_worker_registrations.status, 'online'),
+          eq(codex_worker_registrations.controlChannelStatus, 'connected'),
+          gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
+          isNotNull(codex_worker_registrations.lastHeartbeatAt),
+        ),
+      )
+      .orderBy(asc(codex_worker_registrations.leaseCount), asc(codex_worker_registrations.id));
+    const available = rows
+      .map((row) => fromDbRecord<CodexWorkerRegistrationDbRecord>(row))
+      .filter(
+        (record) =>
+          codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
+          codexRuntimeScopeMatches(record.allowed_scopes_json, codexScope(input.project_id, input.repo_id)),
+      );
+
+    if (available.length === 0) {
+      return 'worker_unavailable';
+    }
+    const targetCompatible = available.filter((record) =>
+      capabilityList(record.capabilities_json, 'target_kinds').includes(input.target_kind),
+    );
+    if (targetCompatible.length === 0) {
+      return 'worker_target_unsupported';
+    }
+    const dockerCompatible = targetCompatible.filter((record) =>
+      capabilityList(record.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest),
+    );
+    if (dockerCompatible.length === 0) {
+      return 'worker_docker_capability_mismatch';
+    }
+    const networkCompatible = dockerCompatible.filter(
+      (record) =>
+        capabilityList(record.capabilities_json, 'network_policy_digests').includes(input.network_policy_digest) &&
+        (input.network_provider_config_digest === undefined ||
+          capabilityList(record.capabilities_json, 'network_provider_config_digests').includes(input.network_provider_config_digest)),
+    );
+    return networkCompatible.length === 0 ? 'worker_network_policy_mismatch' : 'ready';
   }
 
   async createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken> {

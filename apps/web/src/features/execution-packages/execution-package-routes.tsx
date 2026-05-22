@@ -7,9 +7,11 @@ import {
   useForceRerunPackageMutation,
   useGeneratePackagesMutation,
   useMarkPackageReadyMutation,
+  usePackageRuntimeReadinessQuery,
   usePackageQuery,
   usePackagesQuery,
   usePatchExecutionPackageMutation,
+  useReviewQuery,
   useRerunPackageMutation,
   useRunPackageMutation,
 } from '../../shared/api/hooks';
@@ -26,6 +28,7 @@ import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, PageHeader, Section } from '../../shared/layout';
 import { Badge, Button, Checkbox, DataTable, Input, StatusPill, Tabs, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
+import { buildPackageActions, type PackageActionState } from './package-action-model';
 
 const supportedPackageFilters = [
   'work_item_id',
@@ -117,6 +120,8 @@ function PackageDetailView({ packageId }: { packageId: string }) {
   const [searchParams] = useSearchParams();
   const detailQuery = usePackageQuery(packageId);
   const replayQuery = useExecutionPackageReplayQuery(packageId);
+  const readinessQuery = usePackageRuntimeReadinessQuery(packageId);
+  const currentReviewQuery = useReviewQuery(detailQuery.data?.current_review_packet_id);
   const markReady = useMarkPackageReadyMutation(packageId);
   const runPackage = useRunPackageMutation(packageId);
   const rerunPackage = useRerunPackageMutation(packageId);
@@ -136,7 +141,22 @@ function PackageDetailView({ packageId }: { packageId: string }) {
   const executionPackage = detailQuery.data;
   const actionPending = markReady.isPending || runPackage.isPending || rerunPackage.isPending || forceRerunPackage.isPending;
   const previousRunSessionId = executionPackage.last_run_session_id;
-  const canForceRerun = previousRunSessionId !== undefined && forceReason.trim().length > 0;
+  const currentReviewPointerExists = executionPackage.current_review_packet_id !== undefined;
+  const runtimeReadinessBlockedForRefresh = readinessQuery.isFetching || readinessQuery.isError;
+  const currentReviewBlockedForRefresh = currentReviewQuery.isFetching || currentReviewQuery.isError;
+  const currentReviewUnresolved =
+    currentReviewPointerExists && (currentReviewQuery.data === undefined || currentReviewBlockedForRefresh);
+  const runtimeReadiness = runtimeReadinessBlockedForRefresh ? undefined : readinessQuery.data;
+  const currentReview = currentReviewBlockedForRefresh ? undefined : currentReviewQuery.data;
+  const actions = buildPackageActions({
+    executionPackage,
+    actorId,
+    ...(runtimeReadiness === undefined ? {} : { readiness: runtimeReadiness }),
+    ...(currentReview === undefined ? {} : { currentReview }),
+    hasOpenReview: currentReviewUnresolved,
+    actionPending,
+    forceReason,
+  });
 
   return (
     <DetailLayout
@@ -144,7 +164,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
         <ActionRail title="Package actions">
           <div className="stack-form compact">
             <Button
-              disabled={actionPending}
+              disabled={actionPending || !actions.markReady.enabled}
               loading={markReady.isPending}
               onClick={() =>
                 markReady.mutate({
@@ -156,16 +176,19 @@ function PackageDetailView({ packageId }: { packageId: string }) {
             >
               Mark ready
             </Button>
+            <ActionBlockerReason action={actions.markReady} />
             <Button
-              disabled={actionPending}
+              disabled={actionPending || !actions.run.enabled}
               loading={runPackage.isPending}
               onClick={() => runPackage.mutate({ actorId })}
               variant="primary"
             >
               Run
             </Button>
+            <ActionBlockerReason action={actions.run} />
+            {runPackage.isError ? <p className="empty">Run request failed. Check readiness and try again.</p> : null}
             <Button
-              disabled={actionPending || !executionPackage.last_run_session_id}
+              disabled={actionPending || !actions.rerun.enabled}
               loading={rerunPackage.isPending}
               onClick={() =>
                 rerunPackage.mutate({
@@ -179,6 +202,8 @@ function PackageDetailView({ packageId }: { packageId: string }) {
             >
               Rerun
             </Button>
+            <ActionBlockerReason action={actions.rerun} />
+            {rerunPackage.isError ? <p className="empty">Rerun request failed. Check review state and try again.</p> : null}
             <label className="field">
               Force rerun reason
               <Textarea
@@ -188,13 +213,9 @@ function PackageDetailView({ packageId }: { packageId: string }) {
                 value={forceReason}
               />
             </label>
-            <p className="empty">
-              {previousRunSessionId === undefined
-                ? 'Force rerun is available after this package has a previous run.'
-                : 'Force rerun bypasses normal freshness checks and must include a reason for the evidence trail.'}
-            </p>
+            <ActionBlockerReason action={actions.forceRerun} />
             <Button
-              disabled={actionPending || !canForceRerun}
+              disabled={actionPending || !actions.forceRerun.enabled}
               loading={forceRerunPackage.isPending}
               onClick={() => {
                 if (previousRunSessionId === undefined) return;
@@ -208,9 +229,11 @@ function PackageDetailView({ packageId }: { packageId: string }) {
             >
               Force rerun
             </Button>
-            <Button onClick={() => setShowEditPackage((current) => !current)} variant="secondary">
+            {forceRerunPackage.isError ? <p className="empty">Force rerun request failed. Check review eligibility and try again.</p> : null}
+            <Button disabled={actionPending || !actions.edit.enabled} onClick={() => setShowEditPackage((current) => !current)} variant="secondary">
               Edit package details
             </Button>
+            <ActionBlockerReason action={actions.edit} />
             {showEditPackage ? <PackageEditForm executionPackage={executionPackage} onSaved={() => setShowEditPackage(false)} /> : null}
           </div>
           {planRevisionId ? (
@@ -235,7 +258,7 @@ function PackageDetailView({ packageId }: { packageId: string }) {
               <StatusPill tone={deliverySurfaceStateTone(executionPackage.gate_state)}>{executionPackage.gate_state}</StatusPill>
             </span>
           }
-          subtitle={`Repository ${executionPackage.repo_id} / Work Item ${executionPackage.work_item_id}`}
+          subtitle="Execution package for approved delivery work."
           title={executionPackage.objective}
         />
       }
@@ -282,6 +305,11 @@ function PackageDetailView({ packageId }: { packageId: string }) {
       />
     </DetailLayout>
   );
+}
+
+function ActionBlockerReason({ action }: { action: PackageActionState }) {
+  if (action.enabled || action.reason === undefined) return null;
+  return <p className="empty">{action.reason}</p>;
 }
 
 function PlanRevisionPackageActions({ planRevisionId }: { planRevisionId: string }) {
@@ -476,7 +504,7 @@ function PackageTable({ items }: { items: ProductListItem[] }) {
           header: 'Last run',
           cell: (item) => {
             const runId = item.package_state?.last_run_session_id ?? item.related.find((ref) => ref.type === 'run_session')?.id;
-            return runId ? <Link to={`/runs/${encodeURIComponent(runId)}`}>{runId}</Link> : 'none';
+            return runId ? <Link to={`/runs/${encodeURIComponent(runId)}`}>Open latest run</Link> : 'none';
           },
         },
         { key: 'reviewer', header: 'Reviewer / QA', cell: (item) => `${item.reviewer_actor_id ?? 'unassigned'} / ${item.qa_owner_actor_id ?? 'unassigned'}` },
@@ -494,7 +522,6 @@ function PackageOverview({ executionPackage }: { executionPackage: ExecutionPack
     <Section description="Primary package state for execution owners, reviewers, and QA." title="Overview">
       <dl className="fl-metadata-grid">
         <Metadata label="Objective" value={executionPackage.objective} />
-        <Metadata label="Repository" value={executionPackage.repo_id} />
         <Metadata label="Owner" value={executionPackage.owner_actor_id} />
         <Metadata label="Reviewer" value={executionPackage.reviewer_actor_id} />
         <Metadata label="QA owner" value={executionPackage.qa_owner_actor_id} />
