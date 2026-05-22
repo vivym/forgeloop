@@ -543,6 +543,10 @@ const isRawPathEndpointOrContainerId = (value: string): boolean =>
 
 const rawEndpointHostCandidate = (value: string): string | undefined => {
   const withoutPath = value.split(/[/?#]/, 1)[0] ?? value;
+  const legacySchemeEndpoint = withoutPath.match(/^[A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)(.+)$/);
+  if (legacySchemeEndpoint?.[1] !== undefined) {
+    return rawEndpointHostCandidate(legacySchemeEndpoint[1]);
+  }
   const bracketed = withoutPath.match(/^\[([^\]]+)\](?::\d{1,5})?$/);
   if (bracketed?.[1] !== undefined) {
     return bracketed[1];
@@ -653,8 +657,13 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
   const clusterShortServiceEndpointPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.svc(:\d{1,5})?(\/|$)/i;
   const singleLabelHostPortPattern = /^[a-z][a-z0-9-]*:\d{1,5}(\/|$)/i;
   const rawRuntimeServiceEndpointPattern = /^(app-server|control-plane)(:\d{1,5})?(\/|$)/i;
+  const legacySchemeEndpointPattern = /^[A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)(.+)$/;
   const rawUrlSchemePattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
   const hostWithPortOrPathPattern = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(:\d{1,5}|\/)/i;
+  const legacySchemeEndpoint = value.match(legacySchemeEndpointPattern);
+  if (legacySchemeEndpoint?.[1] !== undefined && isCodexRuntimeEndpointOrContainerString(legacySchemeEndpoint[1])) {
+    return true;
+  }
   return (
     rawUrlSchemePattern.test(value) ||
     /^file:\//i.test(value) ||
@@ -807,7 +816,7 @@ const isCodexRuntimeDisplayStringPath = (path: readonly string[]): boolean => {
 };
 
 const isCodexRuntimeChangedFilePath = (path: readonly string[]): boolean => {
-  if (path.length < 2 || !/^\d+$/.test(path[path.length - 1] ?? '')) {
+  if (path.length !== 2 || !/^\d+$/.test(path[path.length - 1] ?? '')) {
     return false;
   }
   return path[path.length - 2] === 'changed_files';

@@ -433,6 +433,27 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('allows run-execution changed files only at the top-level result field', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          execution_package_id: 'package-1',
+          execution_package_version: 3,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          changed_files: ['src/index.ts'],
+          check_results: [],
+          execution_artifacts: [],
+          metadata: {
+            changed_files: ['src/secret.ts'],
+          },
+          public_summary: 'Run completed with public-safe summary.',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it('rejects unsafe public runtime values without blocking safe product refs', () => {
     expect(() =>
       assertCodexRuntimePublicSafeValue(
@@ -514,6 +535,11 @@ describe('codex runtime domain contracts', () => {
     ['internal_ref', 'app-server.internal/jobs'],
     ['href', 'app-server:3845/internal'],
     ['url', 'control-plane:3845/runtime-jobs'],
+    ['url', 'http:127.0.0.1:4555'],
+    ['url', 'http:localhost:3000'],
+    ['url', 'http:app-server:3845'],
+    ['url', 'tcp:10.0.0.5:1234'],
+    ['url', 'ssh:internal.example:22'],
     ['url', 'redis:6379'],
     ['url', 'redis.default.svc'],
     ['url', 'control-plane.default.svc'],
