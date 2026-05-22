@@ -38,6 +38,7 @@ describe('MarkdownDocument validation', () => {
   it('accepts https external links and same-origin product links', () => {
     for (const markdown of [
       '[external](https://example.com/docs)',
+      '<https://example.com/docs>',
       '[storage guide](https://example.com/storage-guide)',
       '[bucket list](https://example.com/bucket-list)',
       '[task](/tasks/task-1)',
@@ -59,6 +60,18 @@ describe('MarkdownDocument validation', () => {
       '![ref][img]\n\n[img]: https://example.com/image.png',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
+    }
+
+    const rawStorageAutolink = validateMarkdownDocument({
+      ...baseDocument,
+      markdown: '<https://bucket.example.com/private/key?signature=raw>',
+    });
+    expect(rawStorageAutolink).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([expect.objectContaining({ code: 'raw_storage_url' })]),
+    });
+    if (!rawStorageAutolink.ok) {
+      expect(rawStorageAutolink.issues.map((issue) => issue.code)).not.toContain('raw_html');
     }
   });
 
@@ -97,6 +110,11 @@ describe('MarkdownDocument validation', () => {
   it('rejects raw html, javascript links, data urls, blob urls, and raw storage urls', () => {
     for (const markdown of [
       '<iframe src="https://example.com"></iframe>',
+      '<>fragment</>',
+      '<></>',
+      '<!-- raw html comment -->',
+      '<!doctype html>',
+      '<?xml version="1.0"?>',
       '[bad](javascript:alert(1))',
       '![bad](data:image/png;base64,aaaa)',
       '![bad](blob:https://example.com/1)',
@@ -157,7 +175,8 @@ describe('MarkdownDocument validation', () => {
     const result = validateMarkdownDocument({
       ...baseDocument,
       allowed_blocks: ['code_block'],
-      markdown: '```html\n<iframe src="https://example.com"></iframe>\nhttps://bucket.example.com/private/key?signature=raw\n```',
+      markdown:
+        '```html\n<iframe src="https://example.com"></iframe>\n<>fragment</>\n<></>\n<!-- raw html comment -->\n<!doctype html>\n<?xml version="1.0"?>\nhttps://bucket.example.com/private/key?signature=raw\n```',
     });
 
     expect(result.ok).toBe(true);

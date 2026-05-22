@@ -49,7 +49,11 @@ export type MarkdownValidationResult =
   | { ok: true; markdown: string; attachment_ids: string[] }
   | { ok: false; issues: MarkdownValidationIssue[] };
 
-const htmlPattern = /<\/?[a-z][\s\S]*?>/i;
+const htmlCommentPattern = /<!--[\s\S]*?-->/;
+const htmlDeclarationPattern = /<![A-Za-z][^>]*>/;
+const htmlProcessingInstructionPattern = /<\?[\s\S]*?\?>/;
+const mdxFragmentPattern = /<>[\s\S]*?<\/>/;
+const htmlTagPattern = /<\/?[A-Za-z][A-Za-z0-9.-]*(?=[\s/>])[^>]*>/;
 const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
@@ -81,7 +85,7 @@ export function validateMarkdownDocument(input: MarkdownDocument): MarkdownValid
   const issues: MarkdownValidationIssue[] = [];
   const activeMarkdown = stripFencedCodeBlocks(document.markdown);
 
-  if (htmlPattern.test(activeMarkdown)) {
+  if (containsRawHtmlOrMdx(activeMarkdown)) {
     issues.push({ code: 'raw_html', message: 'Markdown must not contain raw HTML or MDX JSX.' });
   }
   if (containsMdxEsm(activeMarkdown)) {
@@ -200,6 +204,16 @@ function parseClosingFence(line: string, char: '`' | '~'): number | undefined {
   const match = new RegExp(`^ {0,3}(${escapedChar}{3,})[\\t ]*$`).exec(line);
   const fence = match?.[1];
   return fence?.length;
+}
+
+function containsRawHtmlOrMdx(markdown: string): boolean {
+  return (
+    htmlCommentPattern.test(markdown) ||
+    htmlDeclarationPattern.test(markdown) ||
+    htmlProcessingInstructionPattern.test(markdown) ||
+    mdxFragmentPattern.test(markdown) ||
+    htmlTagPattern.test(markdown)
+  );
 }
 
 function containsMdxEsm(markdown: string): boolean {
