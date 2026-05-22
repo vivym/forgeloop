@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PipelineResponse, ProductListItem } from '../../apps/web/src/shared/api/types';
 import { usePipelineQuery } from '../../apps/web/src/shared/api/hooks';
 import { deletedProductLaneRoot } from './deleted-route-guards';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 
 vi.mock('../../apps/web/src/shared/api/hooks', async (importOriginal) => {
@@ -36,6 +37,7 @@ describe('Pipeline product route', () => {
     expect(screen.getByText('Quality gates')).toBeTruthy();
     expect(screen.getByText('Regression coverage gaps')).toBeTruthy();
     expect(screen.getByText('Release-blocking issues')).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('routes unknown representative objects to Lanes without emitting legacy product lane links', async () => {

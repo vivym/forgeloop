@@ -1,4 +1,5 @@
 import { DataTable, StatusPill } from '../../shared/ui';
+import { cn } from '../../shared/utils/cn';
 import type { ProductLaneRow } from './product-lane-view-model';
 
 export function ProductLaneTable({
@@ -20,11 +21,14 @@ export function ProductLaneTable({
           cell: (row) => (
             <button
               aria-pressed={row.id === selectedItemId}
-              className="fl-button fl-button--ghost"
+              className={cn(
+                'inline-flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-md border border-transparent px-3 text-sm font-semibold text-text-secondary transition-colors duration-base ease-standard hover:bg-surface-muted hover:text-text-primary motion-reduce:transition-none',
+                row.id === selectedItemId ? 'bg-primary-soft text-primary-hover' : null,
+              )}
               onClick={() => onSelect(row.id)}
               type="button"
             >
-              <span className="fl-button__label">{row.title}</span>
+              <span className="inline-flex min-w-0 items-center gap-1.5">{row.title}</span>
             </button>
           ),
         },
