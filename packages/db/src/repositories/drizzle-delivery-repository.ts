@@ -1516,6 +1516,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       bundle.lease.status !== 'active' ||
       bundle.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
       bundle.job.accepted_session_public_key_id !== input.key_id ||
+      bundle.job.accepted_session_epoch !== input.accepted_session_epoch ||
       worker.session_public_key_id !== input.key_id ||
       worker.session_public_key_expires_at <= input.now
     ) {

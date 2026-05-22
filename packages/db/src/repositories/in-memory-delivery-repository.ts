@@ -1186,6 +1186,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       lease.lease.status !== 'active' ||
       record.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
       record.job.accepted_session_public_key_id !== input.key_id ||
+      record.job.accepted_session_epoch !== input.accepted_session_epoch ||
       worker.session_public_key_id !== input.key_id ||
       worker.session_public_key_expires_at <= input.now
     ) {

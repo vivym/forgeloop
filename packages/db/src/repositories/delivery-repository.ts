@@ -321,6 +321,7 @@ export interface ClaimCodexLaunchTokenEnvelopeInput {
   nonce_timestamp: string;
   accepted_worker_session_digest: string;
   key_id: string;
+  accepted_session_epoch: number;
   claim_request_id: string;
   request_digest: string;
   now: string;

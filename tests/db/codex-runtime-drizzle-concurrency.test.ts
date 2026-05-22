@@ -508,6 +508,7 @@ const claimRuntimeJobEnvelopeInput = (
   nonce_timestamp: later,
   accepted_worker_session_digest: tokenHash(seed.sessionToken),
   key_id: 'session-key-1',
+  accepted_session_epoch: 1,
   claim_request_id: `claim-${input.runtime_job_id}`,
   request_digest: tokenHash(`claim-request-${input.runtime_job_id}`),
   now: later,
