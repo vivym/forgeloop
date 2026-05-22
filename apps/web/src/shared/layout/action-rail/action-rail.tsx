@@ -10,9 +10,9 @@ export interface ActionRailProps {
 
 export function ActionRail({ children, className, title }: ActionRailProps) {
   return (
-    <div className={cn('fl-action-rail', className)}>
-      {title ? <h2 className="fl-action-rail__title">{title}</h2> : null}
-      <div className="fl-action-rail__content">{children}</div>
+    <div className={cn('grid gap-3 rounded-card border border-border bg-surface p-4 shadow-sm xl:sticky xl:top-24', className)}>
+      {title ? <h2 className="text-sm font-semibold text-text-primary">{title}</h2> : null}
+      <div className="grid gap-3">{children}</div>
     </div>
   );
 }

@@ -1024,18 +1024,18 @@ describe('review and release product routes', () => {
 });
 
 function expectStatusPillText(value: string) {
-  const header = document.body.querySelector('.fl-page-header');
+  const header = document.body.querySelector('[data-page-header]');
   expect(header).toBeTruthy();
   expect(header?.textContent).toContain(value);
 }
 
 function expectPageHeaderText(pattern: RegExp) {
-  expect(document.body.querySelector('.fl-page-header')?.textContent).toMatch(pattern);
+  expect(document.body.querySelector('[data-page-header]')?.textContent).toMatch(pattern);
 }
 
 function expectActionRailBeforeDetailContent() {
-  const rail = document.body.querySelector('.fl-detail-layout__rail');
-  const content = document.body.querySelector('.fl-detail-layout__content');
+  const rail = document.body.querySelector('[data-detail-layout-rail]');
+  const content = document.body.querySelector('[data-detail-layout-content]');
   expect(rail).toBeTruthy();
   expect(content).toBeTruthy();
   if (rail === null || content === null) throw new Error('Detail layout did not render action rail and content regions.');
@@ -1047,7 +1047,7 @@ function expectNoLegacyWorkbenchText() {
 }
 
 function expectNoNestedCards() {
-  expect(document.body.querySelector('.fl-card .fl-card, .card .card')).toBeNull();
+  expect(document.body.querySelector('[data-layout-section] [data-layout-section]')).toBeNull();
 }
 
 function expectNoRawReviewClosureText(hiddenValues: string[]) {

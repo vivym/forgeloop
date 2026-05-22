@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from 'node:fs';
-
 import { waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,9 +14,10 @@ describe('responsive layout contract', () => {
     const screen = await renderRoute('/lanes');
 
     expect(screen.getByRole('banner')).toBeTruthy();
-    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
     expect(screen.getByRole('main')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
+    expect(document.body.innerHTML).not.toContain('fl-app-shell');
   });
 
   it('renders dense tables with a card fallback contract', async () => {
@@ -36,23 +35,9 @@ describe('responsive layout contract', () => {
 
     expect(await screen.findByRole('table', { name: 'Runs' })).toBeTruthy();
     await waitFor(() => {
-      expect(document.querySelector('.fl-responsive-card-list__item')).toBeNull();
+      const responsiveCards = screen.getByRole('list', { name: 'Runs cards' });
+      expect(responsiveCards.querySelectorAll('[role="listitem"]').length).toBe(0);
     });
-  });
-
-  it('defines tablet inline action rails and mobile navigation sheet styles', () => {
-    const css = readFileSync('apps/web/src/shared/design-system/theme/css-variables.css', 'utf8');
-    const tabletStart = css.indexOf('@media (max-width: 1199px)');
-    const mobileStart = css.indexOf('@media (max-width: 767px)');
-    const tabletBlock = css.slice(tabletStart, mobileStart);
-    const mobileBlock = css.slice(mobileStart);
-
-    expect(tabletBlock).toContain('.fl-detail-layout__body');
-    expect(tabletBlock).toContain('grid-template-columns: 1fr');
-    expect(tabletBlock).toContain('.fl-action-rail');
-    expect(tabletBlock).toContain('border-top');
-    expect(mobileBlock).toContain('.fl-app-shell__sidebar.is-open');
-    expect(mobileBlock).toContain('position: fixed');
   });
 });
 

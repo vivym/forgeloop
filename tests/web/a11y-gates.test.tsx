@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 import axe from 'axe-core';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
 
@@ -43,6 +43,27 @@ describe('web accessibility gates', () => {
 
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Pipeline' }));
+  });
+
+  it('keeps closed mobile navigation out of the keyboard order until opened', async () => {
+    vi.stubGlobal('innerWidth', 375);
+    vi.stubGlobal('matchMedia', createMatchMedia(375));
+
+    const screen = await renderRoute('/lanes');
+    const user = userEvent.setup();
+
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Skip to main content' }));
+
+    await user.tab();
+    const trigger = screen.getByRole('button', { name: 'Open navigation' });
+    expect(document.activeElement).toBe(trigger);
+    expect(screen.queryByRole('link', { name: 'Lanes' })).toBeNull();
+
+    await user.keyboard('{Enter}');
+
+    expect(screen.getByRole('button', { name: 'Close navigation' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Lanes' })).toBeTruthy();
   });
 
   it('keeps drawers keyboard-accessible and returns focus to the trigger', async () => {
@@ -125,6 +146,23 @@ function contrast(foreground: string, background: string) {
   const dark = luminance(background);
   const [lighter, darker] = light > dark ? [light, dark] : [dark, light];
   return (lighter + 0.05) / (darker + 0.05);
+}
+
+function createMatchMedia(width: number) {
+  return (query: string): MediaQueryList => {
+    const maxWidth = Number(query.match(/max-width:\s*(\d+)px/)?.[1] ?? Number.POSITIVE_INFINITY);
+    const minWidth = Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? 0);
+    return {
+      matches: width >= minWidth && width <= maxWidth,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+  };
 }
 
 function luminance(color: string) {

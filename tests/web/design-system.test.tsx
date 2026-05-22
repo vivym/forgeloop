@@ -3,7 +3,17 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { Section } from '../../apps/web/src/shared/layout';
+import {
+  DetailLayout,
+  InlineActions,
+  MetadataGrid,
+  Metric,
+  MetricGrid,
+  ObjectSummary,
+  PillGroup,
+  Section,
+} from '../../apps/web/src/shared/layout';
+import { resolveAriaInvalid } from '../../apps/web/src/shared/ui/form-control-state';
 import {
   Button,
   Checkbox,
@@ -128,9 +138,9 @@ describe('design system primitives', () => {
       expect(control.className).not.toContain('fl-');
     }
 
-    expect(input.className).not.toContain('border-danger');
-    expect(select.className).not.toContain('border-danger');
-    expect(textarea.className).not.toContain('border-danger');
+    expect(resolveAriaInvalid(false, 'false')).toEqual({ isInvalid: false, value: 'false' });
+    expect(resolveAriaInvalid(false, 'grammar')).toEqual({ isInvalid: true, value: 'grammar' });
+    expect(resolveAriaInvalid(true, undefined)).toEqual({ isInvalid: true, value: true });
   });
 
   it('renders skeleton placeholders as hidden presentation lines', () => {
@@ -145,8 +155,54 @@ describe('design system primitives', () => {
   it('renders page sections without nested card markup', () => {
     render(<Section title="Release scope">Content</Section>);
 
-    expect(screen.getByRole('heading', { name: 'Release scope' })).toBeTruthy();
-    expect(document.querySelector('.fl-card .fl-card')).toBeNull();
+    const heading = screen.getByRole('heading', { name: 'Release scope' });
+    const section = heading.closest('section');
+    expect(section).toBeTruthy();
+    expect(section?.querySelector('section')).toBeNull();
+    expect(document.body.innerHTML).not.toContain('fl-');
+  });
+
+  it('keeps detail layout rail inline before content without legacy classes', () => {
+    render(
+      <DetailLayout actionRail={<aside aria-label="Release actions">Actions</aside>} header={<PageHeaderForTest />}>
+        <article aria-label="Release detail">Detail</article>
+      </DetailLayout>,
+    );
+
+    const rail = screen.getByRole('complementary', { name: 'Release actions' });
+    const content = screen.getByRole('article', { name: 'Release detail' });
+    expect(rail.compareDocumentPosition(content)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(document.body.innerHTML).not.toContain('fl-');
+  });
+
+  it('exports semantic layout primitives without legacy classes', () => {
+    render(
+      <>
+        <MetricGrid>
+          <Metric label="Ready packages" value="3" />
+        </MetricGrid>
+        <MetadataGrid
+          items={[
+            { label: 'Project', value: 'project-web-product' },
+            { label: 'Actor', value: 'actor-owner' },
+          ]}
+        />
+        <ObjectSummary meta={<span>Updated today</span>} subtitle="Release train" title="Product shell" />
+        <InlineActions>
+          <Button>Approve</Button>
+        </InlineActions>
+        <PillGroup>
+          <span>Ready</span>
+        </PillGroup>
+      </>,
+    );
+
+    expect(screen.getByText('Ready packages').tagName).toBe('DT');
+    expect(screen.getByText('3').tagName).toBe('DD');
+    expect(screen.getByText('Project').tagName).toBe('DT');
+    expect(screen.getByText('project-web-product').tagName).toBe('DD');
+    expect(screen.getByRole('heading', { name: 'Product shell' })).toBeTruthy();
+    expect(document.body.innerHTML).not.toContain('fl-');
   });
 
   it('exports dialog close semantics that can dismiss uncontrolled content', () => {
@@ -202,3 +258,7 @@ describe('design system primitives', () => {
     expect(document.body.innerHTML).not.toContain('fl-toast');
   });
 });
+
+function PageHeaderForTest() {
+  return <h1>Release shell</h1>;
+}
