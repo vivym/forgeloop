@@ -693,14 +693,46 @@ const isCodexRuntimeEndpointOrContainerString = (value: string): boolean => {
   );
 };
 
-const isBareDnsHostString = (value: string): boolean => /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(value);
+const safePublicFilenameExtensions = new Set([
+  'cjs',
+  'css',
+  'diff',
+  'env',
+  'js',
+  'json',
+  'jsx',
+  'lock',
+  'log',
+  'map',
+  'md',
+  'mjs',
+  'patch',
+  'py',
+  'sh',
+  'sql',
+  'toml',
+  'ts',
+  'tsx',
+  'txt',
+  'yaml',
+  'yml',
+]);
+const isBareDnsHostString = (value: string): boolean => {
+  if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(value)) {
+    return false;
+  }
+  const lastLabel = value.toLowerCase().split('.').at(-1);
+  return lastLabel !== undefined && !safePublicFilenameExtensions.has(lastLabel);
+};
 const displayUnsafeEndpointTokenPattern =
-  /\b(?:https?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:(?!\s)|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|[a-z0-9-]+:\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
+  /\b(?:https?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:(?!\s)|localhost(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:internal|svc|svc\.cluster\.local)|\d{1,3}(?:\.\d{1,3}){1,3}(?::\d{1,5})?|[a-z0-9-]+:\d{1,5}|unix:|[A-Za-z]:[\\/]|\\\\|\.sock\b)/i;
+const displayBareDnsHostTokenPattern = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
 const displayUnsafeSecretTokenPattern =
   /\b(?:(?:api[_-]?key|token|secret|password|authorization|auth(?:[_-]?header)?)\s*(?:[:=]|Bearer\b)|Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]+)/i;
 const isCodexRuntimeUnsafeDisplayString = (value: string): boolean =>
   displayUnsafeEndpointTokenPattern.test(value) ||
+  [...value.matchAll(displayBareDnsHostTokenPattern)].some(([candidate]) => isBareDnsHostString(candidate)) ||
   displayUnsafePathTokenPattern.test(value) ||
   displayUnsafeSecretTokenPattern.test(value);
 
@@ -834,7 +866,7 @@ export const codexRuntimeJobIsActive = (job: Pick<CodexRuntimeJob, 'status'>): b
 const unsafeCodexRuntimePublicValue = (message: string, details?: Record<string, unknown>): DomainError =>
   new DomainError('codex_docker_runtime_evidence_unsafe', message, details);
 
-const codexRuntimeDisplayStringKeys = new Set(['public_summary', 'summary']);
+const codexRuntimeDisplayStringKeys = new Set(['name', 'public_summary', 'summary']);
 const isCodexRuntimeDisplayStringPath = (path: readonly string[]): boolean => {
   const key = path[path.length - 1];
   return key !== undefined && codexRuntimeDisplayStringKeys.has(key);

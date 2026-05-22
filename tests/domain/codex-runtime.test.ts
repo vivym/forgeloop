@@ -430,7 +430,7 @@ describe('codex runtime domain contracts', () => {
       execution_package_version: 3,
       run_session_id: 'run-session-1',
       workspace_bundle_digest: digestA,
-      changed_files: ['src/index.ts', 'docs/release-notes.md'],
+      changed_files: ['package.json', 'README.md', 'vite.config.ts', 'src/index.ts', 'docs/release-notes.md'],
       patch_artifact: {
         content_type: 'text/x-diff',
         digest: digestB,
@@ -440,7 +440,7 @@ describe('codex runtime domain contracts', () => {
         {
           name: 'unit',
           status: 'passed',
-          summary: 'Passed 3/4 checks after updating app/server documentation',
+          summary: 'Node.js tests passed after updating app/server documentation',
           output_digest: digestC,
           output_internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/check-output',
         },
@@ -448,7 +448,7 @@ describe('codex runtime domain contracts', () => {
       execution_artifacts: [
         {
           kind: 'log_summary',
-          name: 'run summary',
+          name: 'check-output.log',
           content_type: 'text/plain',
           digest: digestA,
           internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/summary',
