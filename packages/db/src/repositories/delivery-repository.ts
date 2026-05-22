@@ -291,6 +291,8 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult {
 export interface PollCodexRuntimeJobsInput {
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   target_kinds?: readonly CodexRuntimeTargetKind[];
   limit: number;
   now: string;
@@ -300,6 +302,8 @@ export interface AcceptCodexRuntimeJobInput {
   runtime_job_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   accepted_worker_session_digest: string;
   accepted_session_public_key_id: string;
   accepted_session_epoch: number;
@@ -313,6 +317,8 @@ export interface ClaimCodexLaunchTokenEnvelopeInput {
   envelope_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   accepted_worker_session_digest: string;
   key_id: string;
   claim_request_id: string;
@@ -325,6 +331,8 @@ export interface MaterializeCodexRuntimeJobInput {
   launch_lease_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   launch_token_hash: string;
   accepted_worker_session_digest: string;
   materialization_request_id: string;
@@ -337,6 +345,8 @@ export interface StartCodexRuntimeJobInput {
   runtime_job_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   idempotency_key: string;
   request_digest: string;
   runtime_evidence_digest: string;
@@ -347,7 +357,10 @@ export interface AppendCodexRuntimeJobEventInput {
   runtime_job_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   event_id: string;
+  idempotency_key: string;
   event_type: string;
   event_payload_json: Record<string, unknown>;
   request_digest: string;
@@ -398,6 +411,8 @@ export interface TerminalizeCodexRuntimeJobInput {
   launch_lease_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   terminal_status: NonNullable<CodexRuntimeJob['terminal_status']>;
   reason_code: string;
   terminal_result_json?: Record<string, unknown>;
@@ -422,6 +437,8 @@ export interface GetCodexLaunchLeaseStatusInput {
   launch_lease_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   now: string;
 }
 
@@ -1100,6 +1117,16 @@ export interface DeliveryRepository {
   createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
     input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult>;
+  pollCodexRuntimeJobs(input: PollCodexRuntimeJobsInput): Promise<CodexRuntimeJob[]>;
+  acceptCodexRuntimeJob(input: AcceptCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  claimCodexLaunchTokenEnvelope(input: ClaimCodexLaunchTokenEnvelopeInput): Promise<CodexLaunchTokenEnvelope>;
+  materializeCodexRuntimeJob(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization>;
+  startCodexRuntimeJob(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  appendCodexRuntimeJobEvent(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob>;
+  cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  recoverStaleCodexRuntimeJobs(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult>;
+  getCodexLaunchLeaseStatus(input: GetCodexLaunchLeaseStatusInput): Promise<CodexLaunchLease>;
   createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLeaseWithToken>;
   materializeCodexLaunchLease(input: MaterializeCodexLaunchLeaseInput): Promise<CodexLaunchMaterialization>;
   terminalizeCodexLaunchLease(input: TerminalizeCodexLaunchLeaseInput): Promise<CodexLaunchLease>;

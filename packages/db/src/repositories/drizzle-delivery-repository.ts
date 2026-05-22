@@ -123,7 +123,11 @@ import {
 } from '../schema';
 import type {
   ClaimAutomationActionRunInput,
+  AcceptCodexRuntimeJobInput,
+  AppendCodexRuntimeJobEventInput,
+  CancelCodexRuntimeJobInput,
   ClaimNextAutomationActionRunInput,
+  ClaimCodexLaunchTokenEnvelopeInput,
   ClaimCommandIdempotencyInput,
   ClaimExecutionPackageGenerationRunInput,
   CompleteAutomationActionRunInput,
@@ -144,15 +148,20 @@ import type {
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   GetClaimedAutomationActionRunInput,
+  GetCodexLaunchLeaseStatusInput,
   GetCodexRuntimeStatusInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
+  MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
   PendingWorkspaceBundleInput,
+  PollCodexRuntimeJobsInput,
   DeliveryRepository,
+  RecoverStaleCodexRuntimeJobsInput,
+  RecoverStaleCodexRuntimeJobsResult,
   RecoverStaleCodexWorkerLeasesInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
@@ -166,6 +175,8 @@ import type {
   SaveExecutionPackageGenerationPackageInput,
   SetAutomationProjectSettingsInput,
   SupersedeExecutionPackageGenerationRunInput,
+  StartCodexRuntimeJobInput,
+  TerminalizeCodexRuntimeJobInput,
   TerminalizeCodexLaunchLeaseInput,
   TraceArtifactRefRecord,
   TraceEventRecord,
@@ -1304,6 +1315,46 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.withAdvisoryLocks(this.codexRuntimeJobCreateLockKeys(input), async (repository) =>
       (repository as DrizzleDeliveryRepository).createOrReplayCodexRuntimeJobWithLeaseAndEnvelopeUnlocked(input),
     );
+  }
+
+  async pollCodexRuntimeJobs(_input: PollCodexRuntimeJobsInput): Promise<CodexRuntimeJob[]> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async acceptCodexRuntimeJob(_input: AcceptCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async claimCodexLaunchTokenEnvelope(_input: ClaimCodexLaunchTokenEnvelopeInput): Promise<CodexLaunchTokenEnvelope> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async materializeCodexRuntimeJob(_input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async startCodexRuntimeJob(_input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async appendCodexRuntimeJobEvent(_input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async cancelCodexRuntimeJob(_input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async terminalizeCodexRuntimeJob(_input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async recoverStaleCodexRuntimeJobs(_input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
+  }
+
+  async getCodexLaunchLeaseStatus(_input: GetCodexLaunchLeaseStatusInput): Promise<CodexLaunchLease> {
+    throw new Error('Drizzle Codex runtime job state machine is implemented in a later task.');
   }
 
   private async createOrReplayCodexRuntimeJobWithLeaseAndEnvelopeUnlocked(
