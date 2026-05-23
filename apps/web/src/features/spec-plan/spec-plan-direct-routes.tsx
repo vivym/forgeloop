@@ -548,22 +548,17 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
   if (plan.approved_revision_id === undefined) {
     return (
       <Section title="Downstream package">
-        <InlineActions>
-          <span>This approved Plan does not have an approved revision recorded yet.</span>
-          <Link to="/packages">View package inventory</Link>
-        </InlineActions>
-        <InlineNotice title="Open the package inventory to find packages that may already exist for this work." tone="info" />
+        <InlineNotice
+          title="This approved Plan does not have an approved revision recorded yet. Task-scoped package evidence opens from Tasks."
+          tone="info"
+        />
       </Section>
     );
   }
 
   return (
     <Section title="Downstream package">
-      <InlineActions>
-        <span>Package generation starts from the Packages workspace.</span>
-        <Link to={`/packages?plan_revision_id=${encodeURIComponent(plan.approved_revision_id)}`}>View package readiness</Link>
-      </InlineActions>
-      <InlineNotice title="Package generation is ready for this approved Plan. Open package readiness to continue." tone="success" />
+      <InlineNotice title="Package generation is ready for this approved Plan. Continue from the relevant Task evidence route." tone="success" />
     </Section>
   );
 }

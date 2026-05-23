@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe('responsive layout contract', () => {
   it('renders the shell with stable responsive landmarks', async () => {
-    const screen = await renderRoute('/lanes');
+    const screen = await renderRoute('/my-work');
 
     expect(screen.getByRole('banner')).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
@@ -21,23 +21,23 @@ describe('responsive layout contract', () => {
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
-  it('renders dense tables with a card fallback contract', async () => {
-    const screen = await renderRoute('/runs');
+  it('renders target evidence scaffolds without old responsive class tokens', async () => {
+    const screen = await renderRoute('/tasks/task-web-product/runs/run-web-product');
 
-    expect(await screen.findByRole('table', { name: 'Runs' })).toBeTruthy();
-    expect(document.querySelector('[data-responsive-card-list]')).not.toBeNull();
+    expect(await screen.findByRole('heading', { name: 'Task Run' })).toBeTruthy();
+    expect(screen.getByRole('main')).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
-  it('keeps 768px tablet layouts in table mode instead of mobile card mode', async () => {
+  it('keeps 768px tablet layouts in mobile drawer mode until navigation opens', async () => {
     vi.stubGlobal('innerWidth', 768);
     vi.stubGlobal('matchMedia', createMatchMedia(768));
 
-    const screen = await renderRoute('/runs');
+    const screen = await renderRoute('/reports');
 
-    expect(await screen.findByRole('table', { name: 'Runs' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
     await waitFor(() => {
-      const responsiveCards = screen.getByRole('list', { name: 'Runs cards' });
-      expect(responsiveCards.querySelectorAll('[role="listitem"]').length).toBe(0);
+      expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
     });
   });
 });
