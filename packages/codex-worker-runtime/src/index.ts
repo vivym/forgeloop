@@ -7,6 +7,8 @@ export * from './envelope-crypto.js';
 export * from './fake-docker-runner.js';
 export * from './local-worker.js';
 export * from './network-policy.js';
+export * from './remote-worker-client.js';
+export * from './runtime-job-artifacts.js';
 export * from './run-session-driver.js';
 export * from './scavenger.js';
 export * from './task-filesystem.js';
