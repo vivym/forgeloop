@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { objectRefSchema } from './product-object-ref.js';
+import { productObjectRefSchema } from './product-object-ref.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const queryBooleanSchema = z.preprocess((value) => {
@@ -20,9 +20,6 @@ const queryBooleanSchema = z.preprocess((value) => {
   }
   return value;
 }, z.boolean());
-
-export const productObjectRefSchema = objectRefSchema;
-export type ProductObjectRef = z.infer<typeof productObjectRefSchema>;
 
 export const productListQuerySchema = z
   .object({

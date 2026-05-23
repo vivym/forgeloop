@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bugDetailSchema,
   bugListItemSchema,
+  brainstormingSessionSchema,
   editableObjectRefSchema,
   initiativeDetailSchema,
   initiativeListItemSchema,
@@ -10,6 +11,7 @@ import {
   objectRefSchema,
   planDetailSchema,
   pipelineResponseSchema,
+  productObjectRefSchema,
   productListQuerySchema,
   productListItemSchema,
   requirementDetailSchema,
@@ -23,6 +25,100 @@ import {
 } from '@forgeloop/contracts';
 
 describe('project management typed object contracts', () => {
+  it('uses AI-native typed product refs and rejects legacy task/plan/work_item refs', () => {
+    expect(productObjectRefSchema.parse({ type: 'development_plan', id: 'dp-1' })).toMatchObject({
+      type: 'development_plan',
+    });
+    expect(
+      productObjectRefSchema.parse({
+        type: 'development_plan_item',
+        id: 'dpi-1',
+        development_plan_id: 'dp-1',
+      }),
+    ).toMatchObject({
+      type: 'development_plan_item',
+    });
+    expect(
+      productObjectRefSchema.parse({
+        type: 'execution_plan_revision',
+        id: 'epr-1',
+        execution_plan_id: 'ep-1',
+      }),
+    ).toMatchObject({
+      type: 'execution_plan_revision',
+    });
+    expect(() => productObjectRefSchema.parse({ type: 'work_item', id: 'wi-1' })).toThrow();
+    expect(() => productObjectRefSchema.parse({ type: 'task', id: 'task-1' })).toThrow();
+    expect(() => productObjectRefSchema.parse({ type: 'plan', id: 'plan-1' })).toThrow();
+  });
+
+  it('requires persisted brainstorming evidence before a boundary can approve Spec generation', () => {
+    const session = brainstormingSessionSchema.parse({
+      id: 'bs-1',
+      revision_id: 'bs-rev-1',
+      source_ref: { type: 'requirement', id: 'req-1', revision_id: 'req-rev-1' },
+      development_plan_id: 'dp-1',
+      development_plan_item_id: 'dpi-1',
+      development_plan_item_revision_id: 'dpi-rev-1',
+      context_manifest_id: 'cm-1',
+      context_manifest_revision_id: 'cm-rev-1',
+      questions: [
+        {
+          id: 'q-1',
+          text: 'Which repo is in scope?',
+          author_id: 'codex-runtime',
+          created_at: '2026-05-24T00:00:00.000Z',
+          status: 'answered',
+        },
+      ],
+      answers: [
+        {
+          id: 'a-1',
+          question_id: 'q-1',
+          text: 'Only apps/web.',
+          actor_id: 'actor-tech',
+          created_at: '2026-05-24T00:01:00.000Z',
+        },
+      ],
+      decisions: [
+        {
+          id: 'd-1',
+          text: 'Keep backend out of scope.',
+          actor_id: 'actor-tech',
+          rationale: 'UI-only item.',
+          created_at: '2026-05-24T00:02:00.000Z',
+        },
+      ],
+      approval_state: 'approved',
+      boundary_summary_id: 'boundary-1',
+      approver_actor_id: 'actor-tech',
+      approved_at: '2026-05-24T00:03:00.000Z',
+    });
+    expect(session.approval_state).toBe('approved');
+  });
+
+  it('rejects boundary approval without recorded questions, answers, and decisions', () => {
+    expect(() =>
+      brainstormingSessionSchema.parse({
+        id: 'bs-1',
+        revision_id: 'bs-rev-1',
+        source_ref: { type: 'requirement', id: 'req-1' },
+        development_plan_id: 'dp-1',
+        development_plan_item_id: 'dpi-1',
+        development_plan_item_revision_id: 'dpi-rev-1',
+        context_manifest_id: 'cm-1',
+        context_manifest_revision_id: 'cm-rev-1',
+        questions: [],
+        answers: [],
+        decisions: [],
+        approval_state: 'approved',
+        boundary_summary_id: 'boundary-1',
+        approver_actor_id: 'actor-tech',
+        approved_at: '2026-05-24T00:03:00.000Z',
+      }),
+    ).toThrow(/questions/i);
+  });
+
   it('accepts typed product refs and keeps work_item storage refs internal only', () => {
     expect(objectRefSchema.parse({ type: 'requirement', id: 'wi-req' })).toEqual({
       type: 'requirement',
@@ -314,8 +410,8 @@ describe('project management typed object contracts', () => {
     expect(() =>
       productListItemSchema.parse({
         id: 'row-2',
-        object: { type: 'execution_package', id: 'pkg-1', title: 'Package' },
-        title: 'Package',
+        object: { type: 'execution', id: 'exec-1', title: 'Execution' },
+        title: 'Execution',
         package_state: {
           work_item_id: 'wi-1',
           spec_revision_id: 'spec-rev-1',
@@ -330,10 +426,10 @@ describe('project management typed object contracts', () => {
     expect(
       productListItemSchema.parse({
         id: 'row-3',
-        object: { type: 'execution_package', id: 'pkg-1', title: 'Package' },
-        title: 'Package',
+        object: { type: 'execution', id: 'exec-1', title: 'Execution' },
+        title: 'Execution',
         package_state: {
-          scope_ref: { type: 'requirement', id: 'req-1' },
+          scope_ref: { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
           spec_revision_id: 'spec-rev-1',
           plan_revision_id: 'plan-rev-1',
         },
@@ -341,7 +437,7 @@ describe('project management typed object contracts', () => {
       }),
     ).toMatchObject({
       package_state: {
-        scope_ref: { type: 'requirement', id: 'req-1' },
+        scope_ref: { type: 'development_plan_item', id: 'dpi-1' },
       },
     });
   });
