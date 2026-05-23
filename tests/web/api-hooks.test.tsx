@@ -16,12 +16,15 @@ import {
   useLinkReleaseExecutionPackageMutation,
   useLinkReleaseWorkItemMutation,
   useMarkPackageReadyMutation,
+  useMyWorkQuery,
   usePackagesQuery,
   usePipelineQuery,
   useRunPackageMutation,
   useProductActionCommandMutation,
   useProductLaneQuery,
   useProductWorkItemsQuery,
+  useRequirementQuery,
+  useRequirementsQuery,
   useRequestPlanChangesMutation,
   useRequestSpecChangesMutation,
   useSpecsQuery,
@@ -32,9 +35,29 @@ import {
   useWorkItemCockpitQuery,
   useWorkItemsQuery,
 } from '../../apps/web/src/shared/api/hooks';
+import { createForgeloopCommandApi } from '../../apps/web/src/shared/api/commands';
+import { createForgeloopQueryApi } from '../../apps/web/src/shared/api/query';
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
 import { installProductApiMock } from './fixtures/product-api-mock';
-import { actorId, executionPackage, planRevision, projectId, release, workItem } from './fixtures/product-data';
+import {
+  actorId,
+  bugDetail,
+  bugListResponse,
+  executionPackage,
+  initiativeDetail,
+  initiativeListResponse,
+  myWorkQueueResponse,
+  planRevision,
+  projectId,
+  release,
+  requirementDetail,
+  requirementListResponse,
+  taskDetail,
+  taskListResponse,
+  techDebtDetail,
+  techDebtListResponse,
+  workItem,
+} from './fixtures/product-data';
 
 const workItemScopeRef = { type: 'requirement', id: workItem.id, title: workItem.title } as const;
 
@@ -98,6 +121,20 @@ describe('Web product API hooks', () => {
         cursor: 'cursor-1',
       }),
     ).toEqual(['specs', { project_id: 'proj', status: 'approved', limit: 100, cursor: 'cursor-1' }]);
+  });
+
+  it('uses stable query keys for My Work and typed object pages', () => {
+    expect(queryKeys.myWork({ project_id: 'proj', actor_id: 'actor-product' })).toEqual([
+      'my-work',
+      { project_id: 'proj', actor_id: 'actor-product' },
+    ]);
+    expect(queryKeys.requirements({ project_id: 'proj', limit: 25 })).toEqual([
+      'requirements',
+      { project_id: 'proj', limit: 25 },
+    ]);
+    expect(queryKeys.requirement('req-1')).toEqual(['requirement', 'req-1']);
+    expect(queryKeys.tasks({ project_id: 'proj' })).toEqual(['tasks', { project_id: 'proj' }]);
+    expect(queryKeys.task('task-1')).toEqual(['task', 'task-1']);
   });
 
   it('omits owner filters from product Work Item registry query keys', () => {
@@ -364,6 +401,130 @@ describe('Web product API hooks', () => {
 
     unmount();
     queryClient.clear();
+  });
+
+  it('fetches My Work and typed object pages through query hooks', async () => {
+    const fetchMock = installProductApiMock();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const myWork = renderHook(() => useMyWorkQuery({ project_id: projectId, actor_id: actorId }), { wrapper });
+    await waitFor(() => expect(myWork.result.current.isSuccess).toBe(true));
+    expect(myWork.result.current.data?.items.map((item) => item.href)).toEqual(
+      expect.arrayContaining(['/requirements/req-1', '/tasks/task-1']),
+    );
+
+    const requirements = renderHook(() => useRequirementsQuery({ project_id: projectId, limit: 100 }), { wrapper });
+    await waitFor(() => expect(requirements.result.current.isSuccess).toBe(true));
+    expect(requirements.result.current.data?.items[0]?.ref).toEqual({ type: 'requirement', id: 'req-1' });
+
+    const requirement = renderHook(() => useRequirementQuery('req-1'), { wrapper });
+    await waitFor(() => expect(requirement.result.current.isSuccess).toBe(true));
+    expect(requirement.result.current.data?.ref).toEqual({ type: 'requirement', id: 'req-1' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/query/my-work?project_id=${projectId}&actor_id=${actorId}`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/query/requirements?project_id=${projectId}&limit=100`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3000/query/requirements/req-1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+
+    myWork.unmount();
+    requirements.unmount();
+    requirement.unmount();
+    queryClient.clear();
+  });
+
+  it('exposes typed query client methods for all Task 7 object types', async () => {
+    const fetchMock = installProductApiMock();
+    const api = createForgeloopQueryApi();
+
+    await expect(api.listMyWork({ project_id: projectId, actor_id: actorId })).resolves.toEqual(myWorkQueueResponse);
+    await expect(api.listRequirements({ project_id: projectId, limit: 100 })).resolves.toEqual(requirementListResponse);
+    await expect(api.getRequirement('req-1')).resolves.toEqual(requirementDetail);
+    await expect(api.listInitiatives({ project_id: projectId, limit: 100 })).resolves.toEqual(initiativeListResponse);
+    await expect(api.getInitiative('init-1')).resolves.toEqual(initiativeDetail);
+    await expect(api.listTechDebt({ project_id: projectId, limit: 100 })).resolves.toEqual(techDebtListResponse);
+    await expect(api.getTechDebt('td-1')).resolves.toEqual(techDebtDetail);
+    await expect(api.listTasks({ project_id: projectId, limit: 100 })).resolves.toEqual(taskListResponse);
+    await expect(api.getTask('task-1')).resolves.toEqual(taskDetail);
+    await expect(api.listBugs({ project_id: projectId, limit: 100 })).resolves.toEqual(bugListResponse);
+    await expect(api.getBug('bug-1')).resolves.toEqual(bugDetail);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3000/query/tasks/task-1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('uses typed create wrappers without public generic Work Item routes for Tasks', async () => {
+    const fetchMock = installProductApiMock({
+      'POST /work-items': { ...workItem, id: 'req-created', kind: 'requirement' },
+      'POST /tasks': {
+        id: 'task-created',
+        object_ref: { type: 'task', id: 'task-created' },
+        title: 'Developer task',
+        stale_state: 'current',
+        package_generation_eligible: false,
+        href: '/tasks/task-created',
+      },
+    });
+    const api = createForgeloopCommandApi();
+
+    await api.createRequirement({
+      project_id: projectId,
+      title: 'Checkout requirement',
+      goal: 'Keep checkout valid.',
+      success_criteria: ['Invalid payment states are blocked'],
+      priority: 'P1',
+      risk: 'medium',
+      driver_actor_id: actorId,
+      intake_context: {
+        type: 'requirement',
+        stakeholder_problem: 'Checkout accepts invalid payment state.',
+        desired_outcome: 'Checkout validation blocks invalid payment state.',
+        acceptance_criteria: ['Invalid state cannot continue'],
+        in_scope: ['Checkout validation'],
+      },
+    });
+    await api.createTask({
+      project_id: projectId,
+      title: 'Developer task',
+      execution_brief: 'Implement checkout validation.',
+      acceptance_checklist: ['Focused route tests pass'],
+      parent_ref: { type: 'requirement', id: 'req-1' },
+      actor_id: actorId,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3000/work-items',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"kind":"requirement"'),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3000/tasks',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"execution_brief":"Implement checkout validation."'),
+      }),
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      'http://localhost:3000/work-items',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"execution_brief":"Implement checkout validation."'),
+      }),
+    );
   });
 
   it('fetches Product Lane projections through shared hooks', async () => {

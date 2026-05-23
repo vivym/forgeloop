@@ -1,12 +1,3 @@
-import { ScaffoldRoute } from '../_scaffold';
+import { RequirementsRoute } from '../../../features/requirements/requirements-routes';
 
-export default function RequirementsRoute() {
-  return (
-    <ScaffoldRoute
-      notice="Requirements inventory is loading from typed requirement read models."
-      sectionTitle="Requirement backlog"
-      subtitle="Requirement narratives, specs, plans, and evidence."
-      title="Requirements"
-    />
-  );
-}
+export default RequirementsRoute;

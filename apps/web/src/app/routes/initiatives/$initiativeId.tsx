@@ -1,12 +1,3 @@
-import { ScaffoldRoute } from '../_scaffold';
+import { InitiativeDetailRoute } from '../../../features/initiatives/initiatives-routes';
 
-export default function InitiativeDetailRoute() {
-  return (
-    <ScaffoldRoute
-      notice="Initiative detail is loading from typed initiative read models."
-      sectionTitle="Initiative detail"
-      subtitle="Narrative, requirements, delivery state, and evidence."
-      title="Initiative"
-    />
-  );
-}
+export default InitiativeDetailRoute;

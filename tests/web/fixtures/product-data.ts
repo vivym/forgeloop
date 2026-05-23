@@ -255,6 +255,208 @@ export const timeline = [
   },
 ];
 
+export const requirementListItem = {
+  id: 'req-1',
+  ref: { type: 'requirement', id: 'req-1' },
+  title: 'Checkout requirement',
+  status: 'planning/active/open',
+  priority: 'P1',
+  risk: 'medium',
+  driver_actor_id: actorId,
+  phase: 'planning',
+  updated_at: '2026-05-18T01:00:00.000Z',
+} as const;
+
+export const requirementDetail = {
+  id: requirementListItem.id,
+  ref: requirementListItem.ref,
+  title: requirementListItem.title,
+  status: requirementListItem.status,
+  priority: requirementListItem.priority,
+  risk: requirementListItem.risk,
+  driver_actor_id: requirementListItem.driver_actor_id,
+  updated_at: requirementListItem.updated_at,
+  narrative_markdown: 'Checkout validation must block bad payment states before submission.',
+  evidence_refs: [],
+  attachment_refs: [],
+  spec_ref: { type: 'spec', id: 'spec-checkout' },
+  plan_ref: { type: 'plan', id: 'plan-checkout' },
+  task_refs: [{ type: 'task', id: 'task-1' }],
+  bug_refs: [{ type: 'bug', id: 'bug-1' }],
+  release_refs: [{ type: 'release', id: release.id }],
+} as const;
+
+export const initiativeListItem = {
+  id: 'init-1',
+  ref: { type: 'initiative', id: 'init-1' },
+  title: 'Checkout reliability initiative',
+  status: 'planning/active/open',
+  priority: 'P1',
+  risk: 'medium',
+  driver_actor_id: actorId,
+  business_outcome: 'Coordinate checkout reliability.',
+  updated_at: '2026-05-18T01:01:00.000Z',
+} as const;
+
+export const initiativeDetail = {
+  id: initiativeListItem.id,
+  ref: initiativeListItem.ref,
+  title: initiativeListItem.title,
+  status: initiativeListItem.status,
+  priority: initiativeListItem.priority,
+  risk: initiativeListItem.risk,
+  driver_actor_id: initiativeListItem.driver_actor_id,
+  updated_at: initiativeListItem.updated_at,
+  narrative_markdown: 'Coordinate checkout reliability across requirements, bugs, and task execution.',
+  evidence_refs: [],
+  attachment_refs: [],
+  child_refs: [{ type: 'requirement', id: 'req-1' }],
+  milestone_intent: 'Checkout validation readiness',
+  release_refs: [{ type: 'release', id: release.id }],
+} as const;
+
+export const techDebtListItem = {
+  id: 'td-1',
+  ref: { type: 'tech_debt', id: 'td-1' },
+  title: 'Checkout validation debt',
+  status: 'planning/active/open',
+  priority: 'P2',
+  risk: 'medium',
+  driver_actor_id: actorId,
+  affected_modules: ['apps/web/src/features/checkout'],
+  updated_at: '2026-05-18T01:02:00.000Z',
+} as const;
+
+export const techDebtDetail = {
+  ...techDebtListItem,
+  narrative_markdown: 'Validation logic is duplicated between form state and command guards.',
+  evidence_refs: [],
+  attachment_refs: [],
+  validation_strategy: 'Focused route tests and API command tests.',
+  spec_ref: { type: 'spec', id: 'spec-checkout' },
+  plan_ref: { type: 'plan', id: 'plan-checkout' },
+  task_refs: [{ type: 'task', id: 'task-1' }],
+} as const;
+
+export const taskListItem = {
+  id: 'task-1',
+  ref: { type: 'task', id: 'task-1' },
+  title: 'Developer task',
+  status: 'ready',
+  parent_ref: { type: 'requirement', id: 'req-1' },
+  driver_actor_id: actorId,
+  package_generation_eligible: false,
+  updated_at: '2026-05-18T01:03:00.000Z',
+} as const;
+
+export const taskDetail = {
+  ...taskListItem,
+  narrative_markdown: 'Implement checkout guard and keep the task evidence under the typed Task route.',
+  acceptance_checklist: ['Checkout route test passes', 'Command wrapper uses /tasks'],
+  controlling_spec_revision_id: 'spec-revision-checkout',
+  controlling_plan_revision_id: 'plan-revision-checkout',
+  controlling_spec_revision_authority: 'current_approved',
+  controlling_plan_revision_authority: 'current_approved',
+  stale_state: 'current',
+  attachment_refs: [],
+} as const;
+
+export const bugListItem = {
+  id: 'bug-1',
+  ref: { type: 'bug', id: 'bug-1' },
+  title: 'Checkout regression',
+  status: 'validation/active/open',
+  priority: 'P0',
+  risk: 'high',
+  driver_actor_id: actorId,
+  severity: 'high',
+  updated_at: '2026-05-18T01:04:00.000Z',
+} as const;
+
+export const bugDetail = {
+  id: bugListItem.id,
+  ref: bugListItem.ref,
+  title: bugListItem.title,
+  status: bugListItem.status,
+  priority: bugListItem.priority,
+  risk: bugListItem.risk,
+  driver_actor_id: bugListItem.driver_actor_id,
+  updated_at: bugListItem.updated_at,
+  narrative_markdown: 'Regression notes stay in Markdown while reproduction data remains structured.',
+  evidence_refs: [],
+  attachment_refs: [],
+  observed_behavior: 'Checkout accepts invalid cards.',
+  expected_behavior: 'Checkout blocks invalid cards.',
+  reproduction_steps: ['Open checkout', 'Submit an invalid card'],
+  task_refs: [{ type: 'task', id: 'task-1' }],
+} as const;
+
+export const requirementListResponse = { items: [requirementListItem], degraded_sources: [] } as const;
+export const initiativeListResponse = { items: [initiativeListItem], degraded_sources: [] } as const;
+export const techDebtListResponse = { items: [techDebtListItem], degraded_sources: [] } as const;
+export const taskListResponse = { items: [taskListItem], degraded_sources: [] } as const;
+export const bugListResponse = { items: [bugListItem], degraded_sources: [] } as const;
+
+export const myWorkQueueResponse = {
+  items: [
+    {
+      id: 'product:req-1',
+      object_ref: { type: 'requirement', id: 'req-1' },
+      title: 'Checkout requirement',
+      attention_reason: 'product_attention',
+      expected_action: 'Clarify acceptance criteria',
+      actor_id: actorId,
+      href: '/requirements/req-1',
+    },
+    {
+      id: 'tech-lead:init-1',
+      object_ref: { type: 'initiative', id: 'init-1' },
+      title: 'Checkout reliability initiative',
+      attention_reason: 'tech_lead_attention',
+      expected_action: 'Review technical breakdown',
+      actor_id: actorId,
+      href: '/initiatives/init-1',
+    },
+    {
+      id: 'developer:task-1',
+      object_ref: { type: 'task', id: 'task-1' },
+      title: 'Developer task',
+      attention_reason: 'developer_attention',
+      expected_action: 'Start implementation',
+      actor_id: actorId,
+      href: '/tasks/task-1',
+    },
+    {
+      id: 'qa:bug-1',
+      object_ref: { type: 'bug', id: 'bug-1' },
+      title: 'Checkout regression',
+      attention_reason: 'qa_attention',
+      expected_action: 'Verify reproduction',
+      actor_id: actorId,
+      href: '/bugs/bug-1',
+    },
+    {
+      id: 'release-owner:release-web-product',
+      object_ref: { type: 'release', id: release.id },
+      title: 'Release readiness decision',
+      attention_reason: 'release_owner_attention',
+      expected_action: 'Review rollout blockers',
+      actor_id: 'actor-release-owner',
+      href: `/releases/${release.id}`,
+    },
+    {
+      id: 'manager:td-1',
+      object_ref: { type: 'tech_debt', id: 'td-1' },
+      title: 'Checkout validation debt',
+      attention_reason: 'manager_attention',
+      expected_action: 'Review delivery risk',
+      actor_id: actorId,
+      href: '/tech-debt/td-1',
+    },
+  ],
+  degraded_sources: [],
+} as const;
+
 const fixtureUpdatedAt = '2026-05-18T00:40:00.000Z';
 
 export const productActionFixtures = {

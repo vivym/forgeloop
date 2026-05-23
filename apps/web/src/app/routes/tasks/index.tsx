@@ -1,12 +1,3 @@
-import { ScaffoldRoute } from '../_scaffold';
+import { TasksRoute } from '../../../features/tasks/tasks-routes';
 
-export default function TasksRoute() {
-  return (
-    <ScaffoldRoute
-      notice="Tasks inventory is loading from first-class task read models."
-      sectionTitle="Task backlog"
-      subtitle="Execution work, evidence packages, runs, and reviews."
-      title="Tasks"
-    />
-  );
-}
+export default TasksRoute;

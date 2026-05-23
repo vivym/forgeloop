@@ -1,12 +1,3 @@
-import { ScaffoldRoute } from '../_scaffold';
+import { NewTaskRoute } from '../../../features/tasks/tasks-routes';
 
-export default function NewTaskRoute() {
-  return (
-    <ScaffoldRoute
-      notice="Task creation will write through first-class task commands."
-      sectionTitle="New task"
-      subtitle="Capture execution work and task ownership."
-      title="New Task"
-    />
-  );
-}
+export default NewTaskRoute;

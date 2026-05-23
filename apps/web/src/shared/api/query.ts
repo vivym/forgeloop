@@ -1,10 +1,22 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
 import { normalizeProductWorkItemRegistryQuery } from './query-keys';
+import { z } from 'zod';
 import {
+  bugDetailSchema,
+  bugListItemSchema,
+  initiativeDetailSchema,
+  initiativeListItemSchema,
+  myWorkQueueItemSchema,
   pipelineResponseSchema,
   productLaneResponseSchema,
   productListResponseSchema,
   deliveryRunReadinessResponseSchema,
+  requirementDetailSchema,
+  requirementListItemSchema,
+  taskDetailSchema,
+  taskListItemSchema,
+  techDebtDetailSchema,
+  techDebtListItemSchema,
   workItemCockpitResponseSchema,
 } from '@forgeloop/contracts';
 import type {
@@ -27,6 +39,8 @@ export interface ProjectQuery {
 }
 
 export type ProductRegistryQuery = ListProductQuery;
+export type MyWorkQuery = Pick<ListProductQuery, 'project_id' | 'actor_id' | 'cursor' | 'limit'>;
+export type ProjectManagementListQuery = Pick<ListProductQuery, 'project_id' | 'status' | 'risk' | 'driver_actor_id' | 'cursor' | 'limit'>;
 export type ProductWorkItemRegistryQuery = Pick<
   ListProductQuery,
   'project_id' | 'actor_id' | 'status' | 'phase' | 'gate_state' | 'resolution' | 'risk' | 'driver_actor_id' | 'blocked' | 'stale' | 'cursor' | 'limit'
@@ -43,10 +57,59 @@ const queryString = (params: object = {}) => {
   return encoded ? `?${encoded}` : '';
 };
 
+const projectManagementQueueResponseSchema = z
+  .object({
+    items: z.array(myWorkQueueItemSchema),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
+
+const requirementListResponseSchema = z.object({ items: z.array(requirementListItemSchema) }).passthrough();
+const initiativeListResponseSchema = z.object({ items: z.array(initiativeListItemSchema) }).passthrough();
+const techDebtListResponseSchema = z.object({ items: z.array(techDebtListItemSchema) }).passthrough();
+const taskListResponseSchema = z.object({ items: z.array(taskListItemSchema) }).passthrough();
+const bugListResponseSchema = z.object({ items: z.array(bugListItemSchema) }).passthrough();
+
 export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const { request } = createApiContext(options);
 
   const productMethods = {
+    listMyWork: async (query: MyWorkQuery) =>
+      projectManagementQueueResponseSchema.parse(
+        await request<unknown>(`/query/my-work${queryString(query)}`),
+      ),
+    listRequirements: async (query: ProjectManagementListQuery) =>
+      requirementListResponseSchema.parse(
+        await request<unknown>(`/query/requirements${queryString(query)}`),
+      ),
+    getRequirement: async (requirementId: string) =>
+      requirementDetailSchema.parse(
+        await request<unknown>(`/query/requirements/${encodeURIComponent(requirementId)}`),
+      ),
+    listInitiatives: async (query: ProjectManagementListQuery) =>
+      initiativeListResponseSchema.parse(
+        await request<unknown>(`/query/initiatives${queryString(query)}`),
+      ),
+    getInitiative: async (initiativeId: string) =>
+      initiativeDetailSchema.parse(
+        await request<unknown>(`/query/initiatives/${encodeURIComponent(initiativeId)}`),
+      ),
+    listTechDebt: async (query: ProjectManagementListQuery) =>
+      techDebtListResponseSchema.parse(
+        await request<unknown>(`/query/tech-debt${queryString(query)}`),
+      ),
+    getTechDebt: async (techDebtId: string) =>
+      techDebtDetailSchema.parse(
+        await request<unknown>(`/query/tech-debt/${encodeURIComponent(techDebtId)}`),
+      ),
+    listTasks: async (query: ProjectManagementListQuery) =>
+      taskListResponseSchema.parse(await request<unknown>(`/query/tasks${queryString(query)}`)),
+    getTask: async (taskId: string) =>
+      taskDetailSchema.parse(await request<unknown>(`/query/tasks/${encodeURIComponent(taskId)}`)),
+    listBugs: async (query: ProjectManagementListQuery) =>
+      bugListResponseSchema.parse(await request<unknown>(`/query/bugs${queryString(query)}`)),
+    getBug: async (bugId: string) =>
+      bugDetailSchema.parse(await request<unknown>(`/query/bugs/${encodeURIComponent(bugId)}`)),
     getPipeline: async (query: ProjectQuery) =>
       pipelineResponseSchema.parse(await request<unknown>(`/query/pipeline${queryString(query)}`)) as PipelineResponse,
     listWorkItems: async (query: ProductWorkItemRegistryQuery) =>

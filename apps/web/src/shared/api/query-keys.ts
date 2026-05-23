@@ -1,4 +1,4 @@
-import type { ProductWorkItemRegistryQuery } from './query';
+import type { MyWorkQuery, ProductWorkItemRegistryQuery, ProjectManagementListQuery } from './query';
 import type { AttachmentOwnerObjectType, ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
 
 export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
@@ -68,7 +68,34 @@ export const normalizeProductWorkItemRegistryQuery = (
   ...(query.limit === undefined ? {} : { limit: query.limit }),
 });
 
+export const normalizeMyWorkQuery = (query: MyWorkQuery): MyWorkQuery => ({
+  project_id: query.project_id,
+  ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
+  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
+
+export const normalizeProjectManagementListQuery = (query: ProjectManagementListQuery): ProjectManagementListQuery => ({
+  project_id: query.project_id,
+  ...(query.status === undefined ? {} : { status: query.status }),
+  ...(query.risk === undefined ? {} : { risk: query.risk }),
+  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
+  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
+
 export const queryKeys = {
+  myWork: (query: MyWorkQuery) => ['my-work', normalizeMyWorkQuery(query)],
+  requirements: (query: ProjectManagementListQuery) => ['requirements', normalizeProjectManagementListQuery(query)],
+  requirement: (requirementId: string | undefined) => ['requirement', requirementId],
+  initiatives: (query: ProjectManagementListQuery) => ['initiatives', normalizeProjectManagementListQuery(query)],
+  initiative: (initiativeId: string | undefined) => ['initiative', initiativeId],
+  techDebt: (query: ProjectManagementListQuery) => ['tech-debt', normalizeProjectManagementListQuery(query)],
+  techDebtDetail: (techDebtId: string | undefined) => ['tech-debt-detail', techDebtId],
+  tasks: (query: ProjectManagementListQuery) => ['tasks', normalizeProjectManagementListQuery(query)],
+  task: (taskId: string | undefined) => ['task', taskId],
+  bugs: (query: ProjectManagementListQuery) => ['bugs', normalizeProjectManagementListQuery(query)],
+  bug: (bugId: string | undefined) => ['bug', bugId],
   productLane: (laneId: ProductLaneId, query: ProductLaneQuery) => ['product-lanes', laneId, normalizeProductLaneQuery(query)],
   pipeline: (projectId: string) => ['pipeline', { projectId }],
   workItems: (projectId: string) => ['work-items', { projectId }],

@@ -19,6 +19,7 @@ import type {
   ListReleasesQuery,
   MarkPackageReadyBody,
   MarkdownDocument,
+  ObjectRef,
   OverrideApproveReleaseBody,
   PatchExecutionPackageBody,
   PatchReleaseBody,
@@ -49,6 +50,7 @@ import type {
   TechDebtDetail,
   UnlinkReleaseScopeBody,
   WorkItem,
+  WorkItemIntakeContext,
 } from './types';
 
 const runEventsQuery = (options: { after?: string; streamToken?: string }) => {
@@ -98,6 +100,35 @@ const releaseActorId = (body: { actor_id: string }) => body.actor_id;
 const actorCommandActorId = (body: ActorCommandBody) => body.actor_id;
 const reviewDecisionActorId = (body: ReviewDecisionBody) => body.reviewed_by_actor_id;
 const actorRequest = (actorId: string | undefined) => (actorId === undefined ? {} : { actorId });
+
+type TypedWorkItemCreateBody<K extends CreateWorkItemBody['kind']> = Omit<CreateWorkItemBody, 'kind' | 'intake_context'> & {
+  intake_context: Extract<WorkItemIntakeContext, { type: K }>;
+};
+
+export type CreateRequirementBody = TypedWorkItemCreateBody<'requirement'>;
+export type CreateInitiativeBody = TypedWorkItemCreateBody<'initiative'>;
+export type CreateTechDebtBody = TypedWorkItemCreateBody<'tech_debt'>;
+export type CreateBugBody = TypedWorkItemCreateBody<'bug'>;
+
+export interface CreateTaskBody {
+  project_id: string;
+  title: string;
+  execution_brief: string;
+  acceptance_checklist?: string[];
+  parent_ref?: ObjectRef;
+  controlling_spec_revision_id?: string;
+  controlling_plan_revision_id?: string;
+  actor_id?: string;
+}
+
+export interface CreateTaskResponse {
+  id: string;
+  object_ref: ObjectRef;
+  title: string;
+  stale_state: string;
+  package_generation_eligible: boolean;
+  href?: string;
+}
 
 export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
   const { baseUrl, request } = createApiContext(options);
@@ -194,6 +225,32 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       }),
     createWorkItem: async (body: CreateWorkItemBody) =>
       request<WorkItem>('/work-items', { method: 'POST', body: createWorkItemRequestSchema.parse(body) }),
+    createRequirement: (body: CreateRequirementBody) =>
+      request<WorkItem>('/work-items', {
+        method: 'POST',
+        body: createWorkItemRequestSchema.parse({ ...body, kind: 'requirement' }),
+      }),
+    createInitiative: (body: CreateInitiativeBody) =>
+      request<WorkItem>('/work-items', {
+        method: 'POST',
+        body: createWorkItemRequestSchema.parse({ ...body, kind: 'initiative' }),
+      }),
+    createTechDebt: (body: CreateTechDebtBody) =>
+      request<WorkItem>('/work-items', {
+        method: 'POST',
+        body: createWorkItemRequestSchema.parse({ ...body, kind: 'tech_debt' }),
+      }),
+    createBug: (body: CreateBugBody) =>
+      request<WorkItem>('/work-items', {
+        method: 'POST',
+        body: createWorkItemRequestSchema.parse({ ...body, kind: 'bug' }),
+      }),
+    createTask: (body: CreateTaskBody) =>
+      request<CreateTaskResponse>('/tasks', {
+        method: 'POST',
+        body,
+        ...(body.actor_id === undefined ? {} : { actorId: body.actor_id }),
+      }),
     listWorkItems: (projectId?: string) =>
       request<WorkItem[]>(`/work-items${projectId ? `?${new URLSearchParams({ project_id: projectId }).toString()}` : ''}`),
     getWorkItem: (workItemId: string) => request<WorkItem>(`/work-items/${encodeURIComponent(workItemId)}`),

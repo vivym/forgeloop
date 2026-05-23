@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 
 import { createForgeloopCommandApi } from './commands';
-import { createForgeloopQueryApi } from './query';
-import { normalizeProductLaneQuery, queryKeys } from './query-keys';
+import { createForgeloopQueryApi, type MyWorkQuery, type ProjectManagementListQuery } from './query';
+import { normalizeMyWorkQuery, normalizeProductLaneQuery, normalizeProjectManagementListQuery, queryKeys } from './query-keys';
 import type {
   CockpitResponse,
   AcknowledgeReleaseTestAcceptanceBody,
@@ -16,6 +16,7 @@ import type {
   ExecutionPackage,
   LinkReleaseScopeBody,
   ListProductQuery,
+  MarkdownDocument,
   OverrideApproveReleaseBody,
   PatchReleaseBody,
   PatchExecutionPackageBody,
@@ -76,6 +77,160 @@ export function useProductWorkItemsQuery(query: Pick<ListProductQuery, 'project_
   return useQuery({
     queryKey: queryKeys.productWorkItems(normalizedQuery),
     queryFn: () => createQueryApi().listWorkItems(normalizedQuery),
+  });
+}
+
+export function useMyWorkQuery(query: MyWorkQuery) {
+  const normalizedQuery = normalizeMyWorkQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.myWork(normalizedQuery),
+    queryFn: () => createQueryApi().listMyWork(normalizedQuery),
+  });
+}
+
+export function useRequirementsQuery(query: ProjectManagementListQuery) {
+  const normalizedQuery = normalizeProjectManagementListQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.requirements(normalizedQuery),
+    queryFn: () => createQueryApi().listRequirements(normalizedQuery),
+  });
+}
+
+export function useRequirementQuery(requirementId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.requirement(requirementId),
+    queryFn: () => createQueryApi().getRequirement(requiredId(requirementId, 'requirementId')),
+    enabled: requirementId !== undefined,
+  });
+}
+
+export function useInitiativesQuery(query: ProjectManagementListQuery) {
+  const normalizedQuery = normalizeProjectManagementListQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.initiatives(normalizedQuery),
+    queryFn: () => createQueryApi().listInitiatives(normalizedQuery),
+  });
+}
+
+export function useInitiativeQuery(initiativeId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.initiative(initiativeId),
+    queryFn: () => createQueryApi().getInitiative(requiredId(initiativeId, 'initiativeId')),
+    enabled: initiativeId !== undefined,
+  });
+}
+
+export function useTechDebtQuery(query: ProjectManagementListQuery) {
+  const normalizedQuery = normalizeProjectManagementListQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.techDebt(normalizedQuery),
+    queryFn: () => createQueryApi().listTechDebt(normalizedQuery),
+  });
+}
+
+export function useTechDebtDetailQuery(techDebtId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.techDebtDetail(techDebtId),
+    queryFn: () => createQueryApi().getTechDebt(requiredId(techDebtId, 'techDebtId')),
+    enabled: techDebtId !== undefined,
+  });
+}
+
+export function useTasksQuery(query: ProjectManagementListQuery) {
+  const normalizedQuery = normalizeProjectManagementListQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.tasks(normalizedQuery),
+    queryFn: () => createQueryApi().listTasks(normalizedQuery),
+  });
+}
+
+export function useTaskQuery(taskId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.task(taskId),
+    queryFn: () => createQueryApi().getTask(requiredId(taskId, 'taskId')),
+    enabled: taskId !== undefined,
+  });
+}
+
+export function useBugsQuery(query: ProjectManagementListQuery) {
+  const normalizedQuery = normalizeProjectManagementListQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.bugs(normalizedQuery),
+    queryFn: () => createQueryApi().listBugs(normalizedQuery),
+  });
+}
+
+export function useBugQuery(bugId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.bug(bugId),
+    queryFn: () => createQueryApi().getBug(requiredId(bugId, 'bugId')),
+    enabled: bugId !== undefined,
+  });
+}
+
+export function useUpdateRequirementNarrativeMutation(requirementId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: MarkdownDocument) => createCommandApi().updateRequirementNarrative(requiredId(requirementId, 'requirementId'), body),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.requirement(requirementId) }),
+      queryClient.invalidateQueries({ queryKey: ['requirements'] }),
+    ]),
+  });
+}
+
+export function useUpdateInitiativeNarrativeMutation(initiativeId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: MarkdownDocument) => createCommandApi().updateInitiativeNarrative(requiredId(initiativeId, 'initiativeId'), body),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.initiative(initiativeId) }),
+      queryClient.invalidateQueries({ queryKey: ['initiatives'] }),
+    ]),
+  });
+}
+
+export function useUpdateTechDebtNarrativeMutation(techDebtId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: MarkdownDocument) => createCommandApi().updateTechDebtNarrative(requiredId(techDebtId, 'techDebtId'), body),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.techDebtDetail(techDebtId) }),
+      queryClient.invalidateQueries({ queryKey: ['tech-debt'] }),
+    ]),
+  });
+}
+
+export function useUpdateTaskNarrativeMutation(taskId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: MarkdownDocument) => createCommandApi().updateTaskNarrative(requiredId(taskId, 'taskId'), body),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) }),
+      queryClient.invalidateQueries({ queryKey: ['tasks'] }),
+    ]),
+  });
+}
+
+export function useUpdateBugNarrativeMutation(bugId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: MarkdownDocument) => createCommandApi().updateBugNarrative(requiredId(bugId, 'bugId'), body),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.bug(bugId) }),
+      queryClient.invalidateQueries({ queryKey: ['bugs'] }),
+    ]),
   });
 }
 
