@@ -66,6 +66,7 @@ export class BrainstormingService {
       planLockedRepository.withDeliveryTransaction(async (repository) => {
         const plan = await this.requireDevelopmentPlan(input.development_plan_id, repository);
         const item = await this.requireDevelopmentPlanItem(input.development_plan_id, input.item_id, repository);
+        this.assertItemBoundaryNotApproved(item);
         const contextManifest = this.buildContextManifest(plan, item);
         await repository.saveContextManifest(contextManifest);
 
@@ -169,6 +170,7 @@ export class BrainstormingService {
 
           const plan = await this.requireDevelopmentPlan(session.development_plan_id, repository);
           const item = await this.requireDevelopmentPlanItem(session.development_plan_id, session.development_plan_item_id, repository);
+          this.assertItemBoundaryNotApproved(item);
           const approvedAt = this.runtime.now();
           const boundarySummaryId = this.runtime.id('boundary-summary');
           const boundarySummaryRevisionId = this.runtime.id('boundary-summary-revision');
@@ -390,6 +392,12 @@ export class BrainstormingService {
   private assertSessionMutable(session: BrainstormingSession): void {
     if (session.approval_state === 'approved') {
       throw new BadRequestException(`Brainstorming Session ${session.id} is already approved`);
+    }
+  }
+
+  private assertItemBoundaryNotApproved(item: DevelopmentPlanItem): void {
+    if (item.boundary_status === 'approved') {
+      throw new ConflictException(`Development Plan Item ${item.id} boundary is already approved`);
     }
   }
 

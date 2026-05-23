@@ -336,6 +336,76 @@ describe('Boundary Brainstorming API', () => {
     await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toHaveLength(planRevisionsBefore.length);
   });
 
+  it('rejects starting a new session after item boundary approval without changing revisions', async () => {
+    const { plan, item } = await seedDevelopmentPlanItem(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const session = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
+        .send({ actor_id: 'actor-tech' })
+        .expect(201)
+    ).body;
+
+    await makeSessionReadyForApproval(server, session);
+    await approveBoundary(server, session).expect(201);
+
+    const approvedItem = await repository.getDevelopmentPlanItem(item.id);
+    const itemRevisionsBefore = await repository.listDevelopmentPlanItemRevisions(item.id);
+    const planRevisionsBefore = await repository.listDevelopmentPlanRevisions(plan.id);
+
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
+      .send({ actor_id: 'actor-tech' })
+      .expect(409);
+
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toEqual(approvedItem);
+    await expect(repository.listDevelopmentPlanItemRevisions(item.id)).resolves.toHaveLength(itemRevisionsBefore.length);
+    await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toHaveLength(planRevisionsBefore.length);
+  });
+
+  it('rejects approving a stale second session after item boundary approval without creating a second summary or revisions', async () => {
+    const { plan, item } = await seedDevelopmentPlanItem(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const firstSession = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
+        .send({ actor_id: 'actor-tech' })
+        .expect(201)
+    ).body;
+    const secondSession = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
+        .send({ actor_id: 'actor-reviewer' })
+        .expect(201)
+    ).body;
+
+    await makeSessionReadyForApproval(server, firstSession);
+    await makeSessionReadyForApproval(server, secondSession);
+    const approved = (await approveBoundary(server, firstSession).expect(201)).body;
+    const approvedItem = await repository.getDevelopmentPlanItem(item.id);
+    const approvedBoundarySummary = await repository.getBoundarySummary(approved.boundary_summary_id);
+    const itemRevisionsBefore = await repository.listDevelopmentPlanItemRevisions(item.id);
+    const planRevisionsBefore = await repository.listDevelopmentPlanRevisions(plan.id);
+    const saveBoundarySummarySpy = vi.spyOn(repository, 'saveBoundarySummary');
+
+    await approveBoundary(server, secondSession, {
+      confirmed_scope: ['Stale session should not create a second boundary summary'],
+      actor_id: 'actor-reviewer',
+      final_decision: 'Attempt stale approval.',
+    }).expect(409);
+
+    expect(saveBoundarySummarySpy).not.toHaveBeenCalled();
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toEqual(approvedItem);
+    await expect(repository.getBoundarySummary(approved.boundary_summary_id)).resolves.toEqual(approvedBoundarySummary);
+    await expect(repository.listDevelopmentPlanItemRevisions(item.id)).resolves.toHaveLength(itemRevisionsBefore.length);
+    await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toHaveLength(planRevisionsBefore.length);
+    const persistedSecondSession = await repository.getBrainstormingSession(secondSession.id);
+    expect(persistedSecondSession).toMatchObject({ approval_state: 'ready_for_approval' });
+    expect(persistedSecondSession?.boundary_summary_id).toBeUndefined();
+  });
+
   it('starts brainstorming sessions under the Development Plan lock and transaction', async () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
@@ -382,6 +452,56 @@ describe('Boundary Brainstorming API', () => {
     );
   });
 });
+
+async function makeSessionReadyForApproval(
+  server: ReturnType<INestApplication['getHttpServer']>,
+  session: { id: string; questions: { id: string; text: string }[] },
+) {
+  for (const question of session.questions) {
+    await request(server)
+      .post(`/brainstorming-sessions/${session.id}/answers`)
+      .send({
+        question_id: question.id,
+        text: `Answered boundary question: ${question.text}`,
+        actor_id: 'actor-tech',
+      })
+      .expect(201);
+  }
+  await request(server)
+    .post(`/brainstorming-sessions/${session.id}/decisions`)
+    .send({
+      text: 'Keep implementation scoped to Web IA and route tests.',
+      actor_id: 'actor-tech',
+    })
+    .expect(201);
+}
+
+function approveBoundary(
+  server: ReturnType<INestApplication['getHttpServer']>,
+  session: { id: string },
+  overrides: Partial<{
+    confirmed_scope: string[];
+    confirmed_out_of_scope: string[];
+    accepted_assumptions: string[];
+    open_risks: string[];
+    validation_expectations: string[];
+    actor_id: string;
+    final_decision: string;
+  }> = {},
+) {
+  return request(server)
+    .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
+    .send({
+      confirmed_scope: ['Web IA and Development Plan Item gate UX'],
+      confirmed_out_of_scope: ['Runtime scheduler changes'],
+      accepted_assumptions: ['Mock Codex question generation is sufficient for this slice'],
+      open_risks: ['Execution queue depends on existing runtime adapters'],
+      validation_expectations: ['Route tests and screenshot checks pass'],
+      actor_id: 'actor-tech',
+      final_decision: 'Approve after all questions and one prior decision.',
+      ...overrides,
+    });
+}
 
 async function seedDevelopmentPlanItem(app: INestApplication) {
   const { project, requirement } = await seedRequirement(app);
