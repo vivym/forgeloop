@@ -14,6 +14,12 @@ import {
 } from '../../scripts/automation-dogfood-summary';
 import { loadDogfoodGenerationRuntimeConfig, requestedGenerationMode } from '../../scripts/automation-dogfood';
 import { loadCodexRuntimeDogfoodBootstrapConfig } from '../../scripts/codex-runtime-dogfood-bootstrap';
+import {
+  codexRemoteWorkerDogfoodCommand,
+  loadCodexRemoteWorkerDogfoodConfig,
+  renderCodexRemoteWorkerDogfoodFailure,
+  renderCodexRemoteWorkerDogfoodStartSummary,
+} from '../../scripts/codex-remote-worker-dogfood';
 
 const rootUrl = new URL('../..', import.meta.url);
 
@@ -52,6 +58,21 @@ const bootstrapEnv = () => ({
   FORGELOOP_WORKER_IDENTITY: 'worker-1',
   FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'worker-bootstrap-token',
   FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
+});
+const remoteWorkerEnv = () => ({
+  FORGELOOP_CONTROL_PLANE_URL: 'http://127.0.0.1:31337',
+  FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'trusted-secret',
+  FORGELOOP_AUTOMATION_ACTOR_ID: 'automation-daemon',
+  FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'automation-daemon-identity',
+  FORGELOOP_WORKER_IDENTITY: 'remote-worker-1',
+  FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'worker-bootstrap-token',
+  FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
+  FORGELOOP_WORKER_TEMP_ROOT: '/tmp/forgeloop-remote-worker',
+  FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('a'),
+  FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: digest('b'),
+  FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS: digest('c'),
+  FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-1',
+  FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-1',
 });
 
 describe('automation dogfood script', () => {
@@ -234,6 +255,36 @@ describe('automation dogfood script', () => {
         ]),
       }, '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
     ).toThrow(/model_provider/);
+  });
+
+  it('loads remote worker dogfood config and renders only public-safe startup evidence', () => {
+    const config = loadCodexRemoteWorkerDogfoodConfig(remoteWorkerEnv());
+    const summary = renderCodexRemoteWorkerDogfoodStartSummary(config);
+
+    expect(codexRemoteWorkerDogfoodCommand).toBe(
+      'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-remote-worker-dogfood.ts',
+    );
+    expect(config.allowedScopes).toEqual([{ project_id: 'project-1', repo_id: 'repo-1' }]);
+    expect(config.dockerImageDigests).toEqual([digest('a')]);
+    expect(summary).toContain('Remote Codex worker dogfood');
+    expect(summary).toContain(digest('a'));
+    expect(summary).toContain(digest('b'));
+    expect(summary).not.toContain('remote-worker-1');
+    expect(summary).not.toContain('http://127.0.0.1:31337');
+    expect(summary).not.toContain('trusted-secret');
+    expect(summary).not.toContain('worker-bootstrap-token');
+    expect(summary).not.toContain('/tmp/forgeloop-remote-worker');
+  });
+
+  it('redacts remote worker dogfood failures to public-safe codes', () => {
+    const message = renderCodexRemoteWorkerDogfoodFailure(
+      new Error('docker failed for /tmp/forgeloop-remote-worker at http://127.0.0.1:31337 with worker-bootstrap-token'),
+    );
+
+    expect(message).toBe('Remote Codex worker dogfood failed: codex_remote_worker_dogfood_failed');
+    expect(message).not.toContain('/tmp/forgeloop-remote-worker');
+    expect(message).not.toContain('http://127.0.0.1:31337');
+    expect(message).not.toContain('worker-bootstrap-token');
   });
 
   it('fails the dogfood gate unless every expected daemon artifact is present exactly once', () => {
