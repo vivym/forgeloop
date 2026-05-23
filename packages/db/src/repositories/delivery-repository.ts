@@ -36,6 +36,7 @@ import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
   DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
   DevelopmentPlanSourceLink,
   Execution,
   ExecutionPlanDocument,
@@ -1349,6 +1350,8 @@ export interface DeliveryRepository {
   saveDevelopmentPlan(plan: DevelopmentPlan): Promise<void>;
   getDevelopmentPlan(id: string): Promise<DevelopmentPlan | undefined>;
   listDevelopmentPlans(projectId: string): Promise<DevelopmentPlan[]>;
+  saveDevelopmentPlanRevision(revision: DevelopmentPlanRevision): Promise<void>;
+  listDevelopmentPlanRevisions(developmentPlanId: string): Promise<DevelopmentPlanRevision[]>;
   saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void>;
   listDevelopmentPlanSourceLinks(developmentPlanId: string): Promise<DevelopmentPlanSourceLink[]>;
   listDevelopmentPlanSourceLinksForSource(sourceRef: DevelopmentPlanSourceLink['source_ref']): Promise<DevelopmentPlanSourceLink[]>;

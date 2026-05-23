@@ -35,6 +35,7 @@ import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
   DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
   DevelopmentPlanSourceLink,
   Execution,
   ExecutionPlanDocument,
@@ -523,6 +524,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly specRevisions = new Map<string, SpecRevision>();
   private readonly contextManifests = new Map<string, ContextManifest>();
   private readonly developmentPlans = new Map<string, DevelopmentPlan>();
+  private readonly developmentPlanRevisions = new Map<string, DevelopmentPlanRevision>();
   private readonly developmentPlanSourceLinks = new Map<string, DevelopmentPlanSourceLink>();
   private readonly developmentPlanItems = new Map<string, DevelopmentPlanItem>();
   private readonly developmentPlanItemRevisions = new Map<string, DevelopmentPlanItemRevision>();
@@ -2781,6 +2783,25 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       .filter((plan) => plan.project_id === projectId)
       .sort(byCreatedAtThenId);
     return Promise.all(plans.map((plan) => this.hydrateDevelopmentPlan(plan)));
+  }
+
+  async saveDevelopmentPlanRevision(revision: DevelopmentPlanRevision): Promise<void> {
+    const existing = valuesFor(this.developmentPlanRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.development_plan_id === revision.development_plan_id &&
+          candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
+    this.developmentPlanRevisions.set(revision.id, clone(revision));
+  }
+
+  async listDevelopmentPlanRevisions(developmentPlanId: string): Promise<DevelopmentPlanRevision[]> {
+    return valuesFor(this.developmentPlanRevisions)
+      .filter((revision) => revision.development_plan_id === developmentPlanId)
+      .sort((left, right) => left.revision_number - right.revision_number);
   }
 
   async saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void> {
@@ -5691,6 +5712,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.specRevisions,
       this.contextManifests,
       this.developmentPlans,
+      this.developmentPlanRevisions,
       this.developmentPlanSourceLinks,
       this.developmentPlanItems,
       this.developmentPlanItemRevisions,

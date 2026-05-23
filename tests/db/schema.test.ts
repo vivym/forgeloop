@@ -61,6 +61,7 @@ import {
   boundary_summary_revisions,
   brainstorming_sessions,
   context_manifests,
+  development_plan_revisions,
   development_plan_item_revisions,
   development_plan_items,
   development_plan_source_links,
@@ -110,6 +111,7 @@ const requiredTables = {
   command_idempotency_records,
   context_manifests,
   development_plans,
+  development_plan_revisions,
   development_plan_source_links,
   development_plan_items,
   development_plan_item_revisions,
@@ -231,6 +233,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'decisions',
         'development_plan_item_revisions',
         'development_plan_items',
+        'development_plan_revisions',
         'development_plan_source_links',
         'development_plans',
         'execution_plan_revisions',
@@ -514,6 +517,18 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(work_items, 'intake_context')).toBe('PgJsonb');
     expect(columnType(work_items, 'narrative_markdown')).toBe('PgText');
     expect(Object.keys(getTableColumns(work_items))).not.toContain('ownerActorId');
+    expect(columnType(development_plan_revisions, 'id')).toBe('PgUUID');
+    expect(columnType(development_plan_revisions, 'development_plan_id')).toBe('PgUUID');
+    expect(columnType(development_plan_revisions, 'source_refs')).toBe('PgJsonb');
+    expect(columnType(development_plan_revisions, 'item_refs')).toBe('PgJsonb');
+    expect(columnType(development_plan_revisions, 'generation_state')).toBe('PgText');
+    expect(columnNotNull(development_plan_revisions, 'revisionNumber')).toBe(true);
+    expect(
+      hasUniqueIndex(development_plan_revisions, 'development_plan_revisions_plan_revision_unique', [
+        'development_plan_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
     expect(columnType(boundary_summary_revisions, 'brainstorming_session_revision_id')).toBe('PgUUID');
     expect(columnNotNull(boundary_summary_revisions, 'brainstormingSessionRevisionId')).toBe(true);
     expect(columnType(boundary_summary_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');

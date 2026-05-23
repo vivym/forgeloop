@@ -36,6 +36,7 @@ import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
   DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
   DevelopmentPlanSourceLink,
   Execution,
   ExecutionPlanDocument,
@@ -119,6 +120,7 @@ import {
   brainstorming_sessions,
   context_manifests,
   decisions,
+  development_plan_revisions,
   development_plan_item_revisions,
   development_plan_items,
   development_plan_source_links,
@@ -4037,6 +4039,18 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       development_plans.id,
     ]);
     return Promise.all(plans.map((plan) => this.hydrateDevelopmentPlan(plan)));
+  }
+
+  async saveDevelopmentPlanRevision(revision: DevelopmentPlanRevision): Promise<void> {
+    await this.insertImmutable(development_plan_revisions, revision);
+  }
+
+  async listDevelopmentPlanRevisions(developmentPlanId: string): Promise<DevelopmentPlanRevision[]> {
+    return this.listWhere<DevelopmentPlanRevision>(
+      development_plan_revisions,
+      eq(development_plan_revisions.developmentPlanId, developmentPlanId),
+      development_plan_revisions.revisionNumber,
+    );
   }
 
   async saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void> {

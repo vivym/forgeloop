@@ -3,6 +3,7 @@ import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
   DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
   DevelopmentPlanSourceLink,
 } from '@forgeloop/domain';
 
@@ -23,6 +24,28 @@ export const development_plans = pgTable('development_plans', {
   createdAt: timestampColumn('created_at').notNull(),
   updatedAt: timestampColumn('updated_at').notNull(),
 });
+
+export const development_plan_revisions = pgTable(
+  'development_plan_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    developmentPlanId: uuid('development_plan_id')
+      .notNull()
+      .references(() => development_plans.id),
+    revisionNumber: integer('revision_number').notNull(),
+    title: text('title').notNull(),
+    status: text('status').$type<DevelopmentPlanRevision['status']>().notNull(),
+    sourceRefs: jsonb('source_refs').$type<DevelopmentPlanRevision['source_refs']>().notNull(),
+    itemRefs: jsonb('item_refs').$type<DevelopmentPlanRevision['item_refs']>().notNull(),
+    generationState: text('generation_state').$type<DevelopmentPlanRevision['generation_state']>(),
+    changeReason: text('change_reason').notNull(),
+    actorId: uuid('actor_id').references(() => actors.id),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('development_plan_revisions_plan_revision_unique').on(table.developmentPlanId, table.revisionNumber),
+  ],
+);
 
 export const development_plan_source_links = pgTable('development_plan_source_links', {
   id: uuid('id').primaryKey().defaultRandom(),

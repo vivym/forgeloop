@@ -26,6 +26,32 @@ export interface DevelopmentPlan extends Omit<ContractDevelopmentPlan, 'items'> 
   updated_at: IsoDateTime;
 }
 
+export type DevelopmentPlanGenerationState = 'draft_generated' | 'draft_regenerated';
+
+export interface DevelopmentPlanRevisionItemRef {
+  id: string;
+  revision_id: string;
+  title: string;
+  boundary_status: DevelopmentPlanItem['boundary_status'];
+  spec_status: DevelopmentPlanItem['spec_status'];
+  execution_plan_status: DevelopmentPlanItem['execution_plan_status'];
+  execution_status: DevelopmentPlanItem['execution_status'];
+}
+
+export interface DevelopmentPlanRevision {
+  id: string;
+  development_plan_id: string;
+  revision_number: number;
+  title: string;
+  status: DevelopmentPlan['status'];
+  source_refs: SourceObjectRef[];
+  item_refs: DevelopmentPlanRevisionItemRef[];
+  generation_state?: DevelopmentPlanGenerationState;
+  change_reason: string;
+  actor_id?: string;
+  created_at: IsoDateTime;
+}
+
 export interface DevelopmentPlanSourceLink {
   id: string;
   development_plan_id: string;

@@ -40,6 +40,16 @@ describe('Development Plans API', () => {
       source_refs: [{ type: 'requirement', id: requirement.id }],
       revision_id: expect.any(String),
     });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toEqual([
+      expect.objectContaining({
+        id: plan.revision_id,
+        development_plan_id: plan.id,
+        revision_number: 1,
+        change_reason: 'development_plan_created',
+        item_refs: [],
+      }),
+    ]);
 
     const item = (
       await request(server)
@@ -69,6 +79,14 @@ describe('Development Plans API', () => {
       qa_handoff_status: 'missing',
     });
     expect(item.revision_id).not.toBe(plan.revision_id);
+    await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toEqual([
+      expect.objectContaining({ revision_number: 1, change_reason: 'development_plan_created' }),
+      expect.objectContaining({
+        revision_number: 2,
+        change_reason: 'development_plan_item_created',
+        item_refs: [expect.objectContaining({ id: item.id, revision_id: item.revision_id, title: item.title })],
+      }),
+    ]);
     expect(JSON.stringify(item)).not.toContain('"type":"work_item"');
   });
 
@@ -89,6 +107,15 @@ describe('Development Plans API', () => {
       development_plan_id: plan.id,
       link_type: 'related',
     });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toEqual([
+      expect.objectContaining({ revision_number: 1, change_reason: 'development_plan_created' }),
+      expect.objectContaining({
+        revision_number: 2,
+        change_reason: 'development_plan_source_linked',
+        source_refs: expect.arrayContaining([{ type: 'bug', id: bug.id }]),
+      }),
+    ]);
 
     const duplicateLink = (
       await request(server)
@@ -97,6 +124,7 @@ describe('Development Plans API', () => {
         .expect(201)
     ).body;
     expect(duplicateLink.id).toBe(link.id);
+    await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toHaveLength(2);
     expect(JSON.stringify(link)).not.toContain('"type":"work_item"');
   });
 
@@ -137,6 +165,19 @@ describe('Development Plans API', () => {
         expect.objectContaining({ event_type: 'development_plan_item_created', actor_id: 'actor-product' }),
       ]);
     }
+    const generatedRevisions = await repository.listDevelopmentPlanRevisions(generated.id);
+    expect(generatedRevisions).toEqual([
+      expect.objectContaining({
+        id: generated.revision_id,
+        revision_number: 1,
+        generation_state: 'draft_generated',
+        change_reason: 'development_plan_draft_generated',
+        item_refs: expect.arrayContaining([
+          expect.objectContaining({ id: generated.items[0].id, revision_id: generated.items[0].revision_id }),
+        ]),
+      }),
+    ]);
+    expect(generated.generation_state).toBe(generatedRevisions.at(-1)?.generation_state);
 
     const regenerated = (
       await request(server)
@@ -151,6 +192,7 @@ describe('Development Plans API', () => {
 
     expect(regenerated.id).toBe(generated.id);
     expect(regenerated.revision_id).not.toBe(generated.revision_id);
+    expect(regenerated.generation_state).toBe('draft_regenerated');
     expect(regenerated.context_manifest_id).toEqual(expect.any(String));
     expect(regenerated.regeneration).toMatchObject({
       feedback: 'Preserve the UI item, add a QA handoff item.',
@@ -162,6 +204,15 @@ describe('Development Plans API', () => {
     await expect(repository.listObjectEvents(regeneratedItem.id, 'development_plan_item')).resolves.toEqual([
       expect.objectContaining({ event_type: 'development_plan_item_created', actor_id: 'actor-tech' }),
     ]);
+    const regeneratedRevisions = await repository.listDevelopmentPlanRevisions(generated.id);
+    expect(regeneratedRevisions.at(-1)).toMatchObject({
+      id: regenerated.revision_id,
+      revision_number: 2,
+      generation_state: 'draft_regenerated',
+      change_reason: 'development_plan_draft_regenerated',
+      item_refs: expect.arrayContaining([expect.objectContaining({ id: regeneratedItem.id, revision_id: regeneratedItem.revision_id })]),
+    });
+    expect(regenerated.generation_state).toBe(regeneratedRevisions.at(-1)?.generation_state);
   });
 
   it('rejects unsupported public source object types', async () => {

@@ -12,6 +12,7 @@ import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
   DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
   Execution,
   ExecutionPlanDocument,
   ExecutionPlanRevision,
@@ -101,6 +102,7 @@ const ids = {
   developmentPlanRevision: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2',
   developmentPlanSourceLink1: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3',
   developmentPlanSourceLink2: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee4',
+  developmentPlanRevision2: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5',
   developmentPlanItem: 'ffffffff-ffff-4fff-8fff-fffffffffff1',
   developmentPlanItemRevision1: 'ffffffff-ffff-4fff-8fff-fffffffffff2',
   developmentPlanItemRevision2: 'ffffffff-ffff-4fff-8fff-fffffffffff3',
@@ -702,6 +704,7 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
 
     await repository.saveContextManifest(contextManifestFixture());
     await repository.saveDevelopmentPlan(developmentPlanFixture());
+    await repository.saveDevelopmentPlanRevision(developmentPlanRevisionFixture());
     await repository.saveDevelopmentPlanSourceLink({
       id: ids.developmentPlanSourceLink1,
       development_plan_id: ids.developmentPlan,
@@ -745,6 +748,26 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
         created_at: '2026-05-24T00:03:00.000Z',
       }),
     );
+    await repository.saveDevelopmentPlanRevision(
+      developmentPlanRevisionFixture({
+        id: ids.developmentPlanRevision2,
+        revision_number: 2,
+        generation_state: 'draft_generated',
+        change_reason: 'development_plan_draft_generated',
+        item_refs: [
+          {
+            id: ids.developmentPlanItem,
+            revision_id: ids.developmentPlanItemRevision2,
+            title: 'Persist planning graph',
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            execution_plan_status: 'approved',
+            execution_status: 'ready',
+          },
+        ],
+        created_at: '2026-05-24T00:03:30.000Z',
+      }),
+    );
     await repository.saveBrainstormingSession(brainstormingSessionFixture());
     await repository.saveBoundarySummary(boundarySummaryFixture());
     await repository.saveBoundarySummaryRevision(boundarySummaryRevisionFixture());
@@ -786,6 +809,27 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       expect.objectContaining({ development_plan_id: ids.developmentPlan, link_type: 'related' }),
     ]);
     expect(await repository.listDevelopmentPlanSourceLinks(ids.developmentPlan)).toHaveLength(2);
+    expect(await repository.listDevelopmentPlanRevisions(ids.developmentPlan)).toEqual([
+      developmentPlanRevisionFixture(),
+      developmentPlanRevisionFixture({
+        id: ids.developmentPlanRevision2,
+        revision_number: 2,
+        generation_state: 'draft_generated',
+        change_reason: 'development_plan_draft_generated',
+        item_refs: [
+          {
+            id: ids.developmentPlanItem,
+            revision_id: ids.developmentPlanItemRevision2,
+            title: 'Persist planning graph',
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            execution_plan_status: 'approved',
+            execution_status: 'ready',
+          },
+        ],
+        created_at: '2026-05-24T00:03:30.000Z',
+      }),
+    ]);
     expect(await repository.listDevelopmentPlanItemRevisions(ids.developmentPlanItem)).toEqual([
       expect.objectContaining({ id: ids.developmentPlanItemRevision1, revision_number: 1 }),
       expect.objectContaining({ id: ids.developmentPlanItemRevision2, revision_number: 2 }),
@@ -944,6 +988,7 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       updated_at: at,
     });
     await repository.saveDevelopmentPlan(developmentPlanFixture());
+    await repository.saveDevelopmentPlanRevision(developmentPlanRevisionFixture());
     await repository.saveDevelopmentPlanItem(developmentPlanItemFixture());
     await repository.saveBrainstormingSession(brainstormingSessionFixture());
     await repository.saveBoundarySummary(boundarySummaryFixture());
@@ -952,15 +997,26 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     await repository.saveExecutionPlan(executionPlanFixture());
 
     const developmentPlanRevision = developmentPlanItemRevisionFixture();
+    const parentPlanRevision = developmentPlanRevisionFixture({
+      id: ids.developmentPlanRevision2,
+      revision_number: 2,
+      change_reason: 'Current plan state',
+    });
     const boundaryRevision = boundarySummaryRevisionFixture();
     const executionRevision = executionPlanRevisionFixture();
 
     await repository.saveDevelopmentPlanItemRevision(developmentPlanRevision);
+    await repository.saveDevelopmentPlanRevision(parentPlanRevision);
     await repository.saveBoundarySummaryRevision(boundaryRevision);
     await repository.saveExecutionPlanRevision(executionRevision);
 
     await repository.saveDevelopmentPlanItemRevision({
       ...developmentPlanRevision,
+      revision_number: 99,
+      change_reason: 'Conflicting rewrite',
+    });
+    await repository.saveDevelopmentPlanRevision({
+      ...parentPlanRevision,
       revision_number: 99,
       change_reason: 'Conflicting rewrite',
     });
@@ -980,6 +1036,11 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       id: 'ffffffff-ffff-4fff-8fff-fffffffffff4',
       change_reason: 'Duplicate logical revision',
     });
+    await repository.saveDevelopmentPlanRevision({
+      ...parentPlanRevision,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee6',
+      change_reason: 'Duplicate logical revision',
+    });
     await repository.saveBoundarySummaryRevision({
       ...boundaryRevision,
       id: '13131313-1313-4313-8313-131313131313',
@@ -992,6 +1053,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     });
 
     expect(await repository.listDevelopmentPlanItemRevisions(ids.developmentPlanItem)).toEqual([developmentPlanRevision]);
+    expect(await repository.listDevelopmentPlanRevisions(ids.developmentPlan)).toEqual([
+      developmentPlanRevisionFixture(),
+      parentPlanRevision,
+    ]);
     expect(await repository.listBoundarySummaryRevisions(ids.boundarySummary)).toEqual([boundaryRevision]);
     expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionRevision);
     expect(await repository.listExecutionPlanRevisions(ids.executionPlan)).toEqual([executionRevision]);
@@ -2306,6 +2371,22 @@ const developmentPlanFixture = (overrides: Partial<DevelopmentPlan> = {}): Devel
   items: [],
   created_at: '2026-05-24T00:00:00.000Z',
   updated_at: '2026-05-24T00:00:00.000Z',
+  ...overrides,
+});
+
+const developmentPlanRevisionFixture = (
+  overrides: Partial<DevelopmentPlanRevision> = {},
+): DevelopmentPlanRevision => ({
+  id: ids.developmentPlanRevision,
+  development_plan_id: ids.developmentPlan,
+  revision_number: 1,
+  title: 'AI-native project management UX redesign',
+  status: 'active',
+  source_refs: [{ type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 }],
+  item_refs: [],
+  change_reason: 'development_plan_created',
+  actor_id: ids.human,
+  created_at: '2026-05-24T00:00:00.000Z',
   ...overrides,
 });
 

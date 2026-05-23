@@ -9,6 +9,7 @@ import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
   DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
   RevisionCompareQuery,
   StructuredRevisionDiff,
 } from '@forgeloop/domain';
@@ -216,11 +217,17 @@ export class BrainstormingService {
         updated_at: approvedAt,
       };
       await repository.saveBrainstormingSession(approvedSession);
-      await repository.saveDevelopmentPlan({
+      const updatedPlan: DevelopmentPlan = {
         ...plan,
         revision_id: this.runtime.id('development-plan-revision'),
         updated_at: approvedAt,
-      });
+      };
+      await repository.saveDevelopmentPlan(updatedPlan);
+      await this.saveDevelopmentPlanRevision(
+        updatedPlan,
+        { changeReason: 'development_plan_item_boundary_approved', actorId: input.actor_id },
+        repository,
+      );
       await this.appendItemEvent(item.id, 'boundary_summary_approved', input.actor_id, {
         boundary_summary_id: summary.id,
         development_plan_item_revision_id: itemRevision.id,
@@ -396,6 +403,39 @@ export class BrainstormingService {
       created_at: this.runtime.now(),
     };
     await repository.saveDevelopmentPlanItemRevision(revision);
+    return revision;
+  }
+
+  private async saveDevelopmentPlanRevision(
+    plan: DevelopmentPlan,
+    input: { changeReason: string; actorId?: string | undefined },
+    repository: DeliveryRepository,
+  ): Promise<DevelopmentPlanRevision> {
+    const [revisions, items] = await Promise.all([
+      repository.listDevelopmentPlanRevisions(plan.id),
+      repository.listDevelopmentPlanItems(plan.id),
+    ]);
+    const revision: DevelopmentPlanRevision = {
+      id: plan.revision_id,
+      development_plan_id: plan.id,
+      revision_number: revisions.length + 1,
+      title: plan.title,
+      status: plan.status,
+      source_refs: plan.source_refs,
+      item_refs: items.map((item) => ({
+        id: item.id,
+        revision_id: item.revision_id,
+        title: item.title,
+        boundary_status: item.boundary_status,
+        spec_status: item.spec_status,
+        execution_plan_status: item.execution_plan_status,
+        execution_status: item.execution_status,
+      })),
+      change_reason: input.changeReason,
+      ...(input.actorId === undefined ? {} : { actor_id: input.actorId }),
+      created_at: this.runtime.now(),
+    };
+    await repository.saveDevelopmentPlanRevision(revision);
     return revision;
   }
 
