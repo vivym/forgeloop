@@ -53,6 +53,14 @@ describe('project management route IA', () => {
     expect(screen.queryByRole('heading', { name: /not found|404/i })).toBeNull();
   });
 
+  it('renders Specs & Plans as one queue with separate tabs', async () => {
+    const screen = await renderRoute('/specs-plans');
+    expect(await screen.findByRole('heading', { name: 'Specs & Plans' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Specs' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Plans' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Specs registry' })).toBeNull();
+  });
+
   it('renders typed list and detail surfaces', async () => {
     for (const [route, heading, expectedText] of [
       ['/requirements', 'Requirements', /checkout requirement/i],

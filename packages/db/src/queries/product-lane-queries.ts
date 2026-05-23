@@ -258,9 +258,8 @@ const packageItem = (
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const actions = [
-    openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', `/packages/${executionPackage.id}`),
-  ];
+  const packageHref = taskPackageHref(executionPackage);
+  const actions = packageHref === undefined ? [] : [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', packageHref)];
 
   if (executionPackage.phase === 'draft' || executionPackage.gate_state === 'changes_requested') {
     actions.unshift(
@@ -272,7 +271,7 @@ const packageItem = (
         scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
-        target: objectTarget('execution_package', executionPackage.id, `/packages/${executionPackage.id}`),
+        ...(packageHref === undefined ? {} : { target: objectTarget('execution_package', executionPackage.id, packageHref) }),
       }),
     );
   }
@@ -286,7 +285,7 @@ const packageItem = (
         label: 'Run package',
         scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
-        target: objectTarget('execution_package', executionPackage.id, `/packages/${executionPackage.id}`),
+        ...(packageHref === undefined ? {} : { target: objectTarget('execution_package', executionPackage.id, packageHref) }),
       }),
     );
   }
@@ -319,8 +318,9 @@ const packageReadOnlyItem = (
   laneId: ProductLaneId,
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
-): ProductLaneProjectionItem =>
-  itemBase(
+): ProductLaneProjectionItem => {
+  const packageHref = taskPackageHref(executionPackage);
+  return itemBase(
     {
       id: executionPackage.id,
       laneId,
@@ -340,16 +340,18 @@ const packageReadOnlyItem = (
       qaOwnerActorId: executionPackage.qa_owner_actor_id,
       blocked: executionPackage.activity_state === 'blocked' || executionPackage.blocked_reason !== undefined,
     },
-    [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', `/packages/${executionPackage.id}`)],
+    packageHref === undefined ? [] : [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', packageHref)],
   );
+};
 
 const reviewPacketItem = (
   laneId: ProductLaneId,
   reviewPacket: ReviewPacket,
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
-): ProductLaneProjectionItem =>
-  itemBase(
+): ProductLaneProjectionItem => {
+  const reviewHref = taskReviewHref(executionPackage, reviewPacket.id);
+  return itemBase(
     {
       id: reviewPacket.id,
       laneId,
@@ -366,8 +368,15 @@ const reviewPacketItem = (
       reviewerActorId: reviewPacket.reviewer_actor_id,
       blocked: reviewPacket.requested_changes.length > 0,
     },
-    [openObjectAction(laneId, 'review_packet', reviewPacket.id, 'Open Review', `/reviews/${reviewPacket.id}`)],
+    reviewHref === undefined ? [] : [openObjectAction(laneId, 'review_packet', reviewPacket.id, 'Open Review', reviewHref)],
   );
+};
+
+const taskPackageHref = (executionPackage: ExecutionPackage) =>
+  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`;
+
+const taskReviewHref = (executionPackage: ExecutionPackage, reviewPacketId: string) =>
+  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/reviews/${reviewPacketId}`;
 
 const releaseItem = async (
   repository: DeliveryRepository,

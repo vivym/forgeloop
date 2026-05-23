@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderRoute } from './router-test-utils';
 
 describe('web accessibility gates', () => {
-  it.each(['/my-work', '/tasks/task-web-product/runs/run-web-product', '/releases/release-web-product'])(
+  it.each(['/my-work', '/tasks/task-1/runs/run-web-product', '/releases/release-web-product'])(
     'renders a skip link to the primary main landmark on %s',
     async (route) => {
       const screen = await renderRoute(route);
@@ -20,7 +20,7 @@ describe('web accessibility gates', () => {
     },
   );
 
-  it.each(['/my-work', '/dashboard', '/tasks/task-web-product/packages/package-web-product', '/reports'])(
+  it.each(['/my-work', '/dashboard', '/tasks/task-1/packages/package-web-product', '/reports'])(
     'has no automated axe violations on %s',
     async (route) => {
       await renderRoute(route);
@@ -86,10 +86,10 @@ describe('web accessibility gates', () => {
   });
 
   it('allows task-scoped evidence pages to receive programmatic main focus', async () => {
-    const screen = await renderRoute('/tasks/task-web-product/packages/package-web-product');
+    const screen = await renderRoute('/tasks/task-1/packages/package-web-product');
     const main = screen.getByRole('main');
 
-    expect(await screen.findByRole('heading', { name: 'Task Package' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Package Evidence' })).toBeTruthy();
     main.focus();
     expect(document.activeElement).toBe(main);
   });

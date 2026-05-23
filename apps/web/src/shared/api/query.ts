@@ -31,6 +31,9 @@ import type {
   ReleaseCockpitResponse,
   ReleaseListResponse,
   ReviewPacket,
+  TaskPackageEvidence,
+  TaskReviewEvidence,
+  TaskRunEvidence,
   TimelineEntry,
 } from './types';
 
@@ -106,6 +109,18 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       taskListResponseSchema.parse(await request<unknown>(`/query/tasks${queryString(query)}`)),
     getTask: async (taskId: string) =>
       taskDetailSchema.parse(await request<unknown>(`/query/tasks/${encodeURIComponent(taskId)}`)),
+    getTaskPackageEvidence: (taskId: string, packageId: string) =>
+      request<TaskPackageEvidence>(
+        `/query/tasks/${encodeURIComponent(taskId)}/packages/${encodeURIComponent(packageId)}`,
+      ),
+    getTaskRunEvidence: (taskId: string, runSessionId: string) =>
+      request<TaskRunEvidence>(
+        `/query/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runSessionId)}`,
+      ),
+    getTaskReviewEvidence: (taskId: string, reviewPacketId: string) =>
+      request<TaskReviewEvidence>(
+        `/query/tasks/${encodeURIComponent(taskId)}/reviews/${encodeURIComponent(reviewPacketId)}`,
+      ),
     listBugs: async (query: ProjectManagementListQuery) =>
       bugListResponseSchema.parse(await request<unknown>(`/query/bugs${queryString(query)}`)),
     getBug: async (bugId: string) =>

@@ -21,6 +21,7 @@ import type { ExecutionPackage, Release, ReleaseEvidence, ReviewPacket, RunSessi
 import { canGenerateRuntimePackageForTask } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
+import { serializePublicArtifactRef, serializePublicArtifactRefs } from './public-evidence-serialization';
 
 type WorkItemObjectType = Extract<ObjectRef['type'], 'initiative' | 'requirement' | 'bug' | 'tech_debt'>;
 type TypedWorkItem = WorkItem & { kind: WorkItemObjectType };
@@ -118,7 +119,7 @@ export async function getTaskPackageEvidence(
     object_ref: { type: 'execution_package', id: executionPackage.id },
     task_ref: { type: 'task', id: taskId },
     href: `/tasks/${taskId}/packages/${executionPackage.id}`,
-    package: publicPackageEvidence(executionPackage),
+    package: publicPackageEvidence(executionPackage, taskId),
   };
 }
 
@@ -415,16 +416,50 @@ function taskStatusForContract(status: Task['status']): TaskListItem['status'] {
   return status === 'draft' ? 'todo' : status === 'cancelled' ? 'canceled' : status;
 }
 
-function publicPackageEvidence(executionPackage: ExecutionPackage): Record<string, unknown> {
+function publicPackageEvidence(executionPackage: ExecutionPackage, taskId: string): Record<string, unknown> {
   return {
     id: executionPackage.id,
-    task_id: executionPackage.task_id,
     object_ref: { type: 'execution_package', id: executionPackage.id },
+    scope_ref: { type: 'task', id: taskId },
     spec_revision_id: executionPackage.spec_revision_id,
     plan_revision_id: executionPackage.plan_revision_id,
+    project_id: executionPackage.project_id,
+    repo_id: executionPackage.repo_id,
+    objective: executionPackage.objective,
+    reviewer_actor_id: executionPackage.reviewer_actor_id,
+    qa_owner_actor_id: executionPackage.qa_owner_actor_id,
     phase: executionPackage.phase,
+    activity_state: executionPackage.activity_state,
     gate_state: executionPackage.gate_state,
+    resolution: executionPackage.resolution,
+    required_checks: executionPackage.required_checks,
+    required_artifact_kinds: executionPackage.required_artifact_kinds,
+    allowed_paths: executionPackage.allowed_paths,
+    forbidden_paths: executionPackage.forbidden_paths,
+    version: executionPackage.version,
+    ...(executionPackage.current_run_session_id === undefined ? {} : { current_run_session_id: executionPackage.current_run_session_id }),
+    ...(executionPackage.current_review_packet_id === undefined ? {} : { current_review_packet_id: executionPackage.current_review_packet_id }),
+    ...(executionPackage.current_release_id === undefined ? {} : { current_release_id: executionPackage.current_release_id }),
+    ...(executionPackage.last_run_session_id === undefined ? {} : { last_run_session_id: executionPackage.last_run_session_id }),
+    ...(executionPackage.last_failure_summary === undefined ? {} : { last_failure_summary: executionPackage.last_failure_summary }),
+    ...(executionPackage.blocked_reason === undefined ? {} : { blocked_reason: executionPackage.blocked_reason }),
+    ...(executionPackage.created_at === undefined ? {} : { created_at: executionPackage.created_at }),
     updated_at: executionPackage.updated_at,
+  };
+}
+
+function publicCheckResult(checkResult: RunSession['check_results'][number]): Record<string, unknown> {
+  const stdout = checkResult.stdout === undefined ? undefined : serializePublicArtifactRef(checkResult.stdout);
+  const stderr = checkResult.stderr === undefined ? undefined : serializePublicArtifactRef(checkResult.stderr);
+  return {
+    check_id: checkResult.check_id,
+    command: checkResult.command,
+    status: checkResult.status,
+    exit_code: checkResult.exit_code,
+    duration_seconds: checkResult.duration_seconds,
+    blocks_review: checkResult.blocks_review,
+    ...(stdout === undefined ? {} : { stdout }),
+    ...(stderr === undefined ? {} : { stderr }),
   };
 }
 
@@ -433,10 +468,20 @@ function publicRunEvidence(runSession: RunSession): Record<string, unknown> {
     id: runSession.id,
     object_ref: { type: 'run_session', id: runSession.id },
     execution_package_id: runSession.execution_package_id,
+    requested_by_actor_id: runSession.requested_by_actor_id,
     status: runSession.status,
+    executor_type: runSession.executor_type,
+    changed_files: runSession.changed_files,
+    check_results: runSession.check_results.map(publicCheckResult),
+    artifacts: serializePublicArtifactRefs(runSession.artifacts),
+    log_refs: serializePublicArtifactRefs(runSession.log_refs),
     summary: runSession.summary,
+    failure_kind: runSession.failure_kind,
+    failure_reason: runSession.failure_reason,
     created_at: runSession.created_at,
     updated_at: runSession.updated_at,
+    started_at: runSession.started_at,
+    finished_at: runSession.finished_at,
   };
 }
 
@@ -448,8 +493,18 @@ function publicReviewEvidence(reviewPacket: ReviewPacket): Record<string, unknow
     run_session_id: reviewPacket.run_session_id,
     status: reviewPacket.status,
     decision: reviewPacket.decision,
+    summary: reviewPacket.summary,
+    changed_files: reviewPacket.changed_files,
+    check_result_summary: reviewPacket.check_result_summary,
+    self_review: reviewPacket.self_review,
+    independent_ai_review: reviewPacket.independent_ai_review,
+    test_mapping: reviewPacket.test_mapping,
+    risk_notes: reviewPacket.risk_notes,
+    requested_changes: reviewPacket.requested_changes,
     reviewed_by_actor_id: reviewPacket.reviewed_by_actor_id,
     reviewed_at: reviewPacket.reviewed_at,
+    created_at: reviewPacket.created_at,
+    updated_at: reviewPacket.updated_at,
   };
 }
 

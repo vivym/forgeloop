@@ -33,6 +33,9 @@ import type {
   SpecRevision,
   StartReleaseObservingBody,
   SubmitForApprovalBody,
+  TaskPackageEvidence,
+  TaskReviewEvidence,
+  TaskRunEvidence,
   UnlinkReleaseScopeBody,
 } from './types';
 
@@ -361,10 +364,19 @@ export function usePackageQuery(packageId: string) {
   });
 }
 
-export function usePackageRuntimeReadinessQuery(packageId: string) {
+export function usePackageRuntimeReadinessQuery(packageId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.packageRuntimeReadiness(packageId),
-    queryFn: () => createQueryApi().getExecutionPackageRuntimeReadiness(packageId),
+    queryFn: () => createQueryApi().getExecutionPackageRuntimeReadiness(requiredId(packageId, 'packageId')),
+    enabled: packageId !== undefined,
+  });
+}
+
+export function useTaskPackageEvidenceQuery(taskId: string | undefined, packageId: string | undefined) {
+  return useQuery<TaskPackageEvidence>({
+    queryKey: queryKeys.taskPackageEvidence(taskId, packageId),
+    queryFn: () => createQueryApi().getTaskPackageEvidence(requiredId(taskId, 'taskId'), requiredId(packageId, 'packageId')),
+    enabled: taskId !== undefined && packageId !== undefined,
   });
 }
 
@@ -381,6 +393,14 @@ export function useRunQuery(runSessionId: string) {
   return useQuery({
     queryKey: queryKeys.run(runSessionId),
     queryFn: () => createCommandApi().getRunSession(runSessionId),
+  });
+}
+
+export function useTaskRunEvidenceQuery(taskId: string | undefined, runSessionId: string | undefined) {
+  return useQuery<TaskRunEvidence>({
+    queryKey: queryKeys.taskRunEvidence(taskId, runSessionId),
+    queryFn: () => createQueryApi().getTaskRunEvidence(requiredId(taskId, 'taskId'), requiredId(runSessionId, 'runSessionId')),
+    enabled: taskId !== undefined && runSessionId !== undefined,
   });
 }
 
@@ -412,6 +432,14 @@ export function useReviewQuery(reviewPacketId: string | undefined) {
     queryKey: queryKeys.review(reviewPacketId),
     queryFn: () => createQueryApi().getReview(requiredId(reviewPacketId, 'reviewPacketId')),
     enabled: reviewPacketId !== undefined,
+  });
+}
+
+export function useTaskReviewEvidenceQuery(taskId: string | undefined, reviewPacketId: string | undefined) {
+  return useQuery<TaskReviewEvidence>({
+    queryKey: queryKeys.taskReviewEvidence(taskId, reviewPacketId),
+    queryFn: () => createQueryApi().getTaskReviewEvidence(requiredId(taskId, 'taskId'), requiredId(reviewPacketId, 'reviewPacketId')),
+    enabled: taskId !== undefined && reviewPacketId !== undefined,
   });
 }
 
@@ -909,10 +937,6 @@ function invalidateProductLaneProjectQueries(queryClient: QueryClient, projectId
 }
 
 function invalidateTargetQuery(queryClient: QueryClient, target: ProductActionTarget) {
-  if (target.kind === 'lane') {
-    return queryClient.invalidateQueries({ queryKey: ['product-lanes', target.lane_id] });
-  }
-
   if (target.kind === 'route') {
     return Promise.resolve();
   }

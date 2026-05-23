@@ -1,12 +1,5 @@
-import { ScaffoldRoute } from '../../../_scaffold';
+import { TaskRunEvidenceRoute as TaskRunEvidenceFeatureRoute } from '../../../../../features/tasks/task-evidence-routes';
 
 export default function TaskRunEvidenceRoute() {
-  return (
-    <ScaffoldRoute
-      notice="Run evidence will be task-scoped."
-      sectionTitle="Run evidence"
-      subtitle="Run session evidence attached to this task."
-      title="Task Run"
-    />
-  );
+  return <TaskRunEvidenceFeatureRoute />;
 }

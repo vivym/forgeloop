@@ -76,10 +76,22 @@ export const objectTarget = (objectType: ProductObjectType, objectId: string, hr
   href,
 });
 
-export const laneTarget = (laneId: ProductLaneId, href = `/lanes/${laneId}`): ProductActionTarget => ({
-  kind: 'lane',
-  lane_id: laneId,
-  href,
+const productLaneRouteHref: Record<ProductLaneId, string> = {
+  requirements: '/requirements',
+  bugs: '/bugs',
+  'tech-debt': '/tech-debt',
+  initiatives: '/initiatives',
+  'spec-approver': '/specs-plans',
+  'execution-owner': '/tasks',
+  reviewer: '/tasks',
+  'qa-test-owner': '/reports/quality',
+  'release-owner': '/releases',
+  manager: '/dashboard',
+};
+
+export const laneTarget = (laneId: ProductLaneId): ProductActionTarget => ({
+  kind: 'route',
+  href: productLaneRouteHref[laneId],
 });
 
 export const routeTarget = (href: string): ProductActionTarget => ({

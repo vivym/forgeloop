@@ -97,7 +97,7 @@ const cockpitPackageFor = (
   item: Pick<typeof workItem, 'id' | 'kind' | 'title'>,
   executionPackageLike: typeof executionPackage,
 ) => {
-  const { work_item_id: _workItemId, ...publicPackage } = executionPackageLike;
+  const { task_id: _taskId, work_item_id: _workItemId, ...publicPackage } = executionPackageLike;
   return { ...publicPackage, scope_ref: scopeRefForItem(item) };
 };
 
@@ -135,7 +135,7 @@ const routeProductActions = [
       kind: 'object',
       object_type: 'execution_package',
       object_id: routeExecutionPackage.id,
-      href: `/packages/${routeExecutionPackage.id}`,
+      href: `/tasks/${routeExecutionPackage.task_id}/packages/${routeExecutionPackage.id}`,
     },
   },
 ] as const;
@@ -445,9 +445,22 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     blockers: [],
     generated_at: '2026-05-18T00:23:00.000Z',
   },
+  [`GET /query/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`]: {
+    object_ref: { type: 'execution_package', id: executionPackage.id },
+    task_ref: { type: 'task', id: executionPackage.task_id },
+    href: `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`,
+    package: cockpitPackageFor(workItem, executionPackage),
+  },
   [`GET /query/runs?project_id=${projectId}&limit=100`]: {
     items: [runListItem],
     degraded_sources: [],
+  },
+  [`GET /query/tasks/${executionPackage.task_id}/runs/${runSession.id}`]: {
+    object_ref: { type: 'run_session', id: runSession.id },
+    task_ref: { type: 'task', id: executionPackage.task_id },
+    package_ref: { type: 'execution_package', id: executionPackage.id },
+    href: `/tasks/${executionPackage.task_id}/runs/${runSession.id}`,
+    run_session: runSession,
   },
   [`GET /execution-packages/${executionPackage.id}`]: cockpitPackageFor(workItem, executionPackage),
   [`GET /run-sessions/${runSession.id}`]: runSession,
@@ -499,6 +512,13 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   },
   [`GET /query/reviews?project_id=${projectId}`]: [reviewPacket],
   [`GET /query/reviews/${reviewPacket.id}`]: reviewPacket,
+  [`GET /query/tasks/${executionPackage.task_id}/reviews/${reviewPacket.id}`]: {
+    object_ref: { type: 'review_packet', id: reviewPacket.id },
+    task_ref: { type: 'task', id: executionPackage.task_id },
+    package_ref: { type: 'execution_package', id: executionPackage.id },
+    href: `/tasks/${executionPackage.task_id}/reviews/${reviewPacket.id}`,
+    review_packet: reviewPacket,
+  },
   [`POST /review-packets/${reviewPacket.id}/approve`]: {
     review_packet_id: reviewPacket.id,
     status: 'completed',
@@ -802,6 +822,9 @@ export function installProductApiMock(overrides: ProductApiResponseMap = {}) {
     if (Object.prototype.hasOwnProperty.call(responses, key)) {
       const response = responses[key];
       const body = typeof response === 'function' ? await response({ input, init, key }) : response;
+      if (body instanceof Response) {
+        return body;
+      }
       return jsonResponse(body, 200);
     }
 

@@ -283,9 +283,9 @@ function ArtifactDetailView({
           <Metric label="Current revision" value={currentRevision ? revisionLabel(currentRevision) : artifact.current_revision_id ? 'Current revision' : 'Not created'} />
         </MetricGrid>
       </Section>
-      <Section title="Parent context">
+      <Section title="Source Object Context">
         <InlineActions>
-          <Link to={productScopeHref(artifact.scope_ref)}>Parent item</Link>
+          <Link to={productScopeHref(artifact.scope_ref)}>{scopeLabel(artifact.scope_ref)}</Link>
         </InlineActions>
       </Section>
       {kind === 'plan' ? <PlanPackageState plan={artifact} /> : null}
@@ -447,7 +447,7 @@ function ReadOnlyRevisionLayout({
       <Section title="Revision metadata">
         {meta}
         <InlineActions>
-          <Link to={productScopeHref(scopeRef)}>Parent item</Link>
+          <Link to={productScopeHref(scopeRef)}>{scopeLabel(scopeRef)}</Link>
           <Link to={artifactLink}>{artifactLabel}</Link>
         </InlineActions>
       </Section>
@@ -472,10 +472,10 @@ function ArtifactTable({ artifacts, basePath, emptyMessage }: { artifacts: Produ
         { key: 'resolution', header: 'Resolution', cell: (artifact) => formatValue(artifact.resolution) },
         {
           key: 'parent',
-          header: 'Parent',
+          header: 'Source Object Context',
           cell: (artifact) =>
             artifact.parent ? (
-              <Link to={productScopeHref(artifact.parent)}>{artifact.parent.title ?? 'Parent item'}</Link>
+              <Link to={productScopeHref(artifact.parent)}>{artifact.parent.title ?? scopeLabel(artifact.parent)}</Link>
             ) : (
               'Not linked'
             ),
@@ -686,10 +686,10 @@ function eventParentContext(event: TimelineEntry, scopeRef: ObjectRef) {
     (event.object_type === scopeRef.type && event.object_id === scopeRef.id) ||
     (payloadScopeRef !== undefined && payloadScopeRef.type === scopeRef.type && payloadScopeRef.id === scopeRef.id)
   ) {
-    return `Parent: ${scopeLabel(scopeRef)}`;
+    return `Source Object Context: ${scopeLabel(scopeRef)}`;
   }
 
-  return 'Parent context: typed parent linkage not recorded on this event';
+  return 'Source Object Context: typed source linkage not recorded on this event';
 }
 
 function eventTimelineDescription(event: TimelineEntry, scopeRef: ObjectRef) {
@@ -722,7 +722,7 @@ function scopeLabel(scopeRef: ObjectRef): string {
     case 'task':
       return 'Task';
     default:
-      return 'Parent item';
+      return 'Source object';
   }
 }
 

@@ -108,6 +108,7 @@ export const planRevision = {
 
 export const executionPackage = {
   id: 'package-web-product',
+  task_id: 'task-1',
   work_item_id: workItem.id,
   scope_ref: { type: 'requirement', id: workItem.id, title: workItem.title },
   spec_id: spec.id,
@@ -216,7 +217,7 @@ export const cockpitPlanFor = (item: Pick<WorkItemCockpitResponse['item'], 'id' 
 };
 
 export const cockpitPackageFor = (item: Pick<WorkItemCockpitResponse['item'], 'id' | 'kind' | 'title'>) => {
-  const { work_item_id: _workItemId, ...publicPackage } = executionPackage;
+  const { task_id: _taskId, work_item_id: _workItemId, ...publicPackage } = executionPackage;
   return { ...publicPackage, scope_ref: scopeRefForItem(item) };
 };
 
@@ -515,7 +516,7 @@ export const productActionFixtures = {
       kind: 'object',
       object_type: 'execution_package',
       object_id: executionPackage.id,
-      href: `/packages/${executionPackage.id}`,
+      href: `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`,
     },
   },
   blocked: {
@@ -542,9 +543,8 @@ export const productActionFixtures = {
     enabled: true,
     kind: 'navigate',
     target: {
-      kind: 'lane',
-      lane_id: 'reviewer',
-      href: `/lanes/reviewer?project_id=${projectId}`,
+      kind: 'route',
+      href: `/board?lane=reviewer&project_id=${projectId}`,
     },
   },
   commandTargetFollowUp: {
@@ -566,7 +566,7 @@ export const productActionFixtures = {
       kind: 'object',
       object_type: 'execution_package',
       object_id: executionPackage.id,
-      href: `/packages/${executionPackage.id}`,
+      href: `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`,
     },
   },
 } satisfies Record<string, ProductAction>;
@@ -892,7 +892,7 @@ export const functionalLaneItems = [
           kind: 'object',
           object_type: 'review_packet',
           object_id: reviewPacket.id,
-          href: `/reviews/${reviewPacket.id}`,
+          href: `/tasks/${executionPackage.task_id}/reviews/${reviewPacket.id}`,
         },
       },
     ],
@@ -918,7 +918,7 @@ export const functionalLaneItems = [
           kind: 'object',
           object_type: 'execution_package',
           object_id: executionPackage.id,
-          href: `/packages/${executionPackage.id}`,
+          href: `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`,
         },
       },
     ],

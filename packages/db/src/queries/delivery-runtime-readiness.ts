@@ -72,13 +72,17 @@ const blockerMessages: Record<DeliveryRunReadinessBlockerCode, { message: string
   },
 };
 
-const packageHref = (executionPackage: ExecutionPackage): string => `/packages/${executionPackage.id}`;
+const packageHref = (executionPackage: ExecutionPackage): string | undefined =>
+  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`;
 
-const blocker = (code: DeliveryRunReadinessBlockerCode, executionPackage: ExecutionPackage): DeliveryRunReadinessBlocker => ({
-  code,
-  ...blockerMessages[code],
-  next_step_href: packageHref(executionPackage),
-});
+const blocker = (code: DeliveryRunReadinessBlockerCode, executionPackage: ExecutionPackage): DeliveryRunReadinessBlocker => {
+  const href = packageHref(executionPackage);
+  return {
+    code,
+    ...blockerMessages[code],
+    ...(href === undefined ? {} : { next_step_href: href }),
+  };
+};
 
 const policyTargetsLocalCodexRun = (executionPackage: ExecutionPackage): boolean => {
   const snapshot = executionPackage.package_policy_snapshot;

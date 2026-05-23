@@ -28,16 +28,39 @@ describe('task-scoped evidence query API', () => {
   it('serves package evidence only when package belongs to the requested task', async () => {
     await seedTaskPackageRunReview(repository, { task_id: 'task-1', package_id: 'pkg-1', run_id: 'run-1', review_id: 'review-1' });
 
-    await request(app.getHttpServer()).get('/query/tasks/task-1/packages/pkg-1').expect(200);
+    const response = await request(app.getHttpServer()).get('/query/tasks/task-1/packages/pkg-1').expect(200);
+    expect(response.body.package).toMatchObject({
+      id: 'pkg-1',
+      objective: 'Implement checkout guard.',
+      repo_id: 'repo-1',
+      required_artifact_kinds: ['execution_summary'],
+      allowed_paths: ['apps/control-plane-api/**'],
+    });
+    expect(response.body.package).not.toHaveProperty('work_item_id');
+    expect(response.body.package).not.toHaveProperty('owner_actor_id');
     await request(app.getHttpServer()).get('/query/tasks/task-other/packages/pkg-1').expect(404);
   });
 
   it('serves run and review evidence only through matching task scope', async () => {
     await seedTaskPackageRunReview(repository, { task_id: 'task-1', package_id: 'pkg-1', run_id: 'run-1', review_id: 'review-1' });
 
-    await request(app.getHttpServer()).get('/query/tasks/task-1/runs/run-1').expect(200);
+    const runResponse = await request(app.getHttpServer()).get('/query/tasks/task-1/runs/run-1').expect(200);
+    expect(runResponse.body.run_session).toMatchObject({
+      id: 'run-1',
+      execution_package_id: 'pkg-1',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+    });
     await request(app.getHttpServer()).get('/query/tasks/task-other/runs/run-1').expect(404);
-    await request(app.getHttpServer()).get('/query/tasks/task-1/reviews/review-1').expect(200);
+    const reviewResponse = await request(app.getHttpServer()).get('/query/tasks/task-1/reviews/review-1').expect(200);
+    expect(reviewResponse.body.review_packet).toMatchObject({
+      id: 'review-1',
+      execution_package_id: 'pkg-1',
+      run_session_id: 'run-1',
+      check_result_summary: 'Checks passed.',
+      risk_notes: [],
+    });
     await request(app.getHttpServer()).get('/query/tasks/task-other/reviews/review-1').expect(404);
   });
 });

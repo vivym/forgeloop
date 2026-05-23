@@ -1,12 +1,5 @@
-import { ScaffoldRoute } from '../../../_scaffold';
+import { TaskReviewEvidenceRoute as TaskReviewEvidenceFeatureRoute } from '../../../../../features/tasks/task-evidence-routes';
 
 export default function TaskReviewEvidenceRoute() {
-  return (
-    <ScaffoldRoute
-      notice="Review evidence will be task-scoped."
-      sectionTitle="Review evidence"
-      subtitle="Review packet evidence attached to this task."
-      title="Task Review"
-    />
-  );
+  return <TaskReviewEvidenceFeatureRoute />;
 }

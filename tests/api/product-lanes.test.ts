@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ExecutionPackage, ExecutionPackageDependency, Release, ReviewPacket, RunSession, SpecRevision } from '@forgeloop/domain';
+import type { ExecutionPackage, ExecutionPackageDependency, Release, ReviewPacket, RunSession, SpecRevision, Task } from '@forgeloop/domain';
 import type { ProductLaneId } from '@forgeloop/contracts';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
@@ -203,6 +203,31 @@ const saveReviewPacket = async (
   });
 
   return { runSession, reviewPacket };
+};
+
+const saveTaskScopedPackage = async (
+  repo: InMemoryDeliveryRepository,
+  executionPackage: ExecutionPackage,
+): Promise<ExecutionPackage> => {
+  const task: Task = {
+    id: `task-${executionPackage.id}`,
+    project_id: executionPackage.project_id,
+    title: 'Implement product lane task',
+    narrative_markdown: '',
+    execution_brief: 'Verify product lane evidence links are task scoped.',
+    acceptance_checklist: ['Task-scoped product actions only use real task ids.'],
+    status: 'ready',
+    parent_ref: { type: 'requirement', id: executionPackage.work_item_id },
+    controlling_spec_revision_id: executionPackage.spec_revision_id,
+    controlling_plan_revision_id: executionPackage.plan_revision_id,
+    stale_state: 'current',
+    created_at: now,
+    updated_at: now,
+  };
+  await repo.saveTask(task);
+  const taskScopedPackage = { ...executionPackage, task_id: task.id, updated_at: now };
+  await repo.saveExecutionPackage(taskScopedPackage);
+  return taskScopedPackage;
 };
 
 const saveApprovedReviewPacket = async (
@@ -425,15 +450,32 @@ describe('product lane projections', () => {
       description: expect.stringMatching(/review evidence must be generated before the reviewer can decide/i),
       target: expect.objectContaining({
         kind: 'object',
+        object_type: 'requirement',
+        object_id: executionPackage.work_item_id,
+        href: `/requirements/${executionPackage.work_item_id}`,
+      }),
+    });
+    const forbiddenFallbackHref = ['/tasks', executionPackage.work_item_id, 'packages', executionPackage.id].join('/');
+    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'reviewer')).resolves.not.toMatchObject({
+      target: expect.objectContaining({ href: forbiddenFallbackHref }),
+    });
+
+    const taskScopedPackage = await saveTaskScopedPackage(repo, executionPackage);
+    await expect(getPrimaryCockpitAction(app, taskScopedPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
+      kind: 'navigate',
+      label: 'Generate Review Packet evidence first',
+      description: expect.stringMatching(/review evidence must be generated before the reviewer can decide/i),
+      target: expect.objectContaining({
+        kind: 'object',
         object_type: 'execution_package',
-        object_id: executionPackage.id,
-        href: `/packages/${executionPackage.id}`,
+        object_id: taskScopedPackage.id,
+        href: `/tasks/${taskScopedPackage.task_id}/packages/${taskScopedPackage.id}`,
       }),
     });
 
-    const { reviewPacket } = await saveReviewPacket(repo, executionPackage);
+    const { reviewPacket } = await saveReviewPacket(repo, taskScopedPackage);
 
-    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
+    await expect(getPrimaryCockpitAction(app, taskScopedPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
       kind: 'navigate',
       label: 'Decide Review Packet',
       description: expect.stringMatching(/approve.*request changes/i),
@@ -441,7 +483,7 @@ describe('product lane projections', () => {
         kind: 'object',
         object_type: 'review_packet',
         object_id: reviewPacket.id,
-        href: `/reviews/${reviewPacket.id}`,
+        href: `/tasks/${taskScopedPackage.task_id}/reviews/${reviewPacket.id}`,
       }),
     });
   });
@@ -497,7 +539,7 @@ describe('product lane projections', () => {
 
   it('returns release-owner Work Item Cockpit next actions with state-specific decisions', async () => {
     const { app, repo } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await saveTaskScopedPackage(repo, await seedReadyExecutionPackageThroughApi(app));
     await saveApprovedReviewPacket(repo, executionPackage);
     const reviewedPackage = await repo.getExecutionPackage(executionPackage.id);
     await repo.saveExecutionPackage({
@@ -638,7 +680,7 @@ describe('product lane projections', () => {
       .send({ actor_id: actorReviewer, rationale: 'Verify product lane projections before approval.' })
       .expect(201);
 
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
+    const executionPackage = await saveTaskScopedPackage(repo, await seedReadyExecutionPackageThroughApi(app));
     const upstreamPackage: ExecutionPackage = {
       ...executionPackage,
       id: 'execution-package-product-lane-upstream',

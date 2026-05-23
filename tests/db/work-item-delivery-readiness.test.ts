@@ -124,6 +124,7 @@ const planRevisionFixture = (overrides: Partial<PlanRevision> = {}): PlanRevisio
 
 const packageFixture = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
   id: 'pkg-1',
+  task_id: 'task-1',
   work_item_id: 'wi-1',
   spec_id: 'spec-1',
   spec_revision_id: 'spec-r1',
@@ -518,7 +519,7 @@ describe('Work Item delivery readiness', () => {
     expect(releaseStage?.blockers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'missing_linked_release' })]));
   });
 
-  it('uses canonical Work Item routes for pre-release blocker object links', () => {
+  it('uses typed source object routes for pre-release blocker object links', () => {
     const readiness = deriveWorkItemDeliveryReadiness(readyInput({ linkedRelease: null }));
 
     expect(readiness.stages.find((stage) => stage.id === 'release_readiness')).toMatchObject({
@@ -526,9 +527,9 @@ describe('Work Item delivery readiness', () => {
         expect.objectContaining({
           code: 'missing_linked_release',
           object_ref: expect.objectContaining({
-            object_type: 'work_item',
+            object_type: 'requirement',
             object_id: 'wi-1',
-            href: '/work-items/wi-1',
+            href: '/requirements/wi-1',
           }),
         }),
       ]),

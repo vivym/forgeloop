@@ -22,9 +22,9 @@ describe('responsive layout contract', () => {
   });
 
   it('renders target evidence scaffolds without old responsive class tokens', async () => {
-    const screen = await renderRoute('/tasks/task-web-product/runs/run-web-product');
+    const screen = await renderRoute('/tasks/task-1/runs/run-web-product');
 
-    expect(await screen.findByRole('heading', { name: 'Task Run' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Run Evidence' })).toBeTruthy();
     expect(screen.getByRole('main')).toBeTruthy();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });

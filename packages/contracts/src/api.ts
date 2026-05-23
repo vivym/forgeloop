@@ -131,19 +131,19 @@ export const productObjectTypeSchema = z.enum([
 export type ProductObjectType = z.infer<typeof productObjectTypeSchema>;
 
 const productHrefPrefixes = [
-  '/lanes',
+  '/dashboard',
+  '/my-work',
   '/initiatives',
   '/requirements',
   '/bugs',
   '/tech-debt',
   '/tasks',
   '/specs',
+  '/specs-plans',
   '/plans',
-  '/packages',
-  '/runs',
-  '/reviews',
+  '/board',
   '/releases',
-  '/pipeline',
+  '/reports',
 ] as const;
 
 const mutatingRouteSegments = new Set([
@@ -164,26 +164,6 @@ const mutatingRouteSegments = new Set([
 ]);
 
 const productHrefBaseUrl = 'https://forgeloop.local';
-
-const supportedProductLaneQueryKeys = new Set([
-  'project_id',
-  'actor_id',
-  'driver_actor_id',
-  'execution_owner_actor_id',
-  'reviewer_actor_id',
-  'qa_owner_actor_id',
-  'release_owner_actor_id',
-  'cursor',
-  'limit',
-  'kind',
-  'phase',
-  'status',
-  'gate_state',
-  'resolution',
-  'risk',
-  'blocked',
-  'stale',
-]);
 
 function decodeProductPathname(pathname: string): string | undefined {
   let decoded = pathname;
@@ -217,33 +197,6 @@ function isSafeProductPathname(pathname: string): boolean {
   }
 
   return true;
-}
-
-function productLaneTargetQueryKeys(href: string): string[] | undefined {
-  const withoutHash = href.split('#', 1)[0] ?? '';
-  const queryStart = withoutHash.indexOf('?');
-  if (queryStart === -1) {
-    return [];
-  }
-
-  const query = withoutHash.slice(queryStart + 1);
-  if (query.length === 0) {
-    return [];
-  }
-
-  const keys: string[] = [];
-  for (const part of query.split('&')) {
-    if (part.length === 0) {
-      return undefined;
-    }
-    const rawKey = part.split('=', 1)[0] ?? '';
-    try {
-      keys.push(decodeURIComponent(rawKey.replace(/\+/g, ' ')));
-    } catch {
-      return undefined;
-    }
-  }
-  return keys;
 }
 
 export const productHrefSchema = nonEmptyTrimmedStringSchema.refine(
@@ -281,6 +234,10 @@ export const productHrefSchema = nonEmptyTrimmedStringSchema.refine(
       return false;
     }
 
+    if (pathname === '/specs' || pathname === '/plans') {
+      return false;
+    }
+
     const segments = pathname.split('/').filter(Boolean);
     return !segments.some((segment, index) => index > 0 && mutatingRouteSegments.has(segment));
   },
@@ -297,54 +254,6 @@ const productActionObjectTargetSchema = z
   })
   .strict();
 
-const productActionLaneTargetSchema = z
-  .object({
-    kind: z.literal('lane'),
-    lane_id: productLaneIdSchema,
-    href: productHrefSchema,
-  })
-  .strict()
-  .superRefine((target, ctx) => {
-    let url: ProductParsedUrl;
-    try {
-      url = new URL(target.href, productHrefBaseUrl);
-    } catch {
-      return;
-    }
-
-    const pathname = decodeProductPathname(url.pathname);
-    if (pathname === undefined || pathname !== `/lanes/${target.lane_id}`) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['href'],
-        message: 'lane target href must match lane_id',
-      });
-    }
-
-    const queryKeys = productLaneTargetQueryKeys(target.href);
-    if (queryKeys === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['href'],
-        message: 'lane target href query must be parseable',
-      });
-      return;
-    }
-
-    const seenKeys = new Set<string>();
-    for (const key of queryKeys) {
-      if (!supportedProductLaneQueryKeys.has(key) || seenKeys.has(key)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['href'],
-          message: 'lane target href query must use supported product lane keys once',
-        });
-        return;
-      }
-      seenKeys.add(key);
-    }
-  });
-
 const productActionRouteTargetSchema = z
   .object({
     kind: z.literal('route'),
@@ -354,7 +263,6 @@ const productActionRouteTargetSchema = z
 
 export const productActionTargetSchema = z.discriminatedUnion('kind', [
   productActionObjectTargetSchema,
-  productActionLaneTargetSchema,
   productActionRouteTargetSchema,
 ]);
 export type ProductActionTarget = z.infer<typeof productActionTargetSchema>;

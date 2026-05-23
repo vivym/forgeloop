@@ -19,12 +19,6 @@ const validObjectTarget = {
   href: '/bugs/wi_1',
 } as const;
 
-const validLaneTarget = {
-  kind: 'lane',
-  lane_id: 'bugs',
-  href: '/lanes/bugs?project_id=p1',
-} as const;
-
 const validRouteTarget = {
   kind: 'route',
   href: '/releases',
@@ -247,74 +241,45 @@ describe('ProductAction contracts', () => {
       '/specs/spec_1/generate-draft',
       '/plans/plan_1/generate-draft',
       '/execution-packages/pkg_1/run',
+      '/lanes/bugs',
+      '/pipeline',
+      '/packages/pkg_1',
+      '/runs/run_1',
+      '/reviews/review_1',
+      '/specs',
+      '/plans',
     ]) {
       expect(productActionSchema.safeParse({ ...validNavigateAction, target: { ...validObjectTarget, href } }).success).toBe(
         false,
       );
     }
-
-    expect(
-      productActionSchema.safeParse({ ...validNavigateAction, target: { ...validObjectTarget, href: '/lanes/bugs' } })
-        .success,
-    ).toBe(true);
   });
 
-  it('validates lane targets against the target lane id', () => {
-    expect(productActionSchema.safeParse({ ...validNavigateAction, target: validLaneTarget }).success).toBe(true);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { kind: 'lane', lane_id: 'bugs', href: '/workbench/bugs?project_id=p1' },
-      }).success,
-    ).toBe(false);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/lanes/requirements?project_id=p1' },
-      }).success,
-    ).toBe(false);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { ...validLaneTarget, href: `/lanes/bugs?${'role'}=${'work'}-${'item'}-${'owner'}` },
-      }).success,
-    ).toBe(false);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/lanes/bugs?project_id=p1&project_id=p2' },
-      }).success,
-    ).toBe(false);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/lanes/bugs?project_id=p1&kind=bug&blocked=true' },
-      }).success,
-    ).toBe(true);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { kind: 'lane', lane_id: 'execution-owner', href: '/lanes/execution-owner?project_id=p1&execution_owner_actor_id=actor-owner' },
-      }).success,
-    ).toBe(true);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { kind: 'lane', lane_id: 'execution-owner', href: '/lanes/execution-owner?project_id=p1&owner_actor_id=actor-owner' },
-      }).success,
-    ).toBe(false);
+  it('rejects legacy lane targets and accepts product IA route targets', () => {
     expect(() =>
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/lanes/%E0%A4%A' },
+        target: { kind: 'lane', lane_id: 'bugs', href: '/lanes/bugs?project_id=p1' },
       }),
     ).not.toThrow();
     expect(
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { ...validLaneTarget, href: '/lanes/%E0%A4%A' },
+        target: { kind: 'lane', lane_id: 'bugs', href: '/lanes/bugs?project_id=p1' },
       }).success,
     ).toBe(false);
+    expect(
+      productActionSchema.safeParse({
+        ...validNavigateAction,
+        target: { kind: 'route', href: '/bugs?project_id=p1&kind=bug&blocked=true' },
+      }).success,
+    ).toBe(true);
+    expect(
+      productActionSchema.safeParse({
+        ...validNavigateAction,
+        target: { kind: 'route', href: '/tasks?project_id=p1&reviewer_actor_id=actor-reviewer' },
+      }).success,
+    ).toBe(true);
   });
 
   it('validates concrete command object ids and version types', () => {

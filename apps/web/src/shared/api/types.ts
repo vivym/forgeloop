@@ -333,6 +333,29 @@ export interface RunOperatorCommandResponse {
 export type RequestedChange = NonNullable<WorkItemCockpitResponse['review_packets'][number]['requested_changes']>[number];
 export type ReviewPacket = WorkItemCockpitResponse['review_packets'][number];
 
+export interface TaskPackageEvidence {
+  object_ref: ObjectRef;
+  task_ref: ObjectRef;
+  href: string;
+  package: ExecutionPackage;
+}
+
+export interface TaskRunEvidence {
+  object_ref: ObjectRef;
+  task_ref: ObjectRef;
+  package_ref: ObjectRef;
+  href: string;
+  run_session: RunSession;
+}
+
+export interface TaskReviewEvidence {
+  object_ref: ObjectRef;
+  task_ref: ObjectRef;
+  package_ref: ObjectRef;
+  href: string;
+  review_packet: ReviewPacket;
+}
+
 export interface TimelineEntry {
   id: string;
   source: string;

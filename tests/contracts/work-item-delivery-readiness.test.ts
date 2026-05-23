@@ -14,7 +14,7 @@ const action = {
   label: 'Open Package',
   enabled: true,
   kind: 'navigate',
-  target: { kind: 'object', object_type: 'execution_package', object_id: 'pkg-1', href: '/packages/pkg-1' },
+  target: { kind: 'object', object_type: 'execution_package', object_id: 'pkg-1', href: '/tasks/task-1/packages/pkg-1' },
 } as const;
 
 const commandAction = {
@@ -38,7 +38,7 @@ const stage = {
   label: 'Execution',
   state: 'passed',
   owner_lane: 'execution-owner',
-  object_refs: [{ object_type: 'execution_package', object_id: 'pkg-1', href: '/packages/pkg-1' }],
+  object_refs: [{ object_type: 'execution_package', object_id: 'pkg-1', href: '/tasks/task-1/packages/pkg-1' }],
   blockers: [],
   evidence_refs: [],
   primary_action: action,
