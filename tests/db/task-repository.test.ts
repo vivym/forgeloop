@@ -215,6 +215,19 @@ function runTaskRepositoryExamples(name: string, createRepository: () => Deliver
       expect(await repository.listTasksForParent({ type: 'requirement', id: ids.workItem })).toEqual([taskFixture]);
     });
 
+    it('matches task parent refs by object identity when display metadata differs', async () => {
+      const repository = createRepository();
+      await seedProjectActorWorkItemSpecPlan(repository);
+      const taskWithTitledParent: Task = {
+        ...taskFixture,
+        parent_ref: { type: 'requirement', id: ids.workItem, title: 'Checkout guard requirement' },
+      };
+
+      await repository.saveTask(taskWithTitledParent);
+
+      expect(await repository.listTasksForParent({ type: 'requirement', id: ids.workItem })).toEqual([taskWithTitledParent]);
+    });
+
     it('links execution packages to tasks without exposing package registries as product pages', async () => {
       const repository = createRepository();
       await seedProjectActorWorkItemSpecPlan(repository);
@@ -271,7 +284,10 @@ describe('Task repository Drizzle adapter contract', () => {
       try {
         const repository = new DrizzleDeliveryRepository(db);
         await seedProjectActorWorkItemSpecPlan(repository);
-        await repository.saveTask(taskFixture);
+        await repository.saveTask({
+          ...taskFixture,
+          parent_ref: { type: 'requirement', id: ids.workItem, title: 'Checkout guard requirement' },
+        });
         await repository.saveExecutionPackage(executionPackageFixture);
 
         const parentRef: ObjectRef = { type: 'requirement', id: ids.workItem };
@@ -285,4 +301,38 @@ describe('Task repository Drizzle adapter contract', () => {
       }
     });
   }
+});
+
+describe('Task repository Drizzle adapter missing task guard', () => {
+  it('rejects linking an execution package to a nonexistent task before updating the package', async () => {
+    let updateCalled = false;
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [],
+          }),
+        }),
+      }),
+      update: () => {
+        updateCalled = true;
+        return {
+          set: () => ({
+            where: () => ({
+              returning: async () => [{ id: ids.package }],
+            }),
+          }),
+        };
+      },
+    };
+    const repository = new DrizzleDeliveryRepository(db as never);
+
+    await expect(
+      repository.linkExecutionPackageToTask({
+        task_id: '77777777-7777-4777-8777-777777777779',
+        execution_package_id: ids.package,
+      }),
+    ).rejects.toThrow('Task 77777777-7777-4777-8777-777777777779 was not found');
+    expect(updateCalled).toBe(false);
+  });
 });

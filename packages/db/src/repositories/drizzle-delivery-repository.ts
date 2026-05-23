@@ -260,6 +260,8 @@ const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
 const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
 
 const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
+const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
+  left?.type === right.type && left.id === right.id;
 
 const timestampMillis = (value: string | undefined): number | undefined => {
   if (value === undefined) {
@@ -1880,7 +1882,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const rows = await this.db
       .select()
       .from(tasks)
-      .where(sql`${tasks.parentRef} = ${JSON.stringify(parentRef)}::jsonb`)
+      .where(and(sql`${tasks.parentRef}->>'type' = ${parentRef.type}`, sql`${tasks.parentRef}->>'id' = ${parentRef.id}`))
       .orderBy(asc(tasks.createdAt));
     return rows.map((row) => fromDbRecord<Task>(row));
   }
@@ -1991,6 +1993,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async linkExecutionPackageToTask(input: { task_id: string; execution_package_id: string }): Promise<void> {
+    const task = await this.getTask(input.task_id);
+    if (task === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
+    }
     const [row] = await this.db
       .update(execution_packages)
       .set({ taskId: input.task_id })
@@ -2052,7 +2058,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (attachment === undefined) {
       throw new DomainError('INVALID_TRANSITION', `Attachment ${attachmentId} was not found`);
     }
-    const linked_object_refs = attachment.linked_object_refs.some((ref) => valuesEqual(ref, objectRef))
+    const linked_object_refs = attachment.linked_object_refs.some((ref) => objectRefIdentityMatches(ref, objectRef))
       ? attachment.linked_object_refs
       : [...attachment.linked_object_refs, objectRef];
     const updated = { ...attachment, linked_object_refs };

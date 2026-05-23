@@ -81,6 +81,31 @@ function runAttachmentRepositoryExamples(name: string, createRepository: () => D
       });
       expect(await repository.listAttachmentsForObject('task', '77777777-7777-4777-8777-777777777771')).toHaveLength(1);
     });
+
+    it('deduplicates linked attachment refs by object identity when display metadata differs', async () => {
+      const repository = createRepository();
+      await repository.saveAttachment(attachmentFixture);
+
+      await repository.linkAttachmentToObject(attachmentFixture.id, {
+        type: 'task',
+        id: '77777777-7777-4777-8777-777777777771',
+        title: 'Implement checkout guard',
+      });
+      await repository.linkAttachmentToObject(attachmentFixture.id, {
+        type: 'task',
+        id: '77777777-7777-4777-8777-777777777771',
+      });
+
+      expect(await repository.getAttachment(attachmentFixture.id)).toMatchObject({
+        linked_object_refs: [
+          {
+            type: 'task',
+            id: '77777777-7777-4777-8777-777777777771',
+            title: 'Implement checkout guard',
+          },
+        ],
+      });
+    });
   });
 }
 
@@ -107,6 +132,16 @@ describe('Attachment repository Drizzle adapter contract', () => {
         expect(
           await repository.listAttachmentsForObject(attachmentFixture.owner_object_type, attachmentFixture.owner_object_id),
         ).toHaveLength(1);
+        await repository.linkAttachmentToObject(attachmentFixture.id, {
+          type: 'task',
+          id: '77777777-7777-4777-8777-777777777771',
+          title: 'Implement checkout guard',
+        });
+        await repository.linkAttachmentToObject(attachmentFixture.id, {
+          type: 'task',
+          id: '77777777-7777-4777-8777-777777777771',
+        });
+        expect((await repository.getAttachment(attachmentFixture.id))?.linked_object_refs).toHaveLength(1);
       } finally {
         await pool.end();
       }
