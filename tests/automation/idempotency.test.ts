@@ -164,7 +164,7 @@ describe('automation idempotency helpers', () => {
 
   it('includes Spec draft generation mode and schema identity', () => {
     const specDraftBase = {
-      actionType: 'ensure_SPEC_draft',
+      actionType: 'ensure_package_drafts',
       targetObjectType: 'work_item',
       targetObjectId: 'work-item-1',
       automationScope: 'repo:project-1:repo-1',
@@ -196,8 +196,8 @@ describe('automation idempotency helpers', () => {
       }),
     });
 
-    expect(changedSchema.find((action) => action.actionType === 'ensure_PLAN_draft')?.idempotencyKey).not.toBe(
-      baseline.find((action) => action.actionType === 'ensure_PLAN_draft')?.idempotencyKey,
+    expect(changedSchema.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
+      baseline.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,
     );
     expect(changedSchema.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
       baseline.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,

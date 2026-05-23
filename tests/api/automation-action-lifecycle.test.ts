@@ -56,10 +56,10 @@ const signedPost = (app: INestApplication, pathAndQuery: string, body: Record<st
 
 const createActionBody = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
-  action_type: 'ensure_PLAN_draft',
-  target_object_type: 'work_item',
-  target_object_id: 'work-item-1',
-  target_revision_id: 'spec-revision-1',
+  action_type: 'ensure_package_drafts',
+  target_object_type: 'plan_revision',
+  target_object_id: 'plan-revision-1',
+  target_revision_id: 'default:plan-revision-1',
   target_status: 'approved',
   idempotency_key: `${id}-idempotency`,
   automation_scope: 'repo:project-1:repo-1',
@@ -67,8 +67,8 @@ const createActionBody = (id: string, overrides: Record<string, unknown> = {}) =
   capability_fingerprint: 'capability-fingerprint-1',
   precondition_fingerprint: 'precondition-fingerprint-1',
   action_input_json: {
-    work_item_id: 'work-item-1',
-    spec_revision_id: 'spec-revision-1',
+    plan_revision_id: 'plan-revision-1',
+    generation_key: 'default:plan-revision-1',
   },
   ...overrides,
 });
@@ -124,14 +124,14 @@ describe('internal automation action lifecycle', () => {
 
     expect(response.body.action).toMatchObject({
       id: 'action-create',
-      action_type: 'ensure_PLAN_draft',
-      target_object_type: 'work_item',
-      target_object_id: 'work-item-1',
+      action_type: 'ensure_package_drafts',
+      target_object_type: 'plan_revision',
+      target_object_id: 'plan-revision-1',
       status: 'pending',
       attempt: 0,
       action_input_json: {
-        work_item_id: 'work-item-1',
-        spec_revision_id: 'spec-revision-1',
+        plan_revision_id: 'plan-revision-1',
+        generation_key: 'default:plan-revision-1',
       },
     });
     expect(response.body.action).not.toHaveProperty('claim_token');
@@ -194,10 +194,10 @@ describe('internal automation action lifecycle', () => {
     await signedPost(app, '/internal/automation/actions', body).expect(201);
     const response = await signedPost(app, '/internal/automation/actions', {
       ...body,
-      target_revision_id: 'spec-revision-2',
+      target_revision_id: 'default:plan-revision-2',
       action_input_json: {
-        work_item_id: 'work-item-1',
-        spec_revision_id: 'spec-revision-2',
+        plan_revision_id: 'plan-revision-1',
+        generation_key: 'default:plan-revision-2',
       },
     }).expect(409);
 
@@ -276,9 +276,9 @@ describe('internal automation action lifecycle', () => {
       '/internal/automation/actions',
       createActionBody('action-repo-2', {
         automation_scope: 'repo:project-a:repo-2',
-        target_object_id: 'work-item-2',
+        target_object_id: 'plan-revision-2',
         idempotency_key: 'action-repo-2-key',
-        action_input_json: { work_item_id: 'work-item-2', spec_revision_id: 'spec-revision-1' },
+        action_input_json: { plan_revision_id: 'plan-revision-2', generation_key: 'default:plan-revision-1' },
       }),
     ).expect(201);
 

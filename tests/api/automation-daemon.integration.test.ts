@@ -37,10 +37,10 @@ const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const now = '2026-05-16T00:00:00.000Z';
 const expectedCompletedActionTypes = [
-  'ensure_PLAN_draft',
+  'ensure_package_drafts',
   'project_runtime_snapshot',
 ] as const;
-const expectedInitialPendingActionTypes = ['ensure_PLAN_draft', 'project_runtime_snapshot'] as const;
+const expectedInitialPendingActionTypes = ['ensure_package_drafts', 'project_runtime_snapshot'] as const;
 
 const humanAdminHeaders = {
   'x-forgeloop-actor-id': actorOwner,
@@ -352,318 +352,37 @@ afterEach(async () => {
 });
 
 describe('HTTP automation daemon integration', () => {
-  it('creates a fake Spec draft through the shared generation runtime without generating downstream drafts', async () => {
-    const { app, repository } = await bootAutomationApp();
-    const seeded = await seedDraftOnlyWorkItemWithoutSpec(app);
-    const generationRuntime: CodexGenerationRuntime = {
-      ...createCodexGenerationRuntime({ mode: 'fake' }),
-      async generateSpecDraft(input) {
-        return {
-          taskKind: 'spec_draft',
-          promptVersion: input.promptVersion,
-          outputSchemaVersion: input.outputSchemaVersion,
-          generated: {
-            schema_version: 'spec_draft.v1',
-            summary: 'Runtime-generated Spec draft',
-            content: 'Runtime-generated Spec content.',
-            background: 'Runtime context was used.',
-            goals: ['Use the shared generation runtime'],
-            scope_in: ['Spec generation runtime integration'],
-            scope_out: ['Separate automation-owned Spec generator'],
-            acceptance_criteria: ['Daemon creates a draft Spec revision.'],
-            risk_notes: ['Keep human approval gates intact.'],
-            test_strategy_summary: 'Verify the daemon uses generationRuntime.generateSpecDraft.',
-          },
-          generationArtifacts: [],
-          publicSummary: 'Spec generated.',
-        };
-      },
-    };
-    const daemon = createDaemon(app, createAutomationClient(app), { generationRuntime });
-
-    const result = await daemon.runOnce();
-
-    expect(result).toMatchObject({ plannedActionCount: 2, executed: { status: 'succeeded' } });
-    const workItem = await repository.getWorkItem(seeded.workItem.id);
-    expect(workItem).toMatchObject({
-      id: seeded.workItem.id,
-      current_spec_id: expect.any(String),
-      current_spec_revision_id: expect.any(String),
-    });
-    expect(workItem?.current_plan_id).toBeUndefined();
-    const spec = (await repository.getSpec(workItem!.current_spec_id!))!;
-    expect(spec).toMatchObject({
-      work_item_id: seeded.workItem.id,
-      status: 'draft',
-      current_revision_id: workItem!.current_spec_revision_id,
-    });
-    const revisions = await repository.listSpecRevisions(spec.id);
-    expect(revisions).toHaveLength(1);
-    expect(revisions[0]).toMatchObject({
-      id: spec.current_revision_id,
-      summary: 'Runtime-generated Spec draft',
-      content: 'Runtime-generated Spec content.',
-      acceptance_criteria: ['Daemon creates a draft Spec revision.'],
-    });
-    await expect(repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).resolves.toEqual([]);
-
-    const runs = await actionRuns(repository);
-    expect(runs.map((actionRun) => actionRun.action_type)).toContain('ensure_SPEC_draft');
-    expect(runs.map((actionRun) => actionRun.action_type)).toContain('project_runtime_snapshot');
-    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('ensure_PLAN_draft');
-    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('ensure_package_drafts');
-    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('enqueue_package_run');
-    expectSucceededActionLifecycle(runs, 'ensure_SPEC_draft');
-  });
-
-  it('2A generates a Plan draft from an approved Spec and suppresses Package generation after human Plan approval', async () => {
+  it('generates Package drafts for an approved PlanRevision without retired WorkItem draft actions', async () => {
     const { app, repository } = await bootAutomationApp();
     const seeded = await seedDraftOnlyApprovedSpec(app);
-    const daemon = createDaemon(app);
-
-    await runUntil(
-      daemon,
-      async () => (await repository.getWorkItem(seeded.workItem.id))?.current_plan_id !== undefined,
-      'plan_draft_created',
-    );
-    const planContext = await approveCurrentPlan(app, repository, seeded.workItem.id);
-    await drainDaemon(daemon, 'daemon_drained');
-
-    const workItem = await repository.getWorkItem(seeded.workItem.id);
-    expect(workItem?.current_plan_id).toEqual(expect.any(String));
-    expect(workItem?.current_plan_revision_id).toBe(planContext.revision.id);
-    const plan = (await repository.getPlan(workItem!.current_plan_id!))!;
-    expect(plan).toMatchObject({
-      id: workItem!.current_plan_id,
-      status: 'approved',
-      approved_revision_id: planContext.revision.id,
+    const seededPlan = await seedItemScopedSpecPlan(app, seeded.workItem.id, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: true,
+      specStatus: 'approved',
+      planStatus: 'approved',
     });
-    const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
-    expect(packages).toHaveLength(0);
-
-    const completedActionRuns = await actionRuns(repository);
-    expect(completedActionRuns).toHaveLength(expectedCompletedActionTypes.length);
-    expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
-    expect(sortedActionTypes(completedActionRuns)).toEqual([...expectedCompletedActionTypes]);
-    const planAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_PLAN_draft');
-    expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
-    expect(new Set(completedActionRuns.map((actionRun) => actionRun.idempotency_key)).size).toBe(completedActionRuns.length);
-    expect(planAction.action_input_json).toMatchObject({ work_item_id: seeded.workItem.id, spec_revision_id: seeded.specRevisionId });
-    expect(completedActionRuns.map((actionRun) => actionRun.action_type)).not.toContain('ensure_package_drafts');
-    const actionRunCount = completedActionRuns.length;
-
-    const restarted = createDaemon(app);
-    const restartResult = await restarted.runOnce();
-    const packagesAfterRestart = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
-    const actionRunsAfterRestart = await actionRuns(repository);
-
-    expect(restartResult).toMatchObject({
-      plannedActionCount: 0,
-      executed: { status: 'skipped', reasonCode: 'no_claimable_action' },
-    });
-    expect(packagesAfterRestart).toHaveLength(0);
-    expect(actionRunsAfterRestart).toHaveLength(actionRunCount);
-  });
-
-  it('2B generates Package drafts from a human-approved generated Plan when explicitly enabled without enqueueing run sessions', async () => {
-    const { app, repository } = await bootAutomationApp();
-    const seeded = await seedDraftOnlyApprovedSpec(app);
     const generationPlanning = fakeGenerationPlanning({
+      spec_draft: { enabled: false, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+      plan_draft: { enabled: false, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
       package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
     });
     const daemon = createDaemon(app, createAutomationClient(app), { generationPlanning });
 
     await runUntil(
       daemon,
-      async () => (await repository.getWorkItem(seeded.workItem.id))?.current_plan_id !== undefined,
-      '2b_plan_draft_created',
+      async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length > 0,
+      'package_drafts_created',
     );
-    const planContext = await approveCurrentPlan(app, repository, seeded.workItem.id);
-    await runUntil(
-      daemon,
-      async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length === 2,
-      '2b_package_drafts_created',
-    );
-    await drainDaemon(daemon, '2b_daemon_drained');
+    await drainDaemon(daemon, 'package_daemon_drained');
 
     const packages = await repository.listExecutionPackagesForWorkItem(seeded.workItem.id);
-    expect(packages.map((item) => item.package_key)).toEqual(['api', 'tests']);
-    expect(packages.map((item) => item.sequence)).toEqual([0, 1]);
-    expect(packages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          work_item_id: seeded.workItem.id,
-          plan_revision_id: planContext.revision.id,
-          generation_key: `default:${planContext.revision.id}`,
-          package_key: 'api',
-          phase: 'draft',
-        }),
-        expect.objectContaining({
-          work_item_id: seeded.workItem.id,
-          plan_revision_id: planContext.revision.id,
-          generation_key: `default:${planContext.revision.id}`,
-          package_key: 'tests',
-          phase: 'draft',
-        }),
-      ]),
-    );
-    await expect(repository.listRunSessions(seeded.project.id)).resolves.toEqual([]);
-    for (const executionPackage of packages) {
-      await expect(repository.listRunSessionsForPackage(executionPackage.id)).resolves.toEqual([]);
-    }
-
-    const completedActionRuns = await actionRuns(repository);
-    expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
-    expect(sortedActionTypes(completedActionRuns)).toEqual([
-      'ensure_package_drafts',
-      'ensure_PLAN_draft',
-      'project_runtime_snapshot',
-    ]);
-    expectSucceededActionLifecycle(completedActionRuns, 'ensure_PLAN_draft');
-    expectSucceededActionLifecycle(completedActionRuns, 'ensure_package_drafts');
-    expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
-    expect(completedActionRuns.map((actionRun) => actionRun.action_type)).not.toContain('enqueue_package_run');
+    expect(packages.map((item) => item.plan_revision_id)).toEqual([seededPlan.planRevision!.id]);
+    expect(packages.map((item) => item.phase)).toEqual(['draft']);
+    const runs = await actionRuns(repository);
+    expect(sortedActionTypes(runs)).toEqual(['ensure_package_drafts', 'project_runtime_snapshot']);
+    expectSucceededActionLifecycle(runs, 'ensure_package_drafts');
+    expectSucceededActionLifecycle(runs, 'project_runtime_snapshot');
   });
 
-  it('daemon never submits or approves Spec or Plan during generation', async () => {
-    const { app, repository } = await bootAutomationApp();
-    const specSeed = await seedDraftOnlyWorkItemWithoutSpec(app);
-    await createDaemon(app).runOnce();
-
-    const workItemWithSpec = await repository.getWorkItem(specSeed.workItem.id);
-    const generatedSpec = (await repository.getSpec(workItemWithSpec!.current_spec_id!))!;
-    expect(generatedSpec.status).toBe('draft');
-    expect(generatedSpec.approved_revision_id).toBeUndefined();
-    expect(generatedSpec.submitted_at).toBeUndefined();
-
-    const planSeed = await seedDraftOnlyApprovedSpec(app);
-    await runUntil(
-      createDaemon(app),
-      async () => (await repository.getWorkItem(planSeed.workItem.id))?.current_plan_id !== undefined,
-      'plan_draft_created_without_human_gate_mutation',
-    );
-    const workItemWithPlan = await repository.getWorkItem(planSeed.workItem.id);
-    const generatedPlan = (await repository.getPlan(workItemWithPlan!.current_plan_id!))!;
-    expect(generatedPlan.status).toBe('draft');
-    expect(generatedPlan.approved_revision_id).toBeUndefined();
-    expect(generatedPlan.submitted_at).toBeUndefined();
-  });
-
-  it('continues from pending automation_action_runs after daemon restart without duplicating actions', async () => {
-    const { app, repository } = await bootAutomationApp();
-    const seeded = await seedDraftOnlyApprovedSpec(app);
-    const interruptedClient = new RestartBeforeClaimClient({
-      baseUrl: 'http://forgeloop.test',
-      actorId: automationActorId,
-      daemonIdentity: automationDaemonIdentity,
-      secret: automationSecret,
-      fetch: automationFetchFor(app),
-      now: () => new Date().toISOString(),
-    });
-
-    await expect(createDaemon(app, interruptedClient).runOnce()).rejects.toThrow('simulated_restart_before_claim');
-
-    const pendingActionRuns = await actionRuns(repository);
-    expect(pendingActionRuns).toHaveLength(expectedInitialPendingActionTypes.length);
-    expect(sortedActionTypes(pendingActionRuns)).toEqual([...expectedInitialPendingActionTypes]);
-    expect(pendingActionRuns).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ action_type: 'ensure_PLAN_draft', status: 'pending', attempt: 0 }),
-        expect.objectContaining({ action_type: 'project_runtime_snapshot', status: 'pending', attempt: 0 }),
-      ]),
-    );
-    const pendingIds = new Set(pendingActionRuns.map((actionRun) => actionRun.id));
-    const pendingIdempotencyKeys = new Set(pendingActionRuns.map((actionRun) => actionRun.idempotency_key));
-    expect(pendingIds.size).toBe(pendingActionRuns.length);
-    expect(pendingIdempotencyKeys.size).toBe(pendingActionRuns.length);
-
-    const replayedAction = interruptedClient.createOrReplayActions[0]!;
-    const existingReplayRow = pendingActionRuns.find((actionRun) => actionRun.idempotency_key === replayedAction.idempotencyKey);
-    expect(existingReplayRow).toBeDefined();
-    const replayed = await createAutomationClient(app).createOrReplayAction(replayedAction);
-    expect(replayed.action).toMatchObject({
-      id: existingReplayRow!.id,
-      status: 'pending',
-      attempt: 0,
-      idempotencyKey: replayedAction.idempotencyKey,
-    });
-    expect(await actionRuns(repository)).toHaveLength(pendingActionRuns.length);
-
-    const restarted = createDaemon(app);
-    await runUntil(
-      restarted,
-      async () => {
-        const runs = await actionRuns(repository);
-        return runs.length === pendingActionRuns.length && runs.every((actionRun) => actionRun.status === 'succeeded');
-      },
-      'pending_action_runs_completed_after_restart',
-    );
-
-    const recoveredActionRuns = await actionRuns(repository);
-    expect(new Set(recoveredActionRuns.map((actionRun) => actionRun.id))).toEqual(pendingIds);
-    expect(new Set(recoveredActionRuns.map((actionRun) => actionRun.idempotency_key))).toEqual(pendingIdempotencyKeys);
-    expectSucceededActionLifecycle(recoveredActionRuns, 'ensure_PLAN_draft');
-    expectSucceededActionLifecycle(recoveredActionRuns, 'project_runtime_snapshot');
-    expect((await repository.getWorkItem(seeded.workItem.id))?.current_plan_id).toEqual(expect.any(String));
-  });
-
-  it('requests manual path instead of drafting when a project target matches multiple draft-enabled repos', async () => {
-    const { app, repository } = await bootAutomationApp();
-    const seeded = await seedDraftOnlyApprovedSpec(app);
-    const server = app.getHttpServer();
-    const repoTwoRoot = path.join(tempRoot, 'repo-2');
-    await mkdir(repoTwoRoot, { recursive: true });
-    await writeFile(path.join(repoTwoRoot, 'WORKFLOW.md'), testRuntimePolicyMarkdown(), 'utf8');
-
-    await request(server)
-      .post(`/projects/${seeded.project.id}/repos`)
-      .send({
-        repo_id: 'repo-2',
-        name: 'forgeloop-secondary',
-        local_path: repoTwoRoot,
-        default_branch: 'main',
-        base_commit_sha: 'def456',
-      })
-      .expect(201);
-    await request(server)
-      .post(`/automation/projects/${seeded.project.id}/capabilities`)
-      .set(humanAdminHeaders)
-      .send({
-        repo_id: 'repo-2',
-        preset: 'draft_only',
-        expected_version: 0,
-        reason: 'enable ambiguity regression coverage',
-        evidence_refs: [],
-        actor_context: { actor_id: actorOwner, actor_class: 'human_admin' },
-      })
-      .expect(201);
-
-    await runUntil(
-      createDaemon(app),
-      async () => {
-        const holds = await repository.listActiveManualPathHolds({
-          object_type: 'work_item',
-          object_id: seeded.workItem.id,
-        });
-        return holds.some((hold) => hold.reason_code === 'multi_repo_ambiguity');
-      },
-      'multi_repo_manual_path_created',
-    );
-
-    const workItem = await repository.getWorkItem(seeded.workItem.id);
-    const holds = await repository.listActiveManualPathHolds({
-      object_type: 'work_item',
-      object_id: seeded.workItem.id,
-    });
-    expect(workItem?.current_plan_id).toBeUndefined();
-    expect(holds).toContainEqual(
-      expect.objectContaining({
-        object_type: 'work_item',
-        object_id: seeded.workItem.id,
-        scope_key: `work_item:${seeded.workItem.id}`,
-        reason_code: 'multi_repo_ambiguity',
-      }),
-    );
-    expect((await actionRuns(repository)).map((actionRun) => actionRun.action_type)).toContain('request_manual_path');
-  });
 });

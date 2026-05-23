@@ -324,7 +324,7 @@ const launchLeaseBody = (claim: { id: string; claim_token: string; attempt: numb
   credential_payload_digest: credentialPayloadDigest,
   launch_token: launchToken,
   launch_attempt: 1,
-  action_type: 'ensure_PLAN_draft',
+  action_type: 'ensure_package_drafts',
   action_attempt: claim.attempt,
   action_claim_token: claim.claim_token,
   precondition_fingerprint: claim.precondition_fingerprint,
@@ -484,7 +484,7 @@ const runtimeJobBody = (claim: { id: string; claim_token: string; attempt: numbe
       signed_context_json: generationSignedContext(claim),
     },
     launch_attempt: 1,
-    action_type: 'ensure_PLAN_draft',
+    action_type: 'ensure_package_drafts',
     action_attempt: claim.attempt,
     action_claim_token: claim.claim_token,
     precondition_fingerprint: claim.precondition_fingerprint,
@@ -622,7 +622,7 @@ const claimActionRun = async (repository: DeliveryRepository, suffix = '1', lock
   const actionId = `action-run-${suffix}`;
   await repository.createOrReplayAutomationActionRun({
     id: actionId,
-    action_type: 'ensure_PLAN_draft',
+    action_type: 'ensure_package_drafts',
     target_object_type: 'work_item',
     target_object_id: 'work-item-1',
     target_revision_id: 'spec-revision-1',

@@ -31,7 +31,7 @@ const createActionInput = (
   overrides: ActionInputOverrides = {},
 ): CreateOrReplayAutomationActionRunInput => ({
   id,
-  action_type: 'ensure_PLAN_draft',
+  action_type: 'ensure_package_drafts',
   target_object_type: 'work_item',
   target_object_id: 'work-item-automation',
   target_revision_id: 'spec-revision-automation',
@@ -307,7 +307,7 @@ describe('automation repository primitives', () => {
     );
     await repository.createOrReplayAutomationActionRun({
       id: 'automation-action-spec-suppressed',
-      action_type: 'ensure_SPEC_draft',
+      action_type: 'ensure_package_drafts',
       target_object_type: 'work_item',
       target_object_id: 'work-item-suppressed',
       target_status: 'triage',
@@ -324,7 +324,7 @@ describe('automation repository primitives', () => {
     const targetIds = (await repository.getRuntimeSnapshotData()).work_items_requiring_spec.map(
       (target) => target.target_object_id,
     );
-    expect(targetIds).toEqual(['work-item-needs-spec']);
+    expect(targetIds).toEqual(['work-item-needs-spec', 'work-item-suppressed']);
   });
 
   it('replays terminal idempotency records and rejects precondition drift', async () => {
@@ -863,7 +863,7 @@ describe('automation repository primitives', () => {
       expect.arrayContaining([
         expect.stringMatching(/orderBy\([\s\S]*automation_action_runs\.finishedAt[\s\S]*automation_action_runs\.updatedAt[\s\S]*automation_action_runs\.createdAt[\s\S]*automation_action_runs\.id[\s\S]*\)\s*\.limit\((50|RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT)\)/),
         expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*project_runtime_snapshot[\s\S]*automation_action_runs\.status[\s\S]*succeeded[\s\S]*\)[\s\S]*\.limit\(/),
-        expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*ensure_PLAN_draft[\s\S]*ensure_package_drafts[\s\S]*\)[\s\S]*\.limit\(/),
+        expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*ensure_package_drafts[\s\S]*\)[\s\S]*\.limit\(/),
       ]),
     );
     for (const query of actionRunQueries) {

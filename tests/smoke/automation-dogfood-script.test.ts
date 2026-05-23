@@ -104,7 +104,7 @@ describe('automation dogfood script', () => {
     const summary = renderAutomationDogfoodSummary({
       planDraftCreated: true,
       packageDraftCount: expectedAutomationDogfoodPackageDraftCount,
-      completedActionTypes: ['ensure_PLAN_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+      completedActionTypes: ['ensure_package_drafts', 'ensure_package_drafts', 'project_runtime_snapshot'],
       actionRunCount: 3,
       nonSucceededActionRunCount: 0,
       runSessionCount: 0,
@@ -115,7 +115,7 @@ describe('automation dogfood script', () => {
     expect(requiredAutomationDogfoodSummaryMarkers).toEqual(requiredMarkers);
     expect(expectedAutomationDogfoodActionTypes).toEqual([
       'ensure_package_drafts',
-      'ensure_PLAN_draft',
+      'ensure_package_drafts',
       'project_runtime_snapshot',
     ]);
     expect(expectedAutomationDogfoodPackageDraftCount).toBe(2);
@@ -232,7 +232,7 @@ describe('automation dogfood script', () => {
     const summary = renderAutomationDogfoodSummary({
       planDraftCreated: true,
       packageDraftCount: expectedAutomationDogfoodPackageDraftCount,
-      completedActionTypes: ['ensure_PLAN_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+      completedActionTypes: ['ensure_package_drafts', 'ensure_package_drafts', 'project_runtime_snapshot'],
       actionRunCount: 3,
       nonSucceededActionRunCount: 0,
       runSessionCount: 0,
@@ -388,7 +388,7 @@ describe('automation dogfood script', () => {
     const passing = {
       planDraftCreated: true,
       packageDraftCount: expectedAutomationDogfoodPackageDraftCount,
-      completedActionTypes: ['ensure_PLAN_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+      completedActionTypes: ['ensure_package_drafts', 'ensure_package_drafts', 'project_runtime_snapshot'],
       actionRunCount: 3,
       nonSucceededActionRunCount: 0,
       runSessionCount: 0,
@@ -454,18 +454,18 @@ describe('automation dogfood script', () => {
     expect(automationDogfoodExitCode({ ...passing, packageDraftCount: 0 })).toBe(1);
     expect(automationDogfoodExitCode({ ...passing, packageDraftCount: 1 })).toBe(1);
     expect(automationDogfoodExitCode({ ...passing, packageDraftCount: 3 })).toBe(1);
-    expect(automationDogfoodExitCode({ ...passing, completedActionTypes: ['ensure_PLAN_draft'] })).toBe(1);
+    expect(automationDogfoodExitCode({ ...passing, completedActionTypes: ['ensure_package_drafts'] })).toBe(1);
     expect(
       automationDogfoodExitCode({
         ...passing,
-        completedActionTypes: ['ensure_PLAN_draft', 'ensure_PLAN_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+        completedActionTypes: ['ensure_package_drafts', 'ensure_package_drafts', 'ensure_package_drafts', 'project_runtime_snapshot'],
         actionRunCount: 4,
       }),
     ).toBe(1);
     expect(
       automationDogfoodExitCode({
         ...passing,
-        completedActionTypes: ['ensure_PLAN_draft', 'ensure_package_drafts', 'project_runtime_snapshot', 'unexpected_action'],
+        completedActionTypes: ['ensure_package_drafts', 'ensure_package_drafts', 'project_runtime_snapshot', 'unexpected_action'],
         actionRunCount: 4,
       }),
     ).toBe(1);

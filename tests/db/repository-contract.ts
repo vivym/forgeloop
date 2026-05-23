@@ -1407,7 +1407,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   await repository.createOrReplayAutomationActionRun({
     id: 'automation-action-contract-spec-suppression',
-    action_type: 'ensure_SPEC_draft',
+    action_type: 'ensure_package_drafts',
     target_object_type: 'work_item',
     target_object_id: specNeededWorkItem.id,
     target_status: specNeededWorkItem.phase,
@@ -2161,7 +2161,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const pendingActionInput = {
     id: 'automation-action-contract-pending',
-    action_type: 'ensure_PLAN_draft',
+    action_type: 'ensure_package_drafts',
     target_object_type: 'work_item',
     target_object_id: ids.workItem,
     target_revision_id: ids.specRevision2,

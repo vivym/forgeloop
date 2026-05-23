@@ -80,7 +80,7 @@ const actorOwner = process.env.FORGELOOP_ACTOR_OWNER ?? 'actor-owner';
 const actorReviewer = process.env.FORGELOOP_ACTOR_REVIEWER ?? 'actor-reviewer';
 const repoId = process.env.FORGELOOP_REPO_ID ?? 'forgeloop';
 const repoPath = resolve(process.env.FORGELOOP_REPO_PATH ?? process.cwd());
-const expectedPendingBeforeRestartActionTypes = ['ensure_plan_draft', 'project_runtime_snapshot'] as const;
+const expectedPendingBeforeRestartActionTypes = ['ensure_package_drafts', 'project_runtime_snapshot'] as const;
 
 const createDogfoodGenerationPlanning = (
   mode: AutomationGenerationPlanningConfig['mode'],
@@ -774,7 +774,7 @@ const runtimeJobIdsFromActionRuns = (actionRuns: AutomationActionRun[]): string[
   ...new Set(actionRuns.flatMap((actionRun) => actionRunGenerationArtifacts(actionRun).flatMap((artifact) => runtimeJobIdFromArtifact(artifact) ?? []))),
 ];
 
-const generationActionRunTypes = new Set(['ensure_spec_draft', 'ensure_plan_draft', 'ensure_package_drafts']);
+const generationActionRunTypes = new Set(['ensure_package_drafts', 'ensure_package_drafts', 'ensure_package_drafts']);
 
 const runtimeJobIdsForActionRun = (actionRun: AutomationActionRun): string[] => [
   ...new Set(actionRunGenerationArtifacts(actionRun).flatMap((artifact) => runtimeJobIdFromArtifact(artifact) ?? [])),
