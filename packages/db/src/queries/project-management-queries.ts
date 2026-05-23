@@ -58,7 +58,12 @@ export async function listMyWorkQueue(
     items: [
       ...actorWorkItems.map((workItem) => ({ item: workItemToMyWorkQueueItem(workItem), updated_at: workItem.updated_at })),
       ...actorTasks.flatMap((task) => {
-        const item = taskToMyWorkQueueItem(task);
+        const parentRefKey = task.parent_ref === undefined ? undefined : objectRefKey(task.parent_ref);
+        const parent =
+          parentRefKey === undefined
+            ? undefined
+            : workItems.find((workItem) => objectRefKey(workItemRef(workItem)) === parentRefKey);
+        const item = parent === undefined ? undefined : taskToMyWorkQueueItem(task, parent);
         return item === undefined ? [] : [{ item, updated_at: task.updated_at }];
       }),
       ...actorReleases.map((release) => ({ item: releaseToMyWorkQueueItem(release), updated_at: release.updated_at })),
@@ -285,18 +290,19 @@ function workItemToMyWorkQueueItem(workItem: WorkItem): MyWorkQueueItem {
   };
 }
 
-function taskToMyWorkQueueItem(task: Task): MyWorkQueueItem | undefined {
+function taskToMyWorkQueueItem(task: Task, parent: WorkItem): MyWorkQueueItem | undefined {
   const parentRef = task.parent_ref === undefined ? undefined : publicWorkItemRefFromObjectRef(task.parent_ref);
-  if (parentRef === undefined) {
+  if (parentRef === undefined || parentRef.id !== parent.id || parentRef.type !== workItemKindToObjectType(parent.kind)) {
     return undefined;
   }
 
   return {
-    id: `task:${task.id}`,
+    id: `${parentRef.type}:${parentRef.id}:task-attention:${task.id}`,
     object_ref: parentRef,
-    title: task.title,
+    title: parent.title,
     attention_reason: task.stale_state === 'current' ? 'task_ready_for_developer' : `task_${task.stale_state}`,
-    href: `/tasks/${task.id}`,
+    expected_action: task.title,
+    href: workItemHref(parent),
   };
 }
 

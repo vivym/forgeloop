@@ -2753,17 +2753,19 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveDevelopmentPlan(plan: DevelopmentPlan): Promise<void> {
-    this.developmentPlans.set(plan.id, clone(plan));
+    this.developmentPlans.set(plan.id, clone({ ...plan, items: [] }));
   }
 
   async getDevelopmentPlan(id: string): Promise<DevelopmentPlan | undefined> {
-    return this.cloneMaybe(this.developmentPlans.get(id));
+    const plan = this.developmentPlans.get(id);
+    return plan === undefined ? undefined : this.hydrateDevelopmentPlan(plan);
   }
 
   async listDevelopmentPlans(projectId: string): Promise<DevelopmentPlan[]> {
-    return valuesFor(this.developmentPlans)
+    const plans = valuesFor(this.developmentPlans)
       .filter((plan) => plan.project_id === projectId)
       .sort(byCreatedAtThenId);
+    return Promise.all(plans.map((plan) => this.hydrateDevelopmentPlan(plan)));
   }
 
   async saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void> {
@@ -2801,6 +2803,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return valuesFor(this.developmentPlanItems)
       .filter((item) => item.development_plan_id === developmentPlanId)
       .sort(byCreatedAtThenId);
+  }
+
+  private async hydrateDevelopmentPlan(plan: DevelopmentPlan): Promise<DevelopmentPlan> {
+    return {
+      ...clone(plan),
+      items: await this.listDevelopmentPlanItems(plan.id),
+    };
   }
 
   async saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void> {

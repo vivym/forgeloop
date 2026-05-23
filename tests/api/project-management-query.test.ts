@@ -37,7 +37,14 @@ describe('project management query API', () => {
     expect(response.body.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ object_ref: { type: 'requirement', id: 'req-1' } }),
-        expect.objectContaining({ object_ref: { type: 'task', id: 'task-1' } }),
+        expect.objectContaining({
+          id: 'requirement:req-1:task-attention:task-1',
+          object_ref: { type: 'requirement', id: 'req-1' },
+          title: 'Checkout guard requirement',
+          attention_reason: 'task_ready_for_developer',
+          expected_action: 'Implement checkout guard',
+          href: '/requirements/req-1',
+        }),
         expect.objectContaining({ object_ref: { type: 'release', id: 'release-1' } }),
       ]),
     );
@@ -49,6 +56,7 @@ describe('project management query API', () => {
       ]),
     );
     expect(response.body.degraded_sources).toEqual([]);
+    expect(JSON.stringify(response.body)).not.toContain('"type":"task"');
     expect(JSON.stringify(response.body)).not.toContain('"type":"work_item"');
     expect(JSON.stringify(response.body)).not.toContain('owner_actor_id');
   });

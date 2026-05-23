@@ -68,6 +68,7 @@ export type SpecGenerationGateReason =
 export type ExecutionPlanGenerationGateReason =
   | 'spec_not_approved'
   | 'approved_spec_revision_missing'
+  | 'approved_spec_revision_not_loaded'
   | 'spec_revision_not_approved_revision';
 
 export function canGenerateSpecFromPlanItem(input: {
@@ -97,7 +98,10 @@ export function canGenerateExecutionPlanFromApprovedSpec(input: {
   if (input.spec.approved_revision_id === undefined) {
     return { ok: false, reason: 'approved_spec_revision_missing' };
   }
-  if (input.specRevision !== undefined && input.specRevision.id !== input.spec.approved_revision_id) {
+  if (input.specRevision === undefined) {
+    return { ok: false, reason: 'approved_spec_revision_not_loaded' };
+  }
+  if (input.specRevision.id !== input.spec.approved_revision_id) {
     return { ok: false, reason: 'spec_revision_not_approved_revision' };
   }
   return { ok: true };

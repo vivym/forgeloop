@@ -37,6 +37,7 @@ export interface Execution extends ContractExecution {
 export type ExecutionStartGateReason =
   | 'execution_plan_not_approved'
   | 'approved_execution_plan_revision_missing'
+  | 'approved_execution_plan_revision_not_loaded'
   | 'execution_plan_revision_not_approved_revision';
 
 export function canStartExecutionFromApprovedExecutionPlan(input: {
@@ -49,10 +50,10 @@ export function canStartExecutionFromApprovedExecutionPlan(input: {
   if (input.executionPlan.approved_revision_id === undefined) {
     return { ok: false, reason: 'approved_execution_plan_revision_missing' };
   }
-  if (
-    input.executionPlanRevision !== undefined &&
-    input.executionPlanRevision.id !== input.executionPlan.approved_revision_id
-  ) {
+  if (input.executionPlanRevision === undefined) {
+    return { ok: false, reason: 'approved_execution_plan_revision_not_loaded' };
+  }
+  if (input.executionPlanRevision.id !== input.executionPlan.approved_revision_id) {
     return { ok: false, reason: 'execution_plan_revision_not_approved_revision' };
   }
   return { ok: true };

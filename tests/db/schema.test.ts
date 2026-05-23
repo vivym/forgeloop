@@ -647,6 +647,37 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(plan_revisions, 'author_actor_id', column(actors, 'id'))).toBe(true);
   });
 
+  it('defines AI-native planning graph foreign keys and immutable revision indexes', () => {
+    expect(hasForeignKey(development_plans, 'project_id', column(projects, 'id'))).toBe(true);
+    expect(hasForeignKey(development_plan_items, 'development_plan_id', column(development_plans, 'id'))).toBe(true);
+    expect(hasForeignKey(development_plan_source_links, 'development_plan_id', column(development_plans, 'id'))).toBe(true);
+    expect(hasForeignKey(brainstorming_sessions, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
+    expect(hasForeignKey(boundary_summaries, 'brainstorming_session_id', column(brainstorming_sessions, 'id'))).toBe(true);
+    expect(hasForeignKey(boundary_summary_revisions, 'boundary_summary_id', column(boundary_summaries, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plans, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plan_revisions, 'based_on_spec_revision_id', column(spec_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(executions, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
+    expect(
+      hasUniqueIndex(development_plan_item_revisions, 'dpi_revisions_item_revision_unique', [
+        'development_plan_item_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(boundary_summary_revisions, 'boundary_revisions_summary_revision_unique', [
+        'boundary_summary_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(execution_plan_revisions, 'execution_plan_revisions_plan_revision_unique', [
+        'execution_plan_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
+  });
+
   it('defines release link composite primary keys and durable foreign keys', () => {
     expect(primaryKeyColumnNames(release_work_items)).toContainEqual(['release_id', 'work_item_id']);
     expect(primaryKeyColumnNames(release_execution_packages)).toContainEqual(['release_id', 'package_id']);

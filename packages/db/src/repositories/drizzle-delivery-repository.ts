@@ -4008,18 +4008,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveDevelopmentPlan(plan: DevelopmentPlan): Promise<void> {
-    await this.upsert(development_plans, development_plans.id, plan);
+    await this.upsert(development_plans, development_plans.id, { ...plan, items: [] });
   }
 
   async getDevelopmentPlan(id: string): Promise<DevelopmentPlan | undefined> {
-    return this.getById(development_plans, development_plans.id, id);
+    const plan = await this.getById<DevelopmentPlan>(development_plans, development_plans.id, id);
+    return plan === undefined ? undefined : this.hydrateDevelopmentPlan(plan);
   }
 
   async listDevelopmentPlans(projectId: string): Promise<DevelopmentPlan[]> {
-    return this.listWhere<DevelopmentPlan>(development_plans, eq(development_plans.projectId, projectId), [
+    const plans = await this.listWhere<DevelopmentPlan>(development_plans, eq(development_plans.projectId, projectId), [
       development_plans.createdAt,
       development_plans.id,
     ]);
+    return Promise.all(plans.map((plan) => this.hydrateDevelopmentPlan(plan)));
   }
 
   async saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void> {
@@ -4064,6 +4066,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       eq(development_plan_items.developmentPlanId, developmentPlanId),
       [development_plan_items.createdAt, development_plan_items.id],
     );
+  }
+
+  private async hydrateDevelopmentPlan(plan: DevelopmentPlan): Promise<DevelopmentPlan> {
+    return {
+      ...plan,
+      items: await this.listDevelopmentPlanItems(plan.id),
+    };
   }
 
   async saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void> {

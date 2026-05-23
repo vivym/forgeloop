@@ -761,8 +761,12 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     await repository.saveExecutionPackage(executionPackageFixture());
 
     expect(await repository.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
-    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(developmentPlanFixture());
-    expect(await repository.listDevelopmentPlans(ids.project)).toEqual([developmentPlanFixture()]);
+    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(
+      developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+    );
+    expect(await repository.listDevelopmentPlans(ids.project)).toEqual([
+      developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+    ]);
     expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toMatchObject({
       id: ids.developmentPlanItem,
       development_plan_id: ids.developmentPlan,
@@ -854,7 +858,9 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       await transaction.saveExecution(executionFixture());
 
       expect(await transaction.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
-      expect(await transaction.getDevelopmentPlan(ids.developmentPlan)).toEqual(developmentPlanFixture());
+      expect(await transaction.getDevelopmentPlan(ids.developmentPlan)).toEqual(
+        developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+      );
       expect(await transaction.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
       expect(await transaction.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
       expect(await transaction.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
@@ -862,7 +868,9 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     });
 
     expect(await repository.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
-    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(developmentPlanFixture());
+    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(
+      developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+    );
     expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toEqual(developmentPlanItemFixture());
     expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
     expect(await repository.getBoundarySummary(ids.boundarySummary)).toEqual(boundarySummaryFixture());
