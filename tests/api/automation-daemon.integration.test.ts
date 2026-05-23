@@ -27,6 +27,7 @@ import {
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import type { AutomationActionRun } from '../../packages/domain/src/automation';
 import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../../packages/domain/src/index';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { testRuntimePolicyMarkdown } from '../helpers/runtime-policy-repo';
 
 const automationSecret = 'test-secret';
@@ -193,17 +194,12 @@ const seedDraftOnlyApprovedSpec = async (
       intake_context: requirementIntakeContext,
     })
     .expect(201)).body as WorkItem;
-  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
-  const revision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body as {
-    id: string;
-  };
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
-  const approvedSpec = (await request(server)
-    .post(`/specs/${spec.id}/approve`)
-    .set(reviewerHeaders)
-    .send({ actor_id: actorReviewer })
-    .expect(201)).body as Spec;
-  return { project, workItem, spec: approvedSpec, specRevisionId: revision.id };
+  const { spec, specRevision } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+    includePlan: false,
+  });
+  return { project, workItem, spec, specRevisionId: specRevision.id };
 };
 
 const seedDraftOnlyWorkItemWithoutSpec = async (app: INestApplication): Promise<{ project: Project; workItem: WorkItem }> => {

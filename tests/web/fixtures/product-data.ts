@@ -599,13 +599,17 @@ export const myWorkQueueResponse = {
       href: '/initiatives/init-1',
     },
     {
-      id: 'developer:task-1',
-      object_ref: { type: 'task', id: 'task-1' },
-      title: 'Developer task',
+      id: 'developer:development-plan-item-1',
+      object_ref: {
+        type: 'development_plan_item',
+        id: 'development-plan-item-1',
+        development_plan_id: 'development-plan-1',
+      },
+      title: 'Development Plan Item',
       attention_reason: 'developer_attention',
       expected_action: 'Start implementation',
       actor_id: actorId,
-      href: '/tasks/task-1',
+      href: '/development-plans/development-plan-1/items/development-plan-item-1',
     },
     {
       id: 'qa:bug-1',

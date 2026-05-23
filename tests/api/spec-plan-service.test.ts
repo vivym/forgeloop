@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 
 const actorProduct = 'actor-product';
 const actorTech = 'actor-tech';
@@ -23,16 +22,6 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
   afterEach(async () => {
     await app.close();
-  });
-
-  it('rejects direct source-object to Spec and Execution Plan generation', async () => {
-    expect(app.get(SpecPlanService)).toBeInstanceOf(SpecPlanService);
-
-    const { workItem } = await createProjectRepoWorkItem(app);
-    const server = app.getHttpServer();
-
-    await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(404);
-    await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(404);
   });
 
   it('generates Spec only from an approved Development Plan Item boundary', async () => {

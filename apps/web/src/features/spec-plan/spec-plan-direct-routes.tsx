@@ -179,7 +179,7 @@ function ArtifactDetailView({
                 Open current revision
               </Button>
             )}
-            <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} workItemId={artifact.scope_ref.id} />
+            <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} />
             <InlineNotice title="Creation and edits start from the typed parent planning flow." tone="info" />
           </div>
         </ActionRail>

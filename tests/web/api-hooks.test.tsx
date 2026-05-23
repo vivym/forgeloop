@@ -6,13 +6,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
 import {
-  useApprovePlanMutation,
-  useApproveSpecMutation,
   useCreateExecutionPackageMutation,
-  useCreateSpecMutation,
-  useGeneratePlanDraftMutation,
+  useApproveItemExecutionPlanMutation,
+  useApproveItemSpecMutation,
   useGeneratePackagesMutation,
-  useGenerateSpecDraftMutation,
+  useGenerateItemExecutionPlanDraftMutation,
+  useGenerateItemSpecDraftMutation,
   useLinkReleaseExecutionPackageMutation,
   useLinkReleaseWorkItemMutation,
   useMarkPackageReadyMutation,
@@ -25,11 +24,11 @@ import {
   useProductWorkItemsQuery,
   useRequirementQuery,
   useRequirementsQuery,
-  useRequestPlanChangesMutation,
-  useRequestSpecChangesMutation,
+  useRequestItemExecutionPlanChangesMutation,
+  useRequestItemSpecChangesMutation,
   useSpecsQuery,
-  useSubmitPlanForApprovalMutation,
-  useSubmitSpecForApprovalMutation,
+  useSubmitItemExecutionPlanForApprovalMutation,
+  useSubmitItemSpecForApprovalMutation,
   useUnlinkReleaseExecutionPackageMutation,
   useUnlinkReleaseWorkItemMutation,
   useWorkItemCockpitQuery,
@@ -413,7 +412,7 @@ describe('Web product API hooks', () => {
     const myWork = renderHook(() => useMyWorkQuery({ project_id: projectId, actor_id: actorId }), { wrapper });
     await waitFor(() => expect(myWork.result.current.isSuccess).toBe(true));
     expect(myWork.result.current.data?.items.map((item) => item.href)).toEqual(
-      expect.arrayContaining(['/requirements/req-1', '/tasks/task-1']),
+      expect.arrayContaining(['/requirements/req-1', '/development-plans/development-plan-1/items/development-plan-item-1']),
     );
 
     const requirements = renderHook(() => useRequirementsQuery({ project_id: projectId, limit: 100 }), { wrapper });
@@ -844,7 +843,7 @@ describe('Web product API hooks', () => {
     queryClient.clear();
   });
 
-  it('invalidates generated draft child lists for ProductAction draft commands', async () => {
+  it('rejects retired ProductAction draft commands', async () => {
     const fetchMock = installProductApiMock({
       'POST /specs/spec-product-action/generate-draft': {
         id: 'spec-rev-product-action',
@@ -910,32 +909,26 @@ describe('Web product API hooks', () => {
     } as const;
 
     const specMutation = renderHook(() => useProductActionCommandMutation({ projectId, action: specAction }), { wrapper });
-    await specMutation.result.current.mutateAsync();
+    await expect(specMutation.result.current.mutateAsync()).rejects.toThrow(/Development Plan Item scoped commands/);
     const planMutation = renderHook(() => useProductActionCommandMutation({ projectId, action: planAction }), { wrapper });
-    await planMutation.result.current.mutateAsync();
+    await expect(planMutation.result.current.mutateAsync()).rejects.toThrow(/Development Plan Item scoped commands/);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/specs/spec-product-action/generate-draft',
-      expect.objectContaining({ method: 'POST' }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/plans/plan-product-action/generate-draft',
-      expect.objectContaining({ method: 'POST' }),
-    );
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/generate-draft'), expect.anything());
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.specRevisions('spec-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevisions('plan-product-action') });
-
     specMutation.unmount();
     planMutation.unmount();
     queryClient.clear();
   });
 
-  it('invalidates generated draft child lists for standalone draft hooks', async () => {
+  it('invalidates item-scoped draft resources for standalone draft hooks', async () => {
+    const developmentPlanId = 'development-plan-web-product';
+    const itemId = 'development-plan-item-web-product';
     const fetchMock = installProductApiMock({
-      'POST /specs/spec-product-action/generate-draft': {
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/spec/generate-draft`]: {
         id: 'spec-rev-product-action',
         spec_id: 'spec-product-action',
-        scope_ref: workItemScopeRef,
+        development_plan_item_id: itemId,
         revision_number: 2,
         summary: 'Generated spec draft',
         content: 'Spec draft',
@@ -946,17 +939,14 @@ describe('Web product API hooks', () => {
         acceptance_criteria: ['Criteria'],
         test_strategy_summary: 'Test strategy',
       },
-      'POST /plans/plan-product-action/generate-draft': {
-        id: 'plan-rev-product-action',
-        plan_id: 'plan-product-action',
-        scope_ref: workItemScopeRef,
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/execution-plan/generate-draft`]: {
+        id: 'execution-plan-rev-product-action',
+        execution_plan_id: 'execution-plan-product-action',
+        development_plan_item_id: itemId,
+        based_on_spec_revision_id: 'spec-rev-product-action',
         revision_number: 2,
-        summary: 'Generated plan draft',
-        content: 'Plan draft',
-        implementation_summary: 'Implementation',
-        split_strategy: 'Single package',
-        test_matrix: ['Vitest'],
-        rollback_notes: 'Revert',
+        summary: 'Generated execution plan draft',
+        content: 'Execution plan draft',
       },
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -965,109 +955,33 @@ describe('Web product API hooks', () => {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
 
-    const specMutation = renderHook(
-      () => useGenerateSpecDraftMutation({ workItemId: workItem.id, specId: 'spec-product-action' }),
-      { wrapper },
-    );
+    const specMutation = renderHook(() => useGenerateItemSpecDraftMutation({ developmentPlanId, itemId }), { wrapper });
     await specMutation.result.current.mutateAsync();
-    const planMutation = renderHook(
-      () => useGeneratePlanDraftMutation({ workItemId: workItem.id, planId: 'plan-product-action' }),
-      { wrapper },
-    );
+    const planMutation = renderHook(() => useGenerateItemExecutionPlanDraftMutation({ developmentPlanId, itemId }), { wrapper });
     await planMutation.result.current.mutateAsync();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/specs/spec-product-action/generate-draft',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/spec/generate-draft`,
       expect.objectContaining({ method: 'POST' }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/plans/plan-product-action/generate-draft',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/execution-plan/generate-draft`,
       expect.objectContaining({ method: 'POST' }),
     );
-    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.specRevisions('spec-product-action') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevisions('plan-product-action') });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['development-plans'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['development-plan', developmentPlanId] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['development-plan-item', developmentPlanId, itemId] });
 
     specMutation.unmount();
     planMutation.unmount();
     queryClient.clear();
   });
 
-  it('updates every cached Work Item cockpit lane variant after creating planning artifacts', async () => {
+  it('submits, approves, and requests Spec changes through item-scoped lifecycle hooks with actor headers', async () => {
+    const developmentPlanId = 'development-plan-web-product';
+    const itemId = 'development-plan-item-web-product';
     const fetchMock = installProductApiMock({
-      'POST /work-items/work-item-web-product/specs': {
-        id: 'spec-created-all-lanes',
-        scope_ref: workItemScopeRef,
-        entity_type: 'spec',
-        status: 'draft',
-        editing_state: 'editable',
-        gate_state: 'open',
-        resolution: 'unresolved',
-      },
-    });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(queryKeys.workItemCockpit(workItem.id), {
-      item: { ...workItem, current_spec_id: undefined },
-      current_spec: null,
-      current_plan: null,
-      packages: [],
-      run_sessions: [],
-      review_packets: [],
-      delivery_readiness: {
-        scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
-        active_lane: 'requirements',
-        overall_state: 'in_progress',
-        stages: [],
-        blockers: [],
-        evidence: [],
-        next_actions: [],
-        degraded_sources: [],
-      },
-    });
-    queryClient.setQueryData(queryKeys.workItemCockpit(workItem.id, 'reviewer'), {
-      item: { ...workItem, current_spec_id: undefined },
-      current_spec: null,
-      current_plan: null,
-      packages: [],
-      run_sessions: [],
-      review_packets: [],
-      delivery_readiness: {
-        scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
-        active_lane: 'reviewer',
-        overall_state: 'in_progress',
-        stages: [],
-        blockers: [],
-        evidence: [],
-        next_actions: [],
-        degraded_sources: [],
-      },
-    });
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-
-    const createSpec = renderHook(() => useCreateSpecMutation(workItem.id), { wrapper });
-    await createSpec.result.current.mutateAsync();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      `http://localhost:3000/work-items/${workItem.id}/specs`,
-      expect.objectContaining({ method: 'POST' }),
-    );
-    expect(queryClient.getQueryData<{ current_spec: { id: string } | null }>(queryKeys.workItemCockpit(workItem.id))?.current_spec?.id).toBe(
-      'spec-created-all-lanes',
-    );
-    expect(
-      queryClient.getQueryData<{ current_spec: { id: string } | null }>(queryKeys.workItemCockpit(workItem.id, 'reviewer'))
-        ?.current_spec?.id,
-    ).toBe('spec-created-all-lanes');
-
-    createSpec.unmount();
-    queryClient.clear();
-  });
-
-  it('submits, approves, and requests Spec changes through lifecycle hooks with actor headers', async () => {
-    const fetchMock = installProductApiMock({
-      'POST /specs/spec-1/submit-for-approval': {
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/spec/submit-for-approval`]: {
         id: 'spec-1',
         entity_type: 'spec',
         scope_ref: workItemScopeRef,
@@ -1077,7 +991,7 @@ describe('Web product API hooks', () => {
         resolution: 'none',
         current_revision_id: 'spec-rev-1',
       },
-      'POST /specs/spec-1/approve': {
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/spec/approve`]: {
         id: 'spec-1',
         entity_type: 'spec',
         scope_ref: workItemScopeRef,
@@ -1088,7 +1002,7 @@ describe('Web product API hooks', () => {
         current_revision_id: 'spec-rev-1',
         approved_revision_id: 'spec-rev-1',
       },
-      'POST /specs/spec-1/request-changes': {
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/spec/request-changes`]: {
         id: 'spec-1',
         entity_type: 'spec',
         scope_ref: workItemScopeRef,
@@ -1105,21 +1019,17 @@ describe('Web product API hooks', () => {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
 
-    const submit = renderHook(() => useSubmitSpecForApprovalMutation({ specId: 'spec-1', workItemId: workItem.id }), {
-      wrapper,
-    });
+    const submit = renderHook(() => useSubmitItemSpecForApprovalMutation({ developmentPlanId, itemId }), { wrapper });
     await submit.result.current.mutateAsync({ actor_id: 'actor-owner' });
 
-    const approve = renderHook(() => useApproveSpecMutation({ specId: 'spec-1', workItemId: workItem.id }), { wrapper });
+    const approve = renderHook(() => useApproveItemSpecMutation({ developmentPlanId, itemId }), { wrapper });
     await approve.result.current.mutateAsync({ actor_id: 'actor-reviewer', rationale: 'Spec approved for implementation.' });
 
-    const requestChanges = renderHook(() => useRequestSpecChangesMutation({ specId: 'spec-1', workItemId: workItem.id }), {
-      wrapper,
-    });
+    const requestChanges = renderHook(() => useRequestItemSpecChangesMutation({ developmentPlanId, itemId }), { wrapper });
     await requestChanges.result.current.mutateAsync({ actor_id: 'actor-reviewer', rationale: 'Clarify acceptance criteria.' });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/specs/spec-1/submit-for-approval',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/spec/submit-for-approval`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-owner' }),
@@ -1127,7 +1037,7 @@ describe('Web product API hooks', () => {
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/specs/spec-1/approve',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/spec/approve`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
@@ -1135,56 +1045,43 @@ describe('Web product API hooks', () => {
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/specs/spec-1/request-changes',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/spec/request-changes`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
         body: JSON.stringify({ actor_id: 'actor-reviewer', rationale: 'Clarify acceptance criteria.' }),
       }),
     );
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.spec('spec-1') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.specRevisions('spec-1') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.specReplay('spec-1') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['specs'] });
-    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['development-plan', developmentPlanId] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['development-plan-item', developmentPlanId, itemId] });
 
     queryClient.clear();
   });
 
-  it('submits, approves, and requests Plan changes through lifecycle hooks and refreshes packages after approval', async () => {
+  it('submits, approves, and requests Execution Plan changes through item-scoped lifecycle hooks', async () => {
+    const developmentPlanId = 'development-plan-web-product';
+    const itemId = 'development-plan-item-web-product';
     const fetchMock = installProductApiMock({
-      'POST /plans/plan-1/submit-for-approval': {
-        id: 'plan-1',
-        entity_type: 'plan',
-        scope_ref: workItemScopeRef,
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/execution-plan/submit-for-approval`]: {
+        id: 'execution-plan-1',
+        development_plan_item_id: itemId,
         status: 'in_review',
-        editing_state: 'locked',
-        gate_state: 'awaiting_approval',
-        resolution: 'none',
-        current_revision_id: 'plan-rev-1',
+        current_revision_id: 'execution-plan-rev-1',
       },
-      'POST /plans/plan-1/approve': {
-        id: 'plan-1',
-        entity_type: 'plan',
-        scope_ref: workItemScopeRef,
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/execution-plan/approve`]: {
+        id: 'execution-plan-1',
+        development_plan_item_id: itemId,
         status: 'approved',
-        editing_state: 'locked',
-        gate_state: 'approved',
-        resolution: 'approved',
-        current_revision_id: 'plan-rev-approved',
-        approved_revision_id: 'plan-rev-approved',
+        current_revision_id: 'execution-plan-rev-approved',
+        approved_revision_id: 'execution-plan-rev-approved',
         approved_at: '2026-05-19T08:00:00.000Z',
         approved_by_actor_id: 'actor-reviewer',
       },
-      'POST /plans/plan-1/request-changes': {
-        id: 'plan-1',
-        entity_type: 'plan',
-        scope_ref: workItemScopeRef,
+      [`POST /development-plans/${developmentPlanId}/items/${itemId}/execution-plan/request-changes`]: {
+        id: 'execution-plan-1',
+        development_plan_item_id: itemId,
         status: 'changes_requested',
-        editing_state: 'editable',
-        gate_state: 'changes_requested',
-        resolution: 'changes_requested',
-        current_revision_id: 'plan-rev-approved',
+        current_revision_id: 'execution-plan-rev-approved',
       },
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1197,21 +1094,17 @@ describe('Web product API hooks', () => {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
 
-    const submit = renderHook(() => useSubmitPlanForApprovalMutation({ planId: 'plan-1', workItemId: workItem.id }), {
-      wrapper,
-    });
+    const submit = renderHook(() => useSubmitItemExecutionPlanForApprovalMutation({ developmentPlanId, itemId }), { wrapper });
     await submit.result.current.mutateAsync({ actor_id: 'actor-owner' });
 
-    const approve = renderHook(() => useApprovePlanMutation({ planId: 'plan-1', workItemId: workItem.id }), { wrapper });
+    const approve = renderHook(() => useApproveItemExecutionPlanMutation({ developmentPlanId, itemId }), { wrapper });
     await approve.result.current.mutateAsync({ actor_id: 'actor-reviewer', rationale: 'Plan approved for execution.' });
 
-    const requestChanges = renderHook(() => useRequestPlanChangesMutation({ planId: 'plan-1', workItemId: workItem.id }), {
-      wrapper,
-    });
+    const requestChanges = renderHook(() => useRequestItemExecutionPlanChangesMutation({ developmentPlanId, itemId }), { wrapper });
     await requestChanges.result.current.mutateAsync({ actor_id: 'actor-reviewer', rationale: 'Split rollout checks.' });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/plans/plan-1/submit-for-approval',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/execution-plan/submit-for-approval`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-owner' }),
@@ -1219,7 +1112,7 @@ describe('Web product API hooks', () => {
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/plans/plan-1/approve',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/execution-plan/approve`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
@@ -1227,18 +1120,15 @@ describe('Web product API hooks', () => {
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/plans/plan-1/request-changes',
+      `http://localhost:3000/development-plans/${developmentPlanId}/items/${itemId}/execution-plan/request-changes`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
         body: JSON.stringify({ actor_id: 'actor-reviewer', rationale: 'Split rollout checks.' }),
       }),
     );
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.plan('plan-1') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevisions('plan-1') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planReplay('plan-1') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['plans'] });
-    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['development-plan', developmentPlanId] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['development-plan-item', developmentPlanId, itemId] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 
     queryClient.clear();

@@ -22,6 +22,7 @@ import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-i
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
@@ -172,107 +173,41 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
 
 const approveSpec = async (app: INestApplication, workItemId: string) => {
   const server = app.getHttpServer();
-  const spec = (await request(server).post(`/work-items/${workItemId}/specs`).send({}).expect(201)).body;
-  expect(spec).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(spec).not.toHaveProperty('work_item_id');
-  const manualRevision = (
-    await request(server)
-      .post(`/specs/${spec.id}/revisions`)
-      .send({
-        summary: 'Manual API spec',
-        content: 'Manual control plane API spec.',
-        background: 'Delivery needs command coverage.',
-        goals: ['Expose delivery commands'],
-        scope_in: ['Control plane API'],
-        scope_out: ['Web UI'],
-        acceptance_criteria: ['API tests cover the delivery flow'],
-        risk_notes: ['Keep delivery in-memory for tests'],
-        test_strategy_summary: 'Nest + Supertest API tests',
-        author_actor_id: actorOwner,
-      })
-      .expect(201)
-  ).body;
-  expect(manualRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(manualRevision).not.toHaveProperty('work_item_id');
-  const generatedRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
-
-  expect(generatedRevision.id).not.toBe(manualRevision.id);
-  expect(generatedRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(generatedRevision).not.toHaveProperty('work_item_id');
-  expect(generatedRevision.acceptance_criteria).toContain('Spec, plan, package, run, and review commands are available.');
+  const { spec, specRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+    includePlan: false,
+  });
   const specResponse = (await request(server).get(`/specs/${spec.id}`).expect(200)).body;
   expect(specResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
   expect(specResponse).not.toHaveProperty('work_item_id');
   const revisionListResponse = (await request(server).get(`/specs/${spec.id}/revisions`).expect(200)).body;
   expect(revisionListResponse[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
   expect(revisionListResponse[0]).not.toHaveProperty('work_item_id');
-  const generatedRevisionResponse = (await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200)).body;
-  expect(generatedRevisionResponse).toMatchObject({ id: generatedRevision.id, scope_ref: { type: 'requirement', id: workItemId } });
+  const generatedRevisionResponse = (await request(server).get(`/spec-revisions/${specRevision.id}`).expect(200)).body;
+  expect(generatedRevisionResponse).toMatchObject({ id: specRevision.id, scope_ref: { type: 'requirement', id: workItemId } });
   expect(generatedRevisionResponse).not.toHaveProperty('work_item_id');
-  const submittedSpec = (
-    await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201)
-  ).body;
-  expect(submittedSpec).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(submittedSpec).not.toHaveProperty('work_item_id');
-  const approvedSpec = (
-    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)
-  ).body;
-  expect(approvedSpec).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(approvedSpec).not.toHaveProperty('work_item_id');
 
-  return { specId: spec.id, specRevisionId: generatedRevision.id };
+  return { specId: spec.id, specRevisionId: specRevision.id };
 };
 
 const approvePlan = async (app: INestApplication, workItemId: string) => {
   const server = app.getHttpServer();
-  const plan = (await request(server).post(`/work-items/${workItemId}/plans`).send({}).expect(201)).body;
-  expect(plan).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(plan).not.toHaveProperty('work_item_id');
-  const manualRevision = (
-    await request(server)
-      .post(`/plans/${plan.id}/revisions`)
-      .send({
-        summary: 'Manual API plan',
-        content: 'Manual control plane API plan.',
-        implementation_summary: 'Add Nest controller and service.',
-        split_strategy: 'One API package.',
-        dependency_order: ['api-package'],
-        test_matrix: ['pnpm test tests/api'],
-        risk_mitigations: ['Use in-memory repository in tests'],
-        rollback_notes: 'Revert API app changes.',
-        author_actor_id: actorOwner,
-      })
-      .expect(201)
-  ).body;
-  expect(manualRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(manualRevision).not.toHaveProperty('work_item_id');
-  const generatedRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
-
-  expect(generatedRevision.id).not.toBe(manualRevision.id);
-  expect(generatedRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(generatedRevision).not.toHaveProperty('work_item_id');
-  expect(generatedRevision.test_matrix).toContain('pnpm test tests/api');
-  const planResponse = (await request(server).get(`/plans/${plan.id}`).expect(200)).body;
+  const { plan, planRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+  });
+  const planResponse = (await request(server).get(`/plans/${plan!.id}`).expect(200)).body;
   expect(planResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
   expect(planResponse).not.toHaveProperty('work_item_id');
   const revisionListResponse = (await request(server).get(`/plans/${plan.id}/revisions`).expect(200)).body;
   expect(revisionListResponse[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
   expect(revisionListResponse[0]).not.toHaveProperty('work_item_id');
-  const generatedRevisionResponse = (await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200)).body;
-  expect(generatedRevisionResponse).toMatchObject({ id: generatedRevision.id, scope_ref: { type: 'requirement', id: workItemId } });
+  const generatedRevisionResponse = (await request(server).get(`/plan-revisions/${planRevision!.id}`).expect(200)).body;
+  expect(generatedRevisionResponse).toMatchObject({ id: planRevision!.id, scope_ref: { type: 'requirement', id: workItemId } });
   expect(generatedRevisionResponse).not.toHaveProperty('work_item_id');
-  const submittedPlan = (
-    await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201)
-  ).body;
-  expect(submittedPlan).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(submittedPlan).not.toHaveProperty('work_item_id');
-  const approvedPlan = (
-    await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)
-  ).body;
-  expect(approvedPlan).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(approvedPlan).not.toHaveProperty('work_item_id');
 
-  return { planId: plan.id, planRevisionId: generatedRevision.id };
+  return { planId: plan!.id, planRevisionId: planRevision!.id };
 };
 
 const createManualPackage = async (
@@ -583,8 +518,17 @@ describe('delivery control plane API', () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
 
-    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(400);
+    const draftSpec = await seedItemScopedSpecPlan(app, workItem.id, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: false,
+      specStatus: 'draft',
+    });
+    await request(server)
+      .post(`/development-plans/${draftSpec.developmentPlan.id}/items/${draftSpec.item.id}/spec/approve`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer })
+      .expect(400);
 
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
@@ -1111,29 +1055,20 @@ describe('delivery control plane API', () => {
     );
   });
 
-  it('supports Spec and Plan request-changes command paths', async () => {
+  it('supports item-scoped Spec and Execution Plan request-changes command paths', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
 
-    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-    await request(server)
-      .post(`/specs/${spec.id}/revisions`)
-      .send({
-        summary: 'Spec for changes',
-        content: 'Spec body',
-        background: 'Background',
-        goals: ['Goal'],
-        scope_in: ['Scope'],
-        scope_out: [],
-        acceptance_criteria: ['Criteria'],
-        test_strategy_summary: 'Tests',
-      })
-      .expect(201);
-    await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+    const specSeed = await seedItemScopedSpecPlan(app, workItem.id, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: false,
+      specStatus: 'in_review',
+    });
     expect(
       (
         await request(server)
-          .post(`/specs/${spec.id}/request-changes`)
+          .post(`/development-plans/${specSeed.developmentPlan.id}/items/${specSeed.item.id}/spec/request-changes`)
           .set(reviewerHeaders)
           .send({ actor_id: actorReviewer, rationale: 'Clarify the API acceptance criteria.' })
           .expect(201)
@@ -1141,29 +1076,31 @@ describe('delivery control plane API', () => {
     ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
 
     const { workItem: planWorkItem } = await createProjectRepoWorkItem(app);
-    const approvedSpec = await approveSpec(app, planWorkItem.id);
-    expect(approvedSpec.specId).toContain('spec');
-    const plan = (await request(server).post(`/work-items/${planWorkItem.id}/plans`).send({}).expect(201)).body;
+    const planSeed = await seedItemScopedSpecPlan(app, planWorkItem.id, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: false,
+    });
+    const executionPlanRevision = (
+      await request(server)
+        .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/execution-plan/generate-draft`)
+        .send({ actor_id: actorOwner })
+        .expect(201)
+    ).body;
+    expect(executionPlanRevision.id).toContain('execution-plan-revision');
     await request(server)
-      .post(`/plans/${plan.id}/revisions`)
-      .send({
-        summary: 'Plan for changes',
-        content: 'Plan body',
-        implementation_summary: 'Implementation',
-        split_strategy: 'One package',
-        test_matrix: ['pnpm test tests/api'],
-        rollback_notes: 'Revert',
-      })
+      .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/execution-plan/submit-for-approval`)
+      .set(ownerHeaders)
+      .send({ actor_id: actorOwner })
       .expect(201);
-    await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
     expect(
       (
         await request(server)
-          .post(`/plans/${plan.id}/request-changes`)
+          .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/execution-plan/request-changes`)
           .set(reviewerHeaders)
           .send({ actor_id: actorReviewer, rationale: 'Split the verification rollout steps.' })
           .expect(201)
       ).body,
-    ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
+    ).toMatchObject({ status: 'changes_requested' });
   });
 });

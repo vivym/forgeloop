@@ -1,12 +1,12 @@
 import { useState } from 'react';
 
 import {
-  useApprovePlanMutation,
-  useApproveSpecMutation,
-  useRequestPlanChangesMutation,
-  useRequestSpecChangesMutation,
-  useSubmitPlanForApprovalMutation,
-  useSubmitSpecForApprovalMutation,
+  useApproveItemExecutionPlanMutation,
+  useApproveItemSpecMutation,
+  useRequestItemExecutionPlanChangesMutation,
+  useRequestItemSpecChangesMutation,
+  useSubmitItemExecutionPlanForApprovalMutation,
+  useSubmitItemSpecForApprovalMutation,
 } from '../../shared/api/hooks';
 import type { SpecPlan } from '../../shared/api/types';
 import { Button, InlineNotice, Textarea } from '../../shared/ui';
@@ -16,8 +16,9 @@ export type SpecPlanLifecycleKind = 'spec' | 'plan';
 export interface SpecPlanLifecycleActionsProps {
   artifact: SpecPlan | null | undefined;
   actorId: string;
+  developmentPlanId?: string;
+  itemId?: string;
   kind: SpecPlanLifecycleKind;
-  workItemId?: string;
 }
 
 export function isStrictlyApproved(artifact: SpecPlan | null | undefined) {
@@ -48,20 +49,24 @@ function canReview(artifact: SpecPlan | null | undefined) {
   );
 }
 
-export function SpecPlanLifecycleActions({ actorId, artifact, kind, workItemId }: SpecPlanLifecycleActionsProps) {
-  const artifactId = artifact?.id ?? '';
+export function SpecPlanLifecycleActions({
+  actorId,
+  artifact,
+  developmentPlanId,
+  itemId,
+  kind,
+}: SpecPlanLifecycleActionsProps) {
   const label = kind === 'spec' ? 'Spec' : 'Plan';
   const [approveRationale, setApproveRationale] = useState('');
   const [changeRationale, setChangeRationale] = useState('');
   const [lastError, setLastError] = useState<string | null>(null);
-  const specMutationInput = { specId: artifactId, ...(workItemId === undefined ? {} : { workItemId }) };
-  const planMutationInput = { planId: artifactId, ...(workItemId === undefined ? {} : { workItemId }) };
-  const submitSpec = useSubmitSpecForApprovalMutation(specMutationInput);
-  const approveSpec = useApproveSpecMutation(specMutationInput);
-  const requestSpecChanges = useRequestSpecChangesMutation(specMutationInput);
-  const submitPlan = useSubmitPlanForApprovalMutation(planMutationInput);
-  const approvePlan = useApprovePlanMutation(planMutationInput);
-  const requestPlanChanges = useRequestPlanChangesMutation(planMutationInput);
+  const itemScopedInput = { developmentPlanId: developmentPlanId ?? '', itemId: itemId ?? '' };
+  const submitSpec = useSubmitItemSpecForApprovalMutation(itemScopedInput);
+  const approveSpec = useApproveItemSpecMutation(itemScopedInput);
+  const requestSpecChanges = useRequestItemSpecChangesMutation(itemScopedInput);
+  const submitPlan = useSubmitItemExecutionPlanForApprovalMutation(itemScopedInput);
+  const approvePlan = useApproveItemExecutionPlanMutation(itemScopedInput);
+  const requestPlanChanges = useRequestItemExecutionPlanChangesMutation(itemScopedInput);
   const submitMutation = kind === 'spec' ? submitSpec : submitPlan;
   const approveMutation = kind === 'spec' ? approveSpec : approvePlan;
   const requestChangesMutation = kind === 'spec' ? requestSpecChanges : requestPlanChanges;
@@ -80,6 +85,14 @@ export function SpecPlanLifecycleActions({ actorId, artifact, kind, workItemId }
     return (
       <div className="grid gap-3">
         <InlineNotice title={`No ${label} artifact is available for lifecycle actions.`} />
+      </div>
+    );
+  }
+
+  if (developmentPlanId === undefined || itemId === undefined) {
+    return (
+      <div className="grid gap-3">
+        <InlineNotice title={`${label} lifecycle actions require Development Plan Item context.`} tone="info" />
       </div>
     );
   }

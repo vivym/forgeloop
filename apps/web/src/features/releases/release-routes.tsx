@@ -249,9 +249,6 @@ function typedObjectHref(ref: ReleaseScopeRef): string {
 
 function objectLabel(type: ObjectRef['type']): string {
   if (type === 'tech_debt') return 'Tech Debt';
-  if (type === 'execution_package') return 'Package';
-  if (type === 'run_session') return 'Run';
-  if (type === 'review_packet') return 'Review';
   return formatValue(type);
 }
 

@@ -1,7 +1,7 @@
 import { Link, useSearchParams } from 'react-router';
 
 import { usePlansQuery, useSpecsQuery } from '../../shared/api/hooks';
-import type { ObjectRef, ProductListItem } from '../../shared/api/types';
+import type { ProductListItem } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { InlineActions, PageHeader, Section } from '../../shared/layout';
 import { Badge, InlineNotice, StatusPill } from '../../shared/ui';
@@ -176,7 +176,7 @@ function groupForItem(item: ProductListItem): QueueGroupId {
   return 'needs-authoring';
 }
 
-function sourceObjectHref(ref: ObjectRef): string {
+function sourceObjectHref(ref: NonNullable<ProductListItem['parent']>): string {
   switch (ref.type) {
     case 'initiative':
       return `/initiatives/${encodeURIComponent(ref.id)}`;
@@ -186,14 +186,20 @@ function sourceObjectHref(ref: ObjectRef): string {
       return `/bugs/${encodeURIComponent(ref.id)}`;
     case 'tech_debt':
       return `/tech-debt/${encodeURIComponent(ref.id)}`;
-    case 'task':
-      return `/tasks/${encodeURIComponent(ref.id)}`;
+    case 'development_plan_item':
+      return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
+    case 'spec':
+      return `/specs/${encodeURIComponent(ref.id)}`;
+    case 'execution_plan':
+      return `/plans/${encodeURIComponent(ref.id)}`;
+    case 'release':
+      return `/releases/${encodeURIComponent(ref.id)}`;
     default:
       return '/my-work';
   }
 }
 
-function sourceObjectLabel(ref: ObjectRef) {
+function sourceObjectLabel(ref: NonNullable<ProductListItem['parent']>) {
   return `${formatValue(ref.type)} ${ref.title ?? ref.id}`;
 }
 

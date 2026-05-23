@@ -43,6 +43,7 @@ import {
   type SpecRevision,
   type WorkItem,
 } from '../../packages/domain/src/index';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { seedReadyExecutionPackage, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
@@ -1449,36 +1450,41 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const { workItem } = await seedProjectRepoWorkItem(app);
     const server = app.getHttpServer();
-    const createdSpec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
-    await request(server).post(`/specs/${createdSpec.id}/generate-draft`).send({}).expect(201);
+    const specSeed = await seedItemScopedSpecPlan(app, workItem.id, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: false,
+      specStatus: 'draft',
+    });
+    const specCommandPath = `/development-plans/${specSeed.developmentPlan.id}/items/${specSeed.item.id}/spec`;
     await request(server)
-      .post(`/specs/${createdSpec.id}/submit-for-approval`)
+      .post(`${specCommandPath}/submit-for-approval`)
       .send({ actor_id: actorOwner })
       .expect(401);
     await request(server)
-      .post(`/specs/${createdSpec.id}/submit-for-approval`)
+      .post(`${specCommandPath}/submit-for-approval`)
       .set({ 'x-forgeloop-actor-id': actorOwner })
       .send({ actor_id: actorOwner })
       .expect(401);
     await request(server)
-      .post(`/specs/${createdSpec.id}/submit-for-approval`)
+      .post(`${specCommandPath}/submit-for-approval`)
       .set(daemonHeaders)
       .send({ actor_id: 'daemon-actor' })
       .expect(403);
-    await request(server).post(`/specs/${createdSpec.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
+    await request(server).post(`${specCommandPath}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
 
     await request(server)
-      .post(`/specs/${createdSpec.id}/approve`)
+      .post(`${specCommandPath}/approve`)
       .set(daemonHeaders)
       .send({ actor_id: actorReviewer })
       .expect(403);
     await request(server)
-      .post(`/specs/${createdSpec.id}/approve`)
+      .post(`${specCommandPath}/approve`)
       .set({ 'x-forgeloop-actor-id': 'daemon-actor' })
       .send({ actor_id: actorReviewer })
       .expect(401);
     await request(server)
-      .post(`/specs/${createdSpec.id}/approve`)
+      .post(`${specCommandPath}/approve`)
       .send({ actor_id: actorReviewer })
       .expect(401);
   });
@@ -4112,25 +4118,14 @@ describe('automation command boundaries', () => {
   it('stores based_on_spec_revision_id for manually created plan revisions', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
-    const ctx = await seedApprovedSpec(app);
-    const createdPlan = (await request(app.getHttpServer()).post(`/work-items/${ctx.workItem.id}/plans`).send({}).expect(201)).body as Plan;
+    const { workItem } = await seedProjectRepoWorkItem(app);
+    const seeded = await seedItemScopedSpecPlan(app, workItem.id, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+    });
 
-    const revision = (await request(app.getHttpServer())
-      .post(`/plans/${createdPlan.id}/revisions`)
-      .send({
-        summary: 'Manual plan revision',
-        content: 'Plan body',
-        implementation_summary: 'Implement the approved spec.',
-        split_strategy: 'Single package',
-        dependency_order: ['api-package'],
-        test_matrix: ['pnpm test'],
-        risk_mitigations: [],
-        rollback_notes: 'Revert',
-      })
-      .expect(201)).body as PlanRevision;
-
-    await expect(repository.getPlanRevision(revision.id)).resolves.toMatchObject({
-      based_on_spec_revision_id: ctx.specRevisionId,
+    await expect(repository.getPlanRevision(seeded.planRevision!.id)).resolves.toMatchObject({
+      based_on_spec_revision_id: seeded.specRevision.id,
     });
   });
 

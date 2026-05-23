@@ -2,7 +2,7 @@
 
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -50,6 +50,10 @@ const approvedPlan: SpecPlan = {
   current_revision_id: 'plan-rev-1',
   approved_revision_id: 'plan-rev-1',
 };
+const lifecycleContext = {
+  developmentPlanId: 'development-plan-1',
+  itemId: 'development-plan-item-1',
+};
 
 const renderLifecycle = (ui: ReactNode) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -59,6 +63,7 @@ const renderLifecycle = (ui: ReactNode) => {
 
 describe('SpecPlanLifecycleActions', () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -66,7 +71,7 @@ describe('SpecPlanLifecycleActions', () => {
   it('submits a draft Spec with a current revision', async () => {
     const user = userEvent.setup();
     const fetchMock = installProductApiMock({
-      'POST /specs/spec-1/submit-for-approval': {
+      'POST /development-plans/development-plan-1/items/development-plan-item-1/spec/submit-for-approval': {
         ...draftSpec,
         status: 'in_review',
         gate_state: 'awaiting_approval',
@@ -74,14 +79,14 @@ describe('SpecPlanLifecycleActions', () => {
     });
 
     renderLifecycle(
-      <SpecPlanLifecycleActions actorId="actor-owner" artifact={draftSpec} kind="spec" workItemId="work-item-1" />,
+      <SpecPlanLifecycleActions actorId="actor-owner" artifact={draftSpec} kind="spec" {...lifecycleContext} />,
     );
 
     await user.click(screen.getByRole('button', { name: 'Submit Spec for approval' }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        'http://localhost:3000/specs/spec-1/submit-for-approval',
+        'http://localhost:3000/development-plans/development-plan-1/items/development-plan-item-1/spec/submit-for-approval',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ actor_id: 'actor-owner' }),
@@ -98,11 +103,11 @@ describe('SpecPlanLifecycleActions', () => {
       gate_state: 'awaiting_approval',
     };
     const fetchMock = installProductApiMock({
-      'POST /plans/plan-1/approve': approvedPlan,
+      'POST /development-plans/development-plan-1/items/development-plan-item-1/execution-plan/approve': approvedPlan,
     });
 
     renderLifecycle(
-      <SpecPlanLifecycleActions actorId="actor-reviewer" artifact={inReviewPlan} kind="plan" workItemId="work-item-1" />,
+      <SpecPlanLifecycleActions actorId="actor-reviewer" artifact={inReviewPlan} kind="plan" {...lifecycleContext} />,
     );
 
     await user.type(screen.getByLabelText('Plan approval rationale'), 'Plan is executable.');
@@ -110,7 +115,7 @@ describe('SpecPlanLifecycleActions', () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        'http://localhost:3000/plans/plan-1/approve',
+        'http://localhost:3000/development-plans/development-plan-1/items/development-plan-item-1/execution-plan/approve',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ actor_id: 'actor-reviewer', rationale: 'Plan is executable.' }),
@@ -122,7 +127,7 @@ describe('SpecPlanLifecycleActions', () => {
   it('requires rationale before requesting changes', async () => {
     const user = userEvent.setup();
     const fetchMock = installProductApiMock({
-      'POST /specs/spec-1/request-changes': {
+      'POST /development-plans/development-plan-1/items/development-plan-item-1/spec/request-changes': {
         ...inReviewSpec,
         status: 'changes_requested',
         gate_state: 'changes_requested',
@@ -131,7 +136,7 @@ describe('SpecPlanLifecycleActions', () => {
     });
 
     renderLifecycle(
-      <SpecPlanLifecycleActions actorId="actor-reviewer" artifact={inReviewSpec} kind="spec" workItemId="work-item-1" />,
+      <SpecPlanLifecycleActions actorId="actor-reviewer" artifact={inReviewSpec} kind="spec" {...lifecycleContext} />,
     );
 
     expect((screen.getByRole('button', { name: 'Request Spec changes' }) as HTMLButtonElement).disabled).toBe(true);
@@ -142,7 +147,7 @@ describe('SpecPlanLifecycleActions', () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        'http://localhost:3000/specs/spec-1/request-changes',
+        'http://localhost:3000/development-plans/development-plan-1/items/development-plan-item-1/spec/request-changes',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ actor_id: 'actor-reviewer', rationale: 'Clarify rollout risk.' }),
@@ -157,14 +162,16 @@ describe('SpecPlanLifecycleActions', () => {
         <SpecPlanLifecycleActions
           actorId="actor-owner"
           artifact={{ ...draftSpec, current_revision_id: undefined }}
+          developmentPlanId={lifecycleContext.developmentPlanId}
+          itemId={lifecycleContext.itemId}
           kind="spec"
-          workItemId="work-item-1"
         />
         <SpecPlanLifecycleActions
           actorId="actor-owner"
           artifact={{ ...draftPlan, current_revision_id: undefined }}
+          developmentPlanId={lifecycleContext.developmentPlanId}
+          itemId={lifecycleContext.itemId}
           kind="plan"
-          workItemId="work-item-1"
         />
       </div>,
     );
@@ -172,6 +179,18 @@ describe('SpecPlanLifecycleActions', () => {
     expect(screen.getByText('Create a current Spec revision before submitting for approval.')).toBeTruthy();
     expect(screen.getByText('Plan approval is available after a current Plan revision exists.')).toBeTruthy();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
+  });
+
+  it('blocks lifecycle mutations without Development Plan Item context', async () => {
+    const user = userEvent.setup();
+    const fetchMock = installProductApiMock();
+
+    renderLifecycle(<SpecPlanLifecycleActions actorId="actor-owner" artifact={draftSpec} kind="spec" />);
+
+    expect(screen.getByText('Spec lifecycle actions require Development Plan Item context.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit Spec for approval' })).toBeNull();
+    await user.keyboard('{Enter}');
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/specs/'), expect.anything());
   });
 
   it('only treats artifacts as strictly approved when the approved revision is current', () => {

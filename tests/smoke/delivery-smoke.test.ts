@@ -14,6 +14,7 @@ import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/ru
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
@@ -188,21 +189,16 @@ const createApprovedSpecAndPlan = async (
       .expect(201)
   ).body;
 
-  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-  const specRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
-
-  const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
-  const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+  const { specRevision, planRevision } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+  });
 
   return {
     project,
     workItem,
     specRevisionId: specRevision.id,
-    planRevisionId: planRevision.id,
+    planRevisionId: planRevision!.id,
   };
 };
 

@@ -12,6 +12,7 @@ import {
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { createDbClient, DrizzleDeliveryRepository, type ForgeloopDb, plan_revisions, plans, specs } from '../../packages/db/src';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 
 const connectionString =
   process.env.FORGELOOP_TEST_DATABASE_URL?.trim() || process.env.FORGELOOP_DATABASE_URL?.trim() || undefined;
@@ -157,73 +158,40 @@ describeIfDb('durable revision lookup', () => {
 
   const approveSpec = async (app: INestApplication, workItemId: string) => {
     const server = app.getHttpServer();
-    const spec = (await request(server).post(`/work-items/${workItemId}/specs`).send({}).expect(201)).body;
-    const manualRevision = (
-      await request(server)
-        .post(`/specs/${spec.id}/revisions`)
-        .send({
-          summary: 'Manual API spec',
-          content: 'Manual control plane API spec.',
-          background: 'Delivery needs command coverage.',
-          goals: ['Expose delivery commands'],
-          scope_in: ['Control plane API'],
-          scope_out: ['Web UI'],
-          acceptance_criteria: ['API tests cover the delivery flow'],
-          risk_notes: ['Keep delivery durable for restart tests'],
-          test_strategy_summary: 'Nest + Supertest API tests',
-          author_actor_id: actorOwner,
-        })
-        .expect(201)
-    ).body;
-    const generatedRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
-
-    expect(generatedRevision.id).not.toBe(manualRevision.id);
-    expect(generatedRevision.acceptance_criteria).toContain('Spec, plan, package, run, and review commands are available.');
+    const { spec, specRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: false,
+    });
     await request(server).get(`/specs/${spec.id}`).expect(200);
     await request(server).get(`/specs/${spec.id}/revisions`).expect(200);
-    const generatedRevisionResponse = await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200);
-    expect(generatedRevisionResponse.body.id).toBe(generatedRevision.id);
-    await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+    const generatedRevisionResponse = await request(server).get(`/spec-revisions/${specRevision.id}`).expect(200);
+    expect(generatedRevisionResponse.body.id).toBe(specRevision.id);
 
-    return { specId: spec.id, specRevisionId: generatedRevision.id, manualSpecRevisionId: manualRevision.id };
+    return { specId: spec.id, specRevisionId: specRevision.id };
   };
 
   const createDraftPlan = async (app: INestApplication, workItemId: string) => {
-    return (await request(app.getHttpServer()).post(`/work-items/${workItemId}/plans`).send({}).expect(201)).body;
+    const { plan } = await seedItemScopedSpecPlan(app, workItemId, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      planStatus: 'draft',
+    });
+    return plan!;
   };
 
   const approvePlan = async (app: INestApplication, workItemId: string) => {
     const server = app.getHttpServer();
-    const plan = await createDraftPlan(app, workItemId);
-    const manualRevision = (
-      await request(server)
-        .post(`/plans/${plan.id}/revisions`)
-        .send({
-          summary: 'Manual API plan',
-          content: 'Manual control plane API plan.',
-          implementation_summary: 'Add Nest controller and service.',
-          split_strategy: 'One API package.',
-          dependency_order: ['api-package'],
-          test_matrix: ['pnpm test tests/api'],
-          risk_mitigations: ['Use durable repository in restart tests'],
-          rollback_notes: 'Revert API app changes.',
-          author_actor_id: actorOwner,
-        })
-        .expect(201)
-    ).body;
-    const generatedRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
-
-    expect(generatedRevision.id).not.toBe(manualRevision.id);
-    expect(generatedRevision.test_matrix).toContain('pnpm test tests/api');
+    const { plan, planRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+    });
     await request(server).get(`/plans/${plan.id}`).expect(200);
     await request(server).get(`/plans/${plan.id}/revisions`).expect(200);
-    const generatedRevisionResponse = await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200);
-    expect(generatedRevisionResponse.body.id).toBe(generatedRevision.id);
-    await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
+    const generatedRevisionResponse = await request(server).get(`/plan-revisions/${planRevision!.id}`).expect(200);
+    expect(generatedRevisionResponse.body.id).toBe(planRevision!.id);
 
-    return { planId: plan.id, planRevisionId: generatedRevision.id, manualPlanRevisionId: manualRevision.id };
+    return { planId: plan.id, planRevisionId: planRevision!.id, manualPlanRevisionId: planRevision!.id };
   };
 
   beforeEach(async () => {

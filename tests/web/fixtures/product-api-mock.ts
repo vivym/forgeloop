@@ -642,8 +642,6 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(routeWorkItem, [], 'execution-owner'),
   },
-  [`POST /work-items/${routeWorkItem.id}/specs`]: cockpitSpecFor(routeSpec, routeWorkItem),
-  [`POST /work-items/${routeWorkItem.id}/plans`]: cockpitPlanFor(routePlan, routeWorkItem),
   [`POST /specs/${spec.id}/generate-draft`]: cockpitSpecRevisionFor(specRevision, workItem),
   [`POST /specs/${routeSpec.id}/generate-draft`]: {
     ...cockpitSpecRevisionFor(specRevision, routeWorkItem),

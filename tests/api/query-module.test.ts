@@ -18,6 +18,7 @@ import {
   seedReadyLocalCodexExecutionPackage,
   seedSingleCredentialBinding,
 } from '../helpers/delivery-runtime-fixtures';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -678,26 +679,17 @@ describe('query module', () => {
     const { app } = await track(createTestApp());
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
-    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-    await request(server).post(`/specs/${spec.id}/revisions`).send(validSpecRevision).expect(201);
-    await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-    await request(server)
-      .post(`/specs/${spec.id}/approve`)
-      .set(reviewerHeaders)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved for replay.' })
-      .expect(201);
-
-    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
-    await request(server).post(`/plans/${plan.id}/revisions`).send(validPlanRevision).expect(201);
-    await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-    await request(server)
-      .post(`/plans/${plan.id}/approve`)
-      .set(reviewerHeaders)
-      .send({ actor_id: actorReviewer, rationale: 'Plan approved for replay.' })
-      .expect(201);
+    const { spec, plan } = await seedItemScopedSpecPlan(app, workItem.id, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      specDecision: 'approved',
+      specDecisionSummary: 'Spec approved for replay.',
+      planDecision: 'approved',
+      planDecisionSummary: 'Plan approved for replay.',
+    });
 
     const specReplay = await request(server).get(`/query/replay/spec/${spec.id}`).expect(200);
-    const planReplay = await request(server).get(`/query/replay/plan/${plan.id}`).expect(200);
+    const planReplay = await request(server).get(`/query/replay/plan/${plan!.id}`).expect(200);
 
     expect(specReplay.body).toEqual(
       expect.arrayContaining([

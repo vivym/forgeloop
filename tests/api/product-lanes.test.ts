@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ExecutionPackage, ExecutionPackageDependency, Release, ReviewPacket, RunSession, SpecRevision, Task } from '@forgeloop/domain';
+import type { Decision, ExecutionPackage, ExecutionPackageDependency, Plan, Release, ReviewPacket, RunSession, Spec, SpecRevision, Task } from '@forgeloop/domain';
 import type { ProductLaneId } from '@forgeloop/contracts';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
@@ -18,6 +18,7 @@ import {
   seedReadyLocalCodexExecutionPackage,
   succeededSelfReview,
 } from '../helpers/delivery-runtime-fixtures';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 
 const now = '2026-05-05T00:00:00.000Z';
 const actorOwner = 'actor-owner';
@@ -112,27 +113,23 @@ const seedDraftWorkItem = async (
 
 const seedSubmittedSpec = async (app: INestApplication) => {
   const { project, workItem } = await seedDraftWorkItem(app, 'requirement');
-  const server = app.getHttpServer();
-  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-
-  await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  const { spec } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+    includePlan: false,
+    specStatus: 'in_review',
+  });
 
   return { project, workItem, spec };
 };
 
 const seedSubmittedPlan = async (app: INestApplication) => {
   const { project, workItem } = await seedDraftWorkItem(app, 'requirement');
-  const server = app.getHttpServer();
-  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-
-  await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
-
-  const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
-  await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201);
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
+  const { plan } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+    planStatus: 'in_review',
+  });
 
   return { project, workItem, plan };
 };
@@ -203,6 +200,37 @@ const saveReviewPacket = async (
   });
 
   return { runSession, reviewPacket };
+};
+
+const recordChangesRequested = async (
+  repo: InMemoryDeliveryRepository,
+  objectType: 'spec' | 'plan',
+  artifact: Spec | Plan,
+  rationale: string,
+) => {
+  const updated = {
+    ...artifact,
+    status: 'draft' as const,
+    gate_state: 'changes_requested' as const,
+    resolution: 'none' as const,
+    updated_at: now,
+  };
+  if (objectType === 'spec') {
+    await repo.saveSpec(updated as Spec);
+  } else {
+    await repo.savePlan(updated as Plan);
+  }
+  const decision: Decision = {
+    id: `decision-${objectType}-${artifact.id}-changes-requested`,
+    object_type: objectType,
+    object_id: artifact.id,
+    actor_id: actorReviewer,
+    decision: 'changes_requested',
+    summary: rationale,
+    created_at: now,
+  };
+  await repo.saveDecision(decision);
+  return updated;
 };
 
 const saveTaskScopedPackage = async (
@@ -674,11 +702,7 @@ describe('product lane projections', () => {
       test_strategy_summary: 'Run API product lane tests.',
       risk_notes: ['Approval should verify product lane projections.'],
     });
-    await request(server)
-      .post(`/specs/${spec.id}/request-changes`)
-      .set(reviewerHeaders)
-      .send({ actor_id: actorReviewer, rationale: 'Verify product lane projections before approval.' })
-      .expect(201);
+    await recordChangesRequested(repo, 'spec', spec, 'Verify product lane projections before approval.');
 
     const executionPackage = await saveTaskScopedPackage(repo, await seedReadyExecutionPackageThroughApi(app));
     const upstreamPackage: ExecutionPackage = {
@@ -874,16 +898,8 @@ describe('product lane projections', () => {
     const specSeed = await seedSubmittedSpec(app);
     const planSeed = await seedSubmittedPlan(app);
 
-    await request(app.getHttpServer())
-      .post(`/specs/${specSeed.spec.id}/request-changes`)
-      .set(reviewerHeaders)
-      .send({ actor_id: actorReviewer, rationale: 'Spec needs clearer acceptance criteria.' })
-      .expect(201);
-    await request(app.getHttpServer())
-      .post(`/plans/${planSeed.plan.id}/request-changes`)
-      .set(reviewerHeaders)
-      .send({ actor_id: actorReviewer, rationale: 'Plan needs smaller implementation packages.' })
-      .expect(201);
+    await recordChangesRequested(repo, 'spec', specSeed.spec, 'Spec needs clearer acceptance criteria.');
+    await recordChangesRequested(repo, 'plan', planSeed.plan, 'Plan needs smaller implementation packages.');
 
     await expect(
       getProductLane(

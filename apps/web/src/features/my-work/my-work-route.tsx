@@ -71,10 +71,18 @@ const myWorkColumns: DataTableColumn<MyWorkQueueItem>[] = [
 ];
 
 function attentionGroupFor(item: MyWorkQueueItem): (typeof attentionGroups)[number]['id'] {
-  if (item.attention_reason.includes('tech_lead') || item.object_ref.type === 'spec' || item.object_ref.type === 'plan') {
+  if (
+    item.attention_reason.includes('tech_lead') ||
+    item.object_ref.type === 'spec' ||
+    item.object_ref.type === 'execution_plan'
+  ) {
     return 'tech-lead';
   }
-  if (item.attention_reason.includes('developer') || item.object_ref.type === 'task') {
+  if (
+    item.attention_reason.includes('developer') ||
+    item.object_ref.type === 'development_plan_item' ||
+    item.object_ref.type === 'execution'
+  ) {
     return 'developer';
   }
   if (item.attention_reason.includes('qa') || item.object_ref.type === 'bug') {
@@ -95,11 +103,17 @@ function objectTypeLabel(type: MyWorkQueueItem['object_ref']['type']) {
     requirement: 'Requirement',
     tech_debt: 'Tech Debt',
     bug: 'Bug',
-    task: 'Task',
+    development_plan: 'Development Plan',
+    development_plan_item: 'Development Plan Item',
+    brainstorming_session: 'Brainstorming Session',
+    boundary_summary: 'Boundary Summary',
     spec: 'Spec',
     spec_revision: 'Spec Revision',
-    plan: 'Plan',
-    plan_revision: 'Plan Revision',
+    execution_plan: 'Execution Plan',
+    execution_plan_revision: 'Execution Plan Revision',
+    execution: 'Execution',
+    code_review_handoff: 'Code Review Handoff',
+    qa_handoff: 'QA Handoff',
     release: 'Release',
     execution_package: 'Evidence Package',
     run_session: 'Run Evidence',
@@ -123,16 +137,22 @@ function typedHrefFor(ref: MyWorkQueueItem['object_ref']): string | undefined {
       return `/tech-debt/${encodeURIComponent(ref.id)}`;
     case 'bug':
       return `/bugs/${encodeURIComponent(ref.id)}`;
-    case 'task':
-      return `/tasks/${encodeURIComponent(ref.id)}`;
+    case 'development_plan_item':
+      return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'spec':
       return `/specs/${encodeURIComponent(ref.id)}`;
-    case 'plan':
+    case 'execution_plan':
       return `/plans/${encodeURIComponent(ref.id)}`;
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
+    case 'development_plan':
+    case 'brainstorming_session':
+    case 'boundary_summary':
     case 'spec_revision':
-    case 'plan_revision':
+    case 'execution_plan_revision':
+    case 'execution':
+    case 'code_review_handoff':
+    case 'qa_handoff':
     case 'execution_package':
     case 'run_session':
     case 'review_packet':

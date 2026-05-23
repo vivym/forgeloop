@@ -149,13 +149,13 @@ describe('Forgeloop web API client', () => {
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await api.listWorkItems('project with spaces');
-    await api.approveSpec('spec-1', { actor_id: 'actor-reviewer' });
+    await api.approveItemSpec('development-plan-1', 'development-plan-item-1', { actor_id: 'actor-reviewer' });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/work-items?project_id=project+with+spaces', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/specs/spec-1/approve', {
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/development-plans/development-plan-1/items/development-plan-item-1/spec/approve', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-reviewer', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ actor_id: 'actor-reviewer' }),
@@ -254,7 +254,7 @@ describe('Forgeloop web API client', () => {
     );
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
-    await expect(api.approveSpec('spec-1', {})).rejects.toMatchObject({
+    await expect(api.approveItemSpec('development-plan-1', 'development-plan-item-1', {})).rejects.toMatchObject({
       name: 'ForgeloopApiError',
       message: 'Spec is not awaiting approval',
       status: 400,
