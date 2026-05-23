@@ -104,9 +104,6 @@ export class QueryService {
   }
 
   listWorkItems(query: ProductListQuery) {
-    if (query.owner_actor_id !== undefined) {
-      throw new BadRequestException('owner_actor_id is not supported for Work Item queries; use driver_actor_id.');
-    }
     return listProductWorkItems(this.repository, query);
   }
 

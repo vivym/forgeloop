@@ -156,6 +156,27 @@ describe('MarkdownDocument validation', () => {
     }
   });
 
+  it('allows product prose labels without treating them as bare schemes', () => {
+    for (const markdown of ['Priority:P0', 'Owner:alice', 'Status:ready']) {
+      expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(true);
+    }
+  });
+
+  it('rejects empty image destinations', () => {
+    for (const markdown of ['![empty]()', '![space](   )']) {
+      const result = validateMarkdownDocument({
+        ...baseDocument,
+        allowed_blocks: ['paragraph', 'image'],
+        markdown,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.code)).toContain('unsafe_protocol');
+      }
+    }
+  });
+
   it('rejects mdx esm and directive syntax outside fenced code blocks', () => {
     for (const markdown of [
       'import Alert from "./Alert"',

@@ -54,13 +54,13 @@ const htmlDeclarationPattern = /<![A-Za-z][^>]*>/;
 const htmlProcessingInstructionPattern = /<\?[\s\S]*?\?>/;
 const mdxFragmentPattern = /<>[\s\S]*?<\/>/;
 const htmlTagPattern = /<\/?[$_A-Za-z][$_A-Za-z0-9.-]*(?::[$_A-Za-z][$_A-Za-z0-9.-]*)?(?=[\s/>])[^>]*>/;
-const inlineDestinationPattern = /!?\[[^\]]*]\(\s*([^)\s]+)[^)]*\)/gi;
+const inlineDestinationPattern = /!?\[[^\]]*]\(([^)]*)\)/gi;
 const referenceUsePattern = /!?\[[^\]]*]\[([^\]]+)]/gi;
 const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
 const angleDestinationPattern = /<([A-Za-z][A-Za-z0-9+.-]*:[^>\s]+)>/gi;
 const emailAutolinkPattern = /<([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+)/gim;
-const bareSchemePattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:(?!\/\/)[^\s<>)]+)/gim;
+const bareSchemePattern = /(?:^|[\s(])((?:javascript|data|file|blob|s3|gs|mailto):[^\s<>)]+|attachment:(?!\/\/)[^\s<>)]+)/gim;
 const bareAttachmentPattern = /(?:^|[\s(])(attachment:\/\/[A-Za-z0-9_-]+(?:[/?#][^\s<>)]+)?)/gim;
 const bareUrlBlockPattern = /(?:^|[\s(])(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s<>)]+/im;
 const rawStorageMarkerPattern = /(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;
@@ -337,7 +337,7 @@ function markdownDestinations(markdown: string): MarkdownDestination[] {
   const referenceDefinitions = referenceDefinitionsByLabel(markdown);
 
   for (const match of markdown.matchAll(inlineDestinationPattern)) {
-    const value = match[1];
+    const value = match[1] === undefined ? undefined : inlineDestinationValue(match[1]);
     if (value !== undefined) {
       destinations.push({ kind: match[0].startsWith('!') ? 'image' : 'link', value });
     }
@@ -359,6 +359,18 @@ function markdownDestinations(markdown: string): MarkdownDestination[] {
   collectCaptureGroup(markdown, bareAttachmentPattern, destinations, 'link');
 
   return destinations;
+}
+
+function inlineDestinationValue(rawDestination: string): string {
+  const trimmed = rawDestination.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+  if (trimmed.startsWith('<')) {
+    const closeIndex = trimmed.indexOf('>');
+    return closeIndex === -1 ? trimmed : trimmed.slice(0, closeIndex + 1);
+  }
+  return trimmed.split(/\s+/)[0] ?? '';
 }
 
 function referenceDefinitionsByLabel(markdown: string): Map<string, string> {

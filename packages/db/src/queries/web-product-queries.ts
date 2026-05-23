@@ -1,6 +1,6 @@
 import type {
+  InternalProductListQuery,
   PipelineResponse,
-  ProductListQuery,
   ProductListResponse,
   PublicReplayEntry,
 } from '@forgeloop/contracts';
@@ -27,8 +27,8 @@ const pipelineStages: { id: StageId; label: string }[] = [
 ];
 
 const supportedFiltersByList = {
-  pipeline: new Set<keyof ProductListQuery>(['project_id', 'limit']),
-  workItems: new Set<keyof ProductListQuery>([
+  pipeline: new Set<keyof InternalProductListQuery>(['project_id', 'limit']),
+  workItems: new Set<keyof InternalProductListQuery>([
     'project_id',
     'status',
     'phase',
@@ -40,9 +40,9 @@ const supportedFiltersByList = {
     'cursor',
     'limit',
   ]),
-  specs: new Set<keyof ProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'spec_id', 'cursor', 'limit']),
-  plans: new Set<keyof ProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'plan_id', 'cursor', 'limit']),
-  packages: new Set<keyof ProductListQuery>([
+  specs: new Set<keyof InternalProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'spec_id', 'cursor', 'limit']),
+  plans: new Set<keyof InternalProductListQuery>(['project_id', 'status', 'gate_state', 'resolution', 'work_item_id', 'plan_id', 'cursor', 'limit']),
+  packages: new Set<keyof InternalProductListQuery>([
     'project_id',
     'status',
     'phase',
@@ -61,7 +61,7 @@ const supportedFiltersByList = {
     'cursor',
     'limit',
   ]),
-  runs: new Set<keyof ProductListQuery>([
+  runs: new Set<keyof InternalProductListQuery>([
     'project_id',
     'status',
     'execution_package_id',
@@ -70,7 +70,7 @@ const supportedFiltersByList = {
     'cursor',
     'limit',
   ]),
-  reviews: new Set<keyof ProductListQuery>([
+  reviews: new Set<keyof InternalProductListQuery>([
     'project_id',
     'status',
     'reviewer_actor_id',
@@ -83,7 +83,7 @@ const supportedFiltersByList = {
     'cursor',
     'limit',
   ]),
-  releases: new Set<keyof ProductListQuery>([
+  releases: new Set<keyof InternalProductListQuery>([
     'project_id',
     'phase',
     'gate_state',
@@ -95,12 +95,12 @@ const supportedFiltersByList = {
   ]),
 };
 
-const providedFilterKeys = (query: ProductListQuery): (keyof ProductListQuery)[] =>
+const providedFilterKeys = (query: InternalProductListQuery): (keyof InternalProductListQuery)[] =>
   Object.entries(query)
     .filter(([, value]) => value !== undefined)
-    .map(([key]) => key as keyof ProductListQuery);
+    .map(([key]) => key as keyof InternalProductListQuery);
 
-const degradedForUnsupportedFilters = (source: keyof typeof supportedFiltersByList, query: ProductListQuery): string[] =>
+const degradedForUnsupportedFilters = (source: keyof typeof supportedFiltersByList, query: InternalProductListQuery): string[] =>
   providedFilterKeys(query)
     .filter((key) => !supportedFiltersByList[source].has(key))
     .map((key) => `${source}:unsupported_filter:${key}`);
@@ -109,7 +109,10 @@ const objectRef = (type: ProductObjectType, id: string, title?: string): Product
   type,
   id,
   ...(title === undefined ? {} : { title }),
-});
+}) as ProductObjectRef;
+
+const workItemObjectRef = (workItem: Pick<WorkItem, 'id' | 'kind' | 'title'>): ProductObjectRef =>
+  objectRef(workItem.kind, workItem.id, workItem.title);
 
 const visible = (object: { archived_at?: string; deleted_at?: string }): boolean =>
   object.archived_at === undefined && object.deleted_at === undefined;
@@ -117,7 +120,7 @@ const visible = (object: { archived_at?: string; deleted_at?: string }): boolean
 const byUpdatedAtDesc = <T extends { updated_at: string; id: string }>(left: T, right: T): number =>
   right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id);
 
-const paginateItems = (items: ProductListItem[], query: ProductListQuery): ProductListResponse => {
+const paginateItems = (items: ProductListItem[], query: InternalProductListQuery): ProductListResponse => {
   const sorted = [...items].sort(byUpdatedAtDesc);
   const start = query.cursor === undefined ? 0 : Math.max(sorted.findIndex((item) => item.id === query.cursor) + 1, 0);
   const page = sorted.slice(start, start + query.limit);
@@ -149,7 +152,7 @@ const applyResponseDegradation = (response: ProductListResponse, degradedSources
 
 export async function listProductSpecs(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<ProductListResponse> {
   const degradedSources = degradedForUnsupportedFilters('specs', query);
   const specs = (await repository.listSpecs(query.project_id))
@@ -173,7 +176,7 @@ export async function listProductSpecs(
         status: spec.status,
         gate_state: spec.gate_state,
         resolution: spec.resolution,
-        parent: objectRef('work_item', workItem.id, workItem.title),
+        parent: workItemObjectRef(workItem),
         revision_state: {
           current_revision_id: spec.current_revision_id,
           approved_revision_id: spec.approved_revision_id,
@@ -191,7 +194,7 @@ export async function listProductSpecs(
 
 export async function listProductWorkItems(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<ProductListResponse> {
   const degradedSources = degradedForUnsupportedFilters('workItems', query);
   const workItems = (await repository.listWorkItems(query.project_id))
@@ -209,7 +212,7 @@ export async function listProductWorkItems(
 
 export async function listProductPlans(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<ProductListResponse> {
   const degradedSources = degradedForUnsupportedFilters('plans', query);
   const plans = (await repository.listPlans(query.project_id))
@@ -233,7 +236,7 @@ export async function listProductPlans(
         status: plan.status,
         gate_state: plan.gate_state,
         resolution: plan.resolution,
-        parent: objectRef('work_item', workItem.id, workItem.title),
+        parent: workItemObjectRef(workItem),
         revision_state: {
           current_revision_id: plan.current_revision_id,
           approved_revision_id: plan.approved_revision_id,
@@ -251,7 +254,7 @@ export async function listProductPlans(
 
 export async function listProductExecutionPackages(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<ProductListResponse> {
   const degradedSources = degradedForUnsupportedFilters('packages', query);
   const packages = (await repository.listExecutionPackages(query.project_id))
@@ -289,12 +292,12 @@ export async function listProductExecutionPackages(
     );
 
   const items = await Promise.all(packages.map((executionPackage) => executionPackageListItem(repository, executionPackage)));
-  return applyResponseDegradation(paginateItems(items, query), degradedSources);
+  return applyResponseDegradation(paginateItems(items.filter((item): item is ProductListItem => item !== undefined), query), degradedSources);
 }
 
 export async function listProductRuns(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<ProductListResponse> {
   const degradedSources = degradedForUnsupportedFilters('runs', query);
   const runSessions = (await repository.listRunSessions(query.project_id))
@@ -338,7 +341,7 @@ export async function listProductRuns(
 
 export async function listProductReviewPackets(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<ProductListResponse> {
   const degradedSources = degradedForUnsupportedFilters('reviews', query);
   const reviewPackets = (await repository.listReviewPackets(query.project_id))
@@ -359,7 +362,7 @@ export async function listProductReviewPackets(
 
 export async function listProductReleases(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<ProductListResponse> {
   const degradedSources = degradedForUnsupportedFilters('releases', query);
   const releases = (await repository.listReleases(query.project_id))
@@ -369,12 +372,13 @@ export async function listProductReleases(
     .filter((release) => query.release_owner_actor_id === undefined || release.release_owner_actor_id === query.release_owner_actor_id)
     .filter((release) => query.release_id === undefined || release.id === query.release_id);
 
-  return applyResponseDegradation(paginateItems(releases.map(releaseListItem), query), degradedSources);
+  const items = await Promise.all(releases.map((release) => releaseListItem(repository, release)));
+  return applyResponseDegradation(paginateItems(items, query), degradedSources);
 }
 
 export async function getProductPipeline(
   repository: DeliveryRepository,
-  query: ProductListQuery,
+  query: InternalProductListQuery,
 ): Promise<PipelineResponse> {
   const degradedSources = [
     ...degradedForUnsupportedFilters('pipeline', query),
@@ -409,7 +413,10 @@ export async function getProductPipeline(
     }
   }
   for (const executionPackage of packages) {
-    itemsByStage.get(stageForPackage(executionPackage))?.push(await executionPackageListItem(repository, executionPackage));
+    const item = await executionPackageListItem(repository, executionPackage);
+    if (item !== undefined) {
+      itemsByStage.get(stageForPackage(executionPackage))?.push(item);
+    }
   }
   for (const runSession of runSessions) {
     const item = await runSessionListItem(repository, runSession);
@@ -424,7 +431,7 @@ export async function getProductPipeline(
     }
   }
   for (const release of releases) {
-    itemsByStage.get(stageForRelease(release))?.push(releaseListItem(release));
+    itemsByStage.get(stageForRelease(release))?.push(await releaseListItem(repository, release));
   }
 
   return {
@@ -532,7 +539,7 @@ const getSpecPlanReplayTimeline = async (
 
 const workItemListItem = (workItem: WorkItem): ProductListItem => ({
   id: workItem.id,
-  object: objectRef('work_item', workItem.id, workItem.title),
+  object: workItemObjectRef(workItem),
   title: workItem.title,
   status: workItem.activity_state,
   phase: workItem.phase,
@@ -565,7 +572,7 @@ const specListItem = async (
     status: spec.status,
     gate_state: spec.gate_state,
     resolution: spec.resolution,
-    parent: objectRef('work_item', workItem.id, workItem.title),
+    parent: workItemObjectRef(workItem),
     revision_state: {
       current_revision_id: spec.current_revision_id,
       approved_revision_id: spec.approved_revision_id,
@@ -593,7 +600,7 @@ const planListItem = async (
     status: plan.status,
     gate_state: plan.gate_state,
     resolution: plan.resolution,
-    parent: objectRef('work_item', workItem.id, workItem.title),
+    parent: workItemObjectRef(workItem),
     revision_state: {
       current_revision_id: plan.current_revision_id,
       approved_revision_id: plan.approved_revision_id,
@@ -608,8 +615,11 @@ const planListItem = async (
 const executionPackageListItem = async (
   repository: DeliveryRepository,
   executionPackage: ExecutionPackage,
-): Promise<ProductListItem> => {
+): Promise<ProductListItem | undefined> => {
   const workItem = await repository.getWorkItem(executionPackage.work_item_id);
+  if (workItem === undefined || !visible(workItem)) {
+    return undefined;
+  }
   return {
     id: executionPackage.id,
     object: objectRef('execution_package', executionPackage.id, executionPackage.objective),
@@ -618,11 +628,9 @@ const executionPackageListItem = async (
     phase: executionPackage.phase,
     gate_state: executionPackage.gate_state,
     resolution: executionPackage.resolution,
-    owner_actor_id: executionPackage.owner_actor_id,
     reviewer_actor_id: executionPackage.reviewer_actor_id,
     qa_owner_actor_id: executionPackage.qa_owner_actor_id,
-    parent:
-      workItem === undefined ? objectRef('work_item', executionPackage.work_item_id) : objectRef('work_item', workItem.id, workItem.title),
+    parent: workItemObjectRef(workItem),
     related: [
       objectRef('spec', executionPackage.spec_id),
       objectRef('plan', executionPackage.plan_id),
@@ -635,7 +643,7 @@ const executionPackageListItem = async (
       ...(executionPackage.current_release_id === undefined ? [] : [objectRef('release', executionPackage.current_release_id)]),
     ],
     package_state: {
-      work_item_id: executionPackage.work_item_id,
+      scope_ref: workItemObjectRef(workItem),
       spec_revision_id: executionPackage.spec_revision_id,
       plan_revision_id: executionPackage.plan_revision_id,
       blocked_reason: executionPackage.blocked_reason,
@@ -715,29 +723,35 @@ const reviewPacketListItem = async (
   };
 };
 
-const releaseListItem = (release: Release): ProductListItem => ({
-  id: release.id,
-  object: objectRef('release', release.id, release.title),
-  title: release.title,
-  status: release.activity_state,
-  phase: release.phase,
-  gate_state: release.gate_state,
-  resolution: release.resolution,
-  release_owner_actor_id: release.release_owner_actor_id,
-  related: [...release.work_item_ids.map((id) => objectRef('work_item', id)), ...release.execution_package_ids.map((id) => objectRef('execution_package', id))],
-  release_state: {
-    work_item_count: release.work_item_ids.length,
-    execution_package_count: release.execution_package_ids.length,
-    rollout_complete: release.phase === 'observing' || release.phase === 'completed' || release.phase === 'closed',
-    rollback_complete: release.resolution === 'rolled_back',
-    observation_complete: release.phase === 'completed' || release.phase === 'closed',
-  },
-  counts: {
-    work_items: release.work_item_ids.length,
-    execution_packages: release.execution_package_ids.length,
-  },
-  updated_at: release.updated_at,
-});
+const releaseListItem = async (repository: DeliveryRepository, release: Release): Promise<ProductListItem> => {
+  const workItemRefs = (await Promise.all(release.work_item_ids.map((id) => repository.getWorkItem(id))))
+    .filter((workItem): workItem is WorkItem => workItem !== undefined && visible(workItem))
+    .map(workItemObjectRef);
+
+  return {
+    id: release.id,
+    object: objectRef('release', release.id, release.title),
+    title: release.title,
+    status: release.activity_state,
+    phase: release.phase,
+    gate_state: release.gate_state,
+    resolution: release.resolution,
+    release_owner_actor_id: release.release_owner_actor_id,
+    related: [...workItemRefs, ...release.execution_package_ids.map((id) => objectRef('execution_package', id))],
+    release_state: {
+      work_item_count: release.work_item_ids.length,
+      execution_package_count: release.execution_package_ids.length,
+      rollout_complete: release.phase === 'observing' || release.phase === 'completed' || release.phase === 'closed',
+      rollback_complete: release.resolution === 'rolled_back',
+      observation_complete: release.phase === 'completed' || release.phase === 'closed',
+    },
+    counts: {
+      work_items: release.work_item_ids.length,
+      execution_packages: release.execution_package_ids.length,
+    },
+    updated_at: release.updated_at,
+  };
+};
 
 const stageForWorkItem = (workItem: WorkItem): StageId => {
   if (workItem.phase === 'draft' || workItem.phase === 'triage') {

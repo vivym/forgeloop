@@ -895,9 +895,7 @@ function invalidateRunDetail(queryClient: QueryClient, runSessionId: string) {
 function normalizePackageRunQuery(query: ListProductQuery): ListProductQuery {
   return {
     project_id: query.project_id,
-    ...(query.work_item_id === undefined ? {} : { work_item_id: query.work_item_id }),
     ...(query.plan_revision_id === undefined ? {} : { plan_revision_id: query.plan_revision_id }),
-    ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
     ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
     ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
     ...(query.surface_type === undefined ? {} : { surface_type: query.surface_type }),

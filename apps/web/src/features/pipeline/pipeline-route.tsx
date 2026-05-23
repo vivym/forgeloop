@@ -212,8 +212,16 @@ function productObjectHref(item: ProductListItem): string {
 
 function productObjectRefHref(object: ProductListItem['object']): string {
   switch (object.type) {
-    case 'work_item':
-      return `/work-items/${encodeURIComponent(object.id)}`;
+    case 'initiative':
+      return `/initiatives/${encodeURIComponent(object.id)}`;
+    case 'requirement':
+      return `/requirements/${encodeURIComponent(object.id)}`;
+    case 'bug':
+      return `/bugs/${encodeURIComponent(object.id)}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodeURIComponent(object.id)}`;
+    case 'task':
+      return `/tasks/${encodeURIComponent(object.id)}`;
     case 'spec':
       return `/specs/${encodeURIComponent(object.id)}`;
     case 'plan':
