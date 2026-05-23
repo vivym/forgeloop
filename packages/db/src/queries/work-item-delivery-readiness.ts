@@ -174,8 +174,16 @@ const objectRef = (
 
 const productObjectHref = (objectType: ProductObjectType, objectId: string): string => {
   switch (objectType) {
-    case 'work_item':
-      return `/work-items/${objectId}`;
+    case 'initiative':
+      return `/initiatives/${objectId}`;
+    case 'requirement':
+      return `/requirements/${objectId}`;
+    case 'bug':
+      return `/bugs/${objectId}`;
+    case 'tech_debt':
+      return `/tech-debt/${objectId}`;
+    case 'task':
+      return `/tasks/${objectId}`;
     case 'spec':
       return `/specs/${objectId}`;
     case 'spec_revision':
@@ -647,7 +655,14 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
             blockers: [],
             evidence_refs:
               initiativeAggregation.mode === 'unavailable'
-                ? [objectRef('work_item', input.workItem.id, `/work-items/${input.workItem.id}`, initiativeAggregation.label)]
+                ? [
+                    objectRef(
+                      workItemProductObjectType(input.workItem),
+                      input.workItem.id,
+                      workItemProductHref(input.workItem),
+                      initiativeAggregation.label,
+                    ),
+                  ]
                 : [],
           })
         : currentPackages.length === 0
@@ -792,7 +807,9 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
       : stage({
           id: 'quality_gate',
           state: qualityBlockers.length === 0 ? 'passed' : 'blocked',
-          object_refs: [objectRef('work_item', input.workItem.id, `/work-items/${input.workItem.id}`)],
+          object_refs: [
+            objectRef(workItemProductObjectType(input.workItem), input.workItem.id, workItemProductHref(input.workItem)),
+          ],
           blockers: qualityBlockers,
         });
 
@@ -885,13 +902,28 @@ const overallState = (stages: readonly DeliveryStage[]): DeliveryOverallState =>
   return 'in_progress';
 };
 
+const workItemProductObjectType = (workItem: Pick<WorkItem, 'kind'>): ProductObjectType => workItem.kind;
+
+const workItemProductHref = (workItem: Pick<WorkItem, 'id' | 'kind'>): string => {
+  switch (workItem.kind) {
+    case 'initiative':
+      return `/initiatives/${workItem.id}`;
+    case 'requirement':
+      return `/requirements/${workItem.id}`;
+    case 'bug':
+      return `/bugs/${workItem.id}`;
+    case 'tech_debt':
+      return `/tech-debt/${workItem.id}`;
+  }
+};
+
 const openWorkItemAction = (laneId: ProductLaneId, workItem: WorkItem): ProductAction =>
   navigateAction({
     id: `open-work-item-${workItem.id}`,
     laneId,
     priority: 'secondary',
-    label: 'Open Work Item',
-    target: objectTarget('work_item', workItem.id, `/work-items/${workItem.id}`),
+    label: 'Open item',
+    target: objectTarget(workItemProductObjectType(workItem), workItem.id, workItemProductHref(workItem)),
   });
 
 const releaseOwnerActionCopy = (release: Release | undefined): { label: string; description: string } => {
@@ -972,7 +1004,7 @@ const actionForLane = (
 
   if (laneId === 'spec-approver') {
     const target = input.currentSpec === null
-      ? objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`)
+      ? objectTarget(workItemProductObjectType(input.workItem), input.workItem.id, workItemProductHref(input.workItem))
       : objectTarget('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`);
     return [
       navigateAction({
@@ -1010,7 +1042,7 @@ const actionForLane = (
         label: firstRun === undefined ? 'Open Package' : 'Open package run console',
         target:
           firstPackage === undefined
-            ? objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`)
+            ? objectTarget(workItemProductObjectType(input.workItem), input.workItem.id, workItemProductHref(input.workItem))
             : objectTarget('execution_package', firstPackage.id, `/packages/${firstPackage.id}`),
       }),
     ];
@@ -1020,7 +1052,7 @@ const actionForLane = (
     if (firstReview === undefined) {
       const target =
         firstPackage === undefined
-          ? objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`)
+          ? objectTarget(workItemProductObjectType(input.workItem), input.workItem.id, workItemProductHref(input.workItem))
           : objectTarget('execution_package', firstPackage.id, `/packages/${firstPackage.id}`);
       return [
         navigateAction({
@@ -1056,7 +1088,7 @@ const actionForLane = (
           priority: 'primary',
           label: 'Review Quality Gate blockers',
           description: 'Resolve the quality gate blockers before release test acceptance can be acknowledged.',
-          target: objectTarget('work_item', input.workItem.id, `/work-items/${input.workItem.id}`),
+          target: objectTarget(workItemProductObjectType(input.workItem), input.workItem.id, workItemProductHref(input.workItem)),
         }),
       ];
     }

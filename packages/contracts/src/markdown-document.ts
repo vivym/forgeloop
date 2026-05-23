@@ -60,7 +60,7 @@ const referenceDefinitionPattern = /^\s{0,3}\[[^\]]+]:\s*(\S+)/gim;
 const angleDestinationPattern = /<([A-Za-z][A-Za-z0-9+.-]*:[^>\s]+)>/gi;
 const emailAutolinkPattern = /<([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)>/gi;
 const bareUrlPattern = /(?:^|[\s(])([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+)/gim;
-const bareSchemePattern = /(?:^|[\s(])((?:javascript|data|file|blob|s3|gs|mailto):[^\s<>)]+|attachment:(?!\/\/)[^\s<>)]+)/gim;
+const bareSchemePattern = /(?:^|[\s(])((?:javascript|data|file|blob|s3|gs|mailto):(?:[^\s<>)]+)?|attachment:(?!\/\/)(?:[^\s<>)]+)?)/gim;
 const bareAttachmentPattern = /(?:^|[\s(])(attachment:\/\/[A-Za-z0-9_-]+(?:[/?#][^\s<>)]+)?)/gim;
 const bareUrlBlockPattern = /(?:^|[\s(])(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s<>)]+/im;
 const rawStorageMarkerPattern = /(?:storage_uri)|(?:^(?:s3|gs):\/\/)/i;

@@ -66,6 +66,27 @@ const isStale = (updatedAt: string): boolean => {
 
 const uniqueStrings = (values: readonly (string | undefined)[]): string[] => [...new Set(values.filter((value): value is string => value !== undefined))];
 
+const workItemObjectType = (workItem: Pick<WorkItem, 'kind'>): ProductObjectType => workItem.kind;
+
+const workItemHref = (workItem: Pick<WorkItem, 'id' | 'kind'>): string => {
+  switch (workItem.kind) {
+    case 'initiative':
+      return `/initiatives/${workItem.id}`;
+    case 'requirement':
+      return `/requirements/${workItem.id}`;
+    case 'bug':
+      return `/bugs/${workItem.id}`;
+    case 'tech_debt':
+      return `/tech-debt/${workItem.id}`;
+  }
+};
+
+const workItemRef = (workItem: Pick<WorkItem, 'id' | 'kind' | 'title'>): ProductLaneProjectionItem['parent'] => ({
+  type: workItemObjectType(workItem),
+  id: workItem.id,
+  title: workItem.title,
+});
+
 const itemBase = (
   input: {
     id: string;
@@ -168,8 +189,8 @@ const workItemAction = (laneId: ProductLaneId, workItem: WorkItem, priority: 'pr
     id: `open-work-item-${workItem.id}`,
     laneId,
     priority,
-    label: 'Open Work Item',
-    target: objectTarget('work_item', workItem.id, `/work-items/${workItem.id}`),
+    label: 'Open item',
+    target: objectTarget(workItemObjectType(workItem), workItem.id, workItemHref(workItem)),
   });
 
 const workItemLaneItem = (laneId: ProductLaneId, workItem: WorkItem): ProductLaneProjectionItem =>
@@ -178,11 +199,11 @@ const workItemLaneItem = (laneId: ProductLaneId, workItem: WorkItem): ProductLan
       id: workItem.id,
       laneId,
       title: workItem.title,
-      object: { type: 'work_item', id: workItem.id },
+      object: { type: workItemObjectType(workItem), id: workItem.id },
       projectId: workItem.project_id,
       updatedAt: workItem.updated_at,
       workItem,
-      surfaceType: 'work_item',
+      surfaceType: workItem.kind,
       driverActorId: workItem.driver_actor_id,
       blocked: workItem.activity_state === 'awaiting_ai' || workItem.gate_state.includes('changes_requested'),
     },
@@ -215,7 +236,7 @@ const specPlanItem = async (
       laneId,
       title: revision?.summary ?? workItem.title,
       object: { type: objectType, id: item.id },
-      parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+      parent: workItemRef(workItem),
       projectId: workItem.project_id,
       updatedAt: item.updated_at,
       workItem,
@@ -275,7 +296,7 @@ const packageItem = (
       laneId,
       title: executionPackage.objective,
       object: { type: 'execution_package', id: executionPackage.id },
-      parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+      parent: workItemRef(workItem),
       projectId: executionPackage.project_id,
       updatedAt: executionPackage.updated_at,
       workItem,
@@ -304,7 +325,7 @@ const packageReadOnlyItem = (
       laneId,
       title: executionPackage.objective,
       object: { type: 'execution_package', id: executionPackage.id },
-      parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+      parent: workItemRef(workItem),
       projectId: executionPackage.project_id,
       updatedAt: executionPackage.updated_at,
       workItem,
@@ -509,14 +530,14 @@ const loadProductLaneCandidates = async (
     const workItemRows = [...workItemGroups.values()].map(({ workItem, qaOwnerActorIds }) =>
       itemBase(
         {
-          id: `work_item:${workItem.id}`,
+          id: `${workItem.kind}:${workItem.id}`,
           laneId,
           title: workItem.title,
-          object: { type: 'work_item', id: workItem.id },
+          object: { type: workItemObjectType(workItem), id: workItem.id },
           projectId: workItem.project_id,
           updatedAt: workItem.updated_at,
           workItem,
-          surfaceType: 'work_item',
+          surfaceType: workItem.kind,
           driverActorId: workItem.driver_actor_id,
           qaOwnerActorId: qaOwnerActorIds[0],
           qaOwnerActorIdValues: qaOwnerActorIds,

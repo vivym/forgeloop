@@ -171,7 +171,7 @@ export type PipelineIntegrationReadiness = z.infer<typeof pipelineIntegrationRea
 
 export const pipelineQaOwnerQueueSchema = z
   .object({
-    owner_actor_id: z.string().min(1),
+    qa_owner_actor_id: z.string().min(1),
     item_count: z.number().int().nonnegative(),
   })
   .strict();

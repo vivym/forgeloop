@@ -754,7 +754,11 @@ function invalidateTargetQuery(queryClient: QueryClient, target: ProductActionTa
 
 function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObjectTarget['object_type'], objectId: string) {
   switch (objectType) {
-    case 'work_item':
+    case 'initiative':
+    case 'requirement':
+    case 'bug':
+    case 'tech_debt':
+    case 'task':
       return Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) }),
         invalidateWorkItemCockpit(queryClient, objectId),

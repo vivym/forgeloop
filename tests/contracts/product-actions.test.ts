@@ -5,15 +5,16 @@ import {
   productActionSchema,
   productLaneIdSchema,
   productLaneResponseSchema,
+  productObjectTypeSchema,
 } from '@forgeloop/contracts';
 
 const updatedAt = '2026-05-19T00:00:00.000Z';
 
 const validObjectTarget = {
   kind: 'object',
-  object_type: 'work_item',
+  object_type: 'bug',
   object_id: 'wi_1',
-  href: '/work-items/wi_1#replay',
+  href: '/bugs/wi_1',
 } as const;
 
 const validLaneTarget = {
@@ -60,7 +61,7 @@ const validLaneItem = {
   id: 'item_1',
   title: 'Bug item',
   object: {
-    type: 'work_item',
+    type: 'bug',
     id: 'wi_1',
   },
   parent: {
@@ -69,7 +70,7 @@ const validLaneItem = {
     title: 'Release 1',
   },
   kind: 'bug',
-  surface_type: 'work_item',
+  surface_type: 'bug',
   phase: 'planning',
   status: 'open',
   gate_state: 'none',
@@ -107,6 +108,7 @@ describe('ProductAction contracts', () => {
       'release-owner',
       'manager',
     ]);
+    expect(productObjectTypeSchema.options).not.toContain('work_item');
 
     expect(`${'role'}${'Workbench'}ActionSchema` in contracts).toBe(false);
     expect(`${'role'}${'Workbench'}ResponseSchema` in contracts).toBe(false);
@@ -372,7 +374,7 @@ describe('ProductAction contracts', () => {
     expect(
       productLaneResponseSchema.safeParse({
         ...validLaneResponse,
-        items: [validLaneItem, { ...validLaneItem, object: { type: 'work_item', id: 'wi_2' } }],
+        items: [validLaneItem, { ...validLaneItem, object: { type: 'bug', id: 'wi_2' } }],
       }).success,
     ).toBe(false);
     expect(
@@ -396,6 +398,18 @@ describe('ProductAction contracts', () => {
             object: { type: 'lane_summary', id: 'summary_1', lane_id: 'requirements' },
           },
         ],
+      }).success,
+    ).toBe(false);
+    expect(
+      productLaneResponseSchema.safeParse({
+        ...validLaneResponse,
+        items: [{ ...validLaneItem, object: { type: 'work_item', id: 'wi_1' } }],
+      }).success,
+    ).toBe(false);
+    expect(
+      productLaneResponseSchema.safeParse({
+        ...validLaneResponse,
+        items: [{ ...validLaneItem, owner_actor_id: 'actor-owner' }],
       }).success,
     ).toBe(false);
   });

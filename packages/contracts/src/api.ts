@@ -113,7 +113,11 @@ export const productActionPrioritySchema = z.enum(['primary', 'secondary', 'tert
 export type ProductActionPriority = z.infer<typeof productActionPrioritySchema>;
 
 export const productObjectTypeSchema = z.enum([
-  'work_item',
+  'initiative',
+  'requirement',
+  'bug',
+  'tech_debt',
+  'task',
   'spec',
   'spec_revision',
   'plan',
@@ -127,7 +131,11 @@ export type ProductObjectType = z.infer<typeof productObjectTypeSchema>;
 
 const productHrefPrefixes = [
   '/lanes',
-  '/work-items',
+  '/initiatives',
+  '/requirements',
+  '/bugs',
+  '/tech-debt',
+  '/tasks',
   '/specs',
   '/plans',
   '/packages',
@@ -560,7 +568,6 @@ export const productLaneItemSchema = z
     resolution: nonEmptyTrimmedStringSchema.optional(),
     risk: nonEmptyTrimmedStringSchema.optional(),
     driver_actor_id: nonEmptyTrimmedStringSchema.optional(),
-    owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
     reviewer_actor_id: nonEmptyTrimmedStringSchema.optional(),
     qa_owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
     release_owner_actor_id: nonEmptyTrimmedStringSchema.optional(),

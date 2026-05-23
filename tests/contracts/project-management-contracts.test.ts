@@ -9,6 +9,7 @@ import {
   legacyWorkItemStorageRefSchema,
   objectRefSchema,
   planDetailSchema,
+  pipelineResponseSchema,
   productListQuerySchema,
   productListItemSchema,
   requirementDetailSchema,
@@ -343,6 +344,48 @@ describe('project management typed object contracts', () => {
         scope_ref: { type: 'requirement', id: 'req-1' },
       },
     });
+  });
+
+  it('uses qualified QA owner queue fields in pipeline readiness details', () => {
+    const pipeline = {
+      stages: [
+        {
+          id: 'test_acceptance',
+          label: 'Test Acceptance',
+          item_count: 1,
+          blocked_count: 0,
+          high_risk_count: 0,
+          stale_count: 0,
+          representative_items: [],
+          degraded: false,
+          test_acceptance: {
+            qa_owner_queues: [{ qa_owner_actor_id: 'actor-qa', item_count: 1 }],
+            test_strategy_gaps: [],
+            acceptance_criteria_state: 'Ready.',
+            quality_gates: [],
+            regression_coverage_gaps: [],
+            release_blocking_issues: [],
+          },
+        },
+      ],
+      degraded_sources: [],
+    };
+
+    expect(pipelineResponseSchema.parse(pipeline)).toEqual(pipeline);
+    expect(() =>
+      pipelineResponseSchema.parse({
+        ...pipeline,
+        stages: [
+          {
+            ...pipeline.stages[0],
+            test_acceptance: {
+              ...pipeline.stages[0].test_acceptance,
+              qa_owner_queues: [{ owner_actor_id: 'actor-qa', item_count: 1 }],
+            },
+          },
+        ],
+      }),
+    ).toThrow();
   });
 
   it('exposes product-safe Spec and Plan read models with typed refs', () => {

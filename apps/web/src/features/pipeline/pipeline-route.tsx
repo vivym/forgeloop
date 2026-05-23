@@ -170,7 +170,7 @@ function PipelineStageDetails({ stage }: { stage: PipelineResponse['stages'][num
           {details.qa_owner_queues.length ? (
             <ul className="mt-2 grid gap-1 pl-5">
               {details.qa_owner_queues.map((queue) => (
-                <li key={queue.owner_actor_id}>{queue.owner_actor_id}: {queue.item_count}</li>
+                <li key={queue.qa_owner_actor_id}>{queue.qa_owner_actor_id}: {queue.item_count}</li>
               ))}
             </ul>
           ) : (

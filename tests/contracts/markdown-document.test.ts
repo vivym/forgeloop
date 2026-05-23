@@ -151,6 +151,13 @@ describe('MarkdownDocument validation', () => {
       'Bad data:text/html;base64,aaaa',
       'Bad blob:https://example.com/1',
       'Bad attachment:/att-1',
+      'Bad javascript:',
+      'Bad data:',
+      'Bad file:',
+      'Bad blob:',
+      'Bad s3:',
+      'Bad gs:',
+      'Bad mailto:',
     ]) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(false);
     }

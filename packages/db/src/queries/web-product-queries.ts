@@ -838,7 +838,7 @@ const testAcceptanceDetails = (
   const qaOwnerQueues = [...testPackages.reduce((owners, executionPackage) => {
     owners.set(executionPackage.qa_owner_actor_id, (owners.get(executionPackage.qa_owner_actor_id) ?? 0) + 1);
     return owners;
-  }, new Map<string, number>())].map(([owner_actor_id, item_count]) => ({ owner_actor_id, item_count }));
+  }, new Map<string, number>())].map(([qa_owner_actor_id, item_count]) => ({ qa_owner_actor_id, item_count }));
   const qualityGates = testPackages.flatMap((executionPackage) =>
     executionPackage.required_checks.map((check) => `${executionPackage.objective}: ${check.display_name}`),
   );

@@ -167,7 +167,6 @@ export const toProductLaneResponseItem = (item: ProductLaneProjectionItem): Prod
   ...(item.resolution === undefined ? {} : { resolution: item.resolution }),
   ...(item.risk === undefined ? {} : { risk: item.risk }),
   ...(item.driver_actor_id === undefined ? {} : { driver_actor_id: item.driver_actor_id }),
-  ...(item.owner_actor_id === undefined ? {} : { owner_actor_id: item.owner_actor_id }),
   ...(item.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: item.reviewer_actor_id }),
   ...(item.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: item.qa_owner_actor_id }),
   ...(item.release_owner_actor_id === undefined ? {} : { release_owner_actor_id: item.release_owner_actor_id }),
