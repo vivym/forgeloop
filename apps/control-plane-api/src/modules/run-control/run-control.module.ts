@@ -27,7 +27,7 @@ import {
   type LocalCodexEvidenceInput,
   type LocalCodexRuntimeSafety,
 } from '@forgeloop/executor';
-import { FakeCodexSessionDriver, RunWorker } from '@forgeloop/run-worker';
+import { FakeCodexSessionDriver, RunWorker, type RemoteRunExecutionClient } from '@forgeloop/run-worker';
 
 import { AuditModule } from '../audit/audit.module';
 import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
@@ -185,12 +185,30 @@ const firstDigestList = (primaryKey: string, listKey: string): string[] => {
   return values;
 };
 
-const codexRunWorkerMode = (): 'disabled' | 'local_docker' => {
-  const raw = optionalEnv('FORGELOOP_CODEX_RUN_WORKER_MODE') ?? optionalEnv('FORGELOOP_CODEX_WORKER_MODE') ?? 'disabled';
-  if (raw === 'disabled' || raw === 'local_docker') {
+type CodexRunWorkerMode = 'disabled' | 'local_docker' | 'remote_outbound';
+
+const codexRunWorkerMode = (): CodexRunWorkerMode => {
+  const explicitRunWorkerMode = optionalEnv('FORGELOOP_CODEX_RUN_WORKER_MODE');
+  const globalCodexWorkerMode = optionalEnv('FORGELOOP_CODEX_WORKER_MODE');
+  if (
+    globalCodexWorkerMode !== undefined &&
+    globalCodexWorkerMode !== 'disabled' &&
+    globalCodexWorkerMode !== 'local_docker' &&
+    globalCodexWorkerMode !== 'remote_outbound'
+  ) {
+    throw new Error('Invalid Codex runtime config: FORGELOOP_CODEX_WORKER_MODE must be disabled, local_docker, or remote_outbound');
+  }
+  if (explicitRunWorkerMode === undefined && globalCodexWorkerMode === 'local_docker') {
+    return 'local_docker';
+  }
+  if (explicitRunWorkerMode === undefined && globalCodexWorkerMode === 'remote_outbound') {
+    return 'disabled';
+  }
+  const raw = explicitRunWorkerMode ?? 'disabled';
+  if (raw === 'disabled' || raw === 'local_docker' || raw === 'remote_outbound') {
     return raw;
   }
-  throw new Error('Invalid Codex runtime config: FORGELOOP_CODEX_RUN_WORKER_MODE must be disabled or local_docker');
+  throw new Error('Invalid Codex runtime config: FORGELOOP_CODEX_RUN_WORKER_MODE must be disabled, local_docker, or remote_outbound');
 };
 
 const expiresFromNow = (ms: number): string => new Date(Date.now() + ms).toISOString();
@@ -519,11 +537,41 @@ const createLocalDockerLeasedDriverFactory = (input: {
     );
 };
 
+const createRemoteRunExecutionClient = (
+  codexRuntimeService: CodexRuntimeService,
+): { client: RemoteRunExecutionClient; waitTimeoutMs: number; pollIntervalMs: number } | undefined => {
+  if (codexRunWorkerMode() !== 'remote_outbound') {
+    return undefined;
+  }
+  const runtimeProfileId = requiredEnv('FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID');
+  const credentialBindingId = requiredEnv('FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID');
+  const waitTimeoutMs = positiveIntEnv('FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS');
+  const pollIntervalMs = positiveIntEnv('FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS');
+  return {
+    waitTimeoutMs,
+    pollIntervalMs,
+    client: {
+      getStatus: (input) =>
+        codexRuntimeService.getStatus({
+          project_id: input.projectId,
+          ...(input.repoId === undefined ? {} : { repo_id: input.repoId }),
+          target_kind: input.targetKind,
+          runtime_profile_id: runtimeProfileId,
+          credential_binding_id: credentialBindingId,
+        }),
+      createRuntimeJob: (input) => codexRuntimeService.createRuntimeJob(input as never),
+      getRuntimeJob: (runtimeJobId) => codexRuntimeService.getRuntimeJob(runtimeJobId),
+      cancelRuntimeJob: (runtimeJobId, input) => codexRuntimeService.cancelRuntimeJob(runtimeJobId, input as never),
+    },
+  };
+};
+
 const createRunWorker = (repository: DeliveryRepository, codexRuntimeService: CodexRuntimeService): RunWorker => {
   const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
   mkdirSync(artifactRoot, { recursive: true });
   const rawLogStore = new LocalCodexRawLogStore({ artifactRoot: join(artifactRoot, 'raw-logs') });
   const runWorkerId = process.env.FORGELOOP_RUN_WORKER_ID ?? 'control-plane-api-worker';
+  const runWorkerMode = codexRunWorkerMode();
   const leasedDriverFactory = createLocalDockerLeasedDriverFactory({
     repository,
     codexRuntimeService,
@@ -531,6 +579,7 @@ const createRunWorker = (repository: DeliveryRepository, codexRuntimeService: Co
     rawLogStore,
     runWorkerId,
   });
+  const remoteRunExecution = createRemoteRunExecutionClient(codexRuntimeService);
 
   return new RunWorker({
     repository,
@@ -575,7 +624,14 @@ const createRunWorker = (repository: DeliveryRepository, codexRuntimeService: Co
         : Promise.resolve(mockEvidence(input)),
     selfReview: (input) => Promise.resolve(mockSelfReview(input)),
     artifactRoot,
-    allowExecFallback: leasedDriverFactory === undefined,
+    allowExecFallback: runWorkerMode === 'disabled',
+    ...(remoteRunExecution === undefined
+      ? {}
+      : {
+          remoteRunExecutionClient: remoteRunExecution.client,
+          remoteRunExecutionWaitTimeoutMs: remoteRunExecution.waitTimeoutMs,
+          remoteRunExecutionPollIntervalMs: remoteRunExecution.pollIntervalMs,
+        }),
   });
 };
 

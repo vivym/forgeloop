@@ -375,6 +375,7 @@ export interface CodexGenerationRuntimeJobResult {
     digest?: string;
     internal_ref?: string;
   }>;
+  runtime_evidence?: CodexDockerRuntimeEvidence;
   public_summary: string;
 }
 
@@ -1422,6 +1423,7 @@ const codexGenerationRuntimeJobResultKeys = new Set([
   'generated_payload',
   'generated_payload_digest',
   'generation_artifacts',
+  'runtime_evidence',
   'public_summary',
 ]);
 const codexRunExecutionPatchArtifactKeys = new Set(['content_type', 'digest', 'internal_ref']);
@@ -1474,6 +1476,9 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'generation_artifacts'),
   );
+  if (input.runtime_evidence !== undefined) {
+    validateCodexDockerRuntimeEvidence(input.runtime_evidence);
+  }
   requireCodexRuntimeResultString(input, 'public_summary');
   return input as unknown as CodexGenerationRuntimeJobResult;
 };
@@ -1618,7 +1623,11 @@ export const validateCodexRuntimeJobTerminalResult = (
     input.task_kind === 'run_execution'
       ? requireCodexRunExecutionRuntimeJobResult(input)
       : requireCodexGenerationRuntimeJobResult(input);
-  assertCodexRuntimePublicSafeRecord(input, 'terminal result', [], {
+  const publicSafeInput =
+    input.task_kind === 'run_execution' || input.runtime_evidence === undefined
+      ? input
+      : Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'runtime_evidence'));
+  assertCodexRuntimePublicSafeRecord(publicSafeInput, 'terminal result', [], {
     allowRunExecutionChangedFiles: input.task_kind === 'run_execution',
   });
   return result;

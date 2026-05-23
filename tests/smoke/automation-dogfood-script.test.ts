@@ -182,6 +182,35 @@ describe('automation dogfood script', () => {
     expect(localDocker.appServerDogfood).toEqual({ status: 'blocked', reasonCode: 'codex_worker_unavailable' });
   });
 
+  it('loads remote outbound generation dogfood as a deferred request bound after dogfood control-plane boot', () => {
+    const remote = loadDogfoodGenerationRuntimeConfig({
+      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      FORGELOOP_CODEX_WORKER_MODE: 'remote_outbound',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS: '600000',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS: '1000',
+    });
+
+    expect(remote.planning.mode).toBe('app_server');
+    expect(remote.runtime).toBeUndefined();
+    expect(remote.remoteOutboundRequested).toEqual({
+      waitTimeoutMs: 600000,
+      pollIntervalMs: 1000,
+    });
+    expect(remote.appServerDogfood).toEqual({ status: 'blocked', reasonCode: 'codex_worker_unavailable', runtimeMode: 'remote_outbound' });
+  });
+
+  it('binds remote outbound dogfood to a bootstrapped same-host worker and checks runtime evidence digests', () => {
+    const source = readText('scripts/automation-dogfood.ts');
+
+    expect(source).toContain('createRemoteCodexWorkerClient');
+    expect(source).toContain('runCodexRuntimeDogfoodBootstrap(bootstrapConfig)');
+    expect(source).toContain('generation_runtime_profile_id');
+    expect(source).toContain('generation_credential_binding_id');
+    expect(source).toContain('shouldContinue: () => remoteWorkerRunning');
+    expect(source).toContain('job.runtime_evidence_digest');
+    expect(source).toContain('codexCanonicalDigest(terminalResult.runtime_evidence)');
+  });
+
   it('redacts non-allowlisted app-server dogfood reason text from public summaries', () => {
     const summary = renderAutomationDogfoodSummary({
       planDraftCreated: false,
@@ -197,6 +226,60 @@ describe('automation dogfood script', () => {
     expect(summary).toContain('App-server dogfood: FAILED (automation_dogfood_failed)');
     expect(summary).not.toContain(process.cwd());
     expect(summary).not.toContain('automation-dogfood-secret');
+  });
+
+  it('renders remote runtime dogfood evidence without leaking internal identifiers', () => {
+    const summary = renderAutomationDogfoodSummary({
+      planDraftCreated: true,
+      packageDraftCount: expectedAutomationDogfoodPackageDraftCount,
+      completedActionTypes: ['ensure_plan_draft', 'ensure_package_drafts', 'project_runtime_snapshot'],
+      actionRunCount: 3,
+      nonSucceededActionRunCount: 0,
+      runSessionCount: 0,
+      restartRecoveredFromActionRuns: true,
+      appServerDogfood: {
+        status: 'passed',
+        runtimeMode: 'remote_outbound',
+        blockerCode: 'codex_worker_unavailable',
+        dockerizedAppServerEvidence: {
+          dockerImageDigest: digest('a'),
+          networkPolicyDigest: digest('b'),
+          effectiveConfigDigest: digest('c'),
+          containerIdDigest: digest('d'),
+          workerId: 'remote-worker-1',
+          runtimeJobId: 'runtime-job-1',
+          appServerEndpoint: 'docker-exec:container-1',
+          workspacePath: '/tmp/forgeloop-remote-worker/task-1',
+        },
+        artifacts: [
+          { name: 'run_execution_patch', digest: digest('e'), internalRef: 'artifact://runtime-job-1/patch' },
+          { name: 'review_packet', digest: digest('f'), localRef: '/tmp/review-packet.md' },
+        ],
+        timingBuckets: {
+          queue: '<5s',
+          execution: '<60s',
+          terminalization: '<5s',
+          startedAt: '2026-05-23T00:00:00.000Z',
+        },
+      },
+    });
+
+    expect(summary).toContain('- Remote runtime mode: remote_outbound');
+    expect(summary).toContain(`docker_image_digest=${digest('a')}`);
+    expect(summary).toContain(`network_policy_digest=${digest('b')}`);
+    expect(summary).toContain(`effective_config_digest=${digest('c')}`);
+    expect(summary).toContain(`container_id_digest=${digest('d')}`);
+    expect(summary).toContain(`run_execution_patch=${digest('e')}`);
+    expect(summary).toContain(`review_packet=${digest('f')}`);
+    expect(summary).toContain('queue=<5s');
+    expect(summary).toContain('execution=<60s');
+    expect(summary).toContain('terminalization=<5s');
+    expect(summary).not.toContain('remote-worker-1');
+    expect(summary).not.toContain('runtime-job-1');
+    expect(summary).not.toContain('docker-exec:');
+    expect(summary).not.toContain('/tmp/');
+    expect(summary).not.toContain('artifact://');
+    expect(summary).not.toContain('2026-05-23T00:00:00.000Z');
   });
 
   it('does not hard-code fake runtime when codex app-server mode is requested', () => {
@@ -287,6 +370,20 @@ describe('automation dogfood script', () => {
     expect(message).not.toContain('worker-bootstrap-token');
   });
 
+  it('keeps the remote worker runbook anchored on central config bootstrap and task isolation', () => {
+    const runbook = readText('docs/runbooks/codex-remote-worker-runtime.md');
+
+    expect(runbook).toContain('central runtime profile/auth bootstrap');
+    expect(runbook).toContain('per-task CODEX_HOME');
+    expect(runbook).toContain('same-host remote worker');
+    expect(runbook).toContain('generation dogfood');
+    expect(runbook).toContain('run execution dogfood');
+    expect(runbook).toContain('worker drain');
+    expect(runbook).toContain('worker restart');
+    expect(runbook).toContain('scavenger');
+    expect(runbook).toContain('public-safe blocker codes');
+  });
+
   it('fails the dogfood gate unless every expected daemon artifact is present exactly once', () => {
     const passing = {
       planDraftCreated: true,
@@ -300,6 +397,59 @@ describe('automation dogfood script', () => {
     } as const;
 
     expect(automationDogfoodExitCode(passing)).toBe(0);
+    expect(automationDogfoodExitCode({ ...passing, appServerDogfood: { status: 'passed' } })).toBe(1);
+    const staticConfigOnly = {
+      ...passing,
+      appServerDogfood: {
+        status: 'passed',
+        runtimeMode: 'remote_outbound',
+        dockerizedAppServerEvidence: {
+          dockerImageDigest: digest('a'),
+          networkPolicyDigest: digest('b'),
+          effectiveConfigDigest: digest('c'),
+        },
+      },
+    } as const;
+    expect(automationDogfoodExitCode(staticConfigOnly)).toBe(1);
+    expect(
+      automationDogfoodExitCode({
+        ...staticConfigOnly,
+        appServerDogfood: {
+          ...staticConfigOnly.appServerDogfood,
+          dockerizedAppServerEvidence: {
+            ...staticConfigOnly.appServerDogfood.dockerizedAppServerEvidence,
+            containerIdDigest: digest('d'),
+          },
+        },
+      }),
+    ).toBe(1);
+    expect(
+      automationDogfoodExitCode({
+        ...staticConfigOnly,
+        appServerDogfood: {
+          ...staticConfigOnly.appServerDogfood,
+          dockerizedAppServerEvidence: {
+            ...staticConfigOnly.appServerDogfood.dockerizedAppServerEvidence,
+            containerIdDigest: digest('d'),
+          },
+          artifacts: [{ name: 'generated-payload.json', digest: digest('e') }],
+        },
+      }),
+    ).toBe(1);
+    expect(
+      automationDogfoodExitCode({
+        ...staticConfigOnly,
+        appServerDogfood: {
+          ...staticConfigOnly.appServerDogfood,
+          dockerizedAppServerEvidence: {
+            ...staticConfigOnly.appServerDogfood.dockerizedAppServerEvidence,
+            containerIdDigest: digest('d'),
+          },
+          artifacts: [{ name: 'generated-payload.json', digest: digest('e') }],
+          timingBuckets: { queue: '<5s', execution: '<60s', terminalization: '<5s' },
+        },
+      }),
+    ).toBe(0);
     expect(automationDogfoodExitCode({ ...passing, planDraftCreated: false })).toBe(1);
     expect(automationDogfoodExitCode({ ...passing, packageDraftCount: 0 })).toBe(1);
     expect(automationDogfoodExitCode({ ...passing, packageDraftCount: 1 })).toBe(1);

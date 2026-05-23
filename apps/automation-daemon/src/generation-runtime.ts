@@ -16,6 +16,7 @@ import {
 } from '@forgeloop/codex-runtime';
 import {
   codexCanonicalDigest,
+  type CodexDockerRuntimeEvidence,
   validateCodexRuntimeJobTerminalResult,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
@@ -99,6 +100,27 @@ const codexGenerationRuntimeConfigFor = (config: AutomationDaemonConfig): Parame
   ...(config.generationMaxConcurrency === undefined ? {} : { maxConcurrency: config.generationMaxConcurrency }),
 });
 
+const appendDockerRuntimeEvidenceArtifact = <T>(result: T, evidence: CodexDockerRuntimeEvidence): T => {
+  const candidate = result as CodexGenerationResult<Record<string, unknown>>;
+  if (!Array.isArray(candidate.generationArtifacts)) {
+    return result;
+  }
+  const evidenceDigest = codexCanonicalDigest(evidence);
+  return {
+    ...candidate,
+    generationArtifacts: [
+      ...candidate.generationArtifacts,
+      {
+        kind: 'raw_metadata',
+        name: 'docker-runtime-evidence.json',
+        content_type: 'application/json',
+        storage_uri: `artifact://codex-dogfood-runtime-evidence/${evidenceDigest}`,
+        digest: evidenceDigest,
+      },
+    ],
+  } as T;
+};
+
 export interface CreateLeasedDockerCodexGenerationRuntimeOptions {
   worker: Pick<LocalCodexWorkerRuntime, 'selectForLaunch' | 'withLeaseSlot'>;
   launcher: Pick<DockerizedCodexAppServerLauncher, 'launchFromLease'>;
@@ -111,6 +133,7 @@ export interface CreateLeasedDockerCodexGenerationRuntimeOptions {
   }): Promise<{ leaseId: string; launchToken: string }>;
   innerRuntimeFactory?: (config: Parameters<typeof createCodexGenerationRuntime>[0]) => CodexGenerationRuntime;
   runtimeConfig?: Partial<Parameters<typeof createCodexGenerationRuntime>[0]>;
+  onDockerRuntimeEvidence?: (evidence: CodexDockerRuntimeEvidence) => void;
 }
 
 export const createLeasedDockerCodexGenerationRuntime = (
@@ -144,6 +167,7 @@ export const createLeasedDockerCodexGenerationRuntime = (
         launchToken: lease.launchToken,
         workerSessionToken: worker.sessionToken,
       });
+      options.onDockerRuntimeEvidence?.(session.publicEvidence);
       try {
         const runtime = innerRuntimeFactory({
           mode: 'app_server',
@@ -153,7 +177,7 @@ export const createLeasedDockerCodexGenerationRuntime = (
         });
         const result = await call(runtime, input);
         await session.close('succeeded', 'generation complete');
-        return result;
+        return options.onDockerRuntimeEvidence === undefined ? result : appendDockerRuntimeEvidenceArtifact(result, session.publicEvidence);
       } catch (error) {
         await session.close('failed', error instanceof Error ? error.message : 'generation failed');
         throw error;

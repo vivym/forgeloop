@@ -22,6 +22,7 @@ export interface AutomationDaemonConfig {
   generationPlanning: AutomationGenerationPlanningConfig;
   generationPlanningExplicit: boolean;
   codexWorkerMode: CodexWorkerMode;
+  codexRunWorkerMode: CodexWorkerMode;
   workerId?: string;
   workerIdentity?: string;
   workerBootstrapToken?: string;
@@ -127,6 +128,23 @@ const codexWorkerModeEnv = (env: EnvLike): CodexWorkerMode => {
     return raw;
   }
   throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_WORKER_MODE must be disabled, local_docker, or remote_outbound');
+};
+
+const codexRunWorkerModeEnv = (env: EnvLike): CodexWorkerMode => {
+  const raw = env.FORGELOOP_CODEX_RUN_WORKER_MODE?.trim() ?? 'disabled';
+  if (raw === 'disabled' || raw === 'local_docker' || raw === 'remote_outbound') {
+    return raw;
+  }
+  throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_RUN_WORKER_MODE must be disabled, local_docker, or remote_outbound');
+};
+
+const workerIdEnv = (env: EnvLike, workerIdentity: string | undefined): string | undefined => {
+  const canonical = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_ID');
+  const legacy = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_ID');
+  if (canonical !== undefined && legacy !== undefined && canonical !== legacy) {
+    throw new Error('Invalid automation daemon config: FORGELOOP_WORKER_ID conflicts with FORGELOOP_CODEX_WORKER_ID');
+  }
+  return canonical ?? legacy ?? workerIdentity;
 };
 
 const appServerTransportEnv = (env: EnvLike): CodexAppServerTransport | undefined => {
@@ -313,15 +331,46 @@ const assertAppServerRuntimeConfig = (
   }
 };
 
+const assertRemoteWorkerModeConfig = (
+  env: EnvLike,
+  mode: CodexWorkerMode,
+  modeKey: 'FORGELOOP_CODEX_WORKER_MODE' | 'FORGELOOP_CODEX_RUN_WORKER_MODE',
+  requiredCapability: 'generation' | 'run_execution',
+): void => {
+  if (mode !== 'remote_outbound') {
+    return;
+  }
+  requiredEnv(env, 'FORGELOOP_WORKER_ID');
+  requiredEnv(env, 'FORGELOOP_WORKER_IDENTITY');
+  requiredEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN');
+  requiredEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION');
+  requiredEnv(env, 'FORGELOOP_WORKER_TEMP_ROOT');
+  requiredEnv(env, 'FORGELOOP_DOCKER_BIN');
+  requiredEnv(env, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST');
+  requiredEnv(env, 'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST');
+  requiredEnv(env, 'FORGELOOP_CODEX_WORKER_SCOPES_JSON');
+  requiredEnv(env, 'FORGELOOP_CODEX_WORKER_CAPABILITIES');
+  requiredEnv(env, 'FORGELOOP_WORKER_MAX_CONCURRENCY');
+  const capabilities = workerCapabilitiesEnv(env) ?? [];
+  if (!capabilities.includes(requiredCapability)) {
+    throw new Error(
+      `Invalid automation daemon config: FORGELOOP_CODEX_WORKER_CAPABILITIES must include ${requiredCapability} when ${modeKey}=remote_outbound`,
+    );
+  }
+};
+
 export const loadAutomationDaemonConfig = (env: EnvLike = process.env): AutomationDaemonConfig => {
   const generationPlanning = generationPlanningEnv(env);
   const generationPlanningExplicit = generationPlanningExplicitEnv(env);
   const codexWorkerMode = codexWorkerModeEnv(env);
+  const codexRunWorkerMode = codexRunWorkerModeEnv(env);
+  assertRemoteWorkerModeConfig(env, codexWorkerMode, 'FORGELOOP_CODEX_WORKER_MODE', 'generation');
+  assertRemoteWorkerModeConfig(env, codexRunWorkerMode, 'FORGELOOP_CODEX_RUN_WORKER_MODE', 'run_execution');
   assertAppServerRuntimeConfig(env, generationPlanning.mode, codexWorkerMode);
   const appServerEndpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
   const generationArtifactRoot = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
   const workerIdentity = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_IDENTITY');
-  const workerId = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_ID') ?? workerIdentity;
+  const workerId = workerIdEnv(env, workerIdentity);
   const workerBootstrapToken = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN');
   const workerBootstrapTokenVersion = optionalPositiveIntEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION');
   const workerLabels = recordEnv(env, 'FORGELOOP_WORKER_LABELS');
@@ -376,6 +425,7 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     generationPlanning,
     generationPlanningExplicit,
     codexWorkerMode,
+    codexRunWorkerMode,
     ...(workerId === undefined ? {} : { workerId }),
     ...(workerIdentity === undefined ? {} : { workerIdentity }),
     ...(workerBootstrapToken === undefined ? {} : { workerBootstrapToken }),

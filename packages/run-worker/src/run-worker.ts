@@ -68,6 +68,8 @@ export interface RunWorkerInput {
   idleThresholdMs?: number;
   artifactRoot?: string;
   allowExecFallback?: boolean;
+  remoteRunExecutionWaitTimeoutMs?: number;
+  remoteRunExecutionPollIntervalMs?: number;
 }
 
 export interface RemoteRunExecutionClient {
@@ -663,6 +665,8 @@ export class RunWorker {
   private readonly idleThresholdMs: number;
   private readonly artifactRoot: string;
   private readonly allowExecFallback: boolean;
+  private readonly remoteRunExecutionWaitTimeoutMs: number;
+  private readonly remoteRunExecutionPollIntervalMs: number;
   private drainPromise: Promise<void> | undefined;
   private drainAgainRequested = false;
 
@@ -681,6 +685,8 @@ export class RunWorker {
     this.idleThresholdMs = input.idleThresholdMs ?? 120_000;
     this.artifactRoot = input.artifactRoot ?? '.forgeloop/artifacts';
     this.allowExecFallback = input.allowExecFallback ?? true;
+    this.remoteRunExecutionWaitTimeoutMs = input.remoteRunExecutionWaitTimeoutMs ?? this.leaseDurationMs;
+    this.remoteRunExecutionPollIntervalMs = input.remoteRunExecutionPollIntervalMs ?? this.commandPollIntervalMs;
   }
 
   kick(): void {
@@ -968,7 +974,7 @@ export class RunWorker {
       throw new Error('codex_runtime_job_unavailable');
     }
     const workspacePath = runtimeMetadata.workspace_path;
-    const expiresAt = new Date(Date.parse(this.now()) + this.leaseDurationMs).toISOString();
+    const expiresAt = new Date(Date.parse(this.now()) + this.remoteRunExecutionWaitTimeoutMs).toISOString();
     const runWorkerLeaseId =
       lease.leaseId ?? stableUuidFromDigest({ kind: 'run_worker_lease', run_session_id: activeRunSession.id, worker_id: lease.workerId });
     const persistedRemoteFenceMatches =
@@ -1272,7 +1278,7 @@ export class RunWorker {
           ...(terminalResult === undefined ? {} : { terminalResult }),
         };
       }
-      await delay(this.commandPollIntervalMs);
+      await delay(this.remoteRunExecutionPollIntervalMs);
     }
     if (control.failure !== undefined) {
       throw control.failure;

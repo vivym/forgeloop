@@ -370,7 +370,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       );
       const uploadedArtifacts = await uploadGenerationArtifacts(workerSession, job, generationResult);
       await closeAfterGeneration(workerSession, job, appServerSession);
-      const terminalResult = generationRuntimeJobTerminalResult(generationResult, uploadedArtifacts);
+      const terminalResult = generationRuntimeJobTerminalResult(generationResult, uploadedArtifacts, appServerSession.publicEvidence);
       successTerminalAttempted = true;
       await terminalizeWithRetry(workerSession, job, {
         terminal_status: 'succeeded',
