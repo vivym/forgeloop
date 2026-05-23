@@ -67,6 +67,29 @@ export const requestArtifactChangesCommandSchema = actorCommandSchema
   .strict();
 export type RequestArtifactChangesCommandDto = z.infer<typeof requestArtifactChangesCommandSchema>;
 
+export const rejectArtifactCommandSchema = actorCommandSchema
+  .extend({
+    rationale: nonEmptyString,
+  })
+  .strict();
+export type RejectArtifactCommandDto = z.infer<typeof rejectArtifactCommandSchema>;
+
+export const regenerateArtifactDraftCommandSchema = actorCommandSchema
+  .extend({
+    feedback: nonEmptyString,
+    preserve_prior_decisions: z.boolean().default(false),
+  })
+  .strict();
+export type RegenerateArtifactDraftCommandDto = z.infer<typeof regenerateArtifactDraftCommandSchema>;
+
+export const revisionCompareQuerySchema = z
+  .object({
+    base_revision_id: nonEmptyString,
+    compare_revision_id: nonEmptyString,
+  })
+  .strict();
+export type RevisionCompareQueryDto = z.infer<typeof revisionCompareQuerySchema>;
+
 const runPackageBaseSchema = z.object({
   execution_package_id: nonEmptyString.optional(),
   executor_type: executorTypeSchema.optional(),

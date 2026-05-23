@@ -5,6 +5,7 @@ import {
   bugDetailSchema,
   bugListItemSchema,
   brainstormingSessionSchema,
+  contextManifestSchema,
   editableObjectRefSchema,
   initiativeDetailSchema,
   initiativeListItemSchema,
@@ -117,6 +118,40 @@ describe('project management typed object contracts', () => {
       approved_at: '2026-05-24T00:03:00.000Z',
     });
     expect(session.approval_state).toBe('approved');
+  });
+
+  it('models item-scoped Spec and Execution Plan context manifests without Work Item refs', () => {
+    const manifest = contextManifestSchema.parse({
+      id: 'cm-1',
+      revision_id: 'cm-rev-1',
+      source_ref: { type: 'requirement', id: 'req-1', revision_id: 'req-rev-1' },
+      development_plan_id: 'dp-1',
+      development_plan_revision_id: 'dp-rev-1',
+      development_plan_item_id: 'dpi-1',
+      development_plan_item_revision_id: 'dpi-rev-1',
+      brainstorming_session_id: 'bs-1',
+      brainstorming_session_revision_id: 'bs-rev-1',
+      boundary_summary_id: 'boundary-1',
+      boundary_summary_revision_id: 'boundary-rev-1',
+      boundary_approver_actor_id: 'actor-tech',
+      boundary_approved_at: '2026-05-24T00:03:00.000Z',
+      approved_spec_revision_id: 'spec-rev-1',
+      sources: [
+        { type: 'source_object_revision', ref: 'requirement:req-1', digest: 'req-rev-1' },
+        { type: 'development_plan_item', ref: 'dpi-1', digest: 'dpi-rev-1' },
+        { type: 'boundary_summary', ref: 'boundary-1', digest: 'boundary-rev-1' },
+        { type: 'repository_path', ref: '/workspace/forgeloop', digest: 'abc123' },
+      ],
+      generated_at: '2026-05-24T00:04:00.000Z',
+      runtime_identity: 'control-plane-api:spec-plan',
+    });
+
+    expect(manifest).toMatchObject({
+      development_plan_item_id: 'dpi-1',
+      boundary_summary_id: 'boundary-1',
+      approved_spec_revision_id: 'spec-rev-1',
+    });
+    expect(JSON.stringify(manifest)).not.toContain('"type":"work_item"');
   });
 
   it.each([
