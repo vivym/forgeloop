@@ -1,5 +1,5 @@
 import type { ProductWorkItemRegistryQuery } from './query';
-import type { ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
+import type { AttachmentOwnerObjectType, ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
 
 export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
   project_id: query.project_id,
@@ -112,4 +112,18 @@ export const queryKeys = {
   releaseCockpit: (releaseId: string) => ['release-cockpit', releaseId],
   releaseReplay: (releaseId: string) => ['release-replay', releaseId],
   executionPackageReplay: (executionPackageId: string) => ['execution-package-replay', executionPackageId],
+  attachments: (query: { object_type: AttachmentOwnerObjectType; object_id: string }) => [
+    'attachments',
+    { object_type: query.object_type, object_id: query.object_id },
+  ],
+  attachment: (attachmentId: string | undefined) => ['attachment', attachmentId],
+  attachmentRender: (attachmentId: string, disposition: 'inline' | 'download') => ['attachment-render', attachmentId, { disposition }],
+  markdownDocument: (input: { object_type: string; object_id: string; validation_version: string }) => [
+    'markdown-document',
+    {
+      object_type: input.object_type,
+      object_id: input.object_id,
+      validation_version: input.validation_version,
+    },
+  ],
 } as const;

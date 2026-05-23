@@ -18,6 +18,7 @@ import type {
   LinkReleaseScopeBody,
   ListReleasesQuery,
   MarkPackageReadyBody,
+  MarkdownDocument,
   OverrideApproveReleaseBody,
   PatchExecutionPackageBody,
   PatchReleaseBody,
@@ -37,10 +38,15 @@ import type {
   RunOperatorCommandResponse,
   RunPackageBody,
   RunSession,
+  BugDetail,
+  InitiativeDetail,
   SpecPlan,
   SpecRevision,
   StartReleaseObservingBody,
   SubmitForApprovalBody,
+  RequirementDetail,
+  TaskDetail,
+  TechDebtDetail,
   UnlinkReleaseScopeBody,
   WorkItem,
 } from './types';
@@ -191,6 +197,31 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     listWorkItems: (projectId?: string) =>
       request<WorkItem[]>(`/work-items${projectId ? `?${new URLSearchParams({ project_id: projectId }).toString()}` : ''}`),
     getWorkItem: (workItemId: string) => request<WorkItem>(`/work-items/${encodeURIComponent(workItemId)}`),
+    updateRequirementNarrative: (requirementId: string, body: MarkdownDocument) =>
+      request<RequirementDetail>(`/requirements/${encodeURIComponent(requirementId)}/narrative`, {
+        method: 'PATCH',
+        body,
+      }),
+    updateInitiativeNarrative: (initiativeId: string, body: MarkdownDocument) =>
+      request<InitiativeDetail>(`/initiatives/${encodeURIComponent(initiativeId)}/narrative`, {
+        method: 'PATCH',
+        body,
+      }),
+    updateTechDebtNarrative: (techDebtId: string, body: MarkdownDocument) =>
+      request<TechDebtDetail>(`/tech-debt/${encodeURIComponent(techDebtId)}/narrative`, {
+        method: 'PATCH',
+        body,
+      }),
+    updateBugNarrative: (bugId: string, body: MarkdownDocument) =>
+      request<BugDetail>(`/bugs/${encodeURIComponent(bugId)}/narrative`, {
+        method: 'PATCH',
+        body,
+      }),
+    updateTaskNarrative: (taskId: string, body: MarkdownDocument) =>
+      request<TaskDetail>(`/tasks/${encodeURIComponent(taskId)}/narrative`, {
+        method: 'PATCH',
+        body,
+      }),
     getEvidenceChain: (workItemId: string, reviewPacketId?: string) =>
       request<EvidenceChainResponse>(
         `/work-items/${encodeURIComponent(workItemId)}/evidence-chain${

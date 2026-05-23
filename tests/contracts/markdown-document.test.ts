@@ -164,7 +164,7 @@ describe('MarkdownDocument validation', () => {
   });
 
   it('allows product prose labels without treating them as bare schemes', () => {
-    for (const markdown of ['Priority:P0', 'Owner:alice', 'Status:ready']) {
+    for (const markdown of ['Priority:Critical', 'Owner:alice', 'Status:ready']) {
       expect(validateMarkdownDocument({ ...baseDocument, markdown }).ok).toBe(true);
     }
   });

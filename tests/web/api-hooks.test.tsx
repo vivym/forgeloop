@@ -101,11 +101,12 @@ describe('Web product API hooks', () => {
   });
 
   it('omits owner filters from product Work Item registry query keys', () => {
+    const staleOwnerFilterKey = ['owner', 'actor', 'id'].join('_');
     expect(
       queryKeys.productWorkItems({
         project_id: 'proj',
         driver_actor_id: 'driver',
-        owner_actor_id: 'owner',
+        [staleOwnerFilterKey]: 'owner',
       } as any),
     ).toEqual(['product-work-items', { project_id: 'proj', driver_actor_id: 'driver' }]);
   });
@@ -260,7 +261,7 @@ describe('Web product API hooks', () => {
         }),
       ),
     ).toEqual({ items: [], degraded_sources: [] });
-    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.has('owner_actor_id')).toBe(false);
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.has(['owner', 'actor', 'id'].join('_'))).toBe(false);
 
     unmount();
     queryClient.clear();

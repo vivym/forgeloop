@@ -3060,7 +3060,7 @@ Expected: PASS. If the combined suite shows isolated 404/timeouts, rerun the exa
 Run:
 
 ```bash
-rg -n "p0service" apps packages tests docs/PRD_v1.md
+pnpm vitest run tests/naming/delivery-naming.test.ts tests/web/no-legacy-web-ui.test.ts
 rg -n "Work Item Owner|work-item-owner|workItemOwner|work_item_owner" apps packages tests
 rg -n "\\bowner_actor_id\\b" apps/web/src/features apps/web/src/app/routes tests/web
 rg -n "(to=|href=|href:|target:[\\s\\S]{0,160}href:)\\s*['\\\"]/((lanes|pipeline|work-items|packages|runs|reviews)(/|\\?|['\\\"]|$))" apps/web/src tests/web tests/e2e
@@ -3069,7 +3069,7 @@ rg -n "prefix\\('lanes'|route\\('pipeline'|prefix\\('work-items'|prefix\\('packa
 
 Expected:
 
-- `p0service` has no hits.
+- Historical subsystem naming guard passes.
 - Work Item Owner terms have no hits except explicit negative/no-baggage tests if unavoidable.
 - `owner_actor_id` appears only for legitimate non-Work-Item ownership or explicit rejection tests.
 - Removed top-level route hrefs appear only in negative route tests/no-baggage assertions, not active Web source. Task-scoped routes such as `/tasks/:taskId/packages/:packageId` are valid and must not be flagged.

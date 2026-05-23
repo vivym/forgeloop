@@ -167,8 +167,8 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^packages\/db\/src\/schema\/project\.ts$/,
   ];
   const projectOwnerTestPaths = [
-    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|delivery-flow|durable-id-generation|durable-revision-lookup|execution-package-service|local-codex-routing|product-lanes|query-module|spec-plan-service)\.test\.ts$/,
-    /^tests\/db\/schema\.test\.ts$/,
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|delivery-flow|durable-id-generation|durable-revision-lookup|execution-package-service|local-codex-routing|product-lanes|query-module|spec-plan-service|tasks)\.test\.ts$/,
+    /^tests\/db\/(?:schema|task-repository)\.test\.ts$/,
     /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
     /^tests\/smoke\/(?:delivery-dogfood-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
   ];
@@ -186,8 +186,8 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^apps\/web\/src\/features\/work-items\/delivery-cockpit\/package-matrix\.tsx$/,
   ];
   const executionPackageOwnerTestPaths = [
-    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|test-acceptance-gate)\.test\.ts$/,
-    /^tests\/db\/(?:automation-repository|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|task-scoped-evidence|test-acceptance-gate)\.test\.ts$/,
+    /^tests\/db\/(?:automation-repository|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|task-repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
     /^tests\/db\/repository-contract\.ts$/,
     /^tests\/contracts\/work-item-delivery-readiness\.test\.ts$/,
     /^tests\/domain\/(?:release-gates|release-states|states|validators)\.test\.ts$/,
@@ -220,8 +220,8 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
   ];
   const workItemOwnerRejectionTestPaths = [
     /^apps\/control-plane-api\/src\/modules\/query\/query\.service\.ts$/,
-    /^tests\/contracts\/work-item-intake\.test\.ts$/,
-    /^tests\/api\/(?:product-lanes|query-module|work-items)\.test\.ts$/,
+    /^tests\/contracts\/(?:product-actions|project-management-contracts|work-item-intake)\.test\.ts$/,
+    /^tests\/api\/(?:product-lanes|project-management-query|query-module|work-items)\.test\.ts$/,
     /^tests\/domain\/states\.test\.ts$/,
     /^tests\/web\/(?:api|api-hooks|product-lanes-route|work-item-intake-form|work-item-product-route)\.test\.tsx?$/,
   ];
@@ -234,7 +234,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
       context,
     );
   const negativeWorkItemOwnerContext =
-    /rejects owner_actor_id|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|rejects Work Item create bodies with execution owner fields before POSTing|whitelists product Work Item query filters before sending requests|createWorkItemRequestSchema[\s\S]*owner_actor_id|patchWorkItemRequestSchema[\s\S]*owner_actor_id|publicWorkItemSchema[\s\S]*owner_actor_id|api\.createWorkItem\([\s\S]*owner_actor_id|\.patch\(`\/work-items\/[\s\S]*owner_actor_id/.test(
+    /rejects owner_actor_id|rejects public product list items that expose work_item refs or owner_actor_id|rejects public product query filters with legacy owner or work item fields|rejects Spec and Plan read models with legacy work_item refs or owner fields|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|rejects Work Item create bodies with execution owner fields before POSTing|whitelists product Work Item query filters before sending requests|editableObjectRefSchema\.parse[\s\S]*owner_actor_id|productListItemSchema\.parse[\s\S]*owner_actor_id|productListQuerySchema\.parse[\s\S]*owner_actor_id|specDetailSchema\.parse[\s\S]*owner_actor_id|productActionSchema\.safeParse[\s\S]*owner_actor_id[\s\S]*toBe\(false\)|productLaneResponseSchema\.safeParse[\s\S]*owner_actor_id[\s\S]*toBe\(false\)|createWorkItemRequestSchema[\s\S]*owner_actor_id|patchWorkItemRequestSchema[\s\S]*owner_actor_id|publicWorkItemSchema[\s\S]*owner_actor_id|api\.createWorkItem\([\s\S]*owner_actor_id|\.patch\(`\/work-items\/[\s\S]*owner_actor_id/.test(
       context,
     );
   const runRequesterContext = /requested_by_actor_id|runSession\.requested_by_actor_id/.test(context);
