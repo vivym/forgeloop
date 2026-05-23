@@ -514,6 +514,7 @@ export const transitionWorkItem = (workItem: WorkItem | undefined, event: WorkIt
       project_id: event.project_id,
       kind: event.kind,
       title: event.title,
+      narrative_markdown: '',
       goal: event.goal,
       success_criteria: [...event.success_criteria],
       priority: event.priority,

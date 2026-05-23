@@ -129,6 +129,7 @@ export interface WorkItem {
   project_id: string;
   kind: WorkItemKind;
   title: string;
+  narrative_markdown: string;
   goal: string;
   success_criteria: string[];
   priority: string;
@@ -266,6 +267,7 @@ export type ExecutionPackageResolution = 'none' | 'completed';
 
 export interface ExecutionPackage {
   id: string;
+  task_id?: string;
   work_item_id: string;
   spec_id: string;
   spec_revision_id: string;

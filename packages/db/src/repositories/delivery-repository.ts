@@ -1,5 +1,6 @@
 import type {
   AutomationActionRun,
+  Attachment,
   AutomationActorContext,
   AutomationProjectSettings,
   AutomationPreset,
@@ -46,8 +47,10 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  Task,
   WorkItem,
 } from '@forgeloop/domain';
+import type { ObjectRef } from '@forgeloop/contracts';
 
 import type { trace_link_relationship_values } from '../schema/_shared';
 
@@ -958,6 +961,13 @@ export interface DeliveryRepository {
   saveWorkItem(workItem: WorkItem): Promise<void>;
   getWorkItem(workItemId: string): Promise<WorkItem | undefined>;
   listWorkItems(projectId?: string): Promise<WorkItem[]>;
+  updateWorkItemNarrative(input: { work_item_id: string; markdown: string; updated_at: string }): Promise<WorkItem>;
+
+  saveTask(task: Task): Promise<void>;
+  getTask(taskId: string): Promise<Task | undefined>;
+  listTasks(projectId?: string): Promise<Task[]>;
+  listTasksForParent(parentRef: ObjectRef): Promise<Task[]>;
+  updateTaskNarrative(input: { task_id: string; markdown: string; updated_at: string }): Promise<Task>;
 
   saveSpec(spec: Spec): Promise<void>;
   getSpec(specId: string): Promise<Spec | undefined>;
@@ -977,8 +987,16 @@ export interface DeliveryRepository {
   getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined>;
   listExecutionPackages(projectId?: string): Promise<ExecutionPackage[]>;
   listExecutionPackagesForWorkItem(workItemId: string): Promise<ExecutionPackage[]>;
+  linkExecutionPackageToTask(input: { task_id: string; execution_package_id: string }): Promise<void>;
+  getTaskForExecutionPackage(executionPackageId: string): Promise<Task | undefined>;
   saveExecutionPackageDependency(dependency: ExecutionPackageDependency): Promise<void>;
   listExecutionPackageDependencies(executionPackageId: string): Promise<ExecutionPackageDependency[]>;
+
+  saveAttachment(attachment: Attachment): Promise<void>;
+  getAttachment(attachmentId: string): Promise<Attachment | undefined>;
+  listAttachmentsForObject(objectType: string, objectId: string): Promise<Attachment[]>;
+  linkAttachmentToObject(attachmentId: string, objectRef: ObjectRef): Promise<Attachment>;
+  archiveAttachment(attachmentId: string, archivedAt: string): Promise<Attachment>;
 
   saveRunSession(runSession: RunSession): Promise<void>;
   getRunSession(runSessionId: string): Promise<RunSession | undefined>;
