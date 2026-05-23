@@ -4001,6 +4001,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async saveExecutionPackage(executionPackage: ExecutionPackage): Promise<void> {
     await this.upsert(execution_packages, execution_packages.id, {
       ...executionPackage,
+      required_test_gates: executionPackage.required_test_gates ?? [],
       source_mutation_policy: executionPackage.source_mutation_policy ?? 'path_policy_scoped',
     });
   }

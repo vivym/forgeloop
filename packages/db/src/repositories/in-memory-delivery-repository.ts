@@ -2744,6 +2744,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       executionPackage.id,
       clone({
         ...executionPackage,
+        required_test_gates: executionPackage.required_test_gates ?? [],
         source_mutation_policy: executionPackage.source_mutation_policy ?? 'path_policy_scoped',
       }),
     );

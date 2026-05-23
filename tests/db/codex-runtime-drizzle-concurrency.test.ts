@@ -8,10 +8,12 @@ import {
   codexCredentialPayloadDigest,
   codexRuntimeProfileRevisionDigest,
   codexWorkspaceAcquisitionDigest,
+  type Actor,
   type ExecutionPackage,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexDockerNetworkProxyConfig,
+  type Organization,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
   type RunSession,
@@ -175,7 +177,7 @@ const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionP
   qa_owner_actor_id: overrides.qa_owner_actor_id ?? randomUUID(),
   phase: overrides.phase ?? 'execution',
   activity_state: overrides.activity_state ?? 'idle',
-  gate_state: overrides.gate_state ?? 'none',
+  gate_state: overrides.gate_state ?? 'not_submitted',
   resolution: overrides.resolution ?? 'none',
   required_checks: overrides.required_checks ?? [],
   required_artifact_kinds: overrides.required_artifact_kinds ?? ['execution_summary'],
@@ -190,6 +192,38 @@ const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionP
   ...(overrides.last_run_session_id !== undefined ? { last_run_session_id: overrides.last_run_session_id } : {}),
   ...(overrides.current_run_session_id !== undefined ? { current_run_session_id: overrides.current_run_session_id } : {}),
 });
+
+const seedExecutionPackageActors = async (
+  repository: DeliveryRepository,
+  executionPackageRecord: ExecutionPackage,
+  extraActorIds: string[] = [],
+): Promise<void> => {
+  const organization: Organization = {
+    id: randomUUID(),
+    name: `Runtime package ${executionPackageRecord.id}`,
+    created_at: now,
+    updated_at: now,
+  };
+  await repository.saveOrganization(organization);
+
+  const actorIds = new Set([
+    executionPackageRecord.owner_actor_id,
+    executionPackageRecord.reviewer_actor_id,
+    executionPackageRecord.qa_owner_actor_id,
+    ...extraActorIds,
+  ]);
+  for (const actorId of actorIds) {
+    const actor: Actor = {
+      id: actorId,
+      org_id: organization.id,
+      actor_type: 'system',
+      display_name: `Runtime package actor ${actorId}`,
+      created_at: now,
+      updated_at: now,
+    };
+    await repository.saveActor(actor);
+  }
+};
 
 const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRuntimeProfileRevision } => {
   const profileId = randomUUID();
@@ -739,7 +773,9 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(),
         });
         const run = runSession();
-        await firstRepository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+        const executionPackageRecord = executionPackage({ id: run.execution_package_id });
+        await seedExecutionPackageActors(firstRepository, executionPackageRecord, [run.requested_by_actor_id]);
+        await firstRepository.saveExecutionPackage(executionPackageRecord);
         await firstRepository.saveRunSession(run);
         const runWorkerLease = await firstRepository.claimRunWorkerLease({
           run_session_id: run.id,

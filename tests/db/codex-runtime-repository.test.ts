@@ -256,7 +256,7 @@ const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionP
   qa_owner_actor_id: overrides.qa_owner_actor_id ?? 'actor-qa',
   phase: overrides.phase ?? 'execution',
   activity_state: overrides.activity_state ?? 'idle',
-  gate_state: overrides.gate_state ?? 'none',
+  gate_state: overrides.gate_state ?? 'not_submitted',
   resolution: overrides.resolution ?? 'none',
   required_checks: overrides.required_checks ?? [],
   required_artifact_kinds: overrides.required_artifact_kinds ?? ['execution_summary'],

@@ -184,6 +184,7 @@ const executionPackage: ExecutionPackage = {
   gate_state: 'awaiting_human_review',
   resolution: 'none',
   required_checks: [requiredCheck],
+  required_test_gates: [],
   required_artifact_kinds: ['execution_summary'],
   allowed_paths: ['packages/db/**', 'tests/db/**'],
   forbidden_paths: ['apps/**'],
