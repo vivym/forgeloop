@@ -100,6 +100,7 @@ export class BrainstormingService {
   async answerQuestion(sessionId: string, input: AnswerQuestionInput): Promise<BrainstormingAnswer> {
     return this.repository.withObjectLock(`brainstorming-session:${sessionId}`, async (repository) => {
       const session = await this.requireBrainstormingSession(sessionId, repository);
+      this.assertSessionMutable(session);
       if (!session.questions.some((question) => question.id === input.question_id)) {
         throw new BadRequestException(`Question ${input.question_id} does not belong to Brainstorming Session ${sessionId}`);
       }
@@ -128,6 +129,7 @@ export class BrainstormingService {
   async recordDecision(sessionId: string, input: RecordDecisionInput): Promise<BrainstormingDecision> {
     return this.repository.withObjectLock(`brainstorming-session:${sessionId}`, async (repository) => {
       const session = await this.requireBrainstormingSession(sessionId, repository);
+      this.assertSessionMutable(session);
       const decision = this.buildDecision(input);
       const updated: BrainstormingSession = {
         ...session,
@@ -372,6 +374,12 @@ export class BrainstormingService {
       ...(input.rationale === undefined ? {} : { rationale: input.rationale }),
       created_at: this.runtime.now(),
     };
+  }
+
+  private assertSessionMutable(session: BrainstormingSession): void {
+    if (session.approval_state === 'approved') {
+      throw new BadRequestException(`Brainstorming Session ${session.id} is already approved`);
+    }
   }
 
   private nextApprovalState(

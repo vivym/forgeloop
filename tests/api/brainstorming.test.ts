@@ -182,6 +182,90 @@ describe('Boundary Brainstorming API', () => {
     });
     expect(JSON.stringify(approved)).not.toContain('"type":"work_item"');
   });
+
+  it('rejects answer and decision mutations after boundary approval', async () => {
+    const { plan, item } = await seedDevelopmentPlanItem(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const session = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
+        .send({ actor_id: 'actor-tech' })
+        .expect(201)
+    ).body;
+
+    for (const question of session.questions) {
+      await request(server)
+        .post(`/brainstorming-sessions/${session.id}/answers`)
+        .send({
+          question_id: question.id,
+          text: `Answered boundary question: ${question.text}`,
+          actor_id: 'actor-tech',
+        })
+        .expect(201);
+    }
+
+    await request(server)
+      .post(`/brainstorming-sessions/${session.id}/decisions`)
+      .send({
+        text: 'Keep implementation scoped to Web IA and route tests.',
+        rationale: 'The item is a UI planning slice.',
+        actor_id: 'actor-tech',
+      })
+      .expect(201);
+
+    const approved = (
+      await request(server)
+        .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
+        .send({
+          confirmed_scope: ['Web IA and Development Plan Item gate UX'],
+          confirmed_out_of_scope: ['Runtime scheduler changes'],
+          accepted_assumptions: ['Mock Codex question generation is sufficient for this slice'],
+          open_risks: ['Execution queue depends on existing runtime adapters'],
+          validation_expectations: ['Route tests and screenshot checks pass'],
+          actor_id: 'actor-tech',
+          final_decision: 'Approve after all questions and one prior decision.',
+        })
+        .expect(201)
+    ).body;
+    const approvedSession = await repository.getBrainstormingSession(session.id);
+    expect(approvedSession).toMatchObject({
+      approval_state: 'approved',
+      revision_id: approved.revision_id,
+      boundary_summary_id: approved.boundary_summary_id,
+    });
+
+    await request(server)
+      .post(`/brainstorming-sessions/${session.id}/answers`)
+      .send({
+        question_id: session.questions[0].id,
+        text: 'Late answer after approval.',
+        actor_id: 'actor-tech',
+      })
+      .expect(400);
+
+    await request(server)
+      .post(`/brainstorming-sessions/${session.id}/decisions`)
+      .send({
+        text: 'Late decision after approval.',
+        rationale: 'This should not mutate an approved boundary.',
+        actor_id: 'actor-tech',
+      })
+      .expect(400);
+
+    const persistedSession = await repository.getBrainstormingSession(session.id);
+    const persistedBoundarySummary = await repository.getBoundarySummary(approved.boundary_summary_id);
+    expect(persistedSession).toMatchObject({
+      approval_state: 'approved',
+      revision_id: approved.revision_id,
+      boundary_summary_id: approved.boundary_summary_id,
+    });
+    expect(persistedSession?.answers).toHaveLength(session.questions.length);
+    expect(persistedSession?.decisions).toHaveLength(2);
+    expect((persistedBoundarySummary as { brainstorming_session_revision_id?: string })?.brainstorming_session_revision_id).toBe(
+      persistedSession?.revision_id,
+    );
+  });
 });
 
 async function seedDevelopmentPlanItem(app: INestApplication) {
