@@ -25,13 +25,10 @@ import type { DeliveryRepository } from '../repositories/delivery-repository';
 type WorkItemObjectType = Extract<ObjectRef['type'], 'initiative' | 'requirement' | 'bug' | 'tech_debt'>;
 type TypedWorkItem = WorkItem & { kind: WorkItemObjectType };
 type ProductListQuery = { project_id: string };
-
-const defaultRevisionAuthority = {
-  current_spec_revision_id: 'spec-rev-1',
-  evidence_spec_revision_id: 'spec-rev-1',
-  current_plan_revision_id: 'plan-rev-1',
-  evidence_plan_revision_id: 'plan-rev-1',
-} as const;
+type ReleaseRevisionAuthority = {
+  current_spec_revision_id?: string;
+  current_plan_revision_id?: string;
+};
 
 export async function listMyWorkQueue(
   repository: DeliveryRepository,
@@ -42,12 +39,23 @@ export async function listMyWorkQueue(
     repository.listTasks(query.project_id),
     repository.listReleases(query.project_id),
   ]);
+  const actorWorkItems =
+    query.actor_id === undefined ? workItems : workItems.filter((workItem) => workItem.driver_actor_id === query.actor_id);
+  const actorWorkItemKeys = new Set(actorWorkItems.map((workItem) => objectRefKey(workItemRef(workItem))));
+  const actorTasks =
+    query.actor_id === undefined
+      ? tasks
+      : tasks.filter((task) => task.parent_ref !== undefined && actorWorkItemKeys.has(objectRefKey(task.parent_ref)));
+  const actorReleases =
+    query.actor_id === undefined
+      ? releases
+      : releases.filter((release) => release.release_owner_actor_id === query.actor_id);
 
   return {
     items: [
-      ...workItems.map((workItem) => ({ item: workItemToMyWorkQueueItem(workItem), updated_at: workItem.updated_at })),
-      ...tasks.map((task) => ({ item: taskToMyWorkQueueItem(task), updated_at: task.updated_at })),
-      ...releases.map((release) => ({ item: releaseToMyWorkQueueItem(release), updated_at: release.updated_at })),
+      ...actorWorkItems.map((workItem) => ({ item: workItemToMyWorkQueueItem(workItem), updated_at: workItem.updated_at })),
+      ...actorTasks.map((task) => ({ item: taskToMyWorkQueueItem(task), updated_at: task.updated_at })),
+      ...actorReleases.map((release) => ({ item: releaseToMyWorkQueueItem(release), updated_at: release.updated_at })),
     ]
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
       .map(({ item }) => item),
@@ -169,10 +177,11 @@ export async function getReleaseReadinessDetail(
   }
   const scopeRefs = releaseScopeRefs(release);
   const evidence = await repository.listReleaseEvidences(releaseId);
+  const revisionAuthority = releaseRevisionAuthority(release);
   const disabledReasons: ProductSafeDisabledReason[] = [];
   recordWrongScopeEvidence(evidence, scopeRefs, disabledReasons);
-  const reviewGates = scopeRefs.map((scopeRef) => reviewGateFor(scopeRef, evidence, disabledReasons));
-  const testGates = scopeRefs.map((scopeRef) => testGateFor(scopeRef, evidence, disabledReasons));
+  const reviewGates = scopeRefs.map((scopeRef) => reviewGateFor(scopeRef, evidence, disabledReasons, revisionAuthority));
+  const testGates = scopeRefs.map((scopeRef) => testGateFor(scopeRef, evidence, disabledReasons, revisionAuthority));
   const detail: ReleaseReadinessDetail = {
     release_id: release.id,
     scope_refs: scopeRefs,
@@ -449,27 +458,44 @@ function releaseScopeRefs(release: Release): ObjectRef[] {
   return refs.filter(isObjectRef);
 }
 
+function releaseRevisionAuthority(release: Release): ReleaseRevisionAuthority {
+  const currentSpecRevisionId = stringValue(release.extra, 'current_spec_revision_id');
+  const currentPlanRevisionId = stringValue(release.extra, 'current_plan_revision_id');
+  return {
+    ...(currentSpecRevisionId === undefined ? {} : { current_spec_revision_id: currentSpecRevisionId }),
+    ...(currentPlanRevisionId === undefined ? {} : { current_plan_revision_id: currentPlanRevisionId }),
+  };
+}
+
 function reviewGateFor(
   scopeRef: ObjectRef,
   evidence: ReleaseEvidence[],
   disabledReasons: ProductSafeDisabledReason[],
+  revisionAuthority: ReleaseRevisionAuthority,
 ): EvidenceRequirementStatus {
   const candidates = evidenceForScope(evidence, scopeRef, 'review');
   const invalidStatus = recordInvalidStatus(candidates, scopeRef, disabledReasons);
   if (invalidStatus !== undefined) {
     return invalidStatus;
   }
-  const authoritative = candidates.find((item) => isAuthoritativeReview(item) && value(item.extra, 'status') === 'approved');
+  const authoritativeCandidates = candidates.filter((item) => isAuthoritativeReview(item) && value(item.extra, 'status') === 'approved');
+  const authoritative = authoritativeCandidates.find((item) => evidenceRevisionsMatch(item, revisionAuthority));
   if (authoritative === undefined) {
+    if (authoritativeCandidates.length > 0) {
+      disabledReasons.push(disabled('evidence_revision_mismatch', scopeRef));
+      return revisionMismatchGate('review', scopeRef, 'review');
+    }
     disabledReasons.push(disabled('missing_required_review', scopeRef));
     return gate('review', scopeRef, 'review', 'missing', disabled('missing_required_review', scopeRef));
   }
+  const evidenceSpecRevisionId = stringValue(authoritative.extra, 'spec_revision_id');
+  const evidencePlanRevisionId = stringValue(authoritative.extra, 'plan_revision_id');
   return {
     requirement_id: `review:${scopeRef.type}:${scopeRef.id}`,
     scope_ref: scopeRef,
     kind: 'review',
     status: 'passed',
-    ...defaultRevisionAuthority,
+    ...revisionFields(revisionAuthority, evidenceSpecRevisionId, evidencePlanRevisionId),
     evidence_ref: {
       id: authoritative.id,
       authority_type: value(authoritative.extra, 'authority_type') === 'review_packet_approval' ? 'review_packet_approval' : 'human_review_decision',
@@ -480,6 +506,8 @@ function reviewGateFor(
       scope_ref: scopeRef,
       status: 'approved',
       required: true,
+      ...(evidenceSpecRevisionId === undefined ? {} : { spec_revision_id: evidenceSpecRevisionId }),
+      ...(evidencePlanRevisionId === undefined ? {} : { plan_revision_id: evidencePlanRevisionId }),
       attachment_refs: [],
     },
   };
@@ -489,14 +517,20 @@ function testGateFor(
   scopeRef: ObjectRef,
   evidence: ReleaseEvidence[],
   disabledReasons: ProductSafeDisabledReason[],
+  revisionAuthority: ReleaseRevisionAuthority,
 ): EvidenceRequirementStatus {
   const candidates = evidenceForScope(evidence, scopeRef, 'test');
   const invalidStatus = recordInvalidStatus(candidates, scopeRef, disabledReasons);
   if (invalidStatus !== undefined) {
     return invalidStatus;
   }
-  const passing = candidates.find((item) => value(item.extra, 'status') === 'passed' && isAuthorizedEvidence(item));
+  const passingCandidates = candidates.filter((item) => value(item.extra, 'status') === 'passed' && isAuthorizedEvidence(item));
+  const passing = passingCandidates.find((item) => evidenceRevisionsMatch(item, revisionAuthority));
   if (passing === undefined) {
+    if (passingCandidates.length > 0) {
+      disabledReasons.push(disabled('evidence_revision_mismatch', scopeRef));
+      return revisionMismatchGate('test_acceptance', scopeRef, 'qa_acceptance');
+    }
     disabledReasons.push(disabled('missing_required_test_acceptance', scopeRef));
     return gate('test_acceptance', scopeRef, 'qa_acceptance', 'missing', disabled('missing_required_test_acceptance', scopeRef));
   }
@@ -505,7 +539,7 @@ function testGateFor(
     scope_ref: scopeRef,
     kind: 'qa_acceptance',
     status: 'passed',
-    ...defaultRevisionAuthority,
+    ...revisionFields(revisionAuthority, stringValue(passing.extra, 'spec_revision_id'), stringValue(passing.extra, 'plan_revision_id')),
     evidence_ref: {
       id: passing.id,
       scope_ref: scopeRef,
@@ -526,6 +560,41 @@ function evidenceForScope(evidence: ReleaseEvidence[], scopeRef: ObjectRef, kind
         : evidenceType(item) === 'test_report' || evidenceType(item) === 'test_acceptance' || value(item.extra, 'evidence_type') !== undefined;
     return kindMatches && isObjectRef(itemScopeRef) && itemScopeRef.type === scopeRef.type && itemScopeRef.id === scopeRef.id;
   });
+}
+
+function evidenceRevisionsMatch(evidence: ReleaseEvidence, revisionAuthority: ReleaseRevisionAuthority): boolean {
+  const evidenceSpecRevisionId = stringValue(evidence.extra, 'spec_revision_id');
+  const evidencePlanRevisionId = stringValue(evidence.extra, 'plan_revision_id');
+  return (
+    revisionAuthority.current_spec_revision_id !== undefined &&
+    evidenceSpecRevisionId === revisionAuthority.current_spec_revision_id &&
+    revisionAuthority.current_plan_revision_id !== undefined &&
+    evidencePlanRevisionId === revisionAuthority.current_plan_revision_id
+  );
+}
+
+function revisionFields(
+  revisionAuthority: ReleaseRevisionAuthority,
+  evidenceSpecRevisionId: string | undefined,
+  evidencePlanRevisionId: string | undefined,
+): Pick<
+  EvidenceRequirementStatus,
+  'current_spec_revision_id' | 'evidence_spec_revision_id' | 'current_plan_revision_id' | 'evidence_plan_revision_id'
+> {
+  return {
+    ...(revisionAuthority.current_spec_revision_id === undefined ? {} : { current_spec_revision_id: revisionAuthority.current_spec_revision_id }),
+    ...(evidenceSpecRevisionId === undefined ? {} : { evidence_spec_revision_id: evidenceSpecRevisionId }),
+    ...(revisionAuthority.current_plan_revision_id === undefined ? {} : { current_plan_revision_id: revisionAuthority.current_plan_revision_id }),
+    ...(evidencePlanRevisionId === undefined ? {} : { evidence_plan_revision_id: evidencePlanRevisionId }),
+  };
+}
+
+function revisionMismatchGate(
+  requirementId: string,
+  scopeRef: ObjectRef,
+  kind: EvidenceRequirementStatus['kind'],
+): EvidenceRequirementStatus {
+  return gate(requirementId, scopeRef, kind, 'blocked', disabled('evidence_revision_mismatch', scopeRef));
 }
 
 function recordWrongScopeEvidence(
@@ -699,4 +768,8 @@ function value(record: unknown, key: string): unknown {
 function stringValue(record: unknown, key: string): string | undefined {
   const maybeValue = value(record, key);
   return typeof maybeValue === 'string' && maybeValue.trim().length > 0 ? maybeValue : undefined;
+}
+
+function objectRefKey(ref: ObjectRef): string {
+  return `${ref.type}:${ref.id}`;
 }

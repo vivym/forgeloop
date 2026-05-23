@@ -38,6 +38,14 @@ describe('project management query API', () => {
       expect.arrayContaining([
         expect.objectContaining({ object_ref: { type: 'requirement', id: 'req-1' } }),
         expect.objectContaining({ object_ref: { type: 'task', id: 'task-1' } }),
+        expect.objectContaining({ object_ref: { type: 'release', id: 'release-1' } }),
+      ]),
+    );
+    expect(response.body.items).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ object_ref: { type: 'requirement', id: 'req-other' } }),
+        expect.objectContaining({ object_ref: { type: 'task', id: 'task-other' } }),
+        expect.objectContaining({ object_ref: { type: 'release', id: 'release-other' } }),
       ]),
     );
     expect(response.body.degraded_sources).toEqual([]);
@@ -57,6 +65,7 @@ describe('project management query API', () => {
 async function seedProjectManagementFixture(repository: InMemoryDeliveryRepository): Promise<void> {
   for (const workItem of [
     workItemFixture('requirement', 'req-1', 'Checkout guard requirement', later),
+    workItemFixture('requirement', 'req-other', 'Unrelated requirement', later, 'actor-other'),
     workItemFixture('initiative', 'init-1', 'Checkout reliability initiative', now),
     workItemFixture('tech_debt', 'td-1', 'Checkout validation debt', now),
     workItemFixture('bug', 'bug-1', 'Checkout regression', now),
@@ -64,10 +73,18 @@ async function seedProjectManagementFixture(repository: InMemoryDeliveryReposito
     await repository.saveWorkItem(workItem);
   }
   await repository.saveTask(taskFixture('task-1'));
+  await repository.saveTask(taskFixture('task-other', { parent_ref: { type: 'requirement', id: 'req-other' } }));
   await repository.saveRelease(releaseFixture('release-1'));
+  await repository.saveRelease(releaseFixture('release-other', 'actor-other'));
 }
 
-function workItemFixture(kind: WorkItem['kind'], id: string, title: string, updatedAt: string): WorkItem {
+function workItemFixture(
+  kind: WorkItem['kind'],
+  id: string,
+  title: string,
+  updatedAt: string,
+  driverActorId = 'actor-product',
+): WorkItem {
   return {
     id,
     project_id: 'project-1',
@@ -78,7 +95,7 @@ function workItemFixture(kind: WorkItem['kind'], id: string, title: string, upda
     success_criteria: ['The query API emits concrete product refs.'],
     priority: kind === 'bug' ? 'critical' : 'P1',
     risk: kind === 'bug' ? 'high' : 'medium',
-    driver_actor_id: 'actor-product',
+    driver_actor_id: driverActorId,
     intake_context: intakeContextFor(kind),
     phase: 'draft',
     activity_state: 'idle',
@@ -128,7 +145,7 @@ function intakeContextFor(kind: WorkItem['kind']): WorkItem['intake_context'] {
   };
 }
 
-function taskFixture(id: string): Task {
+function taskFixture(id: string, overrides: Partial<Task> = {}): Task {
   return {
     id,
     project_id: 'project-1',
@@ -143,10 +160,11 @@ function taskFixture(id: string): Task {
     stale_state: 'current',
     created_at: now,
     updated_at: later,
+    ...overrides,
   };
 }
 
-function releaseFixture(id: string): Release {
+function releaseFixture(id: string, releaseOwnerActorId = 'actor-product'): Release {
   return {
     id,
     org_id: 'org-1',
@@ -159,6 +177,7 @@ function releaseFixture(id: string): Release {
     work_item_ids: ['req-1'],
     execution_package_ids: [],
     created_by_actor_id: 'actor-product',
+    release_owner_actor_id: releaseOwnerActorId,
     created_at: now,
     updated_at: now,
   };

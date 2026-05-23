@@ -100,13 +100,39 @@ describe('project management release readiness API', () => {
       disabled_reasons: [],
     });
   });
+
+  it('fails closed when otherwise passing evidence targets stale Spec or Plan revisions', async () => {
+    await seedReadyReleaseEvidence(repository, {
+      release_id: 'release-1',
+      scope_refs: defaultScopeRefs,
+      current_spec_revision_id: 'spec-rev-2',
+      current_plan_revision_id: 'plan-rev-2',
+      evidence_spec_revision_id: 'spec-rev-1',
+      evidence_plan_revision_id: 'plan-rev-1',
+    });
+
+    const response = await request(app.getHttpServer()).get('/query/releases/release-1/readiness').expect(200);
+
+    expect(response.body.ready).toBe(false);
+    expect(response.body.disabled_reasons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'evidence_revision_mismatch' })]),
+    );
+    expect(response.body.required_review_evidence[0]).toMatchObject({
+      status: 'blocked',
+      disabled_reason: expect.objectContaining({ code: 'evidence_revision_mismatch' }),
+    });
+    expect(response.body.required_test_acceptance_evidence[0]).toMatchObject({
+      status: 'blocked',
+      disabled_reason: expect.objectContaining({ code: 'evidence_revision_mismatch' }),
+    });
+  });
 });
 
 async function seedReleaseScope(
   repository: InMemoryDeliveryRepository,
-  input: { release_id: string; scope_refs: ObjectRef[] },
+  input: { release_id: string; scope_refs: ObjectRef[]; current_spec_revision_id?: string; current_plan_revision_id?: string },
 ): Promise<void> {
-  await repository.saveRelease(releaseFixture(input.release_id, input.scope_refs));
+  await repository.saveRelease(releaseFixture(input.release_id, input.scope_refs, input));
 }
 
 async function seedReleaseScopeWithEvidence(
@@ -129,7 +155,14 @@ async function seedReleaseScopeWithEvidence(
 
 async function seedReadyReleaseEvidence(
   repository: InMemoryDeliveryRepository,
-  input: { release_id: string; scope_refs: ObjectRef[] },
+  input: {
+    release_id: string;
+    scope_refs: ObjectRef[];
+    current_spec_revision_id?: string;
+    current_plan_revision_id?: string;
+    evidence_spec_revision_id?: string;
+    evidence_plan_revision_id?: string;
+  },
 ): Promise<void> {
   await seedReleaseScope(repository, input);
   let index = 0;
@@ -142,6 +175,8 @@ async function seedReadyReleaseEvidence(
         freshness: 'current',
         authorization: 'authorized',
         reference_status: 'active',
+        spec_revision_id: input.evidence_spec_revision_id ?? input.current_spec_revision_id ?? 'spec-rev-1',
+        plan_revision_id: input.evidence_plan_revision_id ?? input.current_plan_revision_id ?? 'plan-rev-1',
       }),
     );
     await repository.saveReleaseEvidence(
@@ -152,12 +187,18 @@ async function seedReadyReleaseEvidence(
         freshness: 'current',
         authorization: 'authorized',
         reference_status: 'active',
+        spec_revision_id: input.evidence_spec_revision_id ?? input.current_spec_revision_id ?? 'spec-rev-1',
+        plan_revision_id: input.evidence_plan_revision_id ?? input.current_plan_revision_id ?? 'plan-rev-1',
       }),
     );
   }
 }
 
-function releaseFixture(id: string, scopeRefs: ObjectRef[]): Release {
+function releaseFixture(
+  id: string,
+  scopeRefs: ObjectRef[],
+  options: { current_spec_revision_id?: string; current_plan_revision_id?: string } = {},
+): Release {
   return {
     id,
     org_id: 'org-1',
@@ -171,8 +212,8 @@ function releaseFixture(id: string, scopeRefs: ObjectRef[]): Release {
     execution_package_ids: [],
     extra: {
       project_management_scope_refs: scopeRefs,
-      current_spec_revision_id: 'spec-rev-1',
-      current_plan_revision_id: 'plan-rev-1',
+      current_spec_revision_id: options.current_spec_revision_id ?? 'spec-rev-1',
+      current_plan_revision_id: options.current_plan_revision_id ?? 'plan-rev-1',
     },
     created_by_actor_id: 'actor-release',
     created_at: now,

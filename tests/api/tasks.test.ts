@@ -7,6 +7,7 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import type { Plan, PlanRevision, Project, ProjectRepo, Spec, SpecRevision, Task, WorkItem } from '../../packages/domain/src';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const now = '2026-05-23T00:00:00.000Z';
 
@@ -46,6 +47,45 @@ describe('Task authority API', () => {
     expect(JSON.stringify(response.body)).not.toContain('work_item_kind');
   });
 
+  it('marks independent Tasks stale when their Spec authority is not current approved', async () => {
+    await seedApprovedParent(repository);
+    await repository.saveSpecRevision(specRevisionFixture({ id: 'spec-rev-old', revision_number: 0 }));
+
+    const response = await request(app.getHttpServer())
+      .post('/tasks')
+      .send({
+        project_id: 'project-1',
+        title: 'Implement stale checkout guard',
+        execution_brief: 'Use an old spec revision.',
+        acceptance_checklist: ['Stale authority is blocked'],
+        controlling_spec_revision_id: 'spec-rev-old',
+        controlling_plan_revision_id: 'plan-rev-1',
+      })
+      .expect(201);
+
+    expect(response.body).toMatchObject({
+      object_ref: { type: 'task' },
+      stale_state: 'stale_spec',
+      package_generation_eligible: false,
+    });
+  });
+
+  it('blocks package generation when Task Spec authority does not match the approved Plan authority', async () => {
+    await seedTask(repository, {
+      id: 'task-mismatched-authority',
+      parent_ref: undefined,
+      controlling_spec_revision_id: 'spec-rev-other',
+      controlling_plan_revision_id: 'plan-rev-1',
+      stale_state: 'current',
+    });
+    await repository.saveSpecRevision(specRevisionFixture({ id: 'spec-rev-other', revision_number: 2 }));
+
+    await request(app.getHttpServer())
+      .post('/tasks/task-mismatched-authority/packages')
+      .send({ actor_id: 'actor-dev' })
+      .expect(409);
+  });
+
   it('rejects package generation for manual_exception tasks', async () => {
     await seedManualExceptionTask(repository, 'task-manual');
 
@@ -73,7 +113,7 @@ describe('Task authority API', () => {
 
 async function seedApprovedParent(repository: InMemoryDeliveryRepository): Promise<void> {
   await repository.saveProject(projectFixture());
-  await repository.saveProjectRepo(projectRepoFixture());
+  await repository.saveProjectRepo(await projectRepoFixture());
   await repository.saveWorkItem(requirementFixture());
   await repository.saveSpec(specFixture());
   await repository.saveSpecRevision(specRevisionFixture());
@@ -132,14 +172,14 @@ function projectFixture(): Project {
   };
 }
 
-function projectRepoFixture(): ProjectRepo {
+async function projectRepoFixture(): Promise<ProjectRepo> {
   return {
     id: 'project-repo-1',
     project_id: 'project-1',
     repo_id: 'repo-1',
     name: 'forgeloop',
     status: 'active',
-    local_path: '/workspace/forgeloop',
+    local_path: await createWorkflowPolicyRepoRoot(),
     default_branch: 'main',
     base_commit_sha: 'abc123',
     created_at: now,
@@ -197,7 +237,7 @@ function specFixture(): Spec {
   };
 }
 
-function specRevisionFixture(): SpecRevision {
+function specRevisionFixture(overrides: Partial<SpecRevision> = {}): SpecRevision {
   return {
     id: 'spec-rev-1',
     spec_id: 'spec-1',
@@ -215,6 +255,7 @@ function specRevisionFixture(): SpecRevision {
     artifact_refs: [],
     author_actor_id: 'actor-product',
     created_at: now,
+    ...overrides,
   };
 }
 

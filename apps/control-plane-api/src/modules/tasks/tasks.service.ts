@@ -92,11 +92,18 @@ export class TasksService {
     if (task.controlling_spec_revision_id === undefined || task.controlling_plan_revision_id === undefined) {
       throw new ConflictException('Task package generation requires controlling Spec and Plan revisions');
     }
+    await this.requireCurrentTaskRevisionAuthority(task);
 
     const packages = await this.executionPackages.generatePublicPackages(task.controlling_plan_revision_id);
     const generatedPackage = packages[0];
     if (generatedPackage === undefined) {
       throw new ConflictException('Task package generation did not produce an execution package');
+    }
+    if (
+      generatedPackage.spec_revision_id !== task.controlling_spec_revision_id ||
+      generatedPackage.plan_revision_id !== task.controlling_plan_revision_id
+    ) {
+      throw new ConflictException('Generated package revision authority does not match the Task authority');
     }
     await this.repository.linkExecutionPackageToTask({
       task_id: task.id,
@@ -143,9 +150,19 @@ export class TasksService {
     if (planRevision === undefined) {
       return 'stale_plan';
     }
+    const spec = this.requireFound(await this.repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
+    const plan = this.requireFound(await this.repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
+    if (!isCurrentApprovedSpec(spec, input.controlling_spec_revision_id)) {
+      return 'stale_spec';
+    }
+    if (
+      !isCurrentApprovedPlan(plan, input.controlling_plan_revision_id) ||
+      specRevision.work_item_id !== planRevision.work_item_id ||
+      planRevision.based_on_spec_revision_id !== input.controlling_spec_revision_id
+    ) {
+      return 'stale_plan';
+    }
     if (parentWorkItem !== undefined) {
-      const spec = this.requireFound(await this.repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
-      const plan = this.requireFound(await this.repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
       if (!isCurrentApprovedSpec(spec, input.controlling_spec_revision_id) || parentWorkItem.current_spec_revision_id !== input.controlling_spec_revision_id) {
         return 'stale_spec';
       }
@@ -158,6 +175,40 @@ export class TasksService {
       }
     }
     return 'current';
+  }
+
+  private async requireCurrentTaskRevisionAuthority(task: Task): Promise<void> {
+    if (task.controlling_spec_revision_id === undefined || task.controlling_plan_revision_id === undefined) {
+      throw new ConflictException('Task package generation requires controlling Spec and Plan revisions');
+    }
+    const specRevision = await this.repository.getSpecRevision(task.controlling_spec_revision_id);
+    if (specRevision === undefined) {
+      throw new ConflictException('Task controlling SpecRevision is not current approved');
+    }
+    const planRevision = await this.repository.getPlanRevision(task.controlling_plan_revision_id);
+    if (planRevision === undefined) {
+      throw new ConflictException('Task controlling PlanRevision is not current approved');
+    }
+    const spec = this.requireFound(await this.repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
+    const plan = this.requireFound(await this.repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
+    if (!isCurrentApprovedSpec(spec, task.controlling_spec_revision_id)) {
+      throw new ConflictException('Task controlling SpecRevision is not current approved');
+    }
+    if (!isCurrentApprovedPlan(plan, task.controlling_plan_revision_id)) {
+      throw new ConflictException('Task controlling PlanRevision is not current approved');
+    }
+    if (specRevision.work_item_id !== planRevision.work_item_id || planRevision.based_on_spec_revision_id !== task.controlling_spec_revision_id) {
+      throw new ConflictException('Task controlling PlanRevision is not based on the Task controlling SpecRevision');
+    }
+    if (task.parent_ref !== undefined && task.parent_ref.type !== 'task') {
+      const parentWorkItem = this.requireFound(await this.repository.getWorkItem(task.parent_ref.id), `${task.parent_ref.type} ${task.parent_ref.id}`);
+      if (
+        parentWorkItem.current_spec_revision_id !== task.controlling_spec_revision_id ||
+        parentWorkItem.current_plan_revision_id !== task.controlling_plan_revision_id
+      ) {
+        throw new ConflictException('Task parent authority no longer matches the Task revisions');
+      }
+    }
   }
 
   private async requireTask(taskId: string): Promise<Task> {
