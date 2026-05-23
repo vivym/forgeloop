@@ -271,6 +271,9 @@ const publicSafeErrorCodes = new Set([
   'codex_worker_docker_policy_unavailable',
   'codex_app_server_effective_config_mismatch',
   'codex_runtime_workspace_isolation_unavailable',
+  'codex_runtime_job_unavailable',
+  'codex_runtime_job_expired',
+  'codex_runtime_job_cancelled',
   'codex_docker_runtime_evidence_unsafe',
   'codex_runtime_profile_invalid',
   'generated_output_invalid_json',
@@ -326,6 +329,8 @@ const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'codex_worker_docker_policy_unavailable' ||
   code === 'codex_app_server_effective_config_mismatch' ||
   code === 'codex_runtime_workspace_isolation_unavailable' ||
+  code === 'codex_runtime_job_unavailable' ||
+  code === 'codex_runtime_job_expired' ||
   code === 'codex_docker_runtime_evidence_unsafe' ||
   code === 'codex_runtime_profile_invalid' ||
   code === 'generated_spec_draft_invalid' ||
@@ -368,6 +373,9 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
     code === 'codex_generation_concurrency_limit_exceeded' ||
     code === 'codex_generation_raw_log_too_large' ||
     code === 'codex_generation_turn_failed' ||
+    code === 'codex_runtime_job_unavailable' ||
+    code === 'codex_runtime_job_expired' ||
+    code === 'codex_runtime_job_cancelled' ||
     code === 'generated_output_invalid_json' ||
     code === 'generated_output_ambiguous' ||
     code === 'generated_output_schema_invalid' ||

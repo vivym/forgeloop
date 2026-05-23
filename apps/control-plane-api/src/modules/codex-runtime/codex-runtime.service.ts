@@ -197,6 +197,9 @@ const workerReplayProtection = (method: 'GET' | 'POST', path: string, bodyDigest
   body_digest: bodyDigest,
 });
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
   return {
     id: job.id,
@@ -768,7 +771,25 @@ export class CodexRuntimeService {
       replay_protection: workerReplayProtection('GET', `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/workload`, query.body_digest),
       now,
     });
-    return { workload: runtimeJob.input_json };
+    const workspaceAcquisition = runtimeJob.workspace_acquisition_json;
+    if (runtimeJob.input_json.schema_version !== 'codex_generation_workload.v1') {
+      return { workload: runtimeJob.input_json };
+    }
+    const signedContext =
+      workspaceAcquisition?.schema_version === 'codex_generation_workspace_acquisition.v1' &&
+      workspaceAcquisition.signed_context_ref === runtimeJob.input_json.signed_context_ref &&
+      workspaceAcquisition.signed_context_digest === runtimeJob.input_json.signed_context_digest &&
+      isRecord(workspaceAcquisition.signed_context_json) &&
+      codexCanonicalDigest(workspaceAcquisition.signed_context_json) === runtimeJob.input_json.signed_context_digest
+        ? workspaceAcquisition.signed_context_json
+        : undefined;
+    if (signedContext === undefined) {
+      throw new ForbiddenException('Codex runtime job workload was denied');
+    }
+    return {
+      workload: runtimeJob.input_json,
+      signed_context: signedContext,
+    };
   }
 
   async materializeRuntimeJob(workerId: string, jobId: string, input: MaterializeCodexRuntimeJobServiceInput) {

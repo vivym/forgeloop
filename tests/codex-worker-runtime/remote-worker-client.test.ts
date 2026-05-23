@@ -32,6 +32,12 @@ const generatedSpec = (patch: Partial<GeneratedSpecDraftV1> = {}): GeneratedSpec
   ...patch,
 });
 
+const generationSignedContext = () => ({
+  context_version: 'generation_context.work_item.v1',
+  action_run_id: 'action-run-1',
+  work_item_id: 'work-item-1',
+});
+
 const generationWorkload = (): CodexGenerationWorkloadV1 => ({
   schema_version: 'codex_generation_workload.v1',
   runtime_job_id: 'runtime-job-1',
@@ -40,10 +46,15 @@ const generationWorkload = (): CodexGenerationWorkloadV1 => ({
   prompt_version: 'generation-prompt-v1',
   output_schema_version: 'spec_draft.v1',
   signed_context_ref: 'artifact://codex-runtime-jobs/runtime-job-1/workload/context',
-  signed_context_digest: digest('1'),
+  signed_context_digest: codexCanonicalDigest(generationSignedContext()),
   prompt_template_digest: digest('2'),
   created_at: '2026-05-23T00:00:00.000Z',
   expires_at: '2026-05-23T00:10:00.000Z',
+});
+
+const generationWorkloadResponse = () => ({
+  workload: generationWorkload(),
+  signed_context: generationSignedContext(),
 });
 
 const runtimeJob = (): CodexRuntimeJob => ({
@@ -216,7 +227,7 @@ describe('remote codex worker client', () => {
       },
       fetchRuntimeJobWorkload: async () => {
         calls.push('workload');
-        return { workload: generationWorkload() };
+        return generationWorkloadResponse();
       },
       materializeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
         calls.push('materialize');
@@ -417,7 +428,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
           terminalized.push(input);
@@ -442,6 +453,78 @@ describe('remote codex worker client', () => {
       reason_code: 'codex_app_server_unavailable',
     });
     expect(JSON.stringify(terminalized[0])).not.toContain('/tmp/private.sock');
+    expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-secret');
+  });
+
+  it.each([
+    ['missing signed context', { workload: generationWorkload() }],
+    [
+      'mismatched signed context',
+      {
+        workload: generationWorkload(),
+        signed_context: { context_version: 'generation_context.work_item.v1', action_run_id: 'wrong-action' },
+      },
+    ],
+  ])('rejects generation workload responses with %s', async (_name, workloadResponse) => {
+    const terminalized: Record<string, unknown>[] = [];
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const materializeRuntimeJob = vi.fn(async () => materialization());
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () => workloadResponse,
+        materializeRuntimeJob,
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: {
+        startFromMaterialization: vi.fn(),
+      },
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-1',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(materializeRuntimeJob).not.toHaveBeenCalled();
+    expect(terminalized).toHaveLength(1);
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'codex_runtime_job_unavailable',
+    });
     expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-secret');
   });
 
@@ -673,7 +756,7 @@ describe('remote codex worker client', () => {
           return { control: { cancel_requested: controlCalls >= 5, drain_requested: controlCalls >= 5 } };
         },
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         appendRuntimeJobEvent: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
@@ -782,7 +865,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         appendRuntimeJobEvent: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
@@ -892,7 +975,7 @@ describe('remote codex worker client', () => {
           return { control: { cancel_requested: controlCalls >= 3, drain_requested: controlCalls >= 3 } };
         },
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => {
           throw new Error('codex_runtime_job_unavailable');
         },
@@ -954,7 +1037,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
@@ -1042,7 +1125,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: terminalized.length > 0, drain_requested: terminalized.length > 0 } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
@@ -1132,7 +1215,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: terminalized.length > 0, drain_requested: terminalized.length > 0 } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
@@ -1222,7 +1305,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
@@ -1318,7 +1401,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
@@ -1411,7 +1494,7 @@ describe('remote codex worker client', () => {
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
         claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
-        fetchRuntimeJobWorkload: async () => ({ workload: generationWorkload() }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
         uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {

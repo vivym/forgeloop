@@ -435,6 +435,12 @@ const expectRuntimeJobProjectionRedacted = (runtimeJob: Record<string, unknown>)
   }
 };
 
+const generationSignedContext = (claim: { id: string }) => ({
+  context_version: 'generation_context.work_item.v1',
+  action_run_id: claim.id,
+  work_item_id: 'work-item-1',
+});
+
 const generationWorkload = (claim: { id: string }) => ({
   schema_version: 'codex_generation_workload.v1',
   runtime_job_id: runtimeJobId,
@@ -443,36 +449,45 @@ const generationWorkload = (claim: { id: string }) => ({
   prompt_version: 'prompt-v1',
   output_schema_version: 'spec-output-v1',
   signed_context_ref: 'signed-context-ref-1',
-  signed_context_digest: sha('a'),
+  signed_context_digest: codexCanonicalDigest(generationSignedContext(claim)),
   prompt_template_digest: sha('b'),
   created_at: now,
   expires_at: expiresAt,
 });
 
-const runtimeJobBody = (claim: { id: string; claim_token: string; attempt: number; precondition_fingerprint: string }) => ({
-  runtime_job_id: runtimeJobId,
-  launch_lease_id: runtimeJobLaunchLeaseId,
-  envelope_id: runtimeJobEnvelopeId,
-  job_request_id: 'runtime-job-request-1',
-  target: {
-    target_type: 'automation_action_run',
-    target_id: claim.id,
-    target_kind: 'generation',
-    project_id: projectId,
-    repo_id: repoId,
-  },
-  runtime_profile_revision_id: profileRevisionId,
-  credential_binding_id: credentialBindingId,
-  credential_binding_version_id: credentialVersionId,
-  credential_payload_digest: credentialPayloadDigest,
-  input_json: generationWorkload(claim),
-  launch_attempt: 1,
-  action_type: 'ensure_plan_draft',
-  action_attempt: claim.attempt,
-  action_claim_token: claim.claim_token,
-  precondition_fingerprint: claim.precondition_fingerprint,
-  expires_at: expiresAt,
-});
+const runtimeJobBody = (claim: { id: string; claim_token: string; attempt: number; precondition_fingerprint: string }) => {
+  const workload = generationWorkload(claim);
+  return {
+    runtime_job_id: runtimeJobId,
+    launch_lease_id: runtimeJobLaunchLeaseId,
+    envelope_id: runtimeJobEnvelopeId,
+    job_request_id: 'runtime-job-request-1',
+    target: {
+      target_type: 'automation_action_run',
+      target_id: claim.id,
+      target_kind: 'generation',
+      project_id: projectId,
+      repo_id: repoId,
+    },
+    runtime_profile_revision_id: profileRevisionId,
+    credential_binding_id: credentialBindingId,
+    credential_binding_version_id: credentialVersionId,
+    credential_payload_digest: credentialPayloadDigest,
+    input_json: workload,
+    workspace_acquisition_json: {
+      schema_version: 'codex_generation_workspace_acquisition.v1',
+      signed_context_ref: workload.signed_context_ref,
+      signed_context_digest: workload.signed_context_digest,
+      signed_context_json: generationSignedContext(claim),
+    },
+    launch_attempt: 1,
+    action_type: 'ensure_plan_draft',
+    action_attempt: claim.attempt,
+    action_claim_token: claim.claim_token,
+    precondition_fingerprint: claim.precondition_fingerprint,
+    expires_at: expiresAt,
+  };
+};
 
 const runtimeWorkerBody = (sessionToken: string, nonce: string, body: Record<string, unknown> = {}) =>
   withBodyDigest({
@@ -1459,6 +1474,8 @@ describe('codex runtime control-plane APIs', () => {
       .expect(200)
       .expect(({ body }) => {
         expect(body.workload).toEqual(generationWorkload(claimed));
+        expect(body.signed_context).toEqual(generationSignedContext(claimed));
+        expect(codexCanonicalDigest(body.signed_context)).toBe(body.workload.signed_context_digest);
       });
 
     await request(app.getHttpServer())

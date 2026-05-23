@@ -667,20 +667,17 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
 
 const runGeneration = async (
   runtime: ReturnType<typeof createCodexGenerationRuntime>,
-  workload: CodexGenerationWorkloadV1,
+  workloadResponse: FetchedGenerationWorkload,
   job: Pick<CodexRuntimeJob, 'project_id' | 'repo_id'>,
   materialization: CodexLaunchMaterialization,
   signal: AbortSignal,
 ): Promise<CodexGenerationResult<Record<string, unknown>>> => {
+  const { workload, signedContext } = workloadResponse;
   const input = {
     actionRunId: workload.action_run_id,
     projectId: job.project_id,
     repoIds: materialization.launch_target.repo_id === undefined ? [] : [materialization.launch_target.repo_id],
-    context: {
-      signed_context_ref: workload.signed_context_ref,
-      signed_context_digest: workload.signed_context_digest,
-      prompt_template_digest: workload.prompt_template_digest,
-    },
+    context: signedContext,
     promptVersion: workload.prompt_version,
     outputSchemaVersion: workload.output_schema_version,
     policyDigests: {
@@ -701,7 +698,12 @@ const runGeneration = async (
   return (await runtime.generatePackageDrafts(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
 };
 
-const requiredGenerationWorkload = (response: unknown): CodexGenerationWorkloadV1 => {
+type FetchedGenerationWorkload = {
+  workload: CodexGenerationWorkloadV1;
+  signedContext: Record<string, unknown>;
+};
+
+const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkload => {
   if (!isRecord(response) || !isRecord(response.workload)) {
     throw new Error('codex_runtime_job_unavailable');
   }
@@ -714,7 +716,11 @@ const requiredGenerationWorkload = (response: unknown): CodexGenerationWorkloadV
   ) {
     throw new Error('codex_runtime_job_unavailable');
   }
-  return workload as unknown as CodexGenerationWorkloadV1;
+  const typedWorkload = workload as unknown as CodexGenerationWorkloadV1;
+  if (!isRecord(response.signed_context) || codexCanonicalDigest(response.signed_context) !== typedWorkload.signed_context_digest) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  return { workload: typedWorkload, signedContext: response.signed_context };
 };
 
 const requiredEnvelope = (response: unknown): CodexLaunchTokenEnvelope => {

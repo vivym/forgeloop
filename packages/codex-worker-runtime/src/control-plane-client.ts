@@ -81,8 +81,16 @@ export class CodexRuntimeControlPlaneClient {
     return this.#trustedPost('/internal/codex-runtime/runtime-jobs', input);
   }
 
+  async getRuntimeJob(jobId: string): Promise<unknown> {
+    return this.#trustedGet(`/internal/codex-runtime/runtime-jobs/${encodeURIComponent(jobId)}`);
+  }
+
   async cancelRuntimeJob(jobId: string, input: Record<string, unknown>): Promise<unknown> {
     return this.#trustedPost(`/internal/codex-runtime/runtime-jobs/${encodeURIComponent(jobId)}/cancel`, input);
+  }
+
+  async renewAutomationActionRunClaim(actionRunId: string, input: Record<string, unknown>): Promise<unknown> {
+    return this.#trustedPost(`/internal/automation/action-runs/${encodeURIComponent(actionRunId)}/claim/renew`, input);
   }
 
   async recoverStaleRuntimeJobs(input: Record<string, unknown>): Promise<unknown> {

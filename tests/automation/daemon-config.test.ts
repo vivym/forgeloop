@@ -71,6 +71,37 @@ describe('automation daemon generation config', () => {
     expect(config.generationCredentialBindingId).toBe('credential-binding-1');
   });
 
+  it('allows strict app-server generation without endpoint when remote outbound worker mode is configured', () => {
+    const config = loadAutomationDaemonConfig({
+      ...baseEnv,
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+      FORGELOOP_CODEX_WORKER_MODE: 'remote_outbound',
+      FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID: 'profile-1',
+      FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID: 'credential-binding-1',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS: '60000',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS: '1000',
+    });
+
+    expect(config.generationPlanning.mode).toBe('app_server');
+    expect(config.codexWorkerMode).toBe('remote_outbound');
+    expect(config.appServerEndpoint).toBeUndefined();
+    expect(config.generationRuntimeProfileId).toBe('profile-1');
+    expect(config.generationCredentialBindingId).toBe('credential-binding-1');
+    expect(config.remoteRuntimeJobWaitTimeoutMs).toBe(60_000);
+    expect(config.remoteRuntimeJobPollIntervalMs).toBe(1_000);
+  });
+
+  it('rejects remote outbound generation without remote runtime job config', () => {
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...baseEnv,
+        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+        FORGELOOP_CODEX_WORKER_MODE: 'remote_outbound',
+        FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID: 'profile-1',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID/);
+  });
+
   it('rejects invalid local Docker app-server transport config', () => {
     expect(() =>
       loadAutomationDaemonConfig({
