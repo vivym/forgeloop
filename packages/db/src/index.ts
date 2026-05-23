@@ -19,4 +19,5 @@ export * from './queries/work-item-release-readiness';
 export * from './queries/work-item-delivery-readiness';
 export * from './queries/public-evidence-serialization';
 export * from './queries/web-product-queries';
+export * from './queries/project-management-queries';
 export * from './reset';
