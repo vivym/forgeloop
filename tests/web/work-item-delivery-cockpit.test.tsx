@@ -17,8 +17,7 @@ import type { ProductAction, WorkItemDeliveryReadiness } from '../../apps/web/sr
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 const readinessFixture: WorkItemDeliveryReadiness = {
-  work_item_id: 'wi-1',
-  work_item_kind: 'requirement',
+  scope_ref: { type: 'requirement', id: 'wi-1', title: 'Requirement' },
   active_lane: 'execution-owner',
   overall_state: 'in_progress',
   stages: [
@@ -158,7 +157,7 @@ describe('Delivery Cockpit presentational components', () => {
                 type: 'run_package',
                 object_type: 'execution_package',
                 object_id: 'pkg-1',
-                work_item_id: 'wi-1',
+                scope_ref: { type: 'requirement', id: 'wi-1' },
                 package_id: 'pkg-1',
               },
               target: { kind: 'object', object_type: 'execution_package', object_id: 'pkg-1', href: '/packages/pkg-1' },
@@ -204,7 +203,7 @@ describe('Delivery Cockpit presentational components', () => {
           type: 'run_package',
           object_type: 'execution_package',
           object_id: 'pkg-1',
-          work_item_id: 'wi-1',
+          scope_ref: { type: 'requirement', id: 'wi-1' },
           package_id: 'pkg-1',
         },
         blocked_reason: 'Execution commands are not available in manager view.',
@@ -237,7 +236,7 @@ describe('Delivery Cockpit presentational components', () => {
           type: 'run_package',
           object_type: 'execution_package',
           object_id: 'pkg-1',
-          work_item_id: 'wi-1',
+          scope_ref: { type: 'requirement', id: 'wi-1' },
           package_id: 'pkg-1',
         },
       },

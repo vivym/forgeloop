@@ -84,7 +84,7 @@ describe('Product Lanes route', () => {
 
   it('uses driver_actor_id for Work Item lanes without translating execution owner filters', async () => {
     const screen = await renderRoute(
-      `/lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver&owner_actor_id=actor-execution`,
+      `/lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver&execution_owner_actor_id=actor-execution`,
       {
         apiOverrides: {
           [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`]: {
@@ -108,13 +108,13 @@ describe('Product Lanes route', () => {
       `/lanes/bugs?project_id=${projectId}&driver_actor_id=actor-driver`,
     );
     expect(screen.getByRole('link', { name: 'Execution Owner' }).getAttribute('href')).toBe(
-      `/lanes/execution-owner?project_id=${projectId}&driver_actor_id=actor-driver&owner_actor_id=actor-execution`,
+      `/lanes/execution-owner?project_id=${projectId}&driver_actor_id=actor-driver&execution_owner_actor_id=actor-execution`,
     );
   });
 
   it('strips stale kind and owner filters from direct Work Item lane URLs', async () => {
     const screen = await renderRoute(
-      `/lanes/requirements?project_id=${projectId}&kind=bug&owner_actor_id=actor-owner&driver_actor_id=actor-driver`,
+      `/lanes/requirements?project_id=${projectId}&kind=bug&execution_owner_actor_id=actor-owner&driver_actor_id=actor-driver`,
       {
         apiOverrides: {
           [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`]: {
@@ -144,7 +144,7 @@ describe('Product Lanes route', () => {
       `http://localhost:3000/query/product-lanes/requirements?project_id=${projectId}&phase=planning`,
       expect.objectContaining({ method: 'GET' }),
     );
-    expect(screen.getByRole('link', { name: 'Open work item' }).getAttribute('href')).toBe('/work-items/wi-1');
+    expect(screen.getByRole('link', { name: 'Open requirement' }).getAttribute('href')).toBe('/requirements/wi-1');
     expect(screen.getByRole('button', { name: 'Run package' })).toBeTruthy();
   });
 
@@ -210,7 +210,7 @@ describe('Product Lanes route', () => {
 
     await user.click(screen.getByRole('button', { name: 'Refresh lane' }));
     expect(await screen.findByText('No product actions are available.')).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'Open work item' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open requirement' })).toBeNull();
   });
 
   it('does not nest action cards inside the mobile table card list', async () => {
@@ -226,11 +226,11 @@ describe('Product Lanes route', () => {
 describe('ProductAction view model helpers', () => {
   it('sorts ProductActions by priority while preserving backend order within each priority', () => {
     const actions = [
-      productNavigateAction('secondary-first', 'secondary', '/work-items/wi-1'),
-      productNavigateAction('tertiary-first', 'tertiary', '/work-items/wi-2'),
-      productNavigateAction('primary-first', 'primary', '/work-items/wi-3'),
-      productNavigateAction('secondary-second', 'secondary', '/work-items/wi-4'),
-      productNavigateAction('primary-second', 'primary', '/work-items/wi-5'),
+      productNavigateAction('secondary-first', 'secondary', '/requirements/wi-1'),
+      productNavigateAction('tertiary-first', 'tertiary', '/requirements/wi-2'),
+      productNavigateAction('primary-first', 'primary', '/requirements/wi-3'),
+      productNavigateAction('secondary-second', 'secondary', '/requirements/wi-4'),
+      productNavigateAction('primary-second', 'primary', '/requirements/wi-5'),
     ];
 
     expect(sortProductActions(actions).map((action) => action.id)).toEqual([
@@ -244,12 +244,12 @@ describe('ProductAction view model helpers', () => {
 
   it('keeps a blocked primary action as the first visible CTA', () => {
     const blockedPrimary = {
-      ...productNavigateAction('blocked-primary', 'primary', '/work-items/wi-1'),
+      ...productNavigateAction('blocked-primary', 'primary', '/requirements/wi-1'),
       enabled: false,
       disabled_reason: 'Waiting on approval.',
       blocked_reason: 'Plan has unresolved review comments.',
     };
-    const secondary = productNavigateAction('secondary', 'secondary', '/work-items/wi-2');
+    const secondary = productNavigateAction('secondary', 'secondary', '/requirements/wi-2');
 
     expect(primaryActionForItem({ actions: [secondary, blockedPrimary] })?.id).toBe('blocked-primary');
   });
@@ -260,12 +260,12 @@ function productNavigateAction(id: string, priority: ProductAction['priority'], 
     id,
     lane_id: 'requirements',
     priority,
-    label: id,
+    label: id.startsWith('open-') ? 'Open requirement' : id,
     enabled: true,
     kind: 'navigate',
     target: {
       kind: 'object',
-      object_type: 'work_item',
+      object_type: 'requirement',
       object_id: id,
       href,
     },
@@ -284,7 +284,7 @@ function productCommandAction(id: string, label: string): ProductAction {
       type: 'run_package',
       object_type: 'execution_package',
       object_id: 'package-product-action',
-      work_item_id: 'wi-1',
+      scope_ref: { type: 'requirement', id: 'wi-1' },
       package_id: 'package-product-action',
     },
     target: {
@@ -299,7 +299,7 @@ function productCommandAction(id: string, label: string): ProductAction {
 function laneItem(id: string, title: string) {
   return {
     id,
-    object: { type: 'work_item', id },
+    object: { type: 'requirement', id },
     title,
     kind: 'requirement',
     status: 'active',
@@ -308,6 +308,6 @@ function laneItem(id: string, title: string) {
     resolution: 'unresolved',
     risk: 'medium',
     updated_at: '2026-05-18T00:00:00.000Z',
-    actions: [productNavigateAction(`open-${id}`, 'primary', `/work-items/${id}`)],
+    actions: [productNavigateAction(`open-${id}`, 'primary', `/requirements/${id}`)],
   };
 }

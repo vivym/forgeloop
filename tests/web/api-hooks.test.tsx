@@ -16,6 +16,7 @@ import {
   useLinkReleaseExecutionPackageMutation,
   useLinkReleaseWorkItemMutation,
   useMarkPackageReadyMutation,
+  usePackagesQuery,
   usePipelineQuery,
   useRunPackageMutation,
   useProductActionCommandMutation,
@@ -34,6 +35,8 @@ import {
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { actorId, executionPackage, planRevision, projectId, release, workItem } from './fixtures/product-data';
+
+const workItemScopeRef = { type: 'requirement', id: workItem.id, title: workItem.title } as const;
 
 type InvalidationInput = {
   predicate?: (query: { queryKey: readonly unknown[] }) => boolean;
@@ -220,6 +223,49 @@ describe('Web product API hooks', () => {
     queryClient.clear();
   });
 
+  it('keeps execution owner package filters in query keys and request URLs', async () => {
+    const fetchMock = installProductApiMock({
+      [`GET /query/execution-packages?project_id=${projectId}&execution_owner_actor_id=actor-execution-owner&limit=25`]: {
+        items: [],
+        degraded_sources: [],
+      },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result, unmount } = renderHook(
+      () =>
+        usePackagesQuery({
+          project_id: projectId,
+          execution_owner_actor_id: 'actor-execution-owner',
+          limit: 25,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/query/execution-packages?project_id=${projectId}&execution_owner_actor_id=actor-execution-owner&limit=25`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(
+      queryClient.getQueryData(
+        queryKeys.packages({
+          project_id: projectId,
+          execution_owner_actor_id: 'actor-execution-owner',
+          limit: 25,
+        }),
+      ),
+    ).toEqual({ items: [], degraded_sources: [] });
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.has('owner_actor_id')).toBe(false);
+
+    unmount();
+    queryClient.clear();
+  });
+
   it('uses the installed product API mock when hooks were imported before fetch was stubbed', async () => {
     const fetchMock = installProductApiMock();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -329,7 +375,7 @@ describe('Web product API hooks', () => {
           {
             id: workItem.id,
             title: workItem.title,
-            object: { type: 'work_item', id: workItem.id },
+            object: { type: 'bug', id: workItem.id },
             kind: 'bug',
             updated_at: workItem.updated_at,
             actions: [],
@@ -404,7 +450,7 @@ describe('Web product API hooks', () => {
         type: 'generate_packages',
         object_type: 'plan_revision',
         object_id: 'plan-rev-product-action',
-        work_item_id: workItem.id,
+        scope_ref: { type: 'requirement', id: workItem.id },
         plan_revision_id: 'plan-rev-product-action',
       },
       target: {
@@ -603,7 +649,7 @@ describe('Web product API hooks', () => {
         type: 'generate_packages',
         object_type: 'plan_revision',
         object_id: 'plan-rev-product-action',
-        work_item_id: workItem.id,
+        scope_ref: { type: 'requirement', id: workItem.id },
         plan_revision_id: 'plan-rev-product-action',
       },
       target: {
@@ -641,7 +687,7 @@ describe('Web product API hooks', () => {
       'POST /specs/spec-product-action/generate-draft': {
         id: 'spec-rev-product-action',
         spec_id: 'spec-product-action',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         revision_number: 2,
         summary: 'Generated spec draft',
         content: 'Spec draft',
@@ -655,7 +701,7 @@ describe('Web product API hooks', () => {
       'POST /plans/plan-product-action/generate-draft': {
         id: 'plan-rev-product-action',
         plan_id: 'plan-product-action',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         revision_number: 2,
         summary: 'Generated plan draft',
         content: 'Plan draft',
@@ -681,7 +727,7 @@ describe('Web product API hooks', () => {
         type: 'generate_spec_draft',
         object_type: 'spec',
         object_id: 'spec-product-action',
-        work_item_id: workItem.id,
+        scope_ref: { type: 'requirement', id: workItem.id },
         spec_id: 'spec-product-action',
       },
     } as const;
@@ -696,7 +742,7 @@ describe('Web product API hooks', () => {
         type: 'generate_plan_draft',
         object_type: 'plan',
         object_id: 'plan-product-action',
-        work_item_id: workItem.id,
+        scope_ref: { type: 'requirement', id: workItem.id },
         plan_id: 'plan-product-action',
       },
     } as const;
@@ -727,7 +773,7 @@ describe('Web product API hooks', () => {
       'POST /specs/spec-product-action/generate-draft': {
         id: 'spec-rev-product-action',
         spec_id: 'spec-product-action',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         revision_number: 2,
         summary: 'Generated spec draft',
         content: 'Spec draft',
@@ -741,7 +787,7 @@ describe('Web product API hooks', () => {
       'POST /plans/plan-product-action/generate-draft': {
         id: 'plan-rev-product-action',
         plan_id: 'plan-product-action',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         revision_number: 2,
         summary: 'Generated plan draft',
         content: 'Plan draft',
@@ -789,7 +835,7 @@ describe('Web product API hooks', () => {
     const fetchMock = installProductApiMock({
       'POST /work-items/work-item-web-product/specs': {
         id: 'spec-created-all-lanes',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         entity_type: 'spec',
         status: 'draft',
         editing_state: 'editable',
@@ -799,15 +845,14 @@ describe('Web product API hooks', () => {
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(queryKeys.workItemCockpit(workItem.id), {
-      work_item: { ...workItem, current_spec_id: undefined },
+      item: { ...workItem, current_spec_id: undefined },
       current_spec: null,
       current_plan: null,
       packages: [],
       run_sessions: [],
       review_packets: [],
       delivery_readiness: {
-        work_item_id: workItem.id,
-        work_item_kind: workItem.kind,
+        scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
         active_lane: 'requirements',
         overall_state: 'in_progress',
         stages: [],
@@ -818,15 +863,14 @@ describe('Web product API hooks', () => {
       },
     });
     queryClient.setQueryData(queryKeys.workItemCockpit(workItem.id, 'reviewer'), {
-      work_item: { ...workItem, current_spec_id: undefined },
+      item: { ...workItem, current_spec_id: undefined },
       current_spec: null,
       current_plan: null,
       packages: [],
       run_sessions: [],
       review_packets: [],
       delivery_readiness: {
-        work_item_id: workItem.id,
-        work_item_kind: workItem.kind,
+        scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
         active_lane: 'reviewer',
         overall_state: 'in_progress',
         stages: [],
@@ -864,7 +908,7 @@ describe('Web product API hooks', () => {
       'POST /specs/spec-1/submit-for-approval': {
         id: 'spec-1',
         entity_type: 'spec',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         status: 'in_review',
         editing_state: 'locked',
         gate_state: 'awaiting_approval',
@@ -874,7 +918,7 @@ describe('Web product API hooks', () => {
       'POST /specs/spec-1/approve': {
         id: 'spec-1',
         entity_type: 'spec',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         status: 'approved',
         editing_state: 'locked',
         gate_state: 'approved',
@@ -885,7 +929,7 @@ describe('Web product API hooks', () => {
       'POST /specs/spec-1/request-changes': {
         id: 'spec-1',
         entity_type: 'spec',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         status: 'changes_requested',
         editing_state: 'editable',
         gate_state: 'changes_requested',
@@ -950,7 +994,7 @@ describe('Web product API hooks', () => {
       'POST /plans/plan-1/submit-for-approval': {
         id: 'plan-1',
         entity_type: 'plan',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         status: 'in_review',
         editing_state: 'locked',
         gate_state: 'awaiting_approval',
@@ -960,7 +1004,7 @@ describe('Web product API hooks', () => {
       'POST /plans/plan-1/approve': {
         id: 'plan-1',
         entity_type: 'plan',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         status: 'approved',
         editing_state: 'locked',
         gate_state: 'approved',
@@ -973,7 +1017,7 @@ describe('Web product API hooks', () => {
       'POST /plans/plan-1/request-changes': {
         id: 'plan-1',
         entity_type: 'plan',
-        work_item_id: workItem.id,
+        scope_ref: workItemScopeRef,
         status: 'changes_requested',
         editing_state: 'editable',
         gate_state: 'changes_requested',

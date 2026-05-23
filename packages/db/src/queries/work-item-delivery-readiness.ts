@@ -40,6 +40,7 @@ import {
   objectTarget,
   routeTarget,
   runPackageAction,
+  workItemScopeRef,
 } from './product-action-builders';
 import { deliveryRunReadinessDisabledReason } from './delivery-runtime-readiness';
 import { laneForWorkItemKind } from './product-lane-types';
@@ -855,9 +856,11 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
               'release-owner',
               item.object_type !== undefined && item.object_id !== undefined
                 ? objectRef(
-                    item.object_type as ProductObjectType,
+                    item.object_type === 'work_item' ? workItemProductObjectType(input.workItem) : (item.object_type as ProductObjectType),
                     item.object_id,
-                    productObjectHref(item.object_type as ProductObjectType, item.object_id),
+                    item.object_type === 'work_item'
+                      ? workItemProductHref(input.workItem)
+                      : productObjectHref(item.object_type as ProductObjectType, item.object_id),
                   )
                 : undefined,
             ),
@@ -919,7 +922,7 @@ const workItemProductHref = (workItem: Pick<WorkItem, 'id' | 'kind'>): string =>
 
 const openWorkItemAction = (laneId: ProductLaneId, workItem: WorkItem): ProductAction =>
   navigateAction({
-    id: `open-work-item-${workItem.id}`,
+    id: `open-${workItem.kind}-${workItem.id}`,
     laneId,
     priority: 'secondary',
     label: 'Open item',
@@ -1028,7 +1031,7 @@ const actionForLane = (
           label: 'Run package',
           enabled: disabledReason === undefined,
           ...(disabledReason === undefined ? {} : { disabledReason, blockedReason: disabledReason }),
-          workItemId: input.workItem.id,
+          scopeRef: workItemScopeRef(input.workItem),
           packageId: firstPackage.id,
           target: objectTarget('execution_package', firstPackage.id, `/packages/${firstPackage.id}`),
         }),
@@ -1145,7 +1148,7 @@ const actionForLane = (
         laneId,
         priority: 'primary',
         label: 'Generate Spec draft',
-        workItemId: input.workItem.id,
+        scopeRef: workItemScopeRef(input.workItem),
         specId: input.currentSpec.id,
         target: objectTarget('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`),
       }),
@@ -1159,7 +1162,7 @@ const actionForLane = (
         laneId,
         priority: actions.length === 0 ? 'primary' : 'secondary',
         label: 'Generate Plan draft',
-        workItemId: input.workItem.id,
+        scopeRef: workItemScopeRef(input.workItem),
         planId: input.currentPlan.id,
         target: objectTarget('plan', input.currentPlan.id, `/plans/${input.currentPlan.id}`),
       }),
@@ -1179,7 +1182,7 @@ const actionForLane = (
         laneId,
         priority: actions.length === 0 ? 'primary' : 'secondary',
         label: 'Generate packages',
-        workItemId: input.workItem.id,
+        scopeRef: workItemScopeRef(input.workItem),
         planRevisionId: input.approvedPlanRevision.id,
         target: objectTarget('plan_revision', input.approvedPlanRevision.id, `/plans/${input.currentPlan.id}`),
       }),
@@ -1213,8 +1216,7 @@ export const deriveWorkItemDeliveryReadiness = (
   const blockers = orderedStages.flatMap((item) => item.blockers);
 
   return workItemDeliveryReadinessSchema.parse({
-    work_item_id: input.workItem.id,
-    work_item_kind: input.workItem.kind,
+    scope_ref: { type: input.workItem.kind, id: input.workItem.id, title: input.workItem.title },
     active_lane: activeLane,
     overall_state: overallState(orderedStages),
     stages: orderedStages,

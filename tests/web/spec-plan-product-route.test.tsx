@@ -7,9 +7,15 @@ import type { WorkItemDeliveryReadiness } from '../../apps/web/src/shared/api/ty
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 
+const requirementScopeRef = (workItemId = 'wi-1', title = 'Improve release cockpit') =>
+  ({
+    type: 'requirement',
+    id: workItemId,
+    title,
+  }) as const;
+
 const cockpitReadiness = (workItemId = 'wi-1'): WorkItemDeliveryReadiness => ({
-  work_item_id: workItemId,
-  work_item_kind: 'requirement',
+  scope_ref: requirementScopeRef(workItemId),
   active_lane: 'requirements',
   overall_state: 'in_progress',
   stages: [
@@ -60,7 +66,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
         'GET /query/work-item-cockpit/wi-1': {
-          work_item: {
+          item: {
             id: 'wi-1',
             project_id: 'project-web-product',
             kind: 'requirement',
@@ -85,7 +91,7 @@ describe('Work Item scoped Spec & Plan route', () => {
         },
         'POST /work-items/wi-1/specs': {
           id: 'spec-created',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef(),
           entity_type: 'spec',
           status: 'draft',
           editing_state: 'editable',
@@ -121,7 +127,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     let cockpitRequests = 0;
     let resolveCockpitRefetch: (() => void) | undefined;
     const staleCockpit = {
-      work_item: {
+      item: {
         id: 'wi-1',
         project_id: 'project-web-product',
         kind: 'requirement',
@@ -146,13 +152,13 @@ describe('Work Item scoped Spec & Plan route', () => {
     };
     const refreshedCockpit = {
       ...staleCockpit,
-      work_item: {
-        ...staleCockpit.work_item,
+      item: {
+        ...staleCockpit.item,
         current_spec_id: 'spec-created',
       },
       current_spec: {
         id: 'spec-created',
-        work_item_id: 'wi-1',
+        scope_ref: requirementScopeRef(),
         entity_type: 'spec',
         status: 'draft',
         editing_state: 'editable',
@@ -196,7 +202,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
         'GET /query/work-item-cockpit/wi-1': {
-          work_item: {
+          item: {
             id: 'wi-1',
             project_id: 'project-web-product',
             kind: 'requirement',
@@ -215,7 +221,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_spec: {
             id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'spec',
             status: 'approved',
             editing_state: 'idle',
@@ -232,7 +238,7 @@ describe('Work Item scoped Spec & Plan route', () => {
         },
         'POST /work-items/wi-1/plans': {
           id: 'plan-created',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef(),
           entity_type: 'plan',
           status: 'draft',
           editing_state: 'idle',
@@ -260,7 +266,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
         'GET /query/work-item-cockpit/wi-1': {
-          work_item: {
+          item: {
             id: 'wi-1',
             project_id: 'project-web-product',
             kind: 'requirement',
@@ -279,7 +285,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_spec: {
             id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'spec',
             status: 'approved',
             editing_state: 'idle',
@@ -309,7 +315,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
         'GET /query/work-item-cockpit/wi-1': {
-          work_item: {
+          item: {
             id: 'wi-1',
             project_id: 'project-web-product',
             kind: 'requirement',
@@ -328,7 +334,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_spec: {
             id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'spec',
             status: 'approved',
             editing_state: 'idle',
@@ -371,7 +377,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     };
     let currentSpec = {
       id: 'spec-1',
-      work_item_id: 'wi-1',
+      scope_ref: requirementScopeRef(),
       entity_type: 'spec',
       status: 'draft',
       editing_state: 'idle',
@@ -381,7 +387,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     };
     let currentPlan: Record<string, unknown> | null = null;
     const cockpitResponse = () => ({
-      work_item: workItemState,
+      item: workItemState,
       current_spec: currentSpec,
       current_plan: currentPlan,
       packages: [],
@@ -417,7 +423,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           workItemState.current_plan_id = 'plan-1';
           currentPlan = {
             id: 'plan-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'plan',
             status: 'draft',
             editing_state: 'idle',
@@ -472,7 +478,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
         'GET /query/work-item-cockpit/wi-1': {
-          work_item: {
+          item: {
             id: 'wi-1',
             project_id: 'project-web-product',
             kind: 'requirement',
@@ -492,7 +498,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_spec: {
             id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'spec',
             status: 'approved',
             editing_state: 'idle',
@@ -503,7 +509,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_plan: {
             id: 'plan-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'plan',
             status: 'approved',
             editing_state: 'idle',
@@ -531,7 +537,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
         'GET /query/work-item-cockpit/wi-1': {
-          work_item: {
+          item: {
             id: 'wi-1',
             project_id: 'project-web-product',
             kind: 'requirement',
@@ -551,7 +557,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_spec: {
             id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'spec',
             status: 'approved',
             editing_state: 'idle',
@@ -562,7 +568,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_plan: {
             id: 'plan-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'plan',
             status: 'approved',
             editing_state: 'idle',
@@ -631,7 +637,7 @@ describe('Work Item scoped Spec & Plan route', () => {
     const screen = await renderRoute('/work-items/wi-1/spec-plan', {
       apiOverrides: {
         'GET /query/work-item-cockpit/wi-1': {
-          work_item: {
+          item: {
             id: 'wi-1',
             project_id: 'project-web-product',
             kind: 'requirement',
@@ -651,7 +657,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_spec: {
             id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'spec',
             status: 'approved',
             editing_state: 'locked',
@@ -661,7 +667,7 @@ describe('Work Item scoped Spec & Plan route', () => {
           },
           current_plan: {
             id: 'plan-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef(),
             entity_type: 'plan',
             status: 'approved',
             editing_state: 'locked',

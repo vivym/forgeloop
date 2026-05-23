@@ -29,6 +29,7 @@ import {
   navigateAction,
   objectTarget,
   runPackageAction,
+  workItemScopeRef,
 } from './product-action-builders';
 import {
   buildProductLaneResponse,
@@ -106,8 +107,8 @@ const itemBase = (
     actorIdValues?: readonly string[] | undefined;
     driverActorId?: string | undefined;
     driverActorIdValues?: readonly string[] | undefined;
-    ownerActorId?: string | undefined;
-    ownerActorIdValues?: readonly string[] | undefined;
+    executionOwnerActorId?: string | undefined;
+    executionOwnerActorIdValues?: readonly string[] | undefined;
     reviewerActorId?: string | undefined;
     reviewerActorIdValues?: readonly string[] | undefined;
     qaOwnerActorId?: string | undefined;
@@ -150,8 +151,8 @@ const itemBase = (
     ...(input.actorIdValues === undefined ? {} : { actor_id_values: input.actorIdValues }),
     ...(input.driverActorId === undefined ? {} : { driver_actor_id: input.driverActorId }),
     ...(input.driverActorIdValues === undefined ? {} : { driver_actor_id_values: input.driverActorIdValues }),
-    ...(input.ownerActorId === undefined ? {} : { owner_actor_id: input.ownerActorId }),
-    ...(input.ownerActorIdValues === undefined ? {} : { owner_actor_id_values: input.ownerActorIdValues }),
+    ...(input.executionOwnerActorId === undefined ? {} : { execution_owner_actor_id: input.executionOwnerActorId }),
+    ...(input.executionOwnerActorIdValues === undefined ? {} : { execution_owner_actor_id_values: input.executionOwnerActorIdValues }),
     ...(input.reviewerActorId === undefined ? {} : { reviewer_actor_id: input.reviewerActorId }),
     ...(input.reviewerActorIdValues === undefined ? {} : { reviewer_actor_id_values: input.reviewerActorIdValues }),
     ...(input.qaOwnerActorId === undefined ? {} : { qa_owner_actor_id: input.qaOwnerActorId }),
@@ -268,7 +269,7 @@ const packageItem = (
         laneId,
         priority: 'primary',
         label: 'Mark package ready',
-        workItemId: workItem.id,
+        scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
         target: objectTarget('execution_package', executionPackage.id, `/packages/${executionPackage.id}`),
@@ -283,7 +284,7 @@ const packageItem = (
         laneId,
         priority: 'primary',
         label: 'Run package',
-        workItemId: workItem.id,
+        scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
         target: objectTarget('execution_package', executionPackage.id, `/packages/${executionPackage.id}`),
       }),
@@ -305,7 +306,7 @@ const packageItem = (
       status: executionPackage.gate_state,
       gateState: executionPackage.gate_state,
       resolution: executionPackage.resolution,
-      ownerActorId: executionPackage.owner_actor_id,
+      executionOwnerActorId: executionPackage.owner_actor_id,
       reviewerActorId: executionPackage.reviewer_actor_id,
       qaOwnerActorId: executionPackage.qa_owner_actor_id,
       blocked: executionPackage.activity_state === 'blocked' || executionPackage.blocked_reason !== undefined,
@@ -334,7 +335,7 @@ const packageReadOnlyItem = (
       status: executionPackage.gate_state,
       gateState: executionPackage.gate_state,
       resolution: executionPackage.resolution,
-      ownerActorId: executionPackage.owner_actor_id,
+      executionOwnerActorId: executionPackage.owner_actor_id,
       reviewerActorId: executionPackage.reviewer_actor_id,
       qaOwnerActorId: executionPackage.qa_owner_actor_id,
       blocked: executionPackage.activity_state === 'blocked' || executionPackage.blocked_reason !== undefined,

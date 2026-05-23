@@ -13,7 +13,7 @@ import {
   useSpecRevisionsQuery,
   useSpecsQuery,
 } from '../../shared/api/hooks';
-import type { PlanRevision, ProductListItem, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
+import type { ObjectRef, PlanRevision, ProductListItem, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, InlineActions, Metric, MetricGrid, PageHeader, Section } from '../../shared/layout';
@@ -45,16 +45,16 @@ export function SpecsRegistry() {
     <>
       <PageHeader
         actions={
-          <Link className={primaryLinkClass} to="/work-items">
-            Create from Work Item
+          <Link className={primaryLinkClass} to="/requirements">
+            Create from Requirements
           </Link>
         }
-        subtitle="Find specification records across active Work Items and review their current planning state."
+        subtitle="Find specification records across active typed parent items and review their current planning state."
         title="Specs"
       />
       <RegistryFiltersBar basePath="/specs" selectedStatus={filters.status} />
       <Section
-        description="Rows open the direct Spec route. New Specs still start from Work Item context."
+        description="Rows open the direct Spec route. New Specs still start from a typed parent context."
         title="Spec registry"
       >
         <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="Spec" />
@@ -81,8 +81,8 @@ export function PlansRegistry() {
     <>
       <PageHeader
         actions={
-          <Link className={primaryLinkClass} to="/work-items">
-            Create from Work Item
+          <Link className={primaryLinkClass} to="/requirements">
+            Create from Requirements
           </Link>
         }
         subtitle="Review implementation plans by delivery state and open their current revision."
@@ -90,7 +90,7 @@ export function PlansRegistry() {
       />
       <RegistryFiltersBar basePath="/plans" selectedStatus={filters.status} />
       <Section
-        description="Rows open the direct Plan route. New Plans still start from Work Item context after a Spec exists."
+        description="Rows open the direct Plan route. New Plans still start from typed parent context after a Spec exists."
         title="Plan registry"
       >
         <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="Plan" />
@@ -262,8 +262,8 @@ function ArtifactDetailView({
                 Open current revision
               </Button>
             )}
-            <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} workItemId={artifact.work_item_id} />
-            <InlineNotice title="Creation and edits start from the parent Work Item planning flow." tone="info" />
+            <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} workItemId={artifact.scope_ref.id} />
+            <InlineNotice title="Creation and edits start from the typed parent planning flow." tone="info" />
           </div>
         </ActionRail>
       }
@@ -285,7 +285,7 @@ function ArtifactDetailView({
       </Section>
       <Section title="Parent context">
         <InlineActions>
-          <Link to={`/work-items/${encodeURIComponent(artifact.work_item_id)}`}>Work Item</Link>
+          <Link to={productScopeHref(artifact.scope_ref)}>Parent item</Link>
         </InlineActions>
       </Section>
       {kind === 'plan' ? <PlanPackageState plan={artifact} /> : null}
@@ -302,7 +302,7 @@ function ArtifactDetailView({
         ) : null}
         {replayStatus !== 'pending' && !replayIsError ? (
           replay?.length ? (
-            <Timeline items={replayTimelineItems(replay, artifact.work_item_id)} />
+            <Timeline items={replayTimelineItems(replay, artifact.scope_ref)} />
           ) : (
             <InlineNotice title="No replay events are available for this direct route yet." />
           )
@@ -313,6 +313,23 @@ function ArtifactDetailView({
       </Section>
     </DetailLayout>
   );
+}
+
+function productScopeHref(scopeRef: ObjectRef): string {
+  switch (scopeRef.type) {
+    case 'initiative':
+      return `/initiatives/${encodeURIComponent(scopeRef.id)}`;
+    case 'requirement':
+      return `/requirements/${encodeURIComponent(scopeRef.id)}`;
+    case 'bug':
+      return `/bugs/${encodeURIComponent(scopeRef.id)}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodeURIComponent(scopeRef.id)}`;
+    case 'task':
+      return `/tasks/${encodeURIComponent(scopeRef.id)}`;
+    default:
+      return '/my-work';
+  }
 }
 
 function SpecRevisionReadOnly({ revisionId, specId }: { revisionId: string; specId: string }) {
@@ -335,7 +352,7 @@ function SpecRevisionReadOnly({ revisionId, specId }: { revisionId: string; spec
       meta={<RevisionMeta artifactStatus={specQuery.data?.status} createdAt={revision.created_at} revisionNumber={revision.revision_number} />}
       summary={revision.summary}
       title="Spec Revision"
-      workItemId={revision.work_item_id}
+      scopeRef={revision.scope_ref}
     >
       <Section title="Document">
         <div className="grid gap-2 rounded-card border border-border bg-surface p-4">
@@ -377,7 +394,7 @@ function PlanRevisionReadOnly({ planId, revisionId }: { planId: string; revision
       meta={<RevisionMeta artifactStatus={planQuery.data?.status} createdAt={revision.created_at} revisionNumber={revision.revision_number} />}
       summary={revision.summary}
       title="Plan Revision"
-      workItemId={revision.work_item_id}
+      scopeRef={revision.scope_ref}
     >
       <Section title="Document">
         <div className="grid gap-2 rounded-card border border-border bg-surface p-4">
@@ -407,7 +424,7 @@ function ReadOnlyRevisionLayout({
   meta,
   summary,
   title,
-  workItemId,
+  scopeRef,
 }: {
   artifactLabel: string;
   artifactLink: string;
@@ -415,7 +432,7 @@ function ReadOnlyRevisionLayout({
   meta: ReactNode;
   summary: string;
   title: string;
-  workItemId: string;
+  scopeRef: ObjectRef;
 }) {
   return (
     <DetailLayout
@@ -430,7 +447,7 @@ function ReadOnlyRevisionLayout({
       <Section title="Revision metadata">
         {meta}
         <InlineActions>
-          <Link to={`/work-items/${encodeURIComponent(workItemId)}`}>Work Item</Link>
+          <Link to={productScopeHref(scopeRef)}>Parent item</Link>
           <Link to={artifactLink}>{artifactLabel}</Link>
         </InlineActions>
       </Section>
@@ -454,11 +471,11 @@ function ArtifactTable({ artifacts, basePath, emptyMessage }: { artifacts: Produ
         { key: 'gate', header: 'Gate', cell: (artifact) => formatValue(artifact.gate_state) },
         { key: 'resolution', header: 'Resolution', cell: (artifact) => formatValue(artifact.resolution) },
         {
-          key: 'work-item',
+          key: 'parent',
           header: 'Parent',
           cell: (artifact) =>
             artifact.parent ? (
-              <Link to={`/work-items/${encodeURIComponent(artifact.parent.id)}`}>{artifact.parent.title ?? 'Work Item'}</Link>
+              <Link to={productScopeHref(artifact.parent)}>{artifact.parent.title ?? 'Parent item'}</Link>
             ) : (
               'Not linked'
             ),
@@ -513,7 +530,7 @@ function DegradedNotice({ hasDegradedSources }: { hasDegradedSources: boolean })
 
   return (
     <InlineNotice
-      title="Registry data is available, but History / Timeline detail may be incomplete until parent Work Item replay is available."
+      title="Registry data is available, but History / Timeline detail may be incomplete until typed parent replay is available."
       tone="warning"
     />
   );
@@ -639,11 +656,11 @@ function findCurrentRevision<T extends SpecRevision | PlanRevision>(revisions: T
   return revisions.find((revision) => revision.id === revisionId);
 }
 
-function replayTimelineItems(events: TimelineEntry[], workItemId: string): TimelineItem[] {
+function replayTimelineItems(events: TimelineEntry[], scopeRef: ObjectRef): TimelineItem[] {
   return events.map((event) => ({
     id: event.id,
     title: event.summary,
-    description: eventTimelineDescription(event, workItemId),
+    description: eventTimelineDescription(event, scopeRef),
     meta: formatDate(event.created_at),
   }));
 }
@@ -667,18 +684,51 @@ function RevisionSummaryList({ revisions }: { revisions: Array<SpecRevision | Pl
   );
 }
 
-function eventParentContext(event: TimelineEntry, workItemId: string) {
-  const payloadWorkItemId = typeof event.payload?.work_item_id === 'string' ? event.payload.work_item_id : undefined;
+function eventParentContext(event: TimelineEntry, scopeRef: ObjectRef) {
+  const payloadScopeRef = parseTimelineScopeRef(event.payload?.scope_ref);
 
-  if ((event.object_type === 'work_item' && event.object_id === workItemId) || payloadWorkItemId === workItemId) {
-    return 'Parent: Work Item';
+  if (
+    (event.object_type === scopeRef.type && event.object_id === scopeRef.id) ||
+    (payloadScopeRef !== undefined && payloadScopeRef.type === scopeRef.type && payloadScopeRef.id === scopeRef.id)
+  ) {
+    return `Parent: ${scopeLabel(scopeRef)}`;
   }
 
-  return 'Parent context: Work Item linkage not recorded on this event';
+  return 'Parent context: typed parent linkage not recorded on this event';
 }
 
-function eventTimelineDescription(event: TimelineEntry, workItemId: string) {
-  return [eventParentContext(event, workItemId), eventActorLabel(event)].filter(Boolean).join(' | ');
+function eventTimelineDescription(event: TimelineEntry, scopeRef: ObjectRef) {
+  return [eventParentContext(event, scopeRef), eventActorLabel(event)].filter(Boolean).join(' | ');
+}
+
+function parseTimelineScopeRef(value: unknown): Pick<ObjectRef, 'type' | 'id'> | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  const ref = value as { type?: unknown; id?: unknown };
+  if (typeof ref.type !== 'string' || typeof ref.id !== 'string') {
+    return undefined;
+  }
+
+  return { type: ref.type as ObjectRef['type'], id: ref.id };
+}
+
+function scopeLabel(scopeRef: ObjectRef): string {
+  switch (scopeRef.type) {
+    case 'initiative':
+      return 'Initiative';
+    case 'requirement':
+      return 'Requirement';
+    case 'bug':
+      return 'Bug';
+    case 'tech_debt':
+      return 'Tech Debt';
+    case 'task':
+      return 'Task';
+    default:
+      return 'Parent item';
+  }
 }
 
 function eventActorLabel(event: TimelineEntry) {

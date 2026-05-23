@@ -7,6 +7,7 @@ import {
   reviewDecisionPayloadSchema,
   reviewSubmitDecisionSchema,
 } from './review.js';
+import { objectRefSchema } from './product-object-ref.js';
 
 type ProductParsedUrl = {
   origin: string;
@@ -168,7 +169,7 @@ const supportedProductLaneQueryKeys = new Set([
   'project_id',
   'actor_id',
   'driver_actor_id',
-  'owner_actor_id',
+  'execution_owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',
   'release_owner_actor_id',
@@ -360,7 +361,7 @@ export type ProductActionTarget = z.infer<typeof productActionTargetSchema>;
 
 const commandBaseSchema = {
   object_id: nonEmptyTrimmedStringSchema,
-  work_item_id: nonEmptyTrimmedStringSchema,
+  scope_ref: objectRefSchema,
 } as const;
 
 const generateSpecDraftCommandSchema = z
@@ -568,6 +569,7 @@ export const productLaneItemSchema = z
     resolution: nonEmptyTrimmedStringSchema.optional(),
     risk: nonEmptyTrimmedStringSchema.optional(),
     driver_actor_id: nonEmptyTrimmedStringSchema.optional(),
+    execution_owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
     reviewer_actor_id: nonEmptyTrimmedStringSchema.optional(),
     qa_owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
     release_owner_actor_id: nonEmptyTrimmedStringSchema.optional(),
@@ -815,7 +817,11 @@ export const evidenceChainSourceSchema = z.enum([
 export type EvidenceChainSource = z.infer<typeof evidenceChainSourceSchema>;
 
 export const evidenceChainObjectTypeSchema = z.enum([
-  'work_item',
+  'initiative',
+  'requirement',
+  'bug',
+  'tech_debt',
+  'task',
   'execution_package',
   'run_session',
   'review_packet',
@@ -915,7 +921,7 @@ export type EvidenceChainItem = z.infer<typeof evidenceChainItemSchema>;
 
 export const evidenceChainResponseSchema = z
   .object({
-    work_item_id: z.string().min(1),
+    scope_ref: objectRefSchema,
     generated_at: isoDateTimeSchema,
     focus: z
       .object({

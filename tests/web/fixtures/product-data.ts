@@ -42,6 +42,7 @@ export const workItem = {
 export const spec = {
   id: 'spec-web-product',
   work_item_id: workItem.id,
+  scope_ref: { type: 'requirement', id: workItem.id, title: workItem.title },
   entity_type: 'spec',
   status: 'approved',
   editing_state: 'locked',
@@ -75,6 +76,7 @@ export const specRevision = {
 export const plan = {
   id: 'plan-web-product',
   work_item_id: workItem.id,
+  scope_ref: { type: 'requirement', id: workItem.id, title: workItem.title },
   entity_type: 'plan',
   status: 'approved',
   editing_state: 'locked',
@@ -107,6 +109,7 @@ export const planRevision = {
 export const executionPackage = {
   id: 'package-web-product',
   work_item_id: workItem.id,
+  scope_ref: { type: 'requirement', id: workItem.id, title: workItem.title },
   spec_id: spec.id,
   spec_revision_id: specRevision.id,
   plan_id: plan.id,
@@ -196,6 +199,27 @@ export const reviewPacket = {
   updated_at: '2026-05-18T00:30:00.000Z',
 };
 
+const scopeRefForItem = (item: Pick<WorkItemCockpitResponse['item'], 'id' | 'kind' | 'title'>) => ({
+  type: item.kind,
+  id: item.id,
+  title: item.title,
+});
+
+export const cockpitSpecFor = (item: Pick<WorkItemCockpitResponse['item'], 'id' | 'kind' | 'title'>) => {
+  const { work_item_id: _workItemId, ...publicSpec } = spec;
+  return { ...publicSpec, scope_ref: scopeRefForItem(item) };
+};
+
+export const cockpitPlanFor = (item: Pick<WorkItemCockpitResponse['item'], 'id' | 'kind' | 'title'>) => {
+  const { work_item_id: _workItemId, ...publicPlan } = plan;
+  return { ...publicPlan, scope_ref: scopeRefForItem(item) };
+};
+
+export const cockpitPackageFor = (item: Pick<WorkItemCockpitResponse['item'], 'id' | 'kind' | 'title'>) => {
+  const { work_item_id: _workItemId, ...publicPackage } = executionPackage;
+  return { ...publicPackage, scope_ref: scopeRefForItem(item) };
+};
+
 export const release = {
   id: 'release-web-product',
   org_id: 'org-web-product',
@@ -223,11 +247,11 @@ export const timeline = [
   {
     id: 'timeline-web-product-1',
     source: 'fixture',
-    object_type: 'work_item',
+    object_type: 'requirement',
     object_id: workItem.id,
-    summary: 'Created shared product API foundation work item.',
+    summary: 'Created shared product API foundation requirement.',
     created_at: workItem.created_at,
-  payload: { project_id: projectId },
+    payload: { project_id: projectId },
   },
 ];
 
@@ -238,14 +262,14 @@ export const productActionFixtures = {
     id: 'open-fixture-work-item',
     lane_id: 'requirements',
     priority: 'primary',
-    label: 'Open work item',
+    label: 'Open requirement',
     enabled: true,
     kind: 'navigate',
     target: {
       kind: 'object',
-      object_type: 'work_item',
+      object_type: 'requirement',
       object_id: workItem.id,
-      href: `/work-items/${workItem.id}`,
+      href: `/requirements/${workItem.id}`,
     },
   },
   command: {
@@ -259,7 +283,7 @@ export const productActionFixtures = {
       type: 'generate_spec_draft',
       object_type: 'spec',
       object_id: spec.id,
-      work_item_id: workItem.id,
+      scope_ref: { type: 'requirement', id: workItem.id },
       spec_id: spec.id,
     },
     target: {
@@ -281,7 +305,7 @@ export const productActionFixtures = {
       type: 'mark_package_ready',
       object_type: 'execution_package',
       object_id: executionPackage.id,
-      work_item_id: workItem.id,
+      scope_ref: { type: 'requirement', id: workItem.id },
       package_id: executionPackage.id,
       expected_package_version: executionPackage.version,
     },
@@ -333,7 +357,7 @@ export const productActionFixtures = {
       type: 'run_package',
       object_type: 'execution_package',
       object_id: executionPackage.id,
-      work_item_id: workItem.id,
+      scope_ref: { type: 'requirement', id: workItem.id },
       package_id: executionPackage.id,
     },
     target: {
@@ -370,7 +394,7 @@ const deliveryStageOwnerLanes = {
 const deliveryStageIds = Object.keys(deliveryStageLabels) as DeliveryStageId[];
 
 export function deliveryReadiness(
-  item: Pick<WorkItemCockpitResponse['work_item'], 'id' | 'kind'>,
+  item: Pick<WorkItemCockpitResponse['item'], 'id' | 'kind' | 'title'>,
   actions: readonly ProductAction[] = [],
   activeLane: ProductLaneId = 'requirements',
   overrides: Partial<
@@ -390,8 +414,7 @@ export function deliveryReadiness(
     }));
 
   return {
-    work_item_id: item.id,
-    work_item_kind: item.kind as WorkItemDeliveryReadiness['work_item_kind'],
+    scope_ref: scopeRefForItem(item),
     active_lane: activeLane,
     overall_state: overrides.overall_state ?? 'in_progress',
     stages,
@@ -404,13 +427,13 @@ export function deliveryReadiness(
 }
 
 const baseCockpitFixture = (
-  item: WorkItemCockpitResponse['work_item'],
+  item: WorkItemCockpitResponse['item'],
   readiness: WorkItemDeliveryReadiness,
 ): WorkItemCockpitResponse => ({
-  work_item: item,
-  current_spec: { ...spec, work_item_id: item.id },
-  current_plan: { ...plan, work_item_id: item.id },
-  packages: [{ ...executionPackage, work_item_id: item.id }],
+  item,
+  current_spec: cockpitSpecFor(item),
+  current_plan: cockpitPlanFor(item),
+  packages: [cockpitPackageFor(item)],
   run_sessions: [runSession],
   review_packets: [reviewPacket],
   delivery_readiness: readiness,
@@ -418,7 +441,7 @@ const baseCockpitFixture = (
 
 const workItemKindFixture = (
   id: string,
-  kind: WorkItemCockpitResponse['work_item']['kind'],
+  kind: WorkItemCockpitResponse['item']['kind'],
   title: string,
   lane: ProductLaneId,
 ): WorkItemCockpitResponse => {
@@ -457,7 +480,7 @@ const workItemKindFixture = (
             : requirementIntakeContext,
     phase: kind === 'bug' ? 'validation' : 'planning',
     risk: kind === 'bug' ? 'high' : 'medium',
-  } as WorkItemCockpitResponse['work_item'];
+  } as WorkItemCockpitResponse['item'];
 
   return baseCockpitFixture(item, deliveryReadiness(item, [], lane));
 };
@@ -498,10 +521,10 @@ const initiativeWithoutPackagesWorkItem = {
     success_metrics: ['Child work is identified', 'Readiness can be aggregated'],
   },
   phase: 'planning',
-} as WorkItemCockpitResponse['work_item'];
+} as WorkItemCockpitResponse['item'];
 
 export const initiativeWithoutPackagesCockpitFixture: WorkItemCockpitResponse = {
-  work_item: initiativeWithoutPackagesWorkItem,
+  item: initiativeWithoutPackagesWorkItem,
   current_spec: null,
   current_plan: null,
   packages: [],
@@ -537,13 +560,13 @@ const managerCommandAction = {
   id: 'manager-bad-run-command',
   command: {
     ...productActionFixtures.commandTargetFollowUp.command,
-    work_item_id: workItem.id,
+    scope_ref: { type: 'requirement', id: workItem.id },
   },
 } satisfies ProductAction;
 
 export const cockpitFixtureWithManagerCommandAction: WorkItemCockpitResponse = baseCockpitFixture(
-  workItem as WorkItemCockpitResponse['work_item'],
-  deliveryReadiness(workItem as WorkItemCockpitResponse['work_item'], [managerCommandAction], 'manager'),
+  workItem as WorkItemCockpitResponse['item'],
+  deliveryReadiness(workItem as WorkItemCockpitResponse['item'], [managerCommandAction], 'manager'),
 );
 
 const degradedExecutionBlocker = {
@@ -556,8 +579,8 @@ const degradedExecutionBlocker = {
 } satisfies WorkItemDeliveryReadiness['blockers'][number];
 
 export const cockpitFixtureWithDegradedRunSource: WorkItemCockpitResponse = baseCockpitFixture(
-  workItem as WorkItemCockpitResponse['work_item'],
-  deliveryReadiness(workItem as WorkItemCockpitResponse['work_item'], [], 'execution-owner', {
+  workItem as WorkItemCockpitResponse['item'],
+  deliveryReadiness(workItem as WorkItemCockpitResponse['item'], [], 'execution-owner', {
     overall_state: 'blocked',
     degraded_sources: ['run_sessions'],
     blockers: [degradedExecutionBlocker],
@@ -573,6 +596,19 @@ export const cockpitFixtureWithDegradedRunSource: WorkItemCockpitResponse = base
   }),
 );
 
+const workItemProductHref = (id: string, kind: 'requirement' | 'bug' | 'tech_debt' | 'initiative'): string => {
+  switch (kind) {
+    case 'requirement':
+      return `/requirements/${id}`;
+    case 'bug':
+      return `/bugs/${id}`;
+    case 'tech_debt':
+      return `/tech-debt/${id}`;
+    case 'initiative':
+      return `/initiatives/${id}`;
+  }
+};
+
 const workItemLaneItem = (
   laneId: Extract<ProductLaneId, 'requirements' | 'bugs' | 'tech-debt' | 'initiatives'>,
   id: string,
@@ -581,7 +617,7 @@ const workItemLaneItem = (
 ): ProductLaneItem => ({
   id,
   title,
-  object: { type: 'work_item', id },
+  object: { type: kind, id },
   kind,
   phase: kind === 'bug' ? 'validation' : 'planning',
   status: 'active',
@@ -597,9 +633,9 @@ const workItemLaneItem = (
       lane_id: laneId,
       target: {
         kind: 'object',
-        object_type: 'work_item',
+        object_type: kind,
         object_id: id,
-        href: `/work-items/${id}`,
+        href: workItemProductHref(id, kind),
       },
     },
   ],
@@ -617,7 +653,7 @@ export const functionalLaneItems = [
     id: 'spec-approval-fixture',
     title: 'Approve Product Lane spec',
     object: { type: 'spec', id: spec.id },
-    parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+    parent: { type: 'requirement', id: workItem.id, title: workItem.title },
     status: spec.status,
     gate_state: spec.gate_state,
     resolution: spec.resolution,
@@ -628,7 +664,7 @@ export const functionalLaneItems = [
     id: 'execution-owner-fixture',
     title: executionPackage.objective,
     object: { type: 'execution_package', id: executionPackage.id },
-    parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+    parent: { type: 'requirement', id: workItem.id, title: workItem.title },
     phase: executionPackage.phase,
     status: executionPackage.activity_state,
     gate_state: executionPackage.gate_state,
@@ -663,7 +699,7 @@ export const functionalLaneItems = [
     id: 'qa-owner-fixture',
     title: 'Acknowledge QA acceptance',
     object: { type: 'execution_package', id: executionPackage.id },
-    parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+    parent: { type: 'requirement', id: workItem.id, title: workItem.title },
     phase: 'test_acceptance',
     status: 'active',
     gate_state: 'open',

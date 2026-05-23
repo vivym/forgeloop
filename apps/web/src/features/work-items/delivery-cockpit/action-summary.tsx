@@ -24,7 +24,7 @@ export function DeliveryActionSummary({ readiness }: DeliveryActionSummaryProps)
         />
         <Metric label="Blockers" value={`${blockerCount} ${blockerCount === 1 ? 'blocker' : 'blockers'}`} />
         <Metric label="Primary action" value={primaryAction?.label ?? 'No primary action'} description={<PrimaryActionState action={primaryAction} />} />
-        <Metric label="Work type" value={<Badge tone="info">{formatValue(readiness.work_item_kind)}</Badge>} />
+        <Metric label="Work type" value={<Badge tone="info">{formatValue(readiness.scope_ref.type)}</Badge>} />
       </MetricGrid>
     </section>
   );

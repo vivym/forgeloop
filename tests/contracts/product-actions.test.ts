@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import * as contracts from '@forgeloop/contracts';
 import {
+  evidenceChainResponseSchema,
   productActionSchema,
+  productCommandSchema,
   productLaneIdSchema,
   productLaneResponseSchema,
   productObjectTypeSchema,
@@ -42,7 +44,7 @@ const validCommand = {
   type: 'generate_spec_draft',
   object_type: 'spec',
   object_id: 'spec_1',
-  work_item_id: 'wi_1',
+  scope_ref: { type: 'requirement', id: 'wi_1' },
   spec_id: 'spec_1',
 } as const;
 
@@ -130,7 +132,7 @@ describe('ProductAction contracts', () => {
             type,
             object_type: 'work_item',
             object_id: 'wi_1',
-            work_item_id: 'wi_1',
+            scope_ref: { type: 'requirement', id: 'wi_1' },
             driver_actor_id: 'actor-driver',
             intake_context: { type: 'bug' },
           },
@@ -161,7 +163,7 @@ describe('ProductAction contracts', () => {
       productActionSchema.safeParse({ ...validNavigateAction, target: { ...validObjectTarget, href: '   ' } }).success,
     ).toBe(false);
     expect(
-      productActionSchema.safeParse({ ...validCommandAction, command: { ...validCommand, work_item_id: '' } }).success,
+      productActionSchema.safeParse({ ...validCommandAction, command: { ...validCommand, scope_ref: { type: 'requirement', id: '' } } }).success,
     ).toBe(false);
     expect(productLaneResponseSchema.safeParse({ ...validLaneResponse, label: '   ' }).success).toBe(false);
   });
@@ -289,6 +291,18 @@ describe('ProductAction contracts', () => {
         target: { ...validLaneTarget, href: '/lanes/bugs?project_id=p1&kind=bug&blocked=true' },
       }).success,
     ).toBe(true);
+    expect(
+      productActionSchema.safeParse({
+        ...validNavigateAction,
+        target: { kind: 'lane', lane_id: 'execution-owner', href: '/lanes/execution-owner?project_id=p1&execution_owner_actor_id=actor-owner' },
+      }).success,
+    ).toBe(true);
+    expect(
+      productActionSchema.safeParse({
+        ...validNavigateAction,
+        target: { kind: 'lane', lane_id: 'execution-owner', href: '/lanes/execution-owner?project_id=p1&owner_actor_id=actor-owner' },
+      }).success,
+    ).toBe(false);
     expect(() =>
       productActionSchema.safeParse({
         ...validNavigateAction,
@@ -309,28 +323,28 @@ describe('ProductAction contracts', () => {
         type: 'generate_spec_draft',
         object_type: 'spec',
         object_id: 'spec_1',
-        work_item_id: 'wi_1',
+        scope_ref: { type: 'requirement', id: 'wi_1' },
         spec_id: 'spec_1',
       },
       {
         type: 'generate_plan_draft',
         object_type: 'plan',
         object_id: 'plan_1',
-        work_item_id: 'wi_1',
+        scope_ref: { type: 'requirement', id: 'wi_1' },
         plan_id: 'plan_1',
       },
       {
         type: 'generate_packages',
         object_type: 'plan_revision',
         object_id: 'plan_rev_1',
-        work_item_id: 'wi_1',
+        scope_ref: { type: 'requirement', id: 'wi_1' },
         plan_revision_id: 'plan_rev_1',
       },
       {
         type: 'mark_package_ready',
         object_type: 'execution_package',
         object_id: 'pkg_1',
-        work_item_id: 'wi_1',
+        scope_ref: { type: 'requirement', id: 'wi_1' },
         package_id: 'pkg_1',
         expected_package_version: 3,
       },
@@ -338,7 +352,7 @@ describe('ProductAction contracts', () => {
         type: 'run_package',
         object_type: 'execution_package',
         object_id: 'pkg_1',
-        work_item_id: 'wi_1',
+        scope_ref: { type: 'requirement', id: 'wi_1' },
         package_id: 'pkg_1',
       },
     ] as const;
@@ -360,12 +374,14 @@ describe('ProductAction contracts', () => {
           type: 'mark_package_ready',
           object_type: 'execution_package',
           object_id: 'pkg_1',
-          work_item_id: 'wi_1',
+          scope_ref: { type: 'requirement', id: 'wi_1' },
           package_id: 'pkg_1',
           expected_package_version: '3',
         },
       }).success,
     ).toBe(false);
+    expect(productCommandSchema.safeParse({ ...validCommand, work_item_id: 'wi_1' }).success).toBe(false);
+    expect(productCommandSchema.safeParse({ ...validCommand, scope_ref: { type: 'work_item', id: 'wi_1' } }).success).toBe(false);
   });
 
   it('validates ProductLaneResponse required fields, item uniqueness, and lane consistency', () => {
@@ -416,5 +432,52 @@ describe('ProductAction contracts', () => {
 
   it('rejects command actions in the manager lane', () => {
     expect(productActionSchema.safeParse({ ...validCommandAction, lane_id: 'manager' }).success).toBe(false);
+  });
+
+  it('requires Evidence Chain responses to use typed scope refs without legacy Work Item ids', () => {
+    const validEvidenceChain = {
+      scope_ref: { type: 'requirement', id: 'wi_1' },
+      generated_at: updatedAt,
+      focus: { selection: 'current', review_packet_ids: [] },
+      projection: { source: 'read_time', version: 1, partial: false, gaps: [] },
+      summary: {
+        total_items: 0,
+        run_count: 0,
+        review_packet_count: 0,
+        decision_count: 0,
+        artifact_count: 0,
+        risk_flags: [],
+        redacted_count: 0,
+      },
+      items: [],
+    } as const;
+
+    expect(evidenceChainResponseSchema.safeParse(validEvidenceChain).success).toBe(true);
+    expect(evidenceChainResponseSchema.safeParse({ ...validEvidenceChain, work_item_id: 'wi_1' }).success).toBe(false);
+    expect(
+      evidenceChainResponseSchema.safeParse({
+        ...validEvidenceChain,
+        scope_ref: { type: 'work_item', id: 'wi_1' },
+      }).success,
+    ).toBe(false);
+    expect(
+      evidenceChainResponseSchema.safeParse({
+        ...validEvidenceChain,
+        items: [
+          {
+            id: 'item-1',
+            source: 'object_event',
+            subject: { object_type: 'work_item', object_id: 'wi_1' },
+            summary: 'Leaked legacy Work Item ref.',
+            created_at: updatedAt,
+            visibility: 'public',
+            links: [],
+            risk_flags: [],
+            redacted: false,
+          },
+        ],
+        summary: { ...validEvidenceChain.summary, total_items: 1 },
+      }).success,
+    ).toBe(false);
   });
 });

@@ -6,13 +6,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 
+const requirementScopeRef = { type: 'requirement', id: 'wi-1', title: 'Release cockpit requirement' } as const;
+const otherRequirementScopeRef = { type: 'requirement', id: 'wi-2', title: 'Draft requirement' } as const;
+
 describe('Spec and Plan direct routes', () => {
   it('renders direct Spec detail with parent link and History / Timeline', async () => {
     const screen = await renderRoute('/specs/spec-1', {
       apiOverrides: {
         'GET /specs/spec-1': {
           id: 'spec-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'spec',
           status: 'approved',
           editing_state: 'locked',
@@ -24,7 +27,7 @@ describe('Spec and Plan direct routes', () => {
           {
             id: 'spec-rev-1',
             spec_id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef,
             revision_number: 1,
             summary: 'Release cockpit scope approved',
             content: 'Clarify release cockpit planning scope.',
@@ -32,7 +35,7 @@ describe('Spec and Plan direct routes', () => {
             goals: ['Show planning state'],
             scope_in: ['Direct Spec route'],
             scope_out: ['Package execution'],
-            acceptance_criteria: ['Parent Work Item is visible'],
+            acceptance_criteria: ['Parent requirement is visible'],
             test_strategy_summary: 'Route tests cover direct navigation.',
             created_at: '2026-05-18T00:00:00.000Z',
           },
@@ -45,7 +48,7 @@ describe('Spec and Plan direct routes', () => {
             object_id: 'spec-1',
             summary: 'Spec approved from product planning review.',
             created_at: '2026-05-18T00:30:00.000Z',
-            payload: { actor_id: 'actor-owner', work_item_id: 'wi-1' },
+            payload: { actor_id: 'actor-owner', scope_ref: requirementScopeRef },
           },
         ],
       },
@@ -55,10 +58,10 @@ describe('Spec and Plan direct routes', () => {
     expect(await screen.findByText('History / Timeline')).toBeTruthy();
     expect(screen.getByText('Spec approved from product planning review.')).toBeTruthy();
     expect(screen.getByText('2026-05-18T00:30:00.000Z')).toBeTruthy();
-    expect(screen.getByText('Parent: Work Item | Actor: actor-owner')).toBeTruthy();
+    expect(screen.getByText('Parent: Requirement | Actor: actor-owner')).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/actor_id/);
     expect(screen.queryByText('Revision 1 created')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Work Item' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Parent item' })).toBeTruthy();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
     await waitFor(() => {
       expect(vi.mocked(fetch)).toHaveBeenCalledWith('http://localhost:3000/specs/spec-1', expect.objectContaining({ method: 'GET' }));
@@ -81,7 +84,7 @@ describe('Spec and Plan direct routes', () => {
     const user = userEvent.setup();
     let specState = {
       id: 'spec-1',
-      work_item_id: 'wi-1',
+      scope_ref: requirementScopeRef,
       entity_type: 'spec',
       status: 'draft',
       editing_state: 'idle',
@@ -97,7 +100,7 @@ describe('Spec and Plan direct routes', () => {
           {
             id: 'spec-rev-1',
             spec_id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef,
             revision_number: 1,
             summary: 'Release cockpit scope ready for review',
             content: 'Clarify release cockpit planning scope.',
@@ -105,7 +108,7 @@ describe('Spec and Plan direct routes', () => {
             goals: ['Show planning state'],
             scope_in: ['Direct Spec route'],
             scope_out: ['Package execution'],
-            acceptance_criteria: ['Parent Work Item is visible'],
+            acceptance_criteria: ['Parent requirement is visible'],
             test_strategy_summary: 'Route tests cover direct navigation.',
             created_at: '2026-05-18T00:00:00.000Z',
           },
@@ -147,7 +150,7 @@ describe('Spec and Plan direct routes', () => {
       apiOverrides: {
         'GET /specs/spec-1': {
           id: 'spec-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'spec',
           status: 'approved',
           editing_state: 'locked',
@@ -158,7 +161,7 @@ describe('Spec and Plan direct routes', () => {
         'GET /spec-revisions/spec-rev-1': {
           id: 'spec-rev-1',
           spec_id: 'spec-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           revision_number: 1,
           summary: 'Release cockpit scope approved',
           content: 'Clarify release cockpit planning scope.',
@@ -166,7 +169,7 @@ describe('Spec and Plan direct routes', () => {
           goals: ['Show planning state'],
           scope_in: ['Direct Spec route'],
           scope_out: ['Package execution'],
-          acceptance_criteria: ['Parent Work Item is visible'],
+          acceptance_criteria: ['Parent requirement is visible'],
           test_strategy_summary: 'Route tests cover direct navigation.',
           created_at: '2026-05-18T00:00:00.000Z',
         },
@@ -183,7 +186,7 @@ describe('Spec and Plan direct routes', () => {
       apiOverrides: {
         'GET /plans/plan-1': {
           id: 'plan-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'plan',
           status: 'approved',
           editing_state: 'locked',
@@ -194,7 +197,7 @@ describe('Spec and Plan direct routes', () => {
         'GET /plan-revisions/plan-rev-1': {
           id: 'plan-rev-1',
           plan_id: 'plan-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           revision_number: 1,
           summary: 'Approved implementation path',
           content: 'Implement the release cockpit planning surface as direct routes.',
@@ -226,7 +229,7 @@ describe('Spec and Plan direct routes', () => {
       apiOverrides: {
         'GET /specs/spec-1': {
           id: 'spec-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'spec',
           status: 'approved',
           editing_state: 'locked',
@@ -237,7 +240,7 @@ describe('Spec and Plan direct routes', () => {
         'GET /spec-revisions/spec-rev-other': {
           id: 'spec-rev-other',
           spec_id: 'spec-other',
-          work_item_id: 'wi-2',
+          scope_ref: otherRequirementScopeRef,
           revision_number: 1,
           summary: 'Wrong Spec revision',
           content: 'This revision belongs to another Spec.',
@@ -260,7 +263,7 @@ describe('Spec and Plan direct routes', () => {
       apiOverrides: {
         'GET /plans/plan-1': {
           id: 'plan-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'plan',
           status: 'approved',
           editing_state: 'locked',
@@ -271,7 +274,7 @@ describe('Spec and Plan direct routes', () => {
         'GET /plan-revisions/plan-rev-other': {
           id: 'plan-rev-other',
           plan_id: 'plan-other',
-          work_item_id: 'wi-2',
+          scope_ref: otherRequirementScopeRef,
           revision_number: 1,
           summary: 'Wrong Plan revision',
           content: 'This revision belongs to another Plan.',
@@ -301,7 +304,7 @@ describe('Spec and Plan direct routes', () => {
               status: 'approved',
               gate_state: 'passed',
               resolution: 'approved',
-              parent: { type: 'work_item', id: 'wi-1', title: 'Release cockpit work item' },
+              parent: { type: 'requirement', id: 'wi-1', title: 'Release cockpit requirement' },
               related: [],
               revision_state: {
                 current_revision_id: 'spec-rev-approved',
@@ -317,7 +320,7 @@ describe('Spec and Plan direct routes', () => {
               status: 'draft',
               gate_state: 'open',
               resolution: 'unresolved',
-              parent: { type: 'work_item', id: 'wi-2', title: 'Draft work item' },
+              parent: { type: 'requirement', id: 'wi-2', title: 'Draft requirement' },
               related: [],
               revision_state: {
                 current_revision_id: 'spec-rev-draft',
@@ -333,8 +336,8 @@ describe('Spec and Plan direct routes', () => {
 
     const approvedSpecLink = (await screen.findByRole('link', { name: 'Revision 1' })) as HTMLAnchorElement;
     expect(approvedSpecLink.getAttribute('href')).toBe('/specs/spec-approved');
-    const workItemLink = screen.getByRole('link', { name: 'Release cockpit work item' }) as HTMLAnchorElement;
-    expect(workItemLink.getAttribute('href')).toBe('/work-items/wi-1');
+    const parentItemLink = screen.getByRole('link', { name: 'Release cockpit requirement' }) as HTMLAnchorElement;
+    expect(parentItemLink.getAttribute('href')).toBe('/requirements/wi-1');
     expect(screen.queryByRole('link', { name: 'Current revision' })).toBeNull();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
     await waitFor(() => {
@@ -366,7 +369,7 @@ describe('Spec and Plan direct routes', () => {
       apiOverrides: {
         'GET /plans/plan-1': {
           id: 'plan-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'plan',
           status: 'approved',
           editing_state: 'locked',
@@ -379,7 +382,7 @@ describe('Spec and Plan direct routes', () => {
           {
             id: 'plan-rev-approved',
             plan_id: 'plan-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef,
             revision_number: 1,
             summary: 'Approved implementation path',
             content: 'Implement the release cockpit planning surface as direct routes.',
@@ -400,7 +403,7 @@ describe('Spec and Plan direct routes', () => {
             object_id: 'plan-1',
             summary: 'Plan approved for package preparation.',
             created_at: '2026-05-18T00:35:00.000Z',
-            payload: { work_item_id: 'wi-1' },
+            payload: { scope_ref: requirementScopeRef },
           },
         ],
       },
@@ -408,7 +411,7 @@ describe('Spec and Plan direct routes', () => {
 
     expect(await screen.findByText('Plan approved for package preparation.')).toBeTruthy();
     expect(screen.getByText('2026-05-18T00:35:00.000Z')).toBeTruthy();
-    expect(screen.getByText('Parent: Work Item | Actor: Not recorded')).toBeTruthy();
+    expect(screen.getByText('Parent: Requirement | Actor: Not recorded')).toBeTruthy();
     expect(screen.getByText('Package generation starts from the Packages workspace.')).toBeTruthy();
     expect(screen.getByText('Package generation is ready for this approved Plan. Open package readiness to continue.')).toBeTruthy();
     expect((screen.getByRole('link', { name: 'View package readiness' }) as HTMLAnchorElement).getAttribute('href')).toBe(
@@ -433,7 +436,7 @@ describe('Spec and Plan direct routes', () => {
               status: 'approved',
               gate_state: 'passed',
               resolution: 'approved',
-              parent: { type: 'work_item', id: 'wi-1', title: 'Release cockpit work item' },
+              parent: { type: 'requirement', id: 'wi-1', title: 'Release cockpit requirement' },
               related: [],
               revision_state: {
                 current_revision_id: 'plan-rev-approved',
@@ -457,7 +460,7 @@ describe('Spec and Plan direct routes', () => {
       apiOverrides: {
         'GET /plans/plan-no-approved-revision': {
           id: 'plan-no-approved-revision',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'plan',
           status: 'approved',
           editing_state: 'locked',
@@ -479,12 +482,12 @@ describe('Spec and Plan direct routes', () => {
     expect(screen.queryByRole('button', { name: 'Generate packages' })).toBeNull();
   });
 
-  it('renders degraded parent context when replay event omits Work Item linkage', async () => {
+  it('renders degraded parent context when replay event omits typed parent linkage', async () => {
     const screen = await renderRoute('/specs/spec-1', {
       apiOverrides: {
         'GET /specs/spec-1': {
           id: 'spec-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'spec',
           status: 'approved',
           editing_state: 'locked',
@@ -496,7 +499,7 @@ describe('Spec and Plan direct routes', () => {
           {
             id: 'spec-rev-1',
             spec_id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef,
             revision_number: 1,
             summary: 'Release cockpit scope approved',
             content: 'Clarify release cockpit planning scope.',
@@ -504,7 +507,7 @@ describe('Spec and Plan direct routes', () => {
             goals: ['Show planning state'],
             scope_in: ['Direct Spec route'],
             scope_out: ['Package execution'],
-            acceptance_criteria: ['Parent Work Item is visible'],
+            acceptance_criteria: ['Parent requirement is visible'],
             test_strategy_summary: 'Route tests cover direct navigation.',
             created_at: '2026-05-18T00:00:00.000Z',
           },
@@ -526,17 +529,17 @@ describe('Spec and Plan direct routes', () => {
     expect(await screen.findByText('Spec replay loaded from historical event.')).toBeTruthy();
     expect(screen.getByText('2026-05-18T01:00:00.000Z')).toBeTruthy();
     expect(
-      screen.getByText('Parent context: Work Item linkage not recorded on this event | Actor: actor-reviewer'),
+      screen.getByText('Parent context: typed parent linkage not recorded on this event | Actor: actor-reviewer'),
     ).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/work_item_id|actor_id/);
   });
 
-  it('recognizes Work Item replay events as parent context by parent linkage', async () => {
+  it('recognizes typed parent replay events as parent context by parent linkage', async () => {
     const screen = await renderRoute('/specs/spec-1', {
       apiOverrides: {
         'GET /specs/spec-1': {
           id: 'spec-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'spec',
           status: 'approved',
           editing_state: 'locked',
@@ -548,7 +551,7 @@ describe('Spec and Plan direct routes', () => {
           {
             id: 'spec-rev-1',
             spec_id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef,
             revision_number: 1,
             summary: 'Release cockpit scope approved',
             content: 'Clarify release cockpit planning scope.',
@@ -556,7 +559,7 @@ describe('Spec and Plan direct routes', () => {
             goals: ['Show planning state'],
             scope_in: ['Direct Spec route'],
             scope_out: ['Package execution'],
-            acceptance_criteria: ['Parent Work Item is visible'],
+            acceptance_criteria: ['Parent requirement is visible'],
             test_strategy_summary: 'Route tests cover direct navigation.',
             created_at: '2026-05-18T00:00:00.000Z',
           },
@@ -565,9 +568,9 @@ describe('Spec and Plan direct routes', () => {
           {
             id: 'work-item-event',
             source: 'fixture',
-            object_type: 'work_item',
+            object_type: 'requirement',
             object_id: 'wi-1',
-            summary: 'Parent Work Item updated.',
+            summary: 'Parent requirement updated.',
             created_at: '2026-05-18T01:15:00.000Z',
             payload: { actor_id: 'actor-owner' },
           },
@@ -575,10 +578,10 @@ describe('Spec and Plan direct routes', () => {
       },
     });
 
-    expect(await screen.findByText('Parent Work Item updated.')).toBeTruthy();
-    expect(screen.getByText('Parent: Work Item | Actor: actor-owner')).toBeTruthy();
+    expect(await screen.findByText('Parent requirement updated.')).toBeTruthy();
+    expect(screen.getByText('Parent: Requirement | Actor: actor-owner')).toBeTruthy();
     expect(
-      screen.queryByText('Parent context: Work Item linkage not recorded on this event | Actor: actor-owner'),
+      screen.queryByText('Parent context: typed parent linkage not recorded on this event | Actor: actor-owner'),
     ).toBeNull();
   });
 
@@ -587,7 +590,7 @@ describe('Spec and Plan direct routes', () => {
       apiOverrides: {
         'GET /specs/spec-1': {
           id: 'spec-1',
-          work_item_id: 'wi-1',
+          scope_ref: requirementScopeRef,
           entity_type: 'spec',
           status: 'approved',
           editing_state: 'locked',
@@ -599,7 +602,7 @@ describe('Spec and Plan direct routes', () => {
           {
             id: 'spec-rev-1',
             spec_id: 'spec-1',
-            work_item_id: 'wi-1',
+            scope_ref: requirementScopeRef,
             revision_number: 1,
             summary: 'Release cockpit scope approved',
             content: 'Clarify release cockpit planning scope.',
@@ -607,7 +610,7 @@ describe('Spec and Plan direct routes', () => {
             goals: ['Show planning state'],
             scope_in: ['Direct Spec route'],
             scope_out: ['Package execution'],
-            acceptance_criteria: ['Parent Work Item is visible'],
+            acceptance_criteria: ['Parent requirement is visible'],
             test_strategy_summary: 'Route tests cover direct navigation.',
             created_at: '2026-05-18T00:00:00.000Z',
           },

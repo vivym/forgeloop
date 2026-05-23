@@ -5,6 +5,7 @@ import {
   type ProductActionTarget,
   type ProductLaneId,
   type ProductObjectType,
+  type ObjectRef,
 } from '@forgeloop/contracts';
 
 interface ProductActionBaseInput {
@@ -27,7 +28,7 @@ interface CommandActionInput extends ProductActionBaseInput {
 }
 
 interface WorkItemCommandInput extends CommandActionInput {
-  workItemId: string;
+  scopeRef: WorkItemScopeRef;
 }
 
 export interface GenerateSpecDraftActionInput extends WorkItemCommandInput {
@@ -50,6 +51,8 @@ export interface MarkPackageReadyActionInput extends WorkItemCommandInput {
 export interface RunPackageActionInput extends WorkItemCommandInput {
   packageId: string;
 }
+
+type WorkItemScopeRef = Extract<ObjectRef, { type: 'initiative' | 'requirement' | 'bug' | 'tech_debt' }>;
 
 const optionalActionFields = (input: ProductActionBaseInput) => ({
   ...(input.description === undefined ? {} : { description: input.description }),
@@ -84,6 +87,12 @@ export const routeTarget = (href: string): ProductActionTarget => ({
   href,
 });
 
+export const workItemScopeRef = (workItem: { id: string; kind: WorkItemScopeRef['type']; title?: string }): WorkItemScopeRef => ({
+  type: workItem.kind,
+  id: workItem.id,
+  ...(workItem.title === undefined ? {} : { title: workItem.title }),
+});
+
 export const navigateAction = (input: NavigateActionInput): ProductAction =>
   productActionSchema.parse({
     ...actionBase(input),
@@ -100,7 +109,7 @@ export const generateSpecDraftAction = (input: GenerateSpecDraftActionInput): Pr
       type: 'generate_spec_draft',
       object_type: 'spec',
       object_id: input.specId,
-      work_item_id: input.workItemId,
+      scope_ref: input.scopeRef,
       spec_id: input.specId,
     },
   });
@@ -114,7 +123,7 @@ export const generatePlanDraftAction = (input: GeneratePlanDraftActionInput): Pr
       type: 'generate_plan_draft',
       object_type: 'plan',
       object_id: input.planId,
-      work_item_id: input.workItemId,
+      scope_ref: input.scopeRef,
       plan_id: input.planId,
     },
   });
@@ -128,7 +137,7 @@ export const generatePackagesAction = (input: GeneratePackagesActionInput): Prod
       type: 'generate_packages',
       object_type: 'plan_revision',
       object_id: input.planRevisionId,
-      work_item_id: input.workItemId,
+      scope_ref: input.scopeRef,
       plan_revision_id: input.planRevisionId,
     },
   });
@@ -142,7 +151,7 @@ export const markPackageReadyAction = (input: MarkPackageReadyActionInput): Prod
       type: 'mark_package_ready',
       object_type: 'execution_package',
       object_id: input.packageId,
-      work_item_id: input.workItemId,
+      scope_ref: input.scopeRef,
       package_id: input.packageId,
       expected_package_version: input.expectedPackageVersion,
     },
@@ -157,7 +166,7 @@ export const runPackageAction = (input: RunPackageActionInput): ProductAction =>
       type: 'run_package',
       object_type: 'execution_package',
       object_id: input.packageId,
-      work_item_id: input.workItemId,
+      scope_ref: input.scopeRef,
       package_id: input.packageId,
     },
   });

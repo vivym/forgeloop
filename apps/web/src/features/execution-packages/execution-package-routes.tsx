@@ -31,9 +31,8 @@ import { Badge, Button, Checkbox, DataTable, Field, InlineNotice, Input, StatusP
 import { buildPackageActions, type PackageActionState } from './package-action-model';
 
 const supportedPackageFilters = [
-  'work_item_id',
   'plan_revision_id',
-  'owner_actor_id',
+  'execution_owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',
   'phase',
@@ -77,7 +76,7 @@ export function PackagesRegistry() {
   return (
     <>
       <PageHeader
-        subtitle="Track execution packages by Work Item, ownership, lifecycle state, and blocking state."
+        subtitle="Track execution packages by typed scope, ownership, lifecycle state, and blocking state."
         title="Packages"
       />
       {planRevisionId ? (
@@ -89,7 +88,7 @@ export function PackagesRegistry() {
         </Section>
       ) : null}
       <Section
-        description="Server-side filters are sent for project, work item, plan version, owner, reviewer, QA owner, phase, status, gate state, resolution, and blocked status."
+        description="Server-side filters are sent for project, typed scope, plan version, execution owner, reviewer, QA owner, phase, status, gate state, resolution, and blocked status."
         title="Execution package registry"
       >
         <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="packages" />
@@ -250,9 +249,9 @@ function PackageDetailView({ packageId }: { packageId: string }) {
           actions={
             <Link
               className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-border-strong hover:bg-surface-muted"
-              to={`/work-items/${encodeURIComponent(executionPackage.work_item_id)}`}
+              to={productScopeHref(executionPackage.scope_ref)}
             >
-              Open Work Item
+              Open scoped item
             </Link>
           }
           eyebrow={
@@ -309,6 +308,23 @@ function PackageDetailView({ packageId }: { packageId: string }) {
       />
     </DetailLayout>
   );
+}
+
+function productScopeHref(scopeRef: ExecutionPackage['scope_ref']): string {
+  switch (scopeRef.type) {
+    case 'initiative':
+      return `/initiatives/${encodeURIComponent(scopeRef.id)}`;
+    case 'requirement':
+      return `/requirements/${encodeURIComponent(scopeRef.id)}`;
+    case 'bug':
+      return `/bugs/${encodeURIComponent(scopeRef.id)}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodeURIComponent(scopeRef.id)}`;
+    case 'task':
+      return `/tasks/${encodeURIComponent(scopeRef.id)}`;
+    default:
+      return '/my-work';
+  }
 }
 
 function ActionBlockerReason({ action }: { action: PackageActionState }) {
@@ -488,7 +504,7 @@ function PackageTable({ items }: { items: ProductListItem[] }) {
             </div>
           ),
         },
-        { key: 'work-item', header: 'Work Item', cell: (item) => item.parent?.title ?? item.parent?.id ?? 'unknown' },
+        { key: 'parent', header: 'Parent scope', cell: (item) => item.parent?.title ?? item.parent?.id ?? 'unknown' },
         { key: 'surface', header: 'Surface', cell: (item) => item.package_state?.surface_type ?? 'unspecified' },
         { key: 'state', header: 'State', cell: (item) => <StatusPill>{item.phase ?? item.status ?? 'unknown'}</StatusPill> },
         {
@@ -515,7 +531,7 @@ function PackageOverview({ executionPackage }: { executionPackage: ExecutionPack
       <MetadataGrid
         items={[
           { label: 'Objective', value: executionPackage.objective },
-          { label: 'Owner', value: executionPackage.owner_actor_id },
+          { label: 'Execution owner', value: executionPackage.owner_actor_id },
           { label: 'Reviewer', value: executionPackage.reviewer_actor_id },
           { label: 'QA owner', value: executionPackage.qa_owner_actor_id },
           { label: 'Lifecycle state', value: `${executionPackage.phase} / ${executionPackage.gate_state}` },

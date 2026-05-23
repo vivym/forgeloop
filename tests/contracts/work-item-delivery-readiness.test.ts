@@ -28,7 +28,7 @@ const commandAction = {
     type: 'generate_spec_draft',
     object_type: 'spec',
     object_id: 'spec-1',
-    work_item_id: 'wi-1',
+    scope_ref: { type: 'requirement', id: 'wi-1' },
     spec_id: 'spec-1',
   },
 } as const;
@@ -45,8 +45,7 @@ const stage = {
 } as const;
 
 const readiness = {
-  work_item_id: 'wi-1',
-  work_item_kind: 'requirement',
+  scope_ref: { type: 'requirement', id: 'wi-1', title: 'Title' },
   active_lane: 'execution-owner',
   overall_state: 'ready_for_release',
   stages: [stage],
@@ -57,7 +56,7 @@ const readiness = {
 } as const;
 
 const cockpitResponse = (overrides: Record<string, unknown> = {}) => ({
-  work_item: {
+  item: {
     id: 'wi-1',
     project_id: 'project-1',
     kind: 'requirement',
@@ -90,7 +89,7 @@ const cockpitResponse = (overrides: Record<string, unknown> = {}) => ({
 
 const cockpitPackage = {
   id: 'pkg-1',
-  work_item_id: 'wi-1',
+  scope_ref: { type: 'requirement', id: 'wi-1', title: 'Title' },
   spec_id: 'spec-1',
   spec_revision_id: 'spec-r1',
   plan_id: 'plan-1',
@@ -122,7 +121,7 @@ const cockpitPackage = {
 
 const cockpitSpec = {
   id: 'spec-1',
-  work_item_id: 'wi-1',
+  scope_ref: { type: 'requirement', id: 'wi-1', title: 'Title' },
   entity_type: 'spec',
   status: 'approved',
   editing_state: 'idle',
@@ -148,6 +147,10 @@ describe('Work Item delivery readiness contracts', () => {
   it('parses readiness and full cockpit responses', () => {
     expect(workItemDeliveryReadinessSchema.parse(readiness)).toEqual(readiness);
     expect(workItemCockpitResponseSchema.parse(cockpitResponse())).toMatchObject({ delivery_readiness: readiness });
+    expect(workItemDeliveryReadinessSchema.safeParse({ ...readiness, work_item_id: 'wi-1' }).success).toBe(false);
+    expect(workItemCockpitResponseSchema.safeParse({ ...cockpitResponse(), work_item: cockpitResponse().item }).success).toBe(
+      false,
+    );
   });
 
   it('rejects cockpit work items when kind does not match intake context type', () => {
@@ -156,8 +159,8 @@ describe('Work Item delivery readiness contracts', () => {
     expect(
       workItemCockpitResponseSchema.safeParse({
         ...response,
-        work_item: {
-          ...response.work_item,
+        item: {
+          ...response.item,
           kind: 'bug',
         },
       }).success,
@@ -189,7 +192,7 @@ describe('Work Item delivery readiness contracts', () => {
         next_actions: [
           {
             ...commandAction,
-            command: { ...commandAction.command, work_item_id: 'other-work-item' },
+            command: { ...commandAction.command, scope_ref: { type: 'requirement', id: 'other-work-item' } },
           },
         ],
       }).success,
@@ -558,7 +561,7 @@ describe('Work Item delivery readiness contracts', () => {
         object: { type: 'execution_package', id: 'pkg-1', title: 'Package 1' },
         title: 'Package 1',
         package_state: {
-          work_item_id: 'wi-1',
+          scope_ref: { type: 'requirement', id: 'wi-1' },
           spec_revision_id: 'spec-r1',
           plan_revision_id: 'plan-r1',
           current_run_session_id: 'run-1',

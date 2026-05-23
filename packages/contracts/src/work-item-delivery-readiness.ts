@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { productActionSchema, productLaneIdSchema, productObjectTypeSchema } from './api.js';
 import { artifactKindSchema, jsonObjectSchema } from './executor.js';
+import { objectRefSchema } from './product-object-ref.js';
 import { publicArtifactRefSchema } from './public-artifacts.js';
 import {
   independentAiReviewResultSchema,
@@ -163,8 +164,7 @@ export const deliveryStageSchema = z
 
 export const workItemDeliveryReadinessSchema = z
   .object({
-    work_item_id: nonEmpty,
-    work_item_kind: workItemKindSchema,
+    scope_ref: objectRefSchema,
     active_lane: productLaneIdSchema,
     overall_state: deliveryOverallStateSchema,
     stages: z.array(deliveryStageSchema),
@@ -177,6 +177,15 @@ export const workItemDeliveryReadinessSchema = z
   .strict()
   .superRefine((readiness, ctx) => {
     const actionIds = new Set<string>();
+    const parsedScopeKind = workItemKindSchema.safeParse(readiness.scope_ref.type);
+
+    if (!parsedScopeKind.success) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['scope_ref', 'type'],
+        message: 'delivery readiness scope_ref must identify a typed product work object',
+      });
+    }
 
     readiness.next_actions.forEach((action, index) => {
       if (actionIds.has(action.id)) {
@@ -196,11 +205,14 @@ export const workItemDeliveryReadinessSchema = z
         });
       }
 
-      if (action.kind === 'command' && action.command.work_item_id !== readiness.work_item_id) {
+      if (
+        action.kind === 'command' &&
+        (action.command.scope_ref.type !== readiness.scope_ref.type || action.command.scope_ref.id !== readiness.scope_ref.id)
+      ) {
         ctx.addIssue({
           code: 'custom',
-          path: ['next_actions', index, 'command', 'work_item_id'],
-          message: 'command work_item_id must match readiness work_item_id',
+          path: ['next_actions', index, 'command', 'scope_ref'],
+          message: 'command scope_ref must match readiness Work Item scope',
         });
       }
     });
@@ -241,7 +253,7 @@ const workItemCockpitWorkItemSchema = z
 const cockpitSpecPlanSchema = z
   .object({
     id: nonEmpty,
-    work_item_id: nonEmpty,
+    scope_ref: objectRefSchema,
     entity_type: z.enum(['spec', 'plan']),
     status: nonEmpty,
     editing_state: nonEmpty,
@@ -354,7 +366,7 @@ const publicCockpitSelfReviewResultSchema = z
 const cockpitExecutionPackageSchema = z
   .object({
     id: nonEmpty,
-    work_item_id: nonEmpty,
+    scope_ref: objectRefSchema,
     spec_id: nonEmpty.optional(),
     spec_revision_id: nonEmpty.optional(),
     plan_id: nonEmpty.optional(),
@@ -432,7 +444,7 @@ const cockpitReviewPacketSchema = z
 
 export const workItemCockpitResponseSchema = z
   .object({
-    work_item: workItemCockpitWorkItemSchema,
+    item: workItemCockpitWorkItemSchema,
     current_spec: cockpitSpecPlanSchema.nullable(),
     current_plan: cockpitSpecPlanSchema.nullable(),
     packages: z.array(cockpitExecutionPackageSchema),

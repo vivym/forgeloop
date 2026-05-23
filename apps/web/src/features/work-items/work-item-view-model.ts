@@ -164,7 +164,7 @@ export function evidenceForStage(evidence: readonly DeliveryEvidence[], stageId:
 }
 
 export const createWorkItemDetailViewModel = (cockpit: CockpitResponse | undefined, timeline: TimelineEntry[] | undefined): WorkItemDetailViewModel => ({
-  workItem: cockpit?.work_item ?? null,
+  workItem: cockpit?.item ?? null,
   spec: cockpit?.current_spec ?? null,
   plan: cockpit?.current_plan ?? null,
   packages: cockpit?.packages ?? [],

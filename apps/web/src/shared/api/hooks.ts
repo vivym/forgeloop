@@ -96,7 +96,7 @@ export function useProductActionCommandMutation(input: { projectId: string; acti
     onSettled: () =>
       invalidateProductActionTargets(queryClient, {
         projectId: input.projectId,
-        workItemId: input.action.command.work_item_id,
+        workItemId: workItemIdFromCommandScope(input.action.command.scope_ref),
         action: input.action,
       }),
   });
@@ -660,7 +660,7 @@ type ProductActionCommandInput = {
 
 type ProductActionInvalidationInput = {
   projectId: string;
-  workItemId: string;
+  workItemId: string | undefined;
   action: ProductCommandAction;
 };
 
@@ -697,11 +697,24 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
 export function invalidateProductActionTargets(queryClient: QueryClient, input: ProductActionInvalidationInput) {
   return Promise.all([
     invalidateProductLaneProjectQueries(queryClient, input.projectId),
-    invalidateWorkItemCockpit(queryClient, input.workItemId),
+    input.workItemId === undefined ? Promise.resolve() : invalidateWorkItemCockpit(queryClient, input.workItemId),
     invalidateObjectQuery(queryClient, input.action.command.object_type, input.action.command.object_id),
     invalidateCommandDerivedResources(queryClient, input.action.command),
     input.action.target === undefined ? Promise.resolve() : invalidateTargetQuery(queryClient, input.action.target),
   ]);
+}
+
+function workItemIdFromCommandScope(scopeRef: ProductCommandAction['command']['scope_ref']): string | undefined {
+  switch (scopeRef.type) {
+    case 'initiative':
+    case 'requirement':
+    case 'bug':
+    case 'tech_debt':
+    case 'task':
+      return scopeRef.id;
+    default:
+      return undefined;
+  }
 }
 
 function invalidateCommandDerivedResources(queryClient: QueryClient, command: ProductCommandAction['command']) {
@@ -900,6 +913,7 @@ function normalizePackageRunQuery(query: ListProductQuery): ListProductQuery {
   return {
     project_id: query.project_id,
     ...(query.plan_revision_id === undefined ? {} : { plan_revision_id: query.plan_revision_id }),
+    ...(query.execution_owner_actor_id === undefined ? {} : { execution_owner_actor_id: query.execution_owner_actor_id }),
     ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
     ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
     ...(query.surface_type === undefined ? {} : { surface_type: query.surface_type }),
@@ -959,7 +973,7 @@ function updateWorkItemCockpit(
 
 function setCockpitSpec(queryClient: QueryClient, workItemId: string | undefined, spec: SpecPlan) {
   updateWorkItemCockpit(queryClient, workItemId, (current) =>
-    current.work_item === undefined
+    current.item === undefined
       ? {
           ...current,
           current_spec: spec,
@@ -967,8 +981,8 @@ function setCockpitSpec(queryClient: QueryClient, workItemId: string | undefined
       : {
           ...current,
           current_spec: spec,
-          work_item: {
-            ...current.work_item,
+          item: {
+            ...current.item,
             current_spec_id: spec.id,
           },
         },
@@ -977,7 +991,7 @@ function setCockpitSpec(queryClient: QueryClient, workItemId: string | undefined
 
 function setCockpitPlan(queryClient: QueryClient, workItemId: string | undefined, plan: SpecPlan) {
   updateWorkItemCockpit(queryClient, workItemId, (current) =>
-    current.work_item === undefined
+    current.item === undefined
       ? {
           ...current,
           current_plan: plan,
@@ -985,8 +999,8 @@ function setCockpitPlan(queryClient: QueryClient, workItemId: string | undefined
       : {
           ...current,
           current_plan: plan,
-          work_item: {
-            ...current.work_item,
+          item: {
+            ...current.item,
             current_plan_id: plan.id,
           },
         },

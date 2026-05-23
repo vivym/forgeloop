@@ -24,11 +24,11 @@ const packageListResponse = {
       title: executionPackage.objective,
       phase: executionPackage.phase,
       risk: workItem.risk,
-      owner_actor_id: executionPackage.owner_actor_id,
+      execution_owner_actor_id: executionPackage.owner_actor_id,
       reviewer_actor_id: executionPackage.reviewer_actor_id,
       qa_owner_actor_id: executionPackage.qa_owner_actor_id,
       parent: {
-        type: 'work_item',
+        type: workItem.kind,
         id: workItem.id,
         title: workItem.title,
       },
@@ -45,7 +45,7 @@ const packageListResponse = {
       counts: {},
       updated_at: executionPackage.updated_at,
       package_state: {
-        work_item_id: workItem.id,
+        scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
         plan_revision_id: executionPackage.plan_revision_id,
         surface_type: 'web',
         last_run_session_id: runSession.id,
@@ -66,7 +66,7 @@ const runListResponse = {
       },
       title: runSession.summary,
       status: runSession.status,
-      owner_actor_id: runSession.requested_by_actor_id,
+      execution_owner_actor_id: runSession.requested_by_actor_id,
       parent: {
         type: 'execution_package',
         id: executionPackage.id,
@@ -261,10 +261,10 @@ describe('buildPackageActions', () => {
 describe('package and run product routes', () => {
   it('uses the product Execution Package list endpoint with supported filters', async () => {
     const screen = await renderRoute(
-      `/packages?work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true`,
+      `/packages?plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true`,
       {
         apiOverrides: {
-          [`GET /query/execution-packages?project_id=${projectId}&work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true&limit=100`]:
+          [`GET /query/execution-packages?project_id=${projectId}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true&limit=100`]:
             packageListResponse,
         },
       },
@@ -274,7 +274,7 @@ describe('package and run product routes', () => {
     expectNoLegacyRenderedClasses();
 
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
-      `http://localhost:3000/query/execution-packages?project_id=${projectId}&work_item_id=${workItem.id}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true&limit=100`,
+      `http://localhost:3000/query/execution-packages?project_id=${projectId}&plan_revision_id=${planRevision.id}&phase=ready&status=ready&gate_state=open&resolution=unresolved&blocked=true&limit=100`,
       expect.objectContaining({ method: 'GET' }),
     );
   });
@@ -452,7 +452,7 @@ describe('package and run product routes', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run' })).toBeTruthy());
 
     expectPageHeaderText(/Package/i);
-    expect(screen.getByRole('link', { name: /Open Work Item/i })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Open scoped item/i })).toBeTruthy();
     expectStatusPillText(productCopyPackage.phase);
     expectActionRailBeforeDetailContent();
     expectNoLegacyWorkbenchText();
@@ -563,7 +563,7 @@ describe('package and run product routes', () => {
     const readyPackage = {
       ...executionPackage,
       id: 'package-hidden-route-closure',
-      work_item_id: 'work-item-hidden-route-closure',
+      scope_ref: { type: 'requirement', id: 'work-item-hidden-route-closure', title: workItem.title },
       repo_id: 'repo-hidden-route-closure',
       phase: 'ready',
       gate_state: 'not_submitted',
@@ -579,10 +579,10 @@ describe('package and run product routes', () => {
 
     expect(await screen.findByRole('heading', { name: readyPackage.objective })).toBeTruthy();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run' })).toHaveProperty('disabled', false));
-    expect(screen.getByRole('link', { name: /Open Work Item/i }).getAttribute('href')).toBe(
-      `/work-items/${readyPackage.work_item_id}`,
+    expect(screen.getByRole('link', { name: /Open scoped item/i }).getAttribute('href')).toBe(
+      `/requirements/${readyPackage.scope_ref.id}`,
     );
-    expectNoVisibleRawClosureText([readyPackage.id, readyPackage.work_item_id, readyPackage.repo_id]);
+    expectNoVisibleRawClosureText([readyPackage.id, readyPackage.scope_ref.id, readyPackage.repo_id]);
   });
 
   it('keeps run actions disabled while stale runtime readiness is refetching', async () => {
@@ -1143,7 +1143,7 @@ describe('package and run product routes', () => {
         source: 'fixture',
         object_type: 'work_item',
         object_id: workItem.id,
-        summary: 'Work Item linked.',
+        summary: 'Typed parent linked.',
         created_at: '2026-05-18T00:20:00.000Z',
         payload: {},
       },
@@ -1170,7 +1170,7 @@ describe('package and run product routes', () => {
 
   it('sends supported run filters and reports unsupported run filters', async () => {
     const screen = await renderRoute(
-      `/runs?status=passed&execution_package_id=${executionPackage.id}&run_session_id=${runSession.id}&executor_type=mock&cursor=cursor-web&limit=25&work_item_id=${workItem.id}&risk=high`,
+      `/runs?status=passed&execution_package_id=${executionPackage.id}&run_session_id=${runSession.id}&executor_type=mock&cursor=cursor-web&limit=25&risk=high`,
       {
         apiOverrides: {
           [`GET /query/runs?project_id=${projectId}&status=passed&executor_type=mock&execution_package_id=${executionPackage.id}&run_session_id=${runSession.id}&cursor=cursor-web&limit=25`]:
@@ -1181,13 +1181,9 @@ describe('package and run product routes', () => {
 
     await waitFor(() => expect(screen.getByText(runSession.summary)).toBeTruthy());
 
-    expect(screen.getByText(/work_item_id and risk are not applied to the run inventory yet/i)).toBeTruthy();
+    expect(screen.getByText(/risk is not applied to the run inventory yet/i)).toBeTruthy();
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
       `http://localhost:3000/query/runs?project_id=${projectId}&status=passed&executor_type=mock&execution_package_id=${executionPackage.id}&run_session_id=${runSession.id}&cursor=cursor-web&limit=25`,
-      expect.objectContaining({ method: 'GET' }),
-    );
-    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
-      expect.stringContaining(`work_item_id=${workItem.id}`),
       expect.objectContaining({ method: 'GET' }),
     );
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(

@@ -12,6 +12,9 @@ import type { ProductAction, ProductLaneId, WorkItemIntakeContext } from '../../
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { renderRoute } from './router-test-utils';
 import {
+  cockpitPackageFor,
+  cockpitPlanFor,
+  cockpitSpecFor,
   cockpitFixtureWithDegradedRunSource,
   cockpitFixtureWithManagerCommandAction,
   deliveryReadiness,
@@ -93,7 +96,7 @@ describe('Work Item product route', () => {
   it('labels empty Work Item action states by lane', async () => {
     const screen = await renderRoute('/work-items/wi-1?lane=requirements');
 
-    expect(await screen.findByRole('link', { name: 'Open work item' })).toBeTruthy();
+    expect(await screen.findByRole('link', { name: 'Open requirement' })).toBeTruthy();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       'http://localhost:3000/query/work-item-cockpit/wi-1?lane=requirements',
       expect.objectContaining({ method: 'GET' }),
@@ -107,22 +110,22 @@ describe('Work Item product route', () => {
     ['initiative', workItemKindCockpitFixtures.initiative, /Initiative/i],
   ])('renders a kind-specific typed brief for %s work items', async (_label, cockpit, expectedKind) => {
     const lane = cockpit.delivery_readiness.active_lane;
-    const screen = await renderRoute(`/work-items/${cockpit.work_item.id}?lane=${lane}`, {
+    const screen = await renderRoute(`/work-items/${cockpit.item.id}?lane=${lane}`, {
       apiOverrides: {
-        [`GET /query/work-item-cockpit/${cockpit.work_item.id}?lane=${lane}`]: cockpit,
+        [`GET /query/work-item-cockpit/${cockpit.item.id}?lane=${lane}`]: cockpit,
       },
     });
 
     expect(await screen.findByRole('heading', { name: /Delivery Cockpit/i })).toBeTruthy();
-    expect(screen.getByText(cockpit.work_item.title)).toBeTruthy();
+    expect(screen.getByText(cockpit.item.title)).toBeTruthy();
     expect(screen.getAllByText(expectedKind).length).toBeGreaterThan(0);
   });
 
   it('renders Initiative breakdown without release-ready copy when no packages exist', async () => {
     const cockpit = initiativeWithoutPackagesCockpitFixture;
-    const screen = await renderRoute(`/work-items/${cockpit.work_item.id}?lane=initiatives`, {
+    const screen = await renderRoute(`/work-items/${cockpit.item.id}?lane=initiatives`, {
       apiOverrides: {
-        [`GET /query/work-item-cockpit/${cockpit.work_item.id}?lane=initiatives`]: cockpit,
+        [`GET /query/work-item-cockpit/${cockpit.item.id}?lane=initiatives`]: cockpit,
       },
     });
 
@@ -164,10 +167,10 @@ describe('Work Item product route', () => {
       actorId: 'actor-cockpit-command',
       apiOverrides: {
         [`GET /query/work-item-cockpit/${workItem.id}?lane=execution-owner`]: {
-          work_item: workItem,
-          current_spec: spec,
-          current_plan: plan,
-          packages: [executionPackage],
+          item: workItem,
+          current_spec: cockpitSpecFor(workItem),
+          current_plan: cockpitPlanFor(workItem),
+          packages: [cockpitPackageFor(workItem)],
           run_sessions: [runSession],
           review_packets: [reviewPacket],
           delivery_readiness: deliveryReadiness(workItem, [commandAction], 'execution-owner'),
@@ -378,15 +381,15 @@ describe('ProductActionList', () => {
         kind: 'navigate',
         target: {
           kind: 'object',
-          object_type: 'work_item',
+          object_type: 'requirement',
           object_id: 'wi-target',
-          href: '/work-items/wi-target?lane=requirements#next',
+          href: '/requirements/wi-target?lane=requirements#next',
         },
       },
     ]);
 
     expect(rtlScreen.getByRole('link', { name: 'Open direct target' }).getAttribute('href')).toBe(
-      '/work-items/wi-target?lane=requirements#next',
+      '/requirements/wi-target?lane=requirements#next',
     );
   });
 
@@ -441,7 +444,7 @@ function runPackageAction(id: string, label: string): ProductAction {
       type: 'run_package',
       object_type: 'execution_package',
       object_id: 'package-product-action',
-      work_item_id: 'wi-1',
+      scope_ref: { type: 'requirement', id: 'wi-1' },
       package_id: 'package-product-action',
     },
     target: {

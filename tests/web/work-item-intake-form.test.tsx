@@ -23,7 +23,7 @@ const createdWorkItem = (id: string, kind: WorkItemKind, intake_context: Record<
 });
 
 const cockpitResponse = (item: ReturnType<typeof createdWorkItem>, lane: ProductLaneId) => ({
-  work_item: item,
+  item: item,
   current_spec: null,
   current_plan: null,
   packages: [],

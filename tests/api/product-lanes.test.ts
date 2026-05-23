@@ -309,7 +309,7 @@ describe('product lane projections', () => {
       .expect(200);
     expect(laneResponse.body).toMatchObject({
       lane_id: 'bugs',
-      items: [expect.objectContaining({ object: { type: 'work_item', id: workItem.id } })],
+      items: [expect.objectContaining({ object: { type: 'bug', id: workItem.id } })],
     });
 
     await request(app.getHttpServer()).get(`/query/work-items/${workItem.id}/actions?lane=bugs`).expect(404);
@@ -334,7 +334,10 @@ describe('product lane projections', () => {
     await request(server).get(`/query/product-lanes/unknown?project_id=${project.id}`).expect(400);
     await request(server).get(`/query/product-lanes/bugs?project_id=${project.id}&kind=not-a-kind`).expect(400);
     await request(server)
-      .get(`/query/product-lanes/execution-owner?project_id=${project.id}&actor_id=actor-a&owner_actor_id=actor-b`)
+      .get(`/query/product-lanes/execution-owner?project_id=${project.id}&owner_actor_id=actor-b`)
+      .expect(400);
+    await request(server)
+      .get(`/query/product-lanes/execution-owner?project_id=${project.id}&actor_id=actor-a&execution_owner_actor_id=actor-b`)
       .expect(400);
     await request(server)
       .get(`/query/product-lanes/reviewer?project_id=${project.id}&actor_id=actor-a&reviewer_actor_id=actor-b`)
@@ -350,7 +353,7 @@ describe('product lane projections', () => {
       .expect(400);
   });
 
-  it('filters Work Item type lanes by driver_actor_id and rejects owner_actor_id', async () => {
+  it('filters Work Item type lanes by driver_actor_id and rejects execution_owner_actor_id', async () => {
     const { app } = await track(createTestApp());
     const { project, workItem } = await seedDraftWorkItem(app, 'bug');
     const server = app.getHttpServer();
@@ -361,7 +364,7 @@ describe('product lane projections', () => {
     expect(response.body.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          object: { type: 'work_item', id: workItem.id },
+          object: { type: 'bug', id: workItem.id },
           driver_actor_id: actorOwner,
         }),
       ]),
@@ -369,16 +372,16 @@ describe('product lane projections', () => {
     expect(JSON.stringify(response.body.items)).not.toContain('owner_actor_id');
 
     await request(server)
-      .get(`/query/product-lanes/bugs?project_id=${project.id}&owner_actor_id=${actorOwner}`)
+      .get(`/query/product-lanes/bugs?project_id=${project.id}&execution_owner_actor_id=${actorOwner}`)
       .expect(400);
   });
 
-  it('keeps execution-owner lane owner_actor_id filtering for execution packages', async () => {
+  it('keeps execution-owner lane execution_owner_actor_id filtering for execution packages', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
 
     await request(app.getHttpServer())
-      .get(`/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`)
+      .get(`/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&execution_owner_actor_id=${actorOwner}`)
       .expect(200);
   });
 
@@ -387,7 +390,7 @@ describe('product lane projections', () => {
     const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
 
     for (const path of [
-      `/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`,
+      `/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&execution_owner_actor_id=${actorOwner}`,
       `/query/product-lanes/qa-test-owner?project_id=${executionPackage.project_id}&qa_owner_actor_id=${actorQa}`,
     ]) {
       const response = await request(app.getHttpServer()).get(path).expect(200);
@@ -453,7 +456,7 @@ describe('product lane projections', () => {
       description: expect.stringMatching(/resolve.*quality gate blockers/i),
       target: expect.objectContaining({
         kind: 'object',
-        object_type: 'work_item',
+        object_type: 'requirement',
         object_id: executionPackage.work_item_id,
       }),
     });
@@ -554,15 +557,15 @@ describe('product lane projections', () => {
     }
   });
 
-  it('keeps unsupported owner_actor_id response metadata for non-Work-Item lanes', async () => {
+  it('keeps unsupported execution_owner_actor_id response metadata for non-execution-owner lanes', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
 
     const response = await request(app.getHttpServer())
-      .get(`/query/product-lanes/reviewer?project_id=${executionPackage.project_id}&owner_actor_id=${actorOwner}`)
+      .get(`/query/product-lanes/reviewer?project_id=${executionPackage.project_id}&execution_owner_actor_id=${actorOwner}`)
       .expect(200);
 
-    expect(response.body.unsupported_filters).toContain('owner_actor_id');
+    expect(response.body.unsupported_filters).toContain('execution_owner_actor_id');
   });
 
   it('returns work item type lanes as strict ProductLaneResponse DTOs', async () => {
@@ -603,14 +606,14 @@ describe('product lane projections', () => {
       expect(response.items[0]).toMatchObject({
         id: laneSeed.workItem.id,
         kind,
-        object: { type: 'work_item', id: laneSeed.workItem.id },
+        object: { type: kind, id: laneSeed.workItem.id },
         actions: [
           expect.objectContaining({
             lane_id: lane,
             kind: 'navigate',
             priority: 'primary',
             enabled: true,
-            target: expect.objectContaining({ kind: 'object', object_type: 'work_item', object_id: laneSeed.workItem.id }),
+            target: expect.objectContaining({ kind: 'object', object_type: kind, object_id: laneSeed.workItem.id }),
           }),
         ],
       });
@@ -762,7 +765,7 @@ describe('product lane projections', () => {
       resolveLaneFilters('qa-test-owner', { project_id: executionPackage.project_id, qa_owner_actor_id: actorQa }),
     );
     expect(qaLane.items.map((item) => item.object.type)).toEqual(
-      expect.arrayContaining(['work_item', 'execution_package', 'release']),
+      expect.arrayContaining(['requirement', 'execution_package', 'release']),
     );
     await expect(
       getProductLane(
@@ -772,7 +775,7 @@ describe('product lane projections', () => {
       ),
     ).resolves.toMatchObject({
       items: expect.arrayContaining([
-        expect.objectContaining({ object: { type: 'work_item', id: executionPackage.work_item_id } }),
+        expect.objectContaining({ object: { type: 'requirement', id: executionPackage.work_item_id } }),
         expect.objectContaining({ object: { type: 'release', id: release.id } }),
       ]),
     });
@@ -869,7 +872,7 @@ describe('product lane projections', () => {
     ).resolves.toMatchObject({ items: [], summary: expect.objectContaining({ total: 0 }) });
   });
 
-  it('reports owner_actor_id as unsupported for direct Work Item lane filter resolution', async () => {
+  it('reports execution_owner_actor_id as unsupported for direct Work Item lane filter resolution', async () => {
     const { app } = await track(createTestApp());
     const { project } = await seedDraftWorkItem(app, 'requirement');
 
@@ -877,11 +880,11 @@ describe('product lane projections', () => {
       project_id: project.id,
       kind: 'requirement',
       driver_actor_id: actorOwner,
-      owner_actor_id: actorOwner,
+      execution_owner_actor_id: actorOwner,
       limit: 5,
     });
 
-    expect(filters.unsupported_filters).toContain('owner_actor_id');
+    expect(filters.unsupported_filters).toContain('execution_owner_actor_id');
   });
 
 });

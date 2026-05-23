@@ -48,10 +48,9 @@ const supportedFiltersByList = {
     'phase',
     'gate_state',
     'resolution',
-    'owner_actor_id',
+    'execution_owner_actor_id',
     'reviewer_actor_id',
     'qa_owner_actor_id',
-    'work_item_id',
     'spec_id',
     'plan_id',
     'spec_revision_id',
@@ -263,7 +262,11 @@ export async function listProductExecutionPackages(
     .filter((executionPackage) => query.phase === undefined || executionPackage.phase === query.phase)
     .filter((executionPackage) => query.gate_state === undefined || executionPackage.gate_state === query.gate_state)
     .filter((executionPackage) => query.resolution === undefined || executionPackage.resolution === query.resolution)
-    .filter((executionPackage) => query.owner_actor_id === undefined || executionPackage.owner_actor_id === query.owner_actor_id)
+    .filter(
+      (executionPackage) =>
+        query.execution_owner_actor_id === undefined ||
+        executionPackage.owner_actor_id === query.execution_owner_actor_id,
+    )
     .filter(
       (executionPackage) =>
         query.reviewer_actor_id === undefined || executionPackage.reviewer_actor_id === query.reviewer_actor_id,
@@ -271,7 +274,6 @@ export async function listProductExecutionPackages(
     .filter(
       (executionPackage) => query.qa_owner_actor_id === undefined || executionPackage.qa_owner_actor_id === query.qa_owner_actor_id,
     )
-    .filter((executionPackage) => query.work_item_id === undefined || executionPackage.work_item_id === query.work_item_id)
     .filter((executionPackage) => query.spec_id === undefined || executionPackage.spec_id === query.spec_id)
     .filter((executionPackage) => query.plan_id === undefined || executionPackage.plan_id === query.plan_id)
     .filter(
@@ -628,6 +630,7 @@ const executionPackageListItem = async (
     phase: executionPackage.phase,
     gate_state: executionPackage.gate_state,
     resolution: executionPackage.resolution,
+    execution_owner_actor_id: executionPackage.owner_actor_id,
     reviewer_actor_id: executionPackage.reviewer_actor_id,
     qa_owner_actor_id: executionPackage.qa_owner_actor_id,
     parent: workItemObjectRef(workItem),
