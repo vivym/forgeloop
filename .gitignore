@@ -3,6 +3,7 @@
 
 # Local git worktrees
 .worktrees/
+.forgeloop/
 
 # Superpowers
 .superpowers/

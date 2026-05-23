@@ -1,8 +1,12 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import type { Attachment, Task, WorkItem } from '@forgeloop/domain';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -53,6 +57,7 @@ const taskFixture = (id = 'task-1'): Task => ({
 describe('Attachment API safety', () => {
   let app: INestApplication;
   let repository: InMemoryDeliveryRepository;
+  let attachmentStorageRoot: string;
 
   const seedRequirement = async () => {
     await repository.saveWorkItem(requirementFixture());
@@ -102,6 +107,8 @@ describe('Attachment API safety', () => {
   };
 
   beforeEach(async () => {
+    attachmentStorageRoot = await mkdtemp(join(tmpdir(), 'forgeloop-attachment-api-'));
+    vi.stubEnv('FORGELOOP_ATTACHMENT_STORAGE_ROOT', attachmentStorageRoot);
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
@@ -110,6 +117,8 @@ describe('Attachment API safety', () => {
 
   afterEach(async () => {
     await app.close();
+    vi.unstubAllEnvs();
+    await rm(attachmentStorageRoot, { recursive: true, force: true });
   });
 
   it('rejects JSON/base64 attachment uploads', async () => {
@@ -176,6 +185,29 @@ describe('Attachment API safety', () => {
     expect(binary.headers['content-disposition']).toContain('inline');
     expect(binary.text ?? JSON.stringify(binary.body)).not.toContain('storage_uri');
     expect(binary.text ?? JSON.stringify(binary.body)).not.toContain('memory://attachments');
+  });
+
+  it('serves uploaded attachment bytes after service restart when metadata is restored', async () => {
+    const upload = await uploadImage();
+    const storedMetadata = await repository.getAttachment(upload.body.id);
+    expect(storedMetadata).toBeDefined();
+
+    await app.close();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = moduleRef.createNestApplication({ rawBody: true });
+    await app.init();
+    repository = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
+    await seedRequirement();
+    await repository.saveAttachment(storedMetadata as Attachment);
+
+    const renderRef = await request(app.getHttpServer())
+      .post(`/attachments/${upload.body.id}/render-url`)
+      .send({ disposition: 'inline' })
+      .expect(201);
+    const binary = await request(app.getHttpServer()).get(renderRef.body.render_url.replace(/^\/api/, '')).expect(200);
+
+    expect(binary.headers['content-type']).toContain('image/png');
+    expect(binary.body).toEqual(Buffer.from('png-bytes'));
   });
 
   it('fetches metadata and lists object attachments without exposing storage_uri', async () => {

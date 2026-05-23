@@ -37,7 +37,7 @@ export class TasksService {
     if ((await this.repository.getProject(input.project_id)) === undefined) {
       throw new NotFoundException(`Project ${input.project_id} not found`);
     }
-    const parentWorkItem = input.parent_ref === undefined ? undefined : await this.validateParentRef(input.parent_ref);
+    const parentWorkItem = input.parent_ref === undefined ? undefined : await this.validateParentRef(input.project_id, input.parent_ref);
     const staleState = await this.computeStaleState(input, parentWorkItem);
     const createdAt = this.runtime.now();
     const task: Task = {
@@ -125,9 +125,12 @@ export class TasksService {
     };
   }
 
-  private async validateParentRef(parentRef: ObjectRef): Promise<WorkItem | undefined> {
+  private async validateParentRef(projectId: string, parentRef: ObjectRef): Promise<WorkItem | undefined> {
     if (parentRef.type === 'task') {
-      await this.requireTask(parentRef.id);
+      const parentTask = await this.requireTask(parentRef.id);
+      if (parentTask.project_id !== projectId) {
+        throw new BadRequestException('Task parent_ref must belong to the same project as the Task');
+      }
       return undefined;
     }
     if (parentRef.type !== 'requirement' && parentRef.type !== 'bug' && parentRef.type !== 'tech_debt' && parentRef.type !== 'initiative') {
@@ -136,6 +139,9 @@ export class TasksService {
     const workItem = this.requireFound(await this.repository.getWorkItem(parentRef.id), `${parentRef.type} ${parentRef.id}`);
     if (workItem.kind !== parentRef.type) {
       throw new BadRequestException(`Task parent_ref ${parentRef.id} is not a ${parentRef.type}`);
+    }
+    if (workItem.project_id !== projectId) {
+      throw new BadRequestException('Task parent_ref must belong to the same project as the Task');
     }
     return workItem;
   }
@@ -157,6 +163,12 @@ export class TasksService {
     }
     const spec = this.requireFound(await this.repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
     const plan = this.requireFound(await this.repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
+    await this.assertRevisionAuthorityProject({
+      projectId: input.project_id,
+      specWorkItemId: specRevision.work_item_id,
+      planWorkItemId: planRevision.work_item_id,
+      error: (message) => new BadRequestException(message),
+    });
     if (!isCurrentApprovedSpec(spec, input.controlling_spec_revision_id)) {
       return 'stale_spec';
     }
@@ -196,6 +208,12 @@ export class TasksService {
     }
     const spec = this.requireFound(await this.repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
     const plan = this.requireFound(await this.repository.getPlan(planRevision.plan_id), `Plan ${planRevision.plan_id}`);
+    await this.assertRevisionAuthorityProject({
+      projectId: task.project_id,
+      specWorkItemId: specRevision.work_item_id,
+      planWorkItemId: planRevision.work_item_id,
+      error: (message) => new ConflictException(message),
+    });
     if (!isCurrentApprovedSpec(spec, task.controlling_spec_revision_id)) {
       throw new ConflictException('Task controlling SpecRevision is not current approved');
     }
@@ -225,6 +243,22 @@ export class TasksService {
       throw new NotFoundException(`${label} not found`);
     }
     return value;
+  }
+
+  private async assertRevisionAuthorityProject(input: {
+    projectId: string;
+    specWorkItemId: string;
+    planWorkItemId: string;
+    error: (message: string) => Error;
+  }): Promise<void> {
+    const specWorkItem = this.requireFound(await this.repository.getWorkItem(input.specWorkItemId), `Spec Work Item ${input.specWorkItemId}`);
+    const planWorkItem = this.requireFound(await this.repository.getWorkItem(input.planWorkItemId), `Plan Work Item ${input.planWorkItemId}`);
+    if (specWorkItem.project_id !== input.projectId) {
+      throw input.error('Task controlling SpecRevision must belong to the same project as the Task');
+    }
+    if (planWorkItem.project_id !== input.projectId) {
+      throw input.error('Task controlling PlanRevision must belong to the same project as the Task');
+    }
   }
 
   private async appendTaskEvent(task: Task, eventType: string, actorId: string | undefined): Promise<void> {
