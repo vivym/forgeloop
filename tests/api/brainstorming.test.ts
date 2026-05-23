@@ -1,7 +1,7 @@
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -92,6 +92,13 @@ describe('Boundary Brainstorming API', () => {
       })
       .expect(201);
 
+    const lockKeys: string[] = [];
+    const originalWithObjectLock = repository.withObjectLock.bind(repository);
+    vi.spyOn(repository, 'withObjectLock').mockImplementation((key, write) => {
+      lockKeys.push(key);
+      return originalWithObjectLock(key, write);
+    });
+
     const approved = (
       await request(server)
         .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
@@ -112,6 +119,7 @@ describe('Boundary Brainstorming API', () => {
       boundary_summary_id: expect.any(String),
       development_plan_item_revision_id: expect.any(String),
     });
+    expect(lockKeys).toEqual([`development-plan:${plan.id}`, `brainstorming-session:${session.id}`]);
     expect(approved.development_plan_item_revision_id).not.toBe(item.revision_id);
 
     const itemRevisions = (

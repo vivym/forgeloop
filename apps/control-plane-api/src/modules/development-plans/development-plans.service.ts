@@ -69,7 +69,6 @@ export class DevelopmentPlansService {
   ) {}
 
   async createDevelopmentPlan(input: CreateDevelopmentPlanInput): Promise<DevelopmentPlan> {
-    await this.requireSourceObject(input.project_id, input.source_ref);
     const at = this.runtime.now();
     const plan: DevelopmentPlan = {
       id: this.runtime.id('development-plan'),
@@ -82,21 +81,29 @@ export class DevelopmentPlansService {
       created_at: at,
       updated_at: at,
     };
-    await this.repository.saveDevelopmentPlan(plan);
-    await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id);
-    await this.saveDevelopmentPlanRevision(plan, {
-      changeReason: 'development_plan_created',
-      actorId: input.actor_id,
+
+    return this.withDevelopmentPlanMutation(plan.id, async (repository) => {
+      await this.requireSourceObject(input.project_id, input.source_ref, repository);
+      await repository.saveDevelopmentPlan(plan);
+      await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id, undefined, repository);
+      await this.saveDevelopmentPlanRevision(
+        plan,
+        {
+          changeReason: 'development_plan_created',
+          actorId: input.actor_id,
+        },
+        repository,
+      );
+      await this.appendPlanEvent(plan.id, 'development_plan_created', input.actor_id, {
+        source_ref: input.source_ref,
+        revision_id: plan.revision_id,
+      }, repository);
+      return this.requireDevelopmentPlan(plan.id, repository);
     });
-    await this.appendPlanEvent(plan.id, 'development_plan_created', input.actor_id, {
-      source_ref: input.source_ref,
-      revision_id: plan.revision_id,
-    });
-    return this.requireDevelopmentPlan(plan.id);
   }
 
   async createDevelopmentPlanItem(developmentPlanId: string, input: CreateDevelopmentPlanItemInput): Promise<DevelopmentPlanItem> {
-    return this.repository.withObjectLock(`development-plan:${developmentPlanId}`, async (repository) => {
+    return this.withDevelopmentPlanMutation(developmentPlanId, async (repository) => {
       const plan = await this.requireDevelopmentPlan(developmentPlanId, repository);
       const sourceRef = this.primarySourceRef(plan);
       const item = this.buildDevelopmentPlanItem(plan.id, sourceRef, input);
@@ -119,7 +126,6 @@ export class DevelopmentPlansService {
   }
 
   async generateDevelopmentPlanDraft(input: GenerateDraftInput): Promise<Record<string, unknown>> {
-    await this.requireSourceObject(input.project_id, input.source_ref);
     const at = this.runtime.now();
     const plan: DevelopmentPlan = {
       id: this.runtime.id('development-plan'),
@@ -132,58 +138,75 @@ export class DevelopmentPlansService {
       created_at: at,
       updated_at: at,
     };
-    const contextManifest = await this.buildContextManifest({
-      sourceRef: input.source_ref,
-      projectId: input.project_id,
-      developmentPlanId: plan.id,
-      developmentPlanRevisionId: plan.revision_id,
-      actorGuidance: input.guidance,
-    });
 
-    await this.repository.saveContextManifest(contextManifest);
-    await this.repository.saveDevelopmentPlan(plan);
-    await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id);
+    return this.withDevelopmentPlanMutation(plan.id, async (repository) => {
+      const contextManifest = await this.buildContextManifest(
+        {
+          sourceRef: input.source_ref,
+          projectId: input.project_id,
+          developmentPlanId: plan.id,
+          developmentPlanRevisionId: plan.revision_id,
+          actorGuidance: input.guidance,
+        },
+        repository,
+      );
 
-    for (const itemInput of this.generatedItemInputs(input.guidance)) {
-      const item = this.buildDevelopmentPlanItem(plan.id, input.source_ref, itemInput);
-      await this.repository.saveDevelopmentPlanItem(item);
-      await this.saveItemRevision(item, 'ai_draft_generated', input.actor_id);
-      await this.appendItemEvent(item.id, 'development_plan_item_created', input.actor_id, { development_plan_id: plan.id });
-    }
+      await repository.saveContextManifest(contextManifest);
+      await repository.saveDevelopmentPlan(plan);
+      await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id, undefined, repository);
 
-    await this.saveDevelopmentPlanRevision(plan, {
-      changeReason: 'development_plan_draft_generated',
-      actorId: input.actor_id,
-      generationState: 'draft_generated',
-    });
+      for (const itemInput of this.generatedItemInputs(input.guidance)) {
+        const item = this.buildDevelopmentPlanItem(plan.id, input.source_ref, itemInput);
+        await repository.saveDevelopmentPlanItem(item);
+        await this.saveItemRevision(item, 'ai_draft_generated', input.actor_id, repository);
+        await this.appendItemEvent(item.id, 'development_plan_item_created', input.actor_id, { development_plan_id: plan.id }, repository);
+      }
 
-    await this.appendPlanEvent(plan.id, 'development_plan_draft_generated', input.actor_id, {
-      context_manifest_id: contextManifest.id,
-      guidance: input.guidance,
-    });
+      await this.saveDevelopmentPlanRevision(
+        plan,
+        {
+          changeReason: 'development_plan_draft_generated',
+          actorId: input.actor_id,
+          generationState: 'draft_generated',
+        },
+        repository,
+      );
 
-    return this.developmentPlanResponse(plan.id, {
-      generation_state: 'draft_generated',
-      actor_guidance: input.guidance,
-      context_manifest_id: contextManifest.id,
+      await this.appendPlanEvent(plan.id, 'development_plan_draft_generated', input.actor_id, {
+        context_manifest_id: contextManifest.id,
+        guidance: input.guidance,
+      }, repository);
+
+      return this.developmentPlanResponse(
+        plan.id,
+        {
+          generation_state: 'draft_generated',
+          actor_guidance: input.guidance,
+          context_manifest_id: contextManifest.id,
+        },
+        repository,
+      );
     });
   }
 
   async regenerateDevelopmentPlanDraft(developmentPlanId: string, input: RegenerateDraftInput): Promise<Record<string, unknown>> {
-    return this.repository.withObjectLock(`development-plan:${developmentPlanId}`, async (repository) => {
+    return this.withDevelopmentPlanMutation(developmentPlanId, async (repository) => {
       const plan = await this.requireDevelopmentPlan(developmentPlanId, repository);
       if (plan.status === 'approved') {
         throw new ConflictException('Approved Development Plans cannot be regenerated');
       }
       const revisionId = this.runtime.id('development-plan-revision');
       const sourceRef = this.primarySourceRef(plan);
-      const contextManifest = await this.buildContextManifest({
-        sourceRef,
-        projectId: plan.project_id,
-        developmentPlanId: plan.id,
-        developmentPlanRevisionId: revisionId,
-        actorGuidance: input.feedback,
-      });
+      const contextManifest = await this.buildContextManifest(
+        {
+          sourceRef,
+          projectId: plan.project_id,
+          developmentPlanId: plan.id,
+          developmentPlanRevisionId: revisionId,
+          actorGuidance: input.feedback,
+        },
+        repository,
+      );
       await repository.saveContextManifest(contextManifest);
 
       const regeneratedItem = this.buildDevelopmentPlanItem(plan.id, sourceRef, {
@@ -229,46 +252,57 @@ export class DevelopmentPlansService {
         repository,
       );
 
-      return this.developmentPlanResponse(plan.id, {
-        generation_state: 'draft_regenerated',
-        context_manifest_id: contextManifest.id,
-        regeneration: {
-          feedback: input.feedback,
-          preserve_prior_decisions: input.preserve_prior_decisions,
+      return this.developmentPlanResponse(
+        plan.id,
+        {
+          generation_state: 'draft_regenerated',
+          context_manifest_id: contextManifest.id,
+          regeneration: {
+            feedback: input.feedback,
+            preserve_prior_decisions: input.preserve_prior_decisions,
+          },
         },
-      });
+        repository,
+      );
     });
   }
 
   async linkSourceObjectToDevelopmentPlan(input: LinkSourceObjectInput): Promise<DevelopmentPlanSourceLink> {
-    const plan = await this.requireDevelopmentPlan(input.development_plan_id);
     const sourceRef: SourceObjectRef = { type: input.source_type, id: input.source_id };
-    await this.requireSourceObject(plan.project_id, sourceRef);
-    const existing = (await this.repository.listDevelopmentPlanSourceLinksForSource(sourceRef)).find(
-      (link) => link.development_plan_id === plan.id,
-    );
-    if (existing !== undefined) {
-      return existing;
-    }
 
-    const link = await this.saveSourceLink(plan.id, sourceRef, 'related', input.actor_id, input.rationale);
-    const sourceRefs = this.hasSourceRef(plan, sourceRef) ? plan.source_refs : [...plan.source_refs, sourceRef];
-    const updatedPlan: DevelopmentPlan = {
-      ...plan,
-      revision_id: this.runtime.id('development-plan-revision'),
-      source_refs: sourceRefs,
-      updated_at: this.runtime.now(),
-    };
-    await this.repository.saveDevelopmentPlan(updatedPlan);
-    await this.saveDevelopmentPlanRevision(updatedPlan, {
-      changeReason: 'development_plan_source_linked',
-      actorId: input.actor_id,
+    return this.withDevelopmentPlanMutation(input.development_plan_id, async (repository) => {
+      const plan = await this.requireDevelopmentPlan(input.development_plan_id, repository);
+      await this.requireSourceObject(plan.project_id, sourceRef, repository);
+      const existing = (await repository.listDevelopmentPlanSourceLinksForSource(sourceRef)).find(
+        (link) => link.development_plan_id === plan.id,
+      );
+      if (existing !== undefined) {
+        return existing;
+      }
+
+      const link = await this.saveSourceLink(plan.id, sourceRef, 'related', input.actor_id, input.rationale, repository);
+      const sourceRefs = this.hasSourceRef(plan, sourceRef) ? plan.source_refs : [...plan.source_refs, sourceRef];
+      const updatedPlan: DevelopmentPlan = {
+        ...plan,
+        revision_id: this.runtime.id('development-plan-revision'),
+        source_refs: sourceRefs,
+        updated_at: this.runtime.now(),
+      };
+      await repository.saveDevelopmentPlan(updatedPlan);
+      await this.saveDevelopmentPlanRevision(
+        updatedPlan,
+        {
+          changeReason: 'development_plan_source_linked',
+          actorId: input.actor_id,
+        },
+        repository,
+      );
+      await this.appendPlanEvent(plan.id, 'development_plan_source_linked', input.actor_id, {
+        source_ref: sourceRef,
+        rationale: input.rationale,
+      }, repository);
+      return link;
     });
-    await this.appendPlanEvent(plan.id, 'development_plan_source_linked', input.actor_id, {
-      source_ref: sourceRef,
-      rationale: input.rationale,
-    });
-    return link;
   }
 
   private async requireDevelopmentPlan(
@@ -282,11 +316,15 @@ export class DevelopmentPlansService {
     return plan;
   }
 
-  private async requireSourceObject(projectId: string, sourceRef: SourceObjectRef): Promise<WorkItem> {
+  private async requireSourceObject(
+    projectId: string,
+    sourceRef: SourceObjectRef,
+    repository: DeliveryRepository = this.repository,
+  ): Promise<WorkItem> {
     if (!allowedSourceObjectTypes.has(sourceRef.type)) {
       throw new DomainError('INVALID_TRANSITION', `Unsupported source object type ${sourceRef.type}`);
     }
-    const sourceObject = await this.repository.getWorkItem(sourceRef.id);
+    const sourceObject = await repository.getWorkItem(sourceRef.id);
     if (sourceObject === undefined) {
       throw new NotFoundException(`${sourceRef.type} ${sourceRef.id} not found`);
     }
@@ -396,6 +434,7 @@ export class DevelopmentPlansService {
     linkType: DevelopmentPlanSourceLink['link_type'],
     actorId?: string,
     rationale?: string,
+    repository: DeliveryRepository = this.repository,
   ): Promise<DevelopmentPlanSourceLink> {
     const link: DevelopmentPlanSourceLink = {
       id: this.runtime.id('development-plan-source-link'),
@@ -406,20 +445,23 @@ export class DevelopmentPlansService {
       ...(actorId === undefined ? {} : { created_by_actor_id: actorId }),
       created_at: this.runtime.now(),
     };
-    await this.repository.saveDevelopmentPlanSourceLink(link);
+    await repository.saveDevelopmentPlanSourceLink(link);
     return link;
   }
 
-  private async buildContextManifest(input: {
-    sourceRef: SourceObjectRef;
-    projectId: string;
-    developmentPlanId: string;
-    developmentPlanRevisionId: string;
-    actorGuidance?: string | undefined;
-  }): Promise<ContextManifest> {
-    const sourceObject = await this.requireSourceObject(input.projectId, input.sourceRef);
-    const projectRepos = await this.repository.listProjectRepos(input.projectId);
-    const relatedSources = (await this.repository.listWorkItems(input.projectId))
+  private async buildContextManifest(
+    input: {
+      sourceRef: SourceObjectRef;
+      projectId: string;
+      developmentPlanId: string;
+      developmentPlanRevisionId: string;
+      actorGuidance?: string | undefined;
+    },
+    repository: DeliveryRepository = this.repository,
+  ): Promise<ContextManifest> {
+    const sourceObject = await this.requireSourceObject(input.projectId, input.sourceRef, repository);
+    const projectRepos = await repository.listProjectRepos(input.projectId);
+    const relatedSources = (await repository.listWorkItems(input.projectId))
       .filter((candidate) => candidate.id !== sourceObject.id && (candidate.kind === 'requirement' || candidate.kind === 'bug'))
       .slice(0, 5)
       .map((candidate) => ({
@@ -475,10 +517,14 @@ export class DevelopmentPlansService {
     ];
   }
 
-  private async developmentPlanResponse(planId: string, extra: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async developmentPlanResponse(
+    planId: string,
+    extra: Record<string, unknown>,
+    repository: DeliveryRepository = this.repository,
+  ): Promise<Record<string, unknown>> {
     const [plan, revisions] = await Promise.all([
-      this.requireDevelopmentPlan(planId),
-      this.repository.listDevelopmentPlanRevisions(planId),
+      this.requireDevelopmentPlan(planId, repository),
+      repository.listDevelopmentPlanRevisions(planId),
     ]);
     const currentRevision = revisions.at(-1);
     return {
@@ -498,6 +544,15 @@ export class DevelopmentPlansService {
 
   private hasSourceRef(plan: DevelopmentPlan, sourceRef: SourceObjectRef): boolean {
     return plan.source_refs.some((candidate) => candidate.type === sourceRef.type && candidate.id === sourceRef.id);
+  }
+
+  private withDevelopmentPlanMutation<T>(
+    developmentPlanId: string,
+    write: (repository: DeliveryRepository) => Promise<T>,
+  ): Promise<T> {
+    return this.repository.withObjectLock(`development-plan:${developmentPlanId}`, (repository) =>
+      repository.withDeliveryTransaction(write),
+    );
   }
 
   private appendPlanEvent(

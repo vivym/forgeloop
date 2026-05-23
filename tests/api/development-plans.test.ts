@@ -1,7 +1,7 @@
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -88,6 +88,30 @@ describe('Development Plans API', () => {
       }),
     ]);
     expect(JSON.stringify(item)).not.toContain('"type":"work_item"');
+  });
+
+  it('rolls back Development Plan creation when a scoped source-link write fails', async () => {
+    const { project, requirement } = await seedRequirement(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const originalWithDeliveryTransaction = repository.withDeliveryTransaction.bind(repository);
+    vi.spyOn(repository, 'withDeliveryTransaction').mockImplementation((write) =>
+      originalWithDeliveryTransaction(async (transaction) => {
+        vi.spyOn(transaction, 'saveDevelopmentPlanSourceLink').mockRejectedValueOnce(new Error('forced source-link failure'));
+        return write(transaction);
+      }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/development-plans')
+      .send({
+        project_id: project.id,
+        source_ref: { type: 'requirement', id: requirement.id },
+        title: 'Checkout development plan',
+        actor_id: 'actor-product',
+      })
+      .expect(500);
+
+    await expect(repository.listDevelopmentPlans(project.id)).resolves.toEqual([]);
   });
 
   it('links an existing Development Plan from a source object without creating a duplicate', async () => {
