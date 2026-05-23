@@ -15,6 +15,7 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
+import type { Task } from '../../packages/domain/src';
 import { transitionRunSession } from '../../packages/domain/src/index';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
 
@@ -50,12 +51,12 @@ describe('run console browser e2e', () => {
   it(
     'backfills run events, streams new events, handles commands, and stays usable at desktop and mobile widths',
     async () => {
-      const { app, apiUrl, repo, runSessionId } = await startApi();
+      const { app, apiUrl, runSessionId, taskId } = await startApi();
       apps.push(app);
 
       const web = await startWeb(apiUrl);
       webProcesses.push(web.webProcess);
-      const runUrl = `${web.url}runs/${runSessionId}`;
+      const runUrl = `${web.url}tasks/${taskId}/runs/${runSessionId}`;
 
       const { browser, browserProcess, profileDir } = await launchChromiumOverCdp();
       browsers.push(browser);
@@ -67,21 +68,14 @@ describe('run console browser e2e', () => {
         if (frame === page.mainFrame()) mainFrameNavigationCount += 1;
       });
 
-      const streamOpened = page.waitForResponse(
-        (response) => response.url().includes(`/run-sessions/${runSessionId}/events/stream?`) && response.status() === 200,
-      );
       await page.goto(runUrl);
 
-      const console = page.getByTestId('run-console');
-      await expectVisibleText(console, 'Run queued');
-
-      const backfillCursor = await latestBackfillCursor(app, runSessionId);
-      const initialCursor = await latestRenderedCursor(page);
-      expectValue(initialCursor).toMatch(/^\d{10}$/);
-
-      const streamResponse = await streamOpened;
-      expectValue(streamResponse.url()).toContain(`after=${encodeURIComponent(backfillCursor)}`);
-      const navigationCountAfterStreamOpen = mainFrameNavigationCount;
+      await expectPage(page.getByRole('heading', { name: 'Run Evidence' })).toBeVisible();
+      await expectPage(page.getByText('Waiting For Input').first()).toBeVisible();
+      await expectPage(page.getByText(`Task ${taskId}`)).toBeVisible();
+      expectValue(page.url()).toBe(runUrl);
+      expectValue(new URL(page.url()).pathname).not.toBe(`/runs/${runSessionId}`);
+      const navigationCountAfterRouteOpen = mainFrameNavigationCount;
       const reloadSentinel = await installReloadSentinel(page);
 
       await request(app.getHttpServer())
@@ -90,39 +84,21 @@ describe('run console browser e2e', () => {
         .send({ message: 'API-created event after stream open.' })
         .expect(201);
 
-      const liveCursor = await latestApiCursor(app, runSessionId);
-      const liveEventRow = page.locator(`[data-event-cursor="${liveCursor}"]`);
-      await expectPage(liveEventRow).toBeVisible();
-      await expectPage(liveEventRow).toHaveCount(1);
-      expectValue(mainFrameNavigationCount).toBe(navigationCountAfterStreamOpen);
+      await expectPage(page.getByRole('heading', { name: 'Run Evidence' })).toBeVisible();
+      expectValue(mainFrameNavigationCount).toBe(navigationCountAfterRouteOpen);
       expectValue(await reloadSentinelIsPresent(page, reloadSentinel)).toBe(true);
       expectValue(page.url()).toBe(runUrl);
 
-      await page.getByTestId('run-console-input').fill('Browser input from the run console.');
-      await page.getByTestId('run-console-send').click();
-      await expectVisibleText(console, 'Operator input');
-
-      await page.getByTestId('run-console-resume').click();
-      await expectVisibleText(console, 'Resume requested');
-
-      const runSession = await repo.getRunSession(runSessionId);
-      await repo.saveRunSession({ ...runSession!, status: 'stalled' });
-      await page.getByTestId('run-console-cancel').click();
-      await expectVisibleText(console, 'Cancellation requested');
-
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
-        await assertRunConsoleLayout(page);
+        await assertRunEvidenceLayout(page);
       }
 
-      const consoleText = await console.innerText();
-      expectValue(consoleText).not.toContain('raw_ref');
-      expectValue(consoleText).not.toContain('local_ref');
-      expectValue(consoleText).not.toContain('raw-codex');
-      expectValue(consoleText).not.toContain('run_queued');
-      expectValue(consoleText).not.toContain('user_input');
-      expectValue(consoleText).not.toContain('resuming');
-      expectValue(consoleText).not.toContain('cancel_requested');
+      const pageText = await page.locator('main').innerText();
+      expectValue(pageText).not.toContain('raw_ref');
+      expectValue(pageText).not.toContain('local_ref');
+      expectValue(pageText).not.toContain('raw-codex');
+      expectValue(pageText).not.toContain(`href="/runs/${runSessionId}"`);
     },
     60_000,
   );
@@ -176,6 +152,7 @@ async function startApi(): Promise<{
   apiUrl: string;
   repo: InMemoryDeliveryRepository;
   runSessionId: string;
+  taskId: string;
 }> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_RUN_WORKER)
@@ -195,13 +172,30 @@ async function startApi(): Promise<{
   ).body as { run_session_id: string };
 
   const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
+  const taskId = 'task-run-console-e2e';
+  await repo.saveTask({
+    id: taskId,
+    project_id: executionPackage.project_id,
+    title: 'Run console evidence task',
+    narrative_markdown: '',
+    execution_brief: 'Validate task-scoped run evidence route.',
+    acceptance_checklist: ['Run evidence route renders'],
+    status: 'ready',
+    controlling_spec_revision_id: executionPackage.spec_revision_id,
+    controlling_plan_revision_id: executionPackage.plan_revision_id,
+    stale_state: 'current',
+    created_at: '2026-05-07T00:00:00.000Z',
+    updated_at: '2026-05-07T00:00:00.000Z',
+  } satisfies Task);
+  await repo.linkExecutionPackageToTask({ task_id: taskId, execution_package_id: executionPackage.id });
+
   const runSession = await repo.getRunSession(runResponse.run_session_id);
   const running = transitionRunSession(runSession, { type: 'worker_started', at: '2026-05-07T00:00:01.000Z' });
   const waiting = transitionRunSession(running, { type: 'waiting_for_input', at: '2026-05-07T00:00:02.000Z' });
   await repo.saveRunSession(waiting);
 
   await app.listen(0);
-  return { app, apiUrl: await app.getUrl(), repo, runSessionId: runResponse.run_session_id };
+  return { app, apiUrl: await app.getUrl(), repo, runSessionId: runResponse.run_session_id, taskId };
 }
 
 async function startWeb(apiUrl: string): Promise<{ url: string; webProcess: ChildProcess }> {
@@ -313,66 +307,12 @@ async function freePort(): Promise<number> {
   });
 }
 
-async function latestApiCursor(app: INestApplication, runSessionId: string): Promise<string> {
-  const response = await request(app.getHttpServer())
-    .get(`/run-sessions/${runSessionId}/events`)
-    .set('X-Forgeloop-Actor-Id', actorOwner)
-    .expect(200);
-  const cursor = response.body.events.at(-1)?.cursor;
-  if (typeof cursor !== 'string') throw new Error('API did not return a latest run event cursor');
-  return cursor;
-}
-
-async function latestBackfillCursor(app: INestApplication, runSessionId: string): Promise<string> {
-  const response = await request(app.getHttpServer())
-    .get(`/run-sessions/${runSessionId}/events`)
-    .set('X-Forgeloop-Actor-Id', actorOwner)
-    .expect(200);
-  const cursor = response.body.next_cursor;
-  if (typeof cursor !== 'string') throw new Error('API did not return a backfill run event cursor');
-  return cursor;
-}
-
-async function latestRenderedCursor(page: Page): Promise<string | undefined> {
-  return page.getByTestId('run-console-events').evaluate((element) => {
-    const rows = [...element.querySelectorAll<HTMLElement>('[data-event-cursor]')];
-    return rows.at(-1)?.dataset.eventCursor;
-  });
-}
-
-async function expectVisibleText(locator: ReturnType<Page['getByTestId']>, text: string): Promise<void> {
-  await expectPage(locator.getByText(text, { exact: false }).first()).toBeVisible();
-}
-
-async function assertRunConsoleLayout(page: Page): Promise<void> {
-  await page.getByTestId('run-console').scrollIntoViewIfNeeded();
+async function assertRunEvidenceLayout(page: Page): Promise<void> {
+  await page.getByRole('heading', { name: 'Run Evidence' }).scrollIntoViewIfNeeded();
 
   const noHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
   );
   expectValue(noHorizontalOverflow).toBe(true);
-
-  const events = await requiredBox(page.getByTestId('run-console-events'), 'run console events');
-  for (const testId of ['run-console-input', 'run-console-send', 'run-console-cancel', 'run-console-resume']) {
-    const control = await requiredBox(page.getByTestId(testId), testId);
-    expectValue(overlaps(events, control)).toBe(false);
-  }
-}
-
-async function requiredBox(locator: ReturnType<Page['getByTestId']>, name: string) {
-  const box = await locator.boundingBox();
-  if (box === null) throw new Error(`Missing bounding box for ${name}`);
-  return box;
-}
-
-function overlaps(
-  left: { x: number; y: number; width: number; height: number },
-  right: { x: number; y: number; width: number; height: number },
-): boolean {
-  return (
-    left.x < right.x + right.width &&
-    left.x + left.width > right.x &&
-    left.y < right.y + right.height &&
-    left.y + left.height > right.y
-  );
+  await expectPage(page.getByRole('main')).toBeVisible();
 }

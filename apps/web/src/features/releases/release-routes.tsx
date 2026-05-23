@@ -1,743 +1,260 @@
-import { useState, type FormEvent } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 
-import {
-  useAcknowledgeReleaseTestAcceptanceMutation,
-  useCreateReleaseEvidenceMutation,
-  useCreateReleaseMutation,
-  useLinkReleaseExecutionPackageMutation,
-  useLinkReleaseWorkItemMutation,
-  usePackagesQuery,
-  useProductWorkItemsQuery,
-  useReleaseCockpitQuery,
-  useReleaseReplayQuery,
-  useReleasesQuery,
-  useUnlinkReleaseExecutionPackageMutation,
-  useUnlinkReleaseWorkItemMutation,
-} from '../../shared/api/hooks';
-import type {
-  AcknowledgeReleaseTestAcceptanceBody,
-  ProductListItem,
-  ReleaseCockpitResponse,
-  ReleaseListResponse,
-  TimelineEntry,
-} from '../../shared/api/types';
-import { useActorContext } from '../../shared/context/actor-context';
+import { useReleaseCockpitQuery, useReleaseReadinessQuery, useReleasesQuery } from '../../shared/api/hooks';
+import type { ObjectRef, ReleaseReadinessDetail } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { DetailLayout, InlineActions, MetadataGrid, PageHeader, PillGroup, Section } from '../../shared/layout';
-import { Badge, Button, DataTable, Drawer, Field, InlineNotice, Input, Select, StatusPill, Textarea, Timeline, type TimelineItem } from '../../shared/ui';
-import { releaseActionModel } from './release-action-model';
-import { ReleaseActionRail } from './release-action-rail';
+import { ActionRail, DetailLayout, MetadataGrid, PageHeader, Section } from '../../shared/layout';
+import { DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 
-const supportedReleaseFilters = ['release_owner_actor_id', 'phase', 'gate_state', 'resolution', 'cursor', 'limit'];
-type ReleaseFilters = {
-  release_owner_actor_id?: string;
+type ReleaseListItem = {
+  id: string;
+  title: string;
   phase?: string;
   gate_state?: string;
   resolution?: string;
-  cursor?: string;
-  limit?: number;
+  release_owner_actor_id?: string | undefined;
+  updated_at?: string;
 };
+type ReleaseScopeRef = Extract<ObjectRef, { type: 'initiative' | 'requirement' | 'tech_debt' | 'task' | 'bug' }>;
 
-type CockpitWorkItem = ReleaseCockpitResponse['work_items'][number];
-type CockpitPackage = ReleaseCockpitResponse['execution_packages'][number];
-type CockpitEvidence = ReleaseCockpitResponse['evidences'][number];
-type CockpitDecision = ReleaseCockpitResponse['decisions'][number];
-
-export function ReleasesRegistry() {
-  const { actorId } = useActorContext();
-  const { projectId: contextProjectId } = useProjectContext();
-  const [searchParams] = useSearchParams();
-  const projectId = searchParams.get('project_id')?.trim() || contextProjectId;
-  const filters = releaseFiltersFromSearch(searchParams);
-  const unsupportedFilters = unsupportedReleaseFilters(searchParams);
-  const query = useReleasesQuery({ project_id: projectId, ...filters, limit: filters.limit ?? 100 });
-  const [showCreateRelease, setShowCreateRelease] = useState(false);
+export function ReleasesRoute() {
+  const { projectId } = useProjectContext();
+  const query = useReleasesQuery({ project_id: projectId, limit: 100 });
+  const releases = query.data?.releases ?? [];
+  const columns: DataTableColumn<ReleaseListItem>[] = [
+    {
+      key: 'title',
+      header: 'Release',
+      cell: (release) => (
+        <Link className="font-semibold text-primary hover:underline" to={`/releases/${encodeURIComponent(release.id)}`}>
+          {release.title}
+        </Link>
+      ),
+    },
+    { key: 'phase', header: 'Phase', cell: (release) => <StatusPill tone="neutral">{formatValue(release.phase)}</StatusPill> },
+    { key: 'gate', header: 'Gate', cell: (release) => formatValue(release.gate_state) },
+    { key: 'owner', header: 'Release Owner', cell: (release) => release.release_owner_actor_id ?? 'Unassigned' },
+  ];
 
   return (
     <>
-      <PageHeader
-        actions={
-          <Drawer
-            content={<CreateReleaseForm actorId={actorId} onCreated={() => setShowCreateRelease(false)} projectId={projectId} />}
-            description="Create a governed release for this project."
-            onOpenChange={setShowCreateRelease}
-            open={showCreateRelease}
-            title="Create release"
-          >
-            <Button variant="primary">Create release</Button>
-          </Drawer>
-        }
-        subtitle="Release readiness, scope, ownership, and gate state."
-        title="Releases"
-      />
-      <Section
-        description="Server-side filters are sent only for project, release owner, phase, gate state, resolution, cursor, and limit."
-        title="Release inventory"
-      >
-        <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="releases" />
-        <FilterSummary filters={filters} unsupportedFilters={unsupportedFilters} />
-        {query.status !== 'pending' && !query.isError ? <ReleaseTable response={query.data} /> : null}
+      <PageHeader subtitle="Release readiness, scope, ownership, and gate state." title="Releases" />
+      <Section title="Release inventory">
+        {query.isLoading ? <InlineNotice title="Loading releases." tone="info" /> : null}
+        {query.isError ? <InlineNotice title="Releases could not be loaded." tone="danger" /> : null}
+        <DataTable ariaLabel="Release list" columns={columns} emptyMessage="No releases match the current filters." getRowKey={(release) => release.id} rows={releases} />
       </Section>
     </>
   );
 }
 
-export function ReleaseCockpit() {
+export function ReleaseDetailRoute() {
   const { releaseId } = useParams();
 
-  if (!releaseId) {
-    return <InvalidDetail title="Release" message="This release route is missing a release id." />;
+  if (releaseId === undefined) {
+    return <ReleaseUnavailable title="Release" />;
   }
 
-  return <ReleaseCockpitView releaseId={releaseId} />;
+  return <ReleaseDetailContent releaseId={releaseId} />;
 }
 
-function ReleaseCockpitView({ releaseId }: { releaseId: string }) {
-  const { actorId } = useActorContext();
+function ReleaseDetailContent({ releaseId }: { releaseId: string }) {
+  const { projectId } = useProjectContext();
   const cockpitQuery = useReleaseCockpitQuery(releaseId);
-  const replayQuery = useReleaseReplayQuery(releaseId);
+  const readinessQuery = useReleaseReadinessQuery(releaseId, projectId);
+  const release = cockpitQuery.data?.release;
+  const readiness = readinessQuery.data;
 
-  if (cockpitQuery.status === 'pending') {
-    return <InvalidDetail title="Release" message="Loading release cockpit." />;
+  if (cockpitQuery.isLoading || readinessQuery.isLoading) {
+    return <ReleaseLoading />;
   }
 
-  if (cockpitQuery.isError || cockpitQuery.data === undefined) {
-    return <InvalidDetail title="Release" message="Release cockpit data is temporarily unavailable." />;
+  if (cockpitQuery.isError || readinessQuery.isError || release === undefined || readiness === undefined) {
+    return <ReleaseUnavailable title="Release" />;
   }
-
-  const cockpit = cockpitQuery.data;
-  const release = cockpit.release;
-  const actionModel = releaseActionModel(cockpit);
-  const testAcceptanceDisabledReason = actionModel.groups.qa_test_acceptance.enabled
-    ? undefined
-    : actionModel.groups.qa_test_acceptance.reason;
 
   return (
     <DetailLayout
-      actionRail={<ReleaseActionRail actorId={actorId} cockpit={cockpit} model={actionModel} />}
+      actionRail={
+        <ActionRail title="Release controls">
+          <MetadataGrid
+            items={[
+              { label: 'Release Owner', value: release.release_owner_actor_id ?? 'Unassigned' },
+              { label: 'Gate', value: formatValue(release.gate_state) },
+              { label: 'Resolution', value: formatValue(release.resolution) },
+            ]}
+          />
+        </ActionRail>
+      }
       header={
         <PageHeader
-          eyebrow={
-            <InlineActions>
-              <span>Release</span>
-              <StatusPill tone={releaseStateTone(release.phase)}>{release.phase}</StatusPill>
-              <StatusPill tone={releaseStateTone(release.gate_state)}>{release.gate_state}</StatusPill>
-              <StatusPill tone={releaseStateTone(release.resolution)}>{release.resolution}</StatusPill>
-            </InlineActions>
-          }
-          subtitle={`${release.release_owner_actor_id ? 'Release owner assigned' : 'Release owner unassigned'} / ${actionModel.hasBlockers ? 'Active blockers need review' : 'No active blockers'}`}
-          title={release.title}
+          eyebrow={<StatusPill tone={readiness.ready ? 'success' : 'warning'}>{readiness.ready ? 'Ready' : 'Blocked'}</StatusPill>}
+          subtitle={release.scope_summary ?? 'Release readiness, typed scope, and task-scoped evidence.'}
+          title="Release Readiness"
         />
       }
     >
-      <Section title="Scope summary" description="Release scope, rollout, rollback, and observation planning.">
-        <p>{release.scope_summary ?? 'Scope summary unavailable from release API.'}</p>
+      <Section title={release.title}>
         <MetadataGrid
           items={[
-            { label: 'Rollout strategy', value: release.rollout_strategy ?? 'not recorded' },
-            { label: 'Rollback plan', value: release.rollback_plan ?? 'not recorded' },
-            { label: 'Observation plan', value: release.observation_plan ?? 'not recorded' },
-            { label: 'Release type', value: release.release_type ?? 'unavailable' },
+            { label: 'Release', value: release.id },
+            { label: 'Phase', value: formatValue(release.phase) },
+            { label: 'Activity', value: formatValue(release.activity_state) },
+            { label: 'Release Owner', value: release.release_owner_actor_id ?? 'Unassigned' },
           ]}
         />
       </Section>
-      <Section title="Linked Work Items" description="Work Items in this release scope.">
-        <ReleaseWorkItems releaseId={release.id} actorId={actorId} projectId={release.project_id} workItems={cockpit.work_items} />
-      </Section>
-      <Section title="Linked Execution Packages" description="Execution Packages included in this release.">
-        <ReleaseExecutionPackages actorId={actorId} packages={cockpit.execution_packages} projectId={release.project_id} releaseId={release.id} />
-      </Section>
-      <Section title="Blockers" description="Current release blockers and override state.">
-        <BlockerPanel cockpit={cockpit} />
-      </Section>
-      <Section title="Checklist" description="Release readiness checklist.">
-        <PillList empty="No checklist items recorded." values={cockpit.checklist.map((item) => item.label)} />
-      </Section>
-      <Section title="Risk summary" description="Release risk and gate counts.">
-        <RiskSummary cockpit={cockpit} />
-      </Section>
-      <Section title="Evidence" description="Release evidence linked to this cockpit.">
-        <EvidenceList empty="No release evidence recorded." evidences={cockpit.evidences} />
-      </Section>
-      <Section title="Observations" description="Observation evidence captured during or after rollout.">
-        <EvidenceList empty="No observation evidence recorded." evidences={cockpit.observations} />
-      </Section>
-      <Section title="Decisions" description="Governance decisions recorded for this release.">
-        <DecisionList decisions={cockpit.decisions} />
-      </Section>
-      {actionModel.groups.qa_test_acceptance.visible ? (
-        <Section id="release-test-acceptance" title="Test Acceptance" description="QA acceptance is acknowledged with summary and artifact references.">
-          <TestAcceptanceForm
-            actorId={actorId}
-            releaseId={release.id}
-            {...(testAcceptanceDisabledReason === undefined ? {} : { disabledReason: testAcceptanceDisabledReason })}
-          />
-        </Section>
-      ) : null}
-      <Section title="Observation evidence" description="Submit governed release observations through summary and evidence fields.">
-        <ObservationEvidenceForm actorId={actorId} releaseId={release.id} />
-      </Section>
-      <Section title="Timeline / Replay" description="Release replay timeline.">
-        <ReplayState isError={replayQuery.isError} isPending={replayQuery.status === 'pending'} timeline={replayQuery.data ?? []} />
-      </Section>
+      <TypedScopeSection scopeRefs={readiness.scope_refs} />
+      <ReadinessSection readiness={readiness} />
     </DetailLayout>
   );
 }
 
-function CreateReleaseForm({ actorId, onCreated, projectId }: { actorId: string; onCreated: () => void; projectId: string }) {
-  const createRelease = useCreateReleaseMutation(projectId);
-  const [title, setTitle] = useState('');
-  const [scopeSummary, setScopeSummary] = useState('');
-  const [releaseOwner, setReleaseOwner] = useState('');
-  const [rolloutStrategy, setRolloutStrategy] = useState('');
-  const [rollbackPlan, setRollbackPlan] = useState('');
-  const [observationPlan, setObservationPlan] = useState('');
+export function ReleaseEvidenceRoute() {
+  return <ReleaseDetailRoute />;
+}
 
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!title.trim()) return;
-    createRelease.mutate(
-      {
-        actor_id: actorId,
-        project_id: projectId,
-        title: title.trim(),
-        release_owner_actor_id: releaseOwner.trim() || actorId,
-        ...(scopeSummary.trim() ? { scope_summary: scopeSummary.trim() } : {}),
-        ...(rolloutStrategy.trim() ? { rollout_strategy: rolloutStrategy.trim() } : {}),
-        ...(rollbackPlan.trim() ? { rollback_plan: rollbackPlan.trim() } : {}),
-        ...(observationPlan.trim() ? { observation_plan: observationPlan.trim() } : {}),
-      },
-      {
-        onSuccess: () => {
-          setTitle('');
-          setScopeSummary('');
-          onCreated();
-        },
-      },
-    );
-  }
+function TypedScopeSection({ scopeRefs }: { scopeRefs: ObjectRef[] }) {
+  const typedScopeRefs = scopeRefs.filter(isReleaseScopeRef);
 
   return (
-    <form className="grid gap-3" onSubmit={onSubmit}>
-      <Field label="Release title">
-        <Input onChange={(event) => setTitle(event.currentTarget.value)} value={title} />
-      </Field>
-      <Field label="Scope summary">
-        <Textarea onChange={(event) => setScopeSummary(event.currentTarget.value)} rows={3} value={scopeSummary} />
-      </Field>
-      <Field label="Release owner">
-        <Input onChange={(event) => setReleaseOwner(event.currentTarget.value)} value={releaseOwner} />
-      </Field>
-      <Field label="Rollout strategy">
-        <Textarea onChange={(event) => setRolloutStrategy(event.currentTarget.value)} rows={2} value={rolloutStrategy} />
-      </Field>
-      <Field label="Rollback plan">
-        <Textarea onChange={(event) => setRollbackPlan(event.currentTarget.value)} rows={2} value={rollbackPlan} />
-      </Field>
-      <Field label="Observation plan">
-        <Textarea onChange={(event) => setObservationPlan(event.currentTarget.value)} rows={2} value={observationPlan} />
-      </Field>
-      {createRelease.isError ? <InlineNotice title="Release creation is temporarily unavailable." tone="danger" /> : null}
-      <Button disabled={!title.trim()} loading={createRelease.isPending} type="submit" variant="primary">
-        Submit release
-      </Button>
-    </form>
+    <Section title="Typed scope">
+      <div className="grid gap-2 md:grid-cols-2">
+        {typedScopeRefs.map((ref) => (
+          <Link
+            className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface p-3 text-sm hover:border-primary hover:bg-primary-soft"
+            key={`${ref.type}:${ref.id}`}
+            to={typedObjectHref(ref)}
+          >
+            <span className="font-semibold text-text-primary">{objectLabel(ref.type)}</span>
+            <span className="text-text-secondary">{ref.title ?? ref.id}</span>
+          </Link>
+        ))}
+      </div>
+    </Section>
   );
 }
 
-function ReleaseTable({ response }: { response: ReleaseListResponse | undefined }) {
-  const releases = response?.releases ?? [];
+function ReadinessSection({ readiness }: { readiness: ReleaseReadinessDetail }) {
+  const groups = [
+    { title: 'Review evidence', items: readiness.required_review_evidence },
+    { title: 'Test acceptance evidence', items: readiness.required_test_acceptance_evidence },
+    { title: 'Package and run evidence', items: readiness.package_run_evidence },
+    { title: 'Observation evidence', items: readiness.observation_evidence },
+  ];
 
-  return (
-    <DataTable
-      columns={[
-        {
-          key: 'title',
-          header: 'Release',
-          cell: (release) => (
-            <div className="grid gap-3">
-              {release.key ? <strong>{release.key}</strong> : null}
-              <Link to={`/releases/${encodeURIComponent(release.id)}`}>{release.title}</Link>
-            </div>
-          ),
-        },
-        { key: 'phase', header: 'Phase', cell: (release) => <StatusPill>{release.phase}</StatusPill> },
-        { key: 'gate', header: 'Gate state', cell: (release) => release.gate_state },
-        { key: 'resolution', header: 'Resolution', cell: (release) => release.resolution },
-        { key: 'owner', header: 'Owner', cell: (release) => release.release_owner_actor_id ?? 'unassigned' },
-        {
-          key: 'scope',
-          header: 'Linked scope',
-          cell: (release) => (
-            <div className="grid gap-3">
-              <span>Work Items: {release.work_item_ids.length}</span>
-              <span>Packages: {release.execution_package_ids.length}</span>
-            </div>
-          ),
-        },
-        {
-          key: 'completeness',
-          header: 'Completeness',
-          cell: (release) => (
-            <div className="grid gap-3">
-              <span>Rollout {release.rollout_strategy ? 'complete' : 'missing'}</span>
-              <span>Rollback {release.rollback_plan ? 'complete' : 'missing'}</span>
-              <span>Observation {release.observation_plan ? 'complete' : 'missing'}</span>
-            </div>
-          ),
-        },
-        { key: 'acceptance', header: 'Acceptance', cell: () => 'Acceptance summary unavailable from release list API.' },
-        { key: 'updated', header: 'Updated', cell: (release) => formatAge(release.updated_at) },
-      ]}
-      emptyMessage="No releases are available for this project."
-      getRowKey={(release) => release.id}
-      rows={releases}
-    />
-  );
-}
-
-function ReleaseWorkItems({
-  actorId,
-  projectId,
-  releaseId,
-  workItems,
-}: {
-  actorId: string;
-  projectId: string;
-  releaseId: string;
-  workItems: CockpitWorkItem[];
-}) {
-  const workItemsQuery = useProductWorkItemsQuery({ project_id: projectId, limit: 100 });
-  const linkWorkItem = useLinkReleaseWorkItemMutation(releaseId);
-  const unlinkWorkItem = useUnlinkReleaseWorkItemMutation(releaseId);
-  const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
-  const linkedWorkItemIds = new Set(workItems.map((item) => item.id));
-  const workItemOptions = (workItemsQuery.data?.items ?? [])
-    .filter((item) => !linkedWorkItemIds.has(item.object.id))
-    .map((item) => ({ label: workItemPickerLabel(item), value: item.object.id }));
-
-  return (
-    <div className="grid gap-3">
-      <form
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!selectedWorkItemId) return;
-          linkWorkItem.mutate(
-            { workItemId: selectedWorkItemId, body: { actor_id: actorId } },
-            { onSuccess: () => setSelectedWorkItemId('') },
-          );
-        }}
-      >
-        <Field className="min-w-64 flex-1" label="Work Item">
-          <Select
-            disabled={workItemsQuery.status === 'pending' || workItemsQuery.isError || workItemOptions.length === 0}
-            onChange={(event) => setSelectedWorkItemId(event.currentTarget.value)}
-            options={workItemOptions}
-            placeholder={pickerPlaceholder({
-              empty: 'No available Work Items',
-              isError: workItemsQuery.isError,
-              isPending: workItemsQuery.status === 'pending',
-              ready: 'Select a Work Item',
-              unavailable: 'Work Item picker unavailable',
-              valueCount: workItemOptions.length,
-            })}
-            required
-            value={selectedWorkItemId}
-          />
-        </Field>
-        <Button disabled={!selectedWorkItemId} loading={linkWorkItem.isPending} type="submit" variant="secondary">
-          Add Work Item
-        </Button>
-      </form>
-      <DataTable
-        columns={[
-          { key: 'title', header: 'Work Item', cell: (item) => <Link to={`/work-items/${encodeURIComponent(item.id)}`}>{item.title}</Link> },
-          { key: 'phase', header: 'Phase', cell: (item) => item.phase ?? 'unknown' },
-          { key: 'risk', header: 'Risk', cell: (item) => item.risk ?? 'unknown' },
-          {
-            key: 'remove',
-            header: 'Remove',
-            cell: (item) => (
-              <Button
-                loading={unlinkWorkItem.isPending}
-                onClick={() => unlinkWorkItem.mutate({ workItemId: item.id, body: { actor_id: actorId } })}
-                variant="ghost"
-              >
-                Remove
-              </Button>
-            ),
-          },
-        ]}
-        emptyMessage="No Work Items are linked to this release."
-        getRowKey={(item) => item.id}
-        rows={workItems}
-      />
-    </div>
-  );
-}
-
-function ReleaseExecutionPackages({
-  actorId,
-  packages,
-  projectId,
-  releaseId,
-}: {
-  actorId: string;
-  packages: CockpitPackage[];
-  projectId: string;
-  releaseId: string;
-}) {
-  const packagesQuery = usePackagesQuery({ project_id: projectId, limit: 100 });
-  const linkPackage = useLinkReleaseExecutionPackageMutation(releaseId);
-  const unlinkPackage = useUnlinkReleaseExecutionPackageMutation(releaseId);
-  const [selectedPackageId, setSelectedPackageId] = useState('');
-  const linkedPackageIds = new Set(packages.map((item) => item.id));
-  const packageOptions = (packagesQuery.data?.items ?? [])
-    .filter((item) => !linkedPackageIds.has(item.object.id))
-    .map((item) => ({ label: packagePickerLabel(item), value: item.object.id }));
-
-  return (
-    <div className="grid gap-3">
-      <form
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!selectedPackageId) return;
-          linkPackage.mutate(
-            { packageId: selectedPackageId, body: { actor_id: actorId } },
-            { onSuccess: () => setSelectedPackageId('') },
-          );
-        }}
-      >
-        <Field className="min-w-64 flex-1" label="Execution Package">
-          <Select
-            disabled={packagesQuery.status === 'pending' || packagesQuery.isError || packageOptions.length === 0}
-            onChange={(event) => setSelectedPackageId(event.currentTarget.value)}
-            options={packageOptions}
-            placeholder={pickerPlaceholder({
-              empty: 'No available Execution Packages',
-              isError: packagesQuery.isError,
-              isPending: packagesQuery.status === 'pending',
-              ready: 'Select an Execution Package',
-              unavailable: 'Execution Package picker unavailable',
-              valueCount: packageOptions.length,
-            })}
-            required
-            value={selectedPackageId}
-          />
-        </Field>
-        <Button disabled={!selectedPackageId} loading={linkPackage.isPending} type="submit" variant="secondary">
-          Add Execution Package
-        </Button>
-      </form>
-      <DataTable
-        columns={[
-          { key: 'objective', header: 'Package', cell: (item) => <Link to={`/packages/${encodeURIComponent(item.id)}`}>{item.objective}</Link> },
-          { key: 'phase', header: 'Phase', cell: (item) => item.phase ?? 'unknown' },
-          { key: 'owner', header: 'Owner', cell: () => 'Owner unavailable from release cockpit API.' },
-          {
-            key: 'remove',
-            header: 'Remove',
-            cell: (item) => (
-              <Button
-                loading={unlinkPackage.isPending}
-                onClick={() => unlinkPackage.mutate({ packageId: item.id, body: { actor_id: actorId } })}
-                variant="ghost"
-              >
-                Remove
-              </Button>
-            ),
-          },
-        ]}
-        emptyMessage="No Execution Packages are linked to this release."
-        getRowKey={(item) => item.id}
-        rows={packages}
-      />
-    </div>
-  );
-}
-
-function TestAcceptanceForm({ actorId, disabledReason, releaseId }: { actorId: string; disabledReason?: string; releaseId: string }) {
-  const acknowledge = useAcknowledgeReleaseTestAcceptanceMutation(releaseId);
-  const [summary, setSummary] = useState('');
-  const [evidenceRef, setEvidenceRef] = useState('');
-
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!summary.trim()) return;
-    acknowledge.mutate({
-      actor_id: actorId,
-      summary: summary.trim(),
-      evidence_refs: artifactRefsFromInput(evidenceRef),
-    });
-  }
-
-  return (
-    <form className="grid gap-3" onSubmit={onSubmit}>
-      <Field label="Test acceptance summary">
-        <Textarea onChange={(event) => setSummary(event.currentTarget.value)} rows={3} value={summary} />
-      </Field>
-      <Field label="Acceptance evidence reference">
-        <Input onChange={(event) => setEvidenceRef(event.currentTarget.value)} value={evidenceRef} />
-      </Field>
-      {disabledReason ? <InlineNotice title={disabledReason} tone="warning" /> : null}
-      <Button disabled={!summary.trim() || disabledReason !== undefined} loading={acknowledge.isPending} type="submit" variant="primary">
-        Acknowledge test acceptance
-      </Button>
-    </form>
-  );
-}
-
-function ObservationEvidenceForm({ actorId, releaseId }: { actorId: string; releaseId: string }) {
-  const createEvidence = useCreateReleaseEvidenceMutation(releaseId);
-  const [summary, setSummary] = useState('');
-  const [severity, setSeverity] = useState<'info' | 'warning' | 'failure'>('info');
-
-  return (
-    <form
-      className="grid gap-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!summary.trim()) return;
-        createEvidence.mutate({
-          actor_id: actorId,
-          evidence_type: 'observation_note',
-          summary: summary.trim(),
-          extra: {
-            observation: {
-              source: 'human',
-              severity,
-              summary: summary.trim(),
-              observed_at: new Date().toISOString(),
-              actor_id: actorId,
-            },
-          },
-        });
-      }}
-    >
-      <Field label="Observation summary">
-        <Textarea onChange={(event) => setSummary(event.currentTarget.value)} rows={3} value={summary} />
-      </Field>
-      <Field label="Observation severity">
-        <Select
-          onChange={(event) => setSeverity(event.currentTarget.value as 'info' | 'warning' | 'failure')}
-          options={[
-            { label: 'Info', value: 'info' },
-            { label: 'Warning', value: 'warning' },
-            { label: 'Failure', value: 'failure' },
-          ]}
-          value={severity}
-        />
-      </Field>
-      <Button disabled={!summary.trim()} loading={createEvidence.isPending} type="submit" variant="secondary">
-        Submit observation evidence
-      </Button>
-    </form>
-  );
-}
-
-function BlockerPanel({ cockpit }: { cockpit: ReleaseCockpitResponse }) {
-  const blockers = cockpit.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`);
-  const overridden = cockpit.overridden_blockers.map((blocker) => `${blocker.code}: ${blocker.message}`);
-  return (
-    <div className="grid gap-3">
-      <PillList empty="No active blockers." values={blockers} />
-      <PillList empty="No overridden blockers." values={overridden} />
-    </div>
-  );
-}
-
-function RiskSummary({ cockpit }: { cockpit: ReleaseCockpitResponse }) {
-  return (
-    <MetadataGrid
-      items={Object.entries(cockpit.risk_summary).map(([key, value]) => ({
-        label: key.replaceAll('_', ' '),
-        value: String(value),
-      }))}
-    />
-  );
-}
-
-function EvidenceList({ empty, evidences }: { empty: string; evidences: CockpitEvidence[] }) {
-  if (!evidences.length) return <InlineNotice title={empty} />;
-  return (
-    <div className="grid gap-3">
-      {evidences.map((evidence) => (
-        <article className="grid gap-2 rounded-card border border-border bg-surface p-4" key={evidence.id}>
-          <h3 className="text-sm font-semibold text-text-primary">{evidence.summary}</h3>
-          <p className="text-sm text-text-secondary">{evidence.evidence_type}</p>
-          <p className="text-sm text-text-secondary">{evidence.artifact?.name ?? evidence.artifact?.storage_uri ?? 'No public artifact reference.'}</p>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function DecisionList({ decisions }: { decisions: CockpitDecision[] }) {
-  if (!decisions.length) return <InlineNotice title="No release decisions recorded." />;
-  return (
-    <div className="grid gap-3">
-      {decisions.map((decision) => (
-        <article className="grid gap-2 rounded-card border border-border bg-surface p-4" key={decision.id}>
-          <h3 className="text-sm font-semibold text-text-primary">{decision.summary}</h3>
-          <p className="text-sm text-text-secondary">{decision.rationale ?? decision.decision}</p>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
-  if (isPending) return <InlineNotice title={`Loading ${kind}.`} tone="info" />;
-  if (isError) return <InlineNotice title={`The ${kind} inventory is temporarily unavailable.`} tone="danger" />;
-  return null;
-}
-
-function FilterSummary({ filters, unsupportedFilters }: { filters: ReleaseFilters; unsupportedFilters: string[] }) {
-  const supported = Object.entries(filters)
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `${key}: ${String(value)}`);
-
-  return (
-    <div className="grid gap-3">
-      {supported.length ? <p>Applied filters: {supported.join(', ')}</p> : <p>No release filters applied.</p>}
-      {unsupportedFilters.length ? (
-        <InlineNotice title={`${formatList(unsupportedFilters)} are not applied to the release inventory yet.`} tone="warning" />
-      ) : null}
-    </div>
-  );
-}
-
-function ReplayState({ isError, isPending, timeline }: { isError: boolean; isPending: boolean; timeline: TimelineEntry[] }) {
-  if (isPending) return <InlineNotice title="Loading timeline." tone="info" />;
-  if (isError) return <InlineNotice title="Timeline is temporarily unavailable." tone="danger" />;
-  if (!timeline.length) return <InlineNotice title="No timeline events recorded." />;
-  return <Timeline items={timeline.map(timelineItem)} />;
-}
-
-function PillList({ empty, values }: { empty: string; values: string[] }) {
-  if (!values.length) return <InlineNotice title={empty} />;
-  return (
-    <PillGroup>
-      {values.map((value) => (
-        <Badge key={value}>{value}</Badge>
-      ))}
-    </PillGroup>
-  );
-}
-
-function InvalidDetail({ message, title }: { message: string; title: string }) {
   return (
     <>
-      <PageHeader title={title} />
-      <Section title="Unavailable">
-        <InlineNotice title={message} tone="danger" />
-      </Section>
+      {readiness.disabled_reasons.length > 0 ? (
+        <Section title="Disabled reasons">
+          <ul className="grid gap-2 text-sm text-text-secondary">
+            {readiness.disabled_reasons.map((reason) => (
+              <li key={`${reason.code}:${reason.target_ref?.type ?? 'release'}:${reason.target_ref?.id ?? readiness.release_id}`}>
+                {reason.message}
+                {reason.target_ref ? ` (${objectLabel(reason.target_ref.type)} ${reason.target_ref.id})` : null}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+      {groups.map((group) => (
+        <Section key={group.title} title={group.title}>
+          <div className="grid gap-2">
+            {group.items.map((item) => (
+              <ReadinessEvidenceCard item={item} key={item.requirement_id} />
+            ))}
+          </div>
+        </Section>
+      ))}
     </>
   );
 }
 
-function releaseFiltersFromSearch(searchParams: URLSearchParams): ReleaseFilters {
-  const filters: ReleaseFilters = {};
-  for (const key of supportedReleaseFilters) {
-    const value = searchParams.get(key)?.trim();
-    if (!value) continue;
-    if (key === 'limit') {
-      const parsed = Number(value);
-      filters.limit = Number.isInteger(parsed) && parsed > 0 && parsed <= 100 ? parsed : 100;
-    } else {
-      filters[key as Exclude<keyof ReleaseFilters, 'limit'>] = value;
-    }
-  }
-  return filters;
-}
+function ReadinessEvidenceCard({ item }: { item: ReleaseReadinessDetail['required_review_evidence'][number] }) {
+  const evidenceHref = taskScopedEvidenceHref(item);
 
-function unsupportedReleaseFilters(searchParams: URLSearchParams) {
-  const unsupported = Array.from(searchParams.keys()).filter(
-    (key) => key !== 'project_id' && !supportedReleaseFilters.includes(key),
+  return (
+    <div className="grid gap-2 rounded-card border border-border bg-surface p-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusPill tone={item.status === 'passed' ? 'success' : 'warning'}>{formatValue(item.status)}</StatusPill>
+        <span className="font-semibold text-text-primary">{objectLabel(item.scope_ref.type)}</span>
+        <span className="text-text-secondary">{item.scope_ref.title ?? item.scope_ref.id}</span>
+      </div>
+      <div className="text-text-secondary">{formatValue(item.kind)}</div>
+      {evidenceHref ? (
+        <Link className="text-primary hover:underline" to={evidenceHref}>
+          Open task-scoped evidence
+        </Link>
+      ) : null}
+      {item.disabled_reason ? <p className="text-text-secondary">{item.disabled_reason.message}</p> : null}
+    </div>
   );
-  const limit = searchParams.get('limit');
-  if (limit !== null) {
-    const parsed = Number(limit);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
-      unsupported.push('limit');
-    }
+}
+
+function taskScopedEvidenceHref(item: ReleaseReadinessDetail['required_review_evidence'][number]): string | undefined {
+  if (item.scope_ref.type !== 'task' || item.evidence_ref === undefined) {
+    return undefined;
   }
-  return Array.from(new Set(unsupported));
+  const taskId = encodeURIComponent(item.scope_ref.id);
+  const evidenceRef = item.evidence_ref;
+  if ('evidence_type' in evidenceRef && evidenceRef.evidence_type === 'package_run') {
+    if (evidenceRef.run_session_ref !== undefined) {
+      return `/tasks/${taskId}/runs/${encodeURIComponent(evidenceRef.run_session_ref.id)}`;
+    }
+    return `/tasks/${taskId}/packages/${encodeURIComponent(evidenceRef.package_ref.id)}`;
+  }
+  if ('authority_ref' in evidenceRef && evidenceRef.authority_ref.type === 'review_packet') {
+    return `/tasks/${taskId}/reviews/${encodeURIComponent(evidenceRef.authority_ref.id)}`;
+  }
+  if ('review_packet_id' in evidenceRef && evidenceRef.review_packet_id !== undefined) {
+    return `/tasks/${taskId}/reviews/${encodeURIComponent(evidenceRef.review_packet_id)}`;
+  }
+  return undefined;
 }
 
-function artifactRefsFromInput(value: string): AcknowledgeReleaseTestAcceptanceBody['evidence_refs'] {
-  const trimmed = value.trim();
-  if (!trimmed) return [];
-  return [
-    {
-      kind: 'check_output',
-      name: 'Test acceptance evidence',
-      content_type: 'text/markdown',
-      local_ref: trimmed,
-    },
-  ];
+function ReleaseLoading() {
+  return (
+    <DetailLayout header={<PageHeader subtitle="Loading release readiness." title="Release Readiness" />}>
+      <InlineNotice title="Release readiness is loading." tone="info" />
+    </DetailLayout>
+  );
 }
 
-function workItemPickerLabel(item: ProductListItem) {
-  return item.title;
+function ReleaseUnavailable({ title }: { title: string }) {
+  return (
+    <DetailLayout header={<PageHeader subtitle="This release could not be loaded." title={title} />}>
+      <InlineNotice title="Release readiness is unavailable." tone="warning" />
+    </DetailLayout>
+  );
 }
 
-function packagePickerLabel(item: ProductListItem) {
-  return item.title;
+function isReleaseScopeRef(ref: ObjectRef): ref is ReleaseScopeRef {
+  return ref.type === 'initiative' || ref.type === 'requirement' || ref.type === 'tech_debt' || ref.type === 'task' || ref.type === 'bug';
 }
 
-function pickerPlaceholder({
-  empty,
-  isError,
-  isPending,
-  ready,
-  unavailable,
-  valueCount,
-}: {
-  empty: string;
-  isError: boolean;
-  isPending: boolean;
-  ready: string;
-  unavailable: string;
-  valueCount: number;
-}) {
-  if (isPending) return 'Loading options';
-  if (isError) return unavailable;
-  if (valueCount === 0) return empty;
-  return ready;
+function typedObjectHref(ref: ReleaseScopeRef): string {
+  switch (ref.type) {
+    case 'initiative':
+      return `/initiatives/${encodeURIComponent(ref.id)}`;
+    case 'requirement':
+      return `/requirements/${encodeURIComponent(ref.id)}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodeURIComponent(ref.id)}`;
+    case 'task':
+      return `/tasks/${encodeURIComponent(ref.id)}`;
+    case 'bug':
+      return `/bugs/${encodeURIComponent(ref.id)}`;
+  }
 }
 
-function timelineItem(entry: TimelineEntry): TimelineItem {
-  return {
-    id: entry.id,
-    title: entry.summary,
-    meta: entry.created_at,
-  };
+function objectLabel(type: ObjectRef['type']): string {
+  if (type === 'tech_debt') return 'Tech Debt';
+  if (type === 'execution_package') return 'Package';
+  if (type === 'run_session') return 'Run';
+  if (type === 'review_packet') return 'Review';
+  return formatValue(type);
 }
 
-function formatList(values: string[]) {
-  if (values.length <= 1) return values[0] ?? '';
-  if (values.length === 2) return `${values[0]} and ${values[1]}`;
-  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
-}
-
-function formatAge(value: string | undefined) {
-  if (!value) return 'unknown';
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return value;
-  const days = Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
-  if (days === 0) return 'today';
-  if (days === 1) return '1 day ago';
-  return `${days} days ago`;
-}
-
-function releaseStateTone(value: string | undefined) {
-  const normalized = value?.toLowerCase() ?? '';
-  if (['approved', 'closed', 'completed', 'observing', 'released', 'resolved'].includes(normalized)) return 'success';
-  if (['blocked', 'cancelled', 'failed', 'rejected', 'rolled_back'].includes(normalized)) return 'danger';
-  if (['approval', 'open', 'pending', 'submitted'].includes(normalized)) return 'warning';
-  return 'info';
+function formatValue(value: string | undefined): string {
+  return value === undefined ? 'Not recorded' : value.replaceAll('_', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
 }

@@ -844,7 +844,7 @@ const createDeliveryPath = async (
     .send({ actor_id: actorReviewer })
     .expect(201);
 
-  const executionPackage = (
+  const createdExecutionPackage = (
     await request(server)
       .post(`/plan-revisions/${planRevision.id}/execution-packages`)
       .send({
@@ -859,7 +859,8 @@ const createDeliveryPath = async (
         forbidden_paths: ['secrets/**'],
       })
       .expect(201)
-  ).body as ExecutionPackage;
+  ).body as { id: string };
+  const executionPackage = await requireInternalExecutionPackage(repository, createdExecutionPackage.id);
   await request(server)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
     .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
@@ -1324,6 +1325,17 @@ const strictLocalCodexFailureCode = (error: unknown): string => {
 
 const requestJsonBody = <T>(response: { body: unknown }): T => response.body as T;
 
+const requireInternalExecutionPackage = async (
+  repository: DeliveryRepository,
+  executionPackageId: string,
+): Promise<ExecutionPackage> => {
+  const executionPackage = await repository.getExecutionPackage(executionPackageId);
+  if (executionPackage === undefined) {
+    throw new Error(`ExecutionPackage ${executionPackageId} was not created`);
+  }
+  return executionPackage;
+};
+
 const cleanupStrictLocalCodexWorktree = async (input: {
   repoPath: string;
   runSessionId: string;
@@ -1379,7 +1391,8 @@ const runReleaseStrictLocalCodexPackage = async (input: {
   if (packageResponse.status !== 201) {
     throw new Error(`package create failed ${packageResponse.status}: ${packageResponse.text}`);
   }
-  const executionPackage = requestJsonBody<ExecutionPackage>(packageResponse);
+  const createdExecutionPackage = requestJsonBody<{ id: string }>(packageResponse);
+  const executionPackage = await requireInternalExecutionPackage(input.repository, createdExecutionPackage.id);
   const markReadyResponse = await strictRequest(input.server, input.actorOwner)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
     .send({ actor_id: input.actorOwner, expected_package_version: executionPackage.version });
@@ -1611,7 +1624,7 @@ export const runDurableReleaseLifecycle = async (input: {
   ).body as { id: string };
   await strictRequest(server, owner.id).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: owner.id }).expect(201);
   await strictRequest(server, reviewer.id, 'human').post(`/plans/${plan.id}/approve`).send({ actor_id: reviewer.id }).expect(201);
-  const executionPackage = (
+  const createdExecutionPackage = (
     await strictRequest(server, owner.id)
       .post(`/plan-revisions/${planRevision.id}/execution-packages`)
       .send({
@@ -1626,7 +1639,8 @@ export const runDurableReleaseLifecycle = async (input: {
         forbidden_paths: ['.git'],
       })
       .expect(201)
-  ).body as ExecutionPackage;
+  ).body as { id: string };
+  const executionPackage = await requireInternalExecutionPackage(repository, createdExecutionPackage.id);
   await strictRequest(server, owner.id)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
     .send({ actor_id: owner.id, expected_package_version: executionPackage.version })

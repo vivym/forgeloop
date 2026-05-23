@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderRoute } from './router-test-utils';
 
 describe('web accessibility gates', () => {
-  it.each(['/lanes', '/runs/run-web-product', '/releases/release-web-product'])(
+  it.each(['/my-work', '/tasks/task-1/runs/run-web-product', '/releases/release-web-product'])(
     'renders a skip link to the primary main landmark on %s',
     async (route) => {
       const screen = await renderRoute(route);
@@ -20,7 +20,7 @@ describe('web accessibility gates', () => {
     },
   );
 
-  it.each(['/lanes', '/pipeline', '/runs/run-web-product', '/releases/release-web-product'])(
+  it.each(['/my-work', '/dashboard', '/tasks/task-1/packages/package-web-product', '/reports'])(
     'has no automated axe violations on %s',
     async (route) => {
       await renderRoute(route);
@@ -31,7 +31,7 @@ describe('web accessibility gates', () => {
     },
   );
 
-  it('supports keyboard traversal through navigation and product actions', async () => {
+  it('supports keyboard traversal through the project-management navigation', async () => {
     const screen = await renderRoute('/releases/release-web-product');
     const user = userEvent.setup();
 
@@ -39,17 +39,17 @@ describe('web accessibility gates', () => {
     expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Skip to main content' }));
 
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Lanes' }));
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Dashboard' }));
 
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Pipeline' }));
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'My Work' }));
   });
 
   it('keeps closed mobile navigation out of the keyboard order until opened', async () => {
     vi.stubGlobal('innerWidth', 375);
     vi.stubGlobal('matchMedia', createMatchMedia(375));
 
-    const screen = await renderRoute('/lanes');
+    const screen = await renderRoute('/my-work');
     const user = userEvent.setup();
 
     await user.tab();
@@ -58,51 +58,48 @@ describe('web accessibility gates', () => {
     await user.tab();
     const trigger = screen.getByRole('button', { name: 'Open navigation' });
     expect(document.activeElement).toBe(trigger);
-    expect(screen.queryByRole('link', { name: 'Lanes' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
 
     await user.keyboard('{Enter}');
 
     expect(screen.getByRole('button', { name: 'Close navigation' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Lanes' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeTruthy();
   });
 
-  it('keeps drawers keyboard-accessible and returns focus to the trigger', async () => {
+  it('keeps mobile navigation drawers keyboard-accessible and closable', async () => {
+    vi.stubGlobal('innerWidth', 375);
+    vi.stubGlobal('matchMedia', createMatchMedia(375));
+
     const screen = await renderRoute('/releases');
     const user = userEvent.setup();
-    const trigger = await screen.findByRole('button', { name: 'Create release' });
+    const trigger = screen.getByRole('button', { name: 'Open navigation' });
 
     await user.click(trigger);
 
-    expect(screen.getByRole('dialog', { name: 'Create release' })).toBeTruthy();
-    expect(screen.getByText('Create a governed release for this project.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Close navigation' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Releases' })).toBeTruthy();
 
-    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'Close navigation' }));
 
-    expect(screen.queryByRole('dialog', { name: 'Create release' })).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Releases' })).toBeNull();
   });
 
-  it('allows tabs and action rail controls to receive keyboard focus', async () => {
-    const screen = await renderRoute('/packages/package-web-product');
-    const overviewTab = await screen.findByRole('tab', { name: 'Overview' });
-    const forceRerunReason = screen.getByLabelText('Force rerun reason');
+  it('allows task-scoped evidence pages to receive programmatic main focus', async () => {
+    const screen = await renderRoute('/tasks/task-1/packages/package-web-product');
+    const main = screen.getByRole('main');
 
-    overviewTab.focus();
-    expect(document.activeElement).toBe(overviewTab);
-
-    forceRerunReason.focus();
-    expect(document.activeElement).toBe(forceRerunReason);
+    expect(await screen.findByRole('heading', { name: 'Package Evidence' })).toBeTruthy();
+    main.focus();
+    expect(document.activeElement).toBe(main);
   });
 
-  it('announces form validation with text alerts', async () => {
+  it('announces removed product routes through the product-safe not-found state', async () => {
     const screen = await renderRoute('/work-items/new');
-    const user = userEvent.setup();
 
-    await user.click(screen.getByRole('button', { name: 'Create Work Item' }));
-
-    const alerts = await screen.findAllByRole('alert');
-    expect(alerts.length).toBeGreaterThan(0);
-    expect(alerts.map((alert) => alert.textContent).join(' ')).toMatch(/\w/);
+    expect(screen.getByRole('heading', { name: 'Not Found' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'The requested product route was not found.' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /create work item/i })).toBeNull();
   });
 
   it('keeps design tokens above minimum contrast for product UI states', () => {

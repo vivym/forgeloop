@@ -30,6 +30,8 @@ describe('evidence chain API', () => {
     const response = await request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`).expect(200);
     const chain = evidenceChainResponseSchema.parse(response.body);
 
+    expect(chain.scope_ref).toEqual({ type: 'requirement', id: workItemId });
+    expect(response.body).not.toHaveProperty('work_item_id');
     expect(chain.focus).toEqual({ selection: 'current', review_packet_ids: [currentReviewPacketId] });
     expect(chain.projection).toMatchObject({
       source: 'mixed',
@@ -88,6 +90,8 @@ describe('evidence chain API', () => {
     );
 
     const serialized = JSON.stringify(chain);
+    expect(serialized).not.toContain('"object_type":"work_item"');
+    expect(serialized).not.toContain('"work_item_id"');
     expect(serialized).not.toContain('artifacts/run-session-approved/summary.md');
     expect(serialized).not.toContain('raw-codex.jsonl');
     expect(serialized).not.toContain('Raw Codex log');

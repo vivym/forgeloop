@@ -871,11 +871,24 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
       .expect(201)
   ).body as ExecutionPackage;
 
-  return (await request(server)
+  const readyPackage = (await request(server)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
     .set(ownerHeaders)
     .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
-    .expect(201)).body as ExecutionPackage;
+    .expect(201)).body as { id: string; scope_ref?: unknown };
+  if ('work_item_id' in readyPackage) {
+    throw new Error('Public execution package response exposed work_item_id');
+  }
+  if (!('scope_ref' in readyPackage)) {
+    throw new Error('Public execution package response did not include scope_ref');
+  }
+
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const persistedPackage = await repository.getExecutionPackage(readyPackage.id);
+  if (persistedPackage === undefined) {
+    throw new Error(`Expected persisted execution package ${readyPackage.id}`);
+  }
+  return persistedPackage;
 };
 
 export const seedAppWithRunSession = async (

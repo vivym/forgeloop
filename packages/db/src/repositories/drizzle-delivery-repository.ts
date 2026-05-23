@@ -6,6 +6,7 @@ import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
   AutomationActionRun,
   AutomationProjectSettings,
+  Attachment,
   Artifact,
   Actor,
   CodexCredentialBinding,
@@ -46,9 +47,11 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  Task,
   WorkItem,
   ResolvedCodexCredential,
 } from '@forgeloop/domain';
+import type { ObjectRef } from '@forgeloop/contracts';
 import {
   DomainError,
   assertAutomationCapabilityActor,
@@ -70,6 +73,7 @@ import {
 import * as schema from '../schema';
 import {
   artifacts,
+  attachments,
   automation_action_runs,
   automation_project_settings,
   codex_credential_bindings,
@@ -112,6 +116,7 @@ import {
   trace_artifact_refs,
   trace_events,
   trace_links,
+  tasks,
   work_items,
 } from '../schema';
 import type {
@@ -255,6 +260,8 @@ const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
 const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
 
 const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
+const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
+  left?.type === right.type && left.id === right.id;
 
 const timestampMillis = (value: string | undefined): number | undefined => {
   if (value === undefined) {
@@ -1829,7 +1836,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveWorkItem(workItem: WorkItem): Promise<void> {
-    await this.upsert(work_items, work_items.id, workItem);
+    await this.upsert(work_items, work_items.id, {
+      ...workItem,
+      narrative_markdown: workItem.narrative_markdown ?? '',
+    });
   }
 
   async getWorkItem(workItemId: string): Promise<WorkItem | undefined> {
@@ -1840,6 +1850,53 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return projectId === undefined
       ? this.listWhere<WorkItem>(work_items)
       : this.listWhere<WorkItem>(work_items, eq(work_items.projectId, projectId));
+  }
+
+  async updateWorkItemNarrative(input: { work_item_id: string; markdown: string; updated_at: string }): Promise<WorkItem> {
+    const [row] = await this.db
+      .update(work_items)
+      .set({ narrativeMarkdown: input.markdown, updatedAt: input.updated_at })
+      .where(eq(work_items.id, input.work_item_id))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Work Item ${input.work_item_id} was not found`);
+    }
+    return fromDbRecord<WorkItem>(row);
+  }
+
+  async saveTask(task: Task): Promise<void> {
+    await this.upsert(tasks, tasks.id, task);
+  }
+
+  async getTask(taskId: string): Promise<Task | undefined> {
+    return this.getById(tasks, tasks.id, taskId);
+  }
+
+  async listTasks(projectId?: string): Promise<Task[]> {
+    return projectId === undefined
+      ? this.listWhere<Task>(tasks, undefined, tasks.createdAt)
+      : this.listWhere<Task>(tasks, eq(tasks.projectId, projectId), tasks.createdAt);
+  }
+
+  async listTasksForParent(parentRef: ObjectRef): Promise<Task[]> {
+    const rows = await this.db
+      .select()
+      .from(tasks)
+      .where(and(sql`${tasks.parentRef}->>'type' = ${parentRef.type}`, sql`${tasks.parentRef}->>'id' = ${parentRef.id}`))
+      .orderBy(asc(tasks.createdAt));
+    return rows.map((row) => fromDbRecord<Task>(row));
+  }
+
+  async updateTaskNarrative(input: { task_id: string; markdown: string; updated_at: string }): Promise<Task> {
+    const [row] = await this.db
+      .update(tasks)
+      .set({ narrativeMarkdown: input.markdown, updatedAt: input.updated_at })
+      .where(eq(tasks.id, input.task_id))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
+    }
+    return fromDbRecord<Task>(row);
   }
 
   async saveSpec(spec: Spec): Promise<void> {
@@ -1935,6 +1992,35 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.listWhere<ExecutionPackage>(execution_packages, eq(execution_packages.workItemId, workItemId));
   }
 
+  async linkExecutionPackageToTask(input: { task_id: string; execution_package_id: string }): Promise<void> {
+    const task = await this.getTask(input.task_id);
+    if (task === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
+    }
+    const [row] = await this.db
+      .update(execution_packages)
+      .set({ taskId: input.task_id })
+      .where(
+        and(
+          eq(execution_packages.id, input.execution_package_id),
+          or(isNull(execution_packages.taskId), eq(execution_packages.taskId, input.task_id)),
+        ),
+      )
+      .returning({ id: execution_packages.id });
+    if (row === undefined) {
+      const executionPackage = await this.getExecutionPackage(input.execution_package_id);
+      if (executionPackage === undefined) {
+        throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} was not found`);
+      }
+      throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} is already linked to another Task`);
+    }
+  }
+
+  async getTaskForExecutionPackage(executionPackageId: string): Promise<Task | undefined> {
+    const executionPackage = await this.getExecutionPackage(executionPackageId);
+    return executionPackage?.task_id === undefined ? undefined : this.getTask(executionPackage.task_id);
+  }
+
   async saveExecutionPackageDependency(dependency: ExecutionPackageDependency): Promise<void> {
     const record = toDbRecord(dependency, execution_package_dependencies);
     await this.db
@@ -1951,6 +2037,54 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       execution_package_dependencies,
       eq(execution_package_dependencies.packageId, executionPackageId),
     );
+  }
+
+  async saveAttachment(attachment: Attachment): Promise<void> {
+    await this.upsert(attachments, attachments.id, attachment);
+  }
+
+  async getAttachment(attachmentId: string): Promise<Attachment | undefined> {
+    return this.getById(attachments, attachments.id, attachmentId);
+  }
+
+  async listAttachmentsForObject(objectType: string, objectId: string): Promise<Attachment[]> {
+    const linkedRef = JSON.stringify([{ type: objectType, id: objectId }]);
+    const rows = await this.db
+      .select()
+      .from(attachments)
+      .where(
+        or(
+          and(eq(attachments.ownerObjectType, objectType), eq(attachments.ownerObjectId, objectId)),
+          sql`${attachments.linkedObjectRefs} @> ${linkedRef}::jsonb`,
+        ),
+      )
+      .orderBy(asc(attachments.createdAt));
+    return rows.map((row) => fromDbRecord<Attachment>(row));
+  }
+
+  async linkAttachmentToObject(attachmentId: string, objectRef: ObjectRef): Promise<Attachment> {
+    const attachment = await this.getAttachment(attachmentId);
+    if (attachment === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Attachment ${attachmentId} was not found`);
+    }
+    const linked_object_refs = attachment.linked_object_refs.some((ref) => objectRefIdentityMatches(ref, objectRef))
+      ? attachment.linked_object_refs
+      : [...attachment.linked_object_refs, objectRef];
+    const updated = { ...attachment, linked_object_refs };
+    await this.saveAttachment(updated);
+    return updated;
+  }
+
+  async archiveAttachment(attachmentId: string, _archivedAt: string): Promise<Attachment> {
+    const [row] = await this.db
+      .update(attachments)
+      .set({ referenceStatus: 'archived' })
+      .where(eq(attachments.id, attachmentId))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Attachment ${attachmentId} was not found`);
+    }
+    return fromDbRecord<Attachment>(row);
   }
 
   async saveRunSession(runSession: RunSession): Promise<void> {

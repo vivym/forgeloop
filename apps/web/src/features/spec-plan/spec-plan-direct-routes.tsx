@@ -1,4 +1,4 @@
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 import type { ReactNode } from 'react';
 
 import {
@@ -6,104 +6,21 @@ import {
   usePlanReplayQuery,
   usePlanRevisionQuery,
   usePlanRevisionsQuery,
-  usePlansQuery,
   useSpecQuery,
   useSpecReplayQuery,
   useSpecRevisionQuery,
   useSpecRevisionsQuery,
-  useSpecsQuery,
 } from '../../shared/api/hooks';
-import type { PlanRevision, ProductListItem, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
+import type { ObjectRef, PlanRevision, SpecPlan, SpecRevision, TimelineEntry } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
-import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, InlineActions, Metric, MetricGrid, PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, DataTable, InlineNotice, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
+import { Badge, Button, InlineNotice, StatusPill, Timeline, type TimelineItem } from '../../shared/ui';
 import { SpecPlanLifecycleActions } from './spec-plan-lifecycle-actions';
 
 type ArtifactKind = 'spec' | 'plan';
 
 const primaryLinkClass =
   'inline-flex min-h-10 items-center justify-center rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white transition-colors duration-base ease-standard hover:bg-primary-hover';
-const selectedSegmentClass =
-  'inline-flex min-h-9 items-center justify-center rounded-md border border-primary bg-primary px-3 text-sm font-semibold text-white transition-colors duration-base ease-standard';
-const unselectedSegmentClass =
-  'inline-flex min-h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-border-strong hover:bg-surface-muted';
-
-interface RegistryFilters {
-  status?: string;
-}
-
-export function SpecsRegistry() {
-  const { projectId } = useProjectContext();
-  const [searchParams] = useSearchParams();
-  const filters = parseRegistryFilters(searchParams);
-  const query = useSpecsQuery({ project_id: projectId, ...filters, limit: 100 });
-  const list = normalizeProductList(query.data);
-  const specs = filterArtifacts(list.items, filters);
-
-  return (
-    <>
-      <PageHeader
-        actions={
-          <Link className={primaryLinkClass} to="/work-items">
-            Create from Work Item
-          </Link>
-        }
-        subtitle="Find specification records across active Work Items and review their current planning state."
-        title="Specs"
-      />
-      <RegistryFiltersBar basePath="/specs" selectedStatus={filters.status} />
-      <Section
-        description="Rows open the direct Spec route. New Specs still start from Work Item context."
-        title="Spec registry"
-      >
-        <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="Spec" />
-        {query.status !== 'pending' && !query.isError ? (
-          <>
-            <DegradedNotice hasDegradedSources={list.degradedSources.length > 0} />
-            <ArtifactTable artifacts={specs} basePath="/specs" emptyMessage="No Specs match the current product filters." />
-          </>
-        ) : null}
-      </Section>
-    </>
-  );
-}
-
-export function PlansRegistry() {
-  const { projectId } = useProjectContext();
-  const [searchParams] = useSearchParams();
-  const filters = parseRegistryFilters(searchParams);
-  const query = usePlansQuery({ project_id: projectId, ...filters, limit: 100 });
-  const list = normalizeProductList(query.data);
-  const plans = filterArtifacts(list.items, filters);
-
-  return (
-    <>
-      <PageHeader
-        actions={
-          <Link className={primaryLinkClass} to="/work-items">
-            Create from Work Item
-          </Link>
-        }
-        subtitle="Review implementation plans by delivery state and open their current revision."
-        title="Plans"
-      />
-      <RegistryFiltersBar basePath="/plans" selectedStatus={filters.status} />
-      <Section
-        description="Rows open the direct Plan route. New Plans still start from Work Item context after a Spec exists."
-        title="Plan registry"
-      >
-        <RegistryState isError={query.isError} isPending={query.status === 'pending'} kind="Plan" />
-        {query.status !== 'pending' && !query.isError ? (
-          <>
-            <DegradedNotice hasDegradedSources={list.degradedSources.length > 0} />
-            <ArtifactTable artifacts={plans} basePath="/plans" emptyMessage="No Plans match the current product filters." />
-          </>
-        ) : null}
-      </Section>
-    </>
-  );
-}
 
 export function SpecDetail() {
   const { specId } = useParams();
@@ -262,8 +179,8 @@ function ArtifactDetailView({
                 Open current revision
               </Button>
             )}
-            <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} workItemId={artifact.work_item_id} />
-            <InlineNotice title="Creation and edits start from the parent Work Item planning flow." tone="info" />
+            <SpecPlanLifecycleActions actorId={actorId} artifact={artifact} kind={kind} workItemId={artifact.scope_ref.id} />
+            <InlineNotice title="Creation and edits start from the typed parent planning flow." tone="info" />
           </div>
         </ActionRail>
       }
@@ -283,9 +200,9 @@ function ArtifactDetailView({
           <Metric label="Current revision" value={currentRevision ? revisionLabel(currentRevision) : artifact.current_revision_id ? 'Current revision' : 'Not created'} />
         </MetricGrid>
       </Section>
-      <Section title="Parent context">
+      <Section title="Source Object Context">
         <InlineActions>
-          <Link to={`/work-items/${encodeURIComponent(artifact.work_item_id)}`}>Work Item</Link>
+          <Link to={productScopeHref(artifact.scope_ref)}>{scopeLabel(artifact.scope_ref)}</Link>
         </InlineActions>
       </Section>
       {kind === 'plan' ? <PlanPackageState plan={artifact} /> : null}
@@ -302,7 +219,7 @@ function ArtifactDetailView({
         ) : null}
         {replayStatus !== 'pending' && !replayIsError ? (
           replay?.length ? (
-            <Timeline items={replayTimelineItems(replay, artifact.work_item_id)} />
+            <Timeline items={replayTimelineItems(replay, artifact.scope_ref)} />
           ) : (
             <InlineNotice title="No replay events are available for this direct route yet." />
           )
@@ -313,6 +230,23 @@ function ArtifactDetailView({
       </Section>
     </DetailLayout>
   );
+}
+
+function productScopeHref(scopeRef: ObjectRef): string {
+  switch (scopeRef.type) {
+    case 'initiative':
+      return `/initiatives/${encodeURIComponent(scopeRef.id)}`;
+    case 'requirement':
+      return `/requirements/${encodeURIComponent(scopeRef.id)}`;
+    case 'bug':
+      return `/bugs/${encodeURIComponent(scopeRef.id)}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodeURIComponent(scopeRef.id)}`;
+    case 'task':
+      return `/tasks/${encodeURIComponent(scopeRef.id)}`;
+    default:
+      return '/my-work';
+  }
 }
 
 function SpecRevisionReadOnly({ revisionId, specId }: { revisionId: string; specId: string }) {
@@ -335,7 +269,7 @@ function SpecRevisionReadOnly({ revisionId, specId }: { revisionId: string; spec
       meta={<RevisionMeta artifactStatus={specQuery.data?.status} createdAt={revision.created_at} revisionNumber={revision.revision_number} />}
       summary={revision.summary}
       title="Spec Revision"
-      workItemId={revision.work_item_id}
+      scopeRef={revision.scope_ref}
     >
       <Section title="Document">
         <div className="grid gap-2 rounded-card border border-border bg-surface p-4">
@@ -377,7 +311,7 @@ function PlanRevisionReadOnly({ planId, revisionId }: { planId: string; revision
       meta={<RevisionMeta artifactStatus={planQuery.data?.status} createdAt={revision.created_at} revisionNumber={revision.revision_number} />}
       summary={revision.summary}
       title="Plan Revision"
-      workItemId={revision.work_item_id}
+      scopeRef={revision.scope_ref}
     >
       <Section title="Document">
         <div className="grid gap-2 rounded-card border border-border bg-surface p-4">
@@ -407,7 +341,7 @@ function ReadOnlyRevisionLayout({
   meta,
   summary,
   title,
-  workItemId,
+  scopeRef,
 }: {
   artifactLabel: string;
   artifactLink: string;
@@ -415,7 +349,7 @@ function ReadOnlyRevisionLayout({
   meta: ReactNode;
   summary: string;
   title: string;
-  workItemId: string;
+  scopeRef: ObjectRef;
 }) {
   return (
     <DetailLayout
@@ -430,92 +364,12 @@ function ReadOnlyRevisionLayout({
       <Section title="Revision metadata">
         {meta}
         <InlineActions>
-          <Link to={`/work-items/${encodeURIComponent(workItemId)}`}>Work Item</Link>
+          <Link to={productScopeHref(scopeRef)}>{scopeLabel(scopeRef)}</Link>
           <Link to={artifactLink}>{artifactLabel}</Link>
         </InlineActions>
       </Section>
       {children}
     </DetailLayout>
-  );
-}
-
-function ArtifactTable({ artifacts, basePath, emptyMessage }: { artifacts: ProductListItem[]; basePath: '/specs' | '/plans'; emptyMessage: string }) {
-  return (
-    <DataTable
-      columns={[
-        {
-          key: 'revision',
-          header: 'Current revision',
-          cell: (artifact) => (
-            <Link to={`${basePath}/${encodeURIComponent(artifact.id)}`}>{revisionLabelFromArtifact(artifact)}</Link>
-          ),
-        },
-        { key: 'status', header: 'Status', cell: (artifact) => <StatusPill tone={statusTone(artifact.status)}>{formatValue(artifact.status)}</StatusPill> },
-        { key: 'gate', header: 'Gate', cell: (artifact) => formatValue(artifact.gate_state) },
-        { key: 'resolution', header: 'Resolution', cell: (artifact) => formatValue(artifact.resolution) },
-        {
-          key: 'work-item',
-          header: 'Parent',
-          cell: (artifact) =>
-            artifact.parent ? (
-              <Link to={`/work-items/${encodeURIComponent(artifact.parent.id)}`}>{artifact.parent.title ?? 'Work Item'}</Link>
-            ) : (
-              'Not linked'
-            ),
-        },
-      ]}
-      emptyMessage={emptyMessage}
-      getRowKey={(artifact) => artifact.id}
-      rows={artifacts}
-    />
-  );
-}
-
-function RegistryFiltersBar({ basePath, selectedStatus }: { basePath: '/specs' | '/plans'; selectedStatus: string | undefined }) {
-  const statuses = ['approved', 'draft', 'submitted'];
-
-  return (
-    <Section title="Filters">
-      <InlineActions aria-label="Status filters">
-        <Link className={selectedStatus === undefined ? selectedSegmentClass : unselectedSegmentClass} to={basePath}>
-          All
-        </Link>
-        {statuses.map((status) => (
-          <Link
-            className={selectedStatus === status ? selectedSegmentClass : unselectedSegmentClass}
-            key={status}
-            to={`${basePath}?status=${encodeURIComponent(status)}`}
-          >
-            {formatValue(status)}
-          </Link>
-        ))}
-      </InlineActions>
-    </Section>
-  );
-}
-
-function RegistryState({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: string }) {
-  if (isPending) {
-    return <InlineNotice title={`Loading ${kind.toLowerCase()} registry.`} tone="info" />;
-  }
-
-  if (isError) {
-    return <InlineNotice title={`${kind} registry data is temporarily unavailable.`} tone="danger" />;
-  }
-
-  return null;
-}
-
-function DegradedNotice({ hasDegradedSources }: { hasDegradedSources: boolean }) {
-  if (!hasDegradedSources) {
-    return null;
-  }
-
-  return (
-    <InlineNotice
-      title="Registry data is available, but History / Timeline detail may be incomplete until parent Work Item replay is available."
-      tone="warning"
-    />
   );
 }
 
@@ -531,22 +385,17 @@ function PlanPackageState({ plan }: { plan: SpecPlan }) {
   if (plan.approved_revision_id === undefined) {
     return (
       <Section title="Downstream package">
-        <InlineActions>
-          <span>This approved Plan does not have an approved revision recorded yet.</span>
-          <Link to="/packages">View package inventory</Link>
-        </InlineActions>
-        <InlineNotice title="Open the package inventory to find packages that may already exist for this work." tone="info" />
+        <InlineNotice
+          title="This approved Plan does not have an approved revision recorded yet. Task-scoped package evidence opens from Tasks."
+          tone="info"
+        />
       </Section>
     );
   }
 
   return (
     <Section title="Downstream package">
-      <InlineActions>
-        <span>Package generation starts from the Packages workspace.</span>
-        <Link to={`/packages?plan_revision_id=${encodeURIComponent(plan.approved_revision_id)}`}>View package readiness</Link>
-      </InlineActions>
-      <InlineNotice title="Package generation is ready for this approved Plan. Open package readiness to continue." tone="success" />
+      <InlineNotice title="Package generation is ready for this approved Plan. Continue from the relevant Task evidence route." tone="success" />
     </Section>
   );
 }
@@ -615,22 +464,6 @@ function StructuredList({ items, title }: { items: string[]; title: string }) {
   );
 }
 
-function parseRegistryFilters(searchParams: URLSearchParams): RegistryFilters {
-  const status = searchParams.get('status')?.trim();
-  return status ? { status } : {};
-}
-
-function filterArtifacts(artifacts: ProductListItem[], filters: RegistryFilters) {
-  return artifacts.filter((artifact) => filters.status === undefined || artifact.status === filters.status);
-}
-
-function normalizeProductList(data: { items?: ProductListItem[]; degraded_sources?: unknown[] } | undefined) {
-  return {
-    degradedSources: data?.degraded_sources ?? [],
-    items: data?.items ?? [],
-  };
-}
-
 function findCurrentRevision<T extends SpecRevision | PlanRevision>(revisions: T[], revisionId: string | undefined) {
   if (revisionId === undefined) {
     return undefined;
@@ -639,11 +472,11 @@ function findCurrentRevision<T extends SpecRevision | PlanRevision>(revisions: T
   return revisions.find((revision) => revision.id === revisionId);
 }
 
-function replayTimelineItems(events: TimelineEntry[], workItemId: string): TimelineItem[] {
+function replayTimelineItems(events: TimelineEntry[], scopeRef: ObjectRef): TimelineItem[] {
   return events.map((event) => ({
     id: event.id,
     title: event.summary,
-    description: eventTimelineDescription(event, workItemId),
+    description: eventTimelineDescription(event, scopeRef),
     meta: formatDate(event.created_at),
   }));
 }
@@ -667,18 +500,51 @@ function RevisionSummaryList({ revisions }: { revisions: Array<SpecRevision | Pl
   );
 }
 
-function eventParentContext(event: TimelineEntry, workItemId: string) {
-  const payloadWorkItemId = typeof event.payload?.work_item_id === 'string' ? event.payload.work_item_id : undefined;
+function eventParentContext(event: TimelineEntry, scopeRef: ObjectRef) {
+  const payloadScopeRef = parseTimelineScopeRef(event.payload?.scope_ref);
 
-  if ((event.object_type === 'work_item' && event.object_id === workItemId) || payloadWorkItemId === workItemId) {
-    return 'Parent: Work Item';
+  if (
+    (event.object_type === scopeRef.type && event.object_id === scopeRef.id) ||
+    (payloadScopeRef !== undefined && payloadScopeRef.type === scopeRef.type && payloadScopeRef.id === scopeRef.id)
+  ) {
+    return `Source Object Context: ${scopeLabel(scopeRef)}`;
   }
 
-  return 'Parent context: Work Item linkage not recorded on this event';
+  return 'Source Object Context: typed source linkage not recorded on this event';
 }
 
-function eventTimelineDescription(event: TimelineEntry, workItemId: string) {
-  return [eventParentContext(event, workItemId), eventActorLabel(event)].filter(Boolean).join(' | ');
+function eventTimelineDescription(event: TimelineEntry, scopeRef: ObjectRef) {
+  return [eventParentContext(event, scopeRef), eventActorLabel(event)].filter(Boolean).join(' | ');
+}
+
+function parseTimelineScopeRef(value: unknown): Pick<ObjectRef, 'type' | 'id'> | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  const ref = value as { type?: unknown; id?: unknown };
+  if (typeof ref.type !== 'string' || typeof ref.id !== 'string') {
+    return undefined;
+  }
+
+  return { type: ref.type as ObjectRef['type'], id: ref.id };
+}
+
+function scopeLabel(scopeRef: ObjectRef): string {
+  switch (scopeRef.type) {
+    case 'initiative':
+      return 'Initiative';
+    case 'requirement':
+      return 'Requirement';
+    case 'bug':
+      return 'Bug';
+    case 'tech_debt':
+      return 'Tech Debt';
+    case 'task':
+      return 'Task';
+    default:
+      return 'Source object';
+  }
 }
 
 function eventActorLabel(event: TimelineEntry) {
@@ -709,16 +575,6 @@ function eventActorValue(event: TimelineEntry, field: string) {
   }
 
   return undefined;
-}
-
-function revisionLabelFromArtifact(artifact: ProductListItem) {
-  const revisionNumber = artifact.revision_state?.revision_number;
-
-  if (revisionNumber !== undefined) {
-    return `Revision ${revisionNumber}`;
-  }
-
-  return artifact.revision_state?.current_revision_id ? 'Current revision' : 'No revision yet';
 }
 
 function statusTone(status: string | undefined) {

@@ -16,6 +16,7 @@ export const work_items = pgTable('work_items', {
   projectId: uuid('project_id').notNull(),
   kind: workItemKind('kind').notNull(),
   title: text('title').notNull(),
+  narrativeMarkdown: text('narrative_markdown').notNull().default(''),
   goal: text('goal').notNull(),
   successCriteria: jsonb('success_criteria').$type<WorkItem['success_criteria']>().notNull(),
   priority: text('priority').notNull(),

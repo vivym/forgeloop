@@ -14,6 +14,7 @@ export type RequiredTestGateSpec = Record<string, unknown>;
 
 export const execution_packages = pgTable('execution_packages', {
   id: uuid('id').primaryKey().defaultRandom(),
+  taskId: uuid('task_id'),
   workItemId: uuid('work_item_id').notNull(),
   specId: uuid('spec_id').notNull(),
   specRevisionId: uuid('spec_revision_id').notNull(),

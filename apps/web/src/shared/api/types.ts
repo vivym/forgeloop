@@ -4,17 +4,31 @@ import type {
   ApproveReleaseRequest,
   AcknowledgeReleaseTestAcceptanceRequest,
   acknowledgeReleaseTestAcceptanceRequestSchema,
+  AttachmentDeleteResponse,
+  AttachmentPatch,
+  AttachmentRef,
+  AttachmentRenderRef,
+  AttachmentUploadMetadata,
+  BugDetail,
   closeReleaseRequestSchema,
   createReleaseEvidenceRequestSchema,
   createReleaseRequestSchema,
+  InitiativeDetail,
   LinkReleaseObjectRequest,
+  MarkdownBlockKind,
+  MarkdownDocument,
+  MarkdownValidationResult,
+  ObjectRef,
   OverrideApproveReleaseRequest,
   PatchReleaseRequest,
   ProductLaneId,
   productListQuerySchema,
   ReleaseActorCommandRequest,
   releaseListQuerySchema,
+  RequirementDetail,
   RequestReleaseChangesRequest,
+  TaskDetail,
+  TechDebtDetail,
   WorkItemCockpitResponse,
   CreateWorkItemRequest,
   PublicWorkItem,
@@ -24,6 +38,19 @@ import type {
 export type {
   ApproveReleaseRequest,
   AcknowledgeReleaseTestAcceptanceRequest,
+  AttachmentDeleteResponse,
+  AttachmentEvidenceCategory,
+  AttachmentOwnerObjectType,
+  AttachmentPatch,
+  AttachmentRef,
+  AttachmentReferenceStatus,
+  AttachmentRenderRef,
+  AttachmentSafetyStatus,
+  AttachmentUploadMetadata,
+  AttachmentVisibility,
+  BugDetail,
+  BugListItem,
+  BoardCard,
   CloseReleaseRequest,
   CreateReleaseEvidenceRequest,
   CreateReleaseRequest,
@@ -32,12 +59,21 @@ export type {
   EvidenceChainRedactionReason,
   EvidenceChainResponse,
   EvidenceChainRiskFlag,
+  EditableObjectRef,
+  InitiativeDetail,
+  InitiativeListItem,
   LinkReleaseObjectRequest,
   LinkReleaseObjectResponse,
+  MarkdownBlockKind,
+  MarkdownDocument,
+  MarkdownValidationIssue,
+  MarkdownValidationResult,
+  ObjectRef,
   OverrideApproveReleaseRequest,
   PatchReleaseRequest,
   PublicReleaseSummary as ReleaseSummary,
   ReleaseActorCommandRequest,
+  ReleaseReadinessDetail,
   ReleaseBlocker,
   ReleaseBlockerSnapshot,
   ReleaseChecklistItem,
@@ -49,6 +85,13 @@ export type {
   ReleaseListResponse,
   ReleaseResourceResponse,
   RequestReleaseChangesRequest,
+  RequirementDetail,
+  RequirementListItem,
+  TaskDetail,
+  TaskListItem,
+  TechDebtDetail,
+  TechDebtListItem,
+  MyWorkQueueItem,
   ProductAction,
   ProductActionTarget,
   ProductCommand,
@@ -97,7 +140,7 @@ export interface ProductLaneQuery {
   project_id: string;
   actor_id?: string;
   driver_actor_id?: string;
-  owner_actor_id?: string;
+  execution_owner_actor_id?: string;
   reviewer_actor_id?: string;
   qa_owner_actor_id?: string;
   release_owner_actor_id?: string;
@@ -117,7 +160,7 @@ export const supportedProductLaneSearchParams = [
   'project_id',
   'actor_id',
   'driver_actor_id',
-  'owner_actor_id',
+  'execution_owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',
   'release_owner_actor_id',
@@ -146,7 +189,7 @@ export function isProductLaneSearchParamSupported(laneId: ProductLaneId, key: Pr
   if (key === 'kind') {
     return !isWorkItemTypeLane(laneId);
   }
-  if (key === 'owner_actor_id') {
+  if (key === 'execution_owner_actor_id') {
     return executionOwnerLaneIds.has(laneId);
   }
   return true;
@@ -161,8 +204,8 @@ export function productLaneQueryFromSearchParams(
     project_id: projectId,
     ...stringParam(searchParams, 'actor_id'),
     ...stringParam(searchParams, 'driver_actor_id'),
-    ...(isProductLaneSearchParamSupported(laneId, 'owner_actor_id')
-      ? stringParam(searchParams, 'owner_actor_id')
+    ...(isProductLaneSearchParamSupported(laneId, 'execution_owner_actor_id')
+      ? stringParam(searchParams, 'execution_owner_actor_id')
       : {}),
     ...stringParam(searchParams, 'reviewer_actor_id'),
     ...stringParam(searchParams, 'qa_owner_actor_id'),
@@ -220,13 +263,13 @@ export type ArtifactKind =
 export type ExecutorType = 'mock' | 'local_codex';
 export type ReviewSeverity = 'minor' | 'major' | 'critical';
 
-export type WorkItem = WorkItemCockpitResponse['work_item'];
+export type WorkItem = WorkItemCockpitResponse['item'];
 export type SpecPlan = NonNullable<WorkItemCockpitResponse['current_spec']>;
 
 export interface SpecRevision {
   id: string;
   spec_id: string;
-  work_item_id: string;
+  scope_ref: ObjectRef;
   revision_number: number;
   summary: string;
   content: string;
@@ -243,7 +286,7 @@ export interface SpecRevision {
 export interface PlanRevision {
   id: string;
   plan_id: string;
-  work_item_id: string;
+  scope_ref: ObjectRef;
   revision_number: number;
   summary: string;
   content: string;
@@ -291,6 +334,29 @@ export interface RunOperatorCommandResponse {
 
 export type RequestedChange = NonNullable<WorkItemCockpitResponse['review_packets'][number]['requested_changes']>[number];
 export type ReviewPacket = WorkItemCockpitResponse['review_packets'][number];
+
+export interface TaskPackageEvidence {
+  object_ref: ObjectRef;
+  task_ref: ObjectRef;
+  href: string;
+  package: ExecutionPackage;
+}
+
+export interface TaskRunEvidence {
+  object_ref: ObjectRef;
+  task_ref: ObjectRef;
+  package_ref: ObjectRef;
+  href: string;
+  run_session: RunSession;
+}
+
+export interface TaskReviewEvidence {
+  object_ref: ObjectRef;
+  task_ref: ObjectRef;
+  package_ref: ObjectRef;
+  href: string;
+  review_packet: ReviewPacket;
+}
 
 export interface TimelineEntry {
   id: string;

@@ -789,7 +789,7 @@ const completeDogfoodItem = async (
     request(app.getHttpServer()).get(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
     actorOwner,
   ).expect(200)).body as {
-    work_item?: WorkItem;
+    item?: unknown;
     packages?: ExecutionPackage[];
     run_sessions?: RunSession[];
     review_packets?: ReviewPacket[];
@@ -817,7 +817,7 @@ const completeDogfoodItem = async (
   expectSources(item.key, 'Evidence Chain', evidenceChainSources, productEvidenceSources);
   const reportEvidenceSources = [...new Set([...timelineSources, ...evidenceChainSources])].sort();
 
-  if (cockpit.work_item === undefined) {
+  if (cockpit.item === undefined) {
     throw new Error(`Cockpit response for ${item.key} is missing Work Item record`);
   }
   const records = await loadCompletedDogfoodRecordsFromRepository(app.get(DELIVERY_REPOSITORY) as DeliveryRepository, workItemId);

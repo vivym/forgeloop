@@ -21,7 +21,7 @@ describe('Dev Tools gate', () => {
   });
 
   it('does not show Dev Tools navigation or raw controls when disabled', async () => {
-    const screen = await renderRoute('/lanes');
+    const screen = await renderRoute('/my-work');
 
     expect(screen.queryByRole('link', { name: 'Dev Tools' })).toBeNull();
     expect(screen.queryByLabelText('Object ID')).toBeNull();

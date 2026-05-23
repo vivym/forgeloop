@@ -253,7 +253,7 @@ describe('query module', () => {
       .expect(200);
     const serialized = JSON.stringify(response.body);
 
-    expect(response.body.work_item).toMatchObject({ id: executionPackage.work_item_id });
+    expect(response.body.item).toMatchObject({ id: executionPackage.work_item_id });
     expect(response.body.packages).toEqual([expect.objectContaining({ id: executionPackage.id })]);
     expect(response.body.run_sessions).toEqual(expect.any(Array));
     expect(response.body.run_sessions.find((run: { id: string }) => run.id === 'run-session-runtime-redaction')).toMatchObject({
@@ -279,7 +279,7 @@ describe('query module', () => {
     }
     expect(response.body.review_packets).toEqual(expect.any(Array));
     expect(response.body.delivery_readiness).toMatchObject({
-      work_item_id: executionPackage.work_item_id,
+      scope_ref: { type: 'requirement', id: executionPackage.work_item_id },
       active_lane: 'requirements',
     });
     expect(response.body).not.toHaveProperty('next_actions');
@@ -616,10 +616,10 @@ describe('query module', () => {
 
     const packagesResponse = await request(app.getHttpServer())
       .get('/query/execution-packages')
-      .query({ project_id: projectId, owner_actor_id: actorOwner })
+      .query({ project_id: projectId, execution_owner_actor_id: actorOwner })
       .expect(200);
     expect(packagesResponse.body.items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id, owner_actor_id: actorOwner })]),
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id, execution_owner_actor_id: actorOwner })]),
     );
 
     await request(app.getHttpServer())

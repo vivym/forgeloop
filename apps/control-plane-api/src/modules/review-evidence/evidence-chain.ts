@@ -45,7 +45,11 @@ type TraceProjection = {
 type PendingItem = EvidenceChainItem & { order: number };
 
 const supportedObjectTypes = new Set<EvidenceChainObjectType>([
-  'work_item',
+  'initiative',
+  'requirement',
+  'bug',
+  'tech_debt',
+  'task',
   'execution_package',
   'run_session',
   'review_packet',
@@ -69,7 +73,18 @@ const objectRef = (
   ...(relationship === undefined ? {} : { relationship }),
 });
 
-const traceLinkRef = (link: TraceLinkRecord): EvidenceChainObjectRef | undefined => {
+const workItemEvidenceObjectType = (workItem: Pick<WorkItem, 'kind'>): EvidenceChainObjectType => workItem.kind;
+
+const workItemEvidenceRef = (
+  workItem: Pick<WorkItem, 'id' | 'kind'>,
+  relationship?: EvidenceChainObjectRef['relationship'],
+): EvidenceChainObjectRef => objectRef(workItemEvidenceObjectType(workItem), workItem.id, relationship);
+
+const traceLinkRef = (link: TraceLinkRecord, workItem: WorkItem): EvidenceChainObjectRef | undefined => {
+  if (link.object_type === 'work_item') {
+    return link.object_id === workItem.id ? workItemEvidenceRef(workItem, link.relationship) : undefined;
+  }
+
   if (!supportedObjectTypes.has(link.object_type as EvidenceChainObjectType)) {
     return undefined;
   }
@@ -104,8 +119,9 @@ const runArtifactRefCount = (runs: RunSession[]): number =>
   runs.reduce((count, runSession) => count + runSession.artifacts.length + runSession.log_refs.length, 0);
 
 type DomainObjectRef = {
-  objectType: EvidenceChainObjectType;
+  objectType: string;
   objectId: string;
+  publicObjectType: EvidenceChainObjectType;
 };
 
 const failedRequiredCheckIds = (requiredChecks: RequiredCheckSpec[], runSession: RunSession): string[] =>
@@ -196,7 +212,12 @@ const itemOrder = (item: EvidenceChainItem, currentRunIds: Set<string>, supersed
   return 3;
 };
 
-const publicRunEventItem = (runEvent: RunEvent, runSession: RunSession, executionPackage: ExecutionPackage): EvidenceChainItem => ({
+const publicRunEventItem = (
+  runEvent: RunEvent,
+  runSession: RunSession,
+  executionPackage: ExecutionPackage,
+  workItem: WorkItem,
+): EvidenceChainItem => ({
   id: `evidence-item:run-event:${runEvent.id}`,
   source: 'run_event',
   subject: objectRef('run_session', runSession.id, 'generated_by'),
@@ -205,17 +226,17 @@ const publicRunEventItem = (runEvent: RunEvent, runSession: RunSession, executio
   visibility: 'public',
   links: [
     objectRef('execution_package', executionPackage.id, 'belongs_to'),
-    objectRef('work_item', executionPackage.work_item_id, 'belongs_to'),
+    workItemEvidenceRef(workItem, 'belongs_to'),
   ],
   risk_flags: [],
   redacted: false,
   details: { run_status: runSession.status },
 });
 
-const statusHistoryItem = (statusHistory: StatusHistory): EvidenceChainItem => ({
+const statusHistoryItem = (statusHistory: StatusHistory, publicObjectType: EvidenceChainObjectType): EvidenceChainItem => ({
   id: `evidence-item:status-history:${statusHistory.id}`,
   source: 'status_history',
-  subject: objectRef(statusHistory.object_type as EvidenceChainObjectType, statusHistory.object_id),
+  subject: objectRef(publicObjectType, statusHistory.object_id),
   summary: `${statusHistory.from_status ?? 'none'} -> ${statusHistory.to_status}`,
   created_at: statusHistory.created_at,
   visibility: 'public',
@@ -224,10 +245,10 @@ const statusHistoryItem = (statusHistory: StatusHistory): EvidenceChainItem => (
   redacted: false,
 });
 
-const objectEventItem = (objectEvent: ObjectEvent): EvidenceChainItem => ({
+const objectEventItem = (objectEvent: ObjectEvent, publicObjectType: EvidenceChainObjectType): EvidenceChainItem => ({
   id: `evidence-item:object-event:${objectEvent.id}`,
   source: 'object_event',
-  subject: objectRef(objectEvent.object_type as EvidenceChainObjectType, objectEvent.object_id),
+  subject: objectRef(publicObjectType, objectEvent.object_id),
   summary: objectEvent.event_type,
   created_at: objectEvent.created_at,
   visibility: 'public',
@@ -299,14 +320,14 @@ const loadPackageEvidence = async (repository: DeliveryRepository, workItemId: s
 };
 
 const domainObjectRefs = (workItem: WorkItem, evidence: PackageEvidence[]): DomainObjectRef[] => {
-  const refs: DomainObjectRef[] = [{ objectType: 'work_item', objectId: workItem.id }];
+  const refs: DomainObjectRef[] = [{ objectType: 'work_item', objectId: workItem.id, publicObjectType: workItemEvidenceObjectType(workItem) }];
   for (const item of evidence) {
-    refs.push({ objectType: 'execution_package', objectId: item.executionPackage.id });
+    refs.push({ objectType: 'execution_package', objectId: item.executionPackage.id, publicObjectType: 'execution_package' });
     for (const runSession of item.runs) {
-      refs.push({ objectType: 'run_session', objectId: runSession.id });
+      refs.push({ objectType: 'run_session', objectId: runSession.id, publicObjectType: 'run_session' });
     }
     for (const reviewPacket of item.reviewPackets) {
-      refs.push({ objectType: 'review_packet', objectId: reviewPacket.id });
+      refs.push({ objectType: 'review_packet', objectId: reviewPacket.id, publicObjectType: 'review_packet' });
     }
   }
 
@@ -475,7 +496,7 @@ export const buildEvidenceChain = async (
 
   for (const traceEvent of trace.events) {
     const links = (trace.linksByTraceEventId.get(traceEvent.id) ?? []).flatMap((link) => {
-      const ref = traceLinkRef(link);
+      const ref = traceLinkRef(link, workItem);
       return ref === undefined ? [] : [ref];
     });
     const details = replacementDetails(traceEvent);
@@ -507,7 +528,7 @@ export const buildEvidenceChain = async (
         visibility: 'public',
         links: [
           objectRef('execution_package', evidence.executionPackage.id, 'belongs_to'),
-          objectRef('work_item', evidence.executionPackage.work_item_id, 'belongs_to'),
+          workItemEvidenceRef(workItem, 'belongs_to'),
         ],
         risk_flags: runFlags,
         redacted: false,
@@ -591,7 +612,7 @@ export const buildEvidenceChain = async (
 
       for (const runEvent of await repository.listRunEvents(runSession.id)) {
         if (runEvent.visibility === 'public') {
-          addItem(publicRunEventItem(runEvent, runSession, evidence.executionPackage));
+          addItem(publicRunEventItem(runEvent, runSession, evidence.executionPackage, workItem));
         } else {
           addItem(
             redactionItem({
@@ -681,10 +702,10 @@ export const buildEvidenceChain = async (
 
   for (const ref of domainObjectRefs(workItem, scopedEvidence)) {
     for (const statusHistory of await repository.listStatusHistory(ref.objectId, ref.objectType)) {
-      addItem(statusHistoryItem(statusHistory));
+      addItem(statusHistoryItem(statusHistory, ref.publicObjectType));
     }
     for (const objectEvent of await repository.listObjectEvents(ref.objectId, ref.objectType)) {
-      addItem(objectEventItem(objectEvent));
+      addItem(objectEventItem(objectEvent, ref.publicObjectType));
     }
   }
 
@@ -696,7 +717,10 @@ export const buildEvidenceChain = async (
   const itemFlags = sortedItems.flatMap((item) => item.risk_flags);
 
   return {
-    work_item_id: workItem.id,
+    scope_ref: {
+      type: workItem.kind,
+      id: workItem.id,
+    },
     generated_at: input.generatedAt,
     focus: {
       selection: input.reviewPacketId === undefined ? 'current' : 'explicit',

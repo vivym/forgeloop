@@ -12,7 +12,7 @@ const timestamp = '2026-05-08T01:00:00.000Z';
 
 describe('Evidence Chain contracts', () => {
   const validResponse = {
-    work_item_id: 'work-item-1',
+    scope_ref: { type: 'requirement', id: 'work-item-1' },
     generated_at: timestamp,
     focus: {
       selection: 'current',
@@ -97,6 +97,7 @@ describe('Evidence Chain contracts', () => {
     const parsed = evidenceChainResponseSchema.parse(validResponse);
 
     expect(parsed.focus.selection).toBe('current');
+    expect(parsed.scope_ref).toEqual({ type: 'requirement', id: 'work-item-1' });
     expect(parsed.projection.version).toBe(1);
     expect(parsed.summary.total_items).toBe(2);
     expect(parsed.items).toHaveLength(2);

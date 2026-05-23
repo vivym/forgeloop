@@ -68,12 +68,18 @@ const projectWorkItem = (workItem: WorkItem) => ({
   ...(workItem.updated_at === undefined ? {} : { updated_at: workItem.updated_at }),
 });
 
-const projectSpecPlan = (artifact: Spec | Plan | null) =>
+const workItemScopeRef = (workItem: Pick<WorkItem, 'id' | 'kind' | 'title'>) => ({
+  type: workItem.kind,
+  id: workItem.id,
+  title: workItem.title,
+});
+
+const projectSpecPlan = (artifact: Spec | Plan | null, workItem: Pick<WorkItem, 'id' | 'kind' | 'title'>) =>
   artifact === null
     ? null
     : {
         id: artifact.id,
-        work_item_id: artifact.work_item_id,
+        scope_ref: workItemScopeRef(workItem),
         entity_type: artifact.entity_type,
         status: artifact.status,
         editing_state: artifact.editing_state,
@@ -87,9 +93,12 @@ const projectSpecPlan = (artifact: Spec | Plan | null) =>
         ...(artifact.updated_at === undefined ? {} : { updated_at: artifact.updated_at }),
       };
 
-const projectExecutionPackage = (executionPackage: ExecutionPackage) => ({
+const projectExecutionPackage = (
+  executionPackage: ExecutionPackage,
+  workItem: Pick<WorkItem, 'id' | 'kind' | 'title'>,
+) => ({
   id: executionPackage.id,
-  work_item_id: executionPackage.work_item_id,
+  scope_ref: workItemScopeRef(workItem),
   ...(executionPackage.spec_id === undefined ? {} : { spec_id: executionPackage.spec_id }),
   ...(executionPackage.spec_revision_id === undefined ? {} : { spec_revision_id: executionPackage.spec_revision_id }),
   ...(executionPackage.plan_id === undefined ? {} : { plan_id: executionPackage.plan_id }),
@@ -467,10 +476,10 @@ export async function getWorkItemCockpit(
   );
 
   return workItemCockpitResponseSchema.parse({
-    work_item: projectWorkItem(workItem),
-    current_spec: projectSpecPlan(currentSpec),
-    current_plan: projectSpecPlan(currentPlan),
-    packages: packages.map(projectExecutionPackage),
+    item: projectWorkItem(workItem),
+    current_spec: projectSpecPlan(currentSpec, workItem),
+    current_plan: projectSpecPlan(currentPlan, workItem),
+    packages: packages.map((executionPackage) => projectExecutionPackage(executionPackage, workItem)),
     run_sessions: await Promise.all(
       runSessions.map(async (runSession) =>
         projectRunSession(await withWorkerLeaseMetadata(repository, runSession, options.run_session_metadata_fallback)),

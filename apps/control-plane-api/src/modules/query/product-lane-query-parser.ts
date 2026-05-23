@@ -111,7 +111,7 @@ export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): Par
     stale: parseBoolean(optionalString(raw, 'stale'), 'stale'),
     actor_id: optionalString(raw, 'actor_id'),
     driver_actor_id: optionalString(raw, 'driver_actor_id'),
-    owner_actor_id: optionalString(raw, 'owner_actor_id'),
+    execution_owner_actor_id: optionalString(raw, 'execution_owner_actor_id'),
     reviewer_actor_id: optionalString(raw, 'reviewer_actor_id'),
     qa_owner_actor_id: optionalString(raw, 'qa_owner_actor_id'),
     release_owner_actor_id: optionalString(raw, 'release_owner_actor_id'),
@@ -126,8 +126,8 @@ export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): Par
   if (resolved.conflicts.length > 0) {
     throw new BadRequestException({ message: 'Conflicting product lane filters.', conflicts: resolved.conflicts });
   }
-  if (laneId in workItemKindByLane && resolved.unsupported_filters.includes('owner_actor_id')) {
-    throw new BadRequestException('owner_actor_id is not supported for this product lane.');
+  if (laneId in workItemKindByLane && resolved.unsupported_filters.includes('execution_owner_actor_id')) {
+    throw new BadRequestException('execution_owner_actor_id is not supported for this product lane.');
   }
   return resolved;
 }

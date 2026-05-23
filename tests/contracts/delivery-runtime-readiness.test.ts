@@ -11,7 +11,7 @@ const blockedReadiness = {
       code: 'runtime_profile_missing',
       message: 'A local Codex run execution profile must be active before this package can use local Codex.',
       severity: 'blocking',
-      next_step_href: '/packages/pkg-1',
+      next_step_href: '/tasks/task-1/packages/pkg-1',
     },
   ],
 } as const;
@@ -31,7 +31,7 @@ describe('Delivery runtime readiness contracts', () => {
             code: 'runtime_status_unknown',
             message: 'Runtime status could not be derived.',
             severity: 'warning',
-            next_step_href: '/packages/pkg-1',
+            next_step_href: '/tasks/task-1/packages/pkg-1',
           },
         ],
       }),
