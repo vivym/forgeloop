@@ -17,6 +17,8 @@ export interface CodexRuntimeControlPlaneClientOptions {
   fetchImpl?: typeof fetch;
   trustedActorHeaders?: Record<string, string>;
   trustedActorSigner?: (input: { method: string; pathAndQuery: string; rawBody: string }) => Record<string, string>;
+  nonceFactory?: () => string;
+  now?: () => string;
 }
 
 export class CodexRuntimeControlPlaneClient {
@@ -24,28 +26,32 @@ export class CodexRuntimeControlPlaneClient {
   readonly #fetch: typeof fetch;
   readonly #trustedActorHeaders: Record<string, string>;
   readonly #trustedActorSigner: CodexRuntimeControlPlaneClientOptions['trustedActorSigner'];
+  readonly #nonceFactory: () => string;
+  readonly #now: () => string;
 
   constructor(options: CodexRuntimeControlPlaneClientOptions) {
     this.#baseUrl = options.baseUrl.replace(/\/$/, '');
     this.#fetch = options.fetchImpl ?? fetch;
     this.#trustedActorHeaders = options.trustedActorHeaders ?? {};
     this.#trustedActorSigner = options.trustedActorSigner;
+    this.#nonceFactory = options.nonceFactory ?? (() => crypto.randomUUID());
+    this.#now = options.now ?? (() => new Date().toISOString());
   }
 
   async registerWorker(input: Record<string, unknown>): Promise<{ session_token: string; session_expires_at: string }> {
-    return this.#post('/internal/codex-workers/register', input);
+    return this.#postJson('/internal/codex-workers/register', input);
   }
 
   async heartbeatWorker(workerId: string, input: Record<string, unknown>): Promise<unknown> {
-    return this.#post(`/internal/codex-workers/${encodeURIComponent(workerId)}/heartbeat`, input);
+    return this.#postJson(`/internal/codex-workers/${encodeURIComponent(workerId)}/heartbeat`, input);
   }
 
   async createLaunchLease(input: Record<string, unknown>): Promise<unknown> {
-    return this.#post('/internal/codex-launch-leases', input, this.#trustedActorHeaders);
+    return this.#trustedPost('/internal/codex-launch-leases', input);
   }
 
   async revokeLaunchLease(leaseId: string, input: Record<string, unknown>): Promise<unknown> {
-    return this.#post(`/internal/codex-launch-leases/${encodeURIComponent(leaseId)}/revoke`, input, this.#trustedActorHeaders);
+    return this.#trustedPost(`/internal/codex-launch-leases/${encodeURIComponent(leaseId)}/revoke`, input);
   }
 
   async getStatus(input: {
@@ -68,26 +74,142 @@ export class CodexRuntimeControlPlaneClient {
     if (input.credentialBindingId !== undefined) {
       query.set('credential_binding_id', input.credentialBindingId);
     }
-    return this.#get(`/internal/codex-runtime/status?${query.toString()}`, this.#trustedActorHeaders);
+    return this.#trustedGet(`/internal/codex-runtime/status?${query.toString()}`);
+  }
+
+  async createRuntimeJob(input: Record<string, unknown>): Promise<unknown> {
+    return this.#trustedPost('/internal/codex-runtime/runtime-jobs', input);
+  }
+
+  async cancelRuntimeJob(jobId: string, input: Record<string, unknown>): Promise<unknown> {
+    return this.#trustedPost(`/internal/codex-runtime/runtime-jobs/${encodeURIComponent(jobId)}/cancel`, input);
+  }
+
+  async recoverStaleRuntimeJobs(input: Record<string, unknown>): Promise<unknown> {
+    return this.#trustedPost('/internal/codex-runtime/runtime-jobs/recover-stale', input);
+  }
+
+  async getLaunchLeaseStatus(input: { launchLeaseId?: string; launch_lease_id?: string }): Promise<unknown> {
+    const leaseId = input.launchLeaseId ?? input.launch_lease_id;
+    if (leaseId === undefined) {
+      throw new Error('codex_control_plane_launch_lease_id_required');
+    }
+    return this.#trustedGet(`/internal/codex-launch-leases/${encodeURIComponent(leaseId)}/status`);
+  }
+
+  async refreshWorkerSession(workerId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(`/internal/codex-workers/${encodeURIComponent(workerId)}/session/refresh`, input);
+  }
+
+  async pollRuntimeJobs(workerId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(`/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/poll`, input);
+  }
+
+  async acceptRuntimeJob(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/accepted`,
+      input,
+    );
+  }
+
+  async claimLaunchTokenEnvelope(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/envelope/claim`,
+      input,
+    );
+  }
+
+  async fetchRuntimeJobWorkload(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerGet(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/workload`,
+      input,
+    );
+  }
+
+  async materializeRuntimeJob(workerId: string, jobId: string, input: WorkerRequestInput): Promise<CodexLaunchMaterialization> {
+    const response = await this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/materialize`,
+      input,
+    );
+    return normalizeMaterializationResponse(response);
+  }
+
+  async startRuntimeJob(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/started`,
+      input,
+    );
+  }
+
+  async appendRuntimeJobEvent(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/events`,
+      input,
+    );
+  }
+
+  async uploadRuntimeJobArtifact(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/artifacts`,
+      input,
+    );
+  }
+
+  async getRuntimeJobControl(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerGet(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/control`,
+      input,
+    );
+  }
+
+  async terminalizeRuntimeJob(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/terminal`,
+      input,
+    );
   }
 
   async materializeLaunchLease(workerId: string, leaseId: string, input: Record<string, unknown>): Promise<CodexLaunchMaterialization> {
-    const response = await this.#post(`/internal/codex-workers/${encodeURIComponent(workerId)}/launch-leases/${encodeURIComponent(leaseId)}/materialize`, input);
+    const response = await this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/launch-leases/${encodeURIComponent(leaseId)}/materialize`,
+      input,
+    );
     return normalizeMaterializationResponse(response);
   }
 
   async terminalizeLaunchLease(workerId: string, leaseId: string, input: Record<string, unknown>): Promise<unknown> {
-    return this.#post(`/internal/codex-workers/${encodeURIComponent(workerId)}/launch-leases/${encodeURIComponent(leaseId)}/terminal`, input);
+    return this.#workerPost(`/internal/codex-workers/${encodeURIComponent(workerId)}/launch-leases/${encodeURIComponent(leaseId)}/terminal`, input);
   }
 
   materializationRequestHash(input: Record<string, unknown>): string {
     return codexCanonicalDigest(input);
   }
 
-  async #get(pathAndQuery: string, headers: Record<string, string> = {}): Promise<any> {
+  async #trustedGet(pathAndQuery: string): Promise<any> {
+    return this.#getJson(pathAndQuery, this.#trustedHeaders('GET', pathAndQuery, ''));
+  }
+
+  async #trustedPost(path: string, body: Record<string, unknown>): Promise<any> {
+    const rawBody = JSON.stringify(body);
+    return this.#postJson(path, body, this.#trustedHeaders('POST', path, rawBody));
+  }
+
+  async #workerGet(path: string, input: WorkerRequestInput): Promise<any> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(this.#workerPayload(input))) {
+      query.set(key, String(value));
+    }
+    return this.#getJson(`${path}?${query.toString()}`);
+  }
+
+  async #workerPost(path: string, input: WorkerRequestInput): Promise<any> {
+    return this.#postJson(path, this.#workerPayload(input));
+  }
+
+  async #getJson(pathAndQuery: string, headers: Record<string, string> = {}): Promise<any> {
     const response = await this.#fetch(`${this.#baseUrl}${pathAndQuery}`, {
       method: 'GET',
-      headers: { accept: 'application/json', ...this.#signedHeaders('GET', pathAndQuery, ''), ...headers },
+      headers: { accept: 'application/json', ...headers },
     });
     if (!response.ok) {
       throw new Error(`codex_control_plane_request_failed:${response.status}`);
@@ -95,11 +217,11 @@ export class CodexRuntimeControlPlaneClient {
     return response.json();
   }
 
-  async #post(path: string, body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<any> {
+  async #postJson(path: string, body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<any> {
     const rawBody = JSON.stringify(body);
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...this.#signedHeaders('POST', path, rawBody), ...headers },
+      headers: { 'content-type': 'application/json', ...headers },
       body: rawBody,
     });
     if (!response.ok) {
@@ -108,10 +230,60 @@ export class CodexRuntimeControlPlaneClient {
     return response.json();
   }
 
+  #trustedHeaders(method: string, pathAndQuery: string, rawBody: string): Record<string, string> {
+    return {
+      ...this.#signedHeaders(method, pathAndQuery, rawBody),
+      ...this.#trustedActorHeaders,
+    };
+  }
+
   #signedHeaders(method: string, pathAndQuery: string, rawBody: string): Record<string, string> {
     return this.#trustedActorSigner?.({ method, pathAndQuery, rawBody }) ?? {};
   }
+
+  #workerPayload(input: WorkerRequestInput): Record<string, unknown> {
+    const {
+      workerSessionToken,
+      worker_session_token: workerSessionTokenSnake,
+      nonce,
+      nonceTimestamp,
+      nonce_timestamp: nonceTimestampSnake,
+      body_digest: _bodyDigest,
+      ...body
+    } = input;
+    const workerSessionTokenValue = workerSessionTokenSnake ?? workerSessionToken;
+    if (typeof workerSessionTokenValue !== 'string' || workerSessionTokenValue.length === 0) {
+      throw new Error('codex_control_plane_worker_session_token_required');
+    }
+    const nonceValue = nonce ?? this.#nonceFactory();
+    if (typeof nonceValue !== 'string' || nonceValue.length === 0) {
+      throw new Error('codex_control_plane_worker_nonce_required');
+    }
+    const nonceTimestampValue = nonceTimestampSnake ?? nonceTimestamp ?? this.#now();
+    if (typeof nonceTimestampValue !== 'string' || nonceTimestampValue.length === 0) {
+      throw new Error('codex_control_plane_worker_nonce_timestamp_required');
+    }
+    const unsignedBody = {
+      worker_session_token: workerSessionTokenValue,
+      nonce: nonceValue,
+      nonce_timestamp: nonceTimestampValue,
+      ...body,
+    };
+    return {
+      ...unsignedBody,
+      body_digest: codexCanonicalDigest(unsignedBody),
+    };
+  }
 }
+
+export type WorkerRequestInput = Record<string, unknown> & {
+  workerSessionToken?: string;
+  worker_session_token?: string;
+  nonce?: string;
+  nonceTimestamp?: string;
+  nonce_timestamp?: string;
+  body_digest?: string;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
