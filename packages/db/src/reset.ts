@@ -3,9 +3,13 @@ import { Pool } from 'pg';
 const disposableNamePattern = /(?:test|tmp|forgeloop_dev)/i;
 const localHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
-const resettableTables = [
+export const resettableTables = [
   'codex_runtime_setup_nonces',
   'codex_worker_session_nonces',
+  'codex_runtime_job_artifacts',
+  'codex_launch_token_envelopes',
+  'codex_pending_workspace_bundles',
+  'codex_runtime_jobs',
   'codex_launch_leases',
   'codex_worker_registrations',
   'codex_worker_bootstrap_tokens',

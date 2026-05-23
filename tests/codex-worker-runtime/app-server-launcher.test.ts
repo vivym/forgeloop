@@ -428,4 +428,89 @@ describe('DockerizedCodexAppServerLauncher', () => {
     expect(runner.stoppedContainerDigests).toHaveLength(1);
     await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
   });
+
+  it('cleans remote-mode sessions without terminalizing the launch lease directly', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const runner = new FakeDockerRunner({
+      effectiveConfig: {
+        target_kind: 'generation',
+        approval_policy: 'never',
+        source_write_policy: 'artifact_only',
+        forbidden_writable_roots: ['workspace'],
+      },
+    });
+    const terminalized: unknown[] = [];
+    const launcher = new DockerizedCodexAppServerLauncher({
+      dockerBin: 'docker',
+      workerId: 'worker-1',
+      workerSessionToken: 'session-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        materializeLaunchLease: async () => materialization(workerTempRoot),
+        terminalizeLaunchLease: async (_workerId, _leaseId, input) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      hostUid: 501,
+      hostGid: 20,
+      nonceFactory: () => 'nonce-1',
+      now: () => '2026-05-21T00:00:00.000Z',
+    });
+
+    const session = await launcher.startFromMaterialization(materialization(workerTempRoot), {
+      workerSessionToken: 'session-1',
+      terminalizeLaunchLeaseOnClose: false,
+    });
+
+    await expect(stat(join(workerTempRoot, 'lease-1', 'codex-home', 'auth.json'))).resolves.toBeDefined();
+    await session.close('succeeded', 'remote runtime job terminalized');
+
+    expect(terminalized).toEqual([]);
+    expect(runner.stoppedContainerDigests).toHaveLength(1);
+    await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
+  });
+
+  it('does not terminalize the launch lease directly when remote-mode startup fails', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const runner = new FakeDockerRunner({
+      effectiveConfig: {
+        target_kind: 'generation',
+        approval_policy: 'on-request',
+        source_write_policy: 'artifact_only',
+        forbidden_writable_roots: ['workspace'],
+      },
+    });
+    const terminalized: unknown[] = [];
+    const launcher = new DockerizedCodexAppServerLauncher({
+      dockerBin: 'docker',
+      workerId: 'worker-1',
+      workerSessionToken: 'session-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        materializeLaunchLease: async () => materialization(workerTempRoot),
+        terminalizeLaunchLease: async (_workerId, _leaseId, input) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      hostUid: 501,
+      hostGid: 20,
+      nonceFactory: () => 'nonce-1',
+      now: () => '2026-05-21T00:00:00.000Z',
+    });
+
+    await expect(
+      launcher.startFromMaterialization(materialization(workerTempRoot), {
+        workerSessionToken: 'session-1',
+        terminalizeLaunchLeaseOnClose: false,
+      }),
+    ).rejects.toThrow(/codex_app_server_effective_config_mismatch/);
+
+    expect(terminalized).toEqual([]);
+    expect(runner.stoppedContainerDigests).toHaveLength(1);
+    await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
+  });
 });

@@ -18,6 +18,7 @@ export const expectedAutomationDogfoodActionTypes = [
 export const expectedAutomationDogfoodPackageDraftCount = 2;
 
 export type AutomationDogfoodAppServerStatus = 'passed' | 'skipped' | 'blocked' | 'failed';
+export type AutomationDogfoodRuntimeMode = 'local_docker' | 'remote_outbound';
 
 const publicDogfoodReasonCodes = new Set([
   'fake_generation_mode',
@@ -68,6 +69,23 @@ export interface AutomationDogfoodSummaryInput {
   appServerDogfood: {
     status: AutomationDogfoodAppServerStatus;
     reasonCode?: string;
+    runtimeMode?: AutomationDogfoodRuntimeMode;
+    blockerCode?: string;
+    dockerizedAppServerEvidence?: {
+      dockerImageDigest?: string;
+      networkPolicyDigest?: string;
+      effectiveConfigDigest?: string;
+      containerIdDigest?: string;
+    } & Record<string, unknown>;
+    artifacts?: Array<{
+      name?: string;
+      digest?: string;
+    } & Record<string, unknown>>;
+    timingBuckets?: {
+      queue?: string;
+      execution?: string;
+      terminalization?: string;
+    } & Record<string, unknown>;
   };
 }
 
@@ -99,6 +117,78 @@ const dogfoodStatusText = (status: string, reasonCode?: string): string => {
   return `${status.toUpperCase()}${publicReasonCode === undefined ? '' : ` (${publicReasonCode})`}`;
 };
 
+const digestPattern = /^sha256:[a-f0-9]{64}$/;
+const safeDigest = (value: string | undefined): string | undefined => (value !== undefined && digestPattern.test(value) ? value : undefined);
+
+const timingBucketPattern = /^(?:<\d+(?:ms|s|m)|\d+-\d+(?:ms|s|m)|>\d+(?:ms|s|m))$/;
+const safeTimingBucket = (value: string | undefined): string | undefined =>
+  value !== undefined && timingBucketPattern.test(value) ? value : undefined;
+
+const safeArtifactName = (value: string | undefined): string | undefined =>
+  value !== undefined && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) ? value : undefined;
+
+const appServerEvidenceLines = (appServerDogfood: AutomationDogfoodSummaryInput['appServerDogfood']): string[] => {
+  const lines: string[] = [];
+  if (appServerDogfood.runtimeMode !== undefined) {
+    lines.push(`- Remote runtime mode: ${appServerDogfood.runtimeMode}`);
+  }
+  const blockerCode = publicDogfoodReasonCode(appServerDogfood.blockerCode);
+  if (blockerCode !== undefined) {
+    lines.push(`- Public blocker code: ${blockerCode}`);
+  }
+  const evidence = appServerDogfood.dockerizedAppServerEvidence;
+  if (evidence !== undefined) {
+    const parts = [
+      ['docker_image_digest', safeDigest(evidence.dockerImageDigest)],
+      ['network_policy_digest', safeDigest(evidence.networkPolicyDigest)],
+      ['effective_config_digest', safeDigest(evidence.effectiveConfigDigest)],
+      ['container_id_digest', safeDigest(evidence.containerIdDigest)],
+    ]
+      .filter((entry): entry is [string, string] => entry[1] !== undefined)
+      .map(([name, value]) => `${name}=${value}`);
+    if (parts.length > 0) {
+      lines.push(`- Dockerized app-server evidence: ${parts.join(' ')}`);
+    }
+  }
+  const artifacts = (appServerDogfood.artifacts ?? [])
+    .map((artifact) => {
+      const name = safeArtifactName(artifact.name);
+      const digest = safeDigest(artifact.digest);
+      return name === undefined || digest === undefined ? undefined : `${name}=${digest}`;
+    })
+    .filter((entry): entry is string => entry !== undefined);
+  if (artifacts.length > 0) {
+    lines.push(`- Remote runtime artifacts: ${artifacts.join(' ')}`);
+  }
+  const timing = appServerDogfood.timingBuckets;
+  if (timing !== undefined) {
+    const parts = [
+      ['queue', safeTimingBucket(timing.queue)],
+      ['execution', safeTimingBucket(timing.execution)],
+      ['terminalization', safeTimingBucket(timing.terminalization)],
+    ]
+      .filter((entry): entry is [string, string] => entry[1] !== undefined)
+      .map(([name, value]) => `${name}=${value}`);
+    if (parts.length > 0) {
+      lines.push(`- Remote runtime timing: ${parts.join(' ')}`);
+    }
+  }
+  return lines;
+};
+
+const hasDockerizedAppServerEvidence = (appServerDogfood: AutomationDogfoodSummaryInput['appServerDogfood']): boolean =>
+  appServerDogfood.runtimeMode !== undefined &&
+  safeDigest(appServerDogfood.dockerizedAppServerEvidence?.dockerImageDigest) !== undefined &&
+  safeDigest(appServerDogfood.dockerizedAppServerEvidence?.networkPolicyDigest) !== undefined &&
+  safeDigest(appServerDogfood.dockerizedAppServerEvidence?.effectiveConfigDigest) !== undefined &&
+  safeDigest(appServerDogfood.dockerizedAppServerEvidence?.containerIdDigest) !== undefined &&
+  (appServerDogfood.artifacts ?? []).some(
+    (artifact) => safeArtifactName(artifact.name) !== undefined && safeDigest(artifact.digest) !== undefined,
+  ) &&
+  safeTimingBucket(appServerDogfood.timingBuckets?.queue) !== undefined &&
+  safeTimingBucket(appServerDogfood.timingBuckets?.execution) !== undefined &&
+  safeTimingBucket(appServerDogfood.timingBuckets?.terminalization) !== undefined;
+
 export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryInput): string => {
   if (appServerPreflightSkipped(input)) {
     return [
@@ -110,6 +200,7 @@ export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryIn
       '- Action-run restart recovery: SKIPPED',
       '- Run enqueue disabled: SKIPPED',
       `- App-server dogfood: ${dogfoodStatusText(input.appServerDogfood.status, input.appServerDogfood.reasonCode)}`,
+      ...appServerEvidenceLines(input.appServerDogfood),
     ].join('\n');
   }
 
@@ -129,6 +220,7 @@ export const renderAutomationDogfoodSummary = (input: AutomationDogfoodSummaryIn
     `- Action-run restart recovery: ${input.restartRecoveredFromActionRuns ? 'PASSED' : 'FAILED'}`,
     runSessionLine,
     `- App-server dogfood: ${dogfoodStatusText(input.appServerDogfood.status, input.appServerDogfood.reasonCode)}`,
+    ...appServerEvidenceLines(input.appServerDogfood),
   ].join('\n');
 };
 
@@ -140,7 +232,7 @@ export const automationDogfoodExitCode = (input: AutomationDogfoodSummaryInput):
         automationDogfoodActionRunsPassed(input) &&
         input.runSessionCount === 0 &&
         input.restartRecoveredFromActionRuns &&
-        (input.appServerDogfood.status === 'passed' ||
+        ((input.appServerDogfood.status === 'passed' && hasDockerizedAppServerEvidence(input.appServerDogfood)) ||
           (input.appServerDogfood.status === 'skipped' && input.appServerDogfood.reasonCode === 'fake_generation_mode'))
       ? 0
       : 1;

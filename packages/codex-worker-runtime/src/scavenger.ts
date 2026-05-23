@@ -21,6 +21,20 @@ export interface ScavengeCodexWorkerResourcesInput {
 
 const terminalStatuses = new Set(['expired', 'revoked', 'terminal']);
 
+const readOwnedTempRootMetadata = async (metadataPath: string): Promise<{ workerId: string; launchLeaseId: string } | undefined> => {
+  const parsed = await readFile(metadataPath, 'utf8')
+    .then((value) => JSON.parse(value) as unknown)
+    .catch(() => undefined);
+  if (parsed === undefined || parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const { workerId, launchLeaseId } = parsed as { workerId?: unknown; launchLeaseId?: unknown };
+  if (typeof workerId !== 'string' || workerId.length === 0 || typeof launchLeaseId !== 'string' || launchLeaseId.length === 0) {
+    return undefined;
+  }
+  return { workerId, launchLeaseId };
+};
+
 export const scavengeCodexWorkerResources = async (input: ScavengeCodexWorkerResourcesInput): Promise<void> => {
   const entries = await readdir(input.workerTempRoot, { withFileTypes: true }).catch((error: unknown) => {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
@@ -36,10 +50,8 @@ export const scavengeCodexWorkerResources = async (input: ScavengeCodexWorkerRes
     }
     const leaseRoot = join(input.workerTempRoot, entry.name);
     const metadataPath = join(leaseRoot, '.forgeloop-resource.json');
-    const metadata = await readFile(metadataPath, 'utf8')
-      .then((value) => JSON.parse(value) as { workerId?: string; launchLeaseId?: string })
-      .catch(() => ({ workerId: input.workerId, launchLeaseId: entry.name }));
-    if (metadata.workerId !== input.workerId || metadata.launchLeaseId === undefined) {
+    const metadata = await readOwnedTempRootMetadata(metadataPath);
+    if (metadata?.workerId !== input.workerId || metadata.launchLeaseId !== entry.name) {
       continue;
     }
 

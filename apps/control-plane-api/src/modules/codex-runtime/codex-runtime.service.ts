@@ -1,17 +1,32 @@
 import { randomBytes } from 'node:crypto';
 
-import { BadRequestException, ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexRuntimeJobInputDigest,
   codexRuntimeNetworkPolicyDigest,
+  codexWorkspaceAcquisitionDigest,
+  collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
   validateCodexDockerRuntimeEvidence,
+  validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
+  type AutomationActionRun,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
+  type CodexLaunchLease,
   type CodexLaunchTarget,
+  type CodexLaunchTokenEnvelope,
+  type CodexRuntimeJob,
   type CodexRuntimeNetworkPolicy,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
@@ -24,16 +39,30 @@ import type { CodexLaunchFenceSnapshot, DeliveryRepository } from '@forgeloop/db
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type {
   CodexRuntimeStatusQuery,
+  AcceptCodexRuntimeJobDto,
+  AppendCodexRuntimeJobEventDto,
+  CancelCodexRuntimeJobDto,
+  ClaimCodexRuntimeJobEnvelopeDto,
+  CodexRuntimeWorkerQueryDto,
   CreateCodexCredentialDto,
   CreateCodexLaunchLeaseDto,
+  CreateCodexRuntimeJobArtifactDto,
+  CreateCodexRuntimeJobDto,
   CreateCodexRuntimeProfileDto,
   CreateCodexWorkerBootstrapTokenDto,
   HeartbeatCodexWorkerDto,
+  MaterializeCodexRuntimeJobDto,
   MaterializeCodexLaunchLeaseDto,
+  PollCodexRuntimeJobsDto,
   RecoverStaleCodexWorkersDto,
+  RecoverStaleCodexRuntimeJobsDto,
   RegisterCodexWorkerDto,
+  RenewAutomationActionRunClaimDto,
   RevokeCodexLaunchLeaseDto,
+  StartCodexRuntimeJobDto,
+  TerminalizeCodexRuntimeJobDto,
   TerminalizeCodexLaunchLeaseDto,
+  RefreshCodexWorkerSessionDto,
 } from './codex-runtime.dto';
 
 const unsafeDbCredentialStoreEnv = 'FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE';
@@ -94,10 +123,155 @@ const requireUnsafeDbCredentialStore = (): void => {
 };
 
 const generateWorkerSessionToken = (): string => `codex-worker-session-${randomBytes(32).toString('base64url')}`;
+const deterministicRuntimeArtifactId = (runtimeJobId: string, artifactIdempotencyKey: string): string => {
+  const hex = codexCanonicalDigest({ runtime_job_id: runtimeJobId, artifact_idempotency_key: artifactIdempotencyKey }).slice(
+    'sha256:'.length,
+  );
+  const bytes = Buffer.from(hex.slice(0, 32), 'hex');
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const uuidHex = bytes.toString('hex');
+  return `${uuidHex.slice(0, 8)}-${uuidHex.slice(8, 12)}-${uuidHex.slice(12, 16)}-${uuidHex.slice(16, 20)}-${uuidHex.slice(20, 32)}`;
+};
 
 const materializedNetworkPolicy = (policy: CodexRuntimeNetworkPolicy) => {
   return normalizeCodexRuntimeNetworkPolicy(policy);
 };
+
+const withoutBodyDigest = <T extends { body_digest?: string }>(input: T): Omit<T, 'body_digest'> => {
+  const { body_digest: _bodyDigest, ...body } = input;
+  return body;
+};
+
+const assertWorkerBodyDigest = (input: { body_digest: string }): void => {
+  const expected = codexCanonicalDigest(withoutBodyDigest(input));
+  if (input.body_digest !== expected) {
+    throw new BadRequestException('Codex worker request body digest was rejected');
+  }
+};
+
+type PublicRuntimeJob = Pick<
+  CodexRuntimeJob,
+  | 'id'
+  | 'target_type'
+  | 'target_id'
+  | 'target_kind'
+  | 'project_id'
+  | 'repo_id'
+  | 'worker_id'
+  | 'launch_lease_id'
+  | 'launch_attempt'
+  | 'status'
+  | 'input_digest'
+  | 'created_at'
+  | 'updated_at'
+  | 'expires_at'
+  | 'accepted_at'
+  | 'materializing_at'
+  | 'started_at'
+  | 'last_event_at'
+  | 'cancel_requested_at'
+  | 'drain_requested_at'
+  | 'terminal_at'
+  | 'terminal_status'
+  | 'terminal_reason_code'
+  | 'terminal_result_json'
+> & {
+  input: {
+    input_digest: string;
+    schema_version?: unknown;
+  };
+  workspace_acquisition?: {
+    workspace_acquisition_digest: string;
+    schema_version?: unknown;
+  };
+};
+
+type MaterializeCodexRuntimeJobServiceInput = Omit<MaterializeCodexRuntimeJobDto, 'launch_token'> & {
+  launch_token_hash: string;
+};
+
+const workerReplayProtection = (method: 'GET' | 'POST', path: string, bodyDigest: string) => ({
+  method,
+  path,
+  body_digest: bodyDigest,
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
+  return {
+    id: job.id,
+    target_type: job.target_type,
+    target_id: job.target_id,
+    target_kind: job.target_kind,
+    project_id: job.project_id,
+    ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
+    worker_id: job.worker_id,
+    launch_lease_id: job.launch_lease_id,
+    launch_attempt: job.launch_attempt,
+    status: job.status,
+    input_digest: job.input_digest,
+    created_at: job.created_at,
+    updated_at: job.updated_at,
+    expires_at: job.expires_at,
+    ...(job.accepted_at === undefined ? {} : { accepted_at: job.accepted_at }),
+    ...(job.materializing_at === undefined ? {} : { materializing_at: job.materializing_at }),
+    ...(job.started_at === undefined ? {} : { started_at: job.started_at }),
+    ...(job.last_event_at === undefined ? {} : { last_event_at: job.last_event_at }),
+    ...(job.cancel_requested_at === undefined ? {} : { cancel_requested_at: job.cancel_requested_at }),
+    ...(job.drain_requested_at === undefined ? {} : { drain_requested_at: job.drain_requested_at }),
+    ...(job.terminal_at === undefined ? {} : { terminal_at: job.terminal_at }),
+    ...(job.terminal_status === undefined ? {} : { terminal_status: job.terminal_status }),
+    ...(job.terminal_reason_code === undefined ? {} : { terminal_reason_code: job.terminal_reason_code }),
+    ...(job.terminal_result_json === undefined ? {} : { terminal_result_json: job.terminal_result_json }),
+    input: {
+      input_digest: job.input_digest,
+      ...(job.input_json.schema_version === undefined ? {} : { schema_version: job.input_json.schema_version }),
+    },
+    ...(job.workspace_acquisition_digest === undefined
+      ? {}
+      : {
+          workspace_acquisition: {
+            workspace_acquisition_digest: job.workspace_acquisition_digest,
+            ...(job.workspace_acquisition_json?.schema_version === undefined
+              ? {}
+              : { schema_version: job.workspace_acquisition_json.schema_version }),
+          },
+        }),
+  };
+};
+
+const publicEnvelopeMetadata = (envelope: CodexLaunchTokenEnvelope | undefined) =>
+  envelope === undefined
+    ? undefined
+    : {
+        id: envelope.id,
+        runtime_job_id: envelope.runtime_job_id,
+        launch_lease_id: envelope.launch_lease_id,
+        worker_id: envelope.worker_id,
+        envelope_digest: envelope.envelope_digest,
+        status: envelope.status,
+        expires_at: envelope.expires_at,
+        created_at: envelope.created_at,
+      };
+
+const publicLaunchLeaseStatus = (lease: CodexLaunchLease) => ({
+  id: lease.id,
+  target: lease.target,
+  launch_attempt: lease.launch_attempt,
+  profile_revision_id: lease.profile_revision_id,
+  ...(lease.worker_id === undefined ? {} : { worker_id: lease.worker_id }),
+  status: lease.status,
+  created_at: lease.created_at,
+  expires_at: lease.expires_at,
+  ...(lease.materialized_at === undefined ? {} : { materialized_at: lease.materialized_at }),
+  ...(lease.terminal_at === undefined ? {} : { terminal_at: lease.terminal_at }),
+  ...(lease.revoked_at === undefined ? {} : { revoked_at: lease.revoked_at }),
+  ...(lease.terminal_reason_code === undefined ? {} : { terminal_reason_code: lease.terminal_reason_code }),
+  ...(lease.terminal_runtime_job_id === undefined ? {} : { terminal_runtime_job_id: lease.terminal_runtime_job_id }),
+});
 
 const actorScopeMatchesTarget = (automationScope: string, projectId: string, repoId?: string): boolean => {
   if (repoId !== undefined) {
@@ -321,6 +495,487 @@ export class CodexRuntimeService {
       .then((worker) => ({ worker }));
   }
 
+  async refreshWorkerSession(workerId: string, input: RefreshCodexWorkerSessionDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const nextSessionToken = generateWorkerSessionToken();
+    const nextSessionExpiresAt = boundedWorkerSessionExpiresAt(now, input.next_session_public_key_expires_at);
+    const worker = await this.repository.refreshCodexWorkerSession({
+      worker_id: workerId,
+      current_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      next_session_token: nextSessionToken,
+      next_session_expires_at: nextSessionExpiresAt,
+      next_session_public_key_id: input.next_session_public_key_id,
+      next_session_public_key_material: input.next_session_public_key_material,
+      next_session_public_key_expires_at: input.next_session_public_key_expires_at,
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection('POST', `/internal/codex-workers/${workerId}/session/refresh`, input.body_digest),
+      now,
+    });
+    return { worker, session_token: nextSessionToken, session_expires_at: nextSessionExpiresAt };
+  }
+
+  async createRuntimeJob(input: CreateCodexRuntimeJobDto) {
+    validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
+    const now = nowIso();
+    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      target_kind: input.target.target_kind,
+      now,
+    });
+    if (revision === undefined || revision.id !== input.runtime_profile_revision_id) {
+      throw new BadRequestException('Codex runtime profile revision fence was rejected');
+    }
+    const credential = await this.repository.getCodexCredentialBindingPublic(input.credential_binding_id);
+    if (
+      credential === undefined ||
+      credential.profile_id !== revision.profile_id ||
+      credential.active_version_id !== input.credential_binding_version_id ||
+      credential.active_payload_digest !== input.credential_payload_digest
+    ) {
+      throw new BadRequestException('Codex credential binding fence was rejected');
+    }
+    const target: CodexLaunchTarget = {
+      target_type: input.target.target_type,
+      target_id: input.target.target_id,
+      target_kind: input.target.target_kind,
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+    };
+    const providerConfigDigest = networkProviderConfigDigest(revision);
+    const worker = await this.repository.findAvailableCodexWorker({
+      project_id: target.project_id,
+      ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }),
+      target_kind: target.target_kind,
+      docker_image_digest: revision.docker_image_digest,
+      network_policy_digest: codexRuntimeNetworkPolicyDigest(revision.network_policy),
+      ...(providerConfigDigest === undefined ? {} : { network_provider_config_digest: providerConfigDigest }),
+      now,
+    });
+    if (worker === undefined) {
+      throw new ForbiddenException('Codex worker unavailable for runtime job');
+    }
+
+    const fence = await this.launchFenceFor(
+      {
+        ...input,
+        id: input.launch_lease_id,
+        lease_request_id: input.job_request_id,
+        worker_id: worker.id,
+        launch_token: 'repository-minted',
+      } as CreateCodexLaunchLeaseDto,
+      now,
+    );
+    const inputDigest = codexRuntimeJobInputDigest(input.input_json);
+    const workspaceAcquisitionDigest = codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json);
+    const result = await this.repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      job_request_id: input.job_request_id,
+      target,
+      launch_attempt: input.launch_attempt,
+      worker_id: worker.id,
+      runtime_profile_revision_id: input.runtime_profile_revision_id,
+      runtime_profile_digest: revision.profile_digest,
+      credential_binding_id: input.credential_binding_id,
+      credential_binding_version_id: input.credential_binding_version_id,
+      credential_payload_digest: input.credential_payload_digest,
+      docker_image_digest: revision.docker_image_digest,
+      network_policy_digest: codexRuntimeNetworkPolicyDigest(revision.network_policy),
+      ...(providerConfigDigest === undefined ? {} : { network_provider_config_digest: providerConfigDigest }),
+      input_json: input.input_json,
+      input_digest: inputDigest,
+      ...(input.workspace_acquisition_json === undefined ? {} : { workspace_acquisition_json: input.workspace_acquisition_json }),
+      ...(workspaceAcquisitionDigest === undefined ? {} : { workspace_acquisition_digest: workspaceAcquisitionDigest }),
+      ...(input.pending_workspace_bundle === undefined ? {} : { pending_workspace_bundle: input.pending_workspace_bundle }),
+      ...(input.action_type === undefined ? {} : { action_type: input.action_type }),
+      ...(input.action_attempt === undefined ? {} : { action_attempt: input.action_attempt }),
+      ...(fence.snapshot.action_claim_token_hash === undefined ? {} : { action_claim_token_hash: fence.snapshot.action_claim_token_hash }),
+      ...(fence.snapshot.precondition_fingerprint === undefined ? {} : { precondition_fingerprint: fence.snapshot.precondition_fingerprint }),
+      ...(input.execution_package_id === undefined ? {} : { execution_package_id: input.execution_package_id }),
+      ...(fence.snapshot.run_worker_lease_id === undefined ? {} : { run_worker_lease_id: fence.snapshot.run_worker_lease_id }),
+      ...(fence.snapshot.run_worker_lease_token_hash === undefined
+        ? {}
+        : { run_worker_lease_token_hash: fence.snapshot.run_worker_lease_token_hash }),
+      ...(input.run_session_status === undefined ? {} : { run_session_status: input.run_session_status }),
+      ...(input.run_session_updated_at === undefined ? {} : { run_session_updated_at: input.run_session_updated_at }),
+      ...(input.execution_package_version === undefined ? {} : { execution_package_version: input.execution_package_version }),
+      expires_at: boundedLaunchLeaseExpiresAt(now, input.expires_at),
+      now,
+    });
+    return {
+      runtime_job: publicRuntimeJob(result.runtime_job),
+      launch_lease: publicLaunchLeaseStatus(result.launch_lease),
+      envelope: publicEnvelopeMetadata(result.envelope),
+      replayed: result.replayed,
+    };
+  }
+
+  async getRuntimeJob(jobId: string) {
+    const runtimeJob = await this.repository.getCodexRuntimeJob({ runtime_job_id: jobId });
+    if (runtimeJob === undefined) {
+      throw new NotFoundException('Codex runtime job not found');
+    }
+    return {
+      runtime_job: publicRuntimeJob(runtimeJob),
+      envelope: publicEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: jobId })),
+    };
+  }
+
+  async cancelRuntimeJob(jobId: string, input: CancelCodexRuntimeJobDto) {
+    const runtimeJob = await this.repository.cancelCodexRuntimeJob({
+      runtime_job_id: jobId,
+      reason_code: input.reason_code,
+      idempotency_key: input.idempotency_key,
+      request_digest: codexCanonicalDigest(input),
+      now: nowIso(),
+    });
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  recoverStaleRuntimeJobs(input: RecoverStaleCodexRuntimeJobsDto) {
+    return this.repository.recoverStaleCodexRuntimeJobs({
+      stale_before: input.stale_before,
+      now: input.now ?? nowIso(),
+      ...(input.worker_id === undefined ? {} : { worker_id: input.worker_id }),
+      reason_code: input.reason_code,
+    });
+  }
+
+  async getLaunchLeasePublicStatus(leaseId: string) {
+    const lease = await this.repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: leaseId });
+    if (lease === undefined) {
+      throw new NotFoundException('Codex launch lease not found');
+    }
+    return publicLaunchLeaseStatus(lease);
+  }
+
+  async renewAutomationActionRunClaim(actionRunId: string, input: RenewAutomationActionRunClaimDto) {
+    const now = input.now ?? nowIso();
+    let actionRun: AutomationActionRun;
+    try {
+      actionRun = await this.repository.getClaimedAutomationActionRun({ id: actionRunId, claim_token: input.claim_token });
+    } catch {
+      throw new ForbiddenException('Automation action claim renewal was rejected');
+    }
+    const renewed = await this.repository.claimAutomationActionRun({
+      id: actionRun.id,
+      action_type: actionRun.action_type,
+      target_object_type: actionRun.target_object_type,
+      target_object_id: actionRun.target_object_id,
+      ...(actionRun.target_revision_id === undefined ? {} : { target_revision_id: actionRun.target_revision_id }),
+      ...(actionRun.target_version === undefined ? {} : { target_version: actionRun.target_version }),
+      target_status: actionRun.target_status,
+      idempotency_key: actionRun.idempotency_key,
+      automation_scope: actionRun.automation_scope,
+      automation_settings_version: actionRun.automation_settings_version,
+      capability_fingerprint: actionRun.capability_fingerprint,
+      precondition_fingerprint: actionRun.precondition_fingerprint,
+      action_input_json: actionRun.action_input_json,
+      claim_token: input.claim_token,
+      locked_until: input.locked_until,
+      now,
+    });
+    return { action_run: renewed };
+  }
+
+  async pollRuntimeJobs(workerId: string, input: PollCodexRuntimeJobsDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const runtimeJobs = await this.repository.pollCodexRuntimeJobs({
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      ...(input.target_kinds === undefined ? {} : { target_kinds: input.target_kinds }),
+      limit: input.limit,
+      replay_protection: workerReplayProtection('POST', `/internal/codex-workers/${workerId}/runtime-jobs/poll`, input.body_digest),
+      now,
+    });
+    const rows = await Promise.all(
+      runtimeJobs.map(async (runtimeJob) => ({
+        runtime_job: publicRuntimeJob(runtimeJob),
+        envelope: publicEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: runtimeJob.id })),
+      })),
+    );
+    return { runtime_jobs: rows, heartbeat_interval_ms: 15_000, control_poll_interval_ms: 2_000 };
+  }
+
+  async acceptRuntimeJob(workerId: string, jobId: string, input: AcceptCodexRuntimeJobDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const runtimeJob = await this.repository.acceptCodexRuntimeJob({
+      runtime_job_id: jobId,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      accepted_worker_session_digest: input.accepted_worker_session_digest,
+      accepted_session_public_key_id: input.accepted_session_public_key_id,
+      accepted_session_epoch: input.accepted_session_epoch,
+      idempotency_key: input.accept_idempotency_key,
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/accepted`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  async claimRuntimeJobEnvelope(workerId: string, jobId: string, input: ClaimCodexRuntimeJobEnvelopeDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const envelope = await this.repository.claimCodexLaunchTokenEnvelope({
+      runtime_job_id: jobId,
+      envelope_id: input.envelope_id,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      accepted_worker_session_digest: input.accepted_worker_session_digest,
+      key_id: input.accepted_session_public_key_id,
+      accepted_session_epoch: input.accepted_session_epoch,
+      claim_request_id: input.claim_request_id,
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/envelope/claim`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return { envelope };
+  }
+
+  async getRuntimeJobWorkload(workerId: string, jobId: string, query: CodexRuntimeWorkerQueryDto) {
+    assertWorkerBodyDigest(query);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(query.nonce_timestamp, now);
+    const runtimeJob = await this.repository.getCodexRuntimeJobWorkload({
+      runtime_job_id: jobId,
+      worker_id: workerId,
+      worker_session_token: query.worker_session_token,
+      nonce: query.nonce,
+      nonce_timestamp: query.nonce_timestamp,
+      replay_protection: workerReplayProtection('GET', `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/workload`, query.body_digest),
+      now,
+    });
+    const workspaceAcquisition = runtimeJob.workspace_acquisition_json;
+    if (runtimeJob.input_json.schema_version !== 'codex_generation_workload.v1') {
+      return { workload: runtimeJob.input_json };
+    }
+    const signedContext =
+      workspaceAcquisition?.schema_version === 'codex_generation_workspace_acquisition.v1' &&
+      workspaceAcquisition.signed_context_ref === runtimeJob.input_json.signed_context_ref &&
+      workspaceAcquisition.signed_context_digest === runtimeJob.input_json.signed_context_digest &&
+      isRecord(workspaceAcquisition.signed_context_json) &&
+      codexCanonicalDigest(workspaceAcquisition.signed_context_json) === runtimeJob.input_json.signed_context_digest
+        ? workspaceAcquisition.signed_context_json
+        : undefined;
+    if (signedContext === undefined) {
+      throw new ForbiddenException('Codex runtime job workload was denied');
+    }
+    return {
+      workload: runtimeJob.input_json,
+      signed_context: signedContext,
+    };
+  }
+
+  async materializeRuntimeJob(workerId: string, jobId: string, input: MaterializeCodexRuntimeJobServiceInput) {
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    requireUnsafeDbCredentialStore();
+    const materialized = await this.repository.materializeCodexRuntimeJob({
+      runtime_job_id: jobId,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      launch_token_hash: input.launch_token_hash,
+      accepted_worker_session_digest: input.accepted_worker_session_digest,
+      accepted_session_public_key_id: input.accepted_session_public_key_id,
+      accepted_session_epoch: input.accepted_session_epoch,
+      materialization_request_id: input.materialization_request_id,
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/materialize`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return this.publicMaterialization(materialized);
+  }
+
+  async startRuntimeJob(workerId: string, jobId: string, input: StartCodexRuntimeJobDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const runtimeJob = await this.repository.startCodexRuntimeJob({
+      runtime_job_id: jobId,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      idempotency_key: input.start_idempotency_key,
+      request_digest: input.body_digest,
+      runtime_evidence_digest: input.runtime_evidence_digest,
+      launch_materialization_digest: input.launch_materialization_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/started`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  async appendRuntimeJobEvent(workerId: string, jobId: string, input: AppendCodexRuntimeJobEventDto) {
+    assertWorkerBodyDigest(input);
+    if (codexCanonicalDigest(input.event_payload_json) !== input.event_payload_digest) {
+      throw new BadRequestException('Codex runtime job event payload digest was rejected');
+    }
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const runtimeJob = await this.repository.appendCodexRuntimeJobEvent({
+      runtime_job_id: jobId,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      event_id: input.event_id,
+      idempotency_key: input.event_idempotency_key,
+      event_type: input.event_type,
+      event_payload_json: input.event_payload_json,
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/events`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  async createRuntimeJobArtifact(workerId: string, jobId: string, input: CreateCodexRuntimeJobArtifactDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const artifactId = deterministicRuntimeArtifactId(jobId, input.artifact_idempotency_key);
+    const artifact = await this.repository.createCodexRuntimeJobArtifact({
+      runtime_job_id: jobId,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      artifact_id: artifactId,
+      artifact_idempotency_key: input.artifact_idempotency_key,
+      kind: input.kind,
+      name: input.name,
+      content_type: input.content_type,
+      digest: input.digest,
+      internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/${artifactId}`,
+      size_bytes: input.size_bytes,
+      metadata_json: input.metadata_json ?? {},
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/artifacts`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return { artifact };
+  }
+
+  async downloadWorkspaceBundle(workerId: string, jobId: string, bundleId: string, query: CodexRuntimeWorkerQueryDto) {
+    assertWorkerBodyDigest(query);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(query.nonce_timestamp, now);
+    return this.repository.getWorkspaceBundleDownloadForRuntimeJob({
+      runtime_job_id: jobId,
+      bundle_id: bundleId,
+      worker_id: workerId,
+      worker_session_token: query.worker_session_token,
+      nonce: query.nonce,
+      nonce_timestamp: query.nonce_timestamp,
+      replay_protection: workerReplayProtection(
+        'GET',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/workspace-bundle/${bundleId}`,
+        query.body_digest,
+      ),
+      now,
+    });
+  }
+
+  async getRuntimeJobControl(workerId: string, jobId: string, query: CodexRuntimeWorkerQueryDto) {
+    assertWorkerBodyDigest(query);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(query.nonce_timestamp, now);
+    const runtimeJob = await this.requireWorkerRuntimeJob(workerId, jobId);
+    await this.repository.getCodexLaunchLeaseStatus({
+      launch_lease_id: runtimeJob.launch_lease_id,
+      worker_id: workerId,
+      worker_session_token: query.worker_session_token,
+      nonce: query.nonce,
+      nonce_timestamp: query.nonce_timestamp,
+      replay_protection: workerReplayProtection('GET', `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/control`, query.body_digest),
+      now,
+    });
+    return {
+      control: {
+        cancel_requested: runtimeJob.cancel_requested_at !== undefined,
+        drain_requested: runtimeJob.drain_requested_at !== undefined || runtimeJob.cancel_requested_at !== undefined,
+        session_refresh_requested: false,
+        shutdown_requested: false,
+      },
+    };
+  }
+
+  async terminalizeRuntimeJob(workerId: string, jobId: string, input: TerminalizeCodexRuntimeJobDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    if (input.terminal_result_json !== undefined) {
+      validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
+      collectCodexRuntimeJobTerminalArtifactRefs(input.terminal_result_json);
+    }
+    const runtimeJob = await this.repository.terminalizeCodexRuntimeJob({
+      runtime_job_id: jobId,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      terminal_status: input.terminal_status,
+      reason_code: input.reason_code,
+      ...(input.terminal_result_json === undefined ? {} : { terminal_result_json: input.terminal_result_json }),
+      idempotency_key: input.terminal_idempotency_key,
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/terminal`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
   async createLaunchLease(input: CreateCodexLaunchLeaseDto) {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
     const now = nowIso();
@@ -397,6 +1052,7 @@ export class CodexRuntimeService {
   }
 
   async materializeLaunchLease(workerId: string, leaseId: string, input: MaterializeCodexLaunchLeaseDto) {
+    assertWorkerBodyDigest(input);
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
     requireUnsafeDbCredentialStore();
@@ -408,6 +1064,7 @@ export class CodexRuntimeService {
       nonce: input.nonce,
       nonce_timestamp: input.nonce_timestamp,
       materialization_request_hash: input.materialization_request_hash,
+      replay_protection: workerReplayProtection('POST', `/internal/codex-workers/${workerId}/launch-leases/${leaseId}/materialize`, input.body_digest),
       now,
     });
     const credential = materialized.resolved_credentials[0];
@@ -448,6 +1105,7 @@ export class CodexRuntimeService {
   }
 
   terminalizeLaunchLease(workerId: string, leaseId: string, input: TerminalizeCodexLaunchLeaseDto) {
+    assertWorkerBodyDigest(input);
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
     if (input.evidence_summary !== undefined) {
@@ -464,8 +1122,55 @@ export class CodexRuntimeService {
       ...(input.evidence_summary === undefined ? {} : { evidence_summary: input.evidence_summary }),
       ...(input.runtime_job_id === undefined ? {} : { runtime_job_id: input.runtime_job_id }),
       idempotency_key: input.idempotency_key,
+      replay_protection: workerReplayProtection('POST', `/internal/codex-workers/${workerId}/launch-leases/${leaseId}/terminal`, input.body_digest),
       now,
     });
+  }
+
+  private async requireWorkerRuntimeJob(workerId: string, jobId: string): Promise<CodexRuntimeJob> {
+    const runtimeJob = await this.repository.getCodexRuntimeJob({ runtime_job_id: jobId });
+    if (runtimeJob === undefined || runtimeJob.worker_id !== workerId) {
+      throw new NotFoundException('Codex runtime job not found');
+    }
+    return runtimeJob;
+  }
+
+  private publicMaterialization(materialized: Awaited<ReturnType<DeliveryRepository['materializeCodexRuntimeJob']>>) {
+    const credential = materialized.resolved_credentials[0];
+    if (credential === undefined) {
+      throw new ForbiddenException('Codex launch lease credential material is unavailable');
+    }
+    return {
+      launch_target: materialized.launch_target,
+      runtime_profile: {
+        profile_id: materialized.profile_revision.profile_id,
+        revision_id: materialized.profile_revision.id,
+        profile_digest: materialized.profile_revision.profile_digest,
+        target_kind: materialized.profile_revision.target_kind,
+        source_access_mode: materialized.profile_revision.source_access_mode,
+        environment: materialized.profile_revision.environment,
+        docker_image: materialized.profile_revision.docker_image,
+        docker_image_digest: materialized.profile_revision.docker_image_digest,
+        codex_config_toml: materialized.profile_revision.codex_config_toml,
+        codex_config_digest: materialized.profile_revision.codex_config_digest,
+        expected_effective_config_digest: materialized.profile_revision.expected_effective_config_digest,
+        effective_config_assertions: materialized.profile_revision.effective_config_assertions,
+        app_server_required: materialized.profile_revision.app_server_required,
+        resource_limits: materialized.profile_revision.resource_limits,
+        docker_policy: materialized.profile_revision.docker_policy,
+        network_policy: materializedNetworkPolicy(materialized.profile_revision.network_policy),
+      },
+      credential: {
+        binding_id: credential.binding_id,
+        version_id: credential.binding_version_id,
+        secret_payload_kind: 'codex_auth_json',
+        secret_payload_digest: credential.payload_digest,
+        secret_payload_json: credential.payload,
+      },
+      lease_id: materialized.lease_id,
+      expires_at: materialized.expires_at,
+      materialized_at: materialized.materialized_at,
+    };
   }
 
   private async launchFenceFor(input: CreateCodexLaunchLeaseDto, now: string): Promise<ActiveLaunchFence> {

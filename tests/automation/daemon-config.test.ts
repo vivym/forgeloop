@@ -9,6 +9,33 @@ const baseEnv = {
   FORGELOOP_AUTOMATION_ACTOR_ID: 'actor',
   FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS: '/tmp/repos',
 };
+const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
+const completeRemoteWorkerEnv = () => ({
+  FORGELOOP_WORKER_ID: 'remote-worker-1',
+  FORGELOOP_WORKER_IDENTITY: 'remote-worker-bootstrap-identity',
+  FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'bootstrap-token',
+  FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
+  FORGELOOP_WORKER_TEMP_ROOT: '/tmp/forgeloop-remote-worker',
+  FORGELOOP_DOCKER_BIN: 'docker',
+  FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('a'),
+  FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: digest('b'),
+  FORGELOOP_CODEX_WORKER_SCOPES_JSON: JSON.stringify([{ project_id: 'project-1', repo_id: 'repo-1' }]),
+  FORGELOOP_CODEX_WORKER_CAPABILITIES: 'generation,run_execution',
+  FORGELOOP_WORKER_MAX_CONCURRENCY: '2',
+});
+const requiredRemoteWorkerEnvKeys = [
+  'FORGELOOP_WORKER_ID',
+  'FORGELOOP_WORKER_IDENTITY',
+  'FORGELOOP_WORKER_BOOTSTRAP_TOKEN',
+  'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION',
+  'FORGELOOP_WORKER_TEMP_ROOT',
+  'FORGELOOP_DOCKER_BIN',
+  'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST',
+  'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST',
+  'FORGELOOP_CODEX_WORKER_SCOPES_JSON',
+  'FORGELOOP_CODEX_WORKER_CAPABILITIES',
+  'FORGELOOP_WORKER_MAX_CONCURRENCY',
+] as const;
 
 describe('automation daemon generation config', () => {
   it('defaults package_drafts to disabled for 2A', () => {
@@ -69,6 +96,90 @@ describe('automation daemon generation config', () => {
     expect(config.workerNetworkPolicyDigests).toEqual([`sha256:${'b'.repeat(64)}`]);
     expect(config.workerAuthorizedScopes).toEqual([{ project_id: 'project-1', repo_id: 'repo-1' }]);
     expect(config.generationCredentialBindingId).toBe('credential-binding-1');
+  });
+
+  it('allows strict app-server generation without endpoint when remote outbound worker mode is configured', () => {
+    const config = loadAutomationDaemonConfig({
+      ...baseEnv,
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+      FORGELOOP_CODEX_WORKER_MODE: 'remote_outbound',
+      ...completeRemoteWorkerEnv(),
+      FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID: 'profile-1',
+      FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID: 'credential-binding-1',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS: '60000',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS: '1000',
+    });
+
+    expect(config.generationPlanning.mode).toBe('app_server');
+    expect(config.codexWorkerMode).toBe('remote_outbound');
+    expect(config.codexRunWorkerMode).toBe('disabled');
+    expect(config.appServerEndpoint).toBeUndefined();
+    expect(config.workerId).toBe('remote-worker-1');
+    expect(config.workerIdentity).toBe('remote-worker-bootstrap-identity');
+    expect(config.workerMaxConcurrency).toBe(2);
+    expect(config.dockerBin).toBe('docker');
+    expect(config.workerTempRoot).toBe('/tmp/forgeloop-remote-worker');
+    expect(config.workerDockerImageDigests).toEqual([digest('a')]);
+    expect(config.workerNetworkPolicyDigests).toEqual([digest('b')]);
+    expect(config.workerAuthorizedScopes).toEqual([{ project_id: 'project-1', repo_id: 'repo-1' }]);
+    expect(config.workerCapabilities).toEqual(['generation', 'run_execution']);
+    expect(config.generationRuntimeProfileId).toBe('profile-1');
+    expect(config.generationCredentialBindingId).toBe('credential-binding-1');
+    expect(config.remoteRuntimeJobWaitTimeoutMs).toBe(60_000);
+    expect(config.remoteRuntimeJobPollIntervalMs).toBe(1_000);
+  });
+
+  it.each(requiredRemoteWorkerEnvKeys)('rejects remote outbound generation without complete remote worker config key %s', (key) => {
+    const env = {
+      ...baseEnv,
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+      FORGELOOP_CODEX_WORKER_MODE: 'remote_outbound',
+      ...completeRemoteWorkerEnv(),
+      FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID: 'profile-1',
+      FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID: 'credential-binding-1',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS: '60000',
+      FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS: '1000',
+    };
+    delete env[key];
+
+    expect(() => loadAutomationDaemonConfig(env)).toThrow(new RegExp(key));
+  });
+
+  it('rejects remote outbound generation without remote runtime job config', () => {
+    expect(() =>
+      loadAutomationDaemonConfig({
+        ...baseEnv,
+        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+        FORGELOOP_CODEX_WORKER_MODE: 'remote_outbound',
+        ...completeRemoteWorkerEnv(),
+        FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID: 'profile-1',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID/);
+  });
+
+  it.each(requiredRemoteWorkerEnvKeys)('rejects remote outbound run worker without complete remote worker config key %s', (key) => {
+    const env = {
+      ...baseEnv,
+      FORGELOOP_CODEX_RUN_WORKER_MODE: 'remote_outbound',
+      ...completeRemoteWorkerEnv(),
+    };
+    delete env[key];
+
+    expect(() => loadAutomationDaemonConfig(env)).toThrow(new RegExp(key));
+  });
+
+  it('parses remote outbound run worker config independently from generation mode', () => {
+    const config = loadAutomationDaemonConfig({
+      ...baseEnv,
+      FORGELOOP_CODEX_RUN_WORKER_MODE: 'remote_outbound',
+      ...completeRemoteWorkerEnv(),
+    });
+
+    expect(config.codexWorkerMode).toBe('disabled');
+    expect(config.codexRunWorkerMode).toBe('remote_outbound');
+    expect(config.workerId).toBe('remote-worker-1');
+    expect(config.workerIdentity).toBe('remote-worker-bootstrap-identity');
+    expect(config.workerCapabilities).toEqual(['generation', 'run_execution']);
   });
 
   it('rejects invalid local Docker app-server transport config', () => {

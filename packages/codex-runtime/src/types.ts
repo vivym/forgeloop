@@ -94,6 +94,7 @@ export interface CodexGenerationRuntimeTaskInput<TContext extends Record<string,
   outputSchemaVersion: string;
   policyDigests: Record<string, string>;
   orchestration?: CodexGenerationOrchestrationContext;
+  signal?: AbortSignal;
 }
 
 export interface CodexGenerationRuntime {

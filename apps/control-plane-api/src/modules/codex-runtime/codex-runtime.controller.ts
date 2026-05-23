@@ -1,33 +1,76 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Buffer } from 'node:buffer';
+
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Res, StreamableFile, UseGuards } from '@nestjs/common';
+import { codexCanonicalDigest, codexCredentialPayloadDigest } from '@forgeloop/domain';
 
 import { TrustedAutomationActorGuard } from '../automation/trusted-automation-actor.guard';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
   codexRuntimeStatusQuerySchema,
+  acceptCodexRuntimeJobSchema,
+  appendCodexRuntimeJobEventSchema,
+  cancelCodexRuntimeJobSchema,
+  claimCodexRuntimeJobEnvelopeSchema,
+  codexRuntimeWorkerQuerySchema,
   createCodexCredentialSchema,
   createCodexLaunchLeaseSchema,
+  createCodexRuntimeJobArtifactSchema,
+  createCodexRuntimeJobSchema,
   createCodexRuntimeProfileSchema,
   createCodexWorkerBootstrapTokenSchema,
   heartbeatCodexWorkerSchema,
+  materializeCodexRuntimeJobSchema,
   materializeCodexLaunchLeaseSchema,
+  pollCodexRuntimeJobsSchema,
+  recoverStaleCodexRuntimeJobsSchema,
   recoverStaleCodexWorkersSchema,
   registerCodexWorkerSchema,
+  renewAutomationActionRunClaimSchema,
   revokeCodexLaunchLeaseSchema,
+  startCodexRuntimeJobSchema,
+  terminalizeCodexRuntimeJobSchema,
   terminalizeCodexLaunchLeaseSchema,
+  refreshCodexWorkerSessionSchema,
+  type AcceptCodexRuntimeJobDto,
+  type AppendCodexRuntimeJobEventDto,
+  type CancelCodexRuntimeJobDto,
+  type ClaimCodexRuntimeJobEnvelopeDto,
+  type CodexRuntimeWorkerQueryDto,
   type CodexRuntimeStatusQuery,
   type CreateCodexCredentialDto,
   type CreateCodexLaunchLeaseDto,
+  type CreateCodexRuntimeJobArtifactDto,
+  type CreateCodexRuntimeJobDto,
   type CreateCodexRuntimeProfileDto,
   type CreateCodexWorkerBootstrapTokenDto,
   type HeartbeatCodexWorkerDto,
+  type MaterializeCodexRuntimeJobDto,
   type MaterializeCodexLaunchLeaseDto,
+  type PollCodexRuntimeJobsDto,
   type RecoverStaleCodexWorkersDto,
+  type RecoverStaleCodexRuntimeJobsDto,
   type RegisterCodexWorkerDto,
+  type RenewAutomationActionRunClaimDto,
   type RevokeCodexLaunchLeaseDto,
+  type StartCodexRuntimeJobDto,
+  type TerminalizeCodexRuntimeJobDto,
   type TerminalizeCodexLaunchLeaseDto,
+  type RefreshCodexWorkerSessionDto,
 } from './codex-runtime.dto';
 import { CodexRuntimeService } from './codex-runtime.service';
 import { TrustedCodexRuntimeSetupGuard } from './trusted-codex-runtime-setup.guard';
+
+const withoutBodyDigest = <T extends { body_digest?: string }>(input: T): Omit<T, 'body_digest'> => {
+  const { body_digest: _bodyDigest, ...body } = input;
+  return body;
+};
+
+const assertWorkerBodyDigest = (input: { body_digest: string }): void => {
+  const expected = codexCanonicalDigest(withoutBodyDigest(input));
+  if (input.body_digest !== expected) {
+    throw new BadRequestException('Codex worker request body digest was rejected');
+  }
+};
 
 @Controller()
 export class CodexRuntimeController {
@@ -65,6 +108,50 @@ export class CodexRuntimeController {
     return this.service.recoverStaleWorkers(body);
   }
 
+  @Post('/internal/codex-runtime/runtime-jobs')
+  @UseGuards(TrustedAutomationActorGuard)
+  createRuntimeJob(@Body(new ZodValidationPipe(createCodexRuntimeJobSchema)) body: CreateCodexRuntimeJobDto) {
+    return this.service.createRuntimeJob(body);
+  }
+
+  @Get('/internal/codex-runtime/runtime-jobs/:jobId')
+  @UseGuards(TrustedAutomationActorGuard)
+  getRuntimeJob(@Param('jobId') jobId: string) {
+    return this.service.getRuntimeJob(jobId);
+  }
+
+  @Post('/internal/codex-runtime/runtime-jobs/:jobId/cancel')
+  @UseGuards(TrustedAutomationActorGuard)
+  cancelRuntimeJob(
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(cancelCodexRuntimeJobSchema)) body: CancelCodexRuntimeJobDto,
+  ) {
+    return this.service.cancelRuntimeJob(jobId, body);
+  }
+
+  @Post('/internal/codex-runtime/runtime-jobs/recover-stale')
+  @UseGuards(TrustedAutomationActorGuard)
+  recoverStaleRuntimeJobs(
+    @Body(new ZodValidationPipe(recoverStaleCodexRuntimeJobsSchema)) body: RecoverStaleCodexRuntimeJobsDto,
+  ) {
+    return this.service.recoverStaleRuntimeJobs(body);
+  }
+
+  @Get('/internal/codex-launch-leases/:leaseId/status')
+  @UseGuards(TrustedAutomationActorGuard)
+  getLaunchLeasePublicStatus(@Param('leaseId') leaseId: string) {
+    return this.service.getLaunchLeasePublicStatus(leaseId);
+  }
+
+  @Post('/internal/automation/action-runs/:actionRunId/claim/renew')
+  @UseGuards(TrustedAutomationActorGuard)
+  renewAutomationActionRunClaim(
+    @Param('actionRunId') actionRunId: string,
+    @Body(new ZodValidationPipe(renewAutomationActionRunClaimSchema)) body: RenewAutomationActionRunClaimDto,
+  ) {
+    return this.service.renewAutomationActionRunClaim(actionRunId, body);
+  }
+
   @Post('/internal/codex-workers/register')
   registerWorker(@Body(new ZodValidationPipe(registerCodexWorkerSchema)) body: RegisterCodexWorkerDto) {
     return this.service.registerWorker(body);
@@ -76,6 +163,124 @@ export class CodexRuntimeController {
     @Body(new ZodValidationPipe(heartbeatCodexWorkerSchema)) body: HeartbeatCodexWorkerDto,
   ) {
     return this.service.heartbeatWorker(workerId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/session/refresh')
+  refreshWorkerSession(
+    @Param('workerId') workerId: string,
+    @Body(new ZodValidationPipe(refreshCodexWorkerSessionSchema)) body: RefreshCodexWorkerSessionDto,
+  ) {
+    return this.service.refreshWorkerSession(workerId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/poll')
+  pollRuntimeJobs(
+    @Param('workerId') workerId: string,
+    @Body(new ZodValidationPipe(pollCodexRuntimeJobsSchema)) body: PollCodexRuntimeJobsDto,
+  ) {
+    return this.service.pollRuntimeJobs(workerId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/accepted')
+  acceptRuntimeJob(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(acceptCodexRuntimeJobSchema)) body: AcceptCodexRuntimeJobDto,
+  ) {
+    return this.service.acceptRuntimeJob(workerId, jobId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/envelope/claim')
+  claimRuntimeJobEnvelope(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(claimCodexRuntimeJobEnvelopeSchema)) body: ClaimCodexRuntimeJobEnvelopeDto,
+  ) {
+    return this.service.claimRuntimeJobEnvelope(workerId, jobId, body);
+  }
+
+  @Get('/internal/codex-workers/:workerId/runtime-jobs/:jobId/workload')
+  getRuntimeJobWorkload(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Query(new ZodValidationPipe(codexRuntimeWorkerQuerySchema)) query: CodexRuntimeWorkerQueryDto,
+  ) {
+    return this.service.getRuntimeJobWorkload(workerId, jobId, query);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/materialize')
+  materializeRuntimeJob(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(materializeCodexRuntimeJobSchema)) body: MaterializeCodexRuntimeJobDto,
+  ) {
+    assertWorkerBodyDigest(body);
+    const { launch_token: launchToken, ...scrubbedBody } = body;
+    return this.service.materializeRuntimeJob(workerId, jobId, {
+      ...scrubbedBody,
+      launch_token_hash: codexCredentialPayloadDigest(launchToken),
+    });
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/started')
+  startRuntimeJob(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(startCodexRuntimeJobSchema)) body: StartCodexRuntimeJobDto,
+  ) {
+    return this.service.startRuntimeJob(workerId, jobId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/events')
+  appendRuntimeJobEvent(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(appendCodexRuntimeJobEventSchema)) body: AppendCodexRuntimeJobEventDto,
+  ) {
+    return this.service.appendRuntimeJobEvent(workerId, jobId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/artifacts')
+  createRuntimeJobArtifact(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(createCodexRuntimeJobArtifactSchema)) body: CreateCodexRuntimeJobArtifactDto,
+  ) {
+    return this.service.createRuntimeJobArtifact(workerId, jobId, body);
+  }
+
+  @Get('/internal/codex-workers/:workerId/runtime-jobs/:jobId/workspace-bundle/:bundleId')
+  async downloadWorkspaceBundle(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Param('bundleId') bundleId: string,
+    @Query(new ZodValidationPipe(codexRuntimeWorkerQuerySchema)) query: CodexRuntimeWorkerQueryDto,
+    @Res({ passthrough: true }) response: { setHeader: (name: string, value: string) => void },
+  ) {
+    const download = await this.service.downloadWorkspaceBundle(workerId, jobId, bundleId, query);
+    response.setHeader('content-type', download.content_type);
+    response.setHeader('content-length', String(download.size_bytes));
+    response.setHeader('x-forgeloop-workspace-bundle-digest', download.archive_digest);
+    response.setHeader('x-forgeloop-workspace-bundle-manifest-digest', download.manifest_digest);
+    return new StreamableFile(Buffer.from(download.archive_bytes_base64, 'base64'));
+  }
+
+  @Get('/internal/codex-workers/:workerId/runtime-jobs/:jobId/control')
+  getRuntimeJobControl(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Query(new ZodValidationPipe(codexRuntimeWorkerQuerySchema)) query: CodexRuntimeWorkerQueryDto,
+  ) {
+    return this.service.getRuntimeJobControl(workerId, jobId, query);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/terminal')
+  terminalizeRuntimeJob(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(terminalizeCodexRuntimeJobSchema)) body: TerminalizeCodexRuntimeJobDto,
+  ) {
+    return this.service.terminalizeRuntimeJob(workerId, jobId, body);
   }
 
   @Post('/internal/codex-launch-leases')

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -7,23 +7,35 @@ import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   codexRuntimeProfileRevisionDigest,
+  codexWorkspaceAcquisitionDigest,
+  type Actor,
+  type ExecutionPackage,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexDockerNetworkProxyConfig,
+  type Organization,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
+  type RunSession,
 } from '../../packages/domain/src/index';
 import {
+  automation_action_runs,
+  codex_pending_workspace_bundles,
   codex_credential_bindings,
   assertResettableDatabaseUrl,
   codex_credential_binding_versions,
   codex_launch_leases,
+  codex_launch_token_envelopes,
+  codex_runtime_job_artifacts,
+  codex_runtime_jobs,
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
   codex_worker_registrations,
   createDbClient,
   DrizzleDeliveryRepository,
   resetForgeloopDatabase,
+  type CodexLaunchTokenEnvelopeSealer,
+  type CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   type CreateOrReplayCodexLaunchLeaseInput,
   type DeliveryRepository,
 } from '../../packages/db/src/index';
@@ -32,9 +44,47 @@ const databaseUrl = process.env.FORGELOOP_TEST_DATABASE_URL?.trim() || process.e
 const requireConcurrencyDb = process.env.FORGELOOP_REQUIRE_DB_CONCURRENCY === '1';
 const now = '2026-05-20T00:00:00.000Z';
 const later = '2026-05-20T00:01:00.000Z';
+const afterRuntimeJobExpiry = '2026-05-20T00:02:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
+const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+
+const runtimeMetadata = {
+  durability_mode: 'durable',
+  recovery_attempt_count: 0,
+  effective_dangerous_mode: 'confirmed',
+} as const;
+
+const createEnvelopeSealer = (
+  calls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [],
+): CodexLaunchTokenEnvelopeSealer => ({
+  async sealLaunchTokenEnvelope(input) {
+    calls.push(input);
+    const aadJson = {
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      worker_id: input.worker_id,
+      key_id: input.key_id,
+      expires_at: input.expires_at,
+    };
+    return {
+      id: input.envelope_id,
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: input.worker_id,
+      key_id: input.key_id,
+      algorithm: 'x25519-hkdf-sha256-aes-256-gcm',
+      ciphertext: `sealed:${input.runtime_job_id}`,
+      encryption_nonce: `nonce:${input.envelope_id}`,
+      aad_json: aadJson,
+      aad_digest: codexCanonicalDigest(aadJson),
+      envelope_digest: tokenHash(`envelope:${input.runtime_job_id}:${input.launch_lease_id}:${input.envelope_id}`),
+      expires_at: input.expires_at,
+    };
+  },
+});
 
 const assertUsableDatabaseUrl = (): string | undefined => {
   if (databaseUrl === undefined) {
@@ -88,6 +138,91 @@ const dockerProxyNetworkPolicy = () => {
     }),
     self_test_digest: dockerProxyConfig().self_test_image_digest,
   };
+};
+
+const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
+  id: overrides.id ?? randomUUID(),
+  execution_package_id: overrides.execution_package_id ?? randomUUID(),
+  requested_by_actor_id: overrides.requested_by_actor_id ?? randomUUID(),
+  status: overrides.status ?? 'running',
+  changed_files: overrides.changed_files ?? [],
+  check_results: overrides.check_results ?? [],
+  artifacts: overrides.artifacts ?? [],
+  log_refs: overrides.log_refs ?? [],
+  runtime_metadata: overrides.runtime_metadata ?? runtimeMetadata,
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+  ...(overrides.executor_type !== undefined ? { executor_type: overrides.executor_type } : {}),
+  ...(overrides.executor_result !== undefined ? { executor_result: overrides.executor_result } : {}),
+  ...(overrides.run_spec !== undefined ? { run_spec: overrides.run_spec } : {}),
+  ...(overrides.summary !== undefined ? { summary: overrides.summary } : {}),
+  ...(overrides.failure_kind !== undefined ? { failure_kind: overrides.failure_kind } : {}),
+  ...(overrides.failure_reason !== undefined ? { failure_reason: overrides.failure_reason } : {}),
+  ...(overrides.started_at !== undefined ? { started_at: overrides.started_at } : {}),
+  ...(overrides.finished_at !== undefined ? { finished_at: overrides.finished_at } : {}),
+});
+
+const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+  id: overrides.id ?? randomUUID(),
+  work_item_id: overrides.work_item_id ?? randomUUID(),
+  spec_id: overrides.spec_id ?? randomUUID(),
+  spec_revision_id: overrides.spec_revision_id ?? randomUUID(),
+  plan_id: overrides.plan_id ?? randomUUID(),
+  plan_revision_id: overrides.plan_revision_id ?? randomUUID(),
+  project_id: overrides.project_id ?? randomUUID(),
+  repo_id: overrides.repo_id ?? randomUUID(),
+  objective: overrides.objective ?? 'Implement Codex runtime package execution.',
+  owner_actor_id: overrides.owner_actor_id ?? randomUUID(),
+  reviewer_actor_id: overrides.reviewer_actor_id ?? randomUUID(),
+  qa_owner_actor_id: overrides.qa_owner_actor_id ?? randomUUID(),
+  phase: overrides.phase ?? 'execution',
+  activity_state: overrides.activity_state ?? 'idle',
+  gate_state: overrides.gate_state ?? 'not_submitted',
+  resolution: overrides.resolution ?? 'none',
+  required_checks: overrides.required_checks ?? [],
+  required_artifact_kinds: overrides.required_artifact_kinds ?? ['execution_summary'],
+  allowed_paths: overrides.allowed_paths ?? ['packages/**'],
+  forbidden_paths: overrides.forbidden_paths ?? [],
+  source_mutation_policy: overrides.source_mutation_policy ?? 'path_policy_scoped',
+  version: overrides.version ?? 1,
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+  ...(overrides.execution_package_set_id !== undefined ? { execution_package_set_id: overrides.execution_package_set_id } : {}),
+  ...(overrides.execution_package_version !== undefined ? { execution_package_version: overrides.execution_package_version } : {}),
+  ...(overrides.last_run_session_id !== undefined ? { last_run_session_id: overrides.last_run_session_id } : {}),
+  ...(overrides.current_run_session_id !== undefined ? { current_run_session_id: overrides.current_run_session_id } : {}),
+});
+
+const seedExecutionPackageActors = async (
+  repository: DeliveryRepository,
+  executionPackageRecord: ExecutionPackage,
+  extraActorIds: string[] = [],
+): Promise<void> => {
+  const organization: Organization = {
+    id: randomUUID(),
+    name: `Runtime package ${executionPackageRecord.id}`,
+    created_at: now,
+    updated_at: now,
+  };
+  await repository.saveOrganization(organization);
+
+  const actorIds = new Set([
+    executionPackageRecord.owner_actor_id,
+    executionPackageRecord.reviewer_actor_id,
+    executionPackageRecord.qa_owner_actor_id,
+    ...extraActorIds,
+  ]);
+  for (const actorId of actorIds) {
+    const actor: Actor = {
+      id: actorId,
+      org_id: organization.id,
+      actor_type: 'system',
+      display_name: `Runtime package actor ${actorId}`,
+      created_at: now,
+      updated_at: now,
+    };
+    await repository.saveActor(actor);
+  }
 };
 
 const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRuntimeProfileRevision } => {
@@ -301,7 +436,57 @@ const seedRuntime = async (
           now,
         });
 
-  return { lease: lease!, workerId, sessionToken, secretPayload, profile, revision, binding, version };
+  return { lease: lease!, workerId, sessionToken, secretPayload, profile, revision, binding, version, generationAction };
+};
+
+const runtimeJobInput = (
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  overrides: Partial<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput> = {},
+): CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput => {
+  const target = overrides.target ?? {
+    target_type: 'automation_action_run' as const,
+    target_id: seed.generationAction.id,
+    target_kind: 'generation' as const,
+    project_id: seed.binding.project_id,
+    repo_id: seed.binding.repo_id,
+  };
+  return {
+    runtime_job_id: randomUUID(),
+    launch_lease_id: randomUUID(),
+    envelope_id: randomUUID(),
+    job_request_id: `runtime-job-request-${randomUUID()}`,
+    target,
+    launch_attempt: 1,
+    worker_id: seed.workerId,
+    runtime_profile_revision_id: seed.revision.id,
+    runtime_profile_digest: seed.revision.profile_digest,
+    credential_binding_id: seed.binding.id,
+    credential_binding_version_id: seed.version.id,
+    credential_payload_digest: seed.version.payload_digest,
+    docker_image_digest: seed.revision.docker_image_digest,
+    network_policy_digest: codexCanonicalDigest(seed.revision.network_policy),
+    network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+    input_json: { task: 'draft spec', public_ref: 'artifact://runtime/input' },
+    input_digest: tokenHash('runtime-input-1'),
+    workspace_acquisition_json: { bundle_id: 'workspace-bundle-1', archive_ref: 'artifact://runtime/workspace' },
+    workspace_acquisition_digest: tokenHash('workspace-acquisition-1'),
+    action_type: 'codex_generation',
+    action_attempt: seed.generationAction.attempt,
+    action_claim_token_hash: tokenHash('action-claim-token-1'),
+    precondition_fingerprint: 'precondition-1',
+    expires_at: expiresAt,
+    now,
+    ...overrides,
+  };
+};
+
+const expectRuntimeJobCreateCounts = async (
+  client: ReturnType<typeof createDbClient>,
+  expected: { jobs: number; leases: number; envelopes: number },
+) => {
+  await expect(client.db.select().from(codex_runtime_jobs)).resolves.toHaveLength(expected.jobs);
+  await expect(client.db.select().from(codex_launch_leases)).resolves.toHaveLength(expected.leases);
+  await expect(client.db.select().from(codex_launch_token_envelopes)).resolves.toHaveLength(expected.envelopes);
 };
 
 const createLaunchLease = async (
@@ -377,6 +562,119 @@ const expectWorkerLeaseCount = async (client: ReturnType<typeof createDbClient>,
   expect(workerRow).toEqual({ leaseCount });
 };
 
+const createRuntimeJobWithCapturedToken = async (
+  repository: DeliveryRepository,
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]>,
+  overrides: Partial<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput> = {},
+) => {
+  const input = runtimeJobInput(seed, overrides);
+  const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+  const launchToken = sealerCalls.find((call) => call.runtime_job_id === input.runtime_job_id)?.plaintext_launch_token;
+  if (launchToken === undefined) {
+    throw new Error(`expected runtime job ${input.runtime_job_id} to capture a launch token`);
+  }
+  return { input, created, launchToken };
+};
+
+const acceptRuntimeJobInput = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  suffix: string,
+) => ({
+  runtime_job_id: input.runtime_job_id,
+  worker_id: seed.workerId,
+  worker_session_token: seed.sessionToken,
+  nonce: `accept-${suffix}`,
+  nonce_timestamp: later,
+  accepted_worker_session_digest: tokenHash(seed.sessionToken),
+  accepted_session_public_key_id: 'session-key-1',
+  accepted_session_epoch: 1,
+  idempotency_key: `accept-${input.runtime_job_id}`,
+  request_digest: tokenHash(`accept-request-${input.runtime_job_id}`),
+  now: later,
+});
+
+const claimRuntimeJobEnvelopeInput = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  suffix: string,
+) => ({
+  runtime_job_id: input.runtime_job_id,
+  envelope_id: input.envelope_id,
+  worker_id: seed.workerId,
+  worker_session_token: seed.sessionToken,
+  nonce: `claim-${suffix}`,
+  nonce_timestamp: later,
+  accepted_worker_session_digest: tokenHash(seed.sessionToken),
+  key_id: 'session-key-1',
+  accepted_session_epoch: 1,
+  claim_request_id: `claim-${input.runtime_job_id}`,
+  request_digest: tokenHash(`claim-request-${input.runtime_job_id}`),
+  now: later,
+});
+
+const materializeRuntimeJobInput = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  launchToken: string,
+  suffix: string,
+) => ({
+  runtime_job_id: input.runtime_job_id,
+  launch_lease_id: input.launch_lease_id,
+  worker_id: seed.workerId,
+  worker_session_token: seed.sessionToken,
+  nonce: `materialize-${suffix}`,
+  nonce_timestamp: later,
+  launch_token_hash: tokenHash(launchToken),
+  accepted_worker_session_digest: tokenHash(seed.sessionToken),
+  accepted_session_public_key_id: 'session-key-1',
+  accepted_session_epoch: 1,
+  materialization_request_id: `materialize-${input.runtime_job_id}`,
+  request_digest: tokenHash(`materialize-request-${input.runtime_job_id}`),
+  active_fence: {
+    action_claim_token_hash: tokenHash('action-claim-token-1'),
+    precondition_fingerprint: 'precondition-1',
+  },
+  now: later,
+});
+
+const startRuntimeJobInput = (input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput, seed: Awaited<ReturnType<typeof seedRuntime>>) => ({
+  runtime_job_id: input.runtime_job_id,
+  worker_id: seed.workerId,
+  worker_session_token: seed.sessionToken,
+  nonce: `start-${input.runtime_job_id}`,
+  nonce_timestamp: later,
+  idempotency_key: `start-${input.runtime_job_id}`,
+  request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+  runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+  launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+  now: later,
+});
+
+const runtimeJobArtifactInput = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  artifactId: string,
+) => ({
+  runtime_job_id: input.runtime_job_id,
+  worker_id: seed.workerId,
+  worker_session_token: seed.sessionToken,
+  nonce: `artifact-${artifactId}`,
+  nonce_timestamp: later,
+  artifact_id: artifactId,
+  artifact_idempotency_key: `artifact-${input.runtime_job_id}`,
+  kind: 'generated_payload',
+  name: 'generated-payload.json',
+  content_type: 'application/json',
+  digest: tokenHash(`artifact-digest-${input.runtime_job_id}`),
+  internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${artifactId}`,
+  size_bytes: 128,
+  metadata_json: {},
+  request_digest: tokenHash(`artifact-request-${input.runtime_job_id}`),
+  now: later,
+});
+
 const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbClient>, leaseId: string) => {
   await client.db.execute(sql.raw(`
     create or replace function codex_test_delay_launch_lease_update()
@@ -399,12 +697,799 @@ const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbC
   `));
 };
 
+const installPendingWorkspaceBundleInsertDelay = async (client: ReturnType<typeof createDbClient>, bundleId: string) => {
+  await client.db.execute(sql.raw(`
+    create or replace function codex_test_delay_pending_workspace_bundle_insert()
+    returns trigger
+    language plpgsql
+    as $$
+    begin
+      if new.bundle_id = '${bundleId}' then
+        perform pg_sleep(0.1);
+      end if;
+      return new;
+    end;
+    $$;
+  `));
+  await client.db.execute(sql.raw(`
+    drop trigger if exists codex_test_delay_pending_workspace_bundle_insert_trigger on codex_pending_workspace_bundles;
+    create trigger codex_test_delay_pending_workspace_bundle_insert_trigger
+    before insert on codex_pending_workspace_bundles
+    for each row execute function codex_test_delay_pending_workspace_bundle_insert();
+  `));
+};
+
 describe('Codex runtime Drizzle materialization concurrency', () => {
   const usableDatabaseUrl = assertUsableDatabaseUrl();
 
   if (usableDatabaseUrl === undefined) {
     it.skip('skips concurrency test because no safe resettable database URL is configured', () => {});
   } else {
+    it('atomically replays concurrent runtime job create calls with one sealed envelope', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(firstRepository, { createInitialLease: false, maxConcurrency: 2 });
+        const input = runtimeJobInput(seed);
+
+        const [first, second] = await Promise.all([
+          firstRepository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input),
+          secondRepository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+            ...input,
+            runtime_job_id: randomUUID(),
+            launch_lease_id: input.launch_lease_id,
+            envelope_id: input.envelope_id,
+          }),
+        ]);
+
+        expect(first.runtime_job.id).toBe(input.runtime_job_id);
+        expect(second).toEqual({ ...first, replayed: true });
+        expect(sealerCalls).toHaveLength(1);
+        expect(JSON.stringify(first)).not.toContain(sealerCalls[0]!.plaintext_launch_token);
+        await expectRuntimeJobCreateCounts(firstClient, { jobs: 1, leases: 1, envelopes: 1 });
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('idempotently replays concurrent pending workspace bundle creation', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(),
+        });
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(),
+        });
+        const run = runSession();
+        const executionPackageRecord = executionPackage({ id: run.execution_package_id });
+        await seedExecutionPackageActors(firstRepository, executionPackageRecord, [run.requested_by_actor_id]);
+        await firstRepository.saveExecutionPackage(executionPackageRecord);
+        await firstRepository.saveRunSession(run);
+        const runWorkerLease = await firstRepository.claimRunWorkerLease({
+          run_session_id: run.id,
+          worker_id: 'run-worker-pending-bundle-race',
+          lease_token: 'run-worker-pending-bundle-token',
+          now,
+          expires_at: expiresAt,
+        });
+        const bundleId = 'pending-bundle-race';
+        await installPendingWorkspaceBundleInsertDelay(firstClient, bundleId);
+
+        const archiveBytes = Buffer.from('pending workspace bundle race\n');
+        const workspaceAcquisitionJson = {
+          schema_version: 'workspace_bundle_acquisition.v1',
+          bundle_id: bundleId,
+          archive_ref: `artifact:codex-pending-bundles:${bundleId}`,
+          archive_digest: bytesDigest(archiveBytes),
+          manifest_digest: tokenHash('pending-bundle-race-manifest'),
+          size_bytes: archiveBytes.byteLength,
+          expires_at: expiresAt,
+        };
+        const input = {
+          id: randomUUID(),
+          bundle_id: bundleId,
+          pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+          archive_digest: workspaceAcquisitionJson.archive_digest,
+          manifest_digest: workspaceAcquisitionJson.manifest_digest,
+          run_worker_lease_id: runWorkerLease.id,
+          run_session_id: run.id,
+          execution_package_id: run.execution_package_id,
+          archive_bytes_base64: archiveBytes.toString('base64'),
+          size_bytes: archiveBytes.byteLength,
+          workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+          workspace_acquisition_json: workspaceAcquisitionJson,
+          expires_at: expiresAt,
+          request_digest: tokenHash('pending-bundle-race-request'),
+          created_at: now,
+        };
+
+        await expect(
+          Promise.all([
+            firstRepository.createPendingWorkspaceBundleArtifact(input),
+            secondRepository.createPendingWorkspaceBundleArtifact(input),
+          ]),
+        ).resolves.toEqual([undefined, undefined]);
+        await expect(firstClient.db.select().from(codex_pending_workspace_bundles)).resolves.toHaveLength(1);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('fails closed for concurrent conflicting runtime job replays', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(firstRepository, { createInitialLease: false, maxConcurrency: 2 });
+        const input = runtimeJobInput(seed);
+
+        const [first, second] = await Promise.allSettled([
+          firstRepository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input),
+          secondRepository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+            ...input,
+            runtime_job_id: randomUUID(),
+            launch_lease_id: input.launch_lease_id,
+            envelope_id: input.envelope_id,
+            input_digest: tokenHash('runtime-input-conflict'),
+          }),
+        ]);
+
+        const successes = [first, second].filter((result) => result.status === 'fulfilled');
+        const failures = [first, second].filter((result) => result.status === 'rejected');
+        expect(successes).toHaveLength(1);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({
+          reason: {
+            name: 'DomainError',
+            code: 'codex_runtime_job_unavailable',
+          },
+        });
+        expect(sealerCalls).toHaveLength(1);
+        await expectRuntimeJobCreateCounts(firstClient, { jobs: 1, leases: 1, envelopes: 1 });
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('fails closed when replaying a runtime job after its live action fence expires', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const input = runtimeJobInput(seed, {
+          expires_at: '2026-05-20T00:30:00.000Z',
+        });
+
+        await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+        await expect(
+          repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+            ...input,
+            runtime_job_id: randomUUID(),
+            now: '2026-05-20T00:11:00.000Z',
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_runtime_job_unavailable',
+        });
+        expect(sealerCalls).toHaveLength(1);
+        await expectRuntimeJobCreateCounts(client, { jobs: 1, leases: 1, envelopes: 1 });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('serializes concurrent runtime job accepts and keeps one accepted row', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(firstRepository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input } = await createRuntimeJobWithCapturedToken(firstRepository, seed, sealerCalls);
+        const accept = acceptRuntimeJobInput(input, seed, 'race-1');
+
+        const [first, second] = await Promise.allSettled([
+          firstRepository.acceptCodexRuntimeJob(accept),
+          secondRepository.acceptCodexRuntimeJob({
+            ...accept,
+            nonce: 'accept-race-2',
+            idempotency_key: 'accept-conflicting-runtime-job',
+            request_digest: tokenHash('accept-conflicting-runtime-job-request'),
+          }),
+        ]);
+
+        const successes = [first, second].filter((result) => result.status === 'fulfilled');
+        const failures = [first, second].filter((result) => result.status === 'rejected');
+        expect(successes).toHaveLength(1);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({
+          reason: {
+            name: 'DomainError',
+            code: 'codex_runtime_job_unavailable',
+          },
+        });
+
+        const [row] = await firstClient.db
+          .select({
+            status: codex_runtime_jobs.status,
+            acceptIdempotencyKey: codex_runtime_jobs.acceptIdempotencyKey,
+            acceptRequestDigest: codex_runtime_jobs.acceptRequestDigest,
+          })
+          .from(codex_runtime_jobs)
+          .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+          .limit(1);
+        expect(row).toEqual({
+          status: 'accepted',
+          acceptIdempotencyKey: accept.idempotency_key,
+          acceptRequestDigest: accept.request_digest,
+        });
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('terminalizes runtime jobs and leases exactly once under concurrent terminal replay', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(firstRepository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input, launchToken } = await createRuntimeJobWithCapturedToken(firstRepository, seed, sealerCalls);
+        await firstRepository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'terminal-race-accept'));
+        await firstRepository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'terminal-race-claim'));
+        await firstRepository.materializeCodexRuntimeJob(materializeRuntimeJobInput(input, seed, launchToken, 'terminal-race-materialize'));
+        await firstRepository.startCodexRuntimeJob({
+          runtime_job_id: input.runtime_job_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'start-terminal-race',
+          nonce_timestamp: later,
+          idempotency_key: `start-${input.runtime_job_id}`,
+          request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+          runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+          now: later,
+        });
+
+        const terminalInput = {
+          runtime_job_id: input.runtime_job_id,
+          launch_lease_id: input.launch_lease_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'terminal-race-1',
+          nonce_timestamp: later,
+          terminal_status: 'succeeded' as const,
+          reason_code: 'completed',
+          terminal_result_json: {
+            task_kind: 'spec_draft',
+            prompt_version: 'codex-generation-test-v1',
+            output_schema_version: 'spec-draft-test-v1',
+            generated_payload: { title: 'Generated spec' },
+            generated_payload_digest: tokenHash('generated-spec-payload'),
+            generation_artifacts: [],
+            public_summary: 'completed',
+          },
+          idempotency_key: `terminal-${input.runtime_job_id}`,
+          request_digest: tokenHash(`terminal-request-${input.runtime_job_id}`),
+          now: later,
+        };
+
+        const [first, second] = await Promise.allSettled([
+          firstRepository.terminalizeCodexRuntimeJob(terminalInput),
+          secondRepository.terminalizeCodexRuntimeJob({ ...terminalInput, nonce: 'terminal-race-2' }),
+        ]);
+
+        expect([first, second]).toEqual([
+          expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ status: 'terminal' }) }),
+          expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ status: 'terminal' }) }),
+        ]);
+        const [jobRow] = await firstClient.db
+          .select({ status: codex_runtime_jobs.status, terminalStatus: codex_runtime_jobs.terminalStatus })
+          .from(codex_runtime_jobs)
+          .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+          .limit(1);
+        const [leaseRow] = await firstClient.db
+          .select({ status: codex_launch_leases.status, terminalRuntimeJobId: codex_launch_leases.terminalRuntimeJobId })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, input.launch_lease_id))
+          .limit(1);
+        expect(jobRow).toEqual({ status: 'terminal', terminalStatus: 'succeeded' });
+        expect(leaseRow).toEqual({ status: 'terminal', terminalRuntimeJobId: input.runtime_job_id });
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 0);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('replays runtime job artifact intake idempotently and rejects conflicting Drizzle replays', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input, launchToken } = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls);
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'artifact-accept'));
+        await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'artifact-claim'));
+        await repository.materializeCodexRuntimeJob(materializeRuntimeJobInput(input, seed, launchToken, 'artifact-materialize'));
+        await repository.startCodexRuntimeJob(startRuntimeJobInput(input, seed));
+
+        const artifactId = randomUUID();
+        const artifactInput = runtimeJobArtifactInput(input, seed, artifactId);
+        const artifact = await repository.createCodexRuntimeJobArtifact(artifactInput);
+
+        await expect(
+          repository.createCodexRuntimeJobArtifact({ ...artifactInput, nonce: `artifact-replay-${artifactId}` }),
+        ).resolves.toEqual(artifact);
+        await expect(
+          repository.createCodexRuntimeJobArtifact({
+            ...artifactInput,
+            nonce: `artifact-replay-conflict-${artifactId}`,
+            digest: tokenHash(`artifact-digest-changed-${input.runtime_job_id}`),
+            request_digest: tokenHash(`artifact-conflict-request-${input.runtime_job_id}`),
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+        const conflictingArtifactId = randomUUID();
+        await expect(
+          repository.createCodexRuntimeJobArtifact({
+            ...artifactInput,
+            nonce: `artifact-same-digest-different-key-${conflictingArtifactId}`,
+            artifact_id: conflictingArtifactId,
+            artifact_idempotency_key: `artifact-conflict-${input.runtime_job_id}`,
+            internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${conflictingArtifactId}`,
+            request_digest: tokenHash(`artifact-same-digest-conflict-request-${input.runtime_job_id}`),
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+        const rows = await client.db
+          .select()
+          .from(codex_runtime_job_artifacts)
+          .where(eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id));
+        expect(rows).toHaveLength(1);
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('terminalizes accepted unclaimed cancels and rejects success terminals after durable cancel', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const accepted = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls);
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(accepted.input, seed, 'accepted-cancel'));
+
+        await expect(
+          repository.cancelCodexRuntimeJob({
+            runtime_job_id: accepted.input.runtime_job_id,
+            reason_code: 'user_cancelled',
+            idempotency_key: `cancel-${accepted.input.runtime_job_id}`,
+            request_digest: tokenHash(`cancel-request-${accepted.input.runtime_job_id}`),
+            now: later,
+          }),
+        ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'cancelled' });
+        const [acceptedJobRow] = await client.db
+          .select({ status: codex_runtime_jobs.status, terminalStatus: codex_runtime_jobs.terminalStatus })
+          .from(codex_runtime_jobs)
+          .where(eq(codex_runtime_jobs.id, accepted.input.runtime_job_id))
+          .limit(1);
+        const [acceptedLeaseRow] = await client.db
+          .select({ status: codex_launch_leases.status })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, accepted.input.launch_lease_id))
+          .limit(1);
+        const [acceptedEnvelopeRow] = await client.db
+          .select({ status: codex_launch_token_envelopes.status })
+          .from(codex_launch_token_envelopes)
+          .where(eq(codex_launch_token_envelopes.id, accepted.input.envelope_id))
+          .limit(1);
+        expect(acceptedJobRow).toEqual({ status: 'terminal', terminalStatus: 'cancelled' });
+        expect(acceptedLeaseRow).toEqual({ status: 'revoked' });
+        expect(acceptedEnvelopeRow).toEqual({ status: 'revoked' });
+
+        const running = await createRuntimeJobWithCapturedToken(
+          repository,
+          seed,
+          sealerCalls,
+          {
+            runtime_job_id: randomUUID(),
+            launch_lease_id: randomUUID(),
+            envelope_id: randomUUID(),
+            job_request_id: `runtime-job-request-${randomUUID()}`,
+            launch_attempt: 2,
+          },
+        );
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(running.input, seed, 'running-cancel-accept'));
+        await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(running.input, seed, 'running-cancel-claim'));
+        await repository.materializeCodexRuntimeJob(materializeRuntimeJobInput(running.input, seed, running.launchToken, 'running-cancel-materialize'));
+        await repository.startCodexRuntimeJob({
+          runtime_job_id: running.input.runtime_job_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'start-running-cancel',
+          nonce_timestamp: later,
+          idempotency_key: `start-${running.input.runtime_job_id}`,
+          request_digest: tokenHash(`start-request-${running.input.runtime_job_id}`),
+          runtime_evidence_digest: tokenHash(`runtime-evidence-${running.input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${running.input.runtime_job_id}`),
+          now: later,
+        });
+        await repository.cancelCodexRuntimeJob({
+          runtime_job_id: running.input.runtime_job_id,
+          reason_code: 'user_cancelled',
+          idempotency_key: `cancel-${running.input.runtime_job_id}`,
+          request_digest: tokenHash(`cancel-request-${running.input.runtime_job_id}`),
+          now: later,
+        });
+        await expect(
+          repository.terminalizeCodexRuntimeJob({
+            runtime_job_id: running.input.runtime_job_id,
+            launch_lease_id: running.input.launch_lease_id,
+            worker_id: seed.workerId,
+            worker_session_token: seed.sessionToken,
+            nonce: 'terminal-running-cancel-success-race',
+            nonce_timestamp: later,
+            terminal_status: 'succeeded',
+            reason_code: 'completed_after_cancel',
+            terminal_result_json: {
+              task_kind: 'spec_draft',
+              prompt_version: 'codex-generation-test-v1',
+              output_schema_version: 'spec-draft-test-v1',
+              generated_payload: { title: 'Generated spec' },
+              generated_payload_digest: tokenHash('generated-spec-after-cancel'),
+              generation_artifacts: [],
+              public_summary: 'completed after cancel',
+            },
+            idempotency_key: `terminal-success-after-cancel-${running.input.runtime_job_id}`,
+            request_digest: tokenHash(`terminal-success-after-cancel-request-${running.input.runtime_job_id}`),
+            now: later,
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('keeps runtime job launch leases out of legacy stale worker recovery', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input } = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls, {
+          expires_at: '2026-05-20T00:30:00.000Z',
+        });
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'legacy-recovery-skip'));
+
+        await expect(
+          repository.recoverStaleCodexWorkerLeases({
+            stale_before: later,
+            now: later,
+            worker_id: seed.workerId,
+            reason_code: 'legacy_stale_worker',
+          }),
+        ).resolves.toEqual({ recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] });
+        const [leaseRow] = await client.db
+          .select({ status: codex_launch_leases.status })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, input.launch_lease_id))
+          .limit(1);
+        const [actionRow] = await client.db
+          .select({ status: automation_action_runs.status })
+          .from(automation_action_runs)
+          .where(eq(automation_action_runs.id, seed.generationAction.id))
+          .limit(1);
+        expect(leaseRow).toEqual({ status: 'active' });
+        expect(actionRow).toEqual({ status: 'running' });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('materializes runtime jobs by launch token hash atomically and replays the same materialization', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input, launchToken } = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls);
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'materialize-accept'));
+        const claimed = await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'));
+        const materializeInput = materializeRuntimeJobInput(input, seed, launchToken, 'materialize-valid');
+        const terminalSuccessInput = {
+          runtime_job_id: input.runtime_job_id,
+          launch_lease_id: input.launch_lease_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'terminal-before-start',
+          nonce_timestamp: later,
+          terminal_status: 'succeeded' as const,
+          reason_code: 'completed',
+          terminal_result_json: {
+            task_kind: 'spec_draft',
+            prompt_version: 'codex-generation-test-v1',
+            output_schema_version: 'spec-draft-test-v1',
+            generated_payload: { title: 'Generated spec' },
+            generated_payload_digest: tokenHash('generated-spec-before-start'),
+            generation_artifacts: [],
+            public_summary: 'completed',
+          },
+          idempotency_key: `terminal-${input.runtime_job_id}`,
+          request_digest: tokenHash(`terminal-request-${input.runtime_job_id}`),
+          now: later,
+        };
+
+        await expect(repository.terminalizeCodexRuntimeJob(terminalSuccessInput)).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_runtime_job_unavailable',
+        });
+
+        await expect(
+          repository.materializeCodexRuntimeJob({
+            ...materializeInput,
+            nonce: 'materialize-wrong-hash',
+            launch_token_hash: tokenHash('wrong-launch-token'),
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_launch_materialization_denied',
+        });
+
+        const materialized = await repository.materializeCodexRuntimeJob(materializeInput);
+        await expect(
+          repository.terminalizeCodexRuntimeJob({ ...terminalSuccessInput, nonce: 'terminal-materializing-before-start' }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_runtime_job_unavailable',
+        });
+        await expect(
+          repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-valid-replay' }),
+        ).resolves.toEqual(materialized);
+        await expect(
+          repository.claimCodexLaunchTokenEnvelope({
+            ...claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'),
+            nonce: 'claim-replay-after-materialize',
+          }),
+        ).resolves.toEqual(claimed);
+        expect(materialized).toMatchObject({
+          lease_id: input.launch_lease_id,
+          materialized_at: later,
+          resolved_credentials: [{ payload: seed.secretPayload }],
+        });
+
+        const [jobRow] = await client.db
+          .select({ status: codex_runtime_jobs.status, materializationRequestDigest: codex_runtime_jobs.materializationRequestDigest })
+          .from(codex_runtime_jobs)
+          .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+          .limit(1);
+        const [leaseRow] = await client.db
+          .select({ status: codex_launch_leases.status, materializationRequestHash: codex_launch_leases.materializationRequestHash })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, input.launch_lease_id))
+          .limit(1);
+        expect(jobRow).toEqual({ status: 'materializing', materializationRequestDigest: materializeInput.request_digest });
+        expect(leaseRow).toEqual({ status: 'materialized', materializationRequestHash: materializeInput.request_digest });
+
+        await repository.startCodexRuntimeJob({
+          runtime_job_id: input.runtime_job_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'start-materialization-replay',
+          nonce_timestamp: later,
+          idempotency_key: `start-${input.runtime_job_id}`,
+          request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+          runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+          now: later,
+        });
+        await expect(
+          repository.claimCodexLaunchTokenEnvelope({
+            ...claimRuntimeJobEnvelopeInput(input, seed, 'materialize-claim'),
+            nonce: 'claim-replay-after-start',
+          }),
+        ).resolves.toEqual(claimed);
+        await expect(
+          repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-valid-replay-after-start' }),
+        ).resolves.toEqual(materialized);
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('rejects terminalization after runtime job expiry', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input, launchToken } = await createRuntimeJobWithCapturedToken(
+          repository,
+          seed,
+          sealerCalls,
+          { expires_at: '2026-05-20T00:01:30.000Z' },
+        );
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'expired-terminal-accept'));
+        await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'expired-terminal-claim'));
+        await repository.materializeCodexRuntimeJob(materializeRuntimeJobInput(input, seed, launchToken, 'expired-terminal-materialize'));
+        await repository.startCodexRuntimeJob({
+          runtime_job_id: input.runtime_job_id,
+          worker_id: seed.workerId,
+          worker_session_token: seed.sessionToken,
+          nonce: 'start-expired-terminal',
+          nonce_timestamp: later,
+          idempotency_key: `start-${input.runtime_job_id}`,
+          request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+          runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+          launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+          now: later,
+        });
+
+        for (const terminalStatus of ['succeeded', 'failed'] as const) {
+          await expect(
+            repository.terminalizeCodexRuntimeJob({
+              runtime_job_id: input.runtime_job_id,
+              launch_lease_id: input.launch_lease_id,
+              worker_id: seed.workerId,
+              worker_session_token: seed.sessionToken,
+              nonce: `terminal-expired-${terminalStatus}`,
+              nonce_timestamp: afterRuntimeJobExpiry,
+              terminal_status: terminalStatus,
+              reason_code: terminalStatus === 'succeeded' ? 'completed' : 'runtime_failed',
+              terminal_result_json:
+                terminalStatus === 'succeeded'
+                  ? {
+                      task_kind: 'spec_draft',
+                      prompt_version: 'codex-generation-test-v1',
+                      output_schema_version: 'spec-draft-test-v1',
+                      generated_payload: { title: 'Generated spec' },
+                      generated_payload_digest: tokenHash('generated-spec-after-expiry'),
+                      generation_artifacts: [],
+                      public_summary: 'completed after expiry',
+                    }
+                  : undefined,
+              idempotency_key: `terminal-expired-${terminalStatus}-${input.runtime_job_id}`,
+              request_digest: tokenHash(`terminal-expired-${terminalStatus}-request-${input.runtime_job_id}`),
+              now: afterRuntimeJobExpiry,
+            }),
+          ).rejects.toMatchObject({
+            name: 'DomainError',
+            code: 'codex_runtime_job_unavailable',
+          });
+        }
+
+        await repository.cancelCodexRuntimeJob({
+          runtime_job_id: input.runtime_job_id,
+          reason_code: 'user_cancelled',
+          idempotency_key: `cancel-before-expired-terminal-${input.runtime_job_id}`,
+          request_digest: tokenHash(`cancel-before-expired-terminal-request-${input.runtime_job_id}`),
+          now: later,
+        });
+        await expect(
+          repository.terminalizeCodexRuntimeJob({
+            runtime_job_id: input.runtime_job_id,
+            launch_lease_id: input.launch_lease_id,
+            worker_id: seed.workerId,
+            worker_session_token: seed.sessionToken,
+            nonce: 'terminal-expired-cancelled',
+            nonce_timestamp: afterRuntimeJobExpiry,
+            terminal_status: 'cancelled',
+            reason_code: 'user_cancelled',
+            idempotency_key: `terminal-expired-cancelled-${input.runtime_job_id}`,
+            request_digest: tokenHash(`terminal-expired-cancelled-request-${input.runtime_job_id}`),
+            now: afterRuntimeJobExpiry,
+          }),
+        ).rejects.toMatchObject({
+          name: 'DomainError',
+          code: 'codex_runtime_job_unavailable',
+        });
+      } finally {
+        await client.pool.end();
+      }
+    });
+
+    it('queued cancel revokes the launch lease and decrements worker lease count once', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(firstRepository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input } = await createRuntimeJobWithCapturedToken(firstRepository, seed, sealerCalls);
+        const cancelInput = {
+          runtime_job_id: input.runtime_job_id,
+          reason_code: 'user_cancelled',
+          idempotency_key: `cancel-${input.runtime_job_id}`,
+          request_digest: tokenHash(`cancel-request-${input.runtime_job_id}`),
+          now: later,
+        };
+
+        const [first, second] = await Promise.allSettled([
+          firstRepository.cancelCodexRuntimeJob(cancelInput),
+          secondRepository.cancelCodexRuntimeJob(cancelInput),
+        ]);
+
+        expect([first, second]).toEqual([
+          expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ status: 'terminal' }) }),
+          expect.objectContaining({ status: 'fulfilled', value: expect.objectContaining({ status: 'terminal' }) }),
+        ]);
+        const [jobRow] = await firstClient.db
+          .select({ status: codex_runtime_jobs.status, terminalStatus: codex_runtime_jobs.terminalStatus })
+          .from(codex_runtime_jobs)
+          .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+          .limit(1);
+        const [leaseRow] = await firstClient.db
+          .select({ status: codex_launch_leases.status, terminalReasonCode: codex_launch_leases.terminalReasonCode })
+          .from(codex_launch_leases)
+          .where(eq(codex_launch_leases.id, input.launch_lease_id))
+          .limit(1);
+        expect(jobRow).toEqual({ status: 'terminal', terminalStatus: 'cancelled' });
+        expect(leaseRow).toEqual({ status: 'revoked', terminalReasonCode: 'user_cancelled' });
+        await expectWorkerLeaseCount(firstClient, seed.workerId, 0);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
     it('replays concurrent identical bootstrap token creates', async () => {
       await resetForgeloopDatabase(usableDatabaseUrl);
       const firstClient = createDbClient({ connectionString: usableDatabaseUrl });

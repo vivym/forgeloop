@@ -59,6 +59,25 @@ const codexEffectiveConfigProbe = async (
   throw new Error('codex_app_server_effective_config_mismatch');
 };
 
+const createCodexRuntimeControlPlaneClient = () => {
+  const now = () => new Date().toISOString();
+  return new CodexRuntimeControlPlaneClient({
+    baseUrl: config.controlPlaneUrl,
+    trustedActorSigner: ({ method, pathAndQuery, rawBody }) => ({
+      ...signAutomationRequest({
+        method,
+        pathAndQuery,
+        rawBody,
+        actorId: config.actorId,
+        actorClass: 'automation_daemon',
+        daemonIdentity: config.daemonIdentity,
+        timestamp: now(),
+        secret: config.trustedActorHeaderSecret,
+      }),
+    }),
+  });
+};
+
 const createLocalDockerGenerationRuntimeOptions = async () => {
   if (config.codexWorkerMode !== 'local_docker') {
     return undefined;
@@ -83,21 +102,7 @@ const createLocalDockerGenerationRuntimeOptions = async () => {
   const hostGid = config.workerHostGid ?? process.getgid?.() ?? 0;
   const nonceFactory = () => randomBytes(16).toString('base64url');
   const now = () => new Date().toISOString();
-  const controlPlaneClient = new CodexRuntimeControlPlaneClient({
-    baseUrl: config.controlPlaneUrl,
-    trustedActorSigner: ({ method, pathAndQuery, rawBody }) => ({
-      ...signAutomationRequest({
-        method,
-        pathAndQuery,
-        rawBody,
-        actorId: config.actorId,
-        actorClass: 'automation_daemon',
-        daemonIdentity: config.daemonIdentity,
-        timestamp: now(),
-        secret: config.trustedActorHeaderSecret,
-      }),
-    }),
-  });
+  const controlPlaneClient = createCodexRuntimeControlPlaneClient();
   const worker = createLocalCodexWorkerRuntime({
     workerId,
     workerIdentity: requiredLocalDockerConfig(config.workerIdentity, 'FORGELOOP_WORKER_IDENTITY'),
@@ -190,11 +195,63 @@ const createLocalDockerGenerationRuntimeOptions = async () => {
   };
 };
 
+const createRemoteOutboundGenerationRuntimeOptions = () => {
+  if (config.codexWorkerMode !== 'remote_outbound') {
+    return undefined;
+  }
+  return { controlPlaneClient: createCodexRuntimeControlPlaneClient() };
+};
+
+const createRemoteRuntimeJobRecoveryController = (
+  controlPlaneClient: CodexRuntimeControlPlaneClient | undefined,
+) => {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  if (
+    config.codexWorkerMode !== 'remote_outbound' ||
+    controlPlaneClient === undefined ||
+    config.remoteRuntimeJobWaitTimeoutMs === undefined ||
+    config.remoteRuntimeJobPollIntervalMs === undefined
+  ) {
+    return {
+      async start() {},
+      stop() {},
+    };
+  }
+  const recover = async () => {
+    await controlPlaneClient.recoverStaleRuntimeJobs({
+      stale_before: new Date(Date.now() - config.remoteRuntimeJobWaitTimeoutMs!).toISOString(),
+      reason_code: 'codex_runtime_job_stale',
+    });
+  };
+  const reportRecoveryError = (error: unknown): void => {
+    console.error(error instanceof Error ? error.message : error);
+  };
+  return {
+    async start() {
+      await recover().catch(reportRecoveryError);
+      timer = setInterval(() => {
+        void recover().catch(reportRecoveryError);
+      }, config.remoteRuntimeJobPollIntervalMs);
+    },
+    stop() {
+      if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    },
+  };
+};
+
 const start = async (): Promise<void> => {
   const localDockerOptions = await createLocalDockerGenerationRuntimeOptions();
+  const remoteOutboundOptions = createRemoteOutboundGenerationRuntimeOptions();
+  const remoteRecovery = createRemoteRuntimeJobRecoveryController(remoteOutboundOptions?.controlPlaneClient);
   const generationRuntime = createAutomationDaemonGenerationRuntime(
     config,
-    localDockerOptions === undefined ? {} : { localDocker: localDockerOptions },
+    {
+      ...(localDockerOptions === undefined ? {} : { localDocker: localDockerOptions }),
+      ...(remoteOutboundOptions === undefined ? {} : { remoteOutbound: remoteOutboundOptions }),
+    },
   );
   const generationPlanning = generationPlanningForDaemon(config);
   const daemon = new AutomationDaemon({
@@ -213,10 +270,18 @@ const start = async (): Promise<void> => {
     },
   });
 
-  const stop = (): void => daemon.stop();
+  await remoteRecovery.start();
+  const stop = (): void => {
+    remoteRecovery.stop();
+    daemon.stop();
+  };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
-  await daemon.run();
+  try {
+    await daemon.run();
+  } finally {
+    remoteRecovery.stop();
+  }
 };
 
 void start().catch((error: unknown) => {

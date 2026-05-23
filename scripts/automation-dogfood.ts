@@ -30,10 +30,11 @@ import {
   CodexRuntimeControlPlaneClient,
   DockerizedCodexAppServerLauncher,
   createLocalCodexWorkerRuntime,
+  createRemoteCodexWorkerClient,
 } from '../packages/codex-worker-runtime/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../packages/db/src/index';
 import type { AutomationActionRun, Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
-import { createLeasedDockerCodexGenerationRuntime } from '../apps/automation-daemon/src/generation-runtime';
+import { createLeasedDockerCodexGenerationRuntime, createRemoteCodexGenerationRuntime } from '../apps/automation-daemon/src/generation-runtime';
 import {
   loadCodexRuntimeDogfoodBootstrapConfig,
   runCodexRuntimeDogfoodBootstrap,
@@ -44,6 +45,7 @@ import {
   renderAutomationDogfoodSummary,
   type AutomationDogfoodSummaryInput,
 } from './automation-dogfood-summary';
+import { codexCanonicalDigest, validateCodexDockerRuntimeEvidence } from '../packages/domain/src/index';
 
 interface AutomationDogfoodResult extends AutomationDogfoodSummaryInput {
   exitCode: number;
@@ -55,6 +57,11 @@ export interface DogfoodGenerationRuntimeConfig {
   planning: AutomationGenerationPlanningConfig;
   runtime?: CodexGenerationRuntime;
   localDockerRequested?: boolean;
+  remoteOutboundRequested?: {
+    waitTimeoutMs: number;
+    pollIntervalMs: number;
+  };
+  observedDockerRuntimeEvidence?: Array<ReturnType<typeof validateCodexDockerRuntimeEvidence>>;
   cleanup?: () => void;
   appServerDogfood: AutomationDogfoodSummaryInput['appServerDogfood'];
 }
@@ -92,6 +99,23 @@ const optionalNonBlankEnv = (env: EnvLike, key: string): string | undefined => {
     return undefined;
   }
   return value.trim();
+};
+
+const requiredConfigEnv = (env: EnvLike, key: string): string => {
+  const value = optionalNonBlankEnv(env, key);
+  if (value === undefined) {
+    throw new Error(`${key}_missing`);
+  }
+  return value;
+};
+
+const positiveIntConfigEnv = (env: EnvLike, key: string): number => {
+  const raw = requiredConfigEnv(env, key);
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${key}_invalid`);
+  }
+  return value;
 };
 
 export const requestedGenerationMode = (env: EnvLike = process.env): AutomationGenerationPlanningConfig['mode'] => {
@@ -132,13 +156,27 @@ export const loadDogfoodGenerationRuntimeConfig = (env: EnvLike = process.env): 
   }
 
   if (mode === 'app_server') {
-    return optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_MODE') === 'local_docker'
-      ? {
-          planning: createDogfoodGenerationPlanning('app_server'),
-          localDockerRequested: true,
-          appServerDogfood: { status: 'blocked', reasonCode: 'codex_worker_unavailable' },
-        }
-      : preflightBlockedGeneration('codex_docker_runtime_required');
+    const workerMode = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_MODE');
+    if (workerMode === 'local_docker') {
+      return {
+        planning: createDogfoodGenerationPlanning('app_server'),
+        localDockerRequested: true,
+        appServerDogfood: { status: 'blocked', reasonCode: 'codex_worker_unavailable' },
+      };
+    }
+    if (workerMode === 'remote_outbound') {
+      const waitTimeoutMs = positiveIntConfigEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS');
+      const pollIntervalMs = positiveIntConfigEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS');
+      return {
+        planning: createDogfoodGenerationPlanning('app_server'),
+        remoteOutboundRequested: {
+          waitTimeoutMs,
+          pollIntervalMs,
+        },
+        appServerDogfood: { status: 'blocked', reasonCode: 'codex_worker_unavailable', runtimeMode: 'remote_outbound' },
+      };
+    }
+    return preflightBlockedGeneration('codex_docker_runtime_required');
   }
 
   return {
@@ -269,6 +307,7 @@ const createDogfoodLocalDockerGenerationRuntime = async (input: {
   project: Project;
   generation: DogfoodGenerationRuntimeConfig;
 }): Promise<DogfoodGenerationRuntimeConfig> => {
+  const observedDockerRuntimeEvidence: Array<ReturnType<typeof validateCodexDockerRuntimeEvidence>> = [];
   const bootstrapConfig = bootstrapConfigForProject(input.baseUrl, input.project);
   const bootstrapSummary = await runCodexRuntimeDogfoodBootstrap(bootstrapConfig);
   const dockerImageDigest = String(bootstrapSummary.docker_image_digest);
@@ -382,13 +421,101 @@ const createDogfoodLocalDockerGenerationRuntime = async (input: {
       ...(rawNotificationLimitBytes === undefined ? {} : { rawNotificationLimitBytes }),
       ...(maxConcurrency === undefined ? {} : { maxConcurrency }),
     },
+    onDockerRuntimeEvidence: (evidence) => {
+      observedDockerRuntimeEvidence.push(validateCodexDockerRuntimeEvidence(evidence));
+    },
   });
 
   return {
     ...input.generation,
     runtime,
     cleanup: () => heartbeat.stop(),
-    appServerDogfood: { status: 'passed' },
+    observedDockerRuntimeEvidence,
+    appServerDogfood: { status: 'blocked', reasonCode: 'codex_worker_unavailable', runtimeMode: 'local_docker' },
+  };
+};
+
+const createDogfoodRemoteOutboundGenerationRuntime = async (input: {
+  baseUrl: string;
+  project: Project;
+  generation: DogfoodGenerationRuntimeConfig;
+}): Promise<DogfoodGenerationRuntimeConfig> => {
+  const remote = input.generation.remoteOutboundRequested;
+  if (remote === undefined) {
+    return input.generation;
+  }
+  const bootstrapConfig = bootstrapConfigForProject(input.baseUrl, input.project);
+  const bootstrapSummary = await runCodexRuntimeDogfoodBootstrap(bootstrapConfig);
+  const dockerImageDigest = String(bootstrapSummary.docker_image_digest);
+  const networkPolicyDigest = String(bootstrapSummary.network_policy_digest);
+  const networkProviderConfigDigest = String(bootstrapSummary.network_provider_config_digest);
+  const generationRuntimeProfileId = String(bootstrapSummary.generation_runtime_profile_id);
+  const generationCredentialBindingId = String(bootstrapSummary.generation_credential_binding_id);
+  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_WORKER_ID') ?? bootstrapConfig.workerIdentity;
+  const workerTempRoot = requiredDogfoodEnv('FORGELOOP_WORKER_TEMP_ROOT');
+  const dockerBin = optionalNonBlankEnv(process.env, 'FORGELOOP_DOCKER_BIN') ?? 'docker';
+  const now = () => new Date().toISOString();
+  const nonceFactory = () => randomUUID();
+  const controlPlaneClient = new CodexRuntimeControlPlaneClient({
+    baseUrl: input.baseUrl,
+    trustedActorSigner: dogfoodTrustedActorSigner,
+    now,
+    nonceFactory,
+  });
+  const launcher = new DockerizedCodexAppServerLauncher({
+    dockerBin,
+    workerId,
+    workerTempRoot,
+    dockerRunner: new CliDockerRunner(dockerBin),
+    controlPlaneClient,
+    hostUid: bootstrapConfig.hostWorkerUid,
+    hostGid: bootstrapConfig.hostWorkerGid,
+    appServerTransport: dogfoodAppServerTransport(),
+    allowedRepoRoots: [repoPath],
+    effectiveConfigProbe: codexEffectiveConfigProbe,
+    now,
+    nonceFactory,
+  });
+  let remoteWorkerRunning = true;
+  const worker = createRemoteCodexWorkerClient({
+    workerId,
+    workerIdentity: bootstrapConfig.workerIdentity,
+    version: 'automation-dogfood-remote-outbound',
+    bootstrapToken: bootstrapConfig.workerBootstrapToken,
+    bootstrapTokenVersion: bootstrapConfig.workerBootstrapTokenVersion,
+    workerTempRoot,
+    allowedScopes: [bootstrapConfig.allowedScope],
+    capabilities: ['generation'],
+    dockerImageDigests: [dockerImageDigest],
+    networkPolicyDigests: [networkPolicyDigest],
+    networkProviderConfigDigests: [networkProviderConfigDigest],
+    hostUid: bootstrapConfig.hostWorkerUid,
+    hostGid: bootstrapConfig.hostWorkerGid,
+    maxConcurrency: 1,
+    controlPlaneClient,
+    launcher,
+    scavenger: async () => undefined,
+    pollIntervalMs: remote.pollIntervalMs,
+    controlPollIntervalMs: remote.pollIntervalMs,
+    shouldContinue: () => remoteWorkerRunning,
+    now,
+    nonceFactory,
+  });
+  const workerLoop = worker.runLoop().catch(() => undefined);
+  return {
+    ...input.generation,
+    runtime: createRemoteCodexGenerationRuntime({
+      controlPlaneClient,
+      runtimeProfileId: generationRuntimeProfileId,
+      credentialBindingId: generationCredentialBindingId,
+      waitTimeoutMs: remote.waitTimeoutMs,
+      pollIntervalMs: remote.pollIntervalMs,
+    }),
+    cleanup: () => {
+      remoteWorkerRunning = false;
+      void workerLoop;
+    },
+    appServerDogfood: { status: 'blocked', reasonCode: 'codex_worker_unavailable', runtimeMode: 'remote_outbound' },
   };
 };
 
@@ -610,6 +737,200 @@ const summaryFromRepository = async (input: {
   };
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const actionRunGenerationArtifacts = (actionRun: AutomationActionRun): Array<Record<string, unknown>> => {
+  const result = actionRun.result_json;
+  if (!isRecord(result)) {
+    return [];
+  }
+  const artifacts = result.generation_artifacts;
+  return Array.isArray(artifacts) ? artifacts.filter(isRecord) : [];
+};
+
+const observedArtifactsFromActionRuns = (
+  actionRuns: AutomationActionRun[],
+): NonNullable<AutomationDogfoodSummaryInput['appServerDogfood']['artifacts']> => {
+  const artifacts = new Map<string, { name: string; digest: string }>();
+  for (const artifact of actionRuns.flatMap(actionRunGenerationArtifacts)) {
+    if (typeof artifact.name !== 'string' || typeof artifact.digest !== 'string') {
+      continue;
+    }
+    artifacts.set(`${artifact.name}:${artifact.digest}`, { name: artifact.name, digest: artifact.digest });
+  }
+  return [...artifacts.values()];
+};
+
+const runtimeJobIdFromArtifact = (artifact: Record<string, unknown>): string | undefined => {
+  if (typeof artifact.storage_uri !== 'string') {
+    return undefined;
+  }
+  const match = /^artifact:\/\/codex-runtime-jobs\/([^/]+)\/artifacts\/[^/]+$/.exec(artifact.storage_uri);
+  return match?.[1];
+};
+
+const runtimeJobIdsFromActionRuns = (actionRuns: AutomationActionRun[]): string[] => [
+  ...new Set(actionRuns.flatMap((actionRun) => actionRunGenerationArtifacts(actionRun).flatMap((artifact) => runtimeJobIdFromArtifact(artifact) ?? []))),
+];
+
+const generationActionRunTypes = new Set(['ensure_spec_draft', 'ensure_plan_draft', 'ensure_package_drafts']);
+
+const runtimeJobIdsForActionRun = (actionRun: AutomationActionRun): string[] => [
+  ...new Set(actionRunGenerationArtifacts(actionRun).flatMap((artifact) => runtimeJobIdFromArtifact(artifact) ?? [])),
+];
+
+const isoTimeMs = (value: string | undefined): number | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+};
+
+const durationMs = (start: string | undefined, finish: string | undefined): number | undefined => {
+  const startMs = isoTimeMs(start);
+  const finishMs = isoTimeMs(finish);
+  if (startMs === undefined || finishMs === undefined || finishMs < startMs) {
+    return undefined;
+  }
+  return finishMs - startMs;
+};
+
+const durationBucket = (duration: number | undefined): string | undefined => {
+  if (duration === undefined) {
+    return undefined;
+  }
+  if (duration < 5_000) {
+    return '<5s';
+  }
+  if (duration < 60_000) {
+    return '<60s';
+  }
+  if (duration < 5 * 60_000) {
+    return '<5m';
+  }
+  return '>5m';
+};
+
+const maxObservedDuration = (durations: Array<number | undefined>): number | undefined => {
+  const observed = durations.filter((value): value is number => value !== undefined);
+  return observed.length === 0 ? undefined : Math.max(...observed);
+};
+
+const timingBucketsFromActionRuns = (
+  actionRuns: AutomationActionRun[],
+): AutomationDogfoodSummaryInput['appServerDogfood']['timingBuckets'] => ({
+  queue: durationBucket(maxObservedDuration(actionRuns.map((actionRun) => durationMs(actionRun.created_at, actionRun.started_at)))),
+  execution: durationBucket(maxObservedDuration(actionRuns.map((actionRun) => durationMs(actionRun.started_at, actionRun.finished_at)))),
+  terminalization: durationBucket(maxObservedDuration(actionRuns.map((actionRun) => durationMs(actionRun.finished_at, actionRun.updated_at)))),
+});
+
+const timingBucketsFromRuntimeJobs = (
+  jobs: Array<Awaited<ReturnType<DeliveryRepository['getCodexRuntimeJob']>>>,
+): AutomationDogfoodSummaryInput['appServerDogfood']['timingBuckets'] => {
+  const observedJobs = jobs.filter((job): job is NonNullable<typeof job> => job !== undefined);
+  return {
+    queue: durationBucket(maxObservedDuration(observedJobs.map((job) => durationMs(job.created_at, job.started_at)))),
+    execution: durationBucket(maxObservedDuration(observedJobs.map((job) => durationMs(job.started_at, job.terminal_at)))),
+    terminalization: durationBucket(maxObservedDuration(observedJobs.map((job) => durationMs(job.terminal_at, job.updated_at)))),
+  };
+};
+
+const runtimeEvidenceFromJob = (
+  job: Awaited<ReturnType<DeliveryRepository['getCodexRuntimeJob']>>,
+): ReturnType<typeof validateCodexDockerRuntimeEvidence> | undefined => {
+  const terminalResult = job?.terminal_result_json;
+  if (!isRecord(terminalResult) || terminalResult.runtime_evidence === undefined) {
+    return undefined;
+  }
+  try {
+    const evidence = validateCodexDockerRuntimeEvidence(terminalResult.runtime_evidence);
+    if (
+      job.runtime_evidence_digest === undefined ||
+      codexCanonicalDigest(terminalResult.runtime_evidence) !== job.runtime_evidence_digest
+    ) {
+      return undefined;
+    }
+    return evidence;
+  } catch {
+    return undefined;
+  }
+};
+
+const appServerDogfoodFromObservedEvidence = (input: {
+  runtimeMode: 'local_docker' | 'remote_outbound';
+  evidence?: ReturnType<typeof validateCodexDockerRuntimeEvidence>;
+  artifacts: NonNullable<AutomationDogfoodSummaryInput['appServerDogfood']['artifacts']>;
+  timingBuckets: AutomationDogfoodSummaryInput['appServerDogfood']['timingBuckets'];
+}): AutomationDogfoodSummaryInput['appServerDogfood'] => {
+  const evidence = input.evidence;
+  if (evidence === undefined) {
+    return { status: 'failed', reasonCode: 'codex_docker_runtime_evidence_unsafe', runtimeMode: input.runtimeMode };
+  }
+  const observed: AutomationDogfoodSummaryInput['appServerDogfood'] = {
+    status: 'passed',
+    runtimeMode: input.runtimeMode,
+    dockerizedAppServerEvidence: {
+      dockerImageDigest: evidence.docker_image_digest,
+      ...(evidence.network_policy_digest === undefined ? {} : { networkPolicyDigest: evidence.network_policy_digest }),
+      effectiveConfigDigest: evidence.app_server_effective_config_digest,
+      containerIdDigest: evidence.container_id_digest,
+    },
+    artifacts: input.artifacts,
+    timingBuckets: input.timingBuckets,
+  };
+  if (
+    evidence.network_policy_digest === undefined ||
+    input.artifacts.length === 0 ||
+    input.timingBuckets?.queue === undefined ||
+    input.timingBuckets.execution === undefined ||
+    input.timingBuckets.terminalization === undefined
+  ) {
+    return { ...observed, status: 'failed', reasonCode: 'codex_docker_runtime_evidence_unsafe' };
+  }
+  return observed;
+};
+
+const observedAppServerDogfood = async (input: {
+  generation: DogfoodGenerationRuntimeConfig;
+  repository: DeliveryRepository;
+  actionRuns: AutomationActionRun[];
+}): Promise<AutomationDogfoodSummaryInput['appServerDogfood']> => {
+  const succeededActionRuns = input.actionRuns.filter((actionRun) => actionRun.status === 'succeeded');
+  if (input.generation.remoteOutboundRequested !== undefined) {
+    const succeededGenerationActionRuns = succeededActionRuns.filter((actionRun) => generationActionRunTypes.has(actionRun.action_type));
+    const hasRuntimeJobForEveryGenerationAction = succeededGenerationActionRuns.every(
+      (actionRun) => runtimeJobIdsForActionRun(actionRun).length > 0,
+    );
+    const runtimeJobIds = runtimeJobIdsFromActionRuns(succeededGenerationActionRuns);
+    const runtimeJobs = await Promise.all(
+      runtimeJobIds.map((runtimeJobId) => input.repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId })),
+    );
+    const runtimeEvidences = runtimeJobs.map(runtimeEvidenceFromJob);
+    const hasEvidenceForEveryJob =
+      hasRuntimeJobForEveryGenerationAction &&
+      runtimeJobIds.length > 0 &&
+      runtimeJobs.length === runtimeJobIds.length &&
+      runtimeEvidences.every((evidence) => evidence !== undefined);
+    return appServerDogfoodFromObservedEvidence({
+      runtimeMode: 'remote_outbound',
+      evidence: hasEvidenceForEveryJob ? runtimeEvidences[0] : undefined,
+      artifacts: observedArtifactsFromActionRuns(succeededActionRuns),
+      timingBuckets: timingBucketsFromRuntimeJobs(runtimeJobs),
+    });
+  }
+  if (input.generation.localDockerRequested === true) {
+    return appServerDogfoodFromObservedEvidence({
+      runtimeMode: 'local_docker',
+      evidence: input.generation.observedDockerRuntimeEvidence?.[0],
+      artifacts: observedArtifactsFromActionRuns(succeededActionRuns),
+      timingBuckets: timingBucketsFromActionRuns(succeededActionRuns),
+    });
+  }
+  return input.generation.appServerDogfood;
+};
+
 const errorReasonCode = (error: unknown): string => {
   if (error instanceof Error && error.message.length > 0) {
     return publicDogfoodErrorCode(error.message) ?? 'automation_dogfood_failed';
@@ -624,7 +945,7 @@ const resultWithExitCode = (summary: AutomationDogfoodSummaryInput): AutomationD
 
 const runDogfood = async (): Promise<AutomationDogfoodResult> => {
   let generation = loadDogfoodGenerationRuntimeConfig();
-  if (generation.runtime === undefined && generation.localDockerRequested !== true) {
+  if (generation.runtime === undefined && generation.localDockerRequested !== true && generation.remoteOutboundRequested === undefined) {
     return resultWithExitCode({
       planDraftCreated: false,
       packageDraftCount: 0,
@@ -655,6 +976,9 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
         project: seeded.project,
         generation,
       });
+    }
+    if (generation.remoteOutboundRequested !== undefined) {
+      generation = await createDogfoodRemoteOutboundGenerationRuntime({ baseUrl, project: seeded.project, generation });
     }
     if (generation.runtime === undefined) {
       return resultWithExitCode({
@@ -731,7 +1055,7 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
       nonSucceededActionRunCount: actionRuns.filter((actionRun) => actionRun.status !== 'succeeded').length,
       runSessionCount: runSessions.length,
       restartRecoveredFromActionRuns,
-      appServerDogfood: generation.appServerDogfood.status === 'passed' ? { status: 'passed' } : generation.appServerDogfood,
+      appServerDogfood: await observedAppServerDogfood({ generation, repository, actionRuns }),
     };
     return resultWithExitCode(summary);
   } catch (error) {

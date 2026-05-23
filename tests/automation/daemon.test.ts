@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
+import { codexCanonicalDigest } from '../../packages/domain/src/index';
 import { createCodexGenerationRuntime } from '../../packages/codex-runtime/src/index';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
 import {
   createAutomationDaemonGenerationRuntime,
   createLeasedDockerCodexGenerationRuntime,
+  createRemoteCodexGenerationRuntime,
 } from '../../apps/automation-daemon/src/generation-runtime';
 import {
   projectRuntimeSnapshotIdempotencyKey,
   type AutomationGenerationWorkItemContextV1,
   type AutomationGenerationPlanContextV1,
+  AutomationHttpError,
   AutomationActionResponse,
   AutomationActionRunRecord,
   BlockActionInput,
@@ -302,6 +305,19 @@ const generationPlanning = {
   },
 } as const;
 
+const generatedRemoteSpec = () => ({
+  schema_version: 'spec_draft.v1' as const,
+  summary: 'Remote spec summary',
+  content: 'Remote spec content',
+  background: 'Remote background',
+  goals: ['Use remote runtime jobs'],
+  scope_in: ['remote worker execution'],
+  scope_out: ['direct CLI execution'],
+  acceptance_criteria: ['runtime job terminal result is consumed'],
+  risk_notes: ['none'],
+  test_strategy_summary: 'unit tests',
+});
+
 describe('automation daemon loop', () => {
   it('loads required config and path-list roots from the environment', () => {
     expect(
@@ -503,6 +519,867 @@ describe('automation daemon loop', () => {
     });
     expect(seenConfigs[0]?.transportFactory?.(`docker-exec:sha256:${'a'.repeat(64)}`)).toBe(privateTransport);
     expect(closed).toEqual([{ status: 'succeeded', summary: 'generation complete' }]);
+  });
+
+  it('executes Spec draft generation through a remote runtime job and writes through the command boundary', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      workItemsRequiringSpec: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetStatus: 'triage',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+    });
+    client.actionToClaim = claimedSpecAction();
+    const remoteCalls: Array<{ method: string; args: unknown[] }> = [];
+    const spec = generatedRemoteSpec();
+    const specDigest = codexCanonicalDigest(spec);
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async (input) => {
+          remoteCalls.push({ method: 'getStatus', args: [input] });
+          return {
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+            credential_binding_id: 'credential-binding-1',
+            credential_binding_version_id: 'credential-version-1',
+            credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+            docker_image_digest: `sha256:${'3'.repeat(64)}`,
+            network_policy_digest: `sha256:${'4'.repeat(64)}`,
+          };
+        },
+        createRuntimeJob: async (input) => {
+          remoteCalls.push({ method: 'createRuntimeJob', args: [input] });
+          return {
+            runtime_job: { id: String(input.runtime_job_id), status: 'queued' },
+            replayed: false,
+          };
+        },
+        renewAutomationActionRunClaim: async (actionRunId, input) => {
+          remoteCalls.push({ method: 'renewAutomationActionRunClaim', args: [actionRunId, input] });
+          return { action_run: { id: actionRunId, status: 'running' } };
+        },
+        getRuntimeJob: async (jobId) => {
+          remoteCalls.push({ method: 'getRuntimeJob', args: [jobId] });
+          return {
+            runtime_job: {
+              id: jobId,
+              status: 'terminal',
+              terminal_status: 'succeeded',
+              terminal_reason_code: 'codex_runtime_job_succeeded',
+              terminal_result_json: {
+                task_kind: 'spec_draft',
+                prompt_version: 'spec-draft.remote.v1',
+                output_schema_version: 'spec_draft.v1',
+                generated_payload: spec,
+                generated_payload_digest: specDigest,
+                generation_artifacts: [],
+                public_summary: 'Remote runtime generated a spec.',
+              },
+            },
+          };
+        },
+        cancelRuntimeJob: async (jobId, input) => {
+          remoteCalls.push({ method: 'cancelRuntimeJob', args: [jobId, input] });
+          return {};
+        },
+      },
+    });
+    const daemon = new AutomationDaemon({
+      ...daemonOptions(client),
+      generationPlanning: {
+        mode: 'app_server',
+        tasks: {
+          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
+          package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
+        },
+      },
+      generationRuntime: runtime,
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({ plannedActionCount: 1, executed: { status: 'succeeded' } });
+    expect(remoteCalls.map((call) => call.method)).toEqual([
+      'getStatus',
+      'createRuntimeJob',
+      'renewAutomationActionRunClaim',
+      'getRuntimeJob',
+    ]);
+    expect(remoteCalls.find((call) => call.method === 'createRuntimeJob')?.args[0]).toMatchObject({
+      target: {
+        target_type: 'automation_action_run',
+        target_id: 'spec-action-run-1',
+        target_kind: 'generation',
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+      },
+      action_type: 'ensure_spec_draft',
+      action_attempt: 1,
+      action_claim_token: 'claim-token-1',
+      precondition_fingerprint: 'precondition-fingerprint-1',
+      input_json: {
+        schema_version: 'codex_generation_workload.v1',
+        signed_context_ref: expect.stringMatching(/^artifact:\/\/codex-runtime-jobs\/codex-generation-job-[0-9a-f]+\/workload\/signed-context$/),
+        signed_context_digest: expect.stringMatching(/^sha256:/),
+      },
+      workspace_acquisition_json: {
+        schema_version: 'codex_generation_workspace_acquisition.v1',
+        signed_context_json: expect.objectContaining({ context_version: 'generation_context.work_item.v1' }),
+      },
+    });
+    expect(client.calls.map((call) => call.method)).toContain('ensureSpecDraft');
+    expect(client.calls.map((call) => call.method)).toContain('completeAction');
+  });
+
+  it('cancels the remote runtime job when action claim renewal is lost while waiting', async () => {
+    const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async () => {
+          throw new Error('codex_control_plane_request_failed:409');
+        },
+        getRuntimeJob: async () => ({ runtime_job: { id: 'runtime-job-1', status: 'running' } }),
+        cancelRuntimeJob: async (jobId, input) => {
+          cancelled.push({ jobId, input });
+          return {};
+        },
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toThrow(/automation_action_claim_conflict/);
+
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]).toMatchObject({
+      input: { reason_code: 'codex_runtime_job_cancelled' },
+    });
+  });
+
+  it('keeps remote runtime job input stable across create replay attempts', async () => {
+    const createInputs: Record<string, unknown>[] = [];
+    let nowValue = '2026-05-23T00:00:00.000Z';
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => nowValue,
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => {
+          createInputs.push(input);
+          return { runtime_job: { id: String(input.runtime_job_id), status: 'queued' } };
+        },
+        renewAutomationActionRunClaim: async () => {
+          throw new Error('codex_control_plane_request_failed:503');
+        },
+        getRuntimeJob: async (jobId) => ({ runtime_job: { id: jobId, status: 'running' } }),
+        cancelRuntimeJob: async () => ({}),
+      },
+    });
+    const input = {
+      actionRunId: 'spec-action-run-1',
+      projectId: 'project-1',
+      repoIds: ['repo-1'],
+      context: { context_version: 'generation_context.work_item.v1' },
+      promptVersion: 'spec-draft.remote.v1',
+      outputSchemaVersion: 'spec_draft.v1',
+      policyDigests: {},
+      orchestration: {
+        targetType: 'automation_action_run' as const,
+        actionRunId: 'spec-action-run-1',
+        actionType: 'ensure_spec_draft' as const,
+        actionAttempt: 1,
+        claimToken: 'claim-token-1',
+        preconditionFingerprint: 'precondition-fingerprint-1',
+        automationScope: repoScope,
+        idempotencyKey: 'spec-action-run-1-idempotency',
+      },
+    };
+
+    await expect(runtime.generateSpecDraft(input)).rejects.toMatchObject({ code: 'codex_app_server_unavailable' });
+    nowValue = '2026-05-23T00:01:00.000Z';
+    await expect(runtime.generateSpecDraft(input)).rejects.toMatchObject({ code: 'codex_app_server_unavailable' });
+
+    expect(createInputs).toHaveLength(2);
+    expect(createInputs[1]).toMatchObject({
+      runtime_job_id: createInputs[0]?.runtime_job_id,
+      job_request_id: createInputs[0]?.job_request_id,
+      input_json: createInputs[0]?.input_json,
+      workspace_acquisition_json: createInputs[0]?.workspace_acquisition_json,
+    });
+  });
+
+  it('treats transient remote action claim renewal failures as retryable transport failures', async () => {
+    const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async () => {
+          throw new Error('codex_control_plane_request_failed:503');
+        },
+        getRuntimeJob: async () => ({ runtime_job: { id: 'runtime-job-1', status: 'running' } }),
+        cancelRuntimeJob: async (jobId, input) => {
+          cancelled.push({ jobId, input });
+          return {};
+        },
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'CodexGenerationError', code: 'codex_app_server_unavailable', retryable: true });
+
+    expect(cancelled).toHaveLength(1);
+  });
+
+  it('rejects remote terminal generation artifact refs that were not issued for the runtime job', async () => {
+    const spec = generatedRemoteSpec();
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => ({
+          runtime_job: {
+            id: jobId,
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            terminal_result_json: {
+              task_kind: 'spec_draft',
+              prompt_version: 'spec-draft.remote.v1',
+              output_schema_version: 'spec_draft.v1',
+              generated_payload: spec,
+              generated_payload_digest: codexCanonicalDigest(spec),
+              generation_artifacts: [
+                {
+                  kind: 'raw_metadata',
+                  name: 'invented',
+                  content_type: 'application/json',
+                  digest: `sha256:${'5'.repeat(64)}`,
+                  internal_ref: 'artifact://codex-runtime-jobs/other-job/artifacts/invented',
+                },
+              ],
+              public_summary: 'Remote runtime generated a spec.',
+            },
+          },
+        }),
+        cancelRuntimeJob: async () => ({}),
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'CodexGenerationError', code: 'generated_output_schema_invalid' });
+  });
+
+  it('rejects remote generated payload artifact refs until daemon artifact fetch is implemented', async () => {
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => ({
+          runtime_job: {
+            id: jobId,
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            terminal_result_json: {
+              task_kind: 'spec_draft',
+              prompt_version: 'spec-draft.remote.v1',
+              output_schema_version: 'spec_draft.v1',
+              generated_payload: {
+                schema_version: 'generated_payload_ref.v1',
+                artifact: {
+                  kind: 'generated_payload',
+                  name: 'generated-payload.json',
+                  content_type: 'application/json',
+                  digest: `sha256:${'5'.repeat(64)}`,
+                  internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/generated_payload`,
+                },
+              },
+              generated_payload_digest: `sha256:${'6'.repeat(64)}`,
+              generation_artifacts: [
+                {
+                  kind: 'generated_payload',
+                  name: 'generated-payload.json',
+                  content_type: 'application/json',
+                  digest: `sha256:${'5'.repeat(64)}`,
+                  internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/generated_payload`,
+                },
+              ],
+              public_summary: 'Remote runtime generated an oversized spec.',
+            },
+          },
+        }),
+        cancelRuntimeJob: async () => ({}),
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'CodexGenerationError', code: 'generated_output_too_large' });
+  });
+
+  it('caps remote runtime job polling sleep to the configured wait deadline', async () => {
+    const sleepDurations: number[] = [];
+    const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 1_000,
+      pollIntervalMs: 5_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async (durationMs) => {
+        sleepDurations.push(durationMs);
+      },
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => ({ runtime_job: { id: jobId, status: 'running' } }),
+        cancelRuntimeJob: async (jobId, input) => {
+          cancelled.push({ jobId, input });
+          return {};
+        },
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'codex_runtime_job_expired' });
+
+    expect(sleepDurations).toEqual([1_000]);
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.input).toMatchObject({ reason_code: 'codex_runtime_job_expired' });
+  });
+
+  it('does not sleep again when control-plane polling consumes the remote wait deadline', async () => {
+    const sleepDurations: number[] = [];
+    const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 5,
+      pollIntervalMs: 5,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async (durationMs) => {
+        sleepDurations.push(durationMs);
+      },
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => {
+          await new Promise((resolve) => setTimeout(resolve, 15));
+          return { runtime_job: { id: jobId, status: 'running' } };
+        },
+        cancelRuntimeJob: async (jobId, input) => {
+          cancelled.push({ jobId, input });
+          return {};
+        },
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'codex_runtime_job_expired' });
+
+    expect(sleepDurations).toEqual([]);
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.input).toMatchObject({ reason_code: 'codex_runtime_job_expired' });
+  });
+
+  it('times out a remote runtime job while action claim renewal is still stalled', async () => {
+    const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    let renewalResolved = false;
+    let getRuntimeJobCalled = false;
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 5,
+      pollIntervalMs: 5,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          renewalResolved = true;
+          return { action_run: { id: actionRunId, status: 'running' } };
+        },
+        getRuntimeJob: async (jobId) => {
+          getRuntimeJobCalled = true;
+          return { runtime_job: { id: jobId, status: 'running' } };
+        },
+        cancelRuntimeJob: async (jobId, input) => {
+          cancelled.push({ jobId, input });
+          return {};
+        },
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'codex_runtime_job_expired' });
+
+    expect(renewalResolved).toBe(false);
+    expect(getRuntimeJobCalled).toBe(false);
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.input).toMatchObject({ reason_code: 'codex_runtime_job_expired' });
+  });
+
+  it('times out a remote runtime job while runtime job polling is still stalled', async () => {
+    const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    let pollResolved = false;
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 5,
+      pollIntervalMs: 5,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          pollResolved = true;
+          return { runtime_job: { id: jobId, status: 'running' } };
+        },
+        cancelRuntimeJob: async (jobId, input) => {
+          cancelled.push({ jobId, input });
+          return {};
+        },
+      },
+    });
+
+    await expect(
+      runtime.generateSpecDraft({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.work_item.v1' },
+        promptVersion: 'spec-draft.remote.v1',
+        outputSchemaVersion: 'spec_draft.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_spec_draft',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'codex_runtime_job_expired' });
+
+    expect(pollResolved).toBe(false);
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.input).toMatchObject({ reason_code: 'codex_runtime_job_expired' });
+  });
+
+  it('does not write a remote Spec draft when the command boundary rejects a stale action claim', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      workItemsRequiringSpec: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetStatus: 'triage',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+    });
+    client.actionToClaim = claimedSpecAction();
+    client.ensureSpecDraft = async (workItemId, input) => {
+      client.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
+      throw new AutomationHttpError(409, { code: 'automation_action_claim_conflict' }, 'automation_action_claim_conflict');
+    };
+    const spec = generatedRemoteSpec();
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => ({
+          runtime_job: {
+            id: jobId,
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            terminal_result_json: {
+              task_kind: 'spec_draft',
+              prompt_version: 'spec-draft.remote.v1',
+              output_schema_version: 'spec_draft.v1',
+              generated_payload: spec,
+              generated_payload_digest: codexCanonicalDigest(spec),
+              generation_artifacts: [],
+              public_summary: 'Remote runtime generated a spec.',
+            },
+          },
+        }),
+        cancelRuntimeJob: async () => ({}),
+      },
+    });
+    const daemon = new AutomationDaemon({
+      ...daemonOptions(client),
+      generationPlanning: {
+        mode: 'app_server',
+        tasks: {
+          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
+          package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
+        },
+      },
+      generationRuntime: runtime,
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({
+      executed: { status: 'failed', retryable: false, reasonCode: 'automation_action_claim_conflict' },
+    });
+    expect(client.calls.map((call) => call.method)).toContain('ensureSpecDraft');
+    expect(client.calls.map((call) => call.method)).toContain('failAction');
+    expect(client.calls.map((call) => call.method)).not.toContain('completeAction');
+  });
+
+  it('cancels a timed-out remote runtime job and blocks with public-safe runtime evidence', async () => {
+    const client = new FakeDaemonClient();
+    client.snapshot = baseSnapshot({
+      workItemsRequiringSpec: [
+        {
+          targetObjectType: 'work_item',
+          targetObjectId: 'work-item-1',
+          targetStatus: 'triage',
+          projectId: 'project-1',
+          repoId: 'repo-1',
+          automationScope: repoScope,
+        },
+      ],
+    });
+    client.actionToClaim = claimedSpecAction();
+    const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 1_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => ({ runtime_job: { id: jobId, status: 'running' } }),
+        cancelRuntimeJob: async (jobId, input) => {
+          cancelled.push({ jobId, input });
+          return {};
+        },
+      },
+    });
+    const daemon = new AutomationDaemon({
+      ...daemonOptions(client),
+      generationPlanning: {
+        mode: 'app_server',
+        tasks: {
+          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
+          package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
+        },
+      },
+      generationRuntime: runtime,
+    });
+
+    const result = await daemon.runOnce();
+
+    expect(result).toMatchObject({
+      executed: { status: 'blocked', retryable: false, reasonCode: 'codex_runtime_job_expired' },
+    });
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.input).toMatchObject({ reason_code: 'codex_runtime_job_expired' });
+    expect(client.calls.map((call) => call.method)).toContain('blockAction');
+    expect(JSON.stringify(client.calls)).not.toContain('launch-token');
   });
 
   it('throws early when required config is missing', () => {

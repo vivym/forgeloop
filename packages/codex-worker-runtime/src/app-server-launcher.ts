@@ -81,9 +81,11 @@ export class DockerizedCodexAppServerLauncher {
     input: {
       originalWorkspacePath?: string;
       workerSessionToken?: string;
+      terminalizeLaunchLeaseOnClose?: boolean;
     } = {},
   ): Promise<DockerizedCodexAppServerSession> {
     const workerSessionToken = this.#workerSessionToken(input.workerSessionToken);
+    const terminalizeLaunchLeaseOnClose = input.terminalizeLaunchLeaseOnClose ?? true;
     let filesystem: PreparedCodexTaskFilesystem | undefined;
     let workspace: PreparedContainerWorkspace | undefined;
     let container: StartedDockerContainer | undefined;
@@ -95,6 +97,7 @@ export class DockerizedCodexAppServerLauncher {
       const credential = materialization.resolved_credentials[0];
       filesystem = await prepareCodexTaskFilesystem({
         workerTempRoot: this.options.workerTempRoot,
+        workerId: this.options.workerId,
         launchLeaseId: materialization.lease_id,
         codexConfigToml: materialization.profile_revision.codex_config_toml,
         authJson: credential?.payload ?? {},
@@ -226,15 +229,17 @@ export class DockerizedCodexAppServerLauncher {
             closed = true;
             let terminalizeError: unknown;
             try {
-              await this.options.controlPlaneClient.terminalizeLaunchLease(this.options.workerId, materialization.lease_id, {
-                worker_session_token: workerSessionToken,
-                nonce: this.options.nonceFactory?.() ?? randomUUID(),
-                nonce_timestamp: this.options.now?.() ?? new Date().toISOString(),
-                terminal_status: 'terminal',
-                reason_code: `codex_app_server_${status}`,
-                evidence_summary: publicEvidence,
-                idempotency_key: codexCanonicalDigest({ lease_id: materialization.lease_id, status, summary_digest: codexCanonicalDigest(summary) }),
-              });
+              if (terminalizeLaunchLeaseOnClose) {
+                await this.options.controlPlaneClient.terminalizeLaunchLease(this.options.workerId, materialization.lease_id, {
+                  worker_session_token: workerSessionToken,
+                  nonce: this.options.nonceFactory?.() ?? randomUUID(),
+                  nonce_timestamp: this.options.now?.() ?? new Date().toISOString(),
+                  terminal_status: 'terminal',
+                  reason_code: `codex_app_server_${status}`,
+                  evidence_summary: publicEvidence,
+                  idempotency_key: codexCanonicalDigest({ lease_id: materialization.lease_id, status, summary_digest: codexCanonicalDigest(summary) }),
+                });
+              }
             } catch (error) {
               terminalizeError = error;
             } finally {
@@ -252,7 +257,9 @@ export class DockerizedCodexAppServerLauncher {
         })(),
       };
     } catch (error) {
-      await this.#terminalizeStartupFailure(materialization, workerSessionToken, error);
+      if (terminalizeLaunchLeaseOnClose) {
+        await this.#terminalizeStartupFailure(materialization, workerSessionToken, error);
+      }
       await container?.stop();
       await networkSelfTest?.cleanup?.();
       await workspace?.cleanup();

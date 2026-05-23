@@ -1,13 +1,19 @@
+import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexWorkspaceAcquisitionDigest,
   codexRuntimeProfileRevisionDigest,
   DomainError,
   validateCodexLaunchTargetKind,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexDockerNetworkProxyConfig,
+  type CodexLaunchLease,
+  type CodexLaunchTokenEnvelope,
   type ExecutionPackage,
   type CodexLaunchLeaseWithToken,
   type CodexLaunchTarget,
@@ -16,13 +22,34 @@ import {
   type RunSession,
 } from '../../packages/domain/src/index';
 
-import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
+import { InMemoryDeliveryRepository, type CodexLaunchTokenEnvelopeSealer, type DeliveryRepository } from '../../packages/db/src/index';
+
+type CodexRuntimeJobRepositoryContract = Pick<
+  DeliveryRepository,
+  | 'createOrReplayCodexRuntimeJobWithLeaseAndEnvelope'
+  | 'pollCodexRuntimeJobs'
+  | 'acceptCodexRuntimeJob'
+  | 'claimCodexLaunchTokenEnvelope'
+  | 'materializeCodexRuntimeJob'
+  | 'startCodexRuntimeJob'
+  | 'appendCodexRuntimeJobEvent'
+  | 'createCodexRuntimeJobArtifact'
+  | 'listCodexRuntimeJobArtifacts'
+  | 'cancelCodexRuntimeJob'
+  | 'terminalizeCodexRuntimeJob'
+  | 'recoverStaleCodexRuntimeJobs'
+  | 'getCodexLaunchLeaseStatus'
+>;
+
+const assertCodexRuntimeJobRepositoryContract = <T extends CodexRuntimeJobRepositoryContract>() => undefined;
 
 const now = '2026-05-20T00:00:00.000Z';
 const later = '2026-05-20T00:01:00.000Z';
+const afterRuntimeJobExpiry = '2026-05-20T00:02:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
 
-const createRepository = (): DeliveryRepository => new InMemoryDeliveryRepository();
+const createRepository = (sealer?: CodexLaunchTokenEnvelopeSealer): DeliveryRepository =>
+  new InMemoryDeliveryRepository({ codexLaunchTokenEnvelopeSealer: sealer });
 const runtimeMetadata = {
   durability_mode: 'durable',
   recovery_attempt_count: 0,
@@ -30,6 +57,7 @@ const runtimeMetadata = {
 } as const;
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
+const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const dockerProxyConfig = (): CodexDockerNetworkProxyConfig => {
   const configWithoutDigest = {
@@ -228,7 +256,7 @@ const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionP
   qa_owner_actor_id: overrides.qa_owner_actor_id ?? 'actor-qa',
   phase: overrides.phase ?? 'execution',
   activity_state: overrides.activity_state ?? 'idle',
-  gate_state: overrides.gate_state ?? 'none',
+  gate_state: overrides.gate_state ?? 'not_submitted',
   resolution: overrides.resolution ?? 'none',
   required_checks: overrides.required_checks ?? [],
   required_artifact_kinds: overrides.required_artifact_kinds ?? ['execution_summary'],
@@ -272,18 +300,29 @@ const seedWorker = async (
   repository: DeliveryRepository,
   overrides: {
     worker_id?: string;
+    worker_identity?: string;
+    bootstrap_token_id?: string;
+    bootstrap_token_raw?: string;
     session_token?: string;
+    session_expires_at?: string;
+    session_public_key_expires_at?: string;
     capabilities?: readonly CodexLaunchTarget['target_kind'][];
+    lease_count?: number;
     max_concurrency?: number;
   } = {},
 ) => {
   const workerId = overrides.worker_id ?? 'worker-1';
+  const workerIdentity = overrides.worker_identity ?? (workerId === 'worker-1' ? 'local-worker-1' : `local-${workerId}`);
+  const bootstrapTokenId =
+    overrides.bootstrap_token_id ?? (workerId === 'worker-1' ? 'bootstrap-token-1' : `bootstrap-token-${workerId}`);
+  const bootstrapTokenRaw =
+    overrides.bootstrap_token_raw ?? (workerId === 'worker-1' ? 'bootstrap-token-raw' : `bootstrap-token-${workerId}-raw`);
   const sessionToken = overrides.session_token ?? 'session-token-1';
   const capabilities = overrides.capabilities ?? ['generation'];
   await repository.createCodexWorkerBootstrapToken({
-    id: 'bootstrap-token-1',
-    worker_identity: 'local-worker-1',
-    bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
+    id: bootstrapTokenId,
+    worker_identity: workerIdentity,
+    bootstrap_token_hash: tokenHash(bootstrapTokenRaw),
     bootstrap_token_version: 1,
     status: 'active',
     allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
@@ -302,12 +341,12 @@ const seedWorker = async (
     sessionToken,
     worker: await repository.upsertCodexWorkerRegistration({
       worker_id: workerId,
-      worker_identity: 'local-worker-1',
+      worker_identity: workerIdentity,
       version: '0.1.0',
-      bootstrap_token_hash: tokenHash('bootstrap-token-raw'),
+      bootstrap_token_hash: tokenHash(bootstrapTokenRaw),
       bootstrap_token_version: 1,
       session_token: sessionToken,
-      session_expires_at: expiresAt,
+      session_expires_at: overrides.session_expires_at ?? expiresAt,
       status: 'online',
       control_channel_status: 'connected',
       allowed_scopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
@@ -317,13 +356,13 @@ const seedWorker = async (
       network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
       host_worker_uid: 501,
       host_worker_gid: 20,
-      lease_count: 0,
+      lease_count: overrides.lease_count ?? 0,
       max_concurrency: overrides.max_concurrency ?? 2,
       labels: { host: 'test-host' },
       session_public_key_id: 'session-key-1',
       session_public_key_algorithm: 'x25519',
       session_public_key_material: 'public-key-material',
-      session_public_key_expires_at: expiresAt,
+      session_public_key_expires_at: overrides.session_public_key_expires_at ?? expiresAt,
       now,
     }),
   };
@@ -388,6 +427,295 @@ const createLaunchLease = async (
     ...overrides,
   });
 };
+
+const createEnvelopeSealer = (
+  calls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [],
+  options: { failFirst?: boolean } = {},
+): CodexLaunchTokenEnvelopeSealer => ({
+  async sealLaunchTokenEnvelope(input) {
+    calls.push(input);
+    if (options.failFirst === true && calls.length === 1) {
+      throw new Error('seal failed');
+    }
+    return {
+      id: input.envelope_id,
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: input.worker_id,
+      key_id: input.key_id,
+      algorithm: 'x25519-hkdf-sha256-aes-256-gcm',
+      ciphertext: `sealed:${input.runtime_job_id}`,
+      encryption_nonce: `nonce:${input.envelope_id}`,
+      aad_json: {
+        runtime_job_id: input.runtime_job_id,
+        launch_lease_id: input.launch_lease_id,
+        envelope_id: input.envelope_id,
+        worker_id: input.worker_id,
+        key_id: input.key_id,
+        expires_at: input.expires_at,
+      },
+      aad_digest: codexCanonicalDigest({
+        runtime_job_id: input.runtime_job_id,
+        launch_lease_id: input.launch_lease_id,
+        envelope_id: input.envelope_id,
+        worker_id: input.worker_id,
+        key_id: input.key_id,
+        expires_at: input.expires_at,
+      }),
+      envelope_digest: tokenHash(`envelope:${input.runtime_job_id}:${input.launch_lease_id}:${input.envelope_id}`),
+      expires_at: input.expires_at,
+    };
+  },
+});
+
+const runtimeJobInput = async (
+  repository: DeliveryRepository,
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
+  workerOverrides: Parameters<typeof seedWorker>[1] = {},
+): Promise<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> => {
+  const target = overrides.target ?? generationTarget();
+  const seeded = await seedProfileAndCredential(repository, target.target_kind);
+  const { worker, sessionToken } = await seedWorker(repository, { capabilities: [target.target_kind], ...workerOverrides });
+  await repository.heartbeatCodexWorker({
+    worker_id: worker.id,
+    session_token: sessionToken,
+    nonce: `runtime-job-heartbeat-${overrides.runtime_job_id ?? 'runtime-job-1'}`,
+    nonce_timestamp: now,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: 0,
+    capabilities: [target.target_kind],
+    now,
+  });
+  const defaultActionClaimToken = 'runtime-action-claim-token-1';
+  const actionClaimTokenHash = overrides.action_claim_token_hash ?? tokenHash(defaultActionClaimToken);
+  if (target.target_kind === 'generation' && actionClaimTokenHash === tokenHash(defaultActionClaimToken)) {
+    try {
+      await repository.getClaimedAutomationActionRun({ id: target.target_id, claim_token: defaultActionClaimToken });
+    } catch {
+      await claimGenerationAction(repository, {
+        id: target.target_id,
+        idempotency_key: `runtime-${target.target_id}-claim-idem`,
+        action_type: overrides.action_type ?? 'codex_generation',
+        target_object_id: target.target_id,
+        claim_token: defaultActionClaimToken,
+        precondition_fingerprint: overrides.precondition_fingerprint ?? 'runtime-precondition-1',
+      });
+    }
+  }
+
+  return {
+    runtime_job_id: 'runtime-job-1',
+    launch_lease_id: 'runtime-launch-lease-1',
+    envelope_id: 'runtime-envelope-1',
+    job_request_id: 'runtime-job-request-1',
+    target,
+    launch_attempt: 1,
+    worker_id: worker.id,
+    runtime_profile_revision_id: seeded.revision.id,
+    runtime_profile_digest: seeded.revision.profile_digest,
+    credential_binding_id: seeded.binding.id,
+    credential_binding_version_id: seeded.version.id,
+    credential_payload_digest: seeded.version.payload_digest,
+    docker_image_digest: seeded.revision.docker_image_digest,
+    network_policy_digest: codexCanonicalDigest(seeded.revision.network_policy),
+    network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+    input_json: { task: 'draft spec', public_ref: 'artifact://runtime/input' },
+    input_digest: tokenHash('runtime-input-1'),
+    workspace_acquisition_json: { bundle_id: 'workspace-bundle-1', archive_ref: 'artifact://runtime/workspace' },
+    workspace_acquisition_digest: tokenHash('workspace-acquisition-1'),
+    action_type: 'codex_generation',
+    action_attempt: 1,
+    action_claim_token_hash: tokenHash(defaultActionClaimToken),
+    precondition_fingerprint: 'runtime-precondition-1',
+    expires_at: expiresAt,
+    now,
+    ...overrides,
+  };
+};
+
+const runtimeJobArtifactBindings = (repository: DeliveryRepository): Map<string, Record<string, unknown>> =>
+  (repository as unknown as { codexRuntimeJobArtifacts: Map<string, Record<string, unknown>> }).codexRuntimeJobArtifacts;
+
+const createRuntimeJob = async (
+  repository: DeliveryRepository,
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
+  workerOverrides: Parameters<typeof seedWorker>[1] = {},
+) => {
+  const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+  const input = await runtimeJobInput(repository, overrides, workerOverrides);
+  const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+  return { input, created, sealerCalls };
+};
+
+const createRuntimeJobWithCapturedToken = async (
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
+  workerOverrides: Parameters<typeof seedWorker>[1] = {},
+) => {
+  const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+  const repository = createRepository(createEnvelopeSealer(sealerCalls));
+  const input = await runtimeJobInput(repository, overrides, workerOverrides);
+  const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+  const launchToken = sealerCalls[0]?.plaintext_launch_token;
+  if (launchToken === undefined) {
+    throw new Error('expected runtime job sealer to capture launch token');
+  }
+  return { repository, input, created, launchToken, sealerCalls };
+};
+
+const acceptRuntimeJob = (
+  repository: DeliveryRepository,
+  runtimeJobId = 'runtime-job-1',
+  patch: Partial<Parameters<DeliveryRepository['acceptCodexRuntimeJob']>[0]> = {},
+) =>
+  repository.acceptCodexRuntimeJob({
+    runtime_job_id: runtimeJobId,
+    worker_id: 'worker-1',
+    worker_session_token: 'session-token-1',
+    nonce: `accept-nonce-${runtimeJobId}`,
+    nonce_timestamp: later,
+    accepted_worker_session_digest: tokenHash('session-token-1'),
+    accepted_session_public_key_id: 'session-key-1',
+    accepted_session_epoch: 1,
+    idempotency_key: `accept-${runtimeJobId}`,
+    request_digest: tokenHash(`accept-request-${runtimeJobId}`),
+    now: later,
+    ...patch,
+  });
+
+const claimRuntimeJobEnvelope = (
+  repository: DeliveryRepository,
+  runtimeJobId = 'runtime-job-1',
+  envelopeId = 'runtime-envelope-1',
+  patch: Partial<Parameters<DeliveryRepository['claimCodexLaunchTokenEnvelope']>[0]> = {},
+) =>
+  repository.claimCodexLaunchTokenEnvelope({
+    runtime_job_id: runtimeJobId,
+    envelope_id: envelopeId,
+    worker_id: 'worker-1',
+    worker_session_token: 'session-token-1',
+    nonce: `claim-nonce-${runtimeJobId}`,
+    nonce_timestamp: later,
+    accepted_worker_session_digest: tokenHash('session-token-1'),
+    key_id: 'session-key-1',
+    accepted_session_epoch: 1,
+    claim_request_id: `claim-${runtimeJobId}`,
+    request_digest: tokenHash(`claim-request-${runtimeJobId}`),
+    now: later,
+    ...patch,
+  });
+
+const materializeRuntimeJob = (
+  repository: DeliveryRepository,
+  launchToken: string,
+  runtimeJobId = 'runtime-job-1',
+  leaseId = 'runtime-launch-lease-1',
+  patch: Partial<Parameters<DeliveryRepository['materializeCodexRuntimeJob']>[0]> = {},
+) =>
+  repository.materializeCodexRuntimeJob({
+    runtime_job_id: runtimeJobId,
+    launch_lease_id: leaseId,
+    worker_id: 'worker-1',
+    worker_session_token: 'session-token-1',
+    nonce: `materialize-nonce-${runtimeJobId}`,
+    nonce_timestamp: later,
+    launch_token_hash: tokenHash(launchToken),
+    accepted_worker_session_digest: tokenHash('session-token-1'),
+    accepted_session_public_key_id: 'session-key-1',
+    accepted_session_epoch: 1,
+    materialization_request_id: `materialize-${runtimeJobId}`,
+    request_digest: tokenHash(`materialize-request-${runtimeJobId}`),
+    active_fence: {
+      action_claim_token_hash: tokenHash('runtime-action-claim-token-1'),
+      precondition_fingerprint: 'runtime-precondition-1',
+    },
+    now: later,
+    ...patch,
+  });
+
+const validGenerationTerminalResult = (summary = 'completed') => ({
+  task_kind: 'spec_draft' as const,
+  prompt_version: 'prompt-v1',
+  output_schema_version: 'spec-draft.v1',
+  generated_payload: { summary },
+  generated_payload_digest: tokenHash(`generated-payload-${summary}`),
+  generation_artifacts: [],
+  public_summary: summary,
+});
+
+const startRuntimeJob = (
+  repository: DeliveryRepository,
+  runtimeJobId = 'runtime-job-1',
+  patch: Partial<Parameters<DeliveryRepository['startCodexRuntimeJob']>[0]> = {},
+) =>
+  repository.startCodexRuntimeJob({
+    runtime_job_id: runtimeJobId,
+    worker_id: 'worker-1',
+    worker_session_token: 'session-token-1',
+    nonce: `start-nonce-${runtimeJobId}`,
+    nonce_timestamp: later,
+    idempotency_key: `start-${runtimeJobId}`,
+    request_digest: tokenHash(`start-request-${runtimeJobId}`),
+    runtime_evidence_digest: tokenHash(`runtime-evidence-${runtimeJobId}`),
+    launch_materialization_digest: tokenHash(`launch-materialization-${runtimeJobId}`),
+    now: later,
+    ...patch,
+  });
+
+const terminalizeRuntimeJob = (
+  repository: DeliveryRepository,
+  runtimeJobId = 'runtime-job-1',
+  leaseId = 'runtime-launch-lease-1',
+  patch: Partial<Parameters<DeliveryRepository['terminalizeCodexRuntimeJob']>[0]> = {},
+) =>
+  repository.terminalizeCodexRuntimeJob({
+    runtime_job_id: runtimeJobId,
+    launch_lease_id: leaseId,
+    worker_id: 'worker-1',
+    worker_session_token: 'session-token-1',
+    nonce: `terminal-nonce-${runtimeJobId}`,
+    nonce_timestamp: later,
+    terminal_status: 'succeeded',
+    reason_code: 'completed',
+    terminal_result_json: validGenerationTerminalResult(),
+    idempotency_key: `terminal-${runtimeJobId}`,
+    request_digest: tokenHash(`terminal-request-${runtimeJobId}`),
+    now: later,
+    ...patch,
+  });
+
+const createRuntimeJobArtifact = (
+  repository: DeliveryRepository,
+  runtimeJobId = 'runtime-job-1',
+  patch: Partial<Parameters<DeliveryRepository['createCodexRuntimeJobArtifact']>[0]> = {},
+) =>
+  repository.createCodexRuntimeJobArtifact({
+    runtime_job_id: runtimeJobId,
+    worker_id: 'worker-1',
+    worker_session_token: 'session-token-1',
+    nonce: `artifact-nonce-${runtimeJobId}`,
+    nonce_timestamp: later,
+    artifact_id: `11111111-1111-4111-8111-${runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'}`,
+    artifact_idempotency_key: `artifact-${runtimeJobId}`,
+    kind: 'generated_payload',
+    name: 'generated-payload.json',
+    content_type: 'application/json',
+    digest: tokenHash(`artifact-digest-${runtimeJobId}`),
+    internal_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/11111111-1111-4111-8111-${
+      runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'
+    }`,
+    size_bytes: 128,
+    metadata_json: {},
+    request_digest: tokenHash(`artifact-request-${runtimeJobId}`),
+    now: later,
+    ...patch,
+  });
+
+const runtimeLaunchLeases = (repository: DeliveryRepository): Map<string, { lease: CodexLaunchLease }> =>
+  (repository as unknown as { codexLaunchLeases: Map<string, { lease: CodexLaunchLease }> }).codexLaunchLeases;
+
+const runtimeTokenEnvelopes = (repository: DeliveryRepository): Map<string, CodexLaunchTokenEnvelope> =>
+  (repository as unknown as { codexLaunchTokenEnvelopes: Map<string, CodexLaunchTokenEnvelope> }).codexLaunchTokenEnvelopes;
 
 const claimGenerationAction = (
   repository: DeliveryRepository,
@@ -910,6 +1238,2030 @@ describe('codex runtime repository behavior', () => {
     await expect(repository.heartbeatCodexWorker(heartbeat)).rejects.toMatchObject<Partial<DomainError>>({
       name: 'DomainError',
       code: 'codex_worker_nonce_replay',
+    });
+  });
+
+  it('exposes the remote runtime job create/replay repository contract', () => {
+    const repository = createRepository() as unknown as Record<string, unknown>;
+
+    expect(assertCodexRuntimeJobRepositoryContract<DeliveryRepository>()).toBeUndefined();
+    for (const method of [
+      'createOrReplayCodexRuntimeJobWithLeaseAndEnvelope',
+      'pollCodexRuntimeJobs',
+      'acceptCodexRuntimeJob',
+      'claimCodexLaunchTokenEnvelope',
+      'materializeCodexRuntimeJob',
+      'startCodexRuntimeJob',
+      'appendCodexRuntimeJobEvent',
+      'createCodexRuntimeJobArtifact',
+      'listCodexRuntimeJobArtifacts',
+      'cancelCodexRuntimeJob',
+      'terminalizeCodexRuntimeJob',
+      'recoverStaleCodexRuntimeJobs',
+      'getCodexLaunchLeaseStatus',
+    ]) {
+      expect(typeof repository[method]).toBe('function');
+    }
+  });
+
+  it('polls only queued runtime jobs assigned to the worker and validates worker session nonces', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const workerOneInput = await runtimeJobInput(repository);
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(workerOneInput);
+    const target = generationTarget({ target_id: 'generation-worker-2' });
+    await claimGenerationAction(repository, {
+      id: target.target_id,
+      idempotency_key: 'runtime-generation-worker-2-idem',
+      target_object_id: target.target_id,
+      action_input_json: { generation_id: target.target_id },
+      claim_token: 'runtime-action-claim-token-1',
+      precondition_fingerprint: 'runtime-precondition-1',
+    });
+    const workerTwoInput = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-worker-2',
+        launch_lease_id: 'runtime-launch-lease-worker-2',
+        envelope_id: 'runtime-envelope-worker-2',
+        job_request_id: 'runtime-job-request-worker-2',
+        target,
+      },
+      { worker_id: 'worker-2', session_token: 'session-token-2' },
+    );
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(workerTwoInput);
+
+    await expect(
+      repository.pollCodexRuntimeJobs({
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'poll-nonce-1',
+        nonce_timestamp: later,
+        target_kinds: ['generation'],
+        limit: 10,
+        now: later,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ id: workerOneInput.runtime_job_id, status: 'queued', worker_id: 'worker-1' })]);
+
+    await expect(
+      repository.pollCodexRuntimeJobs({
+        worker_id: 'worker-1',
+        worker_session_token: 'wrong-session-token',
+        nonce: 'poll-bad-session-nonce',
+        nonce_timestamp: later,
+        limit: 10,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+
+    await expect(
+      repository.pollCodexRuntimeJobs({
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'poll-nonce-1',
+        nonce_timestamp: later,
+        limit: 10,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_nonce_replay',
+    });
+  });
+
+  it('accepts runtime jobs idempotently and fails closed on conflicting accept replay', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken();
+
+    const accepted = await acceptRuntimeJob(repository);
+
+    expect(accepted).toMatchObject({
+      id: 'runtime-job-1',
+      status: 'accepted',
+      accepted_worker_session_digest: tokenHash('session-token-1'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      accept_idempotency_key: 'accept-runtime-job-1',
+      accept_request_digest: tokenHash('accept-request-runtime-job-1'),
+    });
+    await expect(
+      acceptRuntimeJob(repository, 'runtime-job-1', { nonce: 'accept-replay-nonce-runtime-job-1' }),
+    ).resolves.toEqual(accepted);
+    await expect(
+      acceptRuntimeJob(repository, 'runtime-job-1', {
+        nonce: 'accept-conflict-nonce-runtime-job-1',
+        idempotency_key: 'accept-conflict-runtime-job-1',
+        request_digest: tokenHash('accept-conflict-request-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('claims launch token envelopes once and denies stale or mismatched worker proofs without detail', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+
+    const claimed = await claimRuntimeJobEnvelope(repository);
+
+    expect(claimed).toMatchObject({
+      id: 'runtime-envelope-1',
+      status: 'claimed',
+      claim_request_id: 'claim-runtime-job-1',
+      claim_request_digest: tokenHash('claim-request-runtime-job-1'),
+      claimed_worker_session_digest: tokenHash('session-token-1'),
+      claimed_key_id: 'session-key-1',
+    });
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-replay-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(claimed);
+
+    for (const patch of [
+      { nonce: 'claim-wrong-worker-nonce', worker_id: 'worker-other' },
+      { nonce: 'claim-stale-session-nonce', worker_session_token: 'wrong-session-token' },
+      { nonce: 'claim-wrong-key-nonce', key_id: 'wrong-session-key' },
+      { nonce: 'claim-wrong-digest-nonce', accepted_worker_session_digest: tokenHash('wrong-session-token') },
+      { nonce: 'claim-wrong-epoch-nonce', accepted_session_epoch: 2 },
+    ]) {
+      await expect(claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', patch)).rejects.toMatchObject<
+        Partial<DomainError>
+      >({
+        name: 'DomainError',
+        code: 'codex_launch_materialization_denied',
+      });
+    }
+
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-replay-nonce-runtime-job-1',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_nonce_replay',
+    });
+
+    const cancelled = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-cancelled-before-claim',
+        launch_lease_id: 'runtime-launch-lease-cancelled-before-claim',
+        envelope_id: 'runtime-envelope-cancelled-before-claim',
+        job_request_id: 'runtime-job-request-cancelled-before-claim',
+        target: generationTarget({ target_id: 'generation-cancelled-before-claim' }),
+      },
+      { worker_id: 'worker-cancelled-before-claim', session_token: 'session-token-cancelled-before-claim' },
+    );
+    await cancelled.repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-cancelled-before-claim',
+      reason_code: 'user_cancelled',
+      idempotency_key: 'cancel-before-claim',
+      request_digest: tokenHash('cancel-before-claim-request'),
+      now: later,
+    });
+    await expect(
+      cancelled.repository.claimCodexLaunchTokenEnvelope({
+        runtime_job_id: 'runtime-job-cancelled-before-claim',
+        envelope_id: 'runtime-envelope-cancelled-before-claim',
+        worker_id: 'worker-cancelled-before-claim',
+        worker_session_token: 'session-token-cancelled-before-claim',
+        nonce: 'claim-cancelled-job-nonce',
+        nonce_timestamp: later,
+        accepted_worker_session_digest: tokenHash('session-token-cancelled-before-claim'),
+        key_id: 'session-key-1',
+        accepted_session_epoch: 1,
+        claim_request_id: 'claim-cancelled-job',
+        request_digest: tokenHash('claim-cancelled-job-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+
+    const expiredKey = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-expired-key',
+        launch_lease_id: 'runtime-launch-lease-expired-key',
+        envelope_id: 'runtime-envelope-expired-key',
+        job_request_id: 'runtime-job-request-expired-key',
+        target: generationTarget({ target_id: 'generation-expired-key' }),
+        expires_at: '2026-05-20T00:30:00.000Z',
+      },
+      {
+        worker_id: 'worker-expired-key',
+        session_token: 'session-token-expired-key',
+        session_expires_at: '2026-05-20T00:30:00.000Z',
+        session_public_key_expires_at: '2026-05-20T00:00:30.000Z',
+      },
+    );
+    await expiredKey.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-expired-key',
+      worker_id: 'worker-expired-key',
+      worker_session_token: 'session-token-expired-key',
+      nonce: 'accept-expired-key-nonce',
+      nonce_timestamp: now,
+      accepted_worker_session_digest: tokenHash('session-token-expired-key'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-expired-key',
+      request_digest: tokenHash('accept-expired-key-request'),
+      now,
+    });
+    await expect(
+      expiredKey.repository.claimCodexLaunchTokenEnvelope({
+        runtime_job_id: 'runtime-job-expired-key',
+        envelope_id: 'runtime-envelope-expired-key',
+        worker_id: 'worker-expired-key',
+        worker_session_token: 'session-token-expired-key',
+        nonce: 'claim-expired-key-nonce',
+        nonce_timestamp: later,
+        accepted_worker_session_digest: tokenHash('session-token-expired-key'),
+        key_id: 'session-key-1',
+        accepted_session_epoch: 1,
+        claim_request_id: 'claim-expired-key',
+        request_digest: tokenHash('claim-expired-key-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+
+    const expiredKeyAfterRefresh = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-expired-key-after-refresh',
+        launch_lease_id: 'runtime-launch-lease-expired-key-after-refresh',
+        envelope_id: 'runtime-envelope-expired-key-after-refresh',
+        job_request_id: 'runtime-job-request-expired-key-after-refresh',
+        target: generationTarget({ target_id: 'generation-expired-key-after-refresh' }),
+        expires_at: '2026-05-20T00:30:00.000Z',
+      },
+      {
+        worker_id: 'worker-expired-key-after-refresh',
+        session_token: 'session-token-expired-key-after-refresh',
+        session_expires_at: '2026-05-20T00:30:00.000Z',
+        session_public_key_expires_at: '2026-05-20T00:00:30.000Z',
+      },
+    );
+    await expiredKeyAfterRefresh.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-expired-key-after-refresh',
+      worker_id: 'worker-expired-key-after-refresh',
+      worker_session_token: 'session-token-expired-key-after-refresh',
+      nonce: 'accept-expired-key-after-refresh-nonce',
+      nonce_timestamp: now,
+      accepted_worker_session_digest: tokenHash('session-token-expired-key-after-refresh'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-expired-key-after-refresh',
+      request_digest: tokenHash('accept-expired-key-after-refresh-request'),
+      now,
+    });
+    await expect(
+      expiredKeyAfterRefresh.repository.refreshCodexWorkerSession({
+        worker_id: 'worker-expired-key-after-refresh',
+        current_session_token: 'session-token-expired-key-after-refresh',
+        nonce: 'refresh-expired-key-after-accept',
+        nonce_timestamp: now,
+        next_session_token: 'session-token-expired-key-after-refresh-2',
+        next_session_expires_at: '2026-05-20T00:30:00.000Z',
+        next_session_public_key_id: 'session-key-2',
+        next_session_public_key_material: 'public-key-material-2',
+        next_session_public_key_expires_at: '2026-05-20T00:30:00.000Z',
+        request_digest: tokenHash('refresh-expired-key-after-accept-request'),
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-expired-key-after-refresh/session/refresh',
+          body_digest: tokenHash('refresh-expired-key-after-accept-request'),
+        },
+        now,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
+  });
+
+  it('materializes runtime jobs by launch-token hash only and replays materialization response loss until terminal', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    const claimed = await claimRuntimeJobEnvelope(repository);
+
+    const materializeInput: Parameters<DeliveryRepository['materializeCodexRuntimeJob']>[0] = {
+      runtime_job_id: 'runtime-job-1',
+      launch_lease_id: 'runtime-launch-lease-1',
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'materialize-nonce-runtime-job-1',
+      nonce_timestamp: later,
+      launch_token_hash: tokenHash(launchToken),
+      accepted_worker_session_digest: tokenHash('session-token-1'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      materialization_request_id: 'materialize-runtime-job-1',
+      request_digest: tokenHash('materialize-request-runtime-job-1'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('runtime-action-claim-token-1'),
+        precondition_fingerprint: 'runtime-precondition-1',
+      },
+      now: later,
+    };
+    expect(materializeInput).not.toHaveProperty('launch_token');
+
+    const materialized = await repository.materializeCodexRuntimeJob(materializeInput);
+
+    expect(materialized).toMatchObject({
+      lease_id: 'runtime-launch-lease-1',
+      materialized_at: later,
+      resolved_credentials: [{ payload: credential().secretPayload }],
+    });
+    await expect(
+      repository.pollCodexRuntimeJobs({
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'poll-after-materialize-nonce',
+        nonce_timestamp: later,
+        limit: 10,
+        now: later,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      repository.getCodexLaunchLeaseStatus({
+        launch_lease_id: 'runtime-launch-lease-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'lease-status-materialized-nonce',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).resolves.toMatchObject<CodexLaunchLease>({ id: 'runtime-launch-lease-1', status: 'materialized' });
+    await expect(
+      repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-replay-nonce-runtime-job-1' }),
+    ).resolves.toEqual(materialized);
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-replay-after-materialize-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(claimed);
+
+    await expect(
+      repository.materializeCodexRuntimeJob({
+        ...materializeInput,
+        nonce: 'materialize-wrong-accepted-key-nonce-runtime-job-1',
+        accepted_session_public_key_id: 'session-key-rotated',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+    await expect(
+      repository.materializeCodexRuntimeJob({
+        ...materializeInput,
+        nonce: 'materialize-wrong-accepted-epoch-nonce-runtime-job-1',
+        accepted_session_epoch: 2,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+
+    await startRuntimeJob(repository);
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-replay-after-start-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(claimed);
+    await expect(
+      repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-replay-after-start-nonce-runtime-job-1' }),
+    ).resolves.toEqual(materialized);
+
+    await terminalizeRuntimeJob(repository);
+    await expect(
+      repository.materializeCodexRuntimeJob({ ...materializeInput, nonce: 'materialize-after-terminal-nonce-runtime-job-1' }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+  });
+
+  it('starts only materializing runtime jobs and rejects cancelled jobs', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+
+    await expect(startRuntimeJob(repository)).resolves.toMatchObject({
+      id: 'runtime-job-1',
+      status: 'running',
+      start_idempotency_key: 'start-runtime-job-1',
+      start_request_digest: tokenHash('start-request-runtime-job-1'),
+      runtime_evidence_digest: tokenHash('runtime-evidence-runtime-job-1'),
+      launch_materialization_digest: tokenHash('launch-materialization-runtime-job-1'),
+    });
+    await expect(
+      startRuntimeJob(repository, 'runtime-job-1', {
+        nonce: 'start-replay-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(expect.objectContaining({ runtime_evidence_digest: tokenHash('runtime-evidence-runtime-job-1') }));
+    await expect(
+      startRuntimeJob(repository, 'runtime-job-1', {
+        nonce: 'start-conflicting-evidence-nonce-runtime-job-1',
+        launch_materialization_digest: tokenHash('conflicting-launch-materialization-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+
+    const cancelled = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-cancelled-start',
+        launch_lease_id: 'runtime-launch-lease-cancelled-start',
+        envelope_id: 'runtime-envelope-cancelled-start',
+        job_request_id: 'runtime-job-request-cancelled-start',
+        target: generationTarget({ target_id: 'generation-cancelled-start' }),
+      },
+      { worker_id: 'worker-cancelled-start', session_token: 'session-token-cancelled-start' },
+    );
+    await cancelled.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-cancelled-start',
+      worker_id: 'worker-cancelled-start',
+      worker_session_token: 'session-token-cancelled-start',
+      nonce: 'accept-cancelled-start-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-cancelled-start'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-cancelled-start',
+      request_digest: tokenHash('accept-cancelled-start-request'),
+      now: later,
+    });
+    await cancelled.repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-cancelled-start',
+      reason_code: 'user_cancelled',
+      idempotency_key: 'cancel-cancelled-start',
+      request_digest: tokenHash('cancel-cancelled-start-request'),
+      now: later,
+    });
+    await expect(
+      cancelled.repository.startCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-cancelled-start',
+        worker_id: 'worker-cancelled-start',
+        worker_session_token: 'session-token-cancelled-start',
+        nonce: 'start-cancelled-start-nonce',
+        nonce_timestamp: later,
+        idempotency_key: 'start-cancelled-start',
+        request_digest: tokenHash('start-cancelled-start-request'),
+        runtime_evidence_digest: tokenHash('runtime-evidence-cancelled-start'),
+        launch_materialization_digest: tokenHash('launch-materialization-cancelled-start'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects start when the coupled launch lease is no longer materialized for the worker', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    const leaseRecord = runtimeLaunchLeases(repository).get('runtime-launch-lease-1');
+    expect(leaseRecord).toBeDefined();
+    runtimeLaunchLeases(repository).set('runtime-launch-lease-1', {
+      ...leaseRecord!,
+      lease: {
+        ...leaseRecord!.lease,
+        status: 'revoked',
+        revoked_at: later,
+        terminal_reason_code: 'revoked-for-test',
+      },
+    });
+
+    await expect(
+      startRuntimeJob(repository, 'runtime-job-1', {
+        nonce: 'start-revoked-lease-nonce',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('deduplicates runtime job events and updates last_event_at', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    const event = await repository.appendCodexRuntimeJobEvent({
+      runtime_job_id: 'runtime-job-1',
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'event-nonce-1',
+      nonce_timestamp: later,
+      event_id: 'event-1',
+      idempotency_key: 'event-idem-1',
+      event_type: 'progress',
+      event_payload_json: { step: 'started' },
+      request_digest: tokenHash('event-request-1'),
+      now: '2026-05-20T00:02:00.000Z',
+    });
+
+    expect(event).toMatchObject({ id: 'runtime-job-1', last_event_at: '2026-05-20T00:02:00.000Z' });
+    await expect(
+      repository.appendCodexRuntimeJobEvent({
+        runtime_job_id: 'runtime-job-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'event-replay-nonce-1',
+        nonce_timestamp: later,
+        event_id: 'event-1',
+        idempotency_key: 'event-idem-1',
+        event_type: 'progress',
+        event_payload_json: { step: 'started' },
+        request_digest: tokenHash('event-request-1'),
+        now: '2026-05-20T00:03:00.000Z',
+      }),
+    ).resolves.toEqual(event);
+  });
+
+  it('terminalizes runtime jobs and launch leases exactly once', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    const terminal = await terminalizeRuntimeJob(repository);
+
+    expect(terminal).toMatchObject({
+      id: 'runtime-job-1',
+      status: 'terminal',
+      terminal_status: 'succeeded',
+      terminal_reason_code: 'completed',
+      terminal_idempotency_key: 'terminal-runtime-job-1',
+      terminal_request_digest: tokenHash('terminal-request-runtime-job-1'),
+    });
+    await expect(
+      repository.getCodexLaunchLeaseStatus({
+        launch_lease_id: 'runtime-launch-lease-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'lease-status-terminal-nonce',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).resolves.toMatchObject<CodexLaunchLease>({
+      id: 'runtime-launch-lease-1',
+      status: 'terminal',
+      terminal_runtime_job_id: 'runtime-job-1',
+    });
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-replay-nonce-runtime-job-1',
+      }),
+    ).resolves.toEqual(terminal);
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-conflict-nonce-runtime-job-1',
+        idempotency_key: 'terminal-conflict-runtime-job-1',
+        request_digest: tokenHash('terminal-conflict-request-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('issues job-bound artifact refs and requires terminal internal refs to match stored artifacts', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    const artifact = await createRuntimeJobArtifact(repository);
+
+    expect(artifact).toMatchObject({
+      runtime_job_id: 'runtime-job-1',
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      target_kind: 'generation',
+      content_type: 'application/json',
+      digest: tokenHash('artifact-digest-runtime-job-1'),
+      size_bytes: 128,
+      internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/11111111-1111-4111-8111-111111111111',
+    });
+    await expect(repository.listCodexRuntimeJobArtifacts({ runtime_job_id: 'runtime-job-1' })).resolves.toEqual([artifact]);
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        nonce: 'artifact-replay-runtime-job-1',
+      }),
+    ).resolves.toEqual(artifact);
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        nonce: 'artifact-replay-conflict-runtime-job-1',
+        digest: tokenHash('artifact-digest-runtime-job-1-changed'),
+        request_digest: tokenHash('artifact-replay-conflict-request-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    const conflictingArtifactId = '11111111-1111-4111-8111-333333333333';
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        nonce: 'artifact-same-digest-different-key-runtime-job-1',
+        artifact_id: conflictingArtifactId,
+        artifact_idempotency_key: 'artifact-runtime-job-1-conflict',
+        internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${conflictingArtifactId}`,
+        request_digest: tokenHash('artifact-same-digest-different-key-request-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        terminal_result_json: {
+          ...validGenerationTerminalResult(),
+          generated_payload_digest: artifact.digest,
+          generation_artifacts: [
+            {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: artifact.content_type,
+              digest: artifact.digest,
+              internal_ref: artifact.internal_ref,
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'succeeded' });
+  });
+
+  it('rejects worker-invented, wrong-job, invalid-type, and oversized runtime job artifacts', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        content_type: 'application/x-secret-dump',
+        nonce: 'artifact-bad-content-type',
+        request_digest: tokenHash('artifact-bad-content-type-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        digest: 'not-a-digest',
+        nonce: 'artifact-bad-digest',
+        request_digest: tokenHash('artifact-bad-digest-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        size_bytes: 10_000_001,
+        nonce: 'artifact-too-large',
+        request_digest: tokenHash('artifact-too-large-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        metadata_json: { workspace_path: '/tmp/private/codex-home' },
+        nonce: 'artifact-unsafe-metadata',
+        request_digest: tokenHash('artifact-unsafe-metadata-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+  });
+
+  it('rejects terminal internal refs invented by the worker or issued for another runtime job', async () => {
+    const first = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(first.repository);
+    await claimRuntimeJobEnvelope(first.repository);
+    await materializeRuntimeJob(first.repository, first.launchToken);
+    await startRuntimeJob(first.repository);
+
+    await expect(
+      terminalizeRuntimeJob(first.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-invented-ref',
+        request_digest: tokenHash('terminal-invented-ref-request'),
+        terminal_result_json: {
+          ...validGenerationTerminalResult(),
+          generation_artifacts: [
+            {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: 'application/json',
+              digest: tokenHash('invented-artifact'),
+              internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/worker-invented',
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+    const secondInput = await runtimeJobInput(first.repository, {
+      runtime_job_id: 'runtime-job-2',
+      launch_lease_id: 'runtime-launch-lease-2',
+      envelope_id: 'runtime-envelope-2',
+      job_request_id: 'runtime-job-request-2',
+      target: generationTarget({ target_id: 'generation-2' }),
+      input_digest: tokenHash('runtime-input-2'),
+    }, { worker_id: 'worker-2', session_token: 'session-token-2' });
+    await first.repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(secondInput);
+    const secondLaunchToken = first.sealerCalls.find((call) => call.runtime_job_id === 'runtime-job-2')?.plaintext_launch_token;
+    if (secondLaunchToken === undefined) {
+      throw new Error('expected second runtime job launch token');
+    }
+    await acceptRuntimeJob(first.repository, 'runtime-job-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'accept-nonce-runtime-job-2',
+      accepted_worker_session_digest: tokenHash('session-token-2'),
+      request_digest: tokenHash('accept-request-runtime-job-2'),
+    });
+    await claimRuntimeJobEnvelope(first.repository, 'runtime-job-2', 'runtime-envelope-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'claim-nonce-runtime-job-2',
+      accepted_worker_session_digest: tokenHash('session-token-2'),
+      request_digest: tokenHash('claim-request-runtime-job-2'),
+    });
+    await materializeRuntimeJob(first.repository, secondLaunchToken, 'runtime-job-2', 'runtime-launch-lease-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'materialize-nonce-runtime-job-2',
+      accepted_worker_session_digest: tokenHash('session-token-2'),
+      request_digest: tokenHash('materialize-request-runtime-job-2'),
+    });
+    await startRuntimeJob(first.repository, 'runtime-job-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'start-nonce-runtime-job-2',
+      request_digest: tokenHash('start-request-runtime-job-2'),
+    });
+    const otherArtifact = await createRuntimeJobArtifact(first.repository, 'runtime-job-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'artifact-other-job',
+      request_digest: tokenHash('artifact-other-job-request'),
+    });
+
+    await expect(
+      terminalizeRuntimeJob(first.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-other-job-ref',
+        request_digest: tokenHash('terminal-other-job-ref-request'),
+        terminal_result_json: {
+          ...validGenerationTerminalResult(),
+          generation_artifacts: [
+            {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: otherArtifact.content_type,
+              digest: otherArtifact.digest,
+              internal_ref: otherArtifact.internal_ref,
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+  });
+
+  it('rejects successful terminal results before the runtime job starts', async () => {
+    const accepted = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(accepted.repository);
+    await expect(
+      terminalizeRuntimeJob(accepted.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-accepted-success-nonce',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+
+    const materializing = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-materializing-success-terminal',
+        launch_lease_id: 'runtime-launch-lease-materializing-success-terminal',
+        envelope_id: 'runtime-envelope-materializing-success-terminal',
+        job_request_id: 'runtime-job-request-materializing-success-terminal',
+        target: generationTarget({ target_id: 'generation-materializing-success-terminal' }),
+      },
+      { worker_id: 'worker-materializing-success-terminal', session_token: 'session-token-materializing-success-terminal' },
+    );
+    await materializing.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-materializing-success-terminal',
+      worker_id: 'worker-materializing-success-terminal',
+      worker_session_token: 'session-token-materializing-success-terminal',
+      nonce: 'accept-materializing-success-terminal-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-materializing-success-terminal'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-materializing-success-terminal',
+      request_digest: tokenHash('accept-materializing-success-terminal-request'),
+      now: later,
+    });
+    await materializing.repository.claimCodexLaunchTokenEnvelope({
+      runtime_job_id: 'runtime-job-materializing-success-terminal',
+      envelope_id: 'runtime-envelope-materializing-success-terminal',
+      worker_id: 'worker-materializing-success-terminal',
+      worker_session_token: 'session-token-materializing-success-terminal',
+      nonce: 'claim-materializing-success-terminal-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-materializing-success-terminal'),
+      key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      claim_request_id: 'claim-materializing-success-terminal',
+      request_digest: tokenHash('claim-materializing-success-terminal-request'),
+      now: later,
+    });
+    await materializing.repository.materializeCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-materializing-success-terminal',
+      launch_lease_id: 'runtime-launch-lease-materializing-success-terminal',
+      worker_id: 'worker-materializing-success-terminal',
+      worker_session_token: 'session-token-materializing-success-terminal',
+      nonce: 'materialize-materializing-success-terminal-nonce',
+      nonce_timestamp: later,
+      launch_token_hash: tokenHash(materializing.launchToken),
+      accepted_worker_session_digest: tokenHash('session-token-materializing-success-terminal'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      materialization_request_id: 'materialize-materializing-success-terminal',
+      request_digest: tokenHash('materialize-materializing-success-terminal-request'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('runtime-action-claim-token-1'),
+        precondition_fingerprint: 'runtime-precondition-1',
+      },
+      now: later,
+    });
+    await expect(
+      materializing.repository.terminalizeCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-materializing-success-terminal',
+        launch_lease_id: 'runtime-launch-lease-materializing-success-terminal',
+        worker_id: 'worker-materializing-success-terminal',
+        worker_session_token: 'session-token-materializing-success-terminal',
+        nonce: 'terminal-materializing-success-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'succeeded',
+        reason_code: 'completed',
+        terminal_result_json: validGenerationTerminalResult('completed-before-start'),
+        idempotency_key: 'terminal-materializing-success',
+        request_digest: tokenHash('terminal-materializing-success-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects new terminal results after runtime job or launch lease expiry', async () => {
+    const expired = await createRuntimeJobWithCapturedToken(
+      { expires_at: '2026-05-20T00:01:30.000Z' },
+      { session_expires_at: expiresAt, session_public_key_expires_at: expiresAt },
+    );
+    await acceptRuntimeJob(expired.repository);
+    await claimRuntimeJobEnvelope(expired.repository);
+    await materializeRuntimeJob(expired.repository, expired.launchToken);
+    await startRuntimeJob(expired.repository);
+
+    for (const terminalStatus of ['succeeded', 'failed'] as const) {
+      await expect(
+        terminalizeRuntimeJob(expired.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+          nonce: `terminal-expired-${terminalStatus}-nonce`,
+          terminal_status: terminalStatus,
+          reason_code: terminalStatus === 'succeeded' ? 'completed' : 'runtime_failed',
+          terminal_result_json:
+            terminalStatus === 'succeeded' ? validGenerationTerminalResult('completed-after-expiry') : undefined,
+          idempotency_key: `terminal-expired-${terminalStatus}`,
+          request_digest: tokenHash(`terminal-expired-${terminalStatus}-request`),
+          now: afterRuntimeJobExpiry,
+        }),
+      ).rejects.toMatchObject<Partial<DomainError>>({
+        name: 'DomainError',
+        code: 'codex_runtime_job_unavailable',
+      });
+    }
+
+    await expired.repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-1',
+      reason_code: 'user_cancelled',
+      idempotency_key: 'cancel-before-expired-terminal',
+      request_digest: tokenHash('cancel-before-expired-terminal-request'),
+      now: later,
+    });
+    await expect(
+      terminalizeRuntimeJob(expired.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-expired-cancelled-nonce',
+        terminal_status: 'cancelled',
+        reason_code: 'user_cancelled',
+        terminal_result_json: undefined,
+        idempotency_key: 'terminal-expired-cancelled',
+        request_digest: tokenHash('terminal-expired-cancelled-request'),
+        now: afterRuntimeJobExpiry,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects unsafe runtime job terminal result payloads before persistence', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-unsafe-result-nonce',
+        terminal_result_json: {
+          ...validGenerationTerminalResult('unsafe'),
+          generated_payload: {
+            raw_endpoint: 'http://127.0.0.1:8080/internal',
+          },
+          generated_payload_digest: tokenHash('unsafe-generated-payload'),
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+    });
+  });
+
+  it('cancels queued runtime jobs by terminalizing the job and revoking the lease', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken();
+
+    const cancelled = await repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-1',
+      reason_code: 'user_cancelled',
+      idempotency_key: 'cancel-queued',
+      request_digest: tokenHash('cancel-queued-request'),
+      now: later,
+    });
+
+    expect(cancelled).toMatchObject({
+      id: 'runtime-job-1',
+      status: 'terminal',
+      terminal_status: 'cancelled',
+      terminal_reason_code: 'user_cancelled',
+      cancel_idempotency_key: 'cancel-queued',
+    });
+    await expect(
+      repository.getCodexLaunchLeaseStatus({
+        launch_lease_id: 'runtime-launch-lease-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'lease-status-revoked-nonce',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).resolves.toMatchObject<CodexLaunchLease>({ id: 'runtime-launch-lease-1', status: 'revoked' });
+  });
+
+  it('terminalizes accepted unclaimed cancels and records durable monotonic cancel requests after claim, materialize, or start', async () => {
+    const accepted = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(accepted.repository);
+    const acceptedCancel = await accepted.repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-1',
+      reason_code: 'user_cancelled',
+      idempotency_key: 'cancel-accepted',
+      request_digest: tokenHash('cancel-accepted-request'),
+      now: later,
+    });
+    expect(acceptedCancel).toMatchObject({
+      status: 'terminal',
+      terminal_status: 'cancelled',
+      terminal_reason_code: 'user_cancelled',
+      cancel_requested_at: later,
+      cancel_idempotency_key: 'cancel-accepted',
+      cancel_request_digest: tokenHash('cancel-accepted-request'),
+    });
+    await expect(
+      accepted.repository.getCodexLaunchLeaseStatus({
+        launch_lease_id: 'runtime-launch-lease-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'lease-status-accepted-cancel-nonce',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).resolves.toMatchObject<CodexLaunchLease>({ id: 'runtime-launch-lease-1', status: 'revoked' });
+    expect(runtimeTokenEnvelopes(accepted.repository).get('runtime-envelope-1')).toMatchObject({ status: 'revoked' });
+    await expect(
+      accepted.repository.cancelCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-1',
+        reason_code: 'user_cancelled',
+        idempotency_key: 'cancel-accepted',
+        request_digest: tokenHash('cancel-accepted-request'),
+        now: '2026-05-20T00:02:00.000Z',
+      }),
+    ).resolves.toEqual(acceptedCancel);
+    await expect(
+      accepted.repository.cancelCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-1',
+        reason_code: 'different_cancel',
+        idempotency_key: 'cancel-accepted-conflict',
+        request_digest: tokenHash('cancel-accepted-conflict-request'),
+        now: '2026-05-20T00:03:00.000Z',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+
+    const acceptedClaimed = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+        launch_lease_id: 'runtime-launch-lease-accepted-claimed-cancel',
+        envelope_id: 'runtime-envelope-accepted-claimed-cancel',
+        job_request_id: 'runtime-job-request-accepted-claimed-cancel',
+        target: generationTarget({ target_id: 'generation-accepted-claimed-cancel' }),
+      },
+      { worker_id: 'worker-accepted-claimed-cancel', session_token: 'session-token-accepted-claimed-cancel' },
+    );
+    await acceptedClaimed.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+      worker_id: 'worker-accepted-claimed-cancel',
+      worker_session_token: 'session-token-accepted-claimed-cancel',
+      nonce: 'accept-accepted-claimed-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-accepted-claimed-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-accepted-claimed-cancel',
+      request_digest: tokenHash('accept-accepted-claimed-cancel-request'),
+      now: later,
+    });
+    await acceptedClaimed.repository.claimCodexLaunchTokenEnvelope({
+      runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+      envelope_id: 'runtime-envelope-accepted-claimed-cancel',
+      worker_id: 'worker-accepted-claimed-cancel',
+      worker_session_token: 'session-token-accepted-claimed-cancel',
+      nonce: 'claim-accepted-claimed-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-accepted-claimed-cancel'),
+      key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      claim_request_id: 'claim-accepted-claimed-cancel',
+      request_digest: tokenHash('claim-accepted-claimed-cancel-request'),
+      now: later,
+    });
+    await expect(
+      acceptedClaimed.repository.cancelCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-accepted-claimed-cancel',
+        reason_code: 'user_cancelled',
+        idempotency_key: 'cancel-accepted-claimed',
+        request_digest: tokenHash('cancel-accepted-claimed-request'),
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'accepted', cancel_idempotency_key: 'cancel-accepted-claimed' });
+
+    const materializing = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-materializing-cancel',
+        launch_lease_id: 'runtime-launch-lease-materializing-cancel',
+        envelope_id: 'runtime-envelope-materializing-cancel',
+        job_request_id: 'runtime-job-request-materializing-cancel',
+        target: generationTarget({ target_id: 'generation-materializing-cancel' }),
+      },
+      { worker_id: 'worker-materializing-cancel', session_token: 'session-token-materializing-cancel' },
+    );
+    await materializing.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-materializing-cancel',
+      worker_id: 'worker-materializing-cancel',
+      worker_session_token: 'session-token-materializing-cancel',
+      nonce: 'accept-materializing-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-materializing-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-materializing-cancel',
+      request_digest: tokenHash('accept-materializing-cancel-request'),
+      now: later,
+    });
+    await materializing.repository.claimCodexLaunchTokenEnvelope({
+      runtime_job_id: 'runtime-job-materializing-cancel',
+      envelope_id: 'runtime-envelope-materializing-cancel',
+      worker_id: 'worker-materializing-cancel',
+      worker_session_token: 'session-token-materializing-cancel',
+      nonce: 'claim-materializing-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-materializing-cancel'),
+      key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      claim_request_id: 'claim-materializing-cancel',
+      request_digest: tokenHash('claim-materializing-cancel-request'),
+      now: later,
+    });
+    await materializing.repository.materializeCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-materializing-cancel',
+      launch_lease_id: 'runtime-launch-lease-materializing-cancel',
+      worker_id: 'worker-materializing-cancel',
+      worker_session_token: 'session-token-materializing-cancel',
+      nonce: 'materialize-materializing-cancel-nonce',
+      nonce_timestamp: later,
+      launch_token_hash: tokenHash(materializing.launchToken),
+      accepted_worker_session_digest: tokenHash('session-token-materializing-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      materialization_request_id: 'materialize-materializing-cancel',
+      request_digest: tokenHash('materialize-materializing-cancel-request'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('runtime-action-claim-token-1'),
+        precondition_fingerprint: 'runtime-precondition-1',
+      },
+      now: later,
+    });
+    await expect(
+      materializing.repository.cancelCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-materializing-cancel',
+        reason_code: 'user_cancelled',
+        idempotency_key: 'cancel-materializing',
+        request_digest: tokenHash('cancel-materializing-request'),
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'materializing', cancel_idempotency_key: 'cancel-materializing' });
+
+    const running = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-running-cancel',
+        launch_lease_id: 'runtime-launch-lease-running-cancel',
+        envelope_id: 'runtime-envelope-running-cancel',
+        job_request_id: 'runtime-job-request-running-cancel',
+        target: generationTarget({ target_id: 'generation-running-cancel' }),
+      },
+      { worker_id: 'worker-running-cancel', session_token: 'session-token-running-cancel' },
+    );
+    await running.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-running-cancel',
+      worker_id: 'worker-running-cancel',
+      worker_session_token: 'session-token-running-cancel',
+      nonce: 'accept-running-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-running-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-running-cancel',
+      request_digest: tokenHash('accept-running-cancel-request'),
+      now: later,
+    });
+    await running.repository.claimCodexLaunchTokenEnvelope({
+      runtime_job_id: 'runtime-job-running-cancel',
+      envelope_id: 'runtime-envelope-running-cancel',
+      worker_id: 'worker-running-cancel',
+      worker_session_token: 'session-token-running-cancel',
+      nonce: 'claim-running-cancel-nonce',
+      nonce_timestamp: later,
+      accepted_worker_session_digest: tokenHash('session-token-running-cancel'),
+      key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      claim_request_id: 'claim-running-cancel',
+      request_digest: tokenHash('claim-running-cancel-request'),
+      now: later,
+    });
+    await running.repository.materializeCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-running-cancel',
+      launch_lease_id: 'runtime-launch-lease-running-cancel',
+      worker_id: 'worker-running-cancel',
+      worker_session_token: 'session-token-running-cancel',
+      nonce: 'materialize-running-cancel-nonce',
+      nonce_timestamp: later,
+      launch_token_hash: tokenHash(running.launchToken),
+      accepted_worker_session_digest: tokenHash('session-token-running-cancel'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      materialization_request_id: 'materialize-running-cancel',
+      request_digest: tokenHash('materialize-running-cancel-request'),
+      active_fence: {
+        action_claim_token_hash: tokenHash('runtime-action-claim-token-1'),
+        precondition_fingerprint: 'runtime-precondition-1',
+      },
+      now: later,
+    });
+    await running.repository.startCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-running-cancel',
+      worker_id: 'worker-running-cancel',
+      worker_session_token: 'session-token-running-cancel',
+      nonce: 'start-running-cancel-nonce',
+      nonce_timestamp: later,
+      idempotency_key: 'start-running-cancel',
+      request_digest: tokenHash('start-running-cancel-request'),
+      runtime_evidence_digest: tokenHash('runtime-evidence-running-cancel'),
+      launch_materialization_digest: tokenHash('launch-materialization-running-cancel'),
+      now: later,
+    });
+    await expect(
+      running.repository.cancelCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-running-cancel',
+        reason_code: 'user_cancelled',
+        idempotency_key: 'cancel-running',
+        request_digest: tokenHash('cancel-running-request'),
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'running', cancel_idempotency_key: 'cancel-running' });
+    await expect(
+      running.repository.terminalizeCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-running-cancel',
+        launch_lease_id: 'runtime-launch-lease-running-cancel',
+        worker_id: 'worker-running-cancel',
+        worker_session_token: 'session-token-running-cancel',
+        nonce: 'terminal-running-cancel-success-race-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'succeeded',
+        reason_code: 'completed_after_cancel',
+        terminal_result_json: validGenerationTerminalResult('completed-after-cancel'),
+        idempotency_key: 'terminal-running-cancel-success-race',
+        request_digest: tokenHash('terminal-running-cancel-success-race-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+    await expect(
+      running.repository.terminalizeCodexRuntimeJob({
+        runtime_job_id: 'runtime-job-running-cancel',
+        launch_lease_id: 'runtime-launch-lease-running-cancel',
+        worker_id: 'worker-running-cancel',
+        worker_session_token: 'session-token-running-cancel',
+        nonce: 'terminal-running-cancelled-nonce',
+        nonce_timestamp: later,
+        terminal_status: 'cancelled',
+        reason_code: 'user_cancelled',
+        idempotency_key: 'terminal-running-cancelled',
+        request_digest: tokenHash('terminal-running-cancelled-request'),
+        now: later,
+      }),
+    ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'cancelled' });
+  });
+
+  it('recovers stale runtime jobs and associated leases without writing product state', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await acceptRuntimeJob(repository);
+
+    const recovered = await repository.recoverStaleCodexRuntimeJobs({
+      stale_before: '2026-05-20T00:02:00.000Z',
+      now: '2026-05-20T00:02:00.000Z',
+      worker_id: 'worker-1',
+      reason_code: 'codex_runtime_job_stale',
+    });
+
+    expect(recovered).toMatchObject({
+      recovered_runtime_jobs: [
+        {
+          id: 'runtime-job-1',
+          status: 'terminal',
+          terminal_status: 'expired',
+          terminal_reason_code: 'codex_runtime_job_stale',
+        },
+      ],
+      recovered_launch_leases: [{ id: 'runtime-launch-lease-1', status: 'expired' }],
+    });
+    expect(recovered.recovered_runtime_jobs[0]).not.toHaveProperty('input_json');
+    expect(recovered.recovered_runtime_jobs[0]).not.toHaveProperty('workspace_acquisition_json');
+    expect(JSON.stringify(recovered)).not.toContain('artifact://runtime/input');
+    await expect(
+      repository.getClaimedAutomationActionRun({
+        id: 'generation-1',
+        claim_token: 'runtime-action-claim-token-1',
+      }),
+    ).resolves.toMatchObject({ id: 'generation-1', status: 'running' });
+  });
+
+  it('rejects non-allowlisted runtime job recovery reason codes', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'unsafe /tmp/recovery token' as never,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it.each([
+    ['queued', async () => undefined],
+    ['accepted', async (repository: DeliveryRepository) => acceptRuntimeJob(repository)],
+    [
+      'materializing',
+      async (repository: DeliveryRepository, launchToken: string) => {
+        await acceptRuntimeJob(repository);
+        await claimRuntimeJobEnvelope(repository);
+        await materializeRuntimeJob(repository, launchToken);
+      },
+    ],
+    [
+      'running',
+      async (repository: DeliveryRepository, launchToken: string) => {
+        await acceptRuntimeJob(repository);
+        await claimRuntimeJobEnvelope(repository);
+        await materializeRuntimeJob(repository, launchToken);
+        await startRuntimeJob(repository);
+      },
+    ],
+  ])('recovers stale %s runtime jobs idempotently with public-safe reason codes', async (_status, prepare) => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await prepare(repository, launchToken);
+
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'codex_runtime_job_stale',
+      }),
+    ).resolves.toMatchObject({
+      recovered_runtime_jobs: [
+        {
+          id: 'runtime-job-1',
+          status: 'terminal',
+          terminal_status: 'expired',
+          terminal_reason_code: 'codex_runtime_job_stale',
+        },
+      ],
+      recovered_launch_leases: [{ id: 'runtime-launch-lease-1', status: 'expired' }],
+    });
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'codex_runtime_job_stale',
+      }),
+    ).resolves.toEqual({ recovered_runtime_jobs: [], recovered_launch_leases: [] });
+    await expect(
+      repository.getClaimedAutomationActionRun({
+        id: 'generation-1',
+        claim_token: 'runtime-action-claim-token-1',
+      }),
+    ).resolves.toMatchObject({ id: 'generation-1', status: 'running' });
+  });
+
+  it('repairs nonterminal runtime jobs whose launch lease already reached a terminal status', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await acceptRuntimeJob(repository);
+    await repository.terminalizeCodexLaunchLease({
+      lease_id: 'runtime-launch-lease-1',
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'terminalize-runtime-lease-before-runtime-recovery',
+      nonce_timestamp: later,
+      terminal_status: 'terminal',
+      reason_code: 'worker_closed_before_runtime_terminal',
+      idempotency_key: 'terminalize-runtime-lease-before-runtime-recovery',
+      evidence_summary: { cleanup_digest: tokenHash('runtime-lease-cleanup') },
+      now: later,
+    });
+
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: now,
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'codex_runtime_job_lease_terminal',
+      }),
+    ).resolves.toMatchObject({
+      recovered_runtime_jobs: [
+        {
+          id: 'runtime-job-1',
+          status: 'terminal',
+          terminal_status: 'expired',
+          terminal_reason_code: 'codex_runtime_job_lease_terminal',
+        },
+      ],
+      recovered_launch_leases: [],
+    });
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: 'runtime-job-1' })).resolves.toMatchObject({
+      status: 'terminal',
+      terminal_status: 'expired',
+      terminal_reason_code: 'codex_runtime_job_lease_terminal',
+    });
+  });
+
+  it('keeps runtime job launch leases out of legacy stale worker recovery', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await acceptRuntimeJob(repository);
+
+    await expect(
+      repository.recoverStaleCodexWorkerLeases({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'legacy_stale_worker',
+      }),
+    ).resolves.toEqual({ recovered_launch_leases: [], automation_action_transitions: [], run_session_transitions: [] });
+    await expect(
+      repository.getClaimedAutomationActionRun({
+        id: 'generation-1',
+        claim_token: 'runtime-action-claim-token-1',
+      }),
+    ).resolves.toMatchObject({ id: 'generation-1', status: 'running' });
+    await expect(
+      repository.getCodexLaunchLeaseStatus({
+        launch_lease_id: 'runtime-launch-lease-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'lease-status-after-legacy-recovery-nonce',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).resolves.toMatchObject<CodexLaunchLease>({ id: 'runtime-launch-lease-1', status: 'active' });
+  });
+
+  it('returns only public-safe launch lease status for runtime jobs', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+
+    const status = await repository.getCodexLaunchLeaseStatus({
+      launch_lease_id: 'runtime-launch-lease-1',
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'lease-status-public-safe-nonce',
+      nonce_timestamp: later,
+      now: later,
+    });
+
+    expect(status).toMatchObject({ id: 'runtime-launch-lease-1', status: 'active', lease_token_hash: tokenHash(launchToken) });
+    expect(status).not.toHaveProperty('lease_token');
+    expect(JSON.stringify(status)).not.toContain(launchToken);
+  });
+
+  it('does not deliver new queued runtime jobs to draining workers', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken();
+    await repository.heartbeatCodexWorker({
+      worker_id: 'worker-1',
+      session_token: 'session-token-1',
+      nonce: 'runtime-job-draining-heartbeat',
+      nonce_timestamp: later,
+      status: 'draining',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now: later,
+    });
+
+    await expect(
+      repository.pollCodexRuntimeJobs({
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'runtime-job-draining-poll',
+        nonce_timestamp: later,
+        target_kinds: ['generation'],
+        limit: 1,
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-1/runtime-jobs/poll',
+          body_digest: tokenHash('runtime-job-draining-poll-request'),
+        },
+        now: later,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it('refreshes worker sessions only when queued jobs sealed to the current key cannot be stranded', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken();
+
+    await expect(
+      repository.refreshCodexWorkerSession({
+        worker_id: 'worker-1',
+        current_session_token: 'session-token-1',
+        nonce: 'refresh-with-queued-runtime-job',
+        nonce_timestamp: later,
+        next_session_token: 'session-token-2',
+        next_session_expires_at: expiresAt,
+        next_session_public_key_id: 'session-key-2',
+        next_session_public_key_material: 'public-key-material-2',
+        next_session_public_key_expires_at: expiresAt,
+        request_digest: tokenHash('refresh-with-queued-runtime-job-request'),
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-1/session/refresh',
+          body_digest: tokenHash('refresh-with-queued-runtime-job-request'),
+        },
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
+
+    await repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-1',
+      reason_code: 'test_cancel_before_refresh',
+      idempotency_key: 'cancel-before-refresh',
+      request_digest: tokenHash('cancel-before-refresh-request'),
+      now: later,
+    });
+
+    await expect(
+      repository.refreshCodexWorkerSession({
+        worker_id: 'worker-1',
+        current_session_token: 'session-token-1',
+        nonce: 'refresh-after-queued-runtime-job-cancel',
+        nonce_timestamp: later,
+        next_session_token: 'session-token-2',
+        next_session_expires_at: expiresAt,
+        next_session_public_key_id: 'session-key-2',
+        next_session_public_key_material: 'public-key-material-2',
+        next_session_public_key_expires_at: expiresAt,
+        request_digest: tokenHash('refresh-after-queued-runtime-job-cancel-request'),
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-1/session/refresh',
+          body_digest: tokenHash('refresh-after-queued-runtime-job-cancel-request'),
+        },
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: 'worker-1', session_id: 'session-key-2', session_epoch: 2 });
+  });
+
+  it('keeps the accepted session token valid for already accepted runtime jobs after session refresh', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+
+    await repository.refreshCodexWorkerSession({
+      worker_id: 'worker-1',
+      current_session_token: 'session-token-1',
+      nonce: 'refresh-after-accepted-runtime-job',
+      nonce_timestamp: later,
+      next_session_token: 'session-token-2',
+      next_session_expires_at: expiresAt,
+      next_session_public_key_id: 'session-key-2',
+      next_session_public_key_material: 'public-key-material-2',
+      next_session_public_key_expires_at: expiresAt,
+      request_digest: tokenHash('refresh-after-accepted-runtime-job-request'),
+      replay_protection: {
+        method: 'POST',
+        path: '/internal/codex-workers/worker-1/session/refresh',
+        body_digest: tokenHash('refresh-after-accepted-runtime-job-request'),
+      },
+      now: later,
+    });
+
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-with-accepted-session-after-refresh',
+      }),
+    ).resolves.toMatchObject({ id: 'runtime-envelope-1', status: 'claimed', claimed_key_id: 'session-key-1' });
+    await expect(
+      materializeRuntimeJob(repository, launchToken, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'materialize-with-accepted-session-after-refresh',
+      }),
+    ).resolves.toMatchObject({ lease_id: 'runtime-launch-lease-1' });
+  });
+
+  it('creates runtime jobs with a repository-owned sealed envelope and no raw launch token in the result', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository);
+
+    const result = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    expect(result.replayed).toBe(false);
+    expect(result.runtime_job).toMatchObject({
+      id: input.runtime_job_id,
+      job_request_id: input.job_request_id,
+      status: 'queued',
+      input_digest: input.input_digest,
+      workspace_acquisition_digest: input.workspace_acquisition_digest,
+    });
+    expect(result.launch_lease).toMatchObject({
+      id: input.launch_lease_id,
+      status: 'active',
+      lease_token_hash: expect.stringMatching(/^sha256:/),
+    });
+    expect(result.envelope).toMatchObject({
+      id: input.envelope_id,
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: input.worker_id,
+      status: 'available',
+    });
+    expect(sealerCalls).toHaveLength(1);
+    expect(sealerCalls[0]).toMatchObject({
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      worker_id: input.worker_id,
+      worker_public_key_material: 'public-key-material',
+      key_id: 'session-key-1',
+      expires_at: input.expires_at,
+    });
+    expect(sealerCalls[0]?.plaintext_launch_token).toEqual(expect.any(String));
+    expect(JSON.stringify(result)).not.toContain(sealerCalls[0]!.plaintext_launch_token);
+    expect(result.launch_lease).not.toHaveProperty('lease_token');
+  });
+
+  it('replays runtime jobs by job_request_id without resealing a new launch token', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository);
+    const first = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    const second = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      runtime_job_id: 'runtime-job-replay-ignored',
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+    });
+
+    expect(second).toEqual({ ...first, replayed: true });
+    expect(sealerCalls).toHaveLength(1);
+  });
+
+  it('replays runtime jobs by target plus launch attempt when fences match', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository);
+    const first = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    const second = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      runtime_job_id: 'runtime-job-target-replay',
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      job_request_id: 'runtime-job-request-target-replay',
+    });
+
+    expect(second).toEqual({ ...first, replayed: true });
+    expect(sealerCalls).toHaveLength(1);
+  });
+
+  it('rejects runtime job replay after the stored action claim fence expires', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await runtimeJobInput(repository, {
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        runtime_job_id: 'runtime-job-stale-action-replay',
+        now: '2026-05-20T00:11:00.000Z',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects runtime job replay after the stored launch lease expires', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const target = generationTarget({ target_id: 'generation-lease-expiry-replay' });
+    await claimGenerationAction(repository, {
+      id: target.target_id,
+      idempotency_key: 'runtime-generation-lease-expiry-replay-idem',
+      target_object_id: target.target_id,
+      action_input_json: { generation_id: target.target_id },
+      claim_token: 'runtime-action-claim-token-1',
+      precondition_fingerprint: 'runtime-precondition-1',
+      locked_until: '2026-05-20T00:30:00.000Z',
+    });
+    const input = await runtimeJobInput(repository, {
+      runtime_job_id: 'runtime-job-lease-expiry-replay',
+      launch_lease_id: 'runtime-launch-lease-expiry-replay',
+      envelope_id: 'runtime-envelope-lease-expiry-replay',
+      job_request_id: 'runtime-job-request-lease-expiry-replay',
+      target,
+      expires_at: expiresAt,
+    });
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        runtime_job_id: 'runtime-job-lease-expiry-replay-ignored',
+        now: '2026-05-20T00:11:00.000Z',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('creates runtime jobs for the selected eligible worker even when another worker has more free slots', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const input = await runtimeJobInput(repository, {}, { lease_count: 1, max_concurrency: 2 });
+    const { worker: emptierWorker, sessionToken: emptierSessionToken } = await seedWorker(repository, {
+      worker_id: 'worker-with-more-free-slots',
+      session_token: 'session-token-more-free-slots',
+      capabilities: ['generation'],
+      lease_count: 0,
+      max_concurrency: 2,
+    });
+    await repository.heartbeatCodexWorker({
+      worker_id: emptierWorker.id,
+      session_token: emptierSessionToken,
+      nonce: 'runtime-job-emptier-worker-heartbeat',
+      nonce_timestamp: now,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now,
+    });
+
+    const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    expect(created.runtime_job.worker_id).toBe(input.worker_id);
+    expect(sealerCalls).toHaveLength(1);
+  });
+
+  it('rejects runtime job create when a non-runtime launch lease already owns the target attempt', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    await createLaunchLease(repository);
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-launch-lease-conflict',
+        launch_lease_id: 'runtime-launch-lease-conflict',
+        envelope_id: 'runtime-envelope-launch-lease-conflict',
+        job_request_id: 'runtime-job-request-launch-lease-conflict',
+        action_claim_token_hash: tokenHash('action-claim-token-1'),
+        precondition_fingerprint: 'precondition-1',
+      },
+      {
+        worker_id: 'worker-runtime-launch-lease-conflict',
+        session_token: 'session-token-runtime-launch-lease-conflict',
+      },
+    );
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('requires generation runtime jobs to carry strong action claim fences', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await runtimeJobInput(repository, {
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+    });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it.each([
+    ['input digest', { input_digest: tokenHash('other-input') }],
+    ['workspace digest', { workspace_acquisition_digest: tokenHash('other-workspace') }],
+    ['worker id', { worker_id: 'worker-other' }],
+    ['launch lease id', { launch_lease_id: 'runtime-launch-lease-other' }],
+    ['profile fence', { runtime_profile_digest: tokenHash('other-profile') }],
+    ['credential fence', { credential_payload_digest: tokenHash('other-credential') }],
+    ['envelope id', { envelope_id: 'runtime-envelope-other' }],
+  ])('rejects runtime job replay with conflicting %s', async (_label, patch) => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await runtimeJobInput(repository);
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        ...patch,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('does not persist runtime job, launch lease, or envelope when envelope sealing fails', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls, { failFirst: true }));
+    const input = await runtimeJobInput(repository, {}, { max_concurrency: 1 });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toThrow('seal failed');
+
+    const retried = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+    expect(retried.replayed).toBe(false);
+    expect(retried.runtime_job.id).toBe(input.runtime_job_id);
+    expect(sealerCalls).toHaveLength(2);
+  });
+
+  it('binds pending workspace bundles on create and rejects mismatched bundle replays', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const run = runSession({
+      id: 'runtime-run-session-1',
+      execution_package_id: 'runtime-execution-package-1',
+    });
+    await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-1',
+      lease_token: 'run-worker-token-1',
+      now,
+      expires_at: expiresAt,
+    });
+    const target = generationTarget({
+      target_type: 'run_session',
+      target_kind: 'run_execution',
+      target_id: run.id,
+    });
+    const archiveBytes = Buffer.from('bundle-archive-1');
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: 'pending-bundle-1',
+      archive_ref: 'artifact:codex-pending-bundles:pending-bundle-1',
+      archive_digest: bytesDigest(archiveBytes),
+      manifest_digest: tokenHash('bundle-manifest-1'),
+      size_bytes: archiveBytes.byteLength,
+      expires_at: expiresAt,
+    };
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-1',
+      pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+      archive_digest: workspaceAcquisitionJson.archive_digest,
+      manifest_digest: workspaceAcquisitionJson.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+      workspace_acquisition_json: workspaceAcquisitionJson,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingBundle,
+      id: '22222222-2222-4222-8222-222222222222',
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      archive_bytes_base64: archiveBytes.toString('base64'),
+      request_digest: tokenHash('pending-workspace-request-1'),
+      created_at: now,
+    });
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-run-execution-1',
+        launch_lease_id: 'runtime-launch-lease-run-execution-1',
+        envelope_id: 'runtime-envelope-run-execution-1',
+        job_request_id: 'runtime-job-request-run-execution-1',
+        target,
+        action_type: undefined,
+        action_attempt: undefined,
+        action_claim_token_hash: undefined,
+        precondition_fingerprint: undefined,
+        execution_package_id: run.execution_package_id,
+        run_worker_lease_id: runWorkerLease.id,
+        run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
+        run_session_status: 'running',
+        run_session_updated_at: now,
+        execution_package_version: 1,
+        input_json: { task: 'run package', public_ref: 'artifact://runtime/run-input' },
+        input_digest: tokenHash('runtime-run-input-1'),
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+        workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        pending_workspace_bundle: pendingBundle,
+      },
+      { capabilities: ['run_execution'] },
+    );
+
+    const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+    const replayed = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      job_request_id: 'runtime-job-request-run-execution-replay',
+    });
+
+    expect(created.runtime_job.workspace_acquisition_digest).toBe(pendingBundle.workspace_acquisition_digest);
+    expect([...runtimeJobArtifactBindings(repository).values()]).toContainEqual(
+      expect.objectContaining({
+        runtime_job_id: created.runtime_job.id,
+        kind: 'workspace_bundle',
+        name: pendingBundle.bundle_id,
+        digest: pendingBundle.archive_digest,
+        internal_ref: pendingBundle.pending_artifact_ref,
+        metadata_json: expect.objectContaining({
+          bundle_id: pendingBundle.bundle_id,
+          manifest_digest: pendingBundle.manifest_digest,
+          run_worker_lease_id: pendingBundle.run_worker_lease_id,
+          workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        }),
+      }),
+    );
+    expect(replayed).toEqual({ ...created, replayed: true });
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+        ...input,
+        job_request_id: 'runtime-job-request-run-execution-conflict',
+        pending_workspace_bundle: {
+          ...pendingBundle,
+          archive_digest: tokenHash('bundle-archive-conflict'),
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('requires run-execution runtime jobs to carry strong run-worker fences', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const run = runSession({
+      id: 'runtime-run-session-missing-fence',
+      execution_package_id: 'runtime-execution-package-missing-fence',
+    });
+    await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-missing-fence',
+      lease_token: 'run-worker-token-missing-fence',
+      now,
+      expires_at: expiresAt,
+    });
+    const target = generationTarget({
+      target_type: 'run_session',
+      target_kind: 'run_execution',
+      target_id: run.id,
+    });
+    const archiveBytes = Buffer.from('bundle-archive-missing-fence');
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: 'pending-bundle-missing-fence',
+      archive_ref: 'artifact:codex-pending-bundles:pending-bundle-missing-fence',
+      archive_digest: bytesDigest(archiveBytes),
+      manifest_digest: tokenHash('bundle-manifest-missing-fence'),
+      size_bytes: archiveBytes.byteLength,
+      expires_at: expiresAt,
+    };
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-missing-fence',
+      pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+      archive_digest: workspaceAcquisitionJson.archive_digest,
+      manifest_digest: workspaceAcquisitionJson.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+      workspace_acquisition_json: workspaceAcquisitionJson,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingBundle,
+      id: '33333333-3333-4333-8333-333333333333',
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      archive_bytes_base64: archiveBytes.toString('base64'),
+      request_digest: tokenHash('pending-workspace-request-missing-fence'),
+      created_at: now,
+    });
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-run-execution-missing-fence',
+        launch_lease_id: 'runtime-launch-lease-run-execution-missing-fence',
+        envelope_id: 'runtime-envelope-run-execution-missing-fence',
+        job_request_id: 'runtime-job-request-run-execution-missing-fence',
+        target,
+        action_type: undefined,
+        action_attempt: undefined,
+        action_claim_token_hash: undefined,
+        precondition_fingerprint: undefined,
+        execution_package_id: run.execution_package_id,
+        run_worker_lease_id: runWorkerLease.id,
+        run_worker_lease_token_hash: undefined,
+        run_session_status: 'running',
+        run_session_updated_at: now,
+        execution_package_version: 1,
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+        workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        pending_workspace_bundle: pendingBundle,
+      },
+      { capabilities: ['run_execution'] },
+    );
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
     });
   });
 

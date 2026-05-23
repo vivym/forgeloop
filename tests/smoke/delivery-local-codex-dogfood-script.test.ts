@@ -460,6 +460,50 @@ describe('delivery local Codex dogfood script helpers', () => {
     ).toThrow(/dangerous mode/);
 
     expect(() =>
+      validateWithRunSession(
+        runSessionRuntimeMetadataReport({
+          executor_type: 'local_codex',
+          runtime_metadata: {
+            workspace_path: '/repo/.worktrees/run-1',
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+            effective_dangerous_mode: 'confirmed',
+            launch_lease_id: 'lease-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            credential_binding_version_id: 'credential-v1',
+            docker_image_digest: `sha256:${'a'.repeat(64)}`,
+            container_id_digest: `sha256:${'b'.repeat(64)}`,
+            app_server_effective_config_digest: `sha256:${'c'.repeat(64)}`,
+            docker_policy_self_check_digest: `sha256:${'d'.repeat(64)}`,
+            CODEX_HOME: '/Users/viv/.codex',
+          },
+        }),
+        { expectedRunSessionId: 'run-1' },
+      ),
+    ).toThrow(/host Codex config/);
+
+    expect(() =>
+      validateWithRunSession(
+        runSessionRuntimeMetadataReport({
+          executor_type: 'local_codex',
+          runtime_metadata: {
+            workspace_path: '/repo/.worktrees/run-1',
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+            effective_dangerous_mode: 'confirmed',
+            launch_lease_id: 'lease-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            credential_binding_version_id: 'credential-v1',
+            docker_image_digest: `sha256:${'a'.repeat(64)}`,
+            container_id_digest: `sha256:${'b'.repeat(64)}`,
+            app_server_effective_config_digest: `sha256:${'c'.repeat(64)}`,
+          },
+        }),
+        { expectedRunSessionId: 'run-1' },
+      ),
+    ).toThrow(/Dockerized app-server evidence/);
+
+    expect(() =>
       validateLocalCodexRuntimeMetadata({
         executor_type: 'mock',
         runtime_metadata: {

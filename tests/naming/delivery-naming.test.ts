@@ -187,7 +187,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
   ];
   const executionPackageOwnerTestPaths = [
     /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|task-scoped-evidence|test-acceptance-gate)\.test\.ts$/,
-    /^tests\/db\/(?:automation-repository|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|task-repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
+    /^tests\/db\/(?:automation-repository|codex-runtime-drizzle-concurrency|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|task-repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
     /^tests\/db\/repository-contract\.ts$/,
     /^tests\/contracts\/work-item-delivery-readiness\.test\.ts$/,
     /^tests\/domain\/(?:release-gates|release-states|states|validators)\.test\.ts$/,

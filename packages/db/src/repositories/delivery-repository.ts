@@ -13,9 +13,13 @@ import type {
   CodexLaunchLease,
   CodexLaunchLeaseWithToken,
   CodexLaunchMaterialization,
+  CodexLaunchTokenEnvelope,
   CodexLaunchTarget,
+  CodexRuntimeJob,
+  CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
+  CodexRuntimeRecoveryReasonCode,
   CodexRuntimeScope,
   CodexSourceAccessMode,
   CodexRuntimeStatusProjection,
@@ -221,6 +225,12 @@ export interface HeartbeatCodexWorkerInput {
   now: string;
 }
 
+export interface CodexWorkerReplayProtectionInput {
+  method: 'GET' | 'POST';
+  path: string;
+  body_digest: string;
+}
+
 export interface FindAvailableCodexWorkerInput {
   project_id: string;
   repo_id?: string;
@@ -270,6 +280,327 @@ export interface CreateOrReplayCodexLaunchLeaseInput {
   now: string;
 }
 
+export interface CodexLaunchTokenEnvelopeSealer {
+  sealLaunchTokenEnvelope(input: {
+    plaintext_launch_token: string;
+    runtime_job_id: string;
+    launch_lease_id: string;
+    envelope_id: string;
+    worker_id: string;
+    worker_public_key_material: string;
+    key_id: string;
+    expires_at: string;
+  }): Promise<Omit<CodexLaunchTokenEnvelope, 'status' | 'created_at'>>;
+}
+
+export interface PendingWorkspaceBundleInput {
+  bundle_id: string;
+  pending_artifact_ref: string;
+  archive_digest: string;
+  manifest_digest: string;
+  run_worker_lease_id: string;
+  size_bytes: number;
+  workspace_acquisition_digest: string;
+  workspace_acquisition_json: Record<string, unknown>;
+  expires_at: string;
+}
+
+export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
+  runtime_job_id: string;
+  launch_lease_id: string;
+  envelope_id: string;
+  job_request_id: string;
+  target: CodexLaunchTarget;
+  launch_attempt: number;
+  worker_id: string;
+  runtime_profile_revision_id: string;
+  runtime_profile_digest: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  credential_payload_digest: string;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+  input_json: Record<string, unknown>;
+  input_digest: string;
+  workspace_acquisition_json?: Record<string, unknown>;
+  workspace_acquisition_digest?: string;
+  pending_workspace_bundle?: PendingWorkspaceBundleInput;
+  action_type?: string;
+  action_attempt?: number;
+  action_claim_token_hash?: string;
+  precondition_fingerprint?: string;
+  execution_package_id?: string;
+  run_worker_lease_id?: string;
+  run_worker_lease_token_hash?: string;
+  run_session_status?: string;
+  run_session_updated_at?: string;
+  execution_package_version?: number;
+  expires_at: string;
+  now: string;
+}
+
+export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult {
+  runtime_job: CodexRuntimeJob;
+  launch_lease: CodexLaunchLease;
+  envelope: CodexLaunchTokenEnvelope;
+  replayed: boolean;
+}
+
+export interface PollCodexRuntimeJobsInput {
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  target_kinds?: readonly CodexRuntimeTargetKind[];
+  limit: number;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface AcceptCodexRuntimeJobInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  accepted_worker_session_digest: string;
+  accepted_session_public_key_id: string;
+  accepted_session_epoch: number;
+  idempotency_key: string;
+  request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface ClaimCodexLaunchTokenEnvelopeInput {
+  runtime_job_id: string;
+  envelope_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  accepted_worker_session_digest: string;
+  key_id: string;
+  accepted_session_epoch: number;
+  claim_request_id: string;
+  request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface MaterializeCodexRuntimeJobInput {
+  runtime_job_id: string;
+  launch_lease_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  launch_token_hash: string;
+  accepted_worker_session_digest: string;
+  accepted_session_public_key_id: string;
+  accepted_session_epoch: number;
+  materialization_request_id: string;
+  request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  active_fence?: CodexLaunchFenceSnapshot;
+  now: string;
+}
+
+export interface StartCodexRuntimeJobInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  idempotency_key: string;
+  request_digest: string;
+  runtime_evidence_digest: string;
+  launch_materialization_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface AppendCodexRuntimeJobEventInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  event_id: string;
+  idempotency_key: string;
+  event_type: string;
+  event_payload_json: Record<string, unknown>;
+  request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface CreateCodexRuntimeJobArtifactInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  artifact_id: string;
+  artifact_idempotency_key: string;
+  kind: string;
+  name: string;
+  content_type: string;
+  digest: string;
+  internal_ref: string;
+  size_bytes: number;
+  metadata_json: Record<string, unknown>;
+  request_digest: string;
+  replay_protection?: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface ListCodexRuntimeJobArtifactsInput {
+  runtime_job_id: string;
+}
+
+export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleInput {
+  id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  archive_bytes_base64: string;
+  request_digest: string;
+  created_at: string;
+}
+
+export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
+  runtime_job_id: string;
+  bundle_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface WorkspaceBundleDownloadForRuntimeJob {
+  bundle_id: string;
+  archive_bytes_base64: string;
+  archive_digest: string;
+  manifest_digest: string;
+  content_type: 'application/vnd.forgeloop.workspace-bundle';
+  size_bytes: number;
+  expires_at: string;
+}
+
+export interface CancelCodexRuntimeJobInput {
+  runtime_job_id: string;
+  reason_code: string;
+  idempotency_key: string;
+  request_digest: string;
+  now: string;
+}
+
+export interface TerminalizeCodexRuntimeJobInput {
+  runtime_job_id: string;
+  launch_lease_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  terminal_status: NonNullable<CodexRuntimeJob['terminal_status']>;
+  reason_code: string;
+  terminal_result_json?: Record<string, unknown>;
+  idempotency_key: string;
+  request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface RecoverStaleCodexRuntimeJobsInput {
+  stale_before: string;
+  now: string;
+  worker_id?: string;
+  reason_code: CodexRuntimeRecoveryReasonCode;
+}
+
+export interface RecoveredCodexRuntimeJobEvidence {
+  id: string;
+  worker_id: string;
+  launch_lease_id: string;
+  target_type: CodexRuntimeJob['target_type'];
+  target_id: string;
+  target_kind: CodexRuntimeJob['target_kind'];
+  project_id: string;
+  repo_id?: string;
+  status: CodexRuntimeJob['status'];
+  terminal_status?: CodexRuntimeJob['terminal_status'];
+  terminal_reason_code?: string;
+  terminal_at?: string;
+  updated_at: string;
+}
+
+export interface RecoveredCodexLaunchLeaseEvidence {
+  id: string;
+  worker_id?: string;
+  target_type: CodexLaunchLease['target']['target_type'];
+  target_id: string;
+  target_kind: CodexLaunchLease['target']['target_kind'];
+  project_id: string;
+  repo_id?: string;
+  status: CodexLaunchLease['status'];
+  terminal_reason_code?: string;
+}
+
+export interface RecoverStaleCodexRuntimeJobsResult {
+  recovered_runtime_jobs: RecoveredCodexRuntimeJobEvidence[];
+  recovered_launch_leases: RecoveredCodexLaunchLeaseEvidence[];
+}
+
+export interface GetCodexLaunchLeaseStatusInput {
+  launch_lease_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  replay_protection?: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface GetCodexRuntimeJobInput {
+  runtime_job_id: string;
+}
+
+export interface GetCodexRuntimeJobEnvelopeInput {
+  runtime_job_id: string;
+}
+
+export interface GetCodexRuntimeJobWorkloadInput {
+  runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
+export interface GetCodexLaunchLeasePublicStatusInput {
+  launch_lease_id: string;
+}
+
+export interface RefreshCodexWorkerSessionInput {
+  worker_id: string;
+  current_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  next_session_token: string;
+  next_session_expires_at: string;
+  next_session_public_key_id: string;
+  next_session_public_key_material: string;
+  next_session_public_key_expires_at: string;
+  request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
+  now: string;
+}
+
 export interface MaterializeCodexLaunchLeaseInput {
   lease_id: string;
   worker_id: string;
@@ -278,6 +609,7 @@ export interface MaterializeCodexLaunchLeaseInput {
   nonce: string;
   nonce_timestamp: string;
   materialization_request_hash: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
   active_fence?: CodexLaunchFenceSnapshot;
   now: string;
 }
@@ -293,6 +625,7 @@ export interface TerminalizeCodexLaunchLeaseInput {
   evidence_summary?: Record<string, unknown>;
   runtime_job_id?: string;
   idempotency_key: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
   now: string;
 }
 
@@ -937,6 +1270,28 @@ export interface DeliveryRepository {
   upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration>;
   heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration>;
   findAvailableCodexWorker(input: FindAvailableCodexWorkerInput): Promise<CodexWorkerRegistration | undefined>;
+  refreshCodexWorkerSession(input: RefreshCodexWorkerSessionInput): Promise<CodexWorkerRegistration>;
+  createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult>;
+  getCodexRuntimeJob(input: GetCodexRuntimeJobInput): Promise<CodexRuntimeJob | undefined>;
+  getCodexRuntimeJobEnvelope(input: GetCodexRuntimeJobEnvelopeInput): Promise<CodexLaunchTokenEnvelope | undefined>;
+  getCodexRuntimeJobWorkload(input: GetCodexRuntimeJobWorkloadInput): Promise<CodexRuntimeJob>;
+  pollCodexRuntimeJobs(input: PollCodexRuntimeJobsInput): Promise<CodexRuntimeJob[]>;
+  acceptCodexRuntimeJob(input: AcceptCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  claimCodexLaunchTokenEnvelope(input: ClaimCodexLaunchTokenEnvelopeInput): Promise<CodexLaunchTokenEnvelope>;
+  materializeCodexRuntimeJob(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization>;
+  startCodexRuntimeJob(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  appendCodexRuntimeJobEvent(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob>;
+  createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
+  listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]>;
+  createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void>;
+  getWorkspaceBundleDownloadForRuntimeJob(input: GetWorkspaceBundleDownloadForRuntimeJobInput): Promise<WorkspaceBundleDownloadForRuntimeJob>;
+  cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
+  recoverStaleCodexRuntimeJobs(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult>;
+  getCodexLaunchLeaseStatus(input: GetCodexLaunchLeaseStatusInput): Promise<CodexLaunchLease>;
+  getCodexLaunchLeasePublicStatus(input: GetCodexLaunchLeasePublicStatusInput): Promise<CodexLaunchLease | undefined>;
   createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLeaseWithToken>;
   materializeCodexLaunchLease(input: MaterializeCodexLaunchLeaseInput): Promise<CodexLaunchMaterialization>;
   terminalizeCodexLaunchLease(input: TerminalizeCodexLaunchLeaseInput): Promise<CodexLaunchLease>;

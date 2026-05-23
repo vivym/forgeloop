@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -12,8 +13,11 @@ import type {
   CodexCredentialBinding,
   CodexCredentialBindingPublic,
   CodexCredentialBindingVersion,
+  CodexLaunchTokenEnvelope,
   CodexLaunchLease,
   CodexLaunchMaterialization,
+  CodexRuntimeJob,
+  CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
   CodexRuntimeScope,
@@ -54,16 +58,22 @@ import type {
 import type { ObjectRef } from '@forgeloop/contracts';
 import {
   DomainError,
+  assertCodexRuntimeRecoveryReasonCode,
   assertAutomationCapabilityActor,
   assertCanonicalManualScopeKey,
   automationCapabilitiesForPreset,
   capabilityFingerprint,
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexLaunchTokenEnvelopeDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeScopeMatches,
+  codexWorkspaceAcquisitionDigest,
+  collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
+  validateCodexRuntimeJobArtifactIntake,
+  validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
   isActiveRunSessionStatus,
   isWorkItemAutomationTerminal,
@@ -79,6 +89,10 @@ import {
   codex_credential_bindings,
   codex_credential_binding_versions,
   codex_launch_leases,
+  codex_launch_token_envelopes,
+  codex_pending_workspace_bundles,
+  codex_runtime_job_artifacts,
+  codex_runtime_jobs,
   codex_runtime_setup_nonces,
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
@@ -121,17 +135,27 @@ import {
 } from '../schema';
 import type {
   ClaimAutomationActionRunInput,
+  AcceptCodexRuntimeJobInput,
+  AppendCodexRuntimeJobEventInput,
+  CancelCodexRuntimeJobInput,
   ClaimNextAutomationActionRunInput,
+  ClaimCodexLaunchTokenEnvelopeInput,
   ClaimCommandIdempotencyInput,
   ClaimExecutionPackageGenerationRunInput,
   CompleteAutomationActionRunInput,
   CompleteExecutionPackageGenerationRunInput,
   CodexLaunchFenceSnapshot,
+  CodexLaunchTokenEnvelopeSealer,
   CodexRuntimeRecoveryResult,
+  CodexWorkerReplayProtectionInput,
   ConsumeCodexRuntimeSetupNonceInput,
+  CreatePendingWorkspaceBundleArtifactInput,
   CreateCodexCredentialBindingWithVersionInput,
+  CreateCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   CreateCodexWorkerBootstrapTokenInput,
+  CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
   CreateOrReplayCodexLaunchLeaseInput,
   CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
@@ -139,23 +163,37 @@ import type {
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   GetClaimedAutomationActionRunInput,
+  GetCodexLaunchLeasePublicStatusInput,
+  GetCodexLaunchLeaseStatusInput,
+  GetCodexRuntimeJobEnvelopeInput,
+  GetCodexRuntimeJobInput,
+  GetCodexRuntimeJobWorkloadInput,
   GetCodexRuntimeStatusInput,
   GetCodexWorkerReadinessDiagnosticInput,
+  GetWorkspaceBundleDownloadForRuntimeJobInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
   ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
   ListCodexCredentialBindingReadinessCandidatesInput,
+  ListCodexRuntimeJobArtifactsInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
+  MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
+  PendingWorkspaceBundleInput,
+  PollCodexRuntimeJobsInput,
   DeliveryRepository,
+  RecoverStaleCodexRuntimeJobsInput,
+  RecoverStaleCodexRuntimeJobsResult,
   RecoverStaleCodexWorkerLeasesInput,
+  RefreshCodexWorkerSessionInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
   CodexCredentialBindingReadinessCandidate,
   CodexRuntimeProfileReadinessDiagnostic,
   CodexWorkerReadinessDiagnostic,
+  WorkspaceBundleDownloadForRuntimeJob,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
   ResolveCodexCredentialForLaunchInput,
@@ -166,6 +204,8 @@ import type {
   SaveExecutionPackageGenerationPackageInput,
   SetAutomationProjectSettingsInput,
   SupersedeExecutionPackageGenerationRunInput,
+  StartCodexRuntimeJobInput,
+  TerminalizeCodexRuntimeJobInput,
   TerminalizeCodexLaunchLeaseInput,
   TraceArtifactRefRecord,
   TraceEventRecord,
@@ -182,7 +222,7 @@ export type ForgeloopDrizzleDatabase = NodePgDatabase<typeof schema>;
 
 const snakeToCamel = (value: string) => value.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
 const camelToSnake = (value: string) => value.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
-const timestampKeyPattern = /(?:^|_)at$|At$/;
+const timestampKeyPattern = /(?:^|_)(?:at|until|timestamp)$|(?:At|Until|Timestamp)$/;
 const postgresTimestampPattern = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)([+-]\d{2})(?::?(\d{2}))?$/;
 
 const toDbRecord = (record: object, table?: AnyPgTable): Record<string, unknown> => {
@@ -228,6 +268,17 @@ const fromDbRecord = <T>(record: Record<string, unknown>): T =>
       .map(([key, value]) => [camelToSnake(key), normalizeTimestampValue(key, value)]),
   ) as T;
 
+const normalizedTimestampString = (value: string): string => {
+  const normalized = normalizeTimestampValue('timestamp', value);
+  return typeof normalized === 'string' ? normalized : value;
+};
+
+const timestampIsAfter = (left: string, right: string): boolean => {
+  const leftMs = Date.parse(normalizedTimestampString(left));
+  const rightMs = Date.parse(normalizedTimestampString(right));
+  return Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs > rightMs;
+};
+
 type CanonicalJsonValue =
   | string
   | number
@@ -260,6 +311,29 @@ const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
 const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
 
 const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
+const rawSha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const workspaceBundleAcquisitionKeys = new Set([
+  'schema_version',
+  'bundle_id',
+  'archive_ref',
+  'archive_digest',
+  'manifest_digest',
+  'size_bytes',
+  'expires_at',
+]);
+
+const workspaceBundleAcquisitionMatches = (
+  value: Record<string, unknown>,
+  expected: Pick<PendingWorkspaceBundleInput, 'bundle_id' | 'pending_artifact_ref' | 'archive_digest' | 'manifest_digest' | 'size_bytes' | 'expires_at'>,
+): boolean =>
+  Object.keys(value).every((key) => workspaceBundleAcquisitionKeys.has(key)) &&
+  value.schema_version === 'workspace_bundle_acquisition.v1' &&
+  value.bundle_id === expected.bundle_id &&
+  value.archive_ref === expected.pending_artifact_ref &&
+  value.archive_digest === expected.archive_digest &&
+  value.manifest_digest === expected.manifest_digest &&
+  value.size_bytes === expected.size_bytes &&
+  value.expires_at === expected.expires_at;
 const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
   left?.type === right.type && left.id === right.id;
 
@@ -343,6 +417,7 @@ type CodexWorkerRegistrationDbRecord = {
   control_channel_status: CodexWorkerRegistration['control_channel_status'];
   session_token_hash: string;
   session_token_expires_at: string;
+  session_epoch: number;
   bootstrap_token_hash?: string;
   bootstrap_token_version: number;
   allowed_scopes_json: readonly CodexRuntimeScope[];
@@ -361,6 +436,14 @@ type CodexWorkerRegistrationDbRecord = {
   session_public_key_expires_at: string;
   registered_at: string;
   last_heartbeat_at?: string;
+};
+
+type CodexWorkerSessionProof = {
+  worker: CodexWorkerRegistrationDbRecord;
+  session_token_hash: string;
+  session_epoch: number;
+  session_public_key_id: string;
+  session_public_key_expires_at: string;
 };
 
 type CodexLaunchLeaseDbRecord = {
@@ -404,6 +487,48 @@ type CodexLaunchLeaseDbRecord = {
   terminal_idempotency_key?: string;
 };
 
+type CodexRuntimeJobDbRecord = CodexRuntimeJob & {
+  runtime_profile_revision_id: string;
+  runtime_profile_digest: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  credential_payload_digest: string;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+  envelope_digest: string;
+};
+
+type CodexPendingWorkspaceBundleDbRecord = PendingWorkspaceBundleInput & {
+  id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  archive_bytes_base64: string;
+  request_digest: string;
+  runtime_job_id?: string;
+  status: string;
+  created_at: string;
+};
+
+type CodexRuntimeJobArtifactDbRecord = {
+  id: string;
+  runtime_job_id: string;
+  artifact_idempotency_key: string;
+  kind: string;
+  name: string;
+  content_type: string;
+  digest: string;
+  internal_ref: string;
+  size_bytes: number;
+  metadata_json: Record<string, unknown>;
+  request_digest?: string;
+  created_at: string;
+};
+
+interface DrizzleDeliveryRepositoryOptions {
+  codexLaunchTokenEnvelopeSealer?: CodexLaunchTokenEnvelopeSealer;
+}
+
 const codexDenied = (code: DomainErrorType['code'], message: string, details?: Record<string, unknown>): DomainErrorType =>
   new DomainError(code, message, details);
 
@@ -419,6 +544,36 @@ const codexScope = (projectId: string, repoId?: string): CodexRuntimeScope => ({
   project_id: projectId,
   ...(repoId === undefined ? {} : { repo_id: repoId }),
 });
+
+const defaultCodexLaunchTokenEnvelopeSealer: CodexLaunchTokenEnvelopeSealer = {
+  async sealLaunchTokenEnvelope(input) {
+    const aad_json = {
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      worker_id: input.worker_id,
+      key_id: input.key_id,
+      expires_at: input.expires_at,
+    };
+    const envelopeWithoutDigest = {
+      id: input.envelope_id,
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      worker_id: input.worker_id,
+      key_id: input.key_id,
+      algorithm: 'x25519-hkdf-sha256-aes-256-gcm' as const,
+      ciphertext: `drizzle-in-memory:${codexCredentialPayloadDigest(input.plaintext_launch_token)}`,
+      encryption_nonce: codexCanonicalDigest(`nonce:${input.envelope_id}:${input.runtime_job_id}`),
+      aad_json,
+      aad_digest: codexCanonicalDigest(aad_json),
+      expires_at: input.expires_at,
+    };
+    return {
+      ...envelopeWithoutDigest,
+      envelope_digest: codexLaunchTokenEnvelopeDigest(envelopeWithoutDigest),
+    };
+  },
+};
 
 const codexCredentialBindingVersionPublicColumns = {
   id: codex_credential_binding_versions.id,
@@ -437,6 +592,7 @@ const registrationFromDbRecord = (record: CodexWorkerRegistrationDbRecord): Code
   status: record.status,
   control_channel_status: record.control_channel_status,
   session_expires_at: record.session_token_expires_at,
+  session_epoch: record.session_epoch,
   ...(record.bootstrap_token_hash === undefined ? {} : { bootstrap_token_hash: record.bootstrap_token_hash }),
   capabilities: record.capabilities ?? (capabilityList(record.capabilities_json, 'target_kinds') as readonly CodexRuntimeTargetKind[]),
   uid: record.host_worker_uid,
@@ -473,6 +629,93 @@ const launchLeaseFromDbRecord = (record: CodexLaunchLeaseDbRecord): CodexLaunchL
   ...(record.terminal_idempotency_key === undefined ? {} : { terminal_idempotency_key: record.terminal_idempotency_key }),
 });
 
+const runtimeJobFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexRuntimeJob => ({
+  id: record.id,
+  job_request_id: record.job_request_id,
+  target_type: record.target_type,
+  target_id: record.target_id,
+  target_kind: record.target_kind,
+  project_id: record.project_id,
+  ...(record.repo_id === undefined ? {} : { repo_id: record.repo_id }),
+  worker_id: record.worker_id,
+  launch_lease_id: record.launch_lease_id,
+  launch_attempt: record.launch_attempt,
+  status: record.status,
+  input_digest: record.input_digest,
+  input_json: record.input_json,
+  ...(record.workspace_acquisition_digest === undefined
+    ? {}
+    : { workspace_acquisition_digest: record.workspace_acquisition_digest }),
+  ...(record.workspace_acquisition_json === undefined ? {} : { workspace_acquisition_json: record.workspace_acquisition_json }),
+  ...(record.accept_idempotency_key === undefined ? {} : { accept_idempotency_key: record.accept_idempotency_key }),
+  ...(record.accept_request_digest === undefined ? {} : { accept_request_digest: record.accept_request_digest }),
+  ...(record.accepted_at === undefined ? {} : { accepted_at: record.accepted_at }),
+  ...(record.accepted_worker_session_digest === undefined
+    ? {}
+    : { accepted_worker_session_digest: record.accepted_worker_session_digest }),
+  ...(record.accepted_session_public_key_id === undefined
+    ? {}
+    : { accepted_session_public_key_id: record.accepted_session_public_key_id }),
+  ...(record.accepted_session_public_key_expires_at === undefined
+    ? {}
+    : { accepted_session_public_key_expires_at: record.accepted_session_public_key_expires_at }),
+  ...(record.accepted_session_epoch === undefined ? {} : { accepted_session_epoch: record.accepted_session_epoch }),
+  ...(record.materializing_at === undefined ? {} : { materializing_at: record.materializing_at }),
+  ...(record.materialization_request_id === undefined ? {} : { materialization_request_id: record.materialization_request_id }),
+  ...(record.materialization_request_digest === undefined
+    ? {}
+    : { materialization_request_digest: record.materialization_request_digest }),
+  ...(record.start_idempotency_key === undefined ? {} : { start_idempotency_key: record.start_idempotency_key }),
+  ...(record.start_request_digest === undefined ? {} : { start_request_digest: record.start_request_digest }),
+  ...(record.runtime_evidence_digest === undefined ? {} : { runtime_evidence_digest: record.runtime_evidence_digest }),
+  ...(record.launch_materialization_digest === undefined
+    ? {}
+    : { launch_materialization_digest: record.launch_materialization_digest }),
+  ...(record.started_at === undefined ? {} : { started_at: record.started_at }),
+  ...(record.last_event_at === undefined ? {} : { last_event_at: record.last_event_at }),
+  ...(record.cancel_requested_at === undefined ? {} : { cancel_requested_at: record.cancel_requested_at }),
+  ...(record.cancel_idempotency_key === undefined ? {} : { cancel_idempotency_key: record.cancel_idempotency_key }),
+  ...(record.cancel_request_digest === undefined ? {} : { cancel_request_digest: record.cancel_request_digest }),
+  ...(record.drain_requested_at === undefined ? {} : { drain_requested_at: record.drain_requested_at }),
+  ...(record.terminal_idempotency_key === undefined ? {} : { terminal_idempotency_key: record.terminal_idempotency_key }),
+  ...(record.terminal_request_digest === undefined ? {} : { terminal_request_digest: record.terminal_request_digest }),
+  ...(record.terminal_at === undefined ? {} : { terminal_at: record.terminal_at }),
+  ...(record.terminal_status === undefined ? {} : { terminal_status: record.terminal_status }),
+  ...(record.terminal_reason_code === undefined ? {} : { terminal_reason_code: record.terminal_reason_code }),
+  ...(record.terminal_result_json === undefined ? {} : { terminal_result_json: record.terminal_result_json }),
+  expires_at: record.expires_at,
+  created_at: record.created_at,
+  updated_at: record.updated_at,
+});
+
+const runtimeJobArtifactFromDbRecord = (
+  artifact: CodexRuntimeJobArtifactDbRecord,
+  job: Pick<CodexRuntimeJobDbRecord, 'project_id' | 'repo_id' | 'target_kind'>,
+): CodexRuntimeJobArtifact => ({
+  id: artifact.id,
+  runtime_job_id: artifact.runtime_job_id,
+  project_id: job.project_id,
+  ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
+  target_kind: job.target_kind,
+  artifact_idempotency_key: artifact.artifact_idempotency_key,
+  kind: artifact.kind,
+  name: artifact.name,
+  content_type: artifact.content_type,
+  digest: artifact.digest,
+  internal_ref: artifact.internal_ref,
+  size_bytes: artifact.size_bytes,
+  metadata_json: artifact.metadata_json,
+  created_at: artifact.created_at,
+});
+
+const runtimeJobTargetFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexLaunchLease['target'] => ({
+  target_type: record.target_type,
+  target_id: record.target_id,
+  target_kind: record.target_kind,
+  project_id: record.project_id,
+  ...(record.repo_id === undefined ? {} : { repo_id: record.repo_id }),
+});
+
 const launchReplayMatches = (record: CodexLaunchLeaseDbRecord, input: CreateOrReplayCodexLaunchLeaseInput): boolean =>
   valuesEqual(launchLeaseFromDbRecord(record).target, input.target) &&
   record.launch_attempt === input.launch_attempt &&
@@ -500,10 +743,18 @@ const runtimeSnapshotActionRunLookback = (targetCount: number): number =>
   Math.min(RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK, Math.max(RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK, targetCount * 20));
 
 export class DrizzleDeliveryRepository implements DeliveryRepository {
-  constructor(private readonly db: ForgeloopDrizzleDatabase) {}
+  private readonly codexLaunchTokenEnvelopeSealer: CodexLaunchTokenEnvelopeSealer;
+
+  constructor(
+    private readonly db: ForgeloopDrizzleDatabase,
+    options: DrizzleDeliveryRepositoryOptions = {},
+  ) {
+    this.codexLaunchTokenEnvelopeSealer =
+      options.codexLaunchTokenEnvelopeSealer ?? defaultCodexLaunchTokenEnvelopeSealer;
+  }
 
   async withDeliveryTransaction<T>(write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
-    return this.db.transaction((tx) => write(new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase)));
+    return this.db.transaction((tx) => write(this.childRepository(tx as ForgeloopDrizzleDatabase)));
   }
 
   async withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
@@ -1186,6 +1437,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           controlChannelStatus: input.control_channel_status,
           sessionTokenHash: codexCredentialPayloadDigest(input.session_token),
           sessionTokenExpiresAt: input.session_expires_at,
+          sessionEpoch: 1,
           bootstrapTokenHash: input.bootstrap_token_hash,
           bootstrapTokenVersion: input.bootstrap_token_version,
           allowedScopesJson: input.allowed_scopes,
@@ -1280,6 +1532,1770 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
             capabilityList(record.capabilities_json, 'network_provider_config_digests').includes(input.network_provider_config_digest)),
       );
     return matched === undefined ? undefined : registrationFromDbRecord(matched);
+  }
+
+  async refreshCodexWorkerSession(input: RefreshCodexWorkerSessionInput): Promise<CodexWorkerRegistration> {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      await repository.assertCodexWorkerSession(
+        input.worker_id,
+        input.current_session_token,
+        'codex_worker_registration_denied',
+        input.now,
+      );
+      await repository.recordCodexWorkerNonce(
+        input.worker_id,
+        input.current_session_token,
+        input.nonce,
+        input.nonce_timestamp,
+        input.now,
+        input.replay_protection,
+      );
+      const [queuedJob] = await tx
+        .select({ id: codex_runtime_jobs.id })
+        .from(codex_runtime_jobs)
+        .where(and(eq(codex_runtime_jobs.workerId, input.worker_id), eq(codex_runtime_jobs.status, 'queued')))
+        .limit(1);
+      if (queuedJob !== undefined) {
+        throw codexDenied('codex_worker_registration_denied', 'Worker session refresh was rejected while runtime jobs are assigned.');
+      }
+      const activeJobsResult = await tx.execute(sql<Record<string, unknown>>`
+        select
+          j.accepted_session_public_key_expires_at,
+          j.expires_at as job_expires_at,
+          l.expires_at as lease_expires_at,
+          e.expires_at as envelope_expires_at
+        from codex_runtime_jobs j
+        left join codex_launch_leases l on l.id = j.launch_lease_id
+        left join codex_launch_token_envelopes e on e.runtime_job_id = j.id
+        where j.worker_id = ${input.worker_id}
+          and j.status in ('accepted', 'materializing', 'running')
+        for update of j
+      `);
+      const activeJobCanKeepOldSession = (row: Record<string, unknown>): boolean => {
+        const acceptedKeyExpiresAt = normalizeTimestampValue(
+          'accepted_session_public_key_expires_at',
+          row.accepted_session_public_key_expires_at,
+        );
+        const jobExpiresAt = normalizeTimestampValue('job_expires_at', row.job_expires_at);
+        const leaseExpiresAt = normalizeTimestampValue('lease_expires_at', row.lease_expires_at);
+        const envelopeExpiresAt = normalizeTimestampValue('envelope_expires_at', row.envelope_expires_at);
+        if (
+          typeof acceptedKeyExpiresAt !== 'string' ||
+          typeof jobExpiresAt !== 'string' ||
+          typeof leaseExpiresAt !== 'string' ||
+          typeof envelopeExpiresAt !== 'string'
+        ) {
+          return false;
+        }
+        return Date.parse(acceptedKeyExpiresAt) >= Math.max(Date.parse(jobExpiresAt), Date.parse(leaseExpiresAt), Date.parse(envelopeExpiresAt));
+      };
+      if (activeJobsResult.rows.some((row) => !activeJobCanKeepOldSession(row))) {
+        throw codexDenied('codex_worker_registration_denied', 'Worker session refresh was rejected while runtime jobs are assigned.');
+      }
+      const [row] = await tx
+        .update(codex_worker_registrations)
+        .set({
+          sessionTokenHash: codexCredentialPayloadDigest(input.next_session_token),
+          sessionTokenExpiresAt: input.next_session_expires_at,
+          sessionEpoch: sql`${codex_worker_registrations.sessionEpoch} + 1`,
+          sessionPublicKeyId: input.next_session_public_key_id,
+          sessionPublicKeyMaterial: input.next_session_public_key_material,
+          sessionPublicKeyExpiresAt: input.next_session_public_key_expires_at,
+        } as never)
+        .where(eq(codex_worker_registrations.id, input.worker_id))
+        .returning();
+      if (row === undefined) {
+        throw codexDenied('codex_worker_registration_denied', 'Worker session refresh was rejected.');
+      }
+      return registrationFromDbRecord(fromDbRecord<CodexWorkerRegistrationDbRecord>(row as Record<string, unknown>));
+    });
+  }
+
+  async createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult> {
+    validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
+    return this.withAdvisoryLocks(this.codexRuntimeJobCreateLockKeys(input), async (repository) =>
+      (repository as DrizzleDeliveryRepository).createOrReplayCodexRuntimeJobWithLeaseAndEnvelopeUnlocked(input),
+    );
+  }
+
+  async getCodexRuntimeJob(input: GetCodexRuntimeJobInput): Promise<CodexRuntimeJob | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+      .limit(1);
+    return row === undefined ? undefined : runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(row as Record<string, unknown>));
+  }
+
+  async getCodexRuntimeJobEnvelope(input: GetCodexRuntimeJobEnvelopeInput): Promise<CodexLaunchTokenEnvelope | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(codex_launch_token_envelopes)
+      .where(eq(codex_launch_token_envelopes.runtimeJobId, input.runtime_job_id))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<CodexLaunchTokenEnvelope>(row as Record<string, unknown>);
+  }
+
+  async getCodexRuntimeJobWorkload(input: GetCodexRuntimeJobWorkloadInput): Promise<CodexRuntimeJob> {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      const session = await repository.assertCodexRuntimeJobWorkerSession(
+        input.runtime_job_id,
+        input.worker_id,
+        input.worker_session_token,
+        'codex_runtime_job_unavailable',
+        input.now,
+      );
+      await repository.recordCodexWorkerNonce(
+        input.worker_id,
+        input.worker_session_token,
+        input.nonce,
+        input.nonce_timestamp,
+        input.now,
+        input.replay_protection,
+        session.session_epoch,
+      );
+      const bundle = await repository.lockCodexRuntimeJobBundle(input.runtime_job_id);
+      if (
+        bundle.job === undefined ||
+        bundle.lease === undefined ||
+        bundle.job.worker_id !== input.worker_id ||
+        (bundle.job.status !== 'accepted' && bundle.job.status !== 'materializing') ||
+        bundle.job.cancel_requested_at !== undefined ||
+        bundle.job.expires_at <= input.now ||
+        bundle.lease.expires_at <= input.now ||
+        (bundle.lease.status !== 'active' && bundle.lease.status !== 'materialized') ||
+        !(await repository.codexLaunchFenceIsActive(bundle.lease, input.now))
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job workload was denied.');
+      }
+      return runtimeJobFromDbRecord(bundle.job);
+    });
+  }
+
+  async pollCodexRuntimeJobs(input: PollCodexRuntimeJobsInput): Promise<CodexRuntimeJob[]> {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      const session = await repository.assertCodexWorkerSession(
+        input.worker_id,
+        input.worker_session_token,
+        'codex_runtime_job_unavailable',
+        input.now,
+      );
+      await repository.recordCodexWorkerNonce(
+        input.worker_id,
+        input.worker_session_token,
+        input.nonce,
+        input.nonce_timestamp,
+        input.now,
+        input.replay_protection,
+      );
+      if (session.worker.status === 'draining') {
+        return [];
+      }
+      const conditions = [
+        eq(codex_runtime_jobs.workerId, input.worker_id),
+        eq(codex_runtime_jobs.status, 'queued' as const),
+        gt(codex_runtime_jobs.expiresAt, input.now),
+      ];
+      if (input.target_kinds !== undefined && input.target_kinds.length === 0) {
+        return [];
+      }
+      if (input.target_kinds !== undefined) {
+        conditions.push(inArray(codex_runtime_jobs.targetKind, [...input.target_kinds]));
+      }
+      const rows = await tx
+        .select()
+        .from(codex_runtime_jobs)
+        .where(and(...conditions))
+        .orderBy(asc(codex_runtime_jobs.createdAt), asc(codex_runtime_jobs.id))
+        .limit(input.limit);
+      return rows.map((row) => runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(row as Record<string, unknown>)));
+    });
+  }
+
+  async acceptCodexRuntimeJob(input: AcceptCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    return this.withAdvisoryLocks(this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id), async (repository) =>
+      (repository as DrizzleDeliveryRepository).acceptCodexRuntimeJobUnlocked(input),
+    );
+  }
+
+  async claimCodexLaunchTokenEnvelope(input: ClaimCodexLaunchTokenEnvelopeInput): Promise<CodexLaunchTokenEnvelope> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-envelope:${input.envelope_id}`,
+        `codex-runtime-envelope-claim:${input.claim_request_id}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).claimCodexLaunchTokenEnvelopeUnlocked(input),
+    );
+  }
+
+  async materializeCodexRuntimeJob(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization> {
+    return this.withAdvisoryLocks(
+      [...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id), `codex-runtime-lease:${input.launch_lease_id}`],
+      async (repository) => (repository as DrizzleDeliveryRepository).materializeCodexRuntimeJobUnlocked(input),
+    );
+  }
+
+  async startCodexRuntimeJob(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    return this.withAdvisoryLocks(this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id), async (repository) =>
+      (repository as DrizzleDeliveryRepository).startCodexRuntimeJobUnlocked(input),
+    );
+  }
+
+  async appendCodexRuntimeJobEvent(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-event:${input.runtime_job_id}:${input.event_id}`,
+        `codex-runtime-event-idempotency:${input.runtime_job_id}:${input.idempotency_key}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).appendCodexRuntimeJobEventUnlocked(input),
+    );
+  }
+
+  async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-artifact:${input.runtime_job_id}:${input.artifact_id}`,
+        `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).createCodexRuntimeJobArtifactUnlocked(input),
+    );
+  }
+
+  async listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]> {
+    const [jobRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+      .limit(1);
+    if (jobRow === undefined) {
+      return [];
+    }
+    const job = fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id))
+      .orderBy(asc(codex_runtime_job_artifacts.createdAt), asc(codex_runtime_job_artifacts.id));
+    return rows.map((row) => runtimeJobArtifactFromDbRecord(fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>), job));
+  }
+
+  async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
+    return this.withAdvisoryLocks([`codex-pending-workspace-bundle:${input.bundle_id}`], async (repository) =>
+      (repository as DrizzleDeliveryRepository).createPendingWorkspaceBundleArtifactUnlocked(input),
+    );
+  }
+
+  private async createPendingWorkspaceBundleArtifactUnlocked(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
+    const [leaseRow] = await this.db
+      .select()
+      .from(run_worker_leases)
+      .where(eq(run_worker_leases.runSessionId, input.run_session_id))
+      .limit(1);
+    const [runSessionRow] = await this.db
+      .select()
+      .from(run_sessions)
+      .where(eq(run_sessions.id, input.run_session_id))
+      .limit(1);
+    const lease = leaseRow === undefined ? undefined : fromDbRecord<RunWorkerLease>(leaseRow as Record<string, unknown>);
+    const runSession = runSessionRow === undefined ? undefined : fromDbRecord<RunSession>(runSessionRow as Record<string, unknown>);
+    const archiveBytes = Buffer.from(input.archive_bytes_base64, 'base64');
+    if (
+      lease === undefined ||
+      runSession === undefined ||
+      runSession.execution_package_id !== input.execution_package_id ||
+      lease.id !== input.run_worker_lease_id ||
+      lease.status !== 'active' ||
+      lease.expires_at <= input.created_at ||
+      archiveBytes.toString('base64') !== input.archive_bytes_base64 ||
+      archiveBytes.byteLength !== input.size_bytes ||
+      rawSha256(archiveBytes) !== input.archive_digest ||
+      input.expires_at <= input.created_at ||
+      input.pending_artifact_ref !== `artifact:codex-pending-bundles:${input.bundle_id}` ||
+      input.workspace_acquisition_json.bundle_id !== input.bundle_id ||
+      input.workspace_acquisition_json.archive_ref !== input.pending_artifact_ref ||
+      input.workspace_acquisition_json.archive_digest !== input.archive_digest ||
+      input.workspace_acquisition_json.manifest_digest !== input.manifest_digest ||
+      input.workspace_acquisition_json.size_bytes !== input.size_bytes ||
+      !workspaceBundleAcquisitionMatches(input.workspace_acquisition_json, input) ||
+      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle artifact was rejected.');
+    }
+    const pending: CodexPendingWorkspaceBundleDbRecord = {
+      id: input.id,
+      bundle_id: input.bundle_id,
+      run_session_id: input.run_session_id,
+      execution_package_id: input.execution_package_id,
+      pending_artifact_ref: input.pending_artifact_ref,
+      archive_digest: input.archive_digest,
+      manifest_digest: input.manifest_digest,
+      archive_bytes_base64: input.archive_bytes_base64,
+      size_bytes: input.size_bytes,
+      run_worker_lease_id: input.run_worker_lease_id,
+      workspace_acquisition_digest: input.workspace_acquisition_digest,
+      workspace_acquisition_json: input.workspace_acquisition_json,
+      request_digest: input.request_digest,
+      expires_at: input.expires_at,
+      status: 'pending',
+      created_at: input.created_at,
+    };
+    const [existingRow] = await this.db
+      .select()
+      .from(codex_pending_workspace_bundles)
+      .where(eq(codex_pending_workspace_bundles.bundleId, input.bundle_id))
+      .limit(1);
+    if (existingRow !== undefined) {
+      const existing = fromDbRecord<CodexPendingWorkspaceBundleDbRecord>(existingRow as Record<string, unknown>);
+      if (existing.status === 'pending' && valuesEqual(existing, pending)) {
+        return;
+      }
+      if (
+        existing.status === 'pending' &&
+        existing.runtime_job_id === undefined &&
+        existing.run_session_id === input.run_session_id &&
+        existing.execution_package_id === input.execution_package_id
+      ) {
+        await this.db
+          .update(codex_pending_workspace_bundles)
+          .set(toDbRecord(pending, codex_pending_workspace_bundles) as never)
+          .where(eq(codex_pending_workspace_bundles.bundleId, input.bundle_id));
+        return;
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle replay was rejected.');
+    }
+    await this.db.insert(codex_pending_workspace_bundles).values(toDbRecord(pending, codex_pending_workspace_bundles) as never);
+  }
+
+  async getWorkspaceBundleDownloadForRuntimeJob(
+    input: GetWorkspaceBundleDownloadForRuntimeJobInput,
+  ): Promise<WorkspaceBundleDownloadForRuntimeJob> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const [jobRow] = await this.db.select().from(codex_runtime_jobs).where(eq(codex_runtime_jobs.id, input.runtime_job_id)).limit(1);
+    const [pendingRow] = await this.db
+      .select()
+      .from(codex_pending_workspace_bundles)
+      .where(and(eq(codex_pending_workspace_bundles.runtimeJobId, input.runtime_job_id), eq(codex_pending_workspace_bundles.bundleId, input.bundle_id)))
+      .limit(1);
+    const [artifactRow] = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(and(eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id), eq(codex_runtime_job_artifacts.kind, 'workspace_bundle')))
+      .limit(1);
+    const job = jobRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const pending =
+      pendingRow === undefined ? undefined : fromDbRecord<CodexPendingWorkspaceBundleDbRecord>(pendingRow as Record<string, unknown>);
+    const artifact =
+      artifactRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobArtifactDbRecord>(artifactRow as Record<string, unknown>);
+    const lease = job === undefined ? undefined : await this.lockCodexLaunchLease(job.launch_lease_id);
+    if (
+      job === undefined ||
+      lease === undefined ||
+      pending === undefined ||
+      artifact === undefined ||
+      job.worker_id !== input.worker_id ||
+      job.target_kind !== 'run_execution' ||
+      (job.status !== 'accepted' && job.status !== 'materializing') ||
+      job.cancel_requested_at !== undefined ||
+      job.expires_at <= input.now ||
+      lease.expires_at <= input.now ||
+      (lease.status !== 'active' && lease.status !== 'materialized') ||
+      pending.status !== 'bound' ||
+      pending.runtime_job_id !== job.id ||
+      pending.expires_at <= input.now ||
+      artifact.runtime_job_id !== job.id ||
+      artifact.kind !== 'workspace_bundle' ||
+      artifact.name !== pending.bundle_id ||
+      artifact.digest !== pending.archive_digest ||
+      artifact.size_bytes !== pending.size_bytes ||
+      artifact.internal_ref !== pending.pending_artifact_ref ||
+      job.workspace_acquisition_json?.bundle_id !== pending.bundle_id ||
+      job.workspace_acquisition_json?.archive_ref !== pending.pending_artifact_ref ||
+      job.workspace_acquisition_json?.archive_digest !== pending.archive_digest ||
+      job.workspace_acquisition_json?.manifest_digest !== pending.manifest_digest ||
+      job.workspace_acquisition_json?.size_bytes !== pending.size_bytes
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle download was denied.');
+    }
+    const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
+    if (archiveBytes.byteLength !== pending.size_bytes || rawSha256(archiveBytes) !== pending.archive_digest) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+    }
+    return {
+      bundle_id: pending.bundle_id,
+      archive_bytes_base64: pending.archive_bytes_base64,
+      archive_digest: pending.archive_digest,
+      manifest_digest: pending.manifest_digest,
+      content_type: 'application/vnd.forgeloop.workspace-bundle',
+      size_bytes: pending.size_bytes,
+      expires_at: pending.expires_at,
+    };
+  }
+
+  async cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    return this.withAdvisoryLocks([`codex-runtime-job:${input.runtime_job_id}`], async (repository) =>
+      (repository as DrizzleDeliveryRepository).cancelCodexRuntimeJobUnlocked(input),
+    );
+  }
+
+  async terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    return this.withAdvisoryLocks(
+      [...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id), `codex-runtime-lease:${input.launch_lease_id}`],
+      async (repository) => (repository as DrizzleDeliveryRepository).terminalizeCodexRuntimeJobUnlocked(input),
+    );
+  }
+
+  async recoverStaleCodexRuntimeJobs(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult> {
+    return this.withAdvisoryLocks(
+      [`codex-runtime-recovery:${input.worker_id ?? 'all'}`],
+      async (repository) => (repository as DrizzleDeliveryRepository).recoverStaleCodexRuntimeJobsUnlocked(input),
+    );
+  }
+
+  async getCodexLaunchLeaseStatus(input: GetCodexLaunchLeaseStatusInput): Promise<CodexLaunchLease> {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now, {
+        requireConnected: false,
+      });
+      await repository.recordCodexWorkerNonce(
+        input.worker_id,
+        input.worker_session_token,
+        input.nonce,
+        input.nonce_timestamp,
+        input.now,
+        input.replay_protection,
+      );
+      const [row] = await tx
+        .select()
+        .from(codex_launch_leases)
+        .where(and(eq(codex_launch_leases.id, input.launch_lease_id), eq(codex_launch_leases.workerId, input.worker_id)))
+        .limit(1);
+      if (row === undefined) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex launch lease status was denied.');
+      }
+      return launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+    });
+  }
+
+  async getCodexLaunchLeasePublicStatus(input: GetCodexLaunchLeasePublicStatusInput): Promise<CodexLaunchLease | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(codex_launch_leases)
+      .where(eq(codex_launch_leases.id, input.launch_lease_id))
+      .limit(1);
+    return row === undefined ? undefined : launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>));
+  }
+
+  private async acceptCodexRuntimeJobUnlocked(input: AcceptCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now);
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+    );
+    const worker = await this.lockCodexWorkerRegistration(input.worker_id);
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      worker === undefined ||
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.envelope === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.job.expires_at <= input.now ||
+      bundle.lease.status !== 'active' ||
+      bundle.envelope.status !== 'available'
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job accept was denied.');
+    }
+    if (bundle.job.status === 'accepted') {
+      if (
+        bundle.job.accept_idempotency_key === input.idempotency_key &&
+        bundle.job.accept_request_digest === input.request_digest &&
+        bundle.job.accepted_worker_session_digest === input.accepted_worker_session_digest &&
+        bundle.job.accepted_session_public_key_id === input.accepted_session_public_key_id &&
+        bundle.job.accepted_session_epoch === input.accepted_session_epoch
+      ) {
+        return runtimeJobFromDbRecord(bundle.job);
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job accept replay was denied.');
+    }
+    if (
+      bundle.job.status !== 'queued' ||
+      input.accepted_worker_session_digest !== worker.session_token_hash ||
+      input.accepted_session_public_key_id !== worker.session_public_key_id ||
+      input.accepted_session_epoch !== worker.session_epoch ||
+      worker.session_public_key_expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job accept was denied.');
+    }
+    const [row] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        status: 'accepted',
+        acceptIdempotencyKey: input.idempotency_key,
+        acceptRequestDigest: input.request_digest,
+        acceptedAt: input.now,
+        acceptedWorkerSessionDigest: input.accepted_worker_session_digest,
+        acceptedSessionPublicKeyId: input.accepted_session_public_key_id,
+        acceptedSessionPublicKeyExpiresAt: worker.session_public_key_expires_at,
+        acceptedSessionEpoch: input.accepted_session_epoch,
+        updatedAt: input.now,
+      } as never)
+      .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), eq(codex_runtime_jobs.status, 'queued')))
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job accept was denied.');
+    }
+    return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(row as Record<string, unknown>));
+  }
+
+  private async claimCodexLaunchTokenEnvelopeUnlocked(input: ClaimCodexLaunchTokenEnvelopeInput): Promise<CodexLaunchTokenEnvelope> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_launch_materialization_denied',
+      input.now,
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const worker = await this.lockCodexWorkerRegistration(input.worker_id);
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      worker === undefined ||
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.envelope === undefined ||
+      bundle.envelope.id !== input.envelope_id ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.job.expires_at <= input.now ||
+      bundle.envelope.expires_at <= input.now ||
+      bundle.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
+      bundle.job.accepted_session_public_key_id !== input.key_id ||
+      bundle.job.accepted_session_epoch !== input.accepted_session_epoch ||
+      session.session_public_key_id !== input.key_id ||
+      session.session_epoch !== input.accepted_session_epoch ||
+      session.session_public_key_expires_at <= input.now
+    ) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
+    }
+    if (bundle.envelope.status === 'claimed') {
+      if (
+        bundle.job.status !== 'terminal' &&
+        bundle.lease.expires_at > input.now &&
+        (bundle.lease.status === 'active' || bundle.lease.status === 'materialized') &&
+        bundle.envelope.claim_request_id === input.claim_request_id &&
+        bundle.envelope.claim_request_digest === input.request_digest &&
+        bundle.envelope.claimed_worker_session_digest === input.accepted_worker_session_digest &&
+        bundle.envelope.claimed_key_id === input.key_id
+      ) {
+        return bundle.envelope;
+      }
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
+    }
+    if (bundle.envelope.status !== 'available') {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
+    }
+    if (bundle.job.status !== 'accepted' || bundle.job.cancel_requested_at !== undefined || bundle.lease.status !== 'active') {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
+    }
+    const [row] = await this.db
+      .update(codex_launch_token_envelopes)
+      .set({
+        status: 'claimed',
+        claimRequestId: input.claim_request_id,
+        claimRequestDigest: input.request_digest,
+        claimedWorkerSessionDigest: input.accepted_worker_session_digest,
+        claimedKeyId: input.key_id,
+        claimedAt: input.now,
+      } as never)
+      .where(and(eq(codex_launch_token_envelopes.id, input.envelope_id), eq(codex_launch_token_envelopes.status, 'available')))
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
+    }
+    return fromDbRecord<CodexLaunchTokenEnvelope>(row as Record<string, unknown>);
+  }
+
+  private async materializeCodexRuntimeJobUnlocked(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_launch_materialization_denied',
+      input.now,
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const worker = await this.lockCodexWorkerRegistration(input.worker_id);
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      worker === undefined ||
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.envelope === undefined ||
+      bundle.job.launch_lease_id !== input.launch_lease_id ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
+      bundle.job.accepted_session_public_key_id !== input.accepted_session_public_key_id ||
+      bundle.job.accepted_session_epoch !== input.accepted_session_epoch ||
+      bundle.job.expires_at <= input.now ||
+      bundle.lease.expires_at <= input.now ||
+      bundle.lease.worker_id !== input.worker_id ||
+      bundle.lease.lease_token_hash !== input.launch_token_hash ||
+      bundle.envelope.status !== 'claimed' ||
+      bundle.envelope.claimed_worker_session_digest !== input.accepted_worker_session_digest ||
+      bundle.envelope.claimed_key_id !== input.accepted_session_public_key_id ||
+      session.session_epoch !== input.accepted_session_epoch ||
+      session.session_public_key_expires_at <= input.now
+    ) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
+    }
+    if (bundle.job.status === 'materializing' || bundle.job.status === 'running') {
+      if (
+        bundle.job.materialization_request_id === input.materialization_request_id &&
+        bundle.job.materialization_request_digest === input.request_digest &&
+        bundle.lease.status === 'materialized'
+      ) {
+        return this.codexRuntimeJobMaterialization(bundle.job, bundle.lease, input.now);
+      }
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
+    }
+    if (bundle.job.cancel_requested_at !== undefined) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
+    }
+    if (bundle.job.status !== 'accepted' || bundle.lease.status !== 'active') {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
+    }
+    if (!this.codexLaunchFenceSnapshotMatches(bundle.lease, input.active_fence) || !(await this.codexLaunchFenceIsActive(bundle.lease, input.now))) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization fence was denied.');
+    }
+    await this.assertCodexRuntimeJobMaterializationDependencies(bundle.job, bundle.lease);
+    const [jobRow] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        status: 'materializing',
+        materializingAt: input.now,
+        materializationRequestId: input.materialization_request_id,
+        materializationRequestDigest: input.request_digest,
+        updatedAt: input.now,
+      } as never)
+      .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), eq(codex_runtime_jobs.status, 'accepted')))
+      .returning();
+    const [leaseRow] = await this.db
+      .update(codex_launch_leases)
+      .set({ status: 'materialized', materializationRequestHash: input.request_digest, materializedAt: input.now } as never)
+      .where(and(eq(codex_launch_leases.id, input.launch_lease_id), eq(codex_launch_leases.status, 'active')))
+      .returning();
+    if (jobRow === undefined || leaseRow === undefined) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
+    }
+    return this.codexRuntimeJobMaterialization(
+      fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>),
+      fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>),
+      input.now,
+    );
+  }
+
+  private async startCodexRuntimeJobUnlocked(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.lease.worker_id !== input.worker_id ||
+      bundle.job.cancel_requested_at !== undefined ||
+      bundle.job.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
+    }
+    if (bundle.job.status === 'running') {
+      if (
+        bundle.job.start_idempotency_key === input.idempotency_key &&
+        bundle.job.start_request_digest === input.request_digest &&
+        bundle.job.runtime_evidence_digest === input.runtime_evidence_digest &&
+        bundle.job.launch_materialization_digest === input.launch_materialization_digest
+      ) {
+        return runtimeJobFromDbRecord(bundle.job);
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
+    }
+    if (bundle.job.status !== 'materializing' || bundle.lease.status !== 'materialized') {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
+    }
+    const [row] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        status: 'running',
+        startIdempotencyKey: input.idempotency_key,
+        startRequestDigest: input.request_digest,
+        runtimeEvidenceDigest: input.runtime_evidence_digest,
+        launchMaterializationDigest: input.launch_materialization_digest,
+        startedAt: input.now,
+        updatedAt: input.now,
+      } as never)
+      .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), eq(codex_runtime_jobs.status, 'materializing')))
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
+    }
+    return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(row as Record<string, unknown>));
+  }
+
+  private async appendCodexRuntimeJobEventUnlocked(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const eventObjectId = this.codexRuntimeJobEventObjectId(input.runtime_job_id, input.event_id);
+    const idempotencyObjectId = this.codexRuntimeJobEventIdempotencyObjectId(input.runtime_job_id, input.idempotency_key);
+    const [existingByEventId, existingByIdempotency] = await Promise.all([
+      this.getCodexRuntimeJobEventRecord(eventObjectId),
+      this.getCodexRuntimeJobEventRecord(idempotencyObjectId),
+    ]);
+    const existing = existingByEventId ?? existingByIdempotency;
+    if (existing !== undefined || existingByEventId !== existingByIdempotency) {
+      if (
+        existing !== undefined &&
+        existing.event_id === input.event_id &&
+        existing.idempotency_key === input.idempotency_key &&
+        existing.request_digest === input.request_digest
+      ) {
+        return existing.job;
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job event replay was denied.');
+    }
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      bundle.job === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.job.status !== 'running' ||
+      bundle.job.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job event append was denied.');
+    }
+    const [row] = await this.db
+      .update(codex_runtime_jobs)
+      .set({ lastEventAt: input.now, updatedAt: input.now } as never)
+      .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), eq(codex_runtime_jobs.status, 'running')))
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job event append was denied.');
+    }
+    const job = runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(row as Record<string, unknown>));
+    const eventRecord = {
+      runtime_job_id: input.runtime_job_id,
+      event_id: input.event_id,
+      idempotency_key: input.idempotency_key,
+      request_digest: input.request_digest,
+      job,
+    };
+    await this.db.insert(object_events).values([
+      {
+        id: eventObjectId,
+        objectType: 'codex_runtime_job_event',
+        objectId: eventObjectId,
+        eventType: input.event_type,
+        actorType: 'codex_worker',
+        actorId: input.worker_id,
+        payload: input.event_payload_json,
+        metadata: eventRecord,
+        createdAt: input.now,
+      },
+      {
+        id: idempotencyObjectId,
+        objectType: 'codex_runtime_job_event_idempotency',
+        objectId: idempotencyObjectId,
+        eventType: input.event_type,
+        actorType: 'codex_worker',
+        actorId: input.worker_id,
+        payload: input.event_payload_json,
+        metadata: eventRecord,
+        createdAt: input.now,
+      },
+    ] as never);
+    return job;
+  }
+
+  private async createCodexRuntimeJobArtifactUnlocked(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+      {
+        requireConnected: false,
+      },
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    this.assertCodexRuntimeJobArtifactIntake(input);
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.job.status !== 'running' ||
+      bundle.job.expires_at <= input.now ||
+      bundle.lease.status !== 'materialized' ||
+      bundle.lease.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    const expectedInternalRef = `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${input.artifact_id}`;
+    if (input.internal_ref !== expectedInternalRef) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    }
+    const existing = await this.findCodexRuntimeJobArtifactReplay(input);
+    if (existing !== undefined) {
+      if (this.codexRuntimeJobArtifactReplayMatches(existing, input)) {
+        return runtimeJobArtifactFromDbRecord(existing, bundle.job);
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    const [row] = await this.db
+      .insert(codex_runtime_job_artifacts)
+      .values({
+        id: input.artifact_id,
+        runtimeJobId: input.runtime_job_id,
+        artifactIdempotencyKey: input.artifact_idempotency_key,
+        kind: input.kind,
+        name: input.name,
+        contentType: input.content_type,
+        digest: input.digest,
+        internalRef: input.internal_ref,
+        sizeBytes: input.size_bytes,
+        metadataJson: input.metadata_json,
+        requestDigest: input.request_digest,
+        createdAt: input.now,
+      } as never)
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    return runtimeJobArtifactFromDbRecord(fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>), bundle.job);
+  }
+
+  private async cancelCodexRuntimeJobUnlocked(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (bundle.job === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
+    }
+    if (bundle.job.cancel_requested_at !== undefined) {
+      if (bundle.job.cancel_idempotency_key !== input.idempotency_key || bundle.job.cancel_request_digest !== input.request_digest) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
+      }
+      return runtimeJobFromDbRecord(bundle.job);
+    }
+    const terminalizeImmediately =
+      bundle.job.status === 'queued' ||
+      (bundle.job.status === 'accepted' && bundle.envelope !== undefined && bundle.envelope.status === 'available');
+    if (terminalizeImmediately) {
+      const [jobRow] = await this.db
+        .update(codex_runtime_jobs)
+        .set({
+          status: 'terminal',
+          cancelRequestedAt: input.now,
+          cancelIdempotencyKey: input.idempotency_key,
+          cancelRequestDigest: input.request_digest,
+          terminalIdempotencyKey: input.idempotency_key,
+          terminalRequestDigest: input.request_digest,
+          terminalAt: input.now,
+          terminalStatus: 'cancelled',
+          terminalReasonCode: input.reason_code,
+          updatedAt: input.now,
+        } as never)
+        .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), eq(codex_runtime_jobs.status, bundle.job.status)))
+        .returning();
+      if (jobRow === undefined) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
+      }
+      if (bundle.lease !== undefined && (bundle.lease.status === 'active' || bundle.lease.status === 'materialized')) {
+        const [leaseRow] = await this.db
+          .update(codex_launch_leases)
+          .set({ status: 'revoked', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
+          .where(
+            and(
+              eq(codex_launch_leases.id, bundle.lease.id),
+              or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+            ),
+          )
+          .returning();
+        if (leaseRow !== undefined && bundle.lease.worker_id !== undefined) {
+          await this.decrementCodexWorkerLeaseCounts(this.db, [bundle.lease.worker_id]);
+        }
+      }
+      if (bundle.envelope !== undefined && bundle.envelope.status === 'available') {
+        await this.db
+          .update(codex_launch_token_envelopes)
+          .set({ status: 'revoked' } as never)
+          .where(and(eq(codex_launch_token_envelopes.id, bundle.envelope.id), eq(codex_launch_token_envelopes.status, 'available')));
+      }
+      return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>));
+    }
+    if (bundle.job.status !== 'accepted' && bundle.job.status !== 'materializing' && bundle.job.status !== 'running') {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
+    }
+    const [row] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        cancelRequestedAt: input.now,
+        cancelIdempotencyKey: input.idempotency_key,
+        cancelRequestDigest: input.request_digest,
+        drainRequestedAt: bundle.job.status === 'running' ? input.now : null,
+        updatedAt: input.now,
+      } as never)
+      .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job cancel was denied.');
+    }
+    return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(row as Record<string, unknown>));
+  }
+
+  private async terminalizeCodexRuntimeJobUnlocked(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+      {
+        requireConnected: false,
+      },
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.job.launch_lease_id !== input.launch_lease_id ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.lease.worker_id !== input.worker_id
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (bundle.job.status === 'terminal') {
+      if (bundle.job.terminal_idempotency_key === input.idempotency_key && bundle.job.terminal_request_digest === input.request_digest) {
+        return runtimeJobFromDbRecord(bundle.job);
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (bundle.job.status !== 'accepted' && bundle.job.status !== 'materializing' && bundle.job.status !== 'running') {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (bundle.lease.status !== 'active' && bundle.lease.status !== 'materialized') {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (bundle.job.expires_at <= input.now || bundle.lease.expires_at <= input.now) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (bundle.job.cancel_requested_at !== undefined && input.terminal_status !== 'cancelled') {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    if (
+      input.terminal_status === 'succeeded' &&
+      (bundle.job.status !== 'running' ||
+        bundle.lease.status !== 'materialized' ||
+        bundle.job.started_at === undefined ||
+        bundle.job.runtime_evidence_digest === undefined ||
+        bundle.job.launch_materialization_digest === undefined)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    const terminalResultJson =
+      input.terminal_result_json === undefined ? undefined : validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
+    if (terminalResultJson !== undefined) {
+      await this.assertCodexRuntimeTerminalArtifactRefs(input.runtime_job_id, terminalResultJson as unknown as Record<string, unknown>);
+    }
+    const [jobRow] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        status: 'terminal',
+        terminalIdempotencyKey: input.idempotency_key,
+        terminalRequestDigest: input.request_digest,
+        terminalAt: input.now,
+        terminalStatus: input.terminal_status,
+        terminalReasonCode: input.reason_code,
+        terminalResultJson: terminalResultJson ?? null,
+        updatedAt: input.now,
+      } as never)
+      .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), notInArray(codex_runtime_jobs.status, ['queued', 'terminal'])))
+      .returning();
+    const [leaseRow] = await this.db
+      .update(codex_launch_leases)
+      .set({
+        status: 'terminal',
+        terminalizedAt: input.now,
+        terminalReasonCode: input.reason_code,
+        terminalEvidenceSummaryJson: terminalResultJson ?? null,
+        terminalRuntimeJobId: input.runtime_job_id,
+        terminalIdempotencyKey: input.idempotency_key,
+      } as never)
+      .where(
+        and(
+          eq(codex_launch_leases.id, input.launch_lease_id),
+          or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+        ),
+      )
+      .returning();
+    if (jobRow === undefined || leaseRow === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
+    }
+    await this.decrementCodexWorkerLeaseCounts(this.db, [input.worker_id]);
+    return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>));
+  }
+
+  private async recoverStaleCodexRuntimeJobsUnlocked(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult> {
+    assertCodexRuntimeRecoveryReasonCode(input.reason_code);
+    const workerPredicate = input.worker_id === undefined ? sql`true` : sql`j.worker_id = ${input.worker_id}`;
+    const result = await this.db.execute(sql<Record<string, unknown>>`
+      select j.*
+      from codex_runtime_jobs j
+      left join codex_launch_leases l on l.id = j.launch_lease_id
+      where j.status <> 'terminal'
+        and ${workerPredicate}
+        and (
+          j.expires_at <= ${input.stale_before}
+          or coalesce(j.last_event_at, j.updated_at) < ${input.stale_before}
+          or l.status in ('terminal', 'expired', 'revoked')
+        )
+      order by j.updated_at asc, j.id asc
+      for update of j
+    `);
+    const recoveredRuntimeJobs: RecoverStaleCodexRuntimeJobsResult['recovered_runtime_jobs'] = [];
+    const recoveredLaunchLeases: RecoverStaleCodexRuntimeJobsResult['recovered_launch_leases'] = [];
+    const workerIdsToDecrement: string[] = [];
+    for (const job of result.rows.map((row) => fromDbRecord<CodexRuntimeJobDbRecord>(row))) {
+      const lease = await this.lockCodexLaunchLease(job.launch_lease_id);
+      const [jobRow] = await this.db
+        .update(codex_runtime_jobs)
+        .set({
+          status: 'terminal',
+          terminalAt: input.now,
+          terminalStatus: 'expired',
+          terminalReasonCode: input.reason_code,
+          updatedAt: input.now,
+        } as never)
+        .where(and(eq(codex_runtime_jobs.id, job.id), notInArray(codex_runtime_jobs.status, ['terminal'])))
+        .returning();
+      if (jobRow === undefined) {
+        continue;
+      }
+      recoveredRuntimeJobs.push(
+        this.codexRuntimeJobRecoveryEvidence(runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>))),
+      );
+      if (lease !== undefined && (lease.status === 'active' || lease.status === 'materialized')) {
+        const [leaseRow] = await this.db
+          .update(codex_launch_leases)
+          .set({ status: 'expired', terminalizedAt: input.now, terminalReasonCode: input.reason_code } as never)
+          .where(
+            and(
+              eq(codex_launch_leases.id, lease.id),
+              or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+            ),
+          )
+          .returning();
+        if (leaseRow !== undefined) {
+          const leaseRecord = fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
+          recoveredLaunchLeases.push(this.codexLaunchLeaseRecoveryEvidence(launchLeaseFromDbRecord(leaseRecord)));
+          if (leaseRecord.worker_id !== undefined) {
+            workerIdsToDecrement.push(leaseRecord.worker_id);
+          }
+        }
+      }
+    }
+    await this.decrementCodexWorkerLeaseCounts(this.db, workerIdsToDecrement);
+    return { recovered_runtime_jobs: recoveredRuntimeJobs, recovered_launch_leases: recoveredLaunchLeases };
+  }
+
+  private async createOrReplayCodexRuntimeJobWithLeaseAndEnvelopeUnlocked(
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult> {
+    const [requestReplayRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.jobRequestId, input.job_request_id))
+      .limit(1);
+    if (requestReplayRow !== undefined) {
+      return this.replayCodexRuntimeJob(fromDbRecord<CodexRuntimeJobDbRecord>(requestReplayRow as Record<string, unknown>), input);
+    }
+
+    const [targetReplayRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(this.codexRuntimeTargetAttemptPredicate(input))
+      .limit(1);
+    if (targetReplayRow !== undefined) {
+      return this.replayCodexRuntimeJob(fromDbRecord<CodexRuntimeJobDbRecord>(targetReplayRow as Record<string, unknown>), input);
+    }
+
+    const [existingLeaseForTargetAttempt] = await this.db
+      .select({ id: codex_launch_leases.id })
+      .from(codex_launch_leases)
+      .where(
+        and(
+          eq(codex_launch_leases.projectId, input.target.project_id),
+          input.target.repo_id === undefined ? isNull(codex_launch_leases.repoId) : eq(codex_launch_leases.repoId, input.target.repo_id),
+          eq(codex_launch_leases.targetType, input.target.target_type),
+          eq(codex_launch_leases.targetId, input.target.target_id),
+          eq(codex_launch_leases.targetKind, input.target.target_kind),
+          eq(codex_launch_leases.launchAttempt, input.launch_attempt),
+        ),
+      )
+      .limit(1);
+    if (existingLeaseForTargetAttempt !== undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job target attempt already has a launch lease.');
+    }
+
+    if (!(await this.codexRuntimeJobCreateIdsAreUnused(input))) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job immutable id was already used.');
+    }
+    if (!(await this.codexRuntimePendingBundleCreateMatches(input))) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
+    }
+    if (!this.codexRuntimeJobHasRequiredLaunchFence(input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job launch fence was incomplete.');
+    }
+
+    const profileRevision = await this.getById<CodexRuntimeProfileRevision>(
+      codex_runtime_profile_revisions,
+      codex_runtime_profile_revisions.id,
+      input.runtime_profile_revision_id,
+    );
+    const profileNetworkPolicy =
+      profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
+    if (
+      profileRevision === undefined ||
+      profileNetworkPolicy === undefined ||
+      profileRevision.status !== 'active' ||
+      profileRevision.target_kind !== input.target.target_kind ||
+      profileRevision.profile_digest !== input.runtime_profile_digest ||
+      !codexRuntimeScopeMatches(profileRevision.allowed_scopes, codexScope(input.target.project_id, input.target.repo_id)) ||
+      profileRevision.docker_image_digest !== input.docker_image_digest ||
+      codexCanonicalDigest(profileNetworkPolicy) !== input.network_policy_digest ||
+      (profileNetworkPolicy.mode === 'egress_allowlist' &&
+        profileNetworkPolicy.provider === 'docker_network_proxy' &&
+        profileNetworkPolicy.provider_config.provider_config_digest !== input.network_provider_config_digest)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job profile fence was rejected.');
+    }
+
+    const [workerRow] = await this.db
+      .select()
+      .from(codex_worker_registrations)
+      .where(eq(codex_worker_registrations.id, input.worker_id))
+      .limit(1);
+    const worker = workerRow === undefined ? undefined : fromDbRecord<CodexWorkerRegistrationDbRecord>(workerRow as Record<string, unknown>);
+    if (worker === undefined || !this.codexWorkerCanRunRuntimeJob(worker, input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job worker fence was rejected.');
+    }
+
+    const credential = await this.resolveCodexCredentialForLaunch({
+      credential_binding_id: input.credential_binding_id,
+      target_kind: input.target.target_kind,
+      runtime_profile_id: profileRevision.profile_id,
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      required_payload_digest: input.credential_payload_digest,
+      now: input.now,
+    });
+    if (credential?.binding_version_id !== input.credential_binding_version_id) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job credential fence was rejected.');
+    }
+
+    const launchToken = `codex-runtime-launch:${randomUUID()}`;
+    const leaseRecord = this.codexRuntimeJobLaunchLeaseRecord(input, codexCredentialPayloadDigest(launchToken));
+    if (!(await this.codexLaunchFenceIsActive(leaseRecord, input.now))) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job active fence was rejected.');
+    }
+
+    const sealedEnvelope = await this.codexLaunchTokenEnvelopeSealer.sealLaunchTokenEnvelope({
+      plaintext_launch_token: launchToken,
+      runtime_job_id: input.runtime_job_id,
+      launch_lease_id: input.launch_lease_id,
+      envelope_id: input.envelope_id,
+      worker_id: input.worker_id,
+      worker_public_key_material: worker.session_public_key_material,
+      key_id: worker.session_public_key_id,
+      expires_at: input.expires_at,
+    });
+    if (
+      sealedEnvelope.id !== input.envelope_id ||
+      sealedEnvelope.runtime_job_id !== input.runtime_job_id ||
+      sealedEnvelope.launch_lease_id !== input.launch_lease_id ||
+      sealedEnvelope.worker_id !== input.worker_id ||
+      sealedEnvelope.key_id !== worker.session_public_key_id ||
+      sealedEnvelope.expires_at !== input.expires_at
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job launch token envelope metadata was rejected.');
+    }
+
+    const [leaseRow] = await this.db
+      .insert(codex_launch_leases)
+      .values(this.codexRuntimeJobLaunchLeaseValues(leaseRecord) as never)
+      .onConflictDoNothing()
+      .returning();
+    if (leaseRow === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job launch lease insert was rejected.');
+    }
+
+    const [jobRow] = await this.db
+      .insert(codex_runtime_jobs)
+      .values(this.codexRuntimeJobValues(input, sealedEnvelope.envelope_digest) as never)
+      .onConflictDoNothing()
+      .returning();
+    if (jobRow === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job insert was rejected.');
+    }
+
+    const envelopeValues = {
+      id: sealedEnvelope.id,
+      runtimeJobId: sealedEnvelope.runtime_job_id,
+      launchLeaseId: sealedEnvelope.launch_lease_id,
+      workerId: sealedEnvelope.worker_id,
+      keyId: sealedEnvelope.key_id,
+      algorithm: sealedEnvelope.algorithm,
+      ciphertext: sealedEnvelope.ciphertext,
+      encryptionNonce: sealedEnvelope.encryption_nonce,
+      aadJson: sealedEnvelope.aad_json,
+      aadDigest: sealedEnvelope.aad_digest,
+      envelopeDigest: sealedEnvelope.envelope_digest,
+      status: 'available',
+      expiresAt: sealedEnvelope.expires_at,
+      createdAt: input.now,
+    };
+    const [envelopeRow] = await this.db
+      .insert(codex_launch_token_envelopes)
+      .values(envelopeValues as never)
+      .onConflictDoNothing()
+      .returning();
+    if (envelopeRow === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job launch token envelope insert was rejected.');
+    }
+
+    if (input.pending_workspace_bundle !== undefined) {
+      await this.bindCodexRuntimePendingWorkspaceBundle(input);
+    }
+
+    const [workerUpdate] = await this.db
+      .update(codex_worker_registrations)
+      .set({ leaseCount: sql`${codex_worker_registrations.leaseCount} + 1` } as never)
+      .where(
+        and(
+          eq(codex_worker_registrations.id, input.worker_id),
+          eq(codex_worker_registrations.status, 'online'),
+          eq(codex_worker_registrations.controlChannelStatus, 'connected'),
+          gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
+          gt(codex_worker_registrations.sessionPublicKeyExpiresAt, input.now),
+          isNotNull(codex_worker_registrations.lastHeartbeatAt),
+          sql`${codex_worker_registrations.leaseCount} < ${codex_worker_registrations.maxConcurrency}`,
+        ),
+      )
+      .returning({ id: codex_worker_registrations.id });
+    if (workerUpdate === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job worker fence was rejected.');
+    }
+
+    return {
+      runtime_job: runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>)),
+      launch_lease: launchLeaseFromDbRecord(fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>)),
+      envelope: fromDbRecord<CodexLaunchTokenEnvelope>(envelopeRow as Record<string, unknown>),
+      replayed: false,
+    };
+  }
+
+  private codexRuntimeJobCreateLockKeys(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): readonly string[] {
+    return [
+      `codex-runtime-job-request:${input.job_request_id}`,
+      `codex-runtime-job-target:${input.target.project_id}:${input.target.repo_id ?? ''}:${input.target.target_type}:${input.target.target_id}:${input.launch_attempt}`,
+      `codex-runtime-worker:${input.worker_id}`,
+    ];
+  }
+
+  private codexRuntimeTargetAttemptPredicate(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput) {
+    return and(
+      eq(codex_runtime_jobs.projectId, input.target.project_id),
+      input.target.repo_id === undefined ? isNull(codex_runtime_jobs.repoId) : eq(codex_runtime_jobs.repoId, input.target.repo_id),
+      eq(codex_runtime_jobs.targetType, input.target.target_type),
+      eq(codex_runtime_jobs.targetId, input.target.target_id),
+      eq(codex_runtime_jobs.targetKind, input.target.target_kind),
+      eq(codex_runtime_jobs.launchAttempt, input.launch_attempt),
+    );
+  }
+
+  private async codexRuntimeJobCreateIdsAreUnused(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): Promise<boolean> {
+    const [jobRows, leaseRows, envelopeRows] = await Promise.all([
+      this.db.select({ id: codex_runtime_jobs.id }).from(codex_runtime_jobs).where(eq(codex_runtime_jobs.id, input.runtime_job_id)).limit(1),
+      this.db.select({ id: codex_launch_leases.id }).from(codex_launch_leases).where(eq(codex_launch_leases.id, input.launch_lease_id)).limit(1),
+      this.db
+        .select({ id: codex_launch_token_envelopes.id })
+        .from(codex_launch_token_envelopes)
+        .where(eq(codex_launch_token_envelopes.id, input.envelope_id))
+        .limit(1),
+    ]);
+    return jobRows[0] === undefined && leaseRows[0] === undefined && envelopeRows[0] === undefined;
+  }
+
+  private async replayCodexRuntimeJob(
+    record: CodexRuntimeJobDbRecord,
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult> {
+    const [leaseRow] = await this.db.select().from(codex_launch_leases).where(eq(codex_launch_leases.id, record.launch_lease_id)).limit(1);
+    const [envelopeRow] = await this.db
+      .select()
+      .from(codex_launch_token_envelopes)
+      .where(eq(codex_launch_token_envelopes.id, input.envelope_id))
+      .limit(1);
+    const [pendingRow] = await this.db
+      .select()
+      .from(codex_pending_workspace_bundles)
+      .where(eq(codex_pending_workspace_bundles.runtimeJobId, record.id))
+      .limit(1);
+    const [artifactRow] = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(and(eq(codex_runtime_job_artifacts.runtimeJobId, record.id), eq(codex_runtime_job_artifacts.kind, 'workspace_bundle')))
+      .limit(1);
+    if (leaseRow === undefined || envelopeRow === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job replay record is inconsistent.');
+    }
+    const lease = fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
+    const envelope = fromDbRecord<CodexLaunchTokenEnvelope>(envelopeRow as Record<string, unknown>);
+    const pending =
+      pendingRow === undefined ? undefined : fromDbRecord<CodexPendingWorkspaceBundleDbRecord>(pendingRow as Record<string, unknown>);
+    const artifact = artifactRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobArtifactDbRecord>(artifactRow as Record<string, unknown>);
+    if (
+      lease.expires_at <= input.now ||
+      !(await this.codexLaunchFenceIsActive(lease, input.now)) ||
+      !this.codexRuntimeJobReplayMatches(record, lease, envelope, pending, artifact, input)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job replay did not match original request.');
+    }
+    return {
+      runtime_job: runtimeJobFromDbRecord(record),
+      launch_lease: launchLeaseFromDbRecord(lease),
+      envelope,
+      replayed: true,
+    };
+  }
+
+  private codexRuntimeJobReplayMatches(
+    record: CodexRuntimeJobDbRecord,
+    lease: CodexLaunchLeaseDbRecord,
+    envelope: CodexLaunchTokenEnvelope,
+    pending: CodexPendingWorkspaceBundleDbRecord | undefined,
+    artifact: CodexRuntimeJobArtifactDbRecord | undefined,
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): boolean {
+    return (
+      valuesEqual(runtimeJobTargetFromDbRecord(record), input.target) &&
+      record.launch_attempt === input.launch_attempt &&
+      record.input_digest === input.input_digest &&
+      valuesEqual(record.input_json, input.input_json) &&
+      record.workspace_acquisition_digest === input.workspace_acquisition_digest &&
+      valuesEqual(record.workspace_acquisition_json, input.workspace_acquisition_json) &&
+      record.worker_id === input.worker_id &&
+      record.launch_lease_id === input.launch_lease_id &&
+      record.launch_lease_id === lease.id &&
+      record.launch_attempt === lease.launch_attempt &&
+      lease.status === 'active' &&
+      lease.runtime_profile_revision_id === input.runtime_profile_revision_id &&
+      record.runtime_profile_digest === input.runtime_profile_digest &&
+      record.credential_binding_id === input.credential_binding_id &&
+      record.credential_binding_version_id === input.credential_binding_version_id &&
+      record.credential_payload_digest === input.credential_payload_digest &&
+      record.docker_image_digest === input.docker_image_digest &&
+      record.network_policy_digest === input.network_policy_digest &&
+      record.network_provider_config_digest === input.network_provider_config_digest &&
+      envelope.id === input.envelope_id &&
+      envelope.runtime_job_id === record.id &&
+      envelope.launch_lease_id === record.launch_lease_id &&
+      envelope.worker_id === record.worker_id &&
+      record.envelope_digest === envelope.envelope_digest &&
+      lease.action_type === input.action_type &&
+      lease.action_attempt === input.action_attempt &&
+      lease.action_claim_token_hash === input.action_claim_token_hash &&
+      lease.precondition_fingerprint === input.precondition_fingerprint &&
+      lease.execution_package_id === input.execution_package_id &&
+      lease.run_worker_lease_id === input.run_worker_lease_id &&
+      lease.run_worker_lease_token_hash === input.run_worker_lease_token_hash &&
+      lease.run_session_status === input.run_session_status &&
+      lease.run_session_updated_at === input.run_session_updated_at &&
+      lease.execution_package_version === input.execution_package_version &&
+      this.codexRuntimePendingBundleReplayMatches(record, pending, artifact, input.pending_workspace_bundle)
+    );
+  }
+
+  private codexRuntimePendingBundleReplayMatches(
+    record: CodexRuntimeJobDbRecord,
+    stored: CodexPendingWorkspaceBundleDbRecord | undefined,
+    artifact: CodexRuntimeJobArtifactDbRecord | undefined,
+    input: PendingWorkspaceBundleInput | undefined,
+  ): boolean {
+    if (stored === undefined || input === undefined) {
+      return stored === undefined && input === undefined && artifact === undefined;
+    }
+    return (
+      artifact !== undefined &&
+      stored.runtime_job_id === record.id &&
+      stored.status === 'bound' &&
+      artifact.runtime_job_id === record.id &&
+      artifact.kind === 'workspace_bundle' &&
+      artifact.name === stored.bundle_id &&
+      artifact.digest === stored.archive_digest &&
+      artifact.internal_ref === stored.pending_artifact_ref &&
+      artifact.metadata_json.bundle_id === stored.bundle_id &&
+      artifact.metadata_json.manifest_digest === stored.manifest_digest &&
+      artifact.metadata_json.run_worker_lease_id === stored.run_worker_lease_id &&
+      artifact.metadata_json.workspace_acquisition_digest === stored.workspace_acquisition_digest &&
+      artifact.size_bytes === stored.size_bytes &&
+      stored.bundle_id === input.bundle_id &&
+      stored.pending_artifact_ref === input.pending_artifact_ref &&
+      stored.archive_digest === input.archive_digest &&
+      stored.manifest_digest === input.manifest_digest &&
+      stored.run_worker_lease_id === input.run_worker_lease_id &&
+      stored.size_bytes === input.size_bytes &&
+      stored.workspace_acquisition_digest === input.workspace_acquisition_digest &&
+      valuesEqual(stored.workspace_acquisition_json, input.workspace_acquisition_json) &&
+      stored.expires_at === input.expires_at
+    );
+  }
+
+  private async codexRuntimePendingBundleCreateMatches(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): Promise<boolean> {
+    if (input.target.target_kind === 'generation') {
+      return input.pending_workspace_bundle === undefined;
+    }
+    const pending = input.pending_workspace_bundle;
+    if (
+      pending === undefined ||
+      input.workspace_acquisition_digest === undefined ||
+      input.workspace_acquisition_json === undefined ||
+      pending.expires_at <= input.now ||
+      pending.run_worker_lease_id !== input.run_worker_lease_id ||
+      pending.size_bytes <= 0 ||
+      pending.workspace_acquisition_digest !== input.workspace_acquisition_digest ||
+      !valuesEqual(pending.workspace_acquisition_json, input.workspace_acquisition_json)
+    ) {
+      return false;
+    }
+    const [existing] = await this.db
+      .select()
+      .from(codex_pending_workspace_bundles)
+      .where(eq(codex_pending_workspace_bundles.bundleId, pending.bundle_id))
+      .limit(1);
+    const stored =
+      existing === undefined ? undefined : fromDbRecord<CodexPendingWorkspaceBundleDbRecord>(existing as Record<string, unknown>);
+    return (
+      stored !== undefined &&
+      stored.status === 'pending' &&
+      stored.runtime_job_id === undefined &&
+      stored.bundle_id === pending.bundle_id &&
+      stored.pending_artifact_ref === pending.pending_artifact_ref &&
+      stored.archive_digest === pending.archive_digest &&
+      stored.manifest_digest === pending.manifest_digest &&
+      stored.run_worker_lease_id === pending.run_worker_lease_id &&
+      stored.size_bytes === pending.size_bytes &&
+      stored.expires_at === pending.expires_at &&
+      stored.workspace_acquisition_digest === pending.workspace_acquisition_digest &&
+      valuesEqual(stored.workspace_acquisition_json, pending.workspace_acquisition_json) &&
+      stored.run_session_id === input.target.target_id &&
+      stored.execution_package_id === input.execution_package_id
+    );
+  }
+
+  private codexRuntimeJobHasRequiredLaunchFence(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean {
+    if (input.target.target_kind === 'generation') {
+      return (
+        input.action_type !== undefined &&
+        input.action_attempt !== undefined &&
+        input.action_claim_token_hash !== undefined &&
+        input.precondition_fingerprint !== undefined
+      );
+    }
+    return (
+      input.execution_package_id !== undefined &&
+      input.run_worker_lease_id !== undefined &&
+      input.run_worker_lease_token_hash !== undefined &&
+      input.run_session_status !== undefined &&
+      input.run_session_updated_at !== undefined &&
+      input.execution_package_version !== undefined
+    );
+  }
+
+  private codexRuntimeJobLaunchLeaseRecord(
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+    leaseTokenHash: string,
+  ): CodexLaunchLeaseDbRecord {
+    return {
+      id: input.launch_lease_id,
+      lease_request_id: `runtime-job:${input.job_request_id}`,
+      target_type: input.target.target_type,
+      target_id: input.target.target_id,
+      target_kind: input.target.target_kind,
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      launch_attempt: input.launch_attempt,
+      ...(input.action_type !== undefined ? { action_type: input.action_type } : {}),
+      ...(input.action_attempt !== undefined ? { action_attempt: input.action_attempt } : {}),
+      ...(input.action_claim_token_hash !== undefined ? { action_claim_token_hash: input.action_claim_token_hash } : {}),
+      ...(input.precondition_fingerprint !== undefined ? { precondition_fingerprint: input.precondition_fingerprint } : {}),
+      ...(input.execution_package_id !== undefined ? { execution_package_id: input.execution_package_id } : {}),
+      ...(input.run_worker_lease_id !== undefined ? { run_worker_lease_id: input.run_worker_lease_id } : {}),
+      ...(input.run_worker_lease_token_hash !== undefined ? { run_worker_lease_token_hash: input.run_worker_lease_token_hash } : {}),
+      ...(input.run_session_status !== undefined ? { run_session_status: input.run_session_status } : {}),
+      ...(input.run_session_updated_at !== undefined ? { run_session_updated_at: input.run_session_updated_at } : {}),
+      ...(input.execution_package_version !== undefined ? { execution_package_version: input.execution_package_version } : {}),
+      worker_id: input.worker_id,
+      status: 'active',
+      lease_token_hash: leaseTokenHash,
+      runtime_profile_revision_id: input.runtime_profile_revision_id,
+      runtime_profile_digest: input.runtime_profile_digest,
+      credential_binding_id: input.credential_binding_id,
+      credential_binding_version_id: input.credential_binding_version_id,
+      credential_payload_digest: input.credential_payload_digest,
+      docker_image_digest: input.docker_image_digest,
+      network_policy_digest: input.network_policy_digest,
+      ...(input.network_provider_config_digest === undefined
+        ? {}
+        : { network_provider_config_digest: input.network_provider_config_digest }),
+      created_at: input.now,
+      expires_at: input.expires_at,
+    };
+  }
+
+  private codexRuntimeJobLaunchLeaseValues(record: CodexLaunchLeaseDbRecord): Record<string, unknown> {
+    return {
+      id: record.id,
+      leaseRequestId: record.lease_request_id,
+      targetType: record.target_type,
+      targetId: record.target_id,
+      targetKind: record.target_kind,
+      projectId: record.project_id,
+      repoId: record.repo_id ?? null,
+      launchAttempt: record.launch_attempt,
+      actionType: record.action_type ?? null,
+      actionAttempt: record.action_attempt ?? null,
+      actionClaimTokenHash: record.action_claim_token_hash ?? null,
+      preconditionFingerprint: record.precondition_fingerprint ?? null,
+      executionPackageId: record.execution_package_id ?? null,
+      runWorkerLeaseId: record.run_worker_lease_id ?? null,
+      runWorkerLeaseTokenHash: record.run_worker_lease_token_hash ?? null,
+      runSessionStatus: record.run_session_status ?? null,
+      runSessionUpdatedAt: record.run_session_updated_at ?? null,
+      executionPackageVersion: record.execution_package_version ?? null,
+      workerId: record.worker_id ?? null,
+      status: record.status,
+      leaseTokenHash: record.lease_token_hash,
+      runtimeProfileRevisionId: record.runtime_profile_revision_id,
+      runtimeProfileDigest: record.runtime_profile_digest,
+      credentialBindingId: record.credential_binding_id,
+      credentialBindingVersionId: record.credential_binding_version_id,
+      credentialPayloadDigest: record.credential_payload_digest,
+      dockerImageDigest: record.docker_image_digest,
+      networkPolicyDigest: record.network_policy_digest,
+      networkProviderConfigDigest: record.network_provider_config_digest ?? null,
+      createdAt: record.created_at,
+      expiresAt: record.expires_at,
+    };
+  }
+
+  private codexRuntimeJobValues(
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+    envelopeDigest: string,
+  ): Record<string, unknown> {
+    return {
+      id: input.runtime_job_id,
+      jobRequestId: input.job_request_id,
+      targetType: input.target.target_type,
+      targetId: input.target.target_id,
+      targetKind: input.target.target_kind,
+      projectId: input.target.project_id,
+      repoId: input.target.repo_id ?? null,
+      workerId: input.worker_id,
+      launchLeaseId: input.launch_lease_id,
+      launchAttempt: input.launch_attempt,
+      status: 'queued',
+      inputDigest: input.input_digest,
+      inputJson: input.input_json,
+      workspaceAcquisitionDigest: input.workspace_acquisition_digest ?? null,
+      workspaceAcquisitionJson: input.workspace_acquisition_json ?? null,
+      runtimeProfileRevisionId: input.runtime_profile_revision_id,
+      runtimeProfileDigest: input.runtime_profile_digest,
+      credentialBindingId: input.credential_binding_id,
+      credentialBindingVersionId: input.credential_binding_version_id,
+      credentialPayloadDigest: input.credential_payload_digest,
+      dockerImageDigest: input.docker_image_digest,
+      networkPolicyDigest: input.network_policy_digest,
+      networkProviderConfigDigest: input.network_provider_config_digest ?? null,
+      envelopeDigest,
+      expiresAt: input.expires_at,
+      createdAt: input.now,
+      updatedAt: input.now,
+    };
+  }
+
+  private async bindCodexRuntimePendingWorkspaceBundle(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): Promise<void> {
+    const pending = input.pending_workspace_bundle;
+    if (pending === undefined) {
+      return;
+    }
+    const [pendingRow] = await this.db
+      .update(codex_pending_workspace_bundles)
+      .set({
+        runtimeJobId: input.runtime_job_id,
+        status: 'bound',
+      })
+      .where(
+        and(
+          eq(codex_pending_workspace_bundles.bundleId, pending.bundle_id),
+          eq(codex_pending_workspace_bundles.status, 'pending'),
+          isNull(codex_pending_workspace_bundles.runtimeJobId),
+        ),
+      )
+      .returning({ id: codex_pending_workspace_bundles.id });
+    if (pendingRow === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
+    }
+    const artifactIdempotencyKey = `runtime-job:${input.runtime_job_id}:workspace-bundle:${pending.bundle_id}`;
+    const [artifactRow] = await this.db
+      .insert(codex_runtime_job_artifacts)
+      .values({
+        id: randomUUID(),
+        runtimeJobId: input.runtime_job_id,
+        artifactIdempotencyKey,
+        kind: 'workspace_bundle',
+        name: pending.bundle_id,
+        contentType: 'application/vnd.forgeloop.workspace-bundle',
+        digest: pending.archive_digest,
+        internalRef: pending.pending_artifact_ref,
+        sizeBytes: pending.size_bytes,
+        metadataJson: {
+          bundle_id: pending.bundle_id,
+          manifest_digest: pending.manifest_digest,
+          run_worker_lease_id: pending.run_worker_lease_id,
+          workspace_acquisition_digest: pending.workspace_acquisition_digest,
+          workspace_acquisition_json: pending.workspace_acquisition_json,
+          expires_at: pending.expires_at,
+        },
+        requestDigest: codexCanonicalDigest({
+          runtime_job_id: input.runtime_job_id,
+          bundle_id: pending.bundle_id,
+          archive_digest: pending.archive_digest,
+          manifest_digest: pending.manifest_digest,
+          workspace_acquisition_digest: pending.workspace_acquisition_digest,
+        }),
+        createdAt: input.now,
+      } as never)
+      .onConflictDoNothing()
+      .returning({ id: codex_runtime_job_artifacts.id });
+    if (artifactRow === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle artifact binding was rejected.');
+    }
+  }
+
+  private codexWorkerCanRunRuntimeJob(
+    worker: CodexWorkerRegistrationDbRecord,
+    input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  ): boolean {
+    return (
+      worker.status === 'online' &&
+      worker.control_channel_status === 'connected' &&
+      worker.session_token_expires_at > input.now &&
+      worker.session_public_key_expires_at > input.now &&
+      codexWorkerHeartbeatIsFresh(worker.last_heartbeat_at, input.now) &&
+      worker.lease_count < worker.max_concurrency &&
+      capabilityList(worker.capabilities_json, 'target_kinds').includes(input.target.target_kind) &&
+      codexRuntimeScopeMatches(worker.allowed_scopes_json, codexScope(input.target.project_id, input.target.repo_id)) &&
+      capabilityList(worker.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest) &&
+      capabilityList(worker.capabilities_json, 'network_policy_digests').includes(input.network_policy_digest) &&
+      (input.network_provider_config_digest === undefined ||
+        capabilityList(worker.capabilities_json, 'network_provider_config_digests').includes(input.network_provider_config_digest))
+    );
   }
 
   async createOrReplayCodexLaunchLease(input: CreateOrReplayCodexLaunchLeaseInput): Promise<CodexLaunchLease & { lease_token: string }> {
@@ -1452,7 +3468,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         'codex_launch_materialization_denied',
         input.now,
       );
-      await repository.recordCodexWorkerNonce(input.worker_id, input.worker_session_token, input.nonce, input.nonce_timestamp, input.now);
+      await repository.recordCodexWorkerNonce(
+        input.worker_id,
+        input.worker_session_token,
+        input.nonce,
+        input.nonce_timestamp,
+        input.now,
+        input.replay_protection,
+      );
 
       const materializationPredicate = and(
         eq(codex_launch_leases.id, input.lease_id),
@@ -1554,7 +3577,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_lease_denied', input.now, {
         requireConnected: false,
       });
-      await repository.recordCodexWorkerNonce(input.worker_id, input.worker_session_token, input.nonce, input.nonce_timestamp, input.now);
+      await repository.recordCodexWorkerNonce(
+        input.worker_id,
+        input.worker_session_token,
+        input.nonce,
+        input.nonce_timestamp,
+        input.now,
+        input.replay_protection,
+      );
       const [row] = await tx
         .update(codex_launch_leases)
         .set({
@@ -1686,6 +3716,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .where(
           and(
             inArray(codex_launch_leases.workerId, staleWorkerIds),
+            sql`${codex_launch_leases.leaseRequestId} not like 'runtime-job:%'`,
             or(
               eq(codex_launch_leases.status, 'active'),
               and(
@@ -1970,6 +4001,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async saveExecutionPackage(executionPackage: ExecutionPackage): Promise<void> {
     await this.upsert(execution_packages, execution_packages.id, {
       ...executionPackage,
+      required_test_gates: executionPackage.required_test_gates ?? [],
       source_mutation_policy: executionPackage.source_mutation_policy ?? 'path_policy_scoped',
     });
   }
@@ -3402,8 +5434,323 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       for (const key of [...new Set(keys)].sort()) {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
       }
-      return write(new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase));
+      return write(this.childRepository(tx as ForgeloopDrizzleDatabase));
     });
+  }
+
+  private childRepository(db: ForgeloopDrizzleDatabase): DrizzleDeliveryRepository {
+    return new DrizzleDeliveryRepository(db, {
+      codexLaunchTokenEnvelopeSealer: this.codexLaunchTokenEnvelopeSealer,
+    });
+  }
+
+  private assertCodexRuntimeJobArtifactIntake(input: CreateCodexRuntimeJobArtifactInput): void {
+    try {
+      validateCodexRuntimeJobArtifactIntake(input);
+    } catch {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+  }
+
+  private async findCodexRuntimeJobArtifactReplay(
+    input: CreateCodexRuntimeJobArtifactInput,
+  ): Promise<CodexRuntimeJobArtifactDbRecord | undefined> {
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(
+        or(
+          eq(codex_runtime_job_artifacts.id, input.artifact_id),
+          and(
+            eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id),
+            eq(codex_runtime_job_artifacts.artifactIdempotencyKey, input.artifact_idempotency_key),
+          ),
+          and(
+            eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id),
+            eq(codex_runtime_job_artifacts.digest, input.digest),
+            eq(codex_runtime_job_artifacts.contentType, input.content_type),
+          ),
+        ),
+      );
+    const records = rows.map((row) => fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>));
+    const first = records[0];
+    if (first === undefined) {
+      return undefined;
+    }
+    if (records.some((record) => record.id !== first.id)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    return first;
+  }
+
+  private codexRuntimeJobArtifactReplayMatches(
+    artifact: CodexRuntimeJobArtifactDbRecord,
+    input: CreateCodexRuntimeJobArtifactInput,
+  ): boolean {
+    return (
+      artifact.runtime_job_id === input.runtime_job_id &&
+      artifact.artifact_idempotency_key === input.artifact_idempotency_key &&
+      artifact.kind === input.kind &&
+      artifact.name === input.name &&
+      artifact.content_type === input.content_type &&
+      artifact.digest === input.digest &&
+      artifact.internal_ref === input.internal_ref &&
+      artifact.size_bytes === input.size_bytes &&
+      artifact.request_digest === input.request_digest &&
+      valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private async assertCodexRuntimeTerminalArtifactRefs(runtimeJobId: string, terminalResultJson: Record<string, unknown>): Promise<void> {
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(eq(codex_runtime_job_artifacts.runtimeJobId, runtimeJobId));
+    const artifactsByRef = new Map(
+      rows
+        .map((row) => fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>))
+        .map((artifact) => [artifact.internal_ref, artifact] as const),
+    );
+    for (const ref of collectCodexRuntimeJobTerminalArtifactRefs(terminalResultJson)) {
+      const artifact = artifactsByRef.get(ref.internal_ref);
+      if (
+        artifact === undefined ||
+        artifact.digest !== ref.digest ||
+        (ref.content_type !== undefined && artifact.content_type !== ref.content_type)
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminal artifact ref was denied.');
+      }
+    }
+  }
+
+  private codexRuntimeJobStateLockKeys(runtimeJobId: string, workerId: string): readonly string[] {
+    return [`codex-runtime-job:${runtimeJobId}`, `codex-runtime-worker:${workerId}`];
+  }
+
+  private async lockCodexRuntimeJobBundle(runtimeJobId: string): Promise<{
+    job?: CodexRuntimeJobDbRecord;
+    lease?: CodexLaunchLeaseDbRecord;
+    envelope?: CodexLaunchTokenEnvelope;
+  }> {
+    const jobResult = await this.db.execute(sql<Record<string, unknown>>`
+      select *
+      from codex_runtime_jobs
+      where id = ${runtimeJobId}
+      for update
+    `);
+    const jobRow = jobResult.rows[0];
+    if (jobRow === undefined) {
+      return {};
+    }
+    const job = fromDbRecord<CodexRuntimeJobDbRecord>(jobRow);
+    const lease = await this.lockCodexLaunchLease(job.launch_lease_id);
+    const envelope = await this.lockCodexLaunchTokenEnvelope(runtimeJobId);
+    return { job, ...(lease === undefined ? {} : { lease }), ...(envelope === undefined ? {} : { envelope }) };
+  }
+
+  private async lockCodexLaunchLease(launchLeaseId: string): Promise<CodexLaunchLeaseDbRecord | undefined> {
+    const result = await this.db.execute(sql<Record<string, unknown>>`
+      select *
+      from codex_launch_leases
+      where id = ${launchLeaseId}
+      for update
+    `);
+    const row = result.rows[0];
+    return row === undefined ? undefined : fromDbRecord<CodexLaunchLeaseDbRecord>(row);
+  }
+
+  private async lockCodexLaunchTokenEnvelope(runtimeJobId: string): Promise<CodexLaunchTokenEnvelope | undefined> {
+    const result = await this.db.execute(sql<Record<string, unknown>>`
+      select *
+      from codex_launch_token_envelopes
+      where runtime_job_id = ${runtimeJobId}
+      for update
+    `);
+    const row = result.rows[0];
+    return row === undefined ? undefined : fromDbRecord<CodexLaunchTokenEnvelope>(row);
+  }
+
+  private async lockCodexWorkerRegistration(workerId: string): Promise<CodexWorkerRegistrationDbRecord | undefined> {
+    const result = await this.db.execute(sql<Record<string, unknown>>`
+      select *
+      from codex_worker_registrations
+      where id = ${workerId}
+      for update
+    `);
+    const row = result.rows[0];
+    return row === undefined ? undefined : fromDbRecord<CodexWorkerRegistrationDbRecord>(row);
+  }
+
+  private codexRuntimeJobRecoveryEvidence(
+    job: CodexRuntimeJob,
+  ): RecoverStaleCodexRuntimeJobsResult['recovered_runtime_jobs'][number] {
+    return {
+      id: job.id,
+      worker_id: job.worker_id,
+      launch_lease_id: job.launch_lease_id,
+      target_type: job.target_type,
+      target_id: job.target_id,
+      target_kind: job.target_kind,
+      project_id: job.project_id,
+      ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
+      status: job.status,
+      ...(job.terminal_status === undefined ? {} : { terminal_status: job.terminal_status }),
+      ...(job.terminal_reason_code === undefined ? {} : { terminal_reason_code: job.terminal_reason_code }),
+      ...(job.terminal_at === undefined ? {} : { terminal_at: job.terminal_at }),
+      updated_at: job.updated_at,
+    };
+  }
+
+  private codexLaunchLeaseRecoveryEvidence(
+    lease: CodexLaunchLease,
+  ): RecoverStaleCodexRuntimeJobsResult['recovered_launch_leases'][number] {
+    return {
+      id: lease.id,
+      ...(lease.worker_id === undefined ? {} : { worker_id: lease.worker_id }),
+      target_type: lease.target.target_type,
+      target_id: lease.target.target_id,
+      target_kind: lease.target.target_kind,
+      project_id: lease.target.project_id,
+      ...(lease.target.repo_id === undefined ? {} : { repo_id: lease.target.repo_id }),
+      status: lease.status,
+      ...(lease.terminal_reason_code === undefined ? {} : { terminal_reason_code: lease.terminal_reason_code }),
+    };
+  }
+
+  private codexLaunchFenceSnapshotMatches(
+    record: CodexLaunchLeaseDbRecord,
+    activeFence: CodexLaunchFenceSnapshot | undefined,
+  ): boolean {
+    if (activeFence === undefined) {
+      return true;
+    }
+    return (
+      (activeFence.action_claim_token_hash === undefined ||
+        record.action_claim_token_hash === undefined ||
+        record.action_claim_token_hash === activeFence.action_claim_token_hash) &&
+      (activeFence.precondition_fingerprint === undefined ||
+        record.precondition_fingerprint === undefined ||
+        record.precondition_fingerprint === activeFence.precondition_fingerprint) &&
+      (activeFence.run_worker_lease_id === undefined ||
+        record.run_worker_lease_id === undefined ||
+        record.run_worker_lease_id === activeFence.run_worker_lease_id) &&
+      (activeFence.run_worker_lease_token_hash === undefined ||
+        record.run_worker_lease_token_hash === undefined ||
+        record.run_worker_lease_token_hash === activeFence.run_worker_lease_token_hash) &&
+      (activeFence.run_session_status === undefined ||
+        record.run_session_status === undefined ||
+        record.run_session_status === activeFence.run_session_status) &&
+      (activeFence.run_session_updated_at === undefined ||
+        record.run_session_updated_at === undefined ||
+        record.run_session_updated_at === activeFence.run_session_updated_at) &&
+      (activeFence.execution_package_version === undefined ||
+        record.execution_package_version === undefined ||
+        record.execution_package_version === activeFence.execution_package_version)
+    );
+  }
+
+  private async assertCodexRuntimeJobMaterializationDependencies(
+    job: CodexRuntimeJobDbRecord,
+    lease: CodexLaunchLeaseDbRecord,
+  ): Promise<void> {
+    await this.codexRuntimeJobMaterialization(job, lease, lease.materialized_at ?? lease.created_at);
+  }
+
+  private async codexRuntimeJobMaterialization(
+    job: CodexRuntimeJobDbRecord,
+    lease: CodexLaunchLeaseDbRecord,
+    now: string,
+  ): Promise<CodexLaunchMaterialization> {
+    const profileRevision = await this.getById<CodexRuntimeProfileRevision>(
+      codex_runtime_profile_revisions,
+      codex_runtime_profile_revisions.id,
+      lease.runtime_profile_revision_id,
+    );
+    const [credentialRow] = await this.db
+      .select()
+      .from(codex_credential_binding_versions)
+      .where(eq(codex_credential_binding_versions.id, lease.credential_binding_version_id))
+      .limit(1);
+    const credentialBinding = await this.getById<CodexCredentialBinding>(
+      codex_credential_bindings,
+      codex_credential_bindings.id,
+      lease.credential_binding_id,
+    );
+    const worker =
+      lease.worker_id === undefined ? undefined : await this.lockCodexWorkerRegistration(lease.worker_id);
+    if (profileRevision === undefined || credentialRow === undefined || credentialBinding === undefined || worker === undefined) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization dependencies were denied.');
+    }
+    const credentialRecord = fromDbRecord<CodexCredentialBindingVersion & { secret_payload_json: unknown }>(
+      credentialRow as Record<string, unknown>,
+    );
+    if (
+      profileRevision.status !== 'active' ||
+      profileRevision.profile_digest !== lease.runtime_profile_digest ||
+      credentialRecord.status !== 'active' ||
+      credentialRecord.payload_digest !== lease.credential_payload_digest ||
+      credentialBinding.profile_id !== profileRevision.profile_id ||
+      !this.workerRecordMatchesLaunch(worker, lease, profileRevision) ||
+      job.credential_binding_version_id !== credentialRecord.id ||
+      job.credential_payload_digest !== credentialRecord.payload_digest
+    ) {
+      throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization dependencies were denied.');
+    }
+    return {
+      launch_target: launchLeaseFromDbRecord(lease).target,
+      profile_revision: profileRevision,
+      resolved_credentials: [
+        {
+          binding_id: lease.credential_binding_id,
+          binding_version_id: credentialRecord.id,
+          payload: credentialRecord.secret_payload_json,
+          payload_digest: credentialRecord.payload_digest,
+        },
+      ],
+      lease_id: lease.id,
+      expires_at: lease.expires_at,
+      materialized_at: lease.materialized_at ?? now,
+    };
+  }
+
+  private codexRuntimeJobEventObjectId(runtimeJobId: string, eventId: string): string {
+    return `codex-runtime-job-event:${runtimeJobId}:${eventId}`;
+  }
+
+  private codexRuntimeJobEventIdempotencyObjectId(runtimeJobId: string, idempotencyKey: string): string {
+    return `codex-runtime-job-event-idempotency:${runtimeJobId}:${idempotencyKey}`;
+  }
+
+  private async getCodexRuntimeJobEventRecord(objectEventId: string): Promise<
+    | {
+        runtime_job_id: string;
+        event_id: string;
+        idempotency_key: string;
+        request_digest: string;
+        job: CodexRuntimeJob;
+      }
+    | undefined
+  > {
+    const [row] = await this.db.select().from(object_events).where(eq(object_events.id, objectEventId)).limit(1);
+    const metadata = row?.metadata as Record<string, unknown> | undefined;
+    if (
+      metadata === undefined ||
+      typeof metadata.runtime_job_id !== 'string' ||
+      typeof metadata.event_id !== 'string' ||
+      typeof metadata.idempotency_key !== 'string' ||
+      typeof metadata.request_digest !== 'string' ||
+      typeof metadata.job !== 'object' ||
+      metadata.job === null
+    ) {
+      return undefined;
+    }
+    return {
+      runtime_job_id: metadata.runtime_job_id,
+      event_id: metadata.event_id,
+      idempotency_key: metadata.idempotency_key,
+      request_digest: metadata.request_digest,
+      job: metadata.job as CodexRuntimeJob,
+    };
   }
 
   private async decrementCodexWorkerLeaseCounts(db: ForgeloopDrizzleDatabase, workerIds: readonly string[]): Promise<void> {
@@ -3456,29 +5803,105 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   private async assertCodexWorkerSession(
     workerId: string,
     sessionToken: string,
-    deniedCode: Extract<DomainErrorType['code'], 'codex_worker_registration_denied' | 'codex_launch_lease_denied' | 'codex_launch_materialization_denied'>,
+    deniedCode: Extract<
+      DomainErrorType['code'],
+      | 'codex_worker_registration_denied'
+      | 'codex_launch_lease_denied'
+      | 'codex_launch_materialization_denied'
+      | 'codex_runtime_job_unavailable'
+    >,
     now: string,
     options: { requireConnected?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<CodexWorkerSessionProof> {
     const requireConnected = options.requireConnected ?? true;
     const [row] = await this.db
-      .select({
-        sessionTokenHash: codex_worker_registrations.sessionTokenHash,
-        sessionTokenExpiresAt: codex_worker_registrations.sessionTokenExpiresAt,
-        status: codex_worker_registrations.status,
-        controlChannelStatus: codex_worker_registrations.controlChannelStatus,
-      })
+      .select()
       .from(codex_worker_registrations)
       .where(eq(codex_worker_registrations.id, workerId))
       .limit(1);
+    const worker = row === undefined ? undefined : fromDbRecord<CodexWorkerRegistrationDbRecord>(row as Record<string, unknown>);
     if (
-      row === undefined ||
-      row.sessionTokenHash !== codexCredentialPayloadDigest(sessionToken) ||
-      row.sessionTokenExpiresAt <= now ||
-      (requireConnected && ((row.status !== 'online' && row.status !== 'draining') || row.controlChannelStatus !== 'connected'))
+      worker === undefined ||
+      worker.session_token_hash !== codexCredentialPayloadDigest(sessionToken) ||
+      !timestampIsAfter(worker.session_token_expires_at, now) ||
+      (requireConnected &&
+        ((worker.status !== 'online' && worker.status !== 'draining') || worker.control_channel_status !== 'connected'))
     ) {
       throw codexDenied(deniedCode, 'Codex worker session proof was rejected.');
     }
+    return {
+      worker,
+      session_token_hash: worker.session_token_hash,
+      session_epoch: worker.session_epoch,
+      session_public_key_id: worker.session_public_key_id,
+      session_public_key_expires_at: worker.session_public_key_expires_at,
+    };
+  }
+
+  private async assertCodexRuntimeJobWorkerSession(
+    runtimeJobId: string,
+    workerId: string,
+    sessionToken: string,
+    deniedCode: Extract<
+      DomainErrorType['code'],
+      | 'codex_worker_registration_denied'
+      | 'codex_launch_lease_denied'
+      | 'codex_launch_materialization_denied'
+      | 'codex_runtime_job_unavailable'
+    >,
+    now: string,
+    options: { requireConnected?: boolean } = {},
+  ): Promise<CodexWorkerSessionProof> {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    try {
+      return await this.assertCodexWorkerSession(workerId, sessionToken, deniedCode, now, options);
+    } catch (error) {
+      if (!(error instanceof DomainError)) {
+        throw error;
+      }
+    }
+
+    const [workerRow] = await this.db
+      .select()
+      .from(codex_worker_registrations)
+      .where(eq(codex_worker_registrations.id, workerId))
+      .limit(1);
+    const [jobRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, runtimeJobId))
+      .limit(1);
+    const worker =
+      workerRow === undefined ? undefined : fromDbRecord<CodexWorkerRegistrationDbRecord>(workerRow as Record<string, unknown>);
+    const job = jobRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const lease = job === undefined ? undefined : await this.lockCodexLaunchLease(job.launch_lease_id);
+    const requireConnected = options.requireConnected ?? true;
+    if (
+      worker === undefined ||
+      job === undefined ||
+      lease === undefined ||
+      job.worker_id !== workerId ||
+      lease.worker_id !== workerId ||
+      job.accepted_worker_session_digest !== sessionTokenHash ||
+      job.accepted_session_epoch === undefined ||
+      job.accepted_session_public_key_id === undefined ||
+      job.accepted_session_public_key_expires_at === undefined ||
+      (job.status !== 'accepted' && job.status !== 'materializing' && job.status !== 'running') ||
+      !timestampIsAfter(job.expires_at, now) ||
+      !timestampIsAfter(lease.expires_at, now) ||
+      !timestampIsAfter(job.accepted_session_public_key_expires_at, now) ||
+      (lease.status !== 'active' && lease.status !== 'materialized') ||
+      (requireConnected && ((worker.status !== 'online' && worker.status !== 'draining') || worker.control_channel_status !== 'connected'))
+    ) {
+      throw codexDenied(deniedCode, 'Codex worker session proof was rejected.');
+    }
+    return {
+      worker,
+      session_token_hash: sessionTokenHash,
+      session_epoch: job.accepted_session_epoch,
+      session_public_key_id: job.accepted_session_public_key_id,
+      session_public_key_expires_at: job.accepted_session_public_key_expires_at,
+    };
   }
 
   private workerRecordMatchesLaunch(
@@ -3500,9 +5923,35 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
-  private async recordCodexWorkerNonce(workerId: string, sessionToken: string, nonce: string, nonceTimestamp: string, now: string): Promise<void> {
+  private async recordCodexWorkerNonce(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    nonceTimestamp: string,
+    now: string,
+    replayProtection?: CodexWorkerReplayProtectionInput,
+    sessionEpochOverride?: number,
+  ): Promise<void> {
     const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
     const nonceHash = codexCredentialPayloadDigest(nonce);
+    const [worker] = await this.db
+      .select({ sessionEpoch: codex_worker_registrations.sessionEpoch })
+      .from(codex_worker_registrations)
+      .where(eq(codex_worker_registrations.id, workerId))
+      .limit(1);
+    const sessionEpoch = sessionEpochOverride ?? worker?.sessionEpoch ?? 1;
+    const requestBindingDigest =
+      replayProtection === undefined
+        ? codexCanonicalDigest({ method: 'LEGACY', path: 'legacy-worker-session', body_digest: sessionTokenHash })
+        : codexCanonicalDigest(replayProtection);
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
     const [row] = await this.db
       .insert(codex_worker_session_nonces)
       .values({
@@ -3510,6 +5959,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         workerId,
         sessionTokenHash,
         nonceHash,
+        sessionEpoch,
+        requestBindingDigest,
+        replayKeyHash,
         nonceTimestamp,
         createdAt: now,
       } as never)
@@ -3903,6 +6355,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       this.assertAutomationActionIdentityMatches(existing, input);
       if (!this.isAutomationActionClaimable(existing, input.now)) {
         if (existing.status === 'running') {
+          if (existing.claim_token === input.claim_token) {
+            const renewed: AutomationActionRun = {
+              ...existing,
+              locked_until: input.locked_until,
+              last_heartbeat_at: input.now,
+              updated_at: input.now,
+            };
+            await this.upsert(automation_action_runs, automation_action_runs.id, renewed);
+            return renewed;
+          }
           throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} already has an active claim`);
         }
         return redactAutomationActionClaim(existing);

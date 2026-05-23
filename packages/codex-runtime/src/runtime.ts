@@ -224,6 +224,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         prompt: promptFor(taskKind, input),
         outputSchemaVersion: input.outputSchemaVersion,
         contextDigest: input.actionRunId,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
         ...(config.outputLimitBytes === undefined ? {} : { outputLimitBytes: config.outputLimitBytes }),
         ...(config.rawNotificationLimitBytes === undefined ? {} : { rawNotificationLimitBytes: config.rawNotificationLimitBytes }),

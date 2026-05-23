@@ -33,4 +33,22 @@ describe('RunControl boundary', () => {
     expect(service).not.toContain('private async bestEffortTraceWrite');
     expect(service).not.toContain('transitionReviewPacket');
   });
+
+  it('wires remote outbound Codex run execution without host exec fallback', () => {
+    const moduleSource = readFileSync('apps/control-plane-api/src/modules/run-control/run-control.module.ts', 'utf8');
+
+    expect(moduleSource).toContain("raw === 'remote_outbound'");
+    expect(moduleSource).toContain('createRemoteRunExecutionClient');
+    expect(moduleSource).toContain('FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID');
+    expect(moduleSource).toContain('FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS');
+    expect(moduleSource).toContain('remoteRunExecutionClient: remoteRunExecution.client');
+    expect(moduleSource).toContain('remoteRunExecutionWaitTimeoutMs: remoteRunExecution.waitTimeoutMs');
+    expect(moduleSource).toContain("allowExecFallback: runWorkerMode === 'disabled'");
+    expect(moduleSource).toContain('globalCodexWorkerMode !== undefined &&');
+    expect(moduleSource).toContain("globalCodexWorkerMode === 'local_docker'");
+    expect(moduleSource).toContain("globalCodexWorkerMode === 'remote_outbound'");
+    expect(moduleSource).toContain('FORGELOOP_CODEX_WORKER_MODE must be disabled, local_docker, or remote_outbound');
+    expect(moduleSource).not.toContain('explicitRunWorkerMode === undefined && globalCodexWorkerMode !== undefined');
+    expect(moduleSource).not.toContain("?? optionalEnv('FORGELOOP_CODEX_WORKER_MODE') ?? 'disabled'");
+  });
 });

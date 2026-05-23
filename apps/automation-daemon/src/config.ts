@@ -6,7 +6,7 @@ export const DEFAULT_AUTOMATION_LOOP_INTERVAL_MS = 5_000;
 export const DEFAULT_AUTOMATION_NO_CLAIM_BACKOFF_MS = 10_000;
 export const DEFAULT_WORKFLOW_POLICY_PARSER_VERSION = 'workflow-md-parser:v1';
 
-export type CodexWorkerMode = 'disabled' | 'local_docker';
+export type CodexWorkerMode = 'disabled' | 'local_docker' | 'remote_outbound';
 export type CodexAppServerTransport = 'unix' | 'websocket' | 'docker_exec';
 
 export interface AutomationDaemonConfig {
@@ -22,6 +22,7 @@ export interface AutomationDaemonConfig {
   generationPlanning: AutomationGenerationPlanningConfig;
   generationPlanningExplicit: boolean;
   codexWorkerMode: CodexWorkerMode;
+  codexRunWorkerMode: CodexWorkerMode;
   workerId?: string;
   workerIdentity?: string;
   workerBootstrapToken?: string;
@@ -47,6 +48,9 @@ export interface AutomationDaemonConfig {
   generationOutputLimitBytes?: number;
   generationRawNotificationLimitBytes?: number;
   generationMaxConcurrency?: number;
+  remoteRuntimeJobWaitTimeoutMs?: number;
+  remoteRuntimeJobPollIntervalMs?: number;
+  remoteActionClaimRenewalMs?: number;
 }
 
 type EnvLike = Record<string, string | undefined>;
@@ -120,10 +124,27 @@ const optionalNonBlankEnv = (env: EnvLike, key: string): string | undefined => {
 
 const codexWorkerModeEnv = (env: EnvLike): CodexWorkerMode => {
   const raw = env.FORGELOOP_CODEX_WORKER_MODE?.trim() ?? 'disabled';
-  if (raw === 'disabled' || raw === 'local_docker') {
+  if (raw === 'disabled' || raw === 'local_docker' || raw === 'remote_outbound') {
     return raw;
   }
-  throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_WORKER_MODE must be disabled or local_docker');
+  throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_WORKER_MODE must be disabled, local_docker, or remote_outbound');
+};
+
+const codexRunWorkerModeEnv = (env: EnvLike): CodexWorkerMode => {
+  const raw = env.FORGELOOP_CODEX_RUN_WORKER_MODE?.trim() ?? 'disabled';
+  if (raw === 'disabled' || raw === 'local_docker' || raw === 'remote_outbound') {
+    return raw;
+  }
+  throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_RUN_WORKER_MODE must be disabled, local_docker, or remote_outbound');
+};
+
+const workerIdEnv = (env: EnvLike, workerIdentity: string | undefined): string | undefined => {
+  const canonical = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_ID');
+  const legacy = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_ID');
+  if (canonical !== undefined && legacy !== undefined && canonical !== legacy) {
+    throw new Error('Invalid automation daemon config: FORGELOOP_WORKER_ID conflicts with FORGELOOP_CODEX_WORKER_ID');
+  }
+  return canonical ?? legacy ?? workerIdentity;
 };
 
 const appServerTransportEnv = (env: EnvLike): CodexAppServerTransport | undefined => {
@@ -278,7 +299,7 @@ const assertAppServerRuntimeConfig = (
     return;
   }
   const endpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
-  if (endpoint === undefined && workerMode !== 'local_docker') {
+  if (endpoint === undefined && workerMode !== 'local_docker' && workerMode !== 'remote_outbound') {
     throw new Error('Invalid automation daemon config: app-server generation requires FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
   }
   if (endpoint !== undefined) {
@@ -289,7 +310,7 @@ const assertAppServerRuntimeConfig = (
       throw new Error(`Invalid automation daemon config: FORGELOOP_CODEX_APP_SERVER_ENDPOINT is invalid: ${reason}`);
     }
   }
-  if (optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT') === undefined) {
+  if (workerMode !== 'remote_outbound' && optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT') === undefined) {
     throw new Error('Invalid automation daemon config: app-server generation requires FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
   }
   if (workerMode === 'local_docker') {
@@ -302,17 +323,54 @@ const assertAppServerRuntimeConfig = (
     requiredEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID');
     requiredEnv(env, 'FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID');
   }
+  if (workerMode === 'remote_outbound') {
+    requiredEnv(env, 'FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID');
+    requiredEnv(env, 'FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID');
+    requiredEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS');
+    requiredEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS');
+  }
+};
+
+const assertRemoteWorkerModeConfig = (
+  env: EnvLike,
+  mode: CodexWorkerMode,
+  modeKey: 'FORGELOOP_CODEX_WORKER_MODE' | 'FORGELOOP_CODEX_RUN_WORKER_MODE',
+  requiredCapability: 'generation' | 'run_execution',
+): void => {
+  if (mode !== 'remote_outbound') {
+    return;
+  }
+  requiredEnv(env, 'FORGELOOP_WORKER_ID');
+  requiredEnv(env, 'FORGELOOP_WORKER_IDENTITY');
+  requiredEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN');
+  requiredEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION');
+  requiredEnv(env, 'FORGELOOP_WORKER_TEMP_ROOT');
+  requiredEnv(env, 'FORGELOOP_DOCKER_BIN');
+  requiredEnv(env, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST');
+  requiredEnv(env, 'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST');
+  requiredEnv(env, 'FORGELOOP_CODEX_WORKER_SCOPES_JSON');
+  requiredEnv(env, 'FORGELOOP_CODEX_WORKER_CAPABILITIES');
+  requiredEnv(env, 'FORGELOOP_WORKER_MAX_CONCURRENCY');
+  const capabilities = workerCapabilitiesEnv(env) ?? [];
+  if (!capabilities.includes(requiredCapability)) {
+    throw new Error(
+      `Invalid automation daemon config: FORGELOOP_CODEX_WORKER_CAPABILITIES must include ${requiredCapability} when ${modeKey}=remote_outbound`,
+    );
+  }
 };
 
 export const loadAutomationDaemonConfig = (env: EnvLike = process.env): AutomationDaemonConfig => {
   const generationPlanning = generationPlanningEnv(env);
   const generationPlanningExplicit = generationPlanningExplicitEnv(env);
   const codexWorkerMode = codexWorkerModeEnv(env);
+  const codexRunWorkerMode = codexRunWorkerModeEnv(env);
+  assertRemoteWorkerModeConfig(env, codexWorkerMode, 'FORGELOOP_CODEX_WORKER_MODE', 'generation');
+  assertRemoteWorkerModeConfig(env, codexRunWorkerMode, 'FORGELOOP_CODEX_RUN_WORKER_MODE', 'run_execution');
   assertAppServerRuntimeConfig(env, generationPlanning.mode, codexWorkerMode);
   const appServerEndpoint = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_APP_SERVER_ENDPOINT');
   const generationArtifactRoot = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
   const workerIdentity = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_IDENTITY');
-  const workerId = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_ID') ?? workerIdentity;
+  const workerId = workerIdEnv(env, workerIdentity);
   const workerBootstrapToken = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN');
   const workerBootstrapTokenVersion = optionalPositiveIntEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION');
   const workerLabels = recordEnv(env, 'FORGELOOP_WORKER_LABELS');
@@ -343,6 +401,9 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     'FORGELOOP_CODEX_GENERATION_RAW_NOTIFICATION_LIMIT_BYTES',
   );
   const generationMaxConcurrency = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_GENERATION_MAX_CONCURRENCY');
+  const remoteRuntimeJobWaitTimeoutMs = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS');
+  const remoteRuntimeJobPollIntervalMs = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS');
+  const remoteActionClaimRenewalMs = optionalPositiveIntEnv(env, 'FORGELOOP_CODEX_REMOTE_ACTION_CLAIM_RENEWAL_MS');
   return {
     controlPlaneUrl: requiredEnv(env, 'FORGELOOP_CONTROL_PLANE_URL'),
     trustedActorHeaderSecret: requiredEnv(env, 'FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET'),
@@ -364,6 +425,7 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     generationPlanning,
     generationPlanningExplicit,
     codexWorkerMode,
+    codexRunWorkerMode,
     ...(workerId === undefined ? {} : { workerId }),
     ...(workerIdentity === undefined ? {} : { workerIdentity }),
     ...(workerBootstrapToken === undefined ? {} : { workerBootstrapToken }),
@@ -389,6 +451,9 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
     ...(generationOutputLimitBytes === undefined ? {} : { generationOutputLimitBytes }),
     ...(generationRawNotificationLimitBytes === undefined ? {} : { generationRawNotificationLimitBytes }),
     ...(generationMaxConcurrency === undefined ? {} : { generationMaxConcurrency }),
+    ...(remoteRuntimeJobWaitTimeoutMs === undefined ? {} : { remoteRuntimeJobWaitTimeoutMs }),
+    ...(remoteRuntimeJobPollIntervalMs === undefined ? {} : { remoteRuntimeJobPollIntervalMs }),
+    ...(remoteActionClaimRenewalMs === undefined ? {} : { remoteActionClaimRenewalMs }),
   };
 };
 

@@ -468,6 +468,13 @@ export const validateLocalCodexRuntimeMetadata = (
     throw new Error('Runtime metadata assertion failed: expected confirmed dangerous mode.');
   }
 
+  const hostCodexConfigKeys = ['CODEX_HOME', 'codex_home', 'host_codex_home', 'host_config_path', 'host_auth_path'] as const;
+  for (const field of hostCodexConfigKeys) {
+    if (metadata[field] !== undefined) {
+      throw new Error('Runtime metadata assertion failed: direct host Codex config/auth is not strict remote evidence.');
+    }
+  }
+
   const requiredDockerEvidence = [
     'launch_lease_id',
     'runtime_profile_revision_id',
