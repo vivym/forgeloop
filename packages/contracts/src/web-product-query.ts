@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { productObjectRefSchema } from './product-object-ref.js';
+import { productQueryObjectRefSchema } from './product-object-ref.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const queryBooleanSchema = z.preprocess((value) => {
@@ -64,7 +64,7 @@ export type InternalProductListQuery = z.infer<typeof internalProductListQuerySc
 export const productListItemSchema = z
   .object({
     id: z.string().min(1),
-    object: productObjectRefSchema,
+    object: productQueryObjectRefSchema,
     title: z.string().min(1),
     status: z.string().min(1).optional(),
     phase: z.string().min(1).optional(),
@@ -76,8 +76,8 @@ export const productListItemSchema = z
     reviewer_actor_id: z.string().min(1).optional(),
     qa_owner_actor_id: z.string().min(1).optional(),
     release_owner_actor_id: z.string().min(1).optional(),
-    parent: productObjectRefSchema.optional(),
-    related: z.array(productObjectRefSchema).default([]),
+    parent: productQueryObjectRefSchema.optional(),
+    related: z.array(productQueryObjectRefSchema).default([]),
     revision_state: z
       .object({
         current_revision_id: z.string().min(1).optional(),
@@ -88,7 +88,7 @@ export const productListItemSchema = z
       .optional(),
     package_state: z
       .object({
-        scope_ref: productObjectRefSchema,
+        scope_ref: productQueryObjectRefSchema,
         spec_revision_id: z.string().min(1).optional(),
         plan_revision_id: z.string().min(1).optional(),
         surface_type: z.string().min(1).optional(),
@@ -162,7 +162,7 @@ export const pipelineIntegrationReadinessSchema = z
     dependency_blockers: z.array(z.string().min(1)).default([]),
     contract_mock_readiness: z.array(z.string().min(1)).default([]),
     environment_requirements: z.array(z.string().min(1)).default([]),
-    waiting_package_refs: z.array(productObjectRefSchema).default([]),
+    waiting_package_refs: z.array(productQueryObjectRefSchema).default([]),
   })
   .strict();
 export type PipelineIntegrationReadiness = z.infer<typeof pipelineIntegrationReadinessSchema>;

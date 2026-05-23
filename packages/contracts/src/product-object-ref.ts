@@ -52,6 +52,9 @@ export const runtimeEvidenceObjectRefSchema = z.discriminatedUnion('type', [
 ]);
 export type RuntimeEvidenceObjectRef = z.infer<typeof runtimeEvidenceObjectRefSchema>;
 
+export const productQueryObjectRefSchema = z.union([productObjectRefSchema, runtimeEvidenceObjectRefSchema]);
+export type ProductQueryObjectRef = z.infer<typeof productQueryObjectRefSchema>;
+
 export const objectRefSchema = z.discriminatedUnion('type', [
   ...sourceObjectRefOptions,
   z.object({ type: z.literal('task'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
@@ -87,6 +90,9 @@ export const objectRefSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('attachment'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
 ]);
 export type ObjectRef = z.infer<typeof objectRefSchema>;
+
+export const legacyBoardQueryObjectRefSchema = z.union([objectRefSchema, runtimeEvidenceObjectRefSchema]);
+export type LegacyBoardQueryObjectRef = z.infer<typeof legacyBoardQueryObjectRefSchema>;
 
 export const editableObjectRefSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('initiative'), id: nonEmpty, driver_actor_id: nonEmpty.optional() }).strict(),

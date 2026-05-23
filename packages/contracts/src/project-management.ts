@@ -1,7 +1,12 @@
 import { z } from 'zod';
 
 import { attachmentRefSchema } from './attachments.js';
-import { objectRefSchema, productObjectRefSchema } from './product-object-ref.js';
+import {
+  legacyBoardQueryObjectRefSchema,
+  objectRefSchema,
+  productObjectRefSchema,
+  productQueryObjectRefSchema,
+} from './product-object-ref.js';
 
 const nonEmpty = z.string().trim().min(1);
 const isoDateTimeSchema = z.string().datetime();
@@ -541,7 +546,7 @@ export type PlanDetail = z.infer<typeof planDetailSchema>;
 export const myWorkQueueItemSchema = z
   .object({
     id: nonEmpty,
-    object_ref: productObjectRefSchema,
+    object_ref: productQueryObjectRefSchema,
     title: nonEmpty,
     attention_reason: nonEmpty,
     expected_action: nonEmpty.optional(),
@@ -676,7 +681,7 @@ export type TaskDetail = z.infer<typeof taskDetailSchema>;
 export const boardCardSchema = z
   .object({
     id: nonEmpty,
-    object_ref: productObjectRefSchema,
+    object_ref: legacyBoardQueryObjectRefSchema,
     title: nonEmpty,
     column_id: nonEmpty,
     status: nonEmpty,

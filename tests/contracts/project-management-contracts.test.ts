@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  boardCardSchema,
   bugDetailSchema,
   bugListItemSchema,
   brainstormingSessionSchema,
@@ -12,6 +13,7 @@ import {
   planDetailSchema,
   pipelineResponseSchema,
   productObjectRefSchema,
+  productQueryObjectRefSchema,
   productListQuerySchema,
   productListItemSchema,
   requirementDetailSchema,
@@ -22,6 +24,7 @@ import {
   techDebtDetailSchema,
   techDebtListItemSchema,
   taskDetailSchema,
+  myWorkQueueItemSchema,
 } from '@forgeloop/contracts';
 
 describe('project management typed object contracts', () => {
@@ -50,6 +53,25 @@ describe('project management typed object contracts', () => {
     expect(() => productObjectRefSchema.parse({ type: 'work_item', id: 'wi-1' })).toThrow();
     expect(() => productObjectRefSchema.parse({ type: 'task', id: 'task-1' })).toThrow();
     expect(() => productObjectRefSchema.parse({ type: 'plan', id: 'plan-1' })).toThrow();
+  });
+
+  it('keeps runtime evidence refs out of public product refs but allows them in query refs', () => {
+    for (const runtimeRef of [
+      { type: 'execution_package', id: 'pkg-1' },
+      { type: 'run_session', id: 'run-1' },
+      { type: 'review_packet', id: 'review-1' },
+    ] as const) {
+      expect(() => productObjectRefSchema.parse(runtimeRef)).toThrow();
+      expect(productQueryObjectRefSchema.parse(runtimeRef)).toMatchObject(runtimeRef);
+    }
+
+    for (const legacyRef of [
+      { type: 'work_item', id: 'wi-1' },
+      { type: 'task', id: 'task-1' },
+      { type: 'plan', id: 'plan-1' },
+    ] as const) {
+      expect(() => productQueryObjectRefSchema.parse(legacyRef)).toThrow();
+    }
   });
 
   it('requires persisted brainstorming evidence before a boundary can approve Spec generation', () => {
@@ -436,6 +458,87 @@ describe('project management typed object contracts', () => {
         updated_at: '2026-05-23T00:00:00.000Z',
       }),
     ).toThrow();
+  });
+
+  it('accepts runtime evidence refs only on runtime-capable query rows', () => {
+    expect(
+      productListItemSchema.parse({
+        id: 'pkg-1',
+        object: { type: 'execution_package', id: 'pkg-1', title: 'Package' },
+        title: 'Package',
+        updated_at: '2026-05-24T00:00:00.000Z',
+      }),
+    ).toMatchObject({ object: { type: 'execution_package', id: 'pkg-1' } });
+
+    expect(
+      myWorkQueueItemSchema.parse({
+        id: 'work-1',
+        object_ref: { type: 'run_session', id: 'run-1', title: 'Run' },
+        title: 'Run needs attention',
+        attention_reason: 'Interrupted',
+      }),
+    ).toMatchObject({ object_ref: { type: 'run_session', id: 'run-1' } });
+
+    expect(
+      boardCardSchema.parse({
+        id: 'card-1',
+        object_ref: { type: 'review_packet', id: 'review-1', title: 'Review' },
+        title: 'Review packet',
+        column_id: 'review',
+        status: 'waiting',
+      }),
+    ).toMatchObject({ object_ref: { type: 'review_packet', id: 'review-1' } });
+
+    for (const legacyRef of [
+      { type: 'work_item', id: 'wi-1' },
+      { type: 'task', id: 'task-1' },
+      { type: 'plan', id: 'plan-1' },
+    ] as const) {
+      expect(() =>
+        productListItemSchema.parse({
+          id: 'row-legacy',
+          object: legacyRef,
+          title: 'Legacy row',
+          updated_at: '2026-05-24T00:00:00.000Z',
+        }),
+      ).toThrow();
+      expect(() =>
+        myWorkQueueItemSchema.parse({
+          id: 'work-legacy',
+          object_ref: legacyRef,
+          title: 'Legacy work',
+          attention_reason: 'Legacy',
+        }),
+      ).toThrow();
+    }
+
+    expect(() =>
+      boardCardSchema.parse({
+        id: 'card-work-item',
+        object_ref: { type: 'work_item', id: 'wi-1' },
+        title: 'Work item card',
+        column_id: 'todo',
+        status: 'todo',
+      }),
+    ).toThrow();
+    expect(
+      boardCardSchema.parse({
+        id: 'card-task',
+        object_ref: { type: 'task', id: 'task-1', title: 'Task' },
+        title: 'Task card',
+        column_id: 'ready',
+        status: 'ready',
+      }),
+    ).toMatchObject({ object_ref: { type: 'task', id: 'task-1' } });
+    expect(
+      boardCardSchema.parse({
+        id: 'card-plan',
+        object_ref: { type: 'plan', id: 'plan-1', title: 'Plan' },
+        title: 'Plan card',
+        column_id: 'ready',
+        status: 'approved',
+      }),
+    ).toMatchObject({ object_ref: { type: 'plan', id: 'plan-1' } });
   });
 
   it('rejects public product query filters with legacy owner or work item fields', () => {
