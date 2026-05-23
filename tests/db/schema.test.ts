@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   actors,
+  attachments,
   decisions,
   execution_package_dependencies,
   execution_package_activity_state_values,
@@ -64,6 +65,7 @@ import {
   trace_events,
   trace_link_relationship_values,
   trace_links,
+  tasks,
   work_item_activity_state_values,
   work_item_gate_state_values,
   work_item_kind_values,
@@ -103,6 +105,8 @@ const requiredTables = {
   projects,
   project_repos,
   work_items,
+  tasks,
+  attachments,
   specs,
   spec_revisions,
   plans,
@@ -182,6 +186,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'automation_action_runs',
         'automation_project_settings',
         'actors',
+        'attachments',
         'artifacts',
         'command_idempotency_records',
         'codex_credential_bindings',
@@ -226,6 +231,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'trace_artifact_refs',
         'trace_events',
         'trace_links',
+        'tasks',
         'work_items',
       ].sort(),
     );
@@ -382,6 +388,10 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(execution_packages, 'requiredChecks')).toBe('PgJsonb');
     expect(columnType(execution_packages, 'requiredArtifactKinds')).toBe('PgJsonb');
     expect(columnType(execution_packages, 'allowedPaths')).toBe('PgJsonb');
+    expect(columnType(tasks, 'acceptanceChecklist')).toBe('PgJsonb');
+    expect(columnType(tasks, 'parentRef')).toBe('PgJsonb');
+    expect(columnType(tasks, 'auditedException')).toBe('PgJsonb');
+    expect(columnType(attachments, 'linkedObjectRefs')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'runSpec')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'executorResult')).toBe('PgJsonb');
     expect(columnType(run_sessions, 'runtimeMetadata')).toBe('PgJsonb');
@@ -408,6 +418,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(actors, 'id')).toBe('PgUUID');
     expect(columnType(projects, 'id')).toBe('PgUUID');
     expect(columnType(work_items, 'id')).toBe('PgUUID');
+    expect(columnType(tasks, 'id')).toBe('PgUUID');
+    expect(columnType(attachments, 'id')).toBe('PgUUID');
     expect(columnType(specs, 'id')).toBe('PgUUID');
     expect(columnType(spec_revisions, 'id')).toBe('PgUUID');
     expect(columnType(plans, 'id')).toBe('PgUUID');
@@ -467,7 +479,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(projects, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(work_items, 'driver_actor_id')).toBe('PgUUID');
     expect(columnType(work_items, 'intake_context')).toBe('PgJsonb');
+    expect(columnType(work_items, 'narrative_markdown')).toBe('PgText');
     expect(Object.keys(getTableColumns(work_items))).not.toContain('ownerActorId');
+    expect(columnType(execution_packages, 'task_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'reviewer_actor_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'qa_owner_actor_id')).toBe('PgUUID');

@@ -8,9 +8,13 @@ export interface SkeletonProps extends HTMLAttributes<HTMLDivElement> {
 
 export function Skeleton({ className, lines = 1, ...props }: SkeletonProps) {
   return (
-    <div aria-hidden="true" className={cn('fl-skeleton-group', className)} {...props}>
+    <div aria-hidden="true" className={cn('grid gap-2', className)} {...props}>
       {Array.from({ length: lines }, (_, index) => (
-        <span className="fl-skeleton" key={index} />
+        <span
+          className="block h-3.5 rounded-pill bg-surface-muted"
+          data-skeleton-line=""
+          key={index}
+        />
       ))}
     </div>
   );

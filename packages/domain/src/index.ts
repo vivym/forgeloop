@@ -1,4 +1,6 @@
 export * from './types.js';
+export * from './task.js';
+export * from './attachment.js';
 export * from './states.js';
 export * from './validators.js';
 export * from './automation.js';

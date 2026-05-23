@@ -2,17 +2,30 @@ import { vi } from 'vitest';
 
 import {
   actorId,
+  boardCards,
+  bugDetail,
+  bugListResponse,
   deliveryReadiness,
   executionPackage,
+  initiativeDetail,
+  initiativeListResponse,
+  myWorkQueueResponse,
   plan,
   planRevision,
   productLaneFixtureItemsByLane,
   projectId,
   release,
+  releaseReadinessDetail,
+  requirementDetail,
+  requirementListResponse,
   reviewPacket,
   runSession,
   spec,
   specRevision,
+  taskDetail,
+  taskListResponse,
+  techDebtDetail,
+  techDebtListResponse,
   timeline,
   workItem,
 } from './product-data';
@@ -40,17 +53,54 @@ const routeWorkItem = {
 const routeSpec = {
   ...spec,
   work_item_id: routeWorkItem.id,
+  scope_ref: { type: routeWorkItem.kind, id: routeWorkItem.id, title: routeWorkItem.title },
 };
 
 const routePlan = {
   ...plan,
   work_item_id: routeWorkItem.id,
+  scope_ref: { type: routeWorkItem.kind, id: routeWorkItem.id, title: routeWorkItem.title },
 };
 
 const routeExecutionPackage = {
   ...executionPackage,
   work_item_id: routeWorkItem.id,
+  scope_ref: { type: routeWorkItem.kind, id: routeWorkItem.id, title: routeWorkItem.title },
   objective: 'Improve release cockpit planning flow',
+};
+
+const scopeRefForItem = (item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => ({
+  type: item.kind,
+  id: item.id,
+  title: item.title,
+});
+
+const cockpitSpecFor = (artifact: typeof spec, item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => {
+  const { work_item_id: _workItemId, ...publicSpec } = artifact;
+  return { ...publicSpec, scope_ref: scopeRefForItem(item) };
+};
+
+const cockpitPlanFor = (artifact: typeof plan, item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => {
+  const { work_item_id: _workItemId, ...publicPlan } = artifact;
+  return { ...publicPlan, scope_ref: scopeRefForItem(item) };
+};
+
+const cockpitSpecRevisionFor = (revision: typeof specRevision, item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => {
+  const { work_item_id: _workItemId, ...publicRevision } = revision;
+  return { ...publicRevision, scope_ref: scopeRefForItem(item) };
+};
+
+const cockpitPlanRevisionFor = (revision: typeof planRevision, item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => {
+  const { work_item_id: _workItemId, ...publicRevision } = revision;
+  return { ...publicRevision, scope_ref: scopeRefForItem(item) };
+};
+
+const cockpitPackageFor = (
+  item: Pick<typeof workItem, 'id' | 'kind' | 'title'>,
+  executionPackageLike: typeof executionPackage,
+) => {
+  const { task_id: _taskId, work_item_id: _workItemId, ...publicPackage } = executionPackageLike;
+  return { ...publicPackage, scope_ref: scopeRefForItem(item) };
 };
 
 const routeProductActions = [
@@ -58,14 +108,14 @@ const routeProductActions = [
     id: 'open-route-work-item',
     lane_id: 'requirements',
     priority: 'primary',
-    label: 'Open work item',
+    label: 'Open requirement',
     enabled: true,
     kind: 'navigate',
     target: {
       kind: 'object',
-      object_type: 'work_item',
+      object_type: 'requirement',
       object_id: routeWorkItem.id,
-      href: `/work-items/${routeWorkItem.id}`,
+      href: `/requirements/${routeWorkItem.id}`,
     },
   },
   {
@@ -80,14 +130,14 @@ const routeProductActions = [
       type: 'run_package',
       object_type: 'execution_package',
       object_id: routeExecutionPackage.id,
-      work_item_id: routeWorkItem.id,
+      scope_ref: { type: 'requirement', id: routeWorkItem.id },
       package_id: routeExecutionPackage.id,
     },
     target: {
       kind: 'object',
       object_type: 'execution_package',
       object_id: routeExecutionPackage.id,
-      href: `/packages/${routeExecutionPackage.id}`,
+      href: `/tasks/${routeExecutionPackage.task_id}/packages/${routeExecutionPackage.id}`,
     },
   },
 ] as const;
@@ -95,7 +145,7 @@ const routeProductActions = [
 const routeProductLaneItem = {
   id: routeWorkItem.id,
   title: routeWorkItem.title,
-  object: { type: 'work_item', id: routeWorkItem.id },
+  object: { type: 'requirement', id: routeWorkItem.id },
   kind: routeWorkItem.kind,
   phase: routeWorkItem.phase,
   status: routeWorkItem.activity_state,
@@ -164,7 +214,7 @@ const productListItem = (
   gate_state: artifact.gate_state,
   resolution: artifact.resolution,
   parent: {
-    type: 'work_item',
+    type: parent.kind,
     id: parent.id,
     title: parent.title,
   },
@@ -187,11 +237,11 @@ const packageListItem = {
   title: executionPackage.objective,
   phase: executionPackage.phase,
   risk: workItem.risk,
-  owner_actor_id: executionPackage.owner_actor_id,
+  execution_owner_actor_id: executionPackage.owner_actor_id,
   reviewer_actor_id: executionPackage.reviewer_actor_id,
   qa_owner_actor_id: executionPackage.qa_owner_actor_id,
   parent: {
-    type: 'work_item',
+    type: workItem.kind,
     id: workItem.id,
     title: workItem.title,
   },
@@ -200,7 +250,7 @@ const packageListItem = {
     current_revision_id: executionPackage.plan_revision_id,
   },
   package_state: {
-    work_item_id: executionPackage.work_item_id,
+    scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
     spec_revision_id: executionPackage.spec_revision_id,
     plan_revision_id: executionPackage.plan_revision_id,
     surface_type: 'web',
@@ -219,7 +269,7 @@ const runListItem = {
   },
   title: runSession.summary ?? runSession.id,
   status: runSession.status,
-  owner_actor_id: runSession.requested_by_actor_id,
+  execution_owner_actor_id: runSession.requested_by_actor_id,
   parent: {
     type: 'execution_package',
     id: executionPackage.id,
@@ -250,7 +300,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         representative_items: [
           {
             id: workItem.id,
-            object: { type: 'work_item', id: workItem.id, title: workItem.title },
+            object: { type: workItem.kind, id: workItem.id, title: workItem.title },
             title: workItem.title,
             status: workItem.activity_state,
             phase: workItem.phase,
@@ -296,7 +346,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         representative_items: [packageListItem],
         degraded: true,
         test_acceptance: {
-          qa_owner_queues: [{ owner_actor_id: executionPackage.qa_owner_actor_id, item_count: 1 }],
+          qa_owner_queues: [{ qa_owner_actor_id: executionPackage.qa_owner_actor_id, item_count: 1 }],
           test_strategy_gaps: ['Visual smoke still needs populated route screenshots.'],
           acceptance_criteria_state: 'Acceptance criteria mapped to Web route smoke and axe checks.',
           quality_gates: ['Web typecheck', 'Web build', 'Product route smoke'],
@@ -314,7 +364,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     items: [
       {
         id: workItem.id,
-        object: { type: 'work_item', id: workItem.id, title: workItem.title },
+        object: { type: workItem.kind, id: workItem.id, title: workItem.title },
         title: workItem.title,
         status: workItem.activity_state,
         phase: workItem.phase,
@@ -327,6 +377,54 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         updated_at: workItem.updated_at ?? '2026-05-18T00:00:00.000Z',
       },
     ],
+    degraded_sources: [],
+  },
+  [`GET /query/my-work?project_id=${projectId}`]: myWorkQueueResponse,
+  [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: myWorkQueueResponse,
+  [`GET /query/requirements?project_id=${projectId}`]: requirementListResponse,
+  [`GET /query/requirements?project_id=${projectId}&limit=100`]: requirementListResponse,
+  'GET /query/requirements/req-1': requirementDetail,
+  [`GET /query/initiatives?project_id=${projectId}`]: initiativeListResponse,
+  [`GET /query/initiatives?project_id=${projectId}&limit=100`]: initiativeListResponse,
+  'GET /query/initiatives/init-1': initiativeDetail,
+  [`GET /query/tech-debt?project_id=${projectId}`]: techDebtListResponse,
+  [`GET /query/tech-debt?project_id=${projectId}&limit=100`]: techDebtListResponse,
+  'GET /query/tech-debt/td-1': techDebtDetail,
+  [`GET /query/tasks?project_id=${projectId}`]: taskListResponse,
+  [`GET /query/tasks?project_id=${projectId}&limit=100`]: taskListResponse,
+  'GET /query/tasks/task-1': taskDetail,
+  [`GET /query/bugs?project_id=${projectId}`]: bugListResponse,
+  [`GET /query/bugs?project_id=${projectId}&limit=100`]: bugListResponse,
+  'GET /query/bugs/bug-1': bugDetail,
+  [`GET /query/board?project_id=${projectId}&limit=100`]: { items: boardCards },
+  [`GET /query/reports/delivery?project_id=${projectId}&limit=100`]: {
+    id: 'delivery',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/quality?project_id=${projectId}&limit=100`]: {
+    id: 'quality',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/release-readiness?project_id=${projectId}&limit=100`]: {
+    id: 'release-readiness',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/observation?project_id=${projectId}&limit=100`]: {
+    id: 'observation',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/replay?project_id=${projectId}&limit=100`]: {
+    id: 'replay',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
     degraded_sources: [],
   },
   [`GET /query/product-lanes/requirements?project_id=${projectId}`]: productLaneResponse('requirements'),
@@ -357,8 +455,8 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     items: [productListItem(spec, workItem, 'spec')],
     degraded_sources: [],
   },
-  [`GET /specs/${spec.id}`]: spec,
-  [`GET /specs/${spec.id}/revisions`]: [specRevision],
+  [`GET /specs/${spec.id}`]: cockpitSpecFor(spec, workItem),
+  [`GET /specs/${spec.id}/revisions`]: [cockpitSpecRevisionFor(specRevision, workItem)],
   [`GET /query/plans?project_id=${projectId}`]: {
     items: [productListItem(plan, workItem, 'plan')],
     degraded_sources: [],
@@ -367,17 +465,37 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     items: [productListItem(plan, workItem, 'plan')],
     degraded_sources: [],
   },
-  [`GET /plans/${plan.id}`]: plan,
-  [`GET /plans/${plan.id}/revisions`]: [planRevision],
+  [`GET /plans/${plan.id}`]: cockpitPlanFor(plan, workItem),
+  [`GET /plans/${plan.id}/revisions`]: [cockpitPlanRevisionFor(planRevision, workItem)],
   [`GET /query/execution-packages?project_id=${projectId}&limit=100`]: {
     items: [packageListItem],
     degraded_sources: [],
+  },
+  [`GET /query/execution-packages/${executionPackage.id}/runtime-readiness`]: {
+    executor_type: 'local_codex',
+    target_kind: 'run_execution',
+    state: 'ready',
+    blockers: [],
+    generated_at: '2026-05-18T00:23:00.000Z',
+  },
+  [`GET /query/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`]: {
+    object_ref: { type: 'execution_package', id: executionPackage.id },
+    task_ref: { type: 'task', id: executionPackage.task_id },
+    href: `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`,
+    package: cockpitPackageFor(workItem, executionPackage),
   },
   [`GET /query/runs?project_id=${projectId}&limit=100`]: {
     items: [runListItem],
     degraded_sources: [],
   },
-  [`GET /execution-packages/${executionPackage.id}`]: executionPackage,
+  [`GET /query/tasks/${executionPackage.task_id}/runs/${runSession.id}`]: {
+    object_ref: { type: 'run_session', id: runSession.id },
+    task_ref: { type: 'task', id: executionPackage.task_id },
+    package_ref: { type: 'execution_package', id: executionPackage.id },
+    href: `/tasks/${executionPackage.task_id}/runs/${runSession.id}`,
+    run_session: runSession,
+  },
+  [`GET /execution-packages/${executionPackage.id}`]: cockpitPackageFor(workItem, executionPackage),
   [`GET /run-sessions/${runSession.id}`]: runSession,
   [`GET /run-sessions/${runSession.id}/events`]: {
     events: [
@@ -427,6 +545,13 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   },
   [`GET /query/reviews?project_id=${projectId}`]: [reviewPacket],
   [`GET /query/reviews/${reviewPacket.id}`]: reviewPacket,
+  [`GET /query/tasks/${executionPackage.task_id}/reviews/${reviewPacket.id}`]: {
+    object_ref: { type: 'review_packet', id: reviewPacket.id },
+    task_ref: { type: 'task', id: executionPackage.task_id },
+    package_ref: { type: 'execution_package', id: executionPackage.id },
+    href: `/tasks/${executionPackage.task_id}/reviews/${reviewPacket.id}`,
+    review_packet: reviewPacket,
+  },
   [`POST /review-packets/${reviewPacket.id}/approve`]: {
     review_packet_id: reviewPacket.id,
     status: 'completed',
@@ -439,8 +564,8 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     decision: 'changes_requested',
     recorded_at: '2026-05-18T00:31:00.000Z',
   },
-  [`GET /query/releases?project_id=${projectId}`]: { releases: [release] },
-  [`GET /query/releases?project_id=${projectId}&limit=100`]: { releases: [release] },
+  [`GET /releases?project_id=${projectId}`]: { releases: [release] },
+  [`GET /releases?project_id=${projectId}&limit=100`]: { releases: [release] },
   'POST /releases': {
     release,
     blocker_snapshot: {
@@ -455,83 +580,81 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     next_actions: [],
   },
   [`GET /query/work-item-cockpit/${workItem.id}`]: {
-    work_item: workItem,
-    current_spec: spec,
-    current_plan: plan,
-    packages: [executionPackage],
+    item: workItem,
+    current_spec: cockpitSpecFor(spec, workItem),
+    current_plan: cockpitPlanFor(plan, workItem),
+    packages: [cockpitPackageFor(workItem, executionPackage)],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(workItem),
   },
   [`GET /query/work-item-cockpit/${workItem.id}?lane=reviewer`]: {
-    work_item: workItem,
-    current_spec: spec,
-    current_plan: plan,
-    packages: [executionPackage],
+    item: workItem,
+    current_spec: cockpitSpecFor(spec, workItem),
+    current_plan: cockpitPlanFor(plan, workItem),
+    packages: [cockpitPackageFor(workItem, executionPackage)],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(workItem, [], 'reviewer'),
   },
   [`GET /query/work-item-cockpit/${workItem.id}?lane=execution-owner`]: {
-    work_item: workItem,
-    current_spec: spec,
-    current_plan: plan,
-    packages: [executionPackage],
+    item: workItem,
+    current_spec: cockpitSpecFor(spec, workItem),
+    current_plan: cockpitPlanFor(plan, workItem),
+    packages: [cockpitPackageFor(workItem, executionPackage)],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(workItem, [], 'execution-owner'),
   },
   [`GET /query/work-item-cockpit/${routeWorkItem.id}`]: {
-    work_item: routeWorkItem,
-    current_spec: routeSpec,
-    current_plan: routePlan,
-    packages: [routeExecutionPackage],
+    item: routeWorkItem,
+    current_spec: cockpitSpecFor(routeSpec, routeWorkItem),
+    current_plan: cockpitPlanFor(routePlan, routeWorkItem),
+    packages: [cockpitPackageFor(routeWorkItem, routeExecutionPackage)],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(routeWorkItem),
   },
   [`GET /query/work-item-cockpit/${routeWorkItem.id}?lane=requirements`]: {
-    work_item: routeWorkItem,
-    current_spec: routeSpec,
-    current_plan: routePlan,
-    packages: [routeExecutionPackage],
+    item: routeWorkItem,
+    current_spec: cockpitSpecFor(routeSpec, routeWorkItem),
+    current_plan: cockpitPlanFor(routePlan, routeWorkItem),
+    packages: [cockpitPackageFor(routeWorkItem, routeExecutionPackage)],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(routeWorkItem, routeProductActions, 'requirements'),
   },
   [`GET /query/work-item-cockpit/${routeWorkItem.id}?lane=reviewer`]: {
-    work_item: routeWorkItem,
-    current_spec: routeSpec,
-    current_plan: routePlan,
-    packages: [routeExecutionPackage],
+    item: routeWorkItem,
+    current_spec: cockpitSpecFor(routeSpec, routeWorkItem),
+    current_plan: cockpitPlanFor(routePlan, routeWorkItem),
+    packages: [cockpitPackageFor(routeWorkItem, routeExecutionPackage)],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(routeWorkItem, [], 'reviewer'),
   },
   [`GET /query/work-item-cockpit/${routeWorkItem.id}?lane=execution-owner`]: {
-    work_item: routeWorkItem,
-    current_spec: routeSpec,
-    current_plan: routePlan,
-    packages: [routeExecutionPackage],
+    item: routeWorkItem,
+    current_spec: cockpitSpecFor(routeSpec, routeWorkItem),
+    current_plan: cockpitPlanFor(routePlan, routeWorkItem),
+    packages: [cockpitPackageFor(routeWorkItem, routeExecutionPackage)],
     run_sessions: [runSession],
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(routeWorkItem, [], 'execution-owner'),
   },
-  [`POST /work-items/${routeWorkItem.id}/specs`]: routeSpec,
-  [`POST /work-items/${routeWorkItem.id}/plans`]: routePlan,
-  [`POST /specs/${spec.id}/generate-draft`]: specRevision,
+  [`POST /work-items/${routeWorkItem.id}/specs`]: cockpitSpecFor(routeSpec, routeWorkItem),
+  [`POST /work-items/${routeWorkItem.id}/plans`]: cockpitPlanFor(routePlan, routeWorkItem),
+  [`POST /specs/${spec.id}/generate-draft`]: cockpitSpecRevisionFor(specRevision, workItem),
   [`POST /specs/${routeSpec.id}/generate-draft`]: {
-    ...specRevision,
+    ...cockpitSpecRevisionFor(specRevision, routeWorkItem),
     id: 'spec-revision-route',
     spec_id: routeSpec.id,
-    work_item_id: routeWorkItem.id,
   },
-  [`POST /plans/${plan.id}/generate-draft`]: planRevision,
+  [`POST /plans/${plan.id}/generate-draft`]: cockpitPlanRevisionFor(planRevision, workItem),
   [`POST /plans/${routePlan.id}/generate-draft`]: {
-    ...planRevision,
+    ...cockpitPlanRevisionFor(planRevision, routeWorkItem),
     id: 'plan-revision-route',
     plan_id: routePlan.id,
-    work_item_id: routeWorkItem.id,
   },
   [`GET /query/release-cockpit/${release.id}`]: {
     release,
@@ -565,6 +688,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     checklist: [{ id: 'fixture-ready', label: 'Fixture release ready', status: 'passed', blocker_codes: [] }],
     next_actions: ['submit_for_approval'],
   },
+  [`GET /query/releases/${release.id}/readiness?project_id=${projectId}`]: releaseReadinessDetail,
   [`GET /query/replay/work_item/${workItem.id}`]: timeline,
   [`GET /query/replay/work_item/${routeWorkItem.id}`]: routeTimeline,
   [`GET /query/replay/spec/${spec.id}`]: timeline.map((entry) => ({
@@ -572,14 +696,14 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     object_type: 'spec',
     object_id: spec.id,
     summary: 'Spec planning state updated.',
-    payload: { work_item_id: workItem.id },
+    payload: { scope_ref: scopeRefForItem(workItem) },
   })),
   [`GET /query/replay/plan/${plan.id}`]: timeline.map((entry) => ({
     ...entry,
     object_type: 'plan',
     object_id: plan.id,
     summary: 'Plan planning state updated.',
-    payload: { work_item_id: workItem.id },
+    payload: { scope_ref: scopeRefForItem(workItem) },
   })),
   [`GET /query/replay/execution_package/${executionPackage.id}`]: timeline,
   [`GET /query/replay/review_packet/${reviewPacket.id}`]: timeline,
@@ -712,6 +836,14 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     decision_intents: [],
     next_actions: [],
   },
+  'POST /tasks': {
+    id: 'task-created',
+    object_ref: { type: 'task', id: 'task-created' },
+    title: 'Developer task',
+    stale_state: 'current',
+    package_generation_eligible: false,
+    href: '/tasks/task-created',
+  },
 };
 
 export function installProductApiMock(overrides: ProductApiResponseMap = {}) {
@@ -724,6 +856,9 @@ export function installProductApiMock(overrides: ProductApiResponseMap = {}) {
     if (Object.prototype.hasOwnProperty.call(responses, key)) {
       const response = responses[key];
       const body = typeof response === 'function' ? await response({ input, init, key }) : response;
+      if (body instanceof Response) {
+        return body;
+      }
       return jsonResponse(body, 200);
     }
 

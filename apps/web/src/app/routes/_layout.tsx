@@ -1,17 +1,20 @@
 import { Outlet, useLocation } from 'react-router';
 
+import { useActorContext } from '../../shared/context/actor-context';
+import { useProjectContext } from '../../shared/context/project-context';
 import { useRuntimeFlags } from '../../shared/context/runtime-flags';
 import { AppShell, SidebarNav, Topbar } from '../../shared/layout';
 
 const navItems = [
-  { label: 'Lanes', to: '/lanes', activeOn: ['/', '/lanes'] },
-  { label: 'Pipeline', to: '/pipeline' },
-  { label: 'Work Items', to: '/work-items' },
-  { label: 'Specs & Plans', to: '/specs', activeOn: ['/specs', '/plans'] },
-  { label: 'Packages', to: '/packages' },
-  { label: 'Runs', to: '/runs' },
-  { label: 'Reviews', to: '/reviews' },
+  { label: 'Dashboard', to: '/dashboard' },
+  { label: 'My Work', to: '/my-work', activeOn: ['/', '/my-work'] },
+  { label: 'Requirements', to: '/requirements', activeOn: ['/requirements', '/initiatives', '/tech-debt'] },
+  { label: 'Specs & Plans', to: '/specs-plans', activeOn: ['/specs-plans', '/specs', '/plans'] },
+  { label: 'Tasks', to: '/tasks' },
+  { label: 'Bugs', to: '/bugs' },
+  { label: 'Board', to: '/board' },
   { label: 'Releases', to: '/releases' },
+  { label: 'Reports', to: '/reports' },
 ];
 
 function isNavItemActive(pathname: string, item: { to: string; activeOn?: string[] }) {
@@ -21,6 +24,8 @@ function isNavItemActive(pathname: string, item: { to: string; activeOn?: string
 
 export default function ProductLayoutRoute() {
   const location = useLocation();
+  const { actorId } = useActorContext();
+  const { projectId } = useProjectContext();
   const runtimeFlags = useRuntimeFlags();
   const items = runtimeFlags.devToolsEnabled ? [...navItems, { label: 'Dev Tools', to: '/dev-tools' }] : navItems;
 
@@ -36,7 +41,7 @@ export default function ProductLayoutRoute() {
           }))}
         />
       }
-      topbar={<Topbar>Product workspace</Topbar>}
+      topbar={<Topbar actorId={actorId} devToolsEnabled={runtimeFlags.devToolsEnabled} projectId={projectId} />}
     >
       <Outlet />
     </AppShell>

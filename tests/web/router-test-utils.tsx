@@ -5,61 +5,116 @@ import type { RouteObject } from 'react-router';
 import { afterEach, vi } from 'vitest';
 
 import ProductLayoutRoute from '../../apps/web/src/app/routes/_layout';
+import RootIndexRoute from '../../apps/web/src/app/routes/_index';
+import BoardRoute from '../../apps/web/src/app/routes/board';
+import BugDetailRoute from '../../apps/web/src/app/routes/bugs/$bugId';
+import BugEvidenceRoute from '../../apps/web/src/app/routes/bugs/$bugId/evidence';
+import BugsRoute from '../../apps/web/src/app/routes/bugs';
+import NewBugRoute from '../../apps/web/src/app/routes/bugs/new';
+import DashboardRoute from '../../apps/web/src/app/routes/dashboard';
 import DevToolsRoute from '../../apps/web/src/app/routes/dev-tools';
-import PackageDetailRoute from '../../apps/web/src/app/routes/packages/$packageId';
-import PackagesRoute from '../../apps/web/src/app/routes/packages';
-import PipelineRoute from '../../apps/web/src/app/routes/pipeline';
+import InitiativeDetailRoute from '../../apps/web/src/app/routes/initiatives/$initiativeId';
+import InitiativeEvidenceRoute from '../../apps/web/src/app/routes/initiatives/$initiativeId/evidence';
+import InitiativesRoute from '../../apps/web/src/app/routes/initiatives';
+import NewInitiativeRoute from '../../apps/web/src/app/routes/initiatives/new';
+import MyWorkRoute from '../../apps/web/src/app/routes/my-work';
 import PlanDetailRoute from '../../apps/web/src/app/routes/plans/$planId';
 import PlanRevisionRoute from '../../apps/web/src/app/routes/plans/$planId/revisions/$revisionId';
-import PlansRoute from '../../apps/web/src/app/routes/plans';
 import ReleaseDetailRoute from '../../apps/web/src/app/routes/releases/$releaseId';
+import ReleaseEvidenceRoute from '../../apps/web/src/app/routes/releases/$releaseId/evidence';
 import ReleasesRoute from '../../apps/web/src/app/routes/releases';
-import ReviewDetailRoute from '../../apps/web/src/app/routes/reviews/$reviewPacketId';
-import ReviewsRoute from '../../apps/web/src/app/routes/reviews';
-import RunDetailRoute from '../../apps/web/src/app/routes/runs/$runSessionId';
-import RunsRoute from '../../apps/web/src/app/routes/runs';
+import DeliveryReportRoute from '../../apps/web/src/app/routes/reports/delivery';
+import ObservationReportRoute from '../../apps/web/src/app/routes/reports/observation';
+import QualityReportRoute from '../../apps/web/src/app/routes/reports/quality';
+import ReleaseReadinessReportRoute from '../../apps/web/src/app/routes/reports/release-readiness';
+import ReplayReportRoute from '../../apps/web/src/app/routes/reports/replay';
+import ReportsRoute from '../../apps/web/src/app/routes/reports';
+import RequirementEvidenceRoute from '../../apps/web/src/app/routes/requirements/$requirementId/evidence';
+import RequirementPlanRoute from '../../apps/web/src/app/routes/requirements/$requirementId/plan';
+import RequirementSpecRoute from '../../apps/web/src/app/routes/requirements/$requirementId/spec';
+import RequirementDetailRoute from '../../apps/web/src/app/routes/requirements/$requirementId';
+import RequirementsRoute from '../../apps/web/src/app/routes/requirements';
+import NewRequirementRoute from '../../apps/web/src/app/routes/requirements/new';
 import SpecDetailRoute from '../../apps/web/src/app/routes/specs/$specId';
 import SpecRevisionRoute from '../../apps/web/src/app/routes/specs/$specId/revisions/$revisionId';
-import SpecsRoute from '../../apps/web/src/app/routes/specs';
-import ProductLanesRoute from '../../apps/web/src/app/routes/lanes';
-import ProductLaneRoute from '../../apps/web/src/app/routes/lanes/$laneId';
-import WorkItemDetailRoute from '../../apps/web/src/app/routes/work-items/$workItemId';
-import WorkItemSpecPlanRoute from '../../apps/web/src/app/routes/work-items/$workItemId/spec-plan';
-import WorkItemsRoute from '../../apps/web/src/app/routes/work-items';
-import NewWorkItemRoute from '../../apps/web/src/app/routes/work-items/new';
+import SpecsPlansRoute from '../../apps/web/src/app/routes/specs-plans';
+import TaskPackageEvidenceRoute from '../../apps/web/src/app/routes/tasks/$taskId/packages/$packageId';
+import TaskReviewEvidenceRoute from '../../apps/web/src/app/routes/tasks/$taskId/reviews/$reviewPacketId';
+import TaskRunEvidenceRoute from '../../apps/web/src/app/routes/tasks/$taskId/runs/$runSessionId';
+import TaskDetailRoute from '../../apps/web/src/app/routes/tasks/$taskId';
+import TasksRoute from '../../apps/web/src/app/routes/tasks';
+import NewTaskRoute from '../../apps/web/src/app/routes/tasks/new';
+import TechDebtDetailRoute from '../../apps/web/src/app/routes/tech-debt/$techDebtId';
+import TechDebtEvidenceRoute from '../../apps/web/src/app/routes/tech-debt/$techDebtId/evidence';
+import TechDebtRoute from '../../apps/web/src/app/routes/tech-debt';
+import NewTechDebtRoute from '../../apps/web/src/app/routes/tech-debt/new';
 import { ActorProvider } from '../../apps/web/src/shared/context/actor-context';
 import { ProjectProvider } from '../../apps/web/src/shared/context/project-context';
 import { RuntimeFlagsProvider } from '../../apps/web/src/shared/context/runtime-flags';
+import { PageHeader, Section } from '../../apps/web/src/shared/layout';
+import { InlineNotice } from '../../apps/web/src/shared/ui';
 import { installProductApiMock, type ProductApiResponseMap } from './fixtures/product-api-mock';
+
+function ProductNotFoundRoute() {
+  return (
+    <>
+      <PageHeader subtitle="This product route is not available." title="Not Found" />
+      <Section title="Route unavailable">
+        <InlineNotice title="The requested product route was not found." tone="warning" />
+      </Section>
+    </>
+  );
+}
 
 const productRoutes: RouteObject[] = [
   {
     path: '/',
     Component: ProductLayoutRoute,
     children: [
-      { index: true, Component: ProductLanesRoute },
-      { path: 'lanes', Component: ProductLanesRoute },
-      { path: 'lanes/:laneId', Component: ProductLaneRoute },
-      { path: 'pipeline', Component: PipelineRoute },
-      { path: 'work-items', Component: WorkItemsRoute },
-      { path: 'work-items/new', Component: NewWorkItemRoute },
-      { path: 'work-items/:workItemId', Component: WorkItemDetailRoute },
-      { path: 'work-items/:workItemId/spec-plan', Component: WorkItemSpecPlanRoute },
-      { path: 'specs', Component: SpecsRoute },
+      { index: true, Component: RootIndexRoute },
+      { path: 'dashboard', Component: DashboardRoute },
+      { path: 'my-work', Component: MyWorkRoute },
+      { path: 'requirements', Component: RequirementsRoute },
+      { path: 'requirements/new', Component: NewRequirementRoute },
+      { path: 'requirements/:requirementId', Component: RequirementDetailRoute },
+      { path: 'requirements/:requirementId/spec', Component: RequirementSpecRoute },
+      { path: 'requirements/:requirementId/plan', Component: RequirementPlanRoute },
+      { path: 'requirements/:requirementId/evidence', Component: RequirementEvidenceRoute },
+      { path: 'initiatives', Component: InitiativesRoute },
+      { path: 'initiatives/new', Component: NewInitiativeRoute },
+      { path: 'initiatives/:initiativeId', Component: InitiativeDetailRoute },
+      { path: 'initiatives/:initiativeId/evidence', Component: InitiativeEvidenceRoute },
+      { path: 'tech-debt', Component: TechDebtRoute },
+      { path: 'tech-debt/new', Component: NewTechDebtRoute },
+      { path: 'tech-debt/:techDebtId', Component: TechDebtDetailRoute },
+      { path: 'tech-debt/:techDebtId/evidence', Component: TechDebtEvidenceRoute },
+      { path: 'specs-plans', Component: SpecsPlansRoute },
       { path: 'specs/:specId', Component: SpecDetailRoute },
       { path: 'specs/:specId/revisions/:revisionId', Component: SpecRevisionRoute },
-      { path: 'plans', Component: PlansRoute },
       { path: 'plans/:planId', Component: PlanDetailRoute },
       { path: 'plans/:planId/revisions/:revisionId', Component: PlanRevisionRoute },
-      { path: 'packages', Component: PackagesRoute },
-      { path: 'packages/:packageId', Component: PackageDetailRoute },
-      { path: 'runs', Component: RunsRoute },
-      { path: 'runs/:runSessionId', Component: RunDetailRoute },
-      { path: 'reviews', Component: ReviewsRoute },
-      { path: 'reviews/:reviewPacketId', Component: ReviewDetailRoute },
+      { path: 'tasks', Component: TasksRoute },
+      { path: 'tasks/new', Component: NewTaskRoute },
+      { path: 'tasks/:taskId', Component: TaskDetailRoute },
+      { path: 'tasks/:taskId/packages/:packageId', Component: TaskPackageEvidenceRoute },
+      { path: 'tasks/:taskId/runs/:runSessionId', Component: TaskRunEvidenceRoute },
+      { path: 'tasks/:taskId/reviews/:reviewPacketId', Component: TaskReviewEvidenceRoute },
+      { path: 'bugs', Component: BugsRoute },
+      { path: 'bugs/new', Component: NewBugRoute },
+      { path: 'bugs/:bugId', Component: BugDetailRoute },
+      { path: 'bugs/:bugId/evidence', Component: BugEvidenceRoute },
+      { path: 'board', Component: BoardRoute },
       { path: 'releases', Component: ReleasesRoute },
       { path: 'releases/:releaseId', Component: ReleaseDetailRoute },
+      { path: 'releases/:releaseId/evidence', Component: ReleaseEvidenceRoute },
+      { path: 'reports', Component: ReportsRoute },
+      { path: 'reports/delivery', Component: DeliveryReportRoute },
+      { path: 'reports/quality', Component: QualityReportRoute },
+      { path: 'reports/release-readiness', Component: ReleaseReadinessReportRoute },
+      { path: 'reports/observation', Component: ObservationReportRoute },
+      { path: 'reports/replay', Component: ReplayReportRoute },
       { path: 'dev-tools', Component: DevToolsRoute },
+      { path: '*', Component: ProductNotFoundRoute },
     ],
   },
 ];
@@ -77,10 +132,11 @@ export async function renderRoute(
     actorId?: string;
     projectId?: string;
     apiOverrides?: ProductApiResponseMap;
+    queryClient?: QueryClient;
   } = {},
 ) {
   installProductApiMock(options.apiOverrides);
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = options.queryClient ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const RoutesStub = createRoutesStub(options.routes ?? productRoutes);
 
   render(

@@ -43,6 +43,8 @@ export const resettableTables = [
   'run_sessions',
   'execution_package_dependencies',
   'execution_packages',
+  'attachments',
+  'tasks',
   'plan_revisions',
   'plans',
   'spec_revisions',

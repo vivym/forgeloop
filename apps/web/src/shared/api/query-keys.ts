@@ -1,11 +1,11 @@
-import type { ProductWorkItemRegistryQuery } from './query';
-import type { ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
+import type { MyWorkQuery, ProductWorkItemRegistryQuery, ProjectManagementListQuery } from './query';
+import type { AttachmentOwnerObjectType, ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
 
 export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
   project_id: query.project_id,
   ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
   ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
-  ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
+  ...(query.execution_owner_actor_id === undefined ? {} : { execution_owner_actor_id: query.execution_owner_actor_id }),
   ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
   ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
   ...(query.release_owner_actor_id === undefined ? {} : { release_owner_actor_id: query.release_owner_actor_id }),
@@ -30,11 +30,10 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
   ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
   ...(query.risk === undefined ? {} : { risk: query.risk }),
   ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
-  ...(query.owner_actor_id === undefined ? {} : { owner_actor_id: query.owner_actor_id }),
+  ...(query.execution_owner_actor_id === undefined ? {} : { execution_owner_actor_id: query.execution_owner_actor_id }),
   ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
   ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
   ...(query.release_owner_actor_id === undefined ? {} : { release_owner_actor_id: query.release_owner_actor_id }),
-  ...(query.work_item_id === undefined ? {} : { work_item_id: query.work_item_id }),
   ...(query.spec_id === undefined ? {} : { spec_id: query.spec_id }),
   ...(query.plan_id === undefined ? {} : { plan_id: query.plan_id }),
   ...(query.spec_revision_id === undefined ? {} : { spec_revision_id: query.spec_revision_id }),
@@ -69,7 +68,37 @@ export const normalizeProductWorkItemRegistryQuery = (
   ...(query.limit === undefined ? {} : { limit: query.limit }),
 });
 
+export const normalizeMyWorkQuery = (query: MyWorkQuery): MyWorkQuery => ({
+  project_id: query.project_id,
+  ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
+  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
+
+export const normalizeProjectManagementListQuery = (query: ProjectManagementListQuery): ProjectManagementListQuery => ({
+  project_id: query.project_id,
+  ...(query.status === undefined ? {} : { status: query.status }),
+  ...(query.risk === undefined ? {} : { risk: query.risk }),
+  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
+  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
+
 export const queryKeys = {
+  myWork: (query: MyWorkQuery) => ['my-work', normalizeMyWorkQuery(query)],
+  requirements: (query: ProjectManagementListQuery) => ['requirements', normalizeProjectManagementListQuery(query)],
+  requirement: (requirementId: string | undefined) => ['requirement', requirementId],
+  initiatives: (query: ProjectManagementListQuery) => ['initiatives', normalizeProjectManagementListQuery(query)],
+  initiative: (initiativeId: string | undefined) => ['initiative', initiativeId],
+  techDebt: (query: ProjectManagementListQuery) => ['tech-debt', normalizeProjectManagementListQuery(query)],
+  techDebtDetail: (techDebtId: string | undefined) => ['tech-debt-detail', techDebtId],
+  tasks: (query: ProjectManagementListQuery) => ['tasks', normalizeProjectManagementListQuery(query)],
+  task: (taskId: string | undefined) => ['task', taskId],
+  bugs: (query: ProjectManagementListQuery) => ['bugs', normalizeProjectManagementListQuery(query)],
+  bug: (bugId: string | undefined) => ['bug', bugId],
+  board: (query: ListProductQuery) => ['board', normalizeProductRegistryQuery(query)],
+  report: (reportId: string, query: ListProductQuery) => ['report', reportId, normalizeProductRegistryQuery(query)],
+  releaseReadiness: (releaseId: string | undefined, projectId: string) => ['release-readiness', releaseId, { project_id: projectId }],
   productLane: (laneId: ProductLaneId, query: ProductLaneQuery) => ['product-lanes', laneId, normalizeProductLaneQuery(query)],
   pipeline: (projectId: string) => ['pipeline', { projectId }],
   workItems: (projectId: string) => ['work-items', { projectId }],
@@ -90,12 +119,16 @@ export const queryKeys = {
   planRevision: (revisionId: string | undefined) => ['plan-revision', revisionId],
   packages: (query: ListProductQuery) => ['packages', normalizeProductRegistryQuery(query)],
   package: (packageId: string) => ['package', packageId],
+  packageRuntimeReadiness: (packageId: string | undefined) => ['package-runtime-readiness', packageId],
+  taskPackageEvidence: (taskId: string | undefined, packageId: string | undefined) => ['task-package-evidence', taskId, packageId],
+  taskRunEvidence: (taskId: string | undefined, runSessionId: string | undefined) => ['task-run-evidence', taskId, runSessionId],
+  taskReviewEvidence: (taskId: string | undefined, reviewPacketId: string | undefined) => ['task-review-evidence', taskId, reviewPacketId],
   runs: (query: ListProductQuery) => ['runs', normalizeProductRegistryQuery(query)],
   runEvents: (runSessionId: string, actorId: string) => ['run-events', runSessionId, { actorId }],
   run: (runSessionId: string) => ['run', runSessionId],
   reviews: (projectId: string) => ['reviews', { projectId }],
   reviewPackets: (query: ListProductQuery) => ['review-packets', normalizeProductRegistryQuery(query)],
-  review: (reviewPacketId: string) => ['review', reviewPacketId],
+  review: (reviewPacketId: string | undefined) => ['review', reviewPacketId],
   reviewPacketReplay: (reviewPacketId: string) => ['review-packet-replay', reviewPacketId],
   releases: (query: { project_id: string; release_owner_actor_id?: string; phase?: string; gate_state?: string; resolution?: string; cursor?: string; limit?: number }) => [
     'releases',
@@ -112,4 +145,18 @@ export const queryKeys = {
   releaseCockpit: (releaseId: string) => ['release-cockpit', releaseId],
   releaseReplay: (releaseId: string) => ['release-replay', releaseId],
   executionPackageReplay: (executionPackageId: string) => ['execution-package-replay', executionPackageId],
+  attachments: (query: { object_type: AttachmentOwnerObjectType; object_id: string }) => [
+    'attachments',
+    { object_type: query.object_type, object_id: query.object_id },
+  ],
+  attachment: (attachmentId: string | undefined) => ['attachment', attachmentId],
+  attachmentRender: (attachmentId: string, disposition: 'inline' | 'download') => ['attachment-render', attachmentId, { disposition }],
+  markdownDocument: (input: { object_type: string; object_id: string; validation_version: string }) => [
+    'markdown-document',
+    {
+      object_type: input.object_type,
+      object_id: input.object_id,
+      validation_version: input.validation_version,
+    },
+  ],
 } as const;

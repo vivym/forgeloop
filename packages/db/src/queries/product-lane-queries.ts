@@ -16,6 +16,11 @@ import { isOpenReviewPacketStatus } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
 import {
+  type DeliveryRunReadinessRuntimeSelection,
+  deliveryRunReadinessDisabledReason,
+  deriveDeliveryRunReadiness,
+} from './delivery-runtime-readiness';
+import {
   generatePackagesAction,
   generatePlanDraftAction,
   generateSpecDraftAction,
@@ -24,6 +29,7 @@ import {
   navigateAction,
   objectTarget,
   runPackageAction,
+  workItemScopeRef,
 } from './product-action-builders';
 import {
   buildProductLaneResponse,
@@ -37,6 +43,11 @@ import {
   type ParsedProductLaneFilters,
   type ProductLaneProjectionItem,
 } from './product-lane-types';
+
+export interface ProductLaneQueryOptions {
+  now?: string;
+  runtime_selection?: DeliveryRunReadinessRuntimeSelection;
+}
 
 const staleAfterMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -55,6 +66,27 @@ const isStale = (updatedAt: string): boolean => {
 };
 
 const uniqueStrings = (values: readonly (string | undefined)[]): string[] => [...new Set(values.filter((value): value is string => value !== undefined))];
+
+const workItemObjectType = (workItem: Pick<WorkItem, 'kind'>): ProductObjectType => workItem.kind;
+
+const workItemHref = (workItem: Pick<WorkItem, 'id' | 'kind'>): string => {
+  switch (workItem.kind) {
+    case 'initiative':
+      return `/initiatives/${workItem.id}`;
+    case 'requirement':
+      return `/requirements/${workItem.id}`;
+    case 'bug':
+      return `/bugs/${workItem.id}`;
+    case 'tech_debt':
+      return `/tech-debt/${workItem.id}`;
+  }
+};
+
+const workItemRef = (workItem: Pick<WorkItem, 'id' | 'kind' | 'title'>): ProductLaneProjectionItem['parent'] => ({
+  type: workItemObjectType(workItem),
+  id: workItem.id,
+  title: workItem.title,
+});
 
 const itemBase = (
   input: {
@@ -75,8 +107,8 @@ const itemBase = (
     actorIdValues?: readonly string[] | undefined;
     driverActorId?: string | undefined;
     driverActorIdValues?: readonly string[] | undefined;
-    ownerActorId?: string | undefined;
-    ownerActorIdValues?: readonly string[] | undefined;
+    executionOwnerActorId?: string | undefined;
+    executionOwnerActorIdValues?: readonly string[] | undefined;
     reviewerActorId?: string | undefined;
     reviewerActorIdValues?: readonly string[] | undefined;
     qaOwnerActorId?: string | undefined;
@@ -119,8 +151,8 @@ const itemBase = (
     ...(input.actorIdValues === undefined ? {} : { actor_id_values: input.actorIdValues }),
     ...(input.driverActorId === undefined ? {} : { driver_actor_id: input.driverActorId }),
     ...(input.driverActorIdValues === undefined ? {} : { driver_actor_id_values: input.driverActorIdValues }),
-    ...(input.ownerActorId === undefined ? {} : { owner_actor_id: input.ownerActorId }),
-    ...(input.ownerActorIdValues === undefined ? {} : { owner_actor_id_values: input.ownerActorIdValues }),
+    ...(input.executionOwnerActorId === undefined ? {} : { execution_owner_actor_id: input.executionOwnerActorId }),
+    ...(input.executionOwnerActorIdValues === undefined ? {} : { execution_owner_actor_id_values: input.executionOwnerActorIdValues }),
     ...(input.reviewerActorId === undefined ? {} : { reviewer_actor_id: input.reviewerActorId }),
     ...(input.reviewerActorIdValues === undefined ? {} : { reviewer_actor_id_values: input.reviewerActorIdValues }),
     ...(input.qaOwnerActorId === undefined ? {} : { qa_owner_actor_id: input.qaOwnerActorId }),
@@ -158,8 +190,8 @@ const workItemAction = (laneId: ProductLaneId, workItem: WorkItem, priority: 'pr
     id: `open-work-item-${workItem.id}`,
     laneId,
     priority,
-    label: 'Open Work Item',
-    target: objectTarget('work_item', workItem.id, `/work-items/${workItem.id}`),
+    label: 'Open item',
+    target: objectTarget(workItemObjectType(workItem), workItem.id, workItemHref(workItem)),
   });
 
 const workItemLaneItem = (laneId: ProductLaneId, workItem: WorkItem): ProductLaneProjectionItem =>
@@ -168,11 +200,11 @@ const workItemLaneItem = (laneId: ProductLaneId, workItem: WorkItem): ProductLan
       id: workItem.id,
       laneId,
       title: workItem.title,
-      object: { type: 'work_item', id: workItem.id },
+      object: { type: workItemObjectType(workItem), id: workItem.id },
       projectId: workItem.project_id,
       updatedAt: workItem.updated_at,
       workItem,
-      surfaceType: 'work_item',
+      surfaceType: workItem.kind,
       driverActorId: workItem.driver_actor_id,
       blocked: workItem.activity_state === 'awaiting_ai' || workItem.gate_state.includes('changes_requested'),
     },
@@ -205,7 +237,7 @@ const specPlanItem = async (
       laneId,
       title: revision?.summary ?? workItem.title,
       object: { type: objectType, id: item.id },
-      parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+      parent: workItemRef(workItem),
       projectId: workItem.project_id,
       updatedAt: item.updated_at,
       workItem,
@@ -226,9 +258,8 @@ const packageItem = (
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const actions = [
-    openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', `/packages/${executionPackage.id}`),
-  ];
+  const packageHref = taskPackageHref(executionPackage);
+  const actions = packageHref === undefined ? [] : [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', packageHref)];
 
   if (executionPackage.phase === 'draft' || executionPackage.gate_state === 'changes_requested') {
     actions.unshift(
@@ -237,10 +268,10 @@ const packageItem = (
         laneId,
         priority: 'primary',
         label: 'Mark package ready',
-        workItemId: workItem.id,
+        scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
-        target: objectTarget('execution_package', executionPackage.id, `/packages/${executionPackage.id}`),
+        ...(packageHref === undefined ? {} : { target: objectTarget('execution_package', executionPackage.id, packageHref) }),
       }),
     );
   }
@@ -252,9 +283,9 @@ const packageItem = (
         laneId,
         priority: 'primary',
         label: 'Run package',
-        workItemId: workItem.id,
+        scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
-        target: objectTarget('execution_package', executionPackage.id, `/packages/${executionPackage.id}`),
+        ...(packageHref === undefined ? {} : { target: objectTarget('execution_package', executionPackage.id, packageHref) }),
       }),
     );
   }
@@ -265,7 +296,7 @@ const packageItem = (
       laneId,
       title: executionPackage.objective,
       object: { type: 'execution_package', id: executionPackage.id },
-      parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+      parent: workItemRef(workItem),
       projectId: executionPackage.project_id,
       updatedAt: executionPackage.updated_at,
       workItem,
@@ -274,7 +305,7 @@ const packageItem = (
       status: executionPackage.gate_state,
       gateState: executionPackage.gate_state,
       resolution: executionPackage.resolution,
-      ownerActorId: executionPackage.owner_actor_id,
+      executionOwnerActorId: executionPackage.owner_actor_id,
       reviewerActorId: executionPackage.reviewer_actor_id,
       qaOwnerActorId: executionPackage.qa_owner_actor_id,
       blocked: executionPackage.activity_state === 'blocked' || executionPackage.blocked_reason !== undefined,
@@ -287,14 +318,15 @@ const packageReadOnlyItem = (
   laneId: ProductLaneId,
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
-): ProductLaneProjectionItem =>
-  itemBase(
+): ProductLaneProjectionItem => {
+  const packageHref = taskPackageHref(executionPackage);
+  return itemBase(
     {
       id: executionPackage.id,
       laneId,
       title: executionPackage.objective,
       object: { type: 'execution_package', id: executionPackage.id },
-      parent: { type: 'work_item', id: workItem.id, title: workItem.title },
+      parent: workItemRef(workItem),
       projectId: executionPackage.project_id,
       updatedAt: executionPackage.updated_at,
       workItem,
@@ -303,21 +335,23 @@ const packageReadOnlyItem = (
       status: executionPackage.gate_state,
       gateState: executionPackage.gate_state,
       resolution: executionPackage.resolution,
-      ownerActorId: executionPackage.owner_actor_id,
+      executionOwnerActorId: executionPackage.owner_actor_id,
       reviewerActorId: executionPackage.reviewer_actor_id,
       qaOwnerActorId: executionPackage.qa_owner_actor_id,
       blocked: executionPackage.activity_state === 'blocked' || executionPackage.blocked_reason !== undefined,
     },
-    [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', `/packages/${executionPackage.id}`)],
+    packageHref === undefined ? [] : [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', packageHref)],
   );
+};
 
 const reviewPacketItem = (
   laneId: ProductLaneId,
   reviewPacket: ReviewPacket,
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
-): ProductLaneProjectionItem =>
-  itemBase(
+): ProductLaneProjectionItem => {
+  const reviewHref = taskReviewHref(executionPackage, reviewPacket.id);
+  return itemBase(
     {
       id: reviewPacket.id,
       laneId,
@@ -334,8 +368,15 @@ const reviewPacketItem = (
       reviewerActorId: reviewPacket.reviewer_actor_id,
       blocked: reviewPacket.requested_changes.length > 0,
     },
-    [openObjectAction(laneId, 'review_packet', reviewPacket.id, 'Open Review', `/reviews/${reviewPacket.id}`)],
+    reviewHref === undefined ? [] : [openObjectAction(laneId, 'review_packet', reviewPacket.id, 'Open Review', reviewHref)],
   );
+};
+
+const taskPackageHref = (executionPackage: ExecutionPackage) =>
+  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`;
+
+const taskReviewHref = (executionPackage: ExecutionPackage, reviewPacketId: string) =>
+  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/reviews/${reviewPacketId}`;
 
 const releaseItem = async (
   repository: DeliveryRepository,
@@ -499,14 +540,14 @@ const loadProductLaneCandidates = async (
     const workItemRows = [...workItemGroups.values()].map(({ workItem, qaOwnerActorIds }) =>
       itemBase(
         {
-          id: `work_item:${workItem.id}`,
+          id: `${workItem.kind}:${workItem.id}`,
           laneId,
           title: workItem.title,
-          object: { type: 'work_item', id: workItem.id },
+          object: { type: workItemObjectType(workItem), id: workItem.id },
           projectId: workItem.project_id,
           updatedAt: workItem.updated_at,
           workItem,
-          surfaceType: 'work_item',
+          surfaceType: workItem.kind,
           driverActorId: workItem.driver_actor_id,
           qaOwnerActorId: qaOwnerActorIds[0],
           qaOwnerActorIdValues: qaOwnerActorIds,
@@ -592,14 +633,83 @@ const buildManagerLane = async (
   });
 };
 
+type ProductLaneAction = ProductLaneResponse['items'][number]['actions'][number];
+
+const isRunPackageAction = (
+  action: ProductLaneAction,
+): action is ProductLaneAction & { kind: 'command'; command: { type: 'run_package'; package_id: string } } =>
+  action.kind === 'command' && action.command.type === 'run_package';
+
+const gateVisibleRunPackageActions = async (
+  repository: DeliveryRepository,
+  response: ProductLaneResponse,
+  options: ProductLaneQueryOptions,
+): Promise<ProductLaneResponse> => {
+  const packageIds = uniqueStrings(
+    response.items.flatMap((item) =>
+      item.actions.flatMap((action) => (isRunPackageAction(action) ? [action.command.package_id] : [])),
+    ),
+  );
+  if (packageIds.length === 0) {
+    return response;
+  }
+
+  const readinessNow = options.now ?? new Date().toISOString();
+  const disabledReasons = new Map(
+    await Promise.all(
+      packageIds.map(async (packageId) => {
+        const executionPackage = await repository.getExecutionPackage(packageId);
+        return [
+          packageId,
+          executionPackage === undefined
+            ? undefined
+            : deliveryRunReadinessDisabledReason(
+                await deriveDeliveryRunReadiness(repository, {
+                  executionPackage,
+                  now: readinessNow,
+                  ...(options.runtime_selection === undefined ? {} : { runtime_selection: options.runtime_selection }),
+                }),
+              ),
+        ] as const;
+      }),
+    ),
+  );
+
+  return productLaneResponseSchema.parse({
+    ...response,
+    items: response.items.map((item) => ({
+      ...item,
+      actions: item.actions.map((action) => {
+        if (!isRunPackageAction(action)) {
+          return action;
+        }
+        const disabledReason = disabledReasons.get(action.command.package_id);
+        return disabledReason === undefined
+          ? action
+          : {
+              ...action,
+              enabled: false,
+              disabled_reason: disabledReason,
+              blocked_reason: disabledReason,
+            };
+      }),
+    })),
+  });
+};
+
 export async function getProductLane(
   repository: DeliveryRepository,
   laneId: ProductLaneId,
   filters: ParsedProductLaneFilters,
+  options: ProductLaneQueryOptions = {},
 ): Promise<ProductLaneResponse> {
   if (laneId === 'manager') {
     return buildManagerLane(repository, filters);
   }
   const items = await loadProductLaneCandidates(repository, laneId, filters);
-  return productLaneResponseSchema.parse(buildProductLaneResponse(laneId, items, filters));
+  return gateVisibleRunPackageActions(
+    repository,
+    productLaneResponseSchema.parse(buildProductLaneResponse(laneId, items, filters)),
+    options,
+  );
 }

@@ -175,6 +175,7 @@ export async function runDeliveryRepositoryContract(repository: DeliveryReposito
     project_id: ids.project,
     kind: 'requirement',
     title: 'Ship P1 repository contract',
+    narrative_markdown: '',
     goal: 'Persist the release-ready delivery graph.',
     success_criteria: ['Repository contract passes for memory and Drizzle.'],
     priority: 'p1',

@@ -9,7 +9,7 @@ import {
   useSubmitSpecForApprovalMutation,
 } from '../../shared/api/hooks';
 import type { SpecPlan } from '../../shared/api/types';
-import { Button, Textarea } from '../../shared/ui';
+import { Button, InlineNotice, Textarea } from '../../shared/ui';
 
 export type SpecPlanLifecycleKind = 'spec' | 'plan';
 
@@ -78,33 +78,31 @@ export function SpecPlanLifecycleActions({ actorId, artifact, kind, workItemId }
 
   if (artifact === null || artifact === undefined) {
     return (
-      <div className="stack-form compact">
-        <p className="empty">No {label} artifact is available for lifecycle actions.</p>
+      <div className="grid gap-3">
+        <InlineNotice title={`No ${label} artifact is available for lifecycle actions.`} />
       </div>
     );
   }
 
   if (!artifact.current_revision_id) {
     return (
-      <div className="stack-form compact">
-        <p className="empty">{missingRevisionMessage(label)}</p>
+      <div className="grid gap-3">
+        <InlineNotice title={missingRevisionMessage(label)} />
       </div>
     );
   }
 
   if (isStrictlyApproved(artifact)) {
     return (
-      <div className="stack-form compact">
-        <p className="status-line">
-          {label} approved at revision {artifact.approved_revision_id}.
-        </p>
+      <div className="grid gap-3">
+        <InlineNotice title={`${label} approved at revision ${artifact.approved_revision_id}.`} tone="success" />
       </div>
     );
   }
 
   if (canSubmit(artifact)) {
     return (
-      <div className="stack-form compact">
+      <div className="grid gap-3">
         <Button
           disabled={isPending}
           loading={submitMutation.isPending}
@@ -120,9 +118,9 @@ export function SpecPlanLifecycleActions({ actorId, artifact, kind, workItemId }
 
   if (canReview(artifact)) {
     return (
-      <div className="stack-form compact">
-        <label className="stack-form compact">
-          <span>{label} approval rationale</span>
+      <div className="grid gap-3">
+        <label className="grid gap-2">
+          <span className="text-sm font-medium text-text-secondary">{label} approval rationale</span>
           <Textarea
             onChange={(event) => setApproveRationale(event.currentTarget.value)}
             rows={2}
@@ -145,8 +143,8 @@ export function SpecPlanLifecycleActions({ actorId, artifact, kind, workItemId }
         >
           Approve {label}
         </Button>
-        <label className="stack-form compact">
-          <span>{label} change rationale</span>
+        <label className="grid gap-2">
+          <span className="text-sm font-medium text-text-secondary">{label} change rationale</span>
           <Textarea
             invalid={!changeRationaleReady && changeRationale.length > 0}
             onChange={(event) => setChangeRationale(event.currentTarget.value)}
@@ -179,10 +177,11 @@ export function SpecPlanLifecycleActions({ actorId, artifact, kind, workItemId }
   }
 
   return (
-    <div className="stack-form compact">
-      <p className="empty">
-        {label} lifecycle actions are blocked while status is {artifact.status} and gate is {artifact.gate_state}.
-      </p>
+    <div className="grid gap-3">
+      <InlineNotice
+        title={`${label} lifecycle actions are blocked while status is ${artifact.status} and gate is ${artifact.gate_state}.`}
+        tone="warning"
+      />
     </div>
   );
 }
@@ -197,11 +196,11 @@ function missingRevisionMessage(label: 'Spec' | 'Plan') {
 
 function LifecycleFeedback({ error, pending }: { error: string | null; pending: string | null }) {
   if (error) {
-    return <p className="empty">{error}</p>;
+    return <InlineNotice title={error} tone="danger" />;
   }
 
   if (pending) {
-    return <p className="status-line">{pending}</p>;
+    return <InlineNotice title={pending} tone="info" />;
   }
 
   return null;

@@ -24,6 +24,7 @@ import {
   validatePackageEditAllowed,
 } from '@forgeloop/domain';
 import type { DeliveryRepository } from '@forgeloop/db';
+import type { ObjectRef } from '@forgeloop/contracts';
 
 import { AuditWriterService } from '../audit/audit-writer.service';
 import type { ActorContext } from '../auth/actor-context';
@@ -52,6 +53,8 @@ type PackageContext = {
   plan: Plan;
   planRevision: PlanRevision;
 };
+
+export type PublicExecutionPackage = Omit<ExecutionPackage, 'work_item_id'> & { scope_ref: ObjectRef };
 
 const productGateRejectedActorClasses = new Set<AutomationActorClass>([
   'automation_daemon',
@@ -126,18 +129,34 @@ export class ExecutionPackageService {
     });
   }
 
+  async generatePublicPackages(planRevisionId: string): Promise<PublicExecutionPackage[]> {
+    return Promise.all((await this.generatePackages(planRevisionId)).map((executionPackage) => this.toPublicExecutionPackage(executionPackage)));
+  }
+
   async createExecutionPackage(planRevisionId: string, dto: CreateExecutionPackageDto): Promise<ExecutionPackage> {
     return this.repository.withObjectLock(`plan-revision:${planRevisionId}`, async (repository) =>
       this.createExecutionPackageFromContext(repository, await this.packageContextFromRepository(repository, planRevisionId), dto, undefined, 'manual'),
     );
   }
 
+  async createPublicExecutionPackage(planRevisionId: string, dto: CreateExecutionPackageDto): Promise<PublicExecutionPackage> {
+    return this.toPublicExecutionPackage(await this.createExecutionPackage(planRevisionId, dto));
+  }
+
   listExecutionPackages(workItemId: string): Promise<ExecutionPackage[]> {
     return this.repository.listExecutionPackagesForWorkItem(workItemId);
   }
 
+  async listPublicExecutionPackages(workItemId: string): Promise<PublicExecutionPackage[]> {
+    return Promise.all((await this.listExecutionPackages(workItemId)).map((executionPackage) => this.toPublicExecutionPackage(executionPackage)));
+  }
+
   async getExecutionPackage(packageId: string): Promise<ExecutionPackage> {
     return this.requireFound(await this.repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
+  }
+
+  async getPublicExecutionPackage(packageId: string): Promise<PublicExecutionPackage> {
+    return this.toPublicExecutionPackage(await this.getExecutionPackage(packageId));
   }
 
   async patchExecutionPackage(packageId: string, dto: PatchExecutionPackageDto): Promise<ExecutionPackage> {
@@ -202,6 +221,10 @@ export class ExecutionPackageService {
     });
   }
 
+  async patchPublicExecutionPackage(packageId: string, dto: PatchExecutionPackageDto): Promise<PublicExecutionPackage> {
+    return this.toPublicExecutionPackage(await this.patchExecutionPackage(packageId, dto));
+  }
+
   async markPackageReady(packageId: string, dto: MarkPackageReadyDto, actorContext?: ActorContext): Promise<ExecutionPackage> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     return this.repository.withObjectLock(`execution-package:${packageId}`, async (repository) => {
@@ -219,6 +242,24 @@ export class ExecutionPackageService {
       await this.historyWithRepository(repository, 'execution_package', packageId, statusForPackage(executionPackage), statusForPackage(updated), actorId);
       return updated;
     });
+  }
+
+  async markPublicPackageReady(
+    packageId: string,
+    dto: MarkPackageReadyDto,
+    actorContext?: ActorContext,
+  ): Promise<PublicExecutionPackage> {
+    return this.toPublicExecutionPackage(await this.markPackageReady(packageId, dto, actorContext));
+  }
+
+  private async toPublicExecutionPackage(executionPackage: ExecutionPackage): Promise<PublicExecutionPackage> {
+    const { work_item_id: workItemId, ...publicPackage } = executionPackage;
+    return { ...publicPackage, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
+  }
+
+  private async scopeRefForWorkItemId(workItemId: string): Promise<ObjectRef> {
+    const workItem = this.requireFound(await this.repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
+    return { type: workItem.kind, id: workItem.id, title: workItem.title } as ObjectRef;
   }
 
   async packageContextFromRepository(repository: DeliveryRepository, planRevisionId: string): Promise<PackageContext> {

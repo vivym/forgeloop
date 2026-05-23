@@ -22,22 +22,22 @@ export class SpecPlanController {
 
   @Post('work-items/:workItemId/specs')
   createSpec(@Param('workItemId') workItemId: string) {
-    return this.specPlanService.createSpec(workItemId);
+    return this.specPlanService.createPublicSpec(workItemId);
   }
 
   @Get('specs/:specId')
   getSpec(@Param('specId') specId: string) {
-    return this.specPlanService.getSpec(specId);
+    return this.specPlanService.getPublicSpec(specId);
   }
 
   @Get('specs/:specId/revisions')
   listSpecRevisions(@Param('specId') specId: string) {
-    return this.specPlanService.listSpecRevisions(specId);
+    return this.specPlanService.listPublicSpecRevisions(specId);
   }
 
   @Get('spec-revisions/:specRevisionId')
   getSpecRevision(@Param('specRevisionId') specRevisionId: string) {
-    return this.specPlanService.getSpecRevision(specRevisionId);
+    return this.specPlanService.getPublicSpecRevision(specRevisionId);
   }
 
   @Post('specs/:specId/revisions')
@@ -45,12 +45,12 @@ export class SpecPlanController {
     @Param('specId') specId: string,
     @Body(new ZodValidationPipe(createSpecRevisionSchema)) body: CreateSpecRevisionDto,
   ) {
-    return this.specPlanService.createSpecRevision(specId, body);
+    return this.specPlanService.createPublicSpecRevision(specId, body);
   }
 
   @Post('specs/:specId/generate-draft')
   generateSpecDraft(@Param('specId') specId: string) {
-    return this.specPlanService.generateSpecDraft(specId);
+    return this.specPlanService.generatePublicSpecDraft(specId);
   }
 
   @Post('specs/:specId/submit-for-approval')
@@ -59,7 +59,7 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.specPlanService.submitSpecForApproval(specId, body, actorContextFromHeaders(headers));
+    return this.specPlanService.submitPublicSpecForApproval(specId, body, actorContextFromHeaders(headers));
   }
 
   @Post('specs/:specId/approve')
@@ -68,7 +68,7 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(approveArtifactCommandSchema)) body: ApproveArtifactCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.specPlanService.approveSpec(specId, body, actorContextFromHeaders(headers));
+    return this.specPlanService.approvePublicSpec(specId, body, actorContextFromHeaders(headers));
   }
 
   @Post('specs/:specId/request-changes')
@@ -77,27 +77,27 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(requestArtifactChangesCommandSchema)) body: RequestArtifactChangesCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.specPlanService.requestSpecChanges(specId, body, actorContextFromHeaders(headers));
+    return this.specPlanService.requestPublicSpecChanges(specId, body, actorContextFromHeaders(headers));
   }
 
   @Post('work-items/:workItemId/plans')
   createPlan(@Param('workItemId') workItemId: string) {
-    return this.specPlanService.createPlan(workItemId);
+    return this.specPlanService.createPublicPlan(workItemId);
   }
 
   @Get('plans/:planId')
   getPlan(@Param('planId') planId: string) {
-    return this.specPlanService.getPlan(planId);
+    return this.specPlanService.getPublicPlan(planId);
   }
 
   @Get('plans/:planId/revisions')
   listPlanRevisions(@Param('planId') planId: string) {
-    return this.specPlanService.listPlanRevisions(planId);
+    return this.specPlanService.listPublicPlanRevisions(planId);
   }
 
   @Get('plan-revisions/:planRevisionId')
   getPlanRevision(@Param('planRevisionId') planRevisionId: string) {
-    return this.specPlanService.getPlanRevision(planRevisionId);
+    return this.specPlanService.getPublicPlanRevision(planRevisionId);
   }
 
   @Post('plans/:planId/revisions')
@@ -105,12 +105,12 @@ export class SpecPlanController {
     @Param('planId') planId: string,
     @Body(new ZodValidationPipe(createPlanRevisionSchema)) body: CreatePlanRevisionDto,
   ) {
-    return this.specPlanService.createPlanRevision(planId, body);
+    return this.specPlanService.createPublicPlanRevision(planId, body);
   }
 
   @Post('plans/:planId/generate-draft')
   generatePlanDraft(@Param('planId') planId: string) {
-    return this.specPlanService.generatePlanDraft(planId);
+    return this.specPlanService.generatePublicPlanDraft(planId);
   }
 
   @Post('plans/:planId/submit-for-approval')
@@ -119,7 +119,7 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.specPlanService.submitPlanForApproval(planId, body, actorContextFromHeaders(headers));
+    return this.specPlanService.submitPublicPlanForApproval(planId, body, actorContextFromHeaders(headers));
   }
 
   @Post('plans/:planId/approve')
@@ -128,7 +128,7 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(approveArtifactCommandSchema)) body: ApproveArtifactCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.specPlanService.approvePlan(planId, body, actorContextFromHeaders(headers));
+    return this.specPlanService.approvePublicPlan(planId, body, actorContextFromHeaders(headers));
   }
 
   @Post('plans/:planId/request-changes')
@@ -137,6 +137,6 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(requestArtifactChangesCommandSchema)) body: RequestArtifactChangesCommandDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.specPlanService.requestPlanChanges(planId, body, actorContextFromHeaders(headers));
+    return this.specPlanService.requestPublicPlanChanges(planId, body, actorContextFromHeaders(headers));
   }
 }

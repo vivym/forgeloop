@@ -4,6 +4,7 @@ import request from 'supertest';
 import type { ArtifactRef, CheckResult, ExecutorResult, RunSpec, SelfReviewResult } from '@forgeloop/contracts';
 import type {
   Artifact,
+  CodexRuntimeProfileRevision,
   ExecutionPackage,
   Plan,
   PlanRevision,
@@ -16,7 +17,14 @@ import type {
   SpecRevision,
   WorkItem,
 } from '../../packages/domain/src/index';
-import { transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src/index';
+import {
+  codexCanonicalDigest,
+  codexCredentialPayloadDigest,
+  codexRuntimeNetworkPolicyDigest,
+  codexRuntimeProfileRevisionDigest,
+  transitionExecutionPackage,
+  transitionRunSession,
+} from '../../packages/domain/src/index';
 import { buildPackageRuntimePolicySnapshot, runtimePolicyFromDocument } from '../../packages/executor/src/index';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
@@ -30,6 +38,11 @@ import { createWorkflowPolicyRepoRoot } from './runtime-policy-repo';
 
 const now = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
+const runtimeNow = '2026-05-20T00:00:00.000Z';
+const expiresAt = '2026-05-20T01:00:00.000Z';
+const digestA = `sha256:${'a'.repeat(64)}`;
+const digestB = `sha256:${'b'.repeat(64)}`;
+const digestC = `sha256:${'c'.repeat(64)}`;
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const actorQa = 'actor-qa';
@@ -114,6 +127,35 @@ const packagePolicyFieldsFor = (executionPackage: ExecutionPackage): Pick<
           forbidden_paths: executionPackage.forbidden_paths,
         },
         observability: { public_summary: 'Required checks and package path policy are frozen for this test package.' },
+      },
+      markdownBody: '',
+      loadedAt: now,
+    }),
+    executionPackageChecks: executionPackage.required_checks,
+    executionPackagePathPolicy: {
+      allowed_paths: executionPackage.allowed_paths,
+      forbidden_paths: executionPackage.forbidden_paths,
+    },
+    validationStrategy: 'checks_required',
+    sourceMutationPolicy: executionPackage.source_mutation_policy,
+  }),
+});
+
+const localCodexPackagePolicyFieldsFor = (executionPackage: ExecutionPackage): ReturnType<typeof packagePolicyFieldsFor> => ({
+  validation_strategy: 'checks_required',
+  validation_strategy_version: 1,
+  validation_public_summary: 'Required checks and local Codex package path policy are frozen for this test package.',
+  policy_snapshot_status: 'captured',
+  policy_snapshot_version: 1,
+  package_policy_snapshot: buildPackageRuntimePolicySnapshot({
+    loadedPolicy: runtimePolicyFromDocument({
+      document: {
+        codex: { primary_executor: 'app_server', network_mode: 'disabled' },
+        path_policy: {
+          allowed_paths: executionPackage.allowed_paths,
+          forbidden_paths: executionPackage.forbidden_paths,
+        },
+        observability: { public_summary: 'Required checks and local Codex package path policy are frozen for this test package.' },
       },
       markdownBody: '',
       loadedAt: now,
@@ -414,6 +456,249 @@ export const seedReadyExecutionPackage = async (repository: DeliveryRepository):
   return records.executionPackage;
 };
 
+export const seedReadyLocalCodexExecutionPackage = async (repository: DeliveryRepository): Promise<ExecutionPackage> => {
+  const executionPackage = await seedReadyExecutionPackage(repository);
+  const localCodexPackage = {
+    ...executionPackage,
+    ...localCodexPackagePolicyFieldsFor(executionPackage),
+  };
+  await repository.saveExecutionPackage(localCodexPackage);
+  return localCodexPackage;
+};
+
+const baseRuntimeProfileRevision = (
+  executionPackage: ExecutionPackage,
+  targetKind: 'generation' | 'run_execution',
+  suffix: string,
+): CodexRuntimeProfileRevision => {
+  const codexConfigToml =
+    targetKind === 'run_execution'
+      ? 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n'
+      : 'approval_policy = "never"\nsandbox_mode = "read-only"\n';
+  const revisionWithoutDigest: CodexRuntimeProfileRevision = {
+    id: `profile-${targetKind}-revision-${suffix}`,
+    profile_id: `profile-${targetKind}-${suffix}`,
+    revision_number: 1,
+    status: 'active',
+    environment: 'test',
+    docker_image: 'ghcr.io/forgeloop/codex-worker:test',
+    docker_image_digest: digestA,
+    target_kind: targetKind,
+    source_access_mode: targetKind === 'run_execution' ? 'path_policy_scoped' : 'artifact_only',
+    codex_config_toml: codexConfigToml,
+    codex_config_digest: codexCanonicalDigest(codexConfigToml),
+    expected_effective_config_digest: digestB,
+    effective_config_assertions:
+      targetKind === 'run_execution'
+        ? {
+            target_kind: 'run_execution',
+            approval_policy: 'never',
+            sandbox_type: 'danger-full-access',
+            writable_roots_policy: 'task_workspace_only',
+          }
+        : {
+            target_kind: 'generation',
+            approval_policy: 'never',
+            source_write_policy: 'artifact_only',
+            forbidden_writable_roots: ['workspace'],
+          },
+    app_server_required: true,
+    allowed_driver_kind: 'app_server',
+    network_policy: { mode: 'disabled' },
+    resource_limits: {
+      cpu_ms: 120_000,
+      memory_mb: 1024,
+      pids: 64,
+      fds: 256,
+      workspace_bytes: 268_435_456,
+      artifact_bytes: 134_217_728,
+      timeout_ms: 120_000,
+      output_limit_bytes: 1_000_000,
+      run_output_limit_bytes: 5_000_000,
+    },
+    docker_policy: {
+      network_disabled: true,
+      app_server_only: true,
+      rootless: true,
+      read_only_rootfs: true,
+      no_new_privileges: true,
+      drop_capabilities: ['ALL'],
+    },
+    allowed_scopes: [{ project_id: executionPackage.project_id, repo_id: executionPackage.repo_id }],
+    profile_digest: digestC,
+    created_by_actor_id: actorOwner,
+    created_at: now,
+  };
+  return { ...revisionWithoutDigest, profile_digest: codexRuntimeProfileRevisionDigest(revisionWithoutDigest) };
+};
+
+export const seedActiveRunExecutionProfile = async (
+  repository: DeliveryRepository,
+  executionPackage: ExecutionPackage,
+  suffix = executionPackage.id,
+): Promise<CodexRuntimeProfileRevision> => {
+  const revision = baseRuntimeProfileRevision(executionPackage, 'run_execution', suffix);
+  await repository.createCodexRuntimeProfileWithRevision({
+    profile: {
+      id: revision.profile_id,
+      name: 'Run execution test profile',
+      environment: revision.environment,
+      target_kind: revision.target_kind,
+      active_revision_id: revision.id,
+      created_by_actor_id: actorOwner,
+      created_at: now,
+      updated_at: now,
+    },
+    revision,
+  });
+  return revision;
+};
+
+export const seedActiveGenerationProfile = async (
+  repository: DeliveryRepository,
+  executionPackage: ExecutionPackage,
+): Promise<CodexRuntimeProfileRevision> => {
+  const revision = baseRuntimeProfileRevision(executionPackage, 'generation', executionPackage.id);
+  await repository.createCodexRuntimeProfileWithRevision({
+    profile: {
+      id: revision.profile_id,
+      name: 'Generation test profile',
+      environment: revision.environment,
+      target_kind: revision.target_kind,
+      active_revision_id: revision.id,
+      created_by_actor_id: actorOwner,
+      created_at: now,
+      updated_at: now,
+    },
+    revision,
+  });
+  return revision;
+};
+
+export const seedSingleCredentialBinding = async (
+  repository: DeliveryRepository,
+  profileRevision: CodexRuntimeProfileRevision,
+  executionPackage: ExecutionPackage,
+  suffix = 'default',
+) => {
+  const secretPayload = { auth: { access_token: `unsafe-db-access-token-${suffix}` } };
+  const bindingId = `credential-binding-${suffix}-${executionPackage.id}`;
+  const versionId = `credential-binding-version-${suffix}-${executionPackage.id}`;
+  await repository.createCodexCredentialBindingWithVersion({
+    binding: {
+      id: bindingId,
+      profile_id: profileRevision.profile_id,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      provider: 'unsafe_db',
+      purpose: 'model_provider',
+      active_version_id: versionId,
+      created_by_actor_id: actorOwner,
+      created_at: now,
+      updated_at: now,
+    },
+    version: {
+      id: versionId,
+      binding_id: bindingId,
+      version_number: 1,
+      status: 'active',
+      payload_digest: codexCredentialPayloadDigest(secretPayload),
+      created_by_actor_id: actorOwner,
+      created_at: now,
+    },
+    secret_payload_json: secretPayload,
+  });
+  return { bindingId, versionId };
+};
+
+const seedCodexWorker = async (
+  repository: DeliveryRepository,
+  profileRevision: CodexRuntimeProfileRevision,
+  executionPackage: ExecutionPackage,
+  suffix: string,
+  overrides: {
+    targetKinds?: readonly ('generation' | 'run_execution')[];
+    dockerImageDigests?: readonly string[];
+    networkPolicyDigests?: readonly string[];
+    activeLeaseCount?: number;
+    maxConcurrency?: number;
+  } = {},
+) => {
+  const bootstrapToken = `bootstrap-token-${suffix}-${executionPackage.id}`;
+  const sessionToken = `session-token-${suffix}-${executionPackage.id}`;
+  const networkPolicyDigest = codexRuntimeNetworkPolicyDigest(profileRevision.network_policy);
+  await repository.createCodexWorkerBootstrapToken({
+    id: `bootstrap-${suffix}-${executionPackage.id}`,
+    worker_identity: `worker-identity-${suffix}-${executionPackage.id}`,
+    bootstrap_token_hash: codexCredentialPayloadDigest(bootstrapToken),
+    bootstrap_token_version: 1,
+    status: 'active',
+    allowed_scopes_json: [{ project_id: executionPackage.project_id, repo_id: executionPackage.repo_id }],
+    allowed_capabilities_json: {
+      target_kinds: overrides.targetKinds ?? [profileRevision.target_kind],
+      docker_image_digests: overrides.dockerImageDigests ?? [profileRevision.docker_image_digest],
+      network_policy_digests: overrides.networkPolicyDigests ?? [networkPolicyDigest],
+    },
+    created_by_actor_id: actorOwner,
+    created_at: runtimeNow,
+    expires_at: expiresAt,
+  });
+  await repository.upsertCodexWorkerRegistration({
+    worker_id: `worker-${suffix}-${executionPackage.id}`,
+    worker_identity: `worker-identity-${suffix}-${executionPackage.id}`,
+    version: 'codex-worker-test-v1',
+    bootstrap_token_hash: codexCredentialPayloadDigest(bootstrapToken),
+    bootstrap_token_version: 1,
+    session_token: sessionToken,
+    session_expires_at: expiresAt,
+    status: 'online',
+    control_channel_status: 'connected',
+    allowed_scopes: [{ project_id: executionPackage.project_id, repo_id: executionPackage.repo_id }],
+    capabilities: overrides.targetKinds ?? [profileRevision.target_kind],
+    docker_image_digests: overrides.dockerImageDigests ?? [profileRevision.docker_image_digest],
+    network_policy_digests: overrides.networkPolicyDigests ?? [networkPolicyDigest],
+    host_worker_uid: 501,
+    host_worker_gid: 20,
+    lease_count: overrides.activeLeaseCount ?? 0,
+    max_concurrency: overrides.maxConcurrency ?? 2,
+    session_public_key_id: `session-key-${suffix}`,
+    session_public_key_algorithm: 'x25519',
+    session_public_key_material: 'base64-public-key-material',
+    session_public_key_expires_at: expiresAt,
+    now: runtimeNow,
+  });
+  await repository.heartbeatCodexWorker({
+    worker_id: `worker-${suffix}-${executionPackage.id}`,
+    session_token: sessionToken,
+    nonce: `nonce-${suffix}`,
+    nonce_timestamp: runtimeNow,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: overrides.activeLeaseCount ?? 0,
+    capabilities: overrides.targetKinds ?? [profileRevision.target_kind],
+    now: runtimeNow,
+  });
+};
+
+export const seedOnlineCompatibleCodexWorker = (
+  repository: DeliveryRepository,
+  profileRevision: CodexRuntimeProfileRevision,
+  executionPackage: ExecutionPackage,
+  overrides: { activeLeaseCount?: number; maxConcurrency?: number } = {},
+) => seedCodexWorker(repository, profileRevision, executionPackage, 'compatible', overrides);
+
+export const seedOnlineCodexWorkerWithDockerMismatch = (
+  repository: DeliveryRepository,
+  profileRevision: CodexRuntimeProfileRevision,
+  executionPackage: ExecutionPackage,
+) => seedCodexWorker(repository, profileRevision, executionPackage, 'docker-mismatch', { dockerImageDigests: [digestB] });
+
+export const seedOnlineCodexWorkerWithNetworkMismatch = (
+  repository: DeliveryRepository,
+  profileRevision: CodexRuntimeProfileRevision,
+  executionPackage: ExecutionPackage,
+) => seedCodexWorker(repository, profileRevision, executionPackage, 'network-mismatch', { networkPolicyDigests: [digestB] });
+
 export const seedQueuedPackageRun = async (
   repository: DeliveryRepository,
 ): Promise<{ executionPackage: ExecutionPackage; runSession: RunSession }> => {
@@ -586,11 +871,24 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
       .expect(201)
   ).body as ExecutionPackage;
 
-  return (await request(server)
+  const readyPackage = (await request(server)
     .post(`/execution-packages/${executionPackage.id}/mark-ready`)
     .set(ownerHeaders)
     .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
-    .expect(201)).body as ExecutionPackage;
+    .expect(201)).body as { id: string; scope_ref?: unknown };
+  if ('work_item_id' in readyPackage) {
+    throw new Error('Public execution package response exposed work_item_id');
+  }
+  if (!('scope_ref' in readyPackage)) {
+    throw new Error('Public execution package response did not include scope_ref');
+  }
+
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const persistedPackage = await repository.getExecutionPackage(readyPackage.id);
+  if (persistedPackage === undefined) {
+    throw new Error(`Expected persisted execution package ${readyPackage.id}`);
+  }
+  return persistedPackage;
 };
 
 export const seedAppWithRunSession = async (

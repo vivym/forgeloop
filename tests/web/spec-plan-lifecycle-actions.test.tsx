@@ -12,6 +12,7 @@ import {
 } from '../../apps/web/src/features/spec-plan/spec-plan-lifecycle-actions';
 import type { SpecPlan } from '../../apps/web/src/shared/api/types';
 import { installProductApiMock } from './fixtures/product-api-mock';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 const inReviewSpec: SpecPlan = {
   id: 'spec-1',
@@ -170,6 +171,7 @@ describe('SpecPlanLifecycleActions', () => {
 
     expect(screen.getByText('Create a current Spec revision before submitting for approval.')).toBeTruthy();
     expect(screen.getByText('Plan approval is available after a current Plan revision exists.')).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
   it('only treats artifacts as strictly approved when the approved revision is current', () => {

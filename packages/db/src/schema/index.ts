@@ -3,6 +3,8 @@ export * from './organization';
 export * from './actor';
 export * from './project';
 export * from './work-item';
+export * from './task';
+export * from './attachment';
 export * from './spec';
 export * from './plan';
 export * from './execution-package';

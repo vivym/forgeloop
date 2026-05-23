@@ -2,6 +2,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { legacyClassTokenMatches } from './helpers/no-legacy-class-scan';
+
 const textFiles = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {
     const path = join(dir, entry);
@@ -28,6 +30,12 @@ const productSourceText = () =>
         (file) => !file.endsWith('no-legacy-web-ui.test.ts') && !file.endsWith('dev-tools-gating.test.tsx'),
       ),
     )
+    .map((file) => readFileSync(file, 'utf8'))
+    .join('\n');
+
+const activeWebSourceText = () =>
+  textFiles('apps/web')
+    .filter((file) => !file.includes('/features/dev-tools/') && !file.includes('/routes/dev-tools/'))
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
@@ -80,15 +88,17 @@ const legacyDeletionMatches = () =>
 
 const workItemWebScanFiles = () =>
   [
+    'apps/web/src/app/routes',
     'apps/web/src/features/work-items',
-    'apps/web/src/app/routes/work-items',
-    'apps/web/src/app/routes/lanes',
     'apps/web/src/features/product-lanes',
     'tests/web/work-item-intake-form.test.tsx',
     'tests/web/work-item-product-route.test.tsx',
     'tests/web/product-lanes-route.test.tsx',
     'tests/web/api-hooks.test.tsx',
-  ].flatMap((path) => (statSync(path).isDirectory() ? textFiles(path) : [path]));
+  ].flatMap((path) => {
+    if (!existsSync(path)) return [];
+    return statSync(path).isDirectory() ? textFiles(path) : [path];
+  });
 
 const allowedWorkItemOwnerWebContext = (context: string): boolean =>
   /rejects owner_actor_id|owner_actor_id is not supported|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|strips stale kind and owner filters|omits owner filters|without translating execution owner filters|Execution Owner|executionPackage\.owner_actor_id|owner: executionPackage\.owner_actor_id|workItemTypeLaneIds\.has\(laneId\)|key === 'kind' \|\| key === 'owner_actor_id'|supportedProductLaneSearchParams[\s\S]*qa_owner_actor_id[\s\S]*release_owner_actor_id/.test(
@@ -127,9 +137,39 @@ describe('no legacy Web UI baggage', () => {
     expect(workItemWebOwnerMatches()).toEqual([]);
   });
 
-  it('scans all Work Item product lane Web surfaces for Work Item Owner baggage', () => {
-    expect(workItemWebScanFiles()).toContain('apps/web/src/features/work-items/delivery-cockpit/typed-brief.tsx');
-    expect(workItemWebScanFiles()).toContain('apps/web/src/features/product-lanes/product-lanes.ts');
+  it('scans active project-management Web surfaces for Work Item Owner baggage', () => {
+    expect(workItemWebScanFiles()).toContain('apps/web/src/app/routes/_layout.tsx');
+    expect(workItemWebScanFiles()).toContain('apps/web/src/app/routes/requirements/index.tsx');
+    expect(workItemWebScanFiles()).not.toContain('apps/web/src/app/routes/work-items/index.tsx');
+    expect(workItemWebScanFiles()).not.toContain('apps/web/src/app/routes/lanes/index.tsx');
+  });
+
+  it('does not keep old product route modules', () => {
+    for (const path of [
+      'apps/web/src/app/routes/lanes',
+      'apps/web/src/app/routes/pipeline',
+      'apps/web/src/app/routes/work-items',
+      'apps/web/src/app/routes/packages',
+      'apps/web/src/app/routes/runs',
+      'apps/web/src/app/routes/reviews',
+      'apps/web/src/features/product-lanes',
+      'apps/web/src/features/pipeline',
+      'apps/web/src/features/execution-packages/execution-package-routes.tsx',
+      'apps/web/src/features/run-console/run-console-routes.tsx',
+      'apps/web/src/features/review-packets/review-packet-routes.tsx',
+    ]) {
+      expect(existsSync(path), path).toBe(false);
+    }
+  });
+
+  it('does not keep removed top-level product route hrefs or labels on active Web surfaces', () => {
+    expect(productSourceText()).not.toMatch(
+      /(?:to=|href=|href:|target:\s*{[\s\S]{0,120}href:)\s*['"`]\/(?:lanes|pipeline|work-items|packages|runs|reviews)(?:\/|\?|['"`])/,
+    );
+    expect(activeWebSourceText()).not.toMatch(
+      /(?:to=|href=|href:|basePath=)\s*['"`]\/(?:specs|plans)(?:\?|['"`])/,
+    );
+    expect(productSourceText()).not.toMatch(/>Lanes<|>Pipeline<|>Work Items<|>Packages<|>Runs<|>Reviews</);
   });
 
   it('does not expose raw or debug-only controls on product Web surfaces', () => {
@@ -145,8 +185,13 @@ describe('no legacy Web UI baggage', () => {
       'apps/web/src/api',
       'apps/web/src/styles.css',
       'apps/web/src/workbenchState.ts',
+      'apps/web/src/shared/design-system/theme/css-variables.css',
     ]) {
       expect(existsSync(path), path).toBe(false);
     }
+  });
+
+  it('does not use old global visual class tokens on active Web surfaces', () => {
+    expect(legacyClassTokenMatches()).toEqual([]);
   });
 });

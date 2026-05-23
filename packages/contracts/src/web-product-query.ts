@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { objectRefSchema } from './product-object-ref.js';
+
 const isoDateTimeSchema = z.string().datetime();
 const queryBooleanSchema = z.preprocess((value) => {
   if (typeof value === 'boolean') {
@@ -19,13 +21,7 @@ const queryBooleanSchema = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
-export const productObjectRefSchema = z
-  .object({
-    type: z.enum(['work_item', 'spec', 'plan', 'execution_package', 'run_session', 'review_packet', 'release']),
-    id: z.string().min(1),
-    title: z.string().min(1).optional(),
-  })
-  .strict();
+export const productObjectRefSchema = objectRefSchema;
 export type ProductObjectRef = z.infer<typeof productObjectRefSchema>;
 
 export const productListQuerySchema = z
@@ -38,11 +34,10 @@ export const productListQuerySchema = z
     resolution: z.string().min(1).optional(),
     risk: z.string().min(1).optional(),
     driver_actor_id: z.string().min(1).optional(),
-    owner_actor_id: z.string().min(1).optional(),
+    execution_owner_actor_id: z.string().min(1).optional(),
     reviewer_actor_id: z.string().min(1).optional(),
     qa_owner_actor_id: z.string().min(1).optional(),
     release_owner_actor_id: z.string().min(1).optional(),
-    work_item_id: z.string().min(1).optional(),
     spec_id: z.string().min(1).optional(),
     plan_id: z.string().min(1).optional(),
     spec_revision_id: z.string().min(1).optional(),
@@ -62,6 +57,13 @@ export const productListQuerySchema = z
   .strict();
 export type ProductListQuery = z.infer<typeof productListQuerySchema>;
 
+export const internalProductListQuerySchema = productListQuerySchema
+  .extend({
+    work_item_id: z.string().min(1).optional(),
+  })
+  .strict();
+export type InternalProductListQuery = z.infer<typeof internalProductListQuerySchema>;
+
 export const productListItemSchema = z
   .object({
     id: z.string().min(1),
@@ -73,7 +75,7 @@ export const productListItemSchema = z
     resolution: z.string().min(1).optional(),
     risk: z.string().min(1).optional(),
     driver_actor_id: z.string().min(1).optional(),
-    owner_actor_id: z.string().min(1).optional(),
+    execution_owner_actor_id: z.string().min(1).optional(),
     reviewer_actor_id: z.string().min(1).optional(),
     qa_owner_actor_id: z.string().min(1).optional(),
     release_owner_actor_id: z.string().min(1).optional(),
@@ -89,7 +91,7 @@ export const productListItemSchema = z
       .optional(),
     package_state: z
       .object({
-        work_item_id: z.string().min(1),
+        scope_ref: productObjectRefSchema,
         spec_revision_id: z.string().min(1).optional(),
         plan_revision_id: z.string().min(1).optional(),
         surface_type: z.string().min(1).optional(),
@@ -170,7 +172,7 @@ export type PipelineIntegrationReadiness = z.infer<typeof pipelineIntegrationRea
 
 export const pipelineQaOwnerQueueSchema = z
   .object({
-    owner_actor_id: z.string().min(1),
+    qa_owner_actor_id: z.string().min(1),
     item_count: z.number().int().nonnegative(),
   })
   .strict();

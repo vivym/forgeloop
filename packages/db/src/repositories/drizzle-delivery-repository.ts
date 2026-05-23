@@ -7,6 +7,7 @@ import type { AnyPgColumn, AnyPgTable } from 'drizzle-orm/pg-core';
 import type {
   AutomationActionRun,
   AutomationProjectSettings,
+  Attachment,
   Artifact,
   Actor,
   CodexCredentialBinding,
@@ -50,9 +51,11 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  Task,
   WorkItem,
   ResolvedCodexCredential,
 } from '@forgeloop/domain';
+import type { ObjectRef } from '@forgeloop/contracts';
 import {
   DomainError,
   assertCodexRuntimeRecoveryReasonCode,
@@ -80,6 +83,7 @@ import {
 import * as schema from '../schema';
 import {
   artifacts,
+  attachments,
   automation_action_runs,
   automation_project_settings,
   codex_credential_bindings,
@@ -126,6 +130,7 @@ import {
   trace_artifact_refs,
   trace_events,
   trace_links,
+  tasks,
   work_items,
 } from '../schema';
 import type {
@@ -164,9 +169,12 @@ import type {
   GetCodexRuntimeJobInput,
   GetCodexRuntimeJobWorkloadInput,
   GetCodexRuntimeStatusInput,
+  GetCodexWorkerReadinessDiagnosticInput,
   GetWorkspaceBundleDownloadForRuntimeJobInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
+  ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ListCodexCredentialBindingReadinessCandidatesInput,
   ListCodexRuntimeJobArtifactsInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
@@ -182,6 +190,9 @@ import type {
   RefreshCodexWorkerSessionInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
+  CodexCredentialBindingReadinessCandidate,
+  CodexRuntimeProfileReadinessDiagnostic,
+  CodexWorkerReadinessDiagnostic,
   WorkspaceBundleDownloadForRuntimeJob,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
@@ -323,6 +334,8 @@ const workspaceBundleAcquisitionMatches = (
   value.manifest_digest === expected.manifest_digest &&
   value.size_bytes === expected.size_bytes &&
   value.expires_at === expected.expires_at;
+const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
+  left?.type === right.type && left.id === right.id;
 
 const timestampMillis = (value: string | undefined): number | undefined => {
   if (value === undefined) {
@@ -1162,6 +1175,124 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...(worker === undefined ? {} : { worker_status: worker.status }),
       blocker_codes: blockerCodes,
     };
+  }
+
+  async listActiveCodexRuntimeProfileReadinessDiagnostics(
+    input: ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ): Promise<CodexRuntimeProfileReadinessDiagnostic[]> {
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_profile_revisions)
+      .where(
+        and(
+          eq(codex_runtime_profile_revisions.status, 'active'),
+          ...(input.runtime_profile_id === undefined
+            ? []
+            : [eq(codex_runtime_profile_revisions.profileId, input.runtime_profile_id)]),
+        ),
+      )
+      .orderBy(desc(codex_runtime_profile_revisions.createdAt), desc(codex_runtime_profile_revisions.revisionNumber));
+    return rows
+      .map((row) => fromDbRecord<CodexRuntimeProfileRevision>(row))
+      .filter((revision) => codexRuntimeScopeMatches(revision.allowed_scopes, codexScope(input.project_id, input.repo_id)))
+      .map((revision) => {
+        const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+        return {
+          profile_id: revision.profile_id,
+          target_kind: revision.target_kind,
+          source_access_mode: revision.source_access_mode,
+          docker_image_digest: revision.docker_image_digest,
+          network_policy_digest: codexRuntimeNetworkPolicyDigest(networkPolicy),
+          ...(networkPolicy.mode === 'egress_allowlist' && networkPolicy.provider === 'docker_network_proxy'
+            ? { network_provider_config_digest: networkPolicy.provider_config.provider_config_digest }
+            : {}),
+        };
+      });
+  }
+
+  async listCodexCredentialBindingReadinessCandidates(
+    input: ListCodexCredentialBindingReadinessCandidatesInput,
+  ): Promise<CodexCredentialBindingReadinessCandidate[]> {
+    const rows = await this.db
+      .select({
+        binding: codex_credential_bindings,
+        versionStatus: codex_credential_binding_versions.status,
+        profileTargetKind: codex_runtime_profiles.targetKind,
+      })
+      .from(codex_credential_bindings)
+      .innerJoin(codex_runtime_profiles, eq(codex_runtime_profiles.id, codex_credential_bindings.profileId))
+      .innerJoin(
+        codex_credential_binding_versions,
+        eq(codex_credential_binding_versions.id, codex_credential_bindings.activeVersionId),
+      )
+      .where(
+        and(
+          eq(codex_credential_bindings.projectId, input.project_id),
+          eq(codex_credential_bindings.profileId, input.runtime_profile_id),
+          ...(input.credential_binding_id === undefined ? [] : [eq(codex_credential_bindings.id, input.credential_binding_id)]),
+        ),
+      );
+
+    return rows
+      .map((row) => ({
+        binding: fromDbRecord<CodexCredentialBinding>(row.binding),
+        versionStatus: row.versionStatus,
+        profileTargetKind: row.profileTargetKind,
+      }))
+      .filter(
+        ({ binding, versionStatus, profileTargetKind }) =>
+          (binding.repo_id === undefined || binding.repo_id === input.repo_id) &&
+          profileTargetKind === input.target_kind &&
+          versionStatus === 'active',
+      )
+      .map(({ binding }) => ({ purpose: binding.purpose }));
+  }
+
+  async getCodexWorkerReadinessDiagnostic(
+    input: GetCodexWorkerReadinessDiagnosticInput,
+  ): Promise<CodexWorkerReadinessDiagnostic> {
+    const rows = await this.db
+      .select()
+      .from(codex_worker_registrations)
+      .where(
+        and(
+          eq(codex_worker_registrations.status, 'online'),
+          eq(codex_worker_registrations.controlChannelStatus, 'connected'),
+          gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
+          isNotNull(codex_worker_registrations.lastHeartbeatAt),
+        ),
+      )
+      .orderBy(asc(codex_worker_registrations.leaseCount), asc(codex_worker_registrations.id));
+    const available = rows
+      .map((row) => fromDbRecord<CodexWorkerRegistrationDbRecord>(row))
+      .filter(
+        (record) =>
+          codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
+          codexRuntimeScopeMatches(record.allowed_scopes_json, codexScope(input.project_id, input.repo_id)),
+      );
+
+    if (available.length === 0) {
+      return 'worker_unavailable';
+    }
+    const targetCompatible = available.filter((record) =>
+      capabilityList(record.capabilities_json, 'target_kinds').includes(input.target_kind),
+    );
+    if (targetCompatible.length === 0) {
+      return 'worker_target_unsupported';
+    }
+    const dockerCompatible = targetCompatible.filter((record) =>
+      capabilityList(record.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest),
+    );
+    if (dockerCompatible.length === 0) {
+      return 'worker_docker_capability_mismatch';
+    }
+    const networkCompatible = dockerCompatible.filter(
+      (record) =>
+        capabilityList(record.capabilities_json, 'network_policy_digests').includes(input.network_policy_digest) &&
+        (input.network_provider_config_digest === undefined ||
+          capabilityList(record.capabilities_json, 'network_provider_config_digests').includes(input.network_provider_config_digest)),
+    );
+    return networkCompatible.length === 0 ? 'worker_network_policy_mismatch' : 'ready';
   }
 
   async createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken> {
@@ -3736,7 +3867,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveWorkItem(workItem: WorkItem): Promise<void> {
-    await this.upsert(work_items, work_items.id, workItem);
+    await this.upsert(work_items, work_items.id, {
+      ...workItem,
+      narrative_markdown: workItem.narrative_markdown ?? '',
+    });
   }
 
   async getWorkItem(workItemId: string): Promise<WorkItem | undefined> {
@@ -3747,6 +3881,53 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return projectId === undefined
       ? this.listWhere<WorkItem>(work_items)
       : this.listWhere<WorkItem>(work_items, eq(work_items.projectId, projectId));
+  }
+
+  async updateWorkItemNarrative(input: { work_item_id: string; markdown: string; updated_at: string }): Promise<WorkItem> {
+    const [row] = await this.db
+      .update(work_items)
+      .set({ narrativeMarkdown: input.markdown, updatedAt: input.updated_at })
+      .where(eq(work_items.id, input.work_item_id))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Work Item ${input.work_item_id} was not found`);
+    }
+    return fromDbRecord<WorkItem>(row);
+  }
+
+  async saveTask(task: Task): Promise<void> {
+    await this.upsert(tasks, tasks.id, task);
+  }
+
+  async getTask(taskId: string): Promise<Task | undefined> {
+    return this.getById(tasks, tasks.id, taskId);
+  }
+
+  async listTasks(projectId?: string): Promise<Task[]> {
+    return projectId === undefined
+      ? this.listWhere<Task>(tasks, undefined, tasks.createdAt)
+      : this.listWhere<Task>(tasks, eq(tasks.projectId, projectId), tasks.createdAt);
+  }
+
+  async listTasksForParent(parentRef: ObjectRef): Promise<Task[]> {
+    const rows = await this.db
+      .select()
+      .from(tasks)
+      .where(and(sql`${tasks.parentRef}->>'type' = ${parentRef.type}`, sql`${tasks.parentRef}->>'id' = ${parentRef.id}`))
+      .orderBy(asc(tasks.createdAt));
+    return rows.map((row) => fromDbRecord<Task>(row));
+  }
+
+  async updateTaskNarrative(input: { task_id: string; markdown: string; updated_at: string }): Promise<Task> {
+    const [row] = await this.db
+      .update(tasks)
+      .set({ narrativeMarkdown: input.markdown, updatedAt: input.updated_at })
+      .where(eq(tasks.id, input.task_id))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
+    }
+    return fromDbRecord<Task>(row);
   }
 
   async saveSpec(spec: Spec): Promise<void> {
@@ -3842,6 +4023,35 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.listWhere<ExecutionPackage>(execution_packages, eq(execution_packages.workItemId, workItemId));
   }
 
+  async linkExecutionPackageToTask(input: { task_id: string; execution_package_id: string }): Promise<void> {
+    const task = await this.getTask(input.task_id);
+    if (task === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
+    }
+    const [row] = await this.db
+      .update(execution_packages)
+      .set({ taskId: input.task_id })
+      .where(
+        and(
+          eq(execution_packages.id, input.execution_package_id),
+          or(isNull(execution_packages.taskId), eq(execution_packages.taskId, input.task_id)),
+        ),
+      )
+      .returning({ id: execution_packages.id });
+    if (row === undefined) {
+      const executionPackage = await this.getExecutionPackage(input.execution_package_id);
+      if (executionPackage === undefined) {
+        throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} was not found`);
+      }
+      throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} is already linked to another Task`);
+    }
+  }
+
+  async getTaskForExecutionPackage(executionPackageId: string): Promise<Task | undefined> {
+    const executionPackage = await this.getExecutionPackage(executionPackageId);
+    return executionPackage?.task_id === undefined ? undefined : this.getTask(executionPackage.task_id);
+  }
+
   async saveExecutionPackageDependency(dependency: ExecutionPackageDependency): Promise<void> {
     const record = toDbRecord(dependency, execution_package_dependencies);
     await this.db
@@ -3858,6 +4068,54 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       execution_package_dependencies,
       eq(execution_package_dependencies.packageId, executionPackageId),
     );
+  }
+
+  async saveAttachment(attachment: Attachment): Promise<void> {
+    await this.upsert(attachments, attachments.id, attachment);
+  }
+
+  async getAttachment(attachmentId: string): Promise<Attachment | undefined> {
+    return this.getById(attachments, attachments.id, attachmentId);
+  }
+
+  async listAttachmentsForObject(objectType: string, objectId: string): Promise<Attachment[]> {
+    const linkedRef = JSON.stringify([{ type: objectType, id: objectId }]);
+    const rows = await this.db
+      .select()
+      .from(attachments)
+      .where(
+        or(
+          and(eq(attachments.ownerObjectType, objectType), eq(attachments.ownerObjectId, objectId)),
+          sql`${attachments.linkedObjectRefs} @> ${linkedRef}::jsonb`,
+        ),
+      )
+      .orderBy(asc(attachments.createdAt));
+    return rows.map((row) => fromDbRecord<Attachment>(row));
+  }
+
+  async linkAttachmentToObject(attachmentId: string, objectRef: ObjectRef): Promise<Attachment> {
+    const attachment = await this.getAttachment(attachmentId);
+    if (attachment === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Attachment ${attachmentId} was not found`);
+    }
+    const linked_object_refs = attachment.linked_object_refs.some((ref) => objectRefIdentityMatches(ref, objectRef))
+      ? attachment.linked_object_refs
+      : [...attachment.linked_object_refs, objectRef];
+    const updated = { ...attachment, linked_object_refs };
+    await this.saveAttachment(updated);
+    return updated;
+  }
+
+  async archiveAttachment(attachmentId: string, _archivedAt: string): Promise<Attachment> {
+    const [row] = await this.db
+      .update(attachments)
+      .set({ referenceStatus: 'archived' })
+      .where(eq(attachments.id, attachmentId))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Attachment ${attachmentId} was not found`);
+    }
+    return fromDbRecord<Attachment>(row);
   }
 
   async saveRunSession(runSession: RunSession): Promise<void> {

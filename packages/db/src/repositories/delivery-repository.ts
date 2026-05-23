@@ -1,5 +1,6 @@
 import type {
   AutomationActionRun,
+  Attachment,
   AutomationActorContext,
   AutomationProjectSettings,
   AutomationPreset,
@@ -20,6 +21,7 @@ import type {
   CodexRuntimeProfileRevision,
   CodexRuntimeRecoveryReasonCode,
   CodexRuntimeScope,
+  CodexSourceAccessMode,
   CodexRuntimeStatusProjection,
   CodexRuntimeTargetKind,
   CodexWorkerBootstrapToken,
@@ -49,8 +51,10 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  Task,
   WorkItem,
 } from '@forgeloop/domain';
+import type { ObjectRef } from '@forgeloop/contracts';
 
 import type { trace_link_relationship_values } from '../schema/_shared';
 
@@ -119,6 +123,52 @@ export interface GetCodexRuntimeStatusInput {
   target_kind: CodexRuntimeTargetKind;
   runtime_profile_id?: string;
   credential_binding_id?: string;
+  now: string;
+}
+
+export interface ListActiveCodexRuntimeProfileReadinessDiagnosticsInput {
+  project_id: string;
+  repo_id?: string;
+  runtime_profile_id?: string;
+  now: string;
+}
+
+export interface CodexRuntimeProfileReadinessDiagnostic {
+  profile_id: string;
+  target_kind: CodexRuntimeTargetKind;
+  source_access_mode: CodexSourceAccessMode;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
+}
+
+export interface ListCodexCredentialBindingReadinessCandidatesInput {
+  project_id: string;
+  repo_id?: string;
+  runtime_profile_id: string;
+  credential_binding_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  now: string;
+}
+
+export interface CodexCredentialBindingReadinessCandidate {
+  purpose: CodexCredentialBinding['purpose'];
+}
+
+export type CodexWorkerReadinessDiagnostic =
+  | 'ready'
+  | 'worker_unavailable'
+  | 'worker_target_unsupported'
+  | 'worker_docker_capability_mismatch'
+  | 'worker_network_policy_mismatch';
+
+export interface GetCodexWorkerReadinessDiagnosticInput {
+  project_id: string;
+  repo_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  docker_image_digest: string;
+  network_policy_digest: string;
+  network_provider_config_digest?: string;
   now: string;
 }
 
@@ -1209,6 +1259,13 @@ export interface DeliveryRepository {
   getCodexCredentialBindingPublic(id: string): Promise<CodexCredentialBindingPublic | undefined>;
   resolveCodexCredentialForLaunch(input: ResolveCodexCredentialForLaunchInput): Promise<ResolvedCodexCredential | undefined>;
   getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection>;
+  listActiveCodexRuntimeProfileReadinessDiagnostics(
+    input: ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ): Promise<CodexRuntimeProfileReadinessDiagnostic[]>;
+  listCodexCredentialBindingReadinessCandidates(
+    input: ListCodexCredentialBindingReadinessCandidatesInput,
+  ): Promise<CodexCredentialBindingReadinessCandidate[]>;
+  getCodexWorkerReadinessDiagnostic(input: GetCodexWorkerReadinessDiagnosticInput): Promise<CodexWorkerReadinessDiagnostic>;
   createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken>;
   upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration>;
   heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration>;
@@ -1259,6 +1316,13 @@ export interface DeliveryRepository {
   saveWorkItem(workItem: WorkItem): Promise<void>;
   getWorkItem(workItemId: string): Promise<WorkItem | undefined>;
   listWorkItems(projectId?: string): Promise<WorkItem[]>;
+  updateWorkItemNarrative(input: { work_item_id: string; markdown: string; updated_at: string }): Promise<WorkItem>;
+
+  saveTask(task: Task): Promise<void>;
+  getTask(taskId: string): Promise<Task | undefined>;
+  listTasks(projectId?: string): Promise<Task[]>;
+  listTasksForParent(parentRef: ObjectRef): Promise<Task[]>;
+  updateTaskNarrative(input: { task_id: string; markdown: string; updated_at: string }): Promise<Task>;
 
   saveSpec(spec: Spec): Promise<void>;
   getSpec(specId: string): Promise<Spec | undefined>;
@@ -1278,8 +1342,16 @@ export interface DeliveryRepository {
   getExecutionPackage(executionPackageId: string): Promise<ExecutionPackage | undefined>;
   listExecutionPackages(projectId?: string): Promise<ExecutionPackage[]>;
   listExecutionPackagesForWorkItem(workItemId: string): Promise<ExecutionPackage[]>;
+  linkExecutionPackageToTask(input: { task_id: string; execution_package_id: string }): Promise<void>;
+  getTaskForExecutionPackage(executionPackageId: string): Promise<Task | undefined>;
   saveExecutionPackageDependency(dependency: ExecutionPackageDependency): Promise<void>;
   listExecutionPackageDependencies(executionPackageId: string): Promise<ExecutionPackageDependency[]>;
+
+  saveAttachment(attachment: Attachment): Promise<void>;
+  getAttachment(attachmentId: string): Promise<Attachment | undefined>;
+  listAttachmentsForObject(objectType: string, objectId: string): Promise<Attachment[]>;
+  linkAttachmentToObject(attachmentId: string, objectRef: ObjectRef): Promise<Attachment>;
+  archiveAttachment(attachmentId: string, archivedAt: string): Promise<Attachment>;
 
   saveRunSession(runSession: RunSession): Promise<void>;
   getRunSession(runSessionId: string): Promise<RunSession | undefined>;

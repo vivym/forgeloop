@@ -4,11 +4,21 @@ import { createForgeloopCommandApi } from '../../apps/web/src/shared/api/command
 import { ForgeloopApiError } from '../../apps/web/src/shared/api/common';
 import { createForgeloopQueryApi } from '../../apps/web/src/shared/api/query';
 import type { ProductLaneId, WorkItemDeliveryReadiness } from '@forgeloop/contracts';
-import { executionPackage, plan, productActionFixtures, reviewPacket, runSession, spec, workItem } from './fixtures/product-data';
+import {
+  cockpitPackageFor,
+  cockpitPlanFor,
+  cockpitSpecFor,
+  executionPackage,
+  plan,
+  productActionFixtures,
+  reviewPacket,
+  runSession,
+  spec,
+  workItem,
+} from './fixtures/product-data';
 
 const cockpitReadiness = (lane: ProductLaneId = 'requirements'): WorkItemDeliveryReadiness => ({
-  work_item_id: workItem.id,
-  work_item_kind: workItem.kind,
+  scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
   active_lane: lane,
   overall_state: 'in_progress',
   stages: [
@@ -36,10 +46,10 @@ const cockpitReadiness = (lane: ProductLaneId = 'requirements'): WorkItemDeliver
 });
 
 const cockpitResponse = (lane?: ProductLaneId) => ({
-  work_item: workItem,
-  current_spec: spec,
-  current_plan: plan,
-  packages: [executionPackage],
+  item: workItem,
+  current_spec: cockpitSpecFor(workItem),
+  current_plan: cockpitPlanFor(workItem),
+  packages: [cockpitPackageFor(workItem)],
   run_sessions: [runSession],
   review_packets: [reviewPacket],
   delivery_readiness: cockpitReadiness(lane),
@@ -462,10 +472,10 @@ describe('Forgeloop web API client', () => {
     const fetchMock = vi.fn(async () =>
       new Response(
         JSON.stringify({
-          work_item: workItem,
-          current_spec: spec,
-          current_plan: plan,
-          packages: [executionPackage],
+          item: workItem,
+          current_spec: cockpitSpecFor(workItem),
+          current_plan: cockpitPlanFor(workItem),
+          packages: [cockpitPackageFor(workItem)],
           run_sessions: [runSession],
           review_packets: [reviewPacket],
           completion_state: {},
@@ -476,6 +486,24 @@ describe('Forgeloop web API client', () => {
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
     await expect(queryApi.getWorkItemCockpit(workItem.id)).rejects.toThrow();
+  });
+
+  it('routes package runtime readiness through the query API', async () => {
+    const readiness = {
+      executor_type: 'local_codex',
+      target_kind: 'run_execution',
+      state: 'ready',
+      blockers: [],
+      generated_at: '2026-05-18T00:23:00.000Z',
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(readiness), { status: 200 }));
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
+
+    await expect(queryApi.getExecutionPackageRuntimeReadiness('package/1')).resolves.toEqual(readiness);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/root/query/execution-packages/package%2F1/runtime-readiness',
+      expect.objectContaining({ method: 'GET' }),
+    );
   });
 
   it('hardens bad manager cockpit command actions before strict response parsing', async () => {
@@ -694,6 +722,7 @@ describe('Forgeloop web API client', () => {
     expect(commandMethods).not.toContain('getWorkItemReplay');
     expect(Object.keys(queryApi).sort()).toEqual([
       'getExecutionPackageReplay',
+      'getExecutionPackageRuntimeReadiness',
       'getPlanReplay',
       'getProductLane',
       'getReleaseCockpit',

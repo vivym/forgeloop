@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from 'node:fs';
-
 import { waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
+import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -13,46 +12,33 @@ afterEach(() => {
 
 describe('responsive layout contract', () => {
   it('renders the shell with stable responsive landmarks', async () => {
-    const screen = await renderRoute('/lanes');
+    const screen = await renderRoute('/my-work');
 
     expect(screen.getByRole('banner')).toBeTruthy();
-    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
     expect(screen.getByRole('main')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
-  it('renders dense tables with a card fallback contract', async () => {
-    const screen = await renderRoute('/runs');
+  it('renders target evidence scaffolds without old responsive class tokens', async () => {
+    const screen = await renderRoute('/tasks/task-1/runs/run-web-product');
 
-    expect(await screen.findByRole('table', { name: 'Runs' })).toBeTruthy();
-    expect(document.querySelector('[data-responsive-card-list]')).not.toBeNull();
+    expect(await screen.findByRole('heading', { name: 'Run Evidence' })).toBeTruthy();
+    expect(screen.getByRole('main')).toBeTruthy();
+    expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
-  it('keeps 768px tablet layouts in table mode instead of mobile card mode', async () => {
+  it('keeps 768px tablet layouts in mobile drawer mode until navigation opens', async () => {
     vi.stubGlobal('innerWidth', 768);
     vi.stubGlobal('matchMedia', createMatchMedia(768));
 
-    const screen = await renderRoute('/runs');
+    const screen = await renderRoute('/reports');
 
-    expect(await screen.findByRole('table', { name: 'Runs' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
     await waitFor(() => {
-      expect(document.querySelector('.fl-responsive-card-list__item')).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
     });
-  });
-
-  it('defines tablet inline action rails and mobile navigation sheet styles', () => {
-    const css = readFileSync('apps/web/src/shared/design-system/theme/css-variables.css', 'utf8');
-    const tabletStart = css.indexOf('@media (max-width: 1199px)');
-    const mobileStart = css.indexOf('@media (max-width: 767px)');
-    const tabletBlock = css.slice(tabletStart, mobileStart);
-    const mobileBlock = css.slice(mobileStart);
-
-    expect(tabletBlock).toContain('.fl-detail-layout__body');
-    expect(tabletBlock).toContain('grid-template-columns: 1fr');
-    expect(tabletBlock).toContain('.fl-action-rail');
-    expect(tabletBlock).toContain('border-top');
-    expect(mobileBlock).toContain('.fl-app-shell__sidebar.is-open');
-    expect(mobileBlock).toContain('position: fixed');
   });
 });
 

@@ -3,27 +3,32 @@ import { useEffect, useState, type HTMLAttributes, type ReactNode, type TdHTMLAt
 import { cn } from '../../utils/cn';
 
 export function Table({ className, ...props }: HTMLAttributes<HTMLTableElement>) {
-  return <table className={cn('fl-table', className)} {...props} />;
+  return (
+    <table
+      className={cn('w-full border-collapse overflow-hidden rounded-card border border-border bg-surface text-sm', className)}
+      {...props}
+    />
+  );
 }
 
 export function TableHeader({ className, ...props }: HTMLAttributes<HTMLTableSectionElement>) {
-  return <thead className={cn('fl-table__head', className)} {...props} />;
+  return <thead className={cn('bg-surface-muted text-text-secondary', className)} {...props} />;
 }
 
 export function TableBody({ className, ...props }: HTMLAttributes<HTMLTableSectionElement>) {
-  return <tbody className={cn('fl-table__body', className)} {...props} />;
+  return <tbody className={className} {...props} />;
 }
 
 export function TableRow({ className, ...props }: HTMLAttributes<HTMLTableRowElement>) {
-  return <tr className={cn('fl-table__row', className)} {...props} />;
+  return <tr className={className} {...props} />;
 }
 
 export function TableHead({ className, scope = 'col', ...props }: ThHTMLAttributes<HTMLTableCellElement>) {
-  return <th className={cn('fl-table__cell', 'fl-table__cell--head', className)} scope={scope} {...props} />;
+  return <th className={cn('border-b border-border px-4 py-3 text-left align-top font-semibold', className)} scope={scope} {...props} />;
 }
 
 export function TableCell({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn('fl-table__cell', className)} {...props} />;
+  return <td className={cn('border-b border-border px-4 py-3 text-left align-top', className)} {...props} />;
 }
 
 export interface DataTableColumn<T> {
@@ -44,8 +49,8 @@ export function DataTable<T>({ ariaLabel, columns, rows, getRowKey, emptyMessage
   const renderResponsiveCards = useResponsiveCards();
 
   return (
-    <div className="fl-responsive-table">
-      <Table aria-label={ariaLabel}>
+    <div className="grid min-w-0 max-w-full gap-3 overflow-x-auto">
+      <Table aria-label={ariaLabel} className="hidden md:table">
         <TableHeader>
           <TableRow>
             {columns.map((column) => (
@@ -71,23 +76,23 @@ export function DataTable<T>({ ariaLabel, columns, rows, getRowKey, emptyMessage
       </Table>
       <div
         aria-label={ariaLabel ? `${ariaLabel} cards` : undefined}
-        className="fl-responsive-card-list"
+        className="grid gap-3 md:hidden"
         data-responsive-card-list=""
         role="list"
       >
         {renderResponsiveCards && rows.length ? (
           rows.map((row, index) => (
-            <article className="fl-responsive-card-list__item" key={getRowKey(row, index)} role="listitem">
+            <article className="grid gap-3 rounded-card border border-border bg-surface p-4" key={getRowKey(row, index)} role="listitem">
               {columns.map((column) => (
-                <div className="fl-responsive-card-list__field" key={column.key}>
-                  <span className="fl-responsive-card-list__label">{column.header}</span>
-                  <span className="fl-responsive-card-list__value">{column.cell(row)}</span>
+                <div className="grid min-w-0 gap-1" key={column.key}>
+                  <span className="text-xs font-semibold uppercase text-text-muted">{column.header}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere] text-text-primary">{column.cell(row)}</span>
                 </div>
               ))}
             </article>
           ))
         ) : renderResponsiveCards ? (
-          <p className="empty">{emptyMessage}</p>
+          <p className="m-0 text-sm text-text-secondary">{emptyMessage}</p>
         ) : null}
       </div>
     </div>

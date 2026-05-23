@@ -19,7 +19,7 @@ docker compose up -d postgres redis temporal
 
 Default endpoints:
 
-- Postgres: `postgresql://forgeloop:forgeloop@localhost:5432/forgeloop`
+- Postgres: `postgresql://forgeloop:forgeloop@localhost:35432/forgeloop`
 - Redis: `redis://localhost:6379`
 - Temporal: `localhost:7233`
 
@@ -39,7 +39,9 @@ The API defaults to `http://localhost:3000`. The web app is served by Vite, usua
 Common environment variables:
 
 - `PORT`: control-plane API port.
-- `FORGELOOP_DATABASE_URL`: Postgres connection string for durable mode, for example `postgresql://forgeloop:forgeloop@localhost:5432/forgeloop`.
+- `FORGELOOP_POSTGRES_PORT`: local Docker Compose host port for Postgres, default `35432`.
+- `FORGELOOP_DATABASE_URL`: Postgres connection string for durable mode, for example `postgresql://forgeloop:forgeloop@localhost:35432/forgeloop`.
+- `FORGELOOP_ATTACHMENT_STORAGE_ROOT`: local directory for attachment binaries, default `.forgeloop/attachments`.
 - `FORGELOOP_API_URL`: API URL used by scripts, default `http://localhost:3000`.
 - `VITE_FORGELOOP_API_URL`: API URL used by the web client, default `http://localhost:3000`.
 - `FORGELOOP_REPO_PATH`: local repo checkout used for dogfood local_codex runs.
@@ -98,7 +100,7 @@ Run the durable one-command dogfood flow with:
 pnpm dogfood:delivery:durable
 ```
 
-`pnpm dogfood:delivery:durable` uses `FORGELOOP_DATABASE_URL` when provided and never drops that database. Without it, the script looks for a running Docker Postgres container with a published 5432 port, creates a temporary `forgeloop_dogfood_<timestamp>` database, runs schema push and `pnpm dogfood:delivery`, verifies durable PASS markers in the generated report, then drops only the temporary database it created. Set `FORGELOOP_DOGFOOD_START_POSTGRES=1` to allow the script to start and remove a disposable Postgres container when no candidate exists.
+`pnpm dogfood:delivery:durable` uses `FORGELOOP_DATABASE_URL` when provided and never drops that database. Without it, the script looks for a running Docker Postgres container with a published `5432/tcp` container port on any host port, creates a temporary `forgeloop_dogfood_<timestamp>` database, runs schema push and `pnpm dogfood:delivery`, verifies durable PASS markers in the generated report, then drops only the temporary database it created. Set `FORGELOOP_DOGFOOD_START_POSTGRES=1` to allow the script to start and remove a disposable Postgres container when no candidate exists.
 
 Run the three Delivery dogfood Work Items from `docs/dogfood/delivery-dogfood-work-items.md` with:
 

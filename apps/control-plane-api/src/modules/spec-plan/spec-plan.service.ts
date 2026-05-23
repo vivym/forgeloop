@@ -17,6 +17,7 @@ import {
   transitionWorkItem,
 } from '@forgeloop/domain';
 import type { DeliveryRepository } from '@forgeloop/db';
+import type { ObjectRef } from '@forgeloop/contracts';
 
 import { AuditWriterService } from '../audit/audit-writer.service';
 import type { ActorContext } from '../auth/actor-context';
@@ -37,6 +38,10 @@ const productGateRejectedActorClasses = new Set<AutomationActorClass>([
   'external_tracker',
   'repo_policy',
 ]);
+
+export type PublicSpecPlan = Omit<Spec | Plan, 'work_item_id'> & { scope_ref: ObjectRef };
+export type PublicSpecRevision = Omit<SpecRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & { scope_ref: ObjectRef };
+export type PublicPlanRevision = Omit<PlanRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & { scope_ref: ObjectRef };
 
 @Injectable()
 export class SpecPlanService {
@@ -65,16 +70,32 @@ export class SpecPlanService {
     });
   }
 
+  async createPublicSpec(workItemId: string): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.createSpec(workItemId));
+  }
+
   async getSpec(specId: string): Promise<Spec> {
     return this.requireFound(await this.repository.getSpec(specId), `Spec ${specId}`);
+  }
+
+  async getPublicSpec(specId: string): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.getSpec(specId));
   }
 
   listSpecRevisions(specId: string): Promise<SpecRevision[]> {
     return this.repository.listSpecRevisions(specId);
   }
 
+  async listPublicSpecRevisions(specId: string): Promise<PublicSpecRevision[]> {
+    return Promise.all((await this.listSpecRevisions(specId)).map((revision) => this.toPublicSpecRevision(revision)));
+  }
+
   async getSpecRevision(specRevisionId: string): Promise<SpecRevision> {
     return this.requireFound(await this.repository.getSpecRevision(specRevisionId), `SpecRevision ${specRevisionId}`);
+  }
+
+  async getPublicSpecRevision(specRevisionId: string): Promise<PublicSpecRevision> {
+    return this.toPublicSpecRevision(await this.getSpecRevision(specRevisionId));
   }
 
   async createSpecRevision(specId: string, dto: CreateSpecRevisionDto): Promise<SpecRevision> {
@@ -94,6 +115,10 @@ export class SpecPlanService {
     });
     await this.event('spec_revision', revision.id, 'spec_revision_created', dto.author_actor_id, { spec_id: spec.id });
     return revision;
+  }
+
+  async createPublicSpecRevision(specId: string, dto: CreateSpecRevisionDto): Promise<PublicSpecRevision> {
+    return this.toPublicSpecRevision(await this.createSpecRevision(specId, dto));
   }
 
   async generateSpecDraft(specId: string): Promise<SpecRevision> {
@@ -130,6 +155,10 @@ export class SpecPlanService {
     return revision;
   }
 
+  async generatePublicSpecDraft(specId: string): Promise<PublicSpecRevision> {
+    return this.toPublicSpecRevision(await this.generateSpecDraft(specId));
+  }
+
   async submitSpecForApproval(specId: string, dto: SubmitForApprovalCommandDto, actorContext?: ActorContext): Promise<Spec> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const spec = await this.getSpec(specId);
@@ -139,6 +168,14 @@ export class SpecPlanService {
     await this.updateWorkItemForSpecPlan(updated.work_item_id, this.workItemSubmitTransitionFor(spec), actorId);
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
     return updated;
+  }
+
+  async submitPublicSpecForApproval(
+    specId: string,
+    dto: SubmitForApprovalCommandDto,
+    actorContext?: ActorContext,
+  ): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.submitSpecForApproval(specId, dto, actorContext));
   }
 
   async approveSpec(specId: string, dto: ApproveArtifactCommandDto, actorContext?: ActorContext): Promise<Spec> {
@@ -162,6 +199,10 @@ export class SpecPlanService {
     return updated;
   }
 
+  async approvePublicSpec(specId: string, dto: ApproveArtifactCommandDto, actorContext?: ActorContext): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.approveSpec(specId, dto, actorContext));
+  }
+
   async requestSpecChanges(specId: string, dto: RequestArtifactChangesCommandDto, actorContext?: ActorContext): Promise<Spec> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const spec = await this.getSpec(specId);
@@ -172,6 +213,14 @@ export class SpecPlanService {
     await this.history('spec', spec.id, spec.status, updated.status, actorId);
     await this.decision('spec', spec.id, actorId, 'changes_requested', dto.rationale);
     return updated;
+  }
+
+  async requestPublicSpecChanges(
+    specId: string,
+    dto: RequestArtifactChangesCommandDto,
+    actorContext?: ActorContext,
+  ): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.requestSpecChanges(specId, dto, actorContext));
   }
 
   async createPlan(workItemId: string): Promise<Plan> {
@@ -192,16 +241,32 @@ export class SpecPlanService {
     });
   }
 
+  async createPublicPlan(workItemId: string): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.createPlan(workItemId));
+  }
+
   async getPlan(planId: string): Promise<Plan> {
     return this.requireFound(await this.repository.getPlan(planId), `Plan ${planId}`);
+  }
+
+  async getPublicPlan(planId: string): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.getPlan(planId));
   }
 
   listPlanRevisions(planId: string): Promise<PlanRevision[]> {
     return this.repository.listPlanRevisions(planId);
   }
 
+  async listPublicPlanRevisions(planId: string): Promise<PublicPlanRevision[]> {
+    return Promise.all((await this.listPlanRevisions(planId)).map((revision) => this.toPublicPlanRevision(revision)));
+  }
+
   async getPlanRevision(planRevisionId: string): Promise<PlanRevision> {
     return this.requireFound(await this.repository.getPlanRevision(planRevisionId), `PlanRevision ${planRevisionId}`);
+  }
+
+  async getPublicPlanRevision(planRevisionId: string): Promise<PublicPlanRevision> {
+    return this.toPublicPlanRevision(await this.getPlanRevision(planRevisionId));
   }
 
   async createPlanRevision(planId: string, dto: CreatePlanRevisionDto): Promise<PlanRevision> {
@@ -223,6 +288,10 @@ export class SpecPlanService {
     });
     await this.event('plan_revision', revision.id, 'plan_revision_created', dto.author_actor_id, { plan_id: plan.id });
     return revision;
+  }
+
+  async createPublicPlanRevision(planId: string, dto: CreatePlanRevisionDto): Promise<PublicPlanRevision> {
+    return this.toPublicPlanRevision(await this.createPlanRevision(planId, dto));
   }
 
   async generatePlanDraft(planId: string): Promise<PlanRevision> {
@@ -256,6 +325,10 @@ export class SpecPlanService {
     return revision;
   }
 
+  async generatePublicPlanDraft(planId: string): Promise<PublicPlanRevision> {
+    return this.toPublicPlanRevision(await this.generatePlanDraft(planId));
+  }
+
   async submitPlanForApproval(planId: string, dto: SubmitForApprovalCommandDto, actorContext?: ActorContext): Promise<Plan> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const plan = await this.getPlan(planId);
@@ -265,6 +338,14 @@ export class SpecPlanService {
     await this.updateWorkItemForSpecPlan(updated.work_item_id, this.workItemSubmitTransitionFor(plan), actorId);
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
     return updated;
+  }
+
+  async submitPublicPlanForApproval(
+    planId: string,
+    dto: SubmitForApprovalCommandDto,
+    actorContext?: ActorContext,
+  ): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.submitPlanForApproval(planId, dto, actorContext));
   }
 
   async approvePlan(planId: string, dto: ApproveArtifactCommandDto, actorContext?: ActorContext): Promise<Plan> {
@@ -288,6 +369,10 @@ export class SpecPlanService {
     return updated;
   }
 
+  async approvePublicPlan(planId: string, dto: ApproveArtifactCommandDto, actorContext?: ActorContext): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.approvePlan(planId, dto, actorContext));
+  }
+
   async requestPlanChanges(planId: string, dto: RequestArtifactChangesCommandDto, actorContext?: ActorContext): Promise<Plan> {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     const plan = await this.getPlan(planId);
@@ -298,6 +383,44 @@ export class SpecPlanService {
     await this.history('plan', plan.id, plan.status, updated.status, actorId);
     await this.decision('plan', plan.id, actorId, 'changes_requested', dto.rationale);
     return updated;
+  }
+
+  async requestPublicPlanChanges(
+    planId: string,
+    dto: RequestArtifactChangesCommandDto,
+    actorContext?: ActorContext,
+  ): Promise<PublicSpecPlan> {
+    return this.toPublicSpecPlan(await this.requestPlanChanges(planId, dto, actorContext));
+  }
+
+  private async toPublicSpecPlan(entity: Spec | Plan): Promise<PublicSpecPlan> {
+    const { work_item_id: workItemId, ...publicEntity } = entity;
+    return { ...publicEntity, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
+  }
+
+  private async toPublicSpecRevision(revision: SpecRevision): Promise<PublicSpecRevision> {
+    const {
+      work_item_id: workItemId,
+      structured_document: _structuredDocument,
+      artifact_refs: _artifactRefs,
+      ...publicRevision
+    } = revision;
+    return { ...publicRevision, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
+  }
+
+  private async toPublicPlanRevision(revision: PlanRevision): Promise<PublicPlanRevision> {
+    const {
+      work_item_id: workItemId,
+      structured_document: _structuredDocument,
+      artifact_refs: _artifactRefs,
+      ...publicRevision
+    } = revision;
+    return { ...publicRevision, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
+  }
+
+  private async scopeRefForWorkItemId(workItemId: string): Promise<ObjectRef> {
+    const workItem = this.requireFound(await this.repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
+    return { type: workItem.kind, id: workItem.id, title: workItem.title } as ObjectRef;
   }
 
   private async requireApprovedCurrentSpec(workItem: WorkItem, repository: DeliveryRepository = this.repository): Promise<Spec> {

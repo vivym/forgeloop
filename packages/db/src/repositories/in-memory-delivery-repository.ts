@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type {
   AutomationActionRun,
   AutomationProjectSettings,
+  Attachment,
   Artifact,
   Actor,
   CodexCredentialBinding,
@@ -50,8 +51,10 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  Task,
   WorkItem,
 } from '@forgeloop/domain';
+import type { ObjectRef } from '@forgeloop/contracts';
 import {
   DomainError,
   assertCodexRuntimeRecoveryReasonCode,
@@ -113,9 +116,12 @@ import type {
   GetCodexRuntimeJobInput,
   GetCodexRuntimeJobWorkloadInput,
   GetCodexRuntimeStatusInput,
+  GetCodexWorkerReadinessDiagnosticInput,
   GetWorkspaceBundleDownloadForRuntimeJobInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
+  ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ListCodexCredentialBindingReadinessCandidatesInput,
   ListCodexRuntimeJobArtifactsInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
@@ -134,6 +140,9 @@ import type {
   RevokeCodexLaunchLeaseInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
+  CodexCredentialBindingReadinessCandidate,
+  CodexRuntimeProfileReadinessDiagnostic,
+  CodexWorkerReadinessDiagnostic,
   WorkspaceBundleDownloadForRuntimeJob,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
@@ -214,6 +223,8 @@ const workspaceBundleAcquisitionMatches = (
   value.manifest_digest === expected.manifest_digest &&
   value.size_bytes === expected.size_bytes &&
   value.expires_at === expected.expires_at;
+const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
+  left?.type === right.type && left.id === right.id;
 
 const timestampMillis = (value: string | undefined): number | undefined => {
   if (value === undefined) {
@@ -467,12 +478,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly projects = new Map<string, Project>();
   private readonly projectRepos = new Map<string, ProjectRepo>();
   private readonly workItems = new Map<string, WorkItem>();
+  private readonly tasks = new Map<string, Task>();
   private readonly specs = new Map<string, Spec>();
   private readonly specRevisions = new Map<string, SpecRevision>();
   private readonly plans = new Map<string, Plan>();
   private readonly planRevisions = new Map<string, PlanRevision>();
   private readonly executionPackages = new Map<string, ExecutionPackage>();
   private readonly executionPackageDependencies = new Map<string, ExecutionPackageDependency>();
+  private readonly attachments = new Map<string, Attachment>();
   private readonly runSessions = new Map<string, RunSession>();
   private readonly runEvents = new Map<string, RunEvent>();
   private readonly runCommands = new Map<string, RunCommand>();
@@ -795,6 +808,89 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       ...(worker !== undefined ? { worker_status: worker.status } : {}),
       blocker_codes: blockerCodes,
     };
+  }
+
+  async listActiveCodexRuntimeProfileReadinessDiagnostics(
+    input: ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
+  ): Promise<CodexRuntimeProfileReadinessDiagnostic[]> {
+    return valuesFor(this.codexRuntimeProfileRevisions)
+      .filter(
+        (revision) =>
+          revision.status === 'active' &&
+          (input.runtime_profile_id === undefined || revision.profile_id === input.runtime_profile_id) &&
+          codexRuntimeScopeMatches(revision.allowed_scopes, codexScope(input.project_id, input.repo_id)),
+      )
+      .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.revision_number - left.revision_number)
+      .map((revision) => {
+        const networkPolicy = normalizeCodexRuntimeNetworkPolicy(revision.network_policy);
+        return {
+          profile_id: revision.profile_id,
+          target_kind: revision.target_kind,
+          source_access_mode: revision.source_access_mode,
+          docker_image_digest: revision.docker_image_digest,
+          network_policy_digest: codexRuntimeNetworkPolicyDigest(networkPolicy),
+          ...(networkPolicy.mode === 'egress_allowlist' && networkPolicy.provider === 'docker_network_proxy'
+            ? { network_provider_config_digest: networkPolicy.provider_config.provider_config_digest }
+            : {}),
+        };
+      });
+  }
+
+  async listCodexCredentialBindingReadinessCandidates(
+    input: ListCodexCredentialBindingReadinessCandidatesInput,
+  ): Promise<CodexCredentialBindingReadinessCandidate[]> {
+    return valuesFor(this.codexCredentialBindings)
+      .filter((binding) => {
+        if (
+          binding.project_id !== input.project_id ||
+          binding.profile_id !== input.runtime_profile_id ||
+          (input.credential_binding_id !== undefined && binding.id !== input.credential_binding_id)
+        ) {
+          return false;
+        }
+        if (binding.repo_id !== undefined && binding.repo_id !== input.repo_id) {
+          return false;
+        }
+        const profile = this.codexRuntimeProfiles.get(binding.profile_id);
+        if (profile?.target_kind !== input.target_kind || binding.active_version_id === undefined) {
+          return false;
+        }
+        const activeVersion = this.codexCredentialBindingVersions.get(binding.active_version_id)?.version;
+        return activeVersion?.status === 'active';
+      })
+      .map((binding) => ({ purpose: binding.purpose }));
+  }
+
+  async getCodexWorkerReadinessDiagnostic(
+    input: GetCodexWorkerReadinessDiagnosticInput,
+  ): Promise<CodexWorkerReadinessDiagnostic> {
+    const available = valuesFor(this.codexWorkerRegistrations).filter(
+      (record) =>
+        record.registration.status === 'online' &&
+        record.registration.control_channel_status === 'connected' &&
+        record.session_expires_at > input.now &&
+        codexWorkerHeartbeatIsFresh(record.registration.last_heartbeat_at, input.now) &&
+        codexRuntimeScopeMatches(record.allowed_scopes, codexScope(input.project_id, input.repo_id)),
+    );
+
+    if (available.length === 0) {
+      return 'worker_unavailable';
+    }
+    const targetCompatible = available.filter((record) => record.registration.capabilities.includes(input.target_kind));
+    if (targetCompatible.length === 0) {
+      return 'worker_target_unsupported';
+    }
+    const dockerCompatible = targetCompatible.filter((record) => record.docker_image_digests.includes(input.docker_image_digest));
+    if (dockerCompatible.length === 0) {
+      return 'worker_docker_capability_mismatch';
+    }
+    const networkCompatible = dockerCompatible.filter(
+      (record) =>
+        record.network_policy_digests.includes(input.network_policy_digest) &&
+        (input.network_provider_config_digest === undefined ||
+          record.network_provider_config_digests.includes(input.network_provider_config_digest)),
+    );
+    return networkCompatible.length === 0 ? 'worker_network_policy_mismatch' : 'ready';
   }
 
   async createCodexWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenInput): Promise<CodexWorkerBootstrapToken> {
@@ -2532,7 +2628,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveWorkItem(workItem: WorkItem): Promise<void> {
-    this.workItems.set(workItem.id, clone(workItem));
+    this.workItems.set(workItem.id, clone({ ...workItem, narrative_markdown: workItem.narrative_markdown ?? '' }));
   }
 
   async getWorkItem(workItemId: string): Promise<WorkItem | undefined> {
@@ -2542,6 +2638,43 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async listWorkItems(projectId?: string): Promise<WorkItem[]> {
     const workItems = valuesFor(this.workItems);
     return projectId === undefined ? workItems : workItems.filter((workItem) => workItem.project_id === projectId);
+  }
+
+  async updateWorkItemNarrative(input: { work_item_id: string; markdown: string; updated_at: string }): Promise<WorkItem> {
+    const workItem = this.workItems.get(input.work_item_id);
+    if (workItem === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Work Item ${input.work_item_id} was not found`);
+    }
+    const updated = { ...workItem, narrative_markdown: input.markdown, updated_at: input.updated_at };
+    this.workItems.set(input.work_item_id, clone(updated));
+    return clone(updated);
+  }
+
+  async saveTask(task: Task): Promise<void> {
+    this.tasks.set(task.id, clone(task));
+  }
+
+  async getTask(taskId: string): Promise<Task | undefined> {
+    return this.cloneMaybe(this.tasks.get(taskId));
+  }
+
+  async listTasks(projectId?: string): Promise<Task[]> {
+    const tasks = valuesFor(this.tasks);
+    return projectId === undefined ? tasks : tasks.filter((task) => task.project_id === projectId);
+  }
+
+  async listTasksForParent(parentRef: ObjectRef): Promise<Task[]> {
+    return valuesFor(this.tasks).filter((task) => objectRefIdentityMatches(task.parent_ref, parentRef));
+  }
+
+  async updateTaskNarrative(input: { task_id: string; markdown: string; updated_at: string }): Promise<Task> {
+    const task = this.tasks.get(input.task_id);
+    if (task === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
+    }
+    const updated = { ...task, narrative_markdown: input.markdown, updated_at: input.updated_at };
+    this.tasks.set(input.task_id, clone(updated));
+    return clone(updated);
   }
 
   async saveSpec(spec: Spec): Promise<void> {
@@ -2631,6 +2764,25 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return valuesFor(this.executionPackages).filter((executionPackage) => executionPackage.work_item_id === workItemId);
   }
 
+  async linkExecutionPackageToTask(input: { task_id: string; execution_package_id: string }): Promise<void> {
+    const executionPackage = this.executionPackages.get(input.execution_package_id);
+    if (executionPackage === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} was not found`);
+    }
+    if (!this.tasks.has(input.task_id)) {
+      throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
+    }
+    if (executionPackage.task_id !== undefined && executionPackage.task_id !== input.task_id) {
+      throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} is already linked to another Task`);
+    }
+    this.executionPackages.set(input.execution_package_id, clone({ ...executionPackage, task_id: input.task_id }));
+  }
+
+  async getTaskForExecutionPackage(executionPackageId: string): Promise<Task | undefined> {
+    const executionPackage = this.executionPackages.get(executionPackageId);
+    return executionPackage?.task_id === undefined ? undefined : this.getTask(executionPackage.task_id);
+  }
+
   async saveExecutionPackageDependency(dependency: ExecutionPackageDependency): Promise<void> {
     this.executionPackageDependencies.set(this.dependencyKey(dependency), clone(dependency));
   }
@@ -2639,6 +2791,45 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return valuesFor(this.executionPackageDependencies).filter(
       (dependency) => dependency.package_id === executionPackageId,
     );
+  }
+
+  async saveAttachment(attachment: Attachment): Promise<void> {
+    this.attachments.set(attachment.id, clone(attachment));
+  }
+
+  async getAttachment(attachmentId: string): Promise<Attachment | undefined> {
+    return this.cloneMaybe(this.attachments.get(attachmentId));
+  }
+
+  async listAttachmentsForObject(objectType: string, objectId: string): Promise<Attachment[]> {
+    return valuesFor(this.attachments).filter(
+      (attachment) =>
+        (attachment.owner_object_type === objectType && attachment.owner_object_id === objectId) ||
+        attachment.linked_object_refs.some((ref) => ref.type === objectType && ref.id === objectId),
+    );
+  }
+
+  async linkAttachmentToObject(attachmentId: string, objectRef: ObjectRef): Promise<Attachment> {
+    const attachment = this.attachments.get(attachmentId);
+    if (attachment === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Attachment ${attachmentId} was not found`);
+    }
+    const linked_object_refs = attachment.linked_object_refs.some((ref) => objectRefIdentityMatches(ref, objectRef))
+      ? attachment.linked_object_refs
+      : [...attachment.linked_object_refs, objectRef];
+    const updated = { ...attachment, linked_object_refs };
+    this.attachments.set(attachmentId, clone(updated));
+    return clone(updated);
+  }
+
+  async archiveAttachment(attachmentId: string, _archivedAt: string): Promise<Attachment> {
+    const attachment = this.attachments.get(attachmentId);
+    if (attachment === undefined) {
+      throw new DomainError('INVALID_TRANSITION', `Attachment ${attachmentId} was not found`);
+    }
+    const updated: Attachment = { ...attachment, reference_status: 'archived' };
+    this.attachments.set(attachmentId, clone(updated));
+    return clone(updated);
   }
 
   async saveRunSession(runSession: RunSession): Promise<void> {
@@ -5267,12 +5458,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.projects,
       this.projectRepos,
       this.workItems,
+      this.tasks,
       this.specs,
       this.specRevisions,
       this.plans,
       this.planRevisions,
       this.executionPackages,
       this.executionPackageDependencies,
+      this.attachments,
       this.runSessions,
       this.runEvents,
       this.runCommands,

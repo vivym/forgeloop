@@ -18,7 +18,7 @@ export class ExecutionPackagesController {
 
   @Post('plan-revisions/:planRevisionId/generate-packages')
   generatePackages(@Param('planRevisionId') planRevisionId: string) {
-    return this.service.generatePackages(planRevisionId);
+    return this.service.generatePublicPackages(planRevisionId);
   }
 
   @Post('plan-revisions/:planRevisionId/execution-packages')
@@ -26,17 +26,17 @@ export class ExecutionPackagesController {
     @Param('planRevisionId') planRevisionId: string,
     @Body(new ZodValidationPipe(createExecutionPackageSchema)) body: CreateExecutionPackageDto,
   ) {
-    return this.service.createExecutionPackage(planRevisionId, body);
+    return this.service.createPublicExecutionPackage(planRevisionId, body);
   }
 
   @Get('work-items/:workItemId/execution-packages')
   listExecutionPackages(@Param('workItemId') workItemId: string) {
-    return this.service.listExecutionPackages(workItemId);
+    return this.service.listPublicExecutionPackages(workItemId);
   }
 
   @Get('execution-packages/:packageId')
   getExecutionPackage(@Param('packageId') packageId: string) {
-    return this.service.getExecutionPackage(packageId);
+    return this.service.getPublicExecutionPackage(packageId);
   }
 
   @Patch('execution-packages/:packageId')
@@ -44,7 +44,7 @@ export class ExecutionPackagesController {
     @Param('packageId') packageId: string,
     @Body(new ZodValidationPipe(patchExecutionPackageSchema)) body: PatchExecutionPackageDto,
   ) {
-    return this.service.patchExecutionPackage(packageId, body);
+    return this.service.patchPublicExecutionPackage(packageId, body);
   }
 
   @Post('execution-packages/:packageId/mark-ready')
@@ -53,6 +53,6 @@ export class ExecutionPackagesController {
     @Body(new ZodValidationPipe(markPackageReadySchema)) body: MarkPackageReadyDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.service.markPackageReady(packageId, body, actorContextFromHeaders(headers));
+    return this.service.markPublicPackageReady(packageId, body, actorContextFromHeaders(headers));
   }
 }

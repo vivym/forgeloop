@@ -3,7 +3,6 @@
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { deletedProductLaneLabel, deletedProductLaneRoot } from './deleted-route-guards';
 import { renderRoute } from './router-test-utils';
 
 function containsElement(node: ReactNode, predicate: (element: ReactElement) => boolean): boolean {
@@ -18,37 +17,60 @@ function containsElement(node: ReactNode, predicate: (element: ReactElement) => 
 }
 
 describe('React Router product shell', () => {
-  it('renders Product Lanes through route modules', async () => {
-    const screen = await renderRoute('/lanes');
-    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+  it('renders My Work through route modules', async () => {
+    const screen = await renderRoute('/my-work');
+    expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
   });
 
-  it('shows product nav labels and does not show Intake as user-facing role copy', async () => {
-    const screen = await renderRoute('/lanes');
-    expect(screen.getByRole('link', { name: 'Lanes' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: deletedProductLaneLabel })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Specs & Plans' })).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: /requirements/i })).toBeTruthy();
+  it('shows project management nav labels without removed product route families', async () => {
+    const screen = await renderRoute('/my-work');
+
+    for (const label of ['Dashboard', 'My Work', 'Requirements', 'Specs & Plans', 'Tasks', 'Bugs', 'Board', 'Releases', 'Reports']) {
+      expect(screen.getByRole('link', { name: label })).toBeTruthy();
+    }
+
+    for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Packages', 'Runs', 'Reviews']) {
+      expect(screen.queryByRole('link', { name: label })).toBeNull();
+    }
+  });
+
+  it('shows real topbar context without placeholder workspace copy', async () => {
+    const screen = await renderRoute('/my-work');
+    const topbarContext = document.body.querySelector('[data-topbar-context]');
+
+    expect(screen.getByText('Context active')).toBeTruthy();
+    expect(screen.getByText('Authenticated')).toBeTruthy();
+    expect(topbarContext?.getAttribute('data-project-context')).toBe('active');
+    expect(topbarContext?.getAttribute('data-actor-context')).toBe('active');
+    expect(topbarContext?.hasAttribute('data-project-id')).toBe(false);
+    expect(topbarContext?.hasAttribute('data-actor-id')).toBe(false);
+    expect(screen.queryByText('Product workspace')).toBeNull();
   });
 
   it('routes sidebar clicks through React Router without document navigation', async () => {
     const user = userEvent.setup();
-    const screen = await renderRoute('/lanes');
+    const screen = await renderRoute('/my-work');
 
-    await user.click(screen.getByRole('link', { name: 'Pipeline' }));
+    await user.click(screen.getByRole('link', { name: 'Reports' }));
 
-    expect(screen.getByRole('heading', { name: 'Pipeline' })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Lanes' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Reports' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'My Work' })).toBeNull();
   });
 
-  it('marks the Lanes nav item active on the index route', async () => {
+  it('marks the My Work nav item active on the index route', async () => {
     const screen = await renderRoute('/');
 
-    expect(screen.getByRole('link', { name: 'Lanes' }).getAttribute('aria-current')).toBe('page');
+    expect((await screen.findByRole('link', { name: 'My Work' })).getAttribute('aria-current')).toBe('page');
   });
 
-  it('marks Specs & Plans active for plan routes', async () => {
-    const screen = await renderRoute('/plans');
+  it('marks Requirements active for initiative and tech debt routes', async () => {
+    const screen = await renderRoute('/initiatives/init-1');
+
+    expect(screen.getByRole('link', { name: 'Requirements' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('marks Specs & Plans active for spec and plan detail routes', async () => {
+    const screen = await renderRoute('/plans/plan-1');
 
     expect(screen.getByRole('link', { name: 'Specs & Plans' }).getAttribute('aria-current')).toBe('page');
   });
@@ -79,20 +101,28 @@ describe('React Router product shell', () => {
     ).toBe(true);
   });
 
-  it('keeps the canonical route config wired to the Product Lanes route module', async () => {
+  it('uses My Work as the default route through a redirect module', async () => {
     const routeConfigModule = await import('../../apps/web/src/app/routes');
-    const routeConfig = routeConfigModule.default;
-    const layoutRoute = routeConfig.find((route) => route.file === './routes/_layout.tsx');
+    const layoutRoute = routeConfigModule.default.find((route) => route.file === './routes/_layout.tsx');
 
     expect(layoutRoute?.children).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ index: true, file: './routes/lanes/index.tsx' }),
-        expect.objectContaining({ path: 'lanes', file: './routes/lanes/index.tsx' }),
-        expect.objectContaining({ path: 'lanes/:laneId', file: './routes/lanes/$laneId.tsx' }),
+        expect.objectContaining({ index: true, file: './routes/_index.tsx' }),
+        expect.objectContaining({ path: 'my-work', file: './routes/my-work/index.tsx' }),
       ]),
     );
-    const routePaths = layoutRoute?.children?.map((route) => route.path).filter(Boolean) ?? [];
-    expect(routePaths).not.toContain(deletedProductLaneRoot.slice(1));
-    expect(routePaths).not.toContain(`${deletedProductLaneRoot.slice(1)}/:laneId`);
+  });
+
+  it('does not include removed route families in canonical route config', async () => {
+    const routeConfigModule = await import('../../apps/web/src/app/routes');
+    const layoutRoute = routeConfigModule.default.find((route) => route.file === './routes/_layout.tsx');
+    const serialized = JSON.stringify(layoutRoute);
+
+    for (const forbidden of ['lanes', 'pipeline', 'work-items', 'packages', 'runs', 'reviews']) {
+      expect(serialized).not.toContain(`"path":"${forbidden}`);
+      expect(serialized).not.toContain(`/routes/${forbidden}`);
+    }
+    expect(serialized).not.toContain(`"path":"specs"`);
+    expect(serialized).not.toContain(`"path":"plans"`);
   });
 });

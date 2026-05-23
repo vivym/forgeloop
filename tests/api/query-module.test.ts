@@ -6,11 +6,18 @@ import type { RunSession } from '@forgeloop/domain';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../../apps/control-plane-api/src/modules/core/control-plane-runtime.service';
 import { QueryController } from '../../apps/control-plane-api/src/modules/query/query.controller';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
-import { seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
+import {
+  seedActiveRunExecutionProfile,
+  seedOnlineCompatibleCodexWorker,
+  seedReadyExecutionPackage,
+  seedReadyLocalCodexExecutionPackage,
+  seedSingleCredentialBinding,
+} from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -64,6 +71,7 @@ describe('query module', () => {
 
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
+    vi.unstubAllEnvs();
   });
 
   it('allows AppModule to override core query providers without QueryModule owning delivery wiring', async () => {
@@ -87,8 +95,9 @@ describe('query module', () => {
     expect(coreTokensModule).toHaveProperty('RUN_DURABILITY_MODE');
   });
 
-  const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo' } = {}) => {
+  const createTestApp = async (options: { durabilityMode?: 'durable' | 'volatile_demo'; now?: string } = {}) => {
     const repo = new InMemoryDeliveryRepository();
+    let idCounter = 0;
     let moduleBuilder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DELIVERY_REPOSITORY)
       .useValue(repo)
@@ -96,6 +105,12 @@ describe('query module', () => {
       .useValue({ kick: () => undefined, drainOnce: async () => undefined });
     if (options.durabilityMode !== undefined) {
       moduleBuilder = moduleBuilder.overrideProvider(RUN_DURABILITY_MODE).useValue(options.durabilityMode);
+    }
+    if (options.now !== undefined) {
+      moduleBuilder = moduleBuilder.overrideProvider(ControlPlaneRuntimeService).useValue({
+        id: (prefix: string) => `${prefix}-test-${++idCounter}`,
+        now: () => options.now,
+      });
     }
     const moduleRef = await moduleBuilder.compile();
     const app = moduleRef.createNestApplication();
@@ -200,17 +215,71 @@ describe('query module', () => {
   it('returns the work item cockpit from the query surface', async () => {
     const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
+    await repo.saveRunSession({
+      id: 'run-session-runtime-redaction',
+      execution_package_id: executionPackage.id,
+      requested_by_actor_id: actorOwner,
+      status: 'running',
+      executor_type: 'local_codex',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        worker_id: 'worker-runtime-redaction',
+        worker_lease_status: 'active',
+        worker_lease_heartbeat_at: '2026-05-20T00:00:00.000Z',
+        worker_lease_expires_at: '2026-05-20T00:05:00.000Z',
+        last_event_cursor: 'cursor-runtime-redaction',
+        last_event_at: '2026-05-20T00:00:01.000Z',
+        recovery_attempt_count: 0,
+        runtime_profile_id: 'profile-runtime-redaction',
+        credential_binding_id: 'credential-runtime-redaction',
+        launch_lease_id: 'lease-runtime-redaction',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        workspace_path: '/workspace/private',
+        codex_config_toml: 'approval_policy = "never"',
+        effective_dangerous_mode: 'not_requested',
+      },
+      created_at: later,
+      updated_at: later,
+    });
 
     const response = await request(app.getHttpServer())
       .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
       .expect(200);
+    const serialized = JSON.stringify(response.body);
 
-    expect(response.body.work_item).toMatchObject({ id: executionPackage.work_item_id });
+    expect(response.body.item).toMatchObject({ id: executionPackage.work_item_id });
     expect(response.body.packages).toEqual([expect.objectContaining({ id: executionPackage.id })]);
     expect(response.body.run_sessions).toEqual(expect.any(Array));
+    expect(response.body.run_sessions.find((run: { id: string }) => run.id === 'run-session-runtime-redaction')).toMatchObject({
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        last_event_at: '2026-05-20T00:00:01.000Z',
+        recovery_attempt_count: 0,
+      },
+    });
+    for (const unsafeText of [
+      'worker-runtime-redaction',
+      'cursor-runtime-redaction',
+      'profile-runtime-redaction',
+      'credential-runtime-redaction',
+      'lease-runtime-redaction',
+      'sha256:',
+      '/workspace/private',
+      'codex_config_toml',
+    ]) {
+      expect(serialized).not.toContain(unsafeText);
+    }
     expect(response.body.review_packets).toEqual(expect.any(Array));
     expect(response.body.delivery_readiness).toMatchObject({
-      work_item_id: executionPackage.work_item_id,
+      scope_ref: { type: 'requirement', id: executionPackage.work_item_id },
       active_lane: 'requirements',
     });
     expect(response.body).not.toHaveProperty('next_actions');
@@ -256,6 +325,95 @@ describe('query module', () => {
     expect(degradedSpecRevision.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'spec')).toMatchObject({
       state: 'blocked',
     });
+  });
+
+  it('returns public-safe runtime readiness for a local Codex execution package', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
+    const profile = await seedActiveRunExecutionProfile(repo, executionPackage);
+    await seedSingleCredentialBinding(repo, profile, executionPackage);
+    await seedOnlineCompatibleCodexWorker(repo, profile, executionPackage);
+
+    const response = await request(app.getHttpServer())
+      .get(`/query/execution-packages/${executionPackage.id}/runtime-readiness`)
+      .expect(200);
+    const serialized = JSON.stringify(response.body);
+
+    expect(response.body).toMatchObject({
+      executor_type: 'local_codex',
+      target_kind: 'run_execution',
+    });
+    expect(response.body.state).toMatch(/^(ready|blocked)$/);
+    expect(response.body.generated_at).toBe('2026-05-05T00:00:01.000Z');
+    expect(response.body).not.toHaveProperty('execution_package_id');
+    for (const unsafeText of [
+      'profile-run-execution',
+      'credential-binding',
+      'worker-',
+      'lease-',
+      'sha256:',
+      '/workspace/',
+      'codex_config',
+      'runtime_profile_id',
+      'credential_binding_id',
+      'docker_image_digest',
+    ]) {
+      expect(serialized).not.toContain(unsafeText);
+    }
+  });
+
+  it('uses server run execution runtime config for readiness without exposing raw selection ids', async () => {
+    const { app, repo } = await track(createTestApp({ now: '2026-05-20T00:00:00.000Z' }));
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
+    const profile = await seedActiveRunExecutionProfile(repo, executionPackage);
+    const configuredBinding = await seedSingleCredentialBinding(repo, profile, executionPackage, 'configured');
+    await seedSingleCredentialBinding(repo, profile, executionPackage, 'rotation');
+    await seedOnlineCompatibleCodexWorker(repo, profile, executionPackage);
+    vi.stubEnv('FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID', profile.profile_id);
+    vi.stubEnv('FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID', configuredBinding.bindingId);
+
+    const readiness = await request(app.getHttpServer())
+      .get(`/query/execution-packages/${executionPackage.id}/runtime-readiness`)
+      .expect(200);
+    expect(readiness.body).toMatchObject({ state: 'ready', blockers: [] });
+
+    const cockpit = await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .expect(200);
+    const runAction = cockpit.body.delivery_readiness.next_actions.find(
+      (candidate: { kind: string; command?: { type: string } }) =>
+        candidate.kind === 'command' && candidate.command?.type === 'run_package',
+    );
+    expect(runAction).toMatchObject({ enabled: true });
+
+    const serialized = `${JSON.stringify(readiness.body)} ${JSON.stringify(cockpit.body)}`;
+    expect(serialized).not.toContain(profile.profile_id);
+    expect(serialized).not.toContain(configuredBinding.bindingId);
+    expect(serialized).not.toContain('runtime_profile_id');
+    expect(serialized).not.toContain('credential_binding_id');
+  });
+
+  it('uses runtime readiness blockers to disable cockpit run package next actions', async () => {
+    const { app, repo } = await track(createTestApp());
+    const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
+
+    const response = await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .expect(200);
+    const action = response.body.delivery_readiness.next_actions.find(
+      (candidate: { kind: string; command?: { type: string } }) =>
+        candidate.kind === 'command' && candidate.command?.type === 'run_package',
+    );
+
+    expect(action).toMatchObject({
+      enabled: false,
+      disabled_reason: 'A local Codex run execution profile must be active for this package scope.',
+      blocked_reason: 'A local Codex run execution profile must be active for this package scope.',
+      command: expect.objectContaining({ type: 'run_package', package_id: executionPackage.id }),
+    });
+    expect(JSON.stringify(action)).not.toContain('sha256:');
+    expect(JSON.stringify(action)).not.toContain('/workspace');
+    expect(JSON.stringify(action)).not.toContain('codex_config');
   });
 
   it('returns 404 for a missing work item cockpit', async () => {
@@ -458,10 +616,10 @@ describe('query module', () => {
 
     const packagesResponse = await request(app.getHttpServer())
       .get('/query/execution-packages')
-      .query({ project_id: projectId, owner_actor_id: actorOwner })
+      .query({ project_id: projectId, execution_owner_actor_id: actorOwner })
       .expect(200);
     expect(packagesResponse.body.items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id, owner_actor_id: actorOwner })]),
+      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id, execution_owner_actor_id: actorOwner })]),
     );
 
     await request(app.getHttpServer())
@@ -898,7 +1056,7 @@ describe('query module', () => {
     await request(app.getHttpServer()).get(`/work-items/${executionPackage.work_item_id}/timeline`).expect(404);
   });
 
-  it('preserves durable runtime metadata fallback when a leased run has no persisted runtime metadata', async () => {
+  it('preserves only public-safe durable runtime metadata fallback when a leased run has no persisted runtime metadata', async () => {
     const { app, repo } = await track(createTestApp({ durabilityMode: 'durable' }));
     const executionPackage = await seedReadyPackage(app);
     const runSession: RunSession = {
@@ -928,10 +1086,11 @@ describe('query module', () => {
       .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
       .expect(200);
 
-    expect(response.body.run_sessions[0].runtime_metadata).toMatchObject({
+    expect(response.body.run_sessions[0].runtime_metadata).toEqual({
       durability_mode: 'durable',
-      worker_id: 'worker-1',
-      worker_lease_status: 'active',
+      recovery_attempt_count: 0,
     });
+    expect(JSON.stringify(response.body)).not.toContain('worker-1');
+    expect(JSON.stringify(response.body)).not.toContain('lease-token-1');
   });
 });

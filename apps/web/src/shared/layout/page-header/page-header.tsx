@@ -12,13 +12,13 @@ export interface PageHeaderProps {
 
 export function PageHeader({ actions, className, eyebrow, subtitle, title }: PageHeaderProps) {
   return (
-    <div className={cn('fl-page-header', className)}>
-      <div>
-        {eyebrow ? <p className="fl-page-header__eyebrow">{eyebrow}</p> : null}
-        <h1 className="fl-page-header__title">{title}</h1>
-        {subtitle ? <p className="fl-page-header__subtitle">{subtitle}</p> : null}
+    <div className={cn('flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between', className)} data-page-header="">
+      <div className="min-w-0">
+        {eyebrow ? <p className="mb-1 text-xs font-semibold uppercase text-text-secondary">{eyebrow}</p> : null}
+        <h1 className="text-2xl font-semibold text-text-primary">{title}</h1>
+        {subtitle ? <p className="mt-2 max-w-3xl text-sm text-text-secondary">{subtitle}</p> : null}
       </div>
-      {actions ? <div className="fl-page-header__actions">{actions}</div> : null}
+      {actions ? <div className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-1 sm:justify-end">{actions}</div> : null}
     </div>
   );
 }

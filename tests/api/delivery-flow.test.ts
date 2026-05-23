@@ -173,6 +173,8 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
 const approveSpec = async (app: INestApplication, workItemId: string) => {
   const server = app.getHttpServer();
   const spec = (await request(server).post(`/work-items/${workItemId}/specs`).send({}).expect(201)).body;
+  expect(spec).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(spec).not.toHaveProperty('work_item_id');
   const manualRevision = (
     await request(server)
       .post(`/specs/${spec.id}/revisions`)
@@ -190,15 +192,33 @@ const approveSpec = async (app: INestApplication, workItemId: string) => {
       })
       .expect(201)
   ).body;
+  expect(manualRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(manualRevision).not.toHaveProperty('work_item_id');
   const generatedRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
 
   expect(generatedRevision.id).not.toBe(manualRevision.id);
+  expect(generatedRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(generatedRevision).not.toHaveProperty('work_item_id');
   expect(generatedRevision.acceptance_criteria).toContain('Spec, plan, package, run, and review commands are available.');
-  await request(server).get(`/specs/${spec.id}`).expect(200);
-  await request(server).get(`/specs/${spec.id}/revisions`).expect(200);
-  await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+  const specResponse = (await request(server).get(`/specs/${spec.id}`).expect(200)).body;
+  expect(specResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(specResponse).not.toHaveProperty('work_item_id');
+  const revisionListResponse = (await request(server).get(`/specs/${spec.id}/revisions`).expect(200)).body;
+  expect(revisionListResponse[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(revisionListResponse[0]).not.toHaveProperty('work_item_id');
+  const generatedRevisionResponse = (await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200)).body;
+  expect(generatedRevisionResponse).toMatchObject({ id: generatedRevision.id, scope_ref: { type: 'requirement', id: workItemId } });
+  expect(generatedRevisionResponse).not.toHaveProperty('work_item_id');
+  const submittedSpec = (
+    await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201)
+  ).body;
+  expect(submittedSpec).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(submittedSpec).not.toHaveProperty('work_item_id');
+  const approvedSpec = (
+    await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)
+  ).body;
+  expect(approvedSpec).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(approvedSpec).not.toHaveProperty('work_item_id');
 
   return { specId: spec.id, specRevisionId: generatedRevision.id };
 };
@@ -206,6 +226,8 @@ const approveSpec = async (app: INestApplication, workItemId: string) => {
 const approvePlan = async (app: INestApplication, workItemId: string) => {
   const server = app.getHttpServer();
   const plan = (await request(server).post(`/work-items/${workItemId}/plans`).send({}).expect(201)).body;
+  expect(plan).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(plan).not.toHaveProperty('work_item_id');
   const manualRevision = (
     await request(server)
       .post(`/plans/${plan.id}/revisions`)
@@ -222,15 +244,33 @@ const approvePlan = async (app: INestApplication, workItemId: string) => {
       })
       .expect(201)
   ).body;
+  expect(manualRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(manualRevision).not.toHaveProperty('work_item_id');
   const generatedRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
 
   expect(generatedRevision.id).not.toBe(manualRevision.id);
+  expect(generatedRevision).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(generatedRevision).not.toHaveProperty('work_item_id');
   expect(generatedRevision.test_matrix).toContain('pnpm test tests/api');
-  await request(server).get(`/plans/${plan.id}`).expect(200);
-  await request(server).get(`/plans/${plan.id}/revisions`).expect(200);
-  await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200);
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+  const planResponse = (await request(server).get(`/plans/${plan.id}`).expect(200)).body;
+  expect(planResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(planResponse).not.toHaveProperty('work_item_id');
+  const revisionListResponse = (await request(server).get(`/plans/${plan.id}/revisions`).expect(200)).body;
+  expect(revisionListResponse[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(revisionListResponse[0]).not.toHaveProperty('work_item_id');
+  const generatedRevisionResponse = (await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200)).body;
+  expect(generatedRevisionResponse).toMatchObject({ id: generatedRevision.id, scope_ref: { type: 'requirement', id: workItemId } });
+  expect(generatedRevisionResponse).not.toHaveProperty('work_item_id');
+  const submittedPlan = (
+    await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201)
+  ).body;
+  expect(submittedPlan).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(submittedPlan).not.toHaveProperty('work_item_id');
+  const approvedPlan = (
+    await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201)
+  ).body;
+  expect(approvedPlan).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
+  expect(approvedPlan).not.toHaveProperty('work_item_id');
 
   return { planId: plan.id, planRevisionId: generatedRevision.id };
 };
@@ -422,25 +462,37 @@ describe('delivery control plane API', () => {
     const { planRevisionId } = await approvePlan(app, workItem.id);
     expect(specRevisionId).toContain('spec-revision');
 
-    const generatedPackages = (await request(server).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(201))
-      .body;
+    const generatedPackages = (
+      await request(server).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(201)
+    ).body;
     expect(generatedPackages).toHaveLength(1);
     expect(generatedPackages[0].phase).toBe('draft');
+    expect(generatedPackages[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
+    expect(generatedPackages[0]).not.toHaveProperty('work_item_id');
 
     const executionPackage = await createManualPackage(app, planRevisionId);
-    expect((await request(server).get(`/work-items/${workItem.id}/execution-packages`).expect(200)).body.length).toBeGreaterThanOrEqual(
-      2,
-    );
-    await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200);
+    expect(executionPackage).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
+    expect(executionPackage).not.toHaveProperty('work_item_id');
+    const packageList = (await request(server).get(`/work-items/${workItem.id}/execution-packages`).expect(200)).body;
+    expect(packageList.length).toBeGreaterThanOrEqual(2);
+    expect(packageList[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
+    expect(packageList[0]).not.toHaveProperty('work_item_id');
+    const packageDetail = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200)).body;
+    expect(packageDetail).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
+    expect(packageDetail).not.toHaveProperty('work_item_id');
     const patchedPackage = (await request(server)
       .patch(`/execution-packages/${executionPackage.id}`)
       .send({ objective: 'Edited before ready.' })
       .expect(200)).body;
-    await request(server)
+    expect(patchedPackage).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
+    expect(patchedPackage).not.toHaveProperty('work_item_id');
+    const readyPackage = (await request(server)
       .post(`/execution-packages/${executionPackage.id}/mark-ready`)
       .set(ownerHeaders)
       .send({ actor_id: actorOwner, expected_package_version: patchedPackage.version })
-      .expect(201);
+      .expect(201)).body;
+    expect(readyPackage).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
+    expect(readyPackage).not.toHaveProperty('work_item_id');
 
     const firstRun = (
       await request(server)
@@ -503,7 +555,7 @@ describe('delivery control plane API', () => {
     expect(cockpit.current_plan.current_revision_id).toBe(planRevisionId);
     expect(cockpit.packages.find((item: { id: string }) => item.id === executionPackage.id).resolution).toBe('completed');
     expect(cockpit.delivery_readiness).toMatchObject({
-      work_item_id: workItem.id,
+      scope_ref: { type: 'requirement', id: workItem.id },
     });
     expect(cockpit).not.toHaveProperty('completion_state');
     expect(cockpit).not.toHaveProperty('next_actions');

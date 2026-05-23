@@ -5,7 +5,7 @@ export const productLaneQueryKeys = [
   'project_id',
   'actor_id',
   'driver_actor_id',
-  'owner_actor_id',
+  'execution_owner_actor_id',
   'reviewer_actor_id',
   'qa_owner_actor_id',
   'release_owner_actor_id',
@@ -42,7 +42,7 @@ export const productLaneByWorkItemKind = {
 
 export type ProductLaneActorFilterKey =
   | 'driver_actor_id'
-  | 'owner_actor_id'
+  | 'execution_owner_actor_id'
   | 'reviewer_actor_id'
   | 'qa_owner_actor_id'
   | 'release_owner_actor_id';
@@ -107,7 +107,7 @@ export const productLaneMetadata: Record<ProductLaneId, ProductLaneMetadata> = {
       'cursor',
       'limit',
       'actor_id',
-      'owner_actor_id',
+      'execution_owner_actor_id',
       'kind',
       'phase',
       'status',
@@ -117,7 +117,7 @@ export const productLaneMetadata: Record<ProductLaneId, ProductLaneMetadata> = {
       'blocked',
       'stale',
     ],
-    actor_filter: 'owner_actor_id',
+    actor_filter: 'execution_owner_actor_id',
   },
   reviewer: {
     label: 'Reviewer',
@@ -189,8 +189,8 @@ export type ProductLaneFilterSubject = {
   actor_id_values?: readonly string[] | undefined;
   driver_actor_id?: string | undefined;
   driver_actor_id_values?: readonly string[] | undefined;
-  owner_actor_id?: string | undefined;
-  owner_actor_id_values?: readonly string[] | undefined;
+  execution_owner_actor_id?: string | undefined;
+  execution_owner_actor_id_values?: readonly string[] | undefined;
   reviewer_actor_id?: string | undefined;
   reviewer_actor_id_values?: readonly string[] | undefined;
   qa_owner_actor_id?: string | undefined;
