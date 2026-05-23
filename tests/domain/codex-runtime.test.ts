@@ -16,6 +16,7 @@ import {
   assertCodexRuntimePublicSafeValue,
   redactCodexLaunchMaterialization,
   validateCodexRuntimeJobTerminalResult,
+  validateCodexRuntimeJobArtifactIntake,
   validateCodexDockerNetworkProxyConfig,
   validateCodexDockerRuntimeEvidence,
   validateCodexEffectiveConfigAssertions,
@@ -393,6 +394,42 @@ describe('codex runtime domain contracts', () => {
               internal_ref: 'http://127.0.0.1:3845/internal/logs/raw',
             },
           ],
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('requires oversized generated payloads to be represented by artifact refs', () => {
+    const oversizedPayload = {
+      title: 'Public spec title',
+      body: 'x'.repeat(70_000),
+    };
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'spec_draft',
+          prompt_version: 'generation-prompt-v1',
+          output_schema_version: 'spec-draft-output.v1',
+          generated_payload: oversizedPayload,
+          generated_payload_digest: codexCanonicalDigest(oversizedPayload),
+          generation_artifacts: [],
+          public_summary: 'Generated a spec draft.',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('rejects unsafe runtime job artifact metadata', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobArtifactIntake({
+          content_type: 'application/json',
+          digest: digestA,
+          size_bytes: 128,
+          metadata_json: {
+            workspace_path: '/tmp/private/codex-home',
+          },
         }),
       'codex_docker_runtime_evidence_unsafe',
     );
@@ -842,7 +879,14 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
-  it.each([{ prompt: 'write private implementation details' }, { log: 'raw stdout from worker' }, { logs: ['raw worker log line'] }])(
+  it.each([
+    { prompt: 'write private implementation details' },
+    { raw_prompt: 'write private implementation details' },
+    { notification: 'raw app-server notification payload' },
+    { raw_notification: 'raw app-server notification payload' },
+    { log: 'raw stdout from worker' },
+    { logs: ['raw worker log line'] },
+  ])(
     'rejects nested raw prompt or log keys %#',
     (generatedPayload) => {
       expectDomainErrorCode(

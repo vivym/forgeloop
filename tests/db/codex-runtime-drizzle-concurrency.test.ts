@@ -20,6 +20,7 @@ import {
   codex_credential_binding_versions,
   codex_launch_leases,
   codex_launch_token_envelopes,
+  codex_runtime_job_artifacts,
   codex_runtime_jobs,
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
@@ -540,6 +541,42 @@ const materializeRuntimeJobInput = (
   now: later,
 });
 
+const startRuntimeJobInput = (input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput, seed: Awaited<ReturnType<typeof seedRuntime>>) => ({
+  runtime_job_id: input.runtime_job_id,
+  worker_id: seed.workerId,
+  worker_session_token: seed.sessionToken,
+  nonce: `start-${input.runtime_job_id}`,
+  nonce_timestamp: later,
+  idempotency_key: `start-${input.runtime_job_id}`,
+  request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+  runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+  launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+  now: later,
+});
+
+const runtimeJobArtifactInput = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+  seed: Awaited<ReturnType<typeof seedRuntime>>,
+  artifactId: string,
+) => ({
+  runtime_job_id: input.runtime_job_id,
+  worker_id: seed.workerId,
+  worker_session_token: seed.sessionToken,
+  nonce: `artifact-${artifactId}`,
+  nonce_timestamp: later,
+  artifact_id: artifactId,
+  artifact_idempotency_key: `artifact-${input.runtime_job_id}`,
+  kind: 'generated_payload',
+  name: 'generated-payload.json',
+  content_type: 'application/json',
+  digest: tokenHash(`artifact-digest-${input.runtime_job_id}`),
+  internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${artifactId}`,
+  size_bytes: 128,
+  metadata_json: {},
+  request_digest: tokenHash(`artifact-request-${input.runtime_job_id}`),
+  now: later,
+});
+
 const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbClient>, leaseId: string) => {
   await client.db.execute(sql.raw(`
     create or replace function codex_test_delay_launch_lease_update()
@@ -813,6 +850,59 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         await expectWorkerLeaseCount(firstClient, seed.workerId, 0);
       } finally {
         await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('replays runtime job artifact intake idempotently and rejects conflicting Drizzle replays', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const client = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+        const repository = new DrizzleDeliveryRepository(client.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(sealerCalls),
+        });
+        const seed = await seedRuntime(repository, { createInitialLease: false, maxConcurrency: 2 });
+        const { input, launchToken } = await createRuntimeJobWithCapturedToken(repository, seed, sealerCalls);
+        await repository.acceptCodexRuntimeJob(acceptRuntimeJobInput(input, seed, 'artifact-accept'));
+        await repository.claimCodexLaunchTokenEnvelope(claimRuntimeJobEnvelopeInput(input, seed, 'artifact-claim'));
+        await repository.materializeCodexRuntimeJob(materializeRuntimeJobInput(input, seed, launchToken, 'artifact-materialize'));
+        await repository.startCodexRuntimeJob(startRuntimeJobInput(input, seed));
+
+        const artifactId = randomUUID();
+        const artifactInput = runtimeJobArtifactInput(input, seed, artifactId);
+        const artifact = await repository.createCodexRuntimeJobArtifact(artifactInput);
+
+        await expect(
+          repository.createCodexRuntimeJobArtifact({ ...artifactInput, nonce: `artifact-replay-${artifactId}` }),
+        ).resolves.toEqual(artifact);
+        await expect(
+          repository.createCodexRuntimeJobArtifact({
+            ...artifactInput,
+            nonce: `artifact-replay-conflict-${artifactId}`,
+            digest: tokenHash(`artifact-digest-changed-${input.runtime_job_id}`),
+            request_digest: tokenHash(`artifact-conflict-request-${input.runtime_job_id}`),
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+        const conflictingArtifactId = randomUUID();
+        await expect(
+          repository.createCodexRuntimeJobArtifact({
+            ...artifactInput,
+            nonce: `artifact-same-digest-different-key-${conflictingArtifactId}`,
+            artifact_id: conflictingArtifactId,
+            artifact_idempotency_key: `artifact-conflict-${input.runtime_job_id}`,
+            internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${conflictingArtifactId}`,
+            request_digest: tokenHash(`artifact-same-digest-conflict-request-${input.runtime_job_id}`),
+          }),
+        ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+        const rows = await client.db
+          .select()
+          .from(codex_runtime_job_artifacts)
+          .where(eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id));
+        expect(rows).toHaveLength(1);
+      } finally {
+        await client.pool.end();
       }
     });
 

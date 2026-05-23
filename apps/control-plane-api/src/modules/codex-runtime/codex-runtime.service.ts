@@ -3,8 +3,6 @@ import { randomBytes } from 'node:crypto';
 import {
   BadRequestException,
   ForbiddenException,
-  HttpException,
-  HttpStatus,
   Inject,
   Injectable,
   NotFoundException,
@@ -16,6 +14,7 @@ import {
   codexRuntimeJobInputDigest,
   codexRuntimeNetworkPolicyDigest,
   codexWorkspaceAcquisitionDigest,
+  collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
   validateCodexDockerRuntimeEvidence,
@@ -124,6 +123,16 @@ const requireUnsafeDbCredentialStore = (): void => {
 };
 
 const generateWorkerSessionToken = (): string => `codex-worker-session-${randomBytes(32).toString('base64url')}`;
+const deterministicRuntimeArtifactId = (runtimeJobId: string, artifactIdempotencyKey: string): string => {
+  const hex = codexCanonicalDigest({ runtime_job_id: runtimeJobId, artifact_idempotency_key: artifactIdempotencyKey }).slice(
+    'sha256:'.length,
+  );
+  const bytes = Buffer.from(hex.slice(0, 32), 'hex');
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const uuidHex = bytes.toString('hex');
+  return `${uuidHex.slice(0, 8)}-${uuidHex.slice(8, 12)}-${uuidHex.slice(12, 16)}-${uuidHex.slice(16, 20)}-${uuidHex.slice(20, 32)}`;
+};
 
 const materializedNetworkPolicy = (policy: CodexRuntimeNetworkPolicy) => {
   return normalizeCodexRuntimeNetworkPolicy(policy);
@@ -845,13 +854,23 @@ export class CodexRuntimeService {
     assertWorkerBodyDigest(input);
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
-    const runtimeJob = await this.requireWorkerRuntimeJob(workerId, jobId);
-    await this.repository.getCodexLaunchLeaseStatus({
-      launch_lease_id: runtimeJob.launch_lease_id,
+    const artifactId = deterministicRuntimeArtifactId(jobId, input.artifact_idempotency_key);
+    const artifact = await this.repository.createCodexRuntimeJobArtifact({
+      runtime_job_id: jobId,
       worker_id: workerId,
       worker_session_token: input.worker_session_token,
       nonce: input.nonce,
       nonce_timestamp: input.nonce_timestamp,
+      artifact_id: artifactId,
+      artifact_idempotency_key: input.artifact_idempotency_key,
+      kind: input.kind,
+      name: input.name,
+      content_type: input.content_type,
+      digest: input.digest,
+      internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/${artifactId}`,
+      size_bytes: input.size_bytes,
+      metadata_json: input.metadata_json ?? {},
+      request_digest: input.body_digest,
       replay_protection: workerReplayProtection(
         'POST',
         `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/artifacts`,
@@ -859,7 +878,7 @@ export class CodexRuntimeService {
       ),
       now,
     });
-    throw new HttpException('Codex runtime artifact intake is implemented in Task 8', HttpStatus.NOT_IMPLEMENTED);
+    return { artifact };
   }
 
   async getRuntimeJobControl(workerId: string, jobId: string, query: CodexRuntimeWorkerQueryDto) {
@@ -892,6 +911,7 @@ export class CodexRuntimeService {
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
     if (input.terminal_result_json !== undefined) {
       validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
+      collectCodexRuntimeJobTerminalArtifactRefs(input.terminal_result_json);
     }
     const runtimeJob = await this.repository.terminalizeCodexRuntimeJob({
       runtime_job_id: jobId,

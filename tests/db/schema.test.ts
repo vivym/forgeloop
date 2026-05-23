@@ -515,6 +515,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
 
     expect(columnType(codex_runtime_job_artifacts, 'runtimeJobId')).toBe('PgUUID');
     expect(columnType(codex_runtime_job_artifacts, 'metadataJson')).toBe('PgJsonb');
+    expect(columnType(codex_runtime_job_artifacts, 'requestDigest')).toBe('PgText');
+    expect(columnNotNull(codex_runtime_job_artifacts, 'requestDigest')).toBe(false);
     expect(columnType(codex_pending_workspace_bundles, 'workspaceAcquisitionJson')).toBe('PgJsonb');
     expect(columnType(codex_pending_workspace_bundles, 'runWorkerLeaseId')).toBe('PgText');
 

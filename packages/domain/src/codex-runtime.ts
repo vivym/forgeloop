@@ -273,6 +273,23 @@ export interface CodexRuntimeJob {
   updated_at: IsoDateTime;
 }
 
+export interface CodexRuntimeJobArtifact {
+  id: string;
+  runtime_job_id: string;
+  project_id: string;
+  repo_id?: string;
+  target_kind: CodexRuntimeTargetKind;
+  artifact_idempotency_key: string;
+  kind: string;
+  name: string;
+  content_type: string;
+  digest: string;
+  internal_ref: string;
+  size_bytes: number;
+  metadata_json: Record<string, unknown>;
+  created_at: IsoDateTime;
+}
+
 export interface CodexLaunchTokenEnvelope {
   id: string;
   runtime_job_id: string;
@@ -519,6 +536,10 @@ const unsafeRuntimePublicCompactKeys = new Set([
   'workerlogs',
   'containerlog',
   'containerlogs',
+  'notification',
+  'notifications',
+  'rawnotification',
+  'rawnotifications',
 ]);
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
@@ -1366,6 +1387,20 @@ const assertCodexRuntimeResultKeys = (input: Record<string, unknown>, allowedKey
 };
 
 const codexRuntimeArtifactResultKeys = new Set(['kind', 'name', 'content_type', 'digest', 'internal_ref']);
+export const codexRuntimeJobArtifactMaxSizeBytes = 10_000_000;
+export const codexRuntimeGeneratedPayloadInlineMaxBytes = 64 * 1024;
+const allowedCodexRuntimeJobArtifactContentTypes = new Set([
+  'application/json',
+  'application/xml',
+  'application/zip',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'text/csv',
+  'text/markdown',
+  'text/plain',
+  'text/x-diff',
+]);
 const codexGenerationRuntimeJobResultKeys = new Set([
   'task_kind',
   'prompt_version',
@@ -1402,6 +1437,9 @@ const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<stri
     requireCodexRuntimeResultDigest(input, 'digest');
   }
   if (input.internal_ref !== undefined) {
+    if (input.digest === undefined) {
+      throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} internal_ref requires digest.`);
+    }
     requireCodexRuntimeResultString(input, 'internal_ref');
   }
   return input;
@@ -1414,7 +1452,10 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   }
   requireCodexRuntimeResultString(input, 'prompt_version');
   requireCodexRuntimeResultString(input, 'output_schema_version');
-  requireCodexRuntimeResultRecord(input, 'generated_payload');
+  const generatedPayload = requireCodexRuntimeResultRecord(input, 'generated_payload');
+  if (Buffer.byteLength(JSON.stringify(generatedPayload), 'utf8') > codexRuntimeGeneratedPayloadInlineMaxBytes) {
+    throw unsafeCodexRuntimePublicValue('Codex generation terminal result generated_payload must be uploaded as an artifact ref.');
+  }
   requireCodexRuntimeResultDigest(input, 'generated_payload_digest');
   requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'generation_artifacts'),
@@ -1459,6 +1500,9 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
       requireCodexRuntimeResultDigest(entry, 'output_digest');
     }
     if (entry.output_internal_ref !== undefined) {
+      if (entry.output_digest === undefined) {
+        throw unsafeCodexRuntimePublicValue('Codex run-execution check result output_internal_ref requires output_digest.');
+      }
       requireCodexRuntimeResultString(entry, 'output_internal_ref');
     }
   });
@@ -1467,6 +1511,64 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   );
   requireCodexRuntimeResultString(input, 'public_summary');
   return input as unknown as CodexRunExecutionRuntimeJobResult;
+};
+
+export const validateCodexRuntimeJobArtifactIntake = (input: {
+  content_type: string;
+  digest: string;
+  size_bytes: number;
+  metadata_json?: unknown;
+}): void => {
+  if (!allowedCodexRuntimeJobArtifactContentTypes.has(input.content_type)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime job artifact content_type is not allowed.');
+  }
+  if (!isSha256Digest(input.digest)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime job artifact digest must be a sha256 digest.');
+  }
+  if (!Number.isInteger(input.size_bytes) || input.size_bytes < 0 || input.size_bytes > codexRuntimeJobArtifactMaxSizeBytes) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime job artifact size exceeds the allowed limit.');
+  }
+  if (input.metadata_json !== undefined) {
+    assertCodexRuntimePublicSafeValue(input.metadata_json, 'runtime job artifact metadata');
+  }
+};
+
+export interface CodexRuntimeTerminalArtifactRef {
+  internal_ref: string;
+  digest: string;
+  content_type?: string;
+}
+
+export const collectCodexRuntimeJobTerminalArtifactRefs = (input: unknown): CodexRuntimeTerminalArtifactRef[] => {
+  const result = validateCodexRuntimeJobTerminalResult(input);
+  if (result.task_kind === 'run_execution') {
+    return [
+      ...(result.patch_artifact === undefined
+        ? []
+        : [
+            {
+              internal_ref: result.patch_artifact.internal_ref,
+              digest: result.patch_artifact.digest,
+              content_type: result.patch_artifact.content_type,
+            },
+          ]),
+      ...result.check_results.flatMap((entry) =>
+        entry.output_internal_ref === undefined || entry.output_digest === undefined
+          ? []
+          : [{ internal_ref: entry.output_internal_ref, digest: entry.output_digest }],
+      ),
+      ...result.execution_artifacts.flatMap((artifact) =>
+        artifact.internal_ref === undefined || artifact.digest === undefined
+          ? []
+          : [{ internal_ref: artifact.internal_ref, digest: artifact.digest, content_type: artifact.content_type }],
+      ),
+    ];
+  }
+  return result.generation_artifacts.flatMap((artifact) =>
+    artifact.internal_ref === undefined || artifact.digest === undefined
+      ? []
+      : [{ internal_ref: artifact.internal_ref, digest: artifact.digest, content_type: artifact.content_type }],
+  );
 };
 
 export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDigestInput | CodexLaunchTokenEnvelope): string => {

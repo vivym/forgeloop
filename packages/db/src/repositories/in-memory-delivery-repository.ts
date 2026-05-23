@@ -14,6 +14,7 @@ import type {
   CodexLaunchLeaseWithToken,
   CodexLaunchMaterialization,
   CodexRuntimeJob,
+  CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
   CodexRuntimeScope,
@@ -61,7 +62,9 @@ import {
   codexLaunchTokenEnvelopeDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeScopeMatches,
+  collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
+  validateCodexRuntimeJobArtifactIntake,
   validateCodexLaunchTargetKind,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
@@ -89,6 +92,7 @@ import type {
   ConsumeCodexRuntimeSetupNonceInput,
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
+  CreateCodexRuntimeJobArtifactInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
@@ -107,6 +111,7 @@ import type {
   GetCodexRuntimeStatusInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
+  ListCodexRuntimeJobArtifactsInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
@@ -1531,6 +1536,72 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return clone(updated.job);
   }
 
+  async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable', {
+      requireConnected: false,
+    });
+    this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+    );
+    this.assertCodexRuntimeJobArtifactIntake(input);
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
+    if (
+      record === undefined ||
+      leaseRecord === undefined ||
+      record.job.worker_id !== input.worker_id ||
+      record.job.status !== 'running' ||
+      record.job.expires_at <= input.now ||
+      leaseRecord.lease.status !== 'materialized' ||
+      leaseRecord.lease.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    const expectedInternalRef = `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${input.artifact_id}`;
+    if (input.internal_ref !== expectedInternalRef) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    }
+    const existing = this.findCodexRuntimeJobArtifactReplay(input);
+    if (existing !== undefined) {
+      if (this.codexRuntimeJobArtifactReplayMatches(existing, input)) {
+        return this.codexRuntimeJobArtifactPublic(existing, record);
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    const artifact: CodexRuntimeJobArtifactPrivateRecord = {
+      id: input.artifact_id,
+      runtime_job_id: input.runtime_job_id,
+      artifact_idempotency_key: input.artifact_idempotency_key,
+      kind: input.kind,
+      name: input.name,
+      content_type: input.content_type,
+      digest: input.digest,
+      internal_ref: input.internal_ref,
+      size_bytes: input.size_bytes,
+      metadata_json: clone(input.metadata_json),
+      request_digest: input.request_digest,
+      created_at: input.now,
+    };
+    this.codexRuntimeJobArtifacts.set(artifact.id, clone(artifact));
+    return this.codexRuntimeJobArtifactPublic(artifact, record);
+  }
+
+  async listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]> {
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    if (record === undefined) {
+      return [];
+    }
+    return valuesFor(this.codexRuntimeJobArtifacts)
+      .filter((artifact) => artifact.runtime_job_id === input.runtime_job_id)
+      .sort(byCreatedAtThenId)
+      .map((artifact) => this.codexRuntimeJobArtifactPublic(artifact, record));
+  }
+
   async cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     if (record === undefined) {
@@ -1656,6 +1727,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.terminal_result_json === undefined
         ? undefined
         : clone(validateCodexRuntimeJobTerminalResult(input.terminal_result_json) as unknown as Record<string, unknown>);
+    if (terminalResultJson !== undefined) {
+      this.assertCodexRuntimeTerminalArtifactRefs(input.runtime_job_id, terminalResultJson);
+    }
     const terminalJob: CodexRuntimeJobPrivateRecord = {
       ...record,
       job: {
@@ -4524,6 +4598,93 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       }),
       created_at: now,
     };
+  }
+
+  private codexRuntimeJobArtifactPublic(
+    artifact: CodexRuntimeJobArtifactPrivateRecord,
+    record: CodexRuntimeJobPrivateRecord,
+  ): CodexRuntimeJobArtifact {
+    return {
+      id: artifact.id,
+      runtime_job_id: artifact.runtime_job_id,
+      project_id: record.job.project_id,
+      ...(record.job.repo_id === undefined ? {} : { repo_id: record.job.repo_id }),
+      target_kind: record.job.target_kind,
+      artifact_idempotency_key: artifact.artifact_idempotency_key,
+      kind: artifact.kind,
+      name: artifact.name,
+      content_type: artifact.content_type,
+      digest: artifact.digest,
+      internal_ref: artifact.internal_ref,
+      size_bytes: artifact.size_bytes,
+      metadata_json: clone(artifact.metadata_json),
+      created_at: artifact.created_at,
+    };
+  }
+
+  private assertCodexRuntimeJobArtifactIntake(input: CreateCodexRuntimeJobArtifactInput): void {
+    try {
+      validateCodexRuntimeJobArtifactIntake(input);
+    } catch {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+  }
+
+  private findCodexRuntimeJobArtifactReplay(
+    input: CreateCodexRuntimeJobArtifactInput,
+  ): CodexRuntimeJobArtifactPrivateRecord | undefined {
+    const candidates = valuesFor(this.codexRuntimeJobArtifacts).filter(
+      (artifact) =>
+        artifact.id === input.artifact_id ||
+        (artifact.runtime_job_id === input.runtime_job_id && artifact.artifact_idempotency_key === input.artifact_idempotency_key) ||
+        (artifact.runtime_job_id === input.runtime_job_id &&
+          artifact.digest === input.digest &&
+          artifact.content_type === input.content_type),
+    );
+    const first = candidates[0];
+    if (first === undefined) {
+      return undefined;
+    }
+    if (candidates.some((candidate) => candidate.id !== first.id)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    return first;
+  }
+
+  private codexRuntimeJobArtifactReplayMatches(
+    artifact: CodexRuntimeJobArtifactPrivateRecord,
+    input: CreateCodexRuntimeJobArtifactInput,
+  ): boolean {
+    return (
+      artifact.runtime_job_id === input.runtime_job_id &&
+      artifact.artifact_idempotency_key === input.artifact_idempotency_key &&
+      artifact.kind === input.kind &&
+      artifact.name === input.name &&
+      artifact.content_type === input.content_type &&
+      artifact.digest === input.digest &&
+      artifact.internal_ref === input.internal_ref &&
+      artifact.size_bytes === input.size_bytes &&
+      artifact.request_digest === input.request_digest &&
+      valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private assertCodexRuntimeTerminalArtifactRefs(runtimeJobId: string, terminalResultJson: Record<string, unknown>): void {
+    const artifactsByRef = new Map(
+      valuesFor(this.codexRuntimeJobArtifacts)
+        .filter((artifact) => artifact.runtime_job_id === runtimeJobId)
+        .map((artifact) => [artifact.internal_ref, artifact] as const),
+    );
+    for (const ref of collectCodexRuntimeJobTerminalArtifactRefs(terminalResultJson)) {
+      const artifact = artifactsByRef.get(ref.internal_ref);
+      if (
+        artifact === undefined ||
+        artifact.digest !== ref.digest ||
+        (ref.content_type !== undefined && artifact.content_type !== ref.content_type)
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminal artifact ref was denied.');
+      }
+    }
   }
 
   private codexRuntimePendingBundleCreateMatches(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean {

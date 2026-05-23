@@ -29,6 +29,8 @@ type CodexRuntimeJobRepositoryContract = Pick<
   | 'materializeCodexRuntimeJob'
   | 'startCodexRuntimeJob'
   | 'appendCodexRuntimeJobEvent'
+  | 'createCodexRuntimeJobArtifact'
+  | 'listCodexRuntimeJobArtifacts'
   | 'cancelCodexRuntimeJob'
   | 'terminalizeCodexRuntimeJob'
   | 'recoverStaleCodexRuntimeJobs'
@@ -553,7 +555,7 @@ const createRuntimeJobWithCapturedToken = async (
   if (launchToken === undefined) {
     throw new Error('expected runtime job sealer to capture launch token');
   }
-  return { repository, input, created, launchToken };
+  return { repository, input, created, launchToken, sealerCalls };
 };
 
 const acceptRuntimeJob = (
@@ -673,6 +675,33 @@ const terminalizeRuntimeJob = (
     terminal_result_json: validGenerationTerminalResult(),
     idempotency_key: `terminal-${runtimeJobId}`,
     request_digest: tokenHash(`terminal-request-${runtimeJobId}`),
+    now: later,
+    ...patch,
+  });
+
+const createRuntimeJobArtifact = (
+  repository: DeliveryRepository,
+  runtimeJobId = 'runtime-job-1',
+  patch: Partial<Parameters<DeliveryRepository['createCodexRuntimeJobArtifact']>[0]> = {},
+) =>
+  repository.createCodexRuntimeJobArtifact({
+    runtime_job_id: runtimeJobId,
+    worker_id: 'worker-1',
+    worker_session_token: 'session-token-1',
+    nonce: `artifact-nonce-${runtimeJobId}`,
+    nonce_timestamp: later,
+    artifact_id: `11111111-1111-4111-8111-${runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'}`,
+    artifact_idempotency_key: `artifact-${runtimeJobId}`,
+    kind: 'generated_payload',
+    name: 'generated-payload.json',
+    content_type: 'application/json',
+    digest: tokenHash(`artifact-digest-${runtimeJobId}`),
+    internal_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/11111111-1111-4111-8111-${
+      runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'
+    }`,
+    size_bytes: 128,
+    metadata_json: {},
+    request_digest: tokenHash(`artifact-request-${runtimeJobId}`),
     now: later,
     ...patch,
   });
@@ -1219,6 +1248,8 @@ describe('codex runtime repository behavior', () => {
       'materializeCodexRuntimeJob',
       'startCodexRuntimeJob',
       'appendCodexRuntimeJobEvent',
+      'createCodexRuntimeJobArtifact',
+      'listCodexRuntimeJobArtifacts',
       'cancelCodexRuntimeJob',
       'terminalizeCodexRuntimeJob',
       'recoverStaleCodexRuntimeJobs',
@@ -1747,6 +1778,198 @@ describe('codex runtime repository behavior', () => {
       name: 'DomainError',
       code: 'codex_runtime_job_unavailable',
     });
+  });
+
+  it('issues job-bound artifact refs and requires terminal internal refs to match stored artifacts', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    const artifact = await createRuntimeJobArtifact(repository);
+
+    expect(artifact).toMatchObject({
+      runtime_job_id: 'runtime-job-1',
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      target_kind: 'generation',
+      content_type: 'application/json',
+      digest: tokenHash('artifact-digest-runtime-job-1'),
+      size_bytes: 128,
+      internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/11111111-1111-4111-8111-111111111111',
+    });
+    await expect(repository.listCodexRuntimeJobArtifacts({ runtime_job_id: 'runtime-job-1' })).resolves.toEqual([artifact]);
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        nonce: 'artifact-replay-runtime-job-1',
+      }),
+    ).resolves.toEqual(artifact);
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        nonce: 'artifact-replay-conflict-runtime-job-1',
+        digest: tokenHash('artifact-digest-runtime-job-1-changed'),
+        request_digest: tokenHash('artifact-replay-conflict-request-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    const conflictingArtifactId = '11111111-1111-4111-8111-333333333333';
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        nonce: 'artifact-same-digest-different-key-runtime-job-1',
+        artifact_id: conflictingArtifactId,
+        artifact_idempotency_key: 'artifact-runtime-job-1-conflict',
+        internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${conflictingArtifactId}`,
+        request_digest: tokenHash('artifact-same-digest-different-key-request-runtime-job-1'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        terminal_result_json: {
+          ...validGenerationTerminalResult(),
+          generated_payload_digest: artifact.digest,
+          generation_artifacts: [
+            {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: artifact.content_type,
+              digest: artifact.digest,
+              internal_ref: artifact.internal_ref,
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'succeeded' });
+  });
+
+  it('rejects worker-invented, wrong-job, invalid-type, and oversized runtime job artifacts', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        content_type: 'application/x-secret-dump',
+        nonce: 'artifact-bad-content-type',
+        request_digest: tokenHash('artifact-bad-content-type-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        digest: 'not-a-digest',
+        nonce: 'artifact-bad-digest',
+        request_digest: tokenHash('artifact-bad-digest-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        size_bytes: 10_000_001,
+        nonce: 'artifact-too-large',
+        request_digest: tokenHash('artifact-too-large-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        metadata_json: { workspace_path: '/tmp/private/codex-home' },
+        nonce: 'artifact-unsafe-metadata',
+        request_digest: tokenHash('artifact-unsafe-metadata-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+  });
+
+  it('rejects terminal internal refs invented by the worker or issued for another runtime job', async () => {
+    const first = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(first.repository);
+    await claimRuntimeJobEnvelope(first.repository);
+    await materializeRuntimeJob(first.repository, first.launchToken);
+    await startRuntimeJob(first.repository);
+
+    await expect(
+      terminalizeRuntimeJob(first.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-invented-ref',
+        request_digest: tokenHash('terminal-invented-ref-request'),
+        terminal_result_json: {
+          ...validGenerationTerminalResult(),
+          generation_artifacts: [
+            {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: 'application/json',
+              digest: tokenHash('invented-artifact'),
+              internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/worker-invented',
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+    const secondInput = await runtimeJobInput(first.repository, {
+      runtime_job_id: 'runtime-job-2',
+      launch_lease_id: 'runtime-launch-lease-2',
+      envelope_id: 'runtime-envelope-2',
+      job_request_id: 'runtime-job-request-2',
+      target: generationTarget({ target_id: 'generation-2' }),
+      input_digest: tokenHash('runtime-input-2'),
+    }, { worker_id: 'worker-2', session_token: 'session-token-2' });
+    await first.repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(secondInput);
+    const secondLaunchToken = first.sealerCalls.find((call) => call.runtime_job_id === 'runtime-job-2')?.plaintext_launch_token;
+    if (secondLaunchToken === undefined) {
+      throw new Error('expected second runtime job launch token');
+    }
+    await acceptRuntimeJob(first.repository, 'runtime-job-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'accept-nonce-runtime-job-2',
+      accepted_worker_session_digest: tokenHash('session-token-2'),
+      request_digest: tokenHash('accept-request-runtime-job-2'),
+    });
+    await claimRuntimeJobEnvelope(first.repository, 'runtime-job-2', 'runtime-envelope-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'claim-nonce-runtime-job-2',
+      accepted_worker_session_digest: tokenHash('session-token-2'),
+      request_digest: tokenHash('claim-request-runtime-job-2'),
+    });
+    await materializeRuntimeJob(first.repository, secondLaunchToken, 'runtime-job-2', 'runtime-launch-lease-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'materialize-nonce-runtime-job-2',
+      accepted_worker_session_digest: tokenHash('session-token-2'),
+      request_digest: tokenHash('materialize-request-runtime-job-2'),
+    });
+    await startRuntimeJob(first.repository, 'runtime-job-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'start-nonce-runtime-job-2',
+      request_digest: tokenHash('start-request-runtime-job-2'),
+    });
+    const otherArtifact = await createRuntimeJobArtifact(first.repository, 'runtime-job-2', {
+      worker_id: 'worker-2',
+      worker_session_token: 'session-token-2',
+      nonce: 'artifact-other-job',
+      request_digest: tokenHash('artifact-other-job-request'),
+    });
+
+    await expect(
+      terminalizeRuntimeJob(first.repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'terminal-other-job-ref',
+        request_digest: tokenHash('terminal-other-job-ref-request'),
+        terminal_result_json: {
+          ...validGenerationTerminalResult(),
+          generation_artifacts: [
+            {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: otherArtifact.content_type,
+              digest: otherArtifact.digest,
+              internal_ref: otherArtifact.internal_ref,
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
   });
 
   it('rejects successful terminal results before the runtime job starts', async () => {

@@ -15,6 +15,7 @@ import type {
   CodexLaunchLease,
   CodexLaunchMaterialization,
   CodexRuntimeJob,
+  CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
   CodexRuntimeScope,
@@ -62,8 +63,10 @@ import {
   codexLaunchTokenEnvelopeDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeScopeMatches,
+  collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
+  validateCodexRuntimeJobArtifactIntake,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
   isActiveRunSessionStatus,
@@ -139,6 +142,7 @@ import type {
   CodexWorkerReplayProtectionInput,
   ConsumeCodexRuntimeSetupNonceInput,
   CreateCodexCredentialBindingWithVersionInput,
+  CreateCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
@@ -158,6 +162,7 @@ import type {
   GetCodexRuntimeStatusInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
+  ListCodexRuntimeJobArtifactsInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
@@ -462,6 +467,7 @@ type CodexRuntimeJobArtifactDbRecord = {
   internal_ref: string;
   size_bytes: number;
   metadata_json: Record<string, unknown>;
+  request_digest?: string;
   created_at: string;
 };
 
@@ -623,6 +629,26 @@ const runtimeJobFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexRuntimeJo
   expires_at: record.expires_at,
   created_at: record.created_at,
   updated_at: record.updated_at,
+});
+
+const runtimeJobArtifactFromDbRecord = (
+  artifact: CodexRuntimeJobArtifactDbRecord,
+  job: Pick<CodexRuntimeJobDbRecord, 'project_id' | 'repo_id' | 'target_kind'>,
+): CodexRuntimeJobArtifact => ({
+  id: artifact.id,
+  runtime_job_id: artifact.runtime_job_id,
+  project_id: job.project_id,
+  ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
+  target_kind: job.target_kind,
+  artifact_idempotency_key: artifact.artifact_idempotency_key,
+  kind: artifact.kind,
+  name: artifact.name,
+  content_type: artifact.content_type,
+  digest: artifact.digest,
+  internal_ref: artifact.internal_ref,
+  size_bytes: artifact.size_bytes,
+  metadata_json: artifact.metadata_json,
+  created_at: artifact.created_at,
 });
 
 const runtimeJobTargetFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexLaunchLease['target'] => ({
@@ -1508,6 +1534,35 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
+  async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-artifact:${input.runtime_job_id}:${input.artifact_id}`,
+        `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).createCodexRuntimeJobArtifactUnlocked(input),
+    );
+  }
+
+  async listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]> {
+    const [jobRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+      .limit(1);
+    if (jobRow === undefined) {
+      return [];
+    }
+    const job = fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id))
+      .orderBy(asc(codex_runtime_job_artifacts.createdAt), asc(codex_runtime_job_artifacts.id));
+    return rows.map((row) => runtimeJobArtifactFromDbRecord(fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>), job));
+  }
+
   async cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
     return this.withAdvisoryLocks([`codex-runtime-job:${input.runtime_job_id}`], async (repository) =>
       (repository as DrizzleDeliveryRepository).cancelCodexRuntimeJobUnlocked(input),
@@ -1910,6 +1965,65 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return job;
   }
 
+  private async createCodexRuntimeJobArtifactUnlocked(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now, {
+      requireConnected: false,
+    });
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+    );
+    this.assertCodexRuntimeJobArtifactIntake(input);
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      bundle.job.status !== 'running' ||
+      bundle.job.expires_at <= input.now ||
+      bundle.lease.status !== 'materialized' ||
+      bundle.lease.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    const expectedInternalRef = `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${input.artifact_id}`;
+    if (input.internal_ref !== expectedInternalRef) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    }
+    const existing = await this.findCodexRuntimeJobArtifactReplay(input);
+    if (existing !== undefined) {
+      if (this.codexRuntimeJobArtifactReplayMatches(existing, input)) {
+        return runtimeJobArtifactFromDbRecord(existing, bundle.job);
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    const [row] = await this.db
+      .insert(codex_runtime_job_artifacts)
+      .values({
+        id: input.artifact_id,
+        runtimeJobId: input.runtime_job_id,
+        artifactIdempotencyKey: input.artifact_idempotency_key,
+        kind: input.kind,
+        name: input.name,
+        contentType: input.content_type,
+        digest: input.digest,
+        internalRef: input.internal_ref,
+        sizeBytes: input.size_bytes,
+        metadataJson: input.metadata_json,
+        requestDigest: input.request_digest,
+        createdAt: input.now,
+      } as never)
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    return runtimeJobArtifactFromDbRecord(fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>), bundle.job);
+  }
+
   private async cancelCodexRuntimeJobUnlocked(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
     if (bundle.job === undefined) {
@@ -2039,6 +2153,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     const terminalResultJson =
       input.terminal_result_json === undefined ? undefined : validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
+    if (terminalResultJson !== undefined) {
+      await this.assertCodexRuntimeTerminalArtifactRefs(input.runtime_job_id, terminalResultJson as unknown as Record<string, unknown>);
+    }
     const [jobRow] = await this.db
       .update(codex_runtime_jobs)
       .set({
@@ -2685,6 +2802,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           workspace_acquisition_json: pending.workspace_acquisition_json,
           expires_at: pending.expires_at,
         },
+        requestDigest: codexCanonicalDigest({
+          runtime_job_id: input.runtime_job_id,
+          bundle_id: pending.bundle_id,
+          archive_digest: pending.archive_digest,
+          manifest_digest: pending.manifest_digest,
+          workspace_acquisition_digest: pending.workspace_acquisition_digest,
+        }),
         createdAt: input.now,
       } as never)
       .onConflictDoNothing()
@@ -4730,6 +4854,85 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return new DrizzleDeliveryRepository(db, {
       codexLaunchTokenEnvelopeSealer: this.codexLaunchTokenEnvelopeSealer,
     });
+  }
+
+  private assertCodexRuntimeJobArtifactIntake(input: CreateCodexRuntimeJobArtifactInput): void {
+    try {
+      validateCodexRuntimeJobArtifactIntake(input);
+    } catch {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+  }
+
+  private async findCodexRuntimeJobArtifactReplay(
+    input: CreateCodexRuntimeJobArtifactInput,
+  ): Promise<CodexRuntimeJobArtifactDbRecord | undefined> {
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(
+        or(
+          eq(codex_runtime_job_artifacts.id, input.artifact_id),
+          and(
+            eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id),
+            eq(codex_runtime_job_artifacts.artifactIdempotencyKey, input.artifact_idempotency_key),
+          ),
+          and(
+            eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id),
+            eq(codex_runtime_job_artifacts.digest, input.digest),
+            eq(codex_runtime_job_artifacts.contentType, input.content_type),
+          ),
+        ),
+      );
+    const records = rows.map((row) => fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>));
+    const first = records[0];
+    if (first === undefined) {
+      return undefined;
+    }
+    if (records.some((record) => record.id !== first.id)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    return first;
+  }
+
+  private codexRuntimeJobArtifactReplayMatches(
+    artifact: CodexRuntimeJobArtifactDbRecord,
+    input: CreateCodexRuntimeJobArtifactInput,
+  ): boolean {
+    return (
+      artifact.runtime_job_id === input.runtime_job_id &&
+      artifact.artifact_idempotency_key === input.artifact_idempotency_key &&
+      artifact.kind === input.kind &&
+      artifact.name === input.name &&
+      artifact.content_type === input.content_type &&
+      artifact.digest === input.digest &&
+      artifact.internal_ref === input.internal_ref &&
+      artifact.size_bytes === input.size_bytes &&
+      artifact.request_digest === input.request_digest &&
+      valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private async assertCodexRuntimeTerminalArtifactRefs(runtimeJobId: string, terminalResultJson: Record<string, unknown>): Promise<void> {
+    const rows = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(eq(codex_runtime_job_artifacts.runtimeJobId, runtimeJobId));
+    const artifactsByRef = new Map(
+      rows
+        .map((row) => fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>))
+        .map((artifact) => [artifact.internal_ref, artifact] as const),
+    );
+    for (const ref of collectCodexRuntimeJobTerminalArtifactRefs(terminalResultJson)) {
+      const artifact = artifactsByRef.get(ref.internal_ref);
+      if (
+        artifact === undefined ||
+        artifact.digest !== ref.digest ||
+        (ref.content_type !== undefined && artifact.content_type !== ref.content_type)
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminal artifact ref was denied.');
+      }
+    }
   }
 
   private codexRuntimeJobStateLockKeys(runtimeJobId: string, workerId: string): readonly string[] {

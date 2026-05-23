@@ -1542,6 +1542,66 @@ describe('codex runtime control-plane APIs', () => {
       )
       .expect(201);
 
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-job-artifact', {
+          artifact_idempotency_key: 'runtime-job-artifact-1',
+          kind: 'generated_payload',
+          name: 'generated-payload.json',
+          content_type: 'application/json',
+          digest: sha('f'),
+          size_bytes: 12,
+          metadata_json: {},
+        }),
+      )
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.artifact).toMatchObject({
+          runtime_job_id: runtimeJobId,
+          project_id: projectId,
+          repo_id: repoId,
+          target_kind: 'generation',
+          content_type: 'application/json',
+          digest: sha('f'),
+          size_bytes: 12,
+        });
+        expect(body.artifact.internal_ref).toMatch(
+          new RegExp(`^artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/[0-9a-f-]{36}$`),
+        );
+        expect(JSON.stringify(body)).not.toContain('launch_token');
+        expect(JSON.stringify(body)).not.toContain(remoteLaunchToken);
+      });
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/terminal`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-job-terminal-invented-artifact-ref', {
+          launch_lease_id: runtimeJobLaunchLeaseId,
+          terminal_status: 'succeeded',
+          reason_code: 'completed',
+          terminal_idempotency_key: 'runtime-job-terminal-invented-artifact-ref',
+          terminal_result_json: {
+            task_kind: 'spec_draft',
+            prompt_version: 'prompt-v1',
+            output_schema_version: 'spec-draft.v1',
+            generated_payload: { summary: 'completed' },
+            generated_payload_digest: sha('g'),
+            generation_artifacts: [
+              {
+                kind: 'generated_payload',
+                name: 'generated-payload.json',
+                content_type: 'application/json',
+                digest: sha('g'),
+                internal_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/worker-invented`,
+              },
+            ],
+            public_summary: 'completed',
+          },
+        }),
+      )
+      .expect(400);
+
     await signedPost(app, `/internal/codex-runtime/runtime-jobs/${runtimeJobId}/cancel`, {
       reason_code: 'test_cancel',
       idempotency_key: 'runtime-job-cancel-1',
@@ -1590,21 +1650,6 @@ describe('codex runtime control-plane APIs', () => {
       .expect(({ body }) => {
         expect(body.recovered_runtime_jobs).toHaveLength(0);
       });
-
-    await request(app.getHttpServer())
-      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
-      .send(
-        runtimeWorkerBody(registration.session_token, 'runtime-job-artifact-task8-placeholder', {
-          artifact_idempotency_key: 'runtime-job-artifact-1',
-          kind: 'execution_summary',
-          name: 'summary.json',
-          content_type: 'application/json',
-          digest: sha('f'),
-          size_bytes: 12,
-          metadata_json: {},
-        }),
-      )
-      .expect(501);
   });
 
   it('redacts workspace acquisition payloads from worker poll projections', async () => {

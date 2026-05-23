@@ -15,6 +15,7 @@ import type {
   CodexLaunchTokenEnvelope,
   CodexLaunchTarget,
   CodexRuntimeJob,
+  CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
   CodexRuntimeScope,
@@ -387,6 +388,8 @@ export interface CreateCodexRuntimeJobArtifactInput {
   runtime_job_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   artifact_id: string;
   artifact_idempotency_key: string;
   kind: string;
@@ -399,6 +402,10 @@ export interface CreateCodexRuntimeJobArtifactInput {
   request_digest: string;
   replay_protection?: CodexWorkerReplayProtectionInput;
   now: string;
+}
+
+export interface ListCodexRuntimeJobArtifactsInput {
+  runtime_job_id: string;
 }
 
 export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleInput {
@@ -1173,6 +1180,8 @@ export interface DeliveryRepository {
   materializeCodexRuntimeJob(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization>;
   startCodexRuntimeJob(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
   appendCodexRuntimeJobEvent(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob>;
+  createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
+  listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]>;
   cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
   terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
   recoverStaleCodexRuntimeJobs(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult>;

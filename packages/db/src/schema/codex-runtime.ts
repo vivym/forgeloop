@@ -386,6 +386,7 @@ export const codex_runtime_job_artifacts = pgTable(
     internalRef: text('internal_ref').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     metadataJson: jsonb('metadata_json').$type<Record<string, unknown>>().notNull(),
+    requestDigest: text('request_digest'),
     createdAt: timestampColumn('created_at').notNull(),
   },
   (table) => [
