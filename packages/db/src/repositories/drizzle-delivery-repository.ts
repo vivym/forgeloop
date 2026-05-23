@@ -4067,7 +4067,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void> {
-    await this.upsert(development_plan_item_revisions, development_plan_item_revisions.id, revision);
+    await this.insertImmutable(development_plan_item_revisions, revision);
   }
 
   async listDevelopmentPlanItemRevisions(itemId: string): Promise<DevelopmentPlanItemRevision[]> {
@@ -4111,7 +4111,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
-    await this.upsert(boundary_summary_revisions, boundary_summary_revisions.id, revision);
+    await this.insertImmutable(boundary_summary_revisions, revision);
   }
 
   async listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]> {
@@ -4143,7 +4143,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void> {
-    await this.upsert(execution_plan_revisions, execution_plan_revisions.id, revision);
+    await this.insertImmutable(execution_plan_revisions, revision);
   }
 
   async getExecutionPlanRevision(id: string): Promise<ExecutionPlanRevision | undefined> {
@@ -7490,6 +7490,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       target,
       set: record as never,
     });
+  }
+
+  private async insertImmutable(table: AnyPgTable, entity: object): Promise<void> {
+    await this.db.insert(table).values(toDbRecord(entity, table) as never).onConflictDoNothing();
   }
 
   private async getById<T>(table: AnyPgTable, idColumn: AnyPgColumn, id: string): Promise<T | undefined> {

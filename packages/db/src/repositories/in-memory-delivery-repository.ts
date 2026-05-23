@@ -2804,6 +2804,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void> {
+    const existing = valuesFor(this.developmentPlanItemRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.development_plan_item_id === revision.development_plan_item_id &&
+          candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
     this.developmentPlanItemRevisions.set(revision.id, clone(revision));
   }
 
@@ -2814,7 +2823,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff> {
-    return revisionDiff(query, this.developmentPlanItemRevisions.get(query.base_revision_id)?.snapshot, this.developmentPlanItemRevisions.get(query.compare_revision_id)?.snapshot);
+    return revisionDiff(
+      query,
+      this.developmentPlanItemRevisions.get(query.base_revision_id)?.snapshot,
+      this.developmentPlanItemRevisions.get(query.compare_revision_id)?.snapshot,
+    );
   }
 
   async saveBrainstormingSession(session: BrainstormingSession): Promise<void> {
@@ -2834,6 +2847,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
+    const existing = valuesFor(this.boundarySummaryRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.boundary_summary_id === revision.boundary_summary_id &&
+          candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
     this.boundarySummaryRevisions.set(revision.id, clone(revision));
   }
 
@@ -2860,6 +2882,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void> {
+    const existing = valuesFor(this.executionPlanRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.execution_plan_id === revision.execution_plan_id && candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
     this.executionPlanRevisions.set(revision.id, clone(revision));
   }
 
@@ -5629,6 +5659,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.tasks,
       this.specs,
       this.specRevisions,
+      this.contextManifests,
+      this.developmentPlans,
+      this.developmentPlanSourceLinks,
+      this.developmentPlanItems,
+      this.developmentPlanItemRevisions,
+      this.brainstormingSessions,
+      this.boundarySummaries,
+      this.boundarySummaryRevisions,
+      this.executionPlans,
+      this.executionPlanRevisions,
+      this.executions,
       this.plans,
       this.planRevisions,
       this.executionPackages,

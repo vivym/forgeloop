@@ -1,4 +1,4 @@
-import { integer, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { BoundarySummary, BoundarySummaryRevision, BrainstormingSession } from '@forgeloop/domain';
 
 import { timestampColumn } from './_shared';
@@ -51,22 +51,28 @@ export const boundary_summaries = pgTable('boundary_summaries', {
   updatedAt: timestampColumn('updated_at').notNull(),
 });
 
-export const boundary_summary_revisions = pgTable('boundary_summary_revisions', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  boundarySummaryId: uuid('boundary_summary_id')
-    .notNull()
-    .references(() => boundary_summaries.id),
-  brainstormingSessionId: uuid('brainstorming_session_id')
-    .notNull()
-    .references(() => brainstorming_sessions.id),
-  developmentPlanItemId: uuid('development_plan_item_id')
-    .notNull()
-    .references(() => development_plan_items.id),
-  revisionNumber: integer('revision_number').notNull(),
-  summaryMarkdown: text('summary_markdown').notNull(),
-  decisionSnapshot: jsonb('decision_snapshot').$type<BoundarySummaryRevision['decision_snapshot']>().notNull(),
-  decisionCount: integer('decision_count').notNull(),
-  approvedByActorId: uuid('approved_by_actor_id').references(() => actors.id),
-  approvedAt: timestampColumn('approved_at'),
-  createdAt: timestampColumn('created_at').notNull(),
-});
+export const boundary_summary_revisions = pgTable(
+  'boundary_summary_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    boundarySummaryId: uuid('boundary_summary_id')
+      .notNull()
+      .references(() => boundary_summaries.id),
+    brainstormingSessionId: uuid('brainstorming_session_id')
+      .notNull()
+      .references(() => brainstorming_sessions.id),
+    developmentPlanItemId: uuid('development_plan_item_id')
+      .notNull()
+      .references(() => development_plan_items.id),
+    revisionNumber: integer('revision_number').notNull(),
+    summaryMarkdown: text('summary_markdown').notNull(),
+    decisionSnapshot: jsonb('decision_snapshot').$type<BoundarySummaryRevision['decision_snapshot']>().notNull(),
+    decisionCount: integer('decision_count').notNull(),
+    approvedByActorId: uuid('approved_by_actor_id').references(() => actors.id),
+    approvedAt: timestampColumn('approved_at'),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('boundary_revisions_summary_revision_unique').on(table.boundarySummaryId, table.revisionNumber),
+  ],
+);

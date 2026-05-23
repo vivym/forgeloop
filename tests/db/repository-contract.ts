@@ -758,7 +758,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     await repository.saveExecutionPlan(executionPlanFixture());
     await repository.saveExecutionPlanRevision(executionPlanRevisionFixture());
     await repository.saveExecution(executionFixture());
+    await repository.saveExecutionPackage(executionPackageFixture());
 
+    expect(await repository.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
+    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(developmentPlanFixture());
     expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toMatchObject({
       id: ids.developmentPlanItem,
       development_plan_id: ids.developmentPlan,
@@ -780,6 +783,7 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       base_revision_id: ids.developmentPlanItemRevision1,
       compare_revision_id: ids.developmentPlanItemRevision2,
     });
+    expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
     expect(await repository.getBoundarySummary(ids.boundarySummary)).toMatchObject({
       development_plan_item_id: ids.developmentPlanItem,
     });
@@ -795,9 +799,151 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       base_revision_id: ids.boundarySummaryRevision,
       compare_revision_id: ids.boundarySummaryRevision,
     });
+    expect(await repository.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
+    expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
     expect(await repository.getExecution(ids.execution)).toMatchObject({
       execution_plan_revision_id: ids.executionPlanRevision,
     });
+    expect(await repository.getExecutionPackage(ids.package)).toMatchObject({
+      development_plan_item_id: ids.developmentPlanItem,
+      execution_plan_id: ids.executionPlan,
+      execution_plan_revision_id: ids.executionPlanRevision,
+    });
+  });
+
+  it('commits AI-native planning graph writes made inside delivery transactions', async () => {
+    const repository = await factory();
+
+    await repository.withDeliveryTransaction(async (transaction) => {
+      await transaction.saveOrganization({
+        id: ids.org,
+        name: 'ForgeLoop Test Org',
+        created_at: at,
+        updated_at: at,
+      });
+      await transaction.saveActor({
+        id: ids.human,
+        org_id: ids.org,
+        display_name: 'Human Driver',
+        actor_type: 'human',
+        created_at: at,
+        updated_at: at,
+      });
+      await transaction.saveProject({
+        id: ids.project,
+        org_id: ids.org,
+        key: 'FORGE',
+        name: 'ForgeLoop',
+        repo_ids: ['repo-1'],
+        owner_actor_id: ids.human,
+        created_at: at,
+        updated_at: at,
+      });
+      await transaction.saveContextManifest(contextManifestFixture());
+      await transaction.saveDevelopmentPlan(developmentPlanFixture());
+      await transaction.saveDevelopmentPlanItem(developmentPlanItemFixture());
+      await transaction.saveBrainstormingSession(brainstormingSessionFixture());
+      await transaction.saveBoundarySummary(boundarySummaryFixture());
+      await transaction.saveExecutionPlan(executionPlanFixture());
+      await transaction.saveExecutionPlanRevision(executionPlanRevisionFixture());
+      await transaction.saveExecution(executionFixture());
+
+      expect(await transaction.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
+      expect(await transaction.getDevelopmentPlan(ids.developmentPlan)).toEqual(developmentPlanFixture());
+      expect(await transaction.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+      expect(await transaction.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
+      expect(await transaction.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
+      expect(await transaction.getExecution(ids.execution)).toEqual(executionFixture());
+    });
+
+    expect(await repository.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
+    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(developmentPlanFixture());
+    expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toEqual(developmentPlanItemFixture());
+    expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+    expect(await repository.getBoundarySummary(ids.boundarySummary)).toEqual(boundarySummaryFixture());
+    expect(await repository.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
+    expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
+    expect(await repository.getExecution(ids.execution)).toEqual(executionFixture());
+  });
+
+  it('keeps AI-native revision histories immutable', async () => {
+    const repository = await factory();
+
+    await repository.saveOrganization({
+      id: ids.org,
+      name: 'ForgeLoop Test Org',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveActor({
+      id: ids.human,
+      org_id: ids.org,
+      display_name: 'Human Driver',
+      actor_type: 'human',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveProject({
+      id: ids.project,
+      org_id: ids.org,
+      key: 'FORGE',
+      name: 'ForgeLoop',
+      repo_ids: ['repo-1'],
+      owner_actor_id: ids.human,
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveDevelopmentPlan(developmentPlanFixture());
+    await repository.saveDevelopmentPlanItem(developmentPlanItemFixture());
+    await repository.saveBrainstormingSession(brainstormingSessionFixture());
+    await repository.saveBoundarySummary(boundarySummaryFixture());
+    await repository.saveSpec(specFixture());
+    await repository.saveSpecRevision(specRevisionFixture());
+    await repository.saveExecutionPlan(executionPlanFixture());
+
+    const developmentPlanRevision = developmentPlanItemRevisionFixture();
+    const boundaryRevision = boundarySummaryRevisionFixture();
+    const executionRevision = executionPlanRevisionFixture();
+
+    await repository.saveDevelopmentPlanItemRevision(developmentPlanRevision);
+    await repository.saveBoundarySummaryRevision(boundaryRevision);
+    await repository.saveExecutionPlanRevision(executionRevision);
+
+    await repository.saveDevelopmentPlanItemRevision({
+      ...developmentPlanRevision,
+      revision_number: 99,
+      change_reason: 'Conflicting rewrite',
+    });
+    await repository.saveBoundarySummaryRevision({
+      ...boundaryRevision,
+      revision_number: 99,
+      summary_markdown: 'Conflicting rewrite',
+    });
+    await repository.saveExecutionPlanRevision({
+      ...executionRevision,
+      revision_number: 99,
+      content: 'Conflicting rewrite',
+    });
+
+    await repository.saveDevelopmentPlanItemRevision({
+      ...developmentPlanRevision,
+      id: 'ffffffff-ffff-4fff-8fff-fffffffffff4',
+      change_reason: 'Duplicate logical revision',
+    });
+    await repository.saveBoundarySummaryRevision({
+      ...boundaryRevision,
+      id: '13131313-1313-4313-8313-131313131313',
+      summary_markdown: 'Duplicate logical revision',
+    });
+    await repository.saveExecutionPlanRevision({
+      ...executionRevision,
+      id: '14141414-1414-4414-8414-141414141413',
+      content: 'Duplicate logical revision',
+    });
+
+    expect(await repository.listDevelopmentPlanItemRevisions(ids.developmentPlanItem)).toEqual([developmentPlanRevision]);
+    expect(await repository.listBoundarySummaryRevisions(ids.boundarySummary)).toEqual([boundaryRevision]);
+    expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionRevision);
   });
 }
 
@@ -2322,6 +2468,38 @@ const executionFixture = (overrides: Partial<Execution> = {}): Execution => ({
   evidence_refs: [],
   created_at: '2026-05-24T00:07:00.000Z',
   updated_at: '2026-05-24T00:07:00.000Z',
+  ...overrides,
+});
+
+const executionPackageFixture = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+  id: ids.package,
+  work_item_id: ids.workItem,
+  development_plan_item_id: ids.developmentPlanItem,
+  spec_id: ids.spec,
+  spec_revision_id: ids.specRevision1,
+  execution_plan_id: ids.executionPlan,
+  execution_plan_revision_id: ids.executionPlanRevision,
+  plan_id: ids.plan,
+  plan_revision_id: ids.planRevision1,
+  project_id: ids.project,
+  repo_id: 'repo-1',
+  objective: 'Persist the AI-native planning graph.',
+  owner_actor_id: ids.human,
+  reviewer_actor_id: ids.human,
+  qa_owner_actor_id: ids.human,
+  phase: 'ready',
+  activity_state: 'idle',
+  gate_state: 'not_submitted',
+  resolution: 'none',
+  required_checks: [requiredCheck],
+  required_test_gates: [],
+  required_artifact_kinds: ['execution_summary'],
+  allowed_paths: ['packages/domain/**', 'packages/db/**', 'tests/db/**'],
+  forbidden_paths: ['apps/**'],
+  source_mutation_policy: 'path_policy_scoped',
+  version: 0,
+  created_at: '2026-05-24T00:08:00.000Z',
+  updated_at: '2026-05-24T00:08:00.000Z',
   ...overrides,
 });
 

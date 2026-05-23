@@ -1,4 +1,4 @@
-import { integer, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
@@ -63,17 +63,23 @@ export const development_plan_items = pgTable('development_plan_items', {
   updatedAt: timestampColumn('updated_at').notNull(),
 });
 
-export const development_plan_item_revisions = pgTable('development_plan_item_revisions', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  developmentPlanItemId: uuid('development_plan_item_id')
-    .notNull()
-    .references(() => development_plan_items.id),
-  developmentPlanId: uuid('development_plan_id')
-    .notNull()
-    .references(() => development_plans.id),
-  revisionNumber: integer('revision_number').notNull(),
-  snapshot: jsonb('snapshot').$type<DevelopmentPlanItemRevision['snapshot']>().notNull(),
-  changeReason: text('change_reason').notNull(),
-  editedByActorId: uuid('edited_by_actor_id').references(() => actors.id),
-  createdAt: timestampColumn('created_at').notNull(),
-});
+export const development_plan_item_revisions = pgTable(
+  'development_plan_item_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    developmentPlanItemId: uuid('development_plan_item_id')
+      .notNull()
+      .references(() => development_plan_items.id),
+    developmentPlanId: uuid('development_plan_id')
+      .notNull()
+      .references(() => development_plans.id),
+    revisionNumber: integer('revision_number').notNull(),
+    snapshot: jsonb('snapshot').$type<DevelopmentPlanItemRevision['snapshot']>().notNull(),
+    changeReason: text('change_reason').notNull(),
+    editedByActorId: uuid('edited_by_actor_id').references(() => actors.id),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('dpi_revisions_item_revision_unique').on(table.developmentPlanItemId, table.revisionNumber),
+  ],
+);
