@@ -151,6 +151,19 @@ describe('Attachment API safety', () => {
     expect(JSON.stringify(response.body)).not.toContain('storage_uri');
   });
 
+  it('rejects render urls for active metadata when binary content is unavailable', async () => {
+    await seedAttachment();
+
+    const response = await request(app.getHttpServer())
+      .post('/attachments/att-1/render-url')
+      .send({ disposition: 'inline' })
+      .expect(404);
+
+    expect(response.body).not.toHaveProperty('render_url');
+    expect(JSON.stringify(response.body)).not.toContain('storage_uri');
+    expect(JSON.stringify(response.body)).not.toContain('memory://');
+  });
+
   it('serves binary content through the safe render url without exposing storage_uri', async () => {
     const upload = await uploadImage();
     const renderRef = await request(app.getHttpServer())

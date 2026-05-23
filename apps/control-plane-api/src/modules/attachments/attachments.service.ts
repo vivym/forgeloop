@@ -148,6 +148,7 @@ export class AttachmentsService {
     const attachment = await this.requireAttachment(attachmentId);
     await this.assertAttachmentRenderable(attachment);
     await this.assertObjectReadable(attachment.owner_object_type, attachment.owner_object_id);
+    this.requireAttachmentBinary(attachment);
 
     const token = randomUUID().replace(/-/g, '');
     const expiresAt = new Date(Date.parse(this.runtime.now()) + 5 * 60 * 1000).toISOString();
@@ -181,10 +182,7 @@ export class AttachmentsService {
     await this.assertAttachmentRenderable(attachment);
     await this.assertObjectReadable(attachment.owner_object_type, attachment.owner_object_id);
 
-    const bytes = this.binaryByStorageUri.get(attachment.storage_uri);
-    if (bytes === undefined) {
-      throw new NotFoundException('Attachment binary was not found');
-    }
+    const bytes = this.requireAttachmentBinary(attachment);
 
     response.status(200);
     response.setHeader('content-type', attachment.content_type);
@@ -327,6 +325,14 @@ export class AttachmentsService {
     if (attachment.safety_status !== 'passed') {
       throw new ForbiddenException('Attachment is not safe to render');
     }
+  }
+
+  private requireAttachmentBinary(attachment: Attachment): Buffer {
+    const bytes = this.binaryByStorageUri.get(attachment.storage_uri);
+    if (bytes === undefined) {
+      throw new NotFoundException('Attachment binary was not found');
+    }
+    return bytes;
   }
 
   private async assertObjectReadable(objectType: string, objectId: string): Promise<void> {
