@@ -62,39 +62,49 @@ export class BrainstormingService {
   ) {}
 
   async startSession(input: StartSessionInput): Promise<BrainstormingSession> {
-    const plan = await this.requireDevelopmentPlan(input.development_plan_id);
-    const item = await this.requireDevelopmentPlanItem(input.development_plan_id, input.item_id);
-    const contextManifest = this.buildContextManifest(plan, item);
-    await this.repository.saveContextManifest(contextManifest);
+    return this.repository.withObjectLock(`development-plan:${input.development_plan_id}`, async (planLockedRepository) =>
+      planLockedRepository.withDeliveryTransaction(async (repository) => {
+        const plan = await this.requireDevelopmentPlan(input.development_plan_id, repository);
+        const item = await this.requireDevelopmentPlanItem(input.development_plan_id, input.item_id, repository);
+        const contextManifest = this.buildContextManifest(plan, item);
+        await repository.saveContextManifest(contextManifest);
 
-    const at = this.runtime.now();
-    const session: BrainstormingSession = {
-      id: this.runtime.id('brainstorming-session'),
-      revision_id: this.runtime.id('brainstorming-session-revision'),
-      source_ref: item.source_ref,
-      development_plan_id: plan.id,
-      development_plan_item_id: item.id,
-      development_plan_item_revision_id: item.revision_id,
-      context_manifest_id: contextManifest.id,
-      context_manifest_revision_id: contextManifest.revision_id,
-      questions: defaultBoundaryQuestions.map((text) => ({
-        id: this.runtime.id('brainstorming-question'),
-        text,
-        author_id: 'system',
-        created_at: at,
-        status: 'open',
-      })),
-      answers: [],
-      decisions: [],
-      approval_state: 'questions_open',
-      created_at: at,
-      updated_at: at,
-    };
-    await this.repository.saveBrainstormingSession(session);
-    await this.appendItemEvent(item.id, 'brainstorming_session_started', input.actor_id, {
-      brainstorming_session_id: session.id,
-    });
-    return session;
+        const at = this.runtime.now();
+        const session: BrainstormingSession = {
+          id: this.runtime.id('brainstorming-session'),
+          revision_id: this.runtime.id('brainstorming-session-revision'),
+          source_ref: item.source_ref,
+          development_plan_id: plan.id,
+          development_plan_item_id: item.id,
+          development_plan_item_revision_id: item.revision_id,
+          context_manifest_id: contextManifest.id,
+          context_manifest_revision_id: contextManifest.revision_id,
+          questions: defaultBoundaryQuestions.map((text) => ({
+            id: this.runtime.id('brainstorming-question'),
+            text,
+            author_id: 'system',
+            created_at: at,
+            status: 'open',
+          })),
+          answers: [],
+          decisions: [],
+          approval_state: 'questions_open',
+          created_at: at,
+          updated_at: at,
+        };
+        await repository.saveBrainstormingSession(session);
+        await this.appendItemEvent(
+          item.id,
+          'brainstorming_session_started',
+          input.actor_id,
+          {
+            brainstorming_session_id: session.id,
+          },
+          repository,
+        );
+        return session;
+      }),
+    );
   }
 
   async answerQuestion(sessionId: string, input: AnswerQuestionInput): Promise<BrainstormingAnswer> {
@@ -149,6 +159,7 @@ export class BrainstormingService {
       planLockedRepository.withObjectLock(`brainstorming-session:${sessionId}`, async (sessionLockedRepository) =>
         sessionLockedRepository.withDeliveryTransaction(async (repository) => {
           const session = await this.requireBrainstormingSession(sessionId, repository);
+          this.assertSessionMutable(session);
           if (!this.allQuestionsAnswered(session)) {
             throw new ConflictException('Boundary approval requires an answer for every brainstorming question');
           }

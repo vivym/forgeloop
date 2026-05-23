@@ -266,6 +266,121 @@ describe('Boundary Brainstorming API', () => {
       persistedSession?.revision_id,
     );
   });
+
+  it('rejects repeated boundary approval without creating new revisions', async () => {
+    const { plan, item } = await seedDevelopmentPlanItem(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const session = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
+        .send({ actor_id: 'actor-tech' })
+        .expect(201)
+    ).body;
+
+    for (const question of session.questions) {
+      await request(server)
+        .post(`/brainstorming-sessions/${session.id}/answers`)
+        .send({
+          question_id: question.id,
+          text: `Answered boundary question: ${question.text}`,
+          actor_id: 'actor-tech',
+        })
+        .expect(201);
+    }
+    await request(server)
+      .post(`/brainstorming-sessions/${session.id}/decisions`)
+      .send({
+        text: 'Keep implementation scoped to Web IA and route tests.',
+        actor_id: 'actor-tech',
+      })
+      .expect(201);
+
+    const approved = (
+      await request(server)
+        .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
+        .send({
+          confirmed_scope: ['Web IA and Development Plan Item gate UX'],
+          confirmed_out_of_scope: ['Runtime scheduler changes'],
+          accepted_assumptions: ['Mock Codex question generation is sufficient for this slice'],
+          open_risks: ['Execution queue depends on existing runtime adapters'],
+          validation_expectations: ['Route tests and screenshot checks pass'],
+          actor_id: 'actor-tech',
+          final_decision: 'Approve after all questions and one prior decision.',
+        })
+        .expect(201)
+    ).body;
+    const approvedSession = await repository.getBrainstormingSession(session.id);
+    const approvedBoundarySummary = await repository.getBoundarySummary(approved.boundary_summary_id);
+    const itemRevisionsBefore = await repository.listDevelopmentPlanItemRevisions(item.id);
+    const planRevisionsBefore = await repository.listDevelopmentPlanRevisions(plan.id);
+
+    await request(server)
+      .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
+      .send({
+        confirmed_scope: ['Expanded scope should not be written'],
+        confirmed_out_of_scope: ['Runtime scheduler changes'],
+        accepted_assumptions: ['Mock Codex question generation is sufficient for this slice'],
+        open_risks: ['Execution queue depends on existing runtime adapters'],
+        validation_expectations: ['Route tests and screenshot checks pass'],
+        actor_id: 'actor-tech',
+        final_decision: 'Attempt to approve twice.',
+      })
+      .expect(400);
+
+    const persistedSession = await repository.getBrainstormingSession(session.id);
+    const persistedBoundarySummary = await repository.getBoundarySummary(approved.boundary_summary_id);
+    expect(persistedSession?.revision_id).toBe(approvedSession?.revision_id);
+    expect(persistedBoundarySummary).toEqual(approvedBoundarySummary);
+    await expect(repository.listDevelopmentPlanItemRevisions(item.id)).resolves.toHaveLength(itemRevisionsBefore.length);
+    await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toHaveLength(planRevisionsBefore.length);
+  });
+
+  it('starts brainstorming sessions under the Development Plan lock and transaction', async () => {
+    const { plan, item } = await seedDevelopmentPlanItem(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const lockKeys: string[] = [];
+    const transactionMarkers: string[] = [];
+    const originalWithObjectLock = repository.withObjectLock.bind(repository);
+    const originalWithDeliveryTransaction = repository.withDeliveryTransaction.bind(repository);
+    vi.spyOn(repository, 'withObjectLock').mockImplementation((key, write) => {
+      lockKeys.push(key);
+      return originalWithObjectLock(key, write);
+    });
+    vi.spyOn(repository, 'withDeliveryTransaction').mockImplementation((write) =>
+      originalWithDeliveryTransaction(async (transaction) => {
+        transactionMarkers.push('started');
+        return write(transaction);
+      }),
+    );
+
+    const session = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
+        .send({ actor_id: 'actor-tech' })
+        .expect(201)
+    ).body;
+
+    expect(lockKeys).toEqual([`development-plan:${plan.id}`]);
+    expect(transactionMarkers).toEqual(['started']);
+    await expect(repository.getContextManifest(session.context_manifest_id)).resolves.toMatchObject({
+      development_plan_id: plan.id,
+      development_plan_item_id: item.id,
+    });
+    await expect(repository.getBrainstormingSession(session.id)).resolves.toMatchObject({
+      id: session.id,
+      context_manifest_id: session.context_manifest_id,
+    });
+    await expect(repository.listObjectEvents(item.id, 'development_plan_item')).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'brainstorming_session_started',
+          metadata: { brainstorming_session_id: session.id },
+        }),
+      ]),
+    );
+  });
 });
 
 async function seedDevelopmentPlanItem(app: INestApplication) {
