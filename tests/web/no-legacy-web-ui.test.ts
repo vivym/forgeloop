@@ -33,6 +33,12 @@ const productSourceText = () =>
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
+const activeWebSourceText = () =>
+  textFiles('apps/web')
+    .filter((file) => !file.includes('/features/dev-tools/') && !file.includes('/routes/dev-tools/'))
+    .map((file) => readFileSync(file, 'utf8'))
+    .join('\n');
+
 type LegacyPattern = {
   target: string;
   pattern: RegExp;
@@ -136,6 +142,34 @@ describe('no legacy Web UI baggage', () => {
     expect(workItemWebScanFiles()).toContain('apps/web/src/app/routes/requirements/index.tsx');
     expect(workItemWebScanFiles()).not.toContain('apps/web/src/app/routes/work-items/index.tsx');
     expect(workItemWebScanFiles()).not.toContain('apps/web/src/app/routes/lanes/index.tsx');
+  });
+
+  it('does not keep old product route modules', () => {
+    for (const path of [
+      'apps/web/src/app/routes/lanes',
+      'apps/web/src/app/routes/pipeline',
+      'apps/web/src/app/routes/work-items',
+      'apps/web/src/app/routes/packages',
+      'apps/web/src/app/routes/runs',
+      'apps/web/src/app/routes/reviews',
+      'apps/web/src/features/product-lanes',
+      'apps/web/src/features/pipeline',
+      'apps/web/src/features/execution-packages/execution-package-routes.tsx',
+      'apps/web/src/features/run-console/run-console-routes.tsx',
+      'apps/web/src/features/review-packets/review-packet-routes.tsx',
+    ]) {
+      expect(existsSync(path), path).toBe(false);
+    }
+  });
+
+  it('does not keep removed top-level product route hrefs or labels on active Web surfaces', () => {
+    expect(productSourceText()).not.toMatch(
+      /(?:to=|href=|href:|target:\s*{[\s\S]{0,120}href:)\s*['"`]\/(?:lanes|pipeline|work-items|packages|runs|reviews)(?:\/|\?|['"`])/,
+    );
+    expect(activeWebSourceText()).not.toMatch(
+      /(?:to=|href=|href:|basePath=)\s*['"`]\/(?:specs|plans)(?:\?|['"`])/,
+    );
+    expect(productSourceText()).not.toMatch(/>Lanes<|>Pipeline<|>Work Items<|>Packages<|>Runs<|>Reviews</);
   });
 
   it('does not expose raw or debug-only controls on product Web surfaces', () => {

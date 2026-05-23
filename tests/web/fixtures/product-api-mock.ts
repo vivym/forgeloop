@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 
 import {
   actorId,
+  boardCards,
   bugDetail,
   bugListResponse,
   deliveryReadiness,
@@ -14,6 +15,7 @@ import {
   productLaneFixtureItemsByLane,
   projectId,
   release,
+  releaseReadinessDetail,
   requirementDetail,
   requirementListResponse,
   reviewPacket,
@@ -394,6 +396,37 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/bugs?project_id=${projectId}`]: bugListResponse,
   [`GET /query/bugs?project_id=${projectId}&limit=100`]: bugListResponse,
   'GET /query/bugs/bug-1': bugDetail,
+  [`GET /query/board?project_id=${projectId}&limit=100`]: { items: boardCards },
+  [`GET /query/reports/delivery?project_id=${projectId}&limit=100`]: {
+    id: 'delivery',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/quality?project_id=${projectId}&limit=100`]: {
+    id: 'quality',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/release-readiness?project_id=${projectId}&limit=100`]: {
+    id: 'release-readiness',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/observation?project_id=${projectId}&limit=100`]: {
+    id: 'observation',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
+  [`GET /query/reports/replay?project_id=${projectId}&limit=100`]: {
+    id: 'replay',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    degraded_sources: [],
+  },
   [`GET /query/product-lanes/requirements?project_id=${projectId}`]: productLaneResponse('requirements'),
   [`GET /query/product-lanes/requirements?project_id=${projectId}&driver_actor_id=actor-driver`]:
     productLaneResponse('requirements'),
@@ -531,8 +564,8 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     decision: 'changes_requested',
     recorded_at: '2026-05-18T00:31:00.000Z',
   },
-  [`GET /query/releases?project_id=${projectId}`]: { releases: [release] },
-  [`GET /query/releases?project_id=${projectId}&limit=100`]: { releases: [release] },
+  [`GET /releases?project_id=${projectId}`]: { releases: [release] },
+  [`GET /releases?project_id=${projectId}&limit=100`]: { releases: [release] },
   'POST /releases': {
     release,
     blocker_snapshot: {
@@ -655,6 +688,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     checklist: [{ id: 'fixture-ready', label: 'Fixture release ready', status: 'passed', blocker_codes: [] }],
     next_actions: ['submit_for_approval'],
   },
+  [`GET /query/releases/${release.id}/readiness?project_id=${projectId}`]: releaseReadinessDetail,
   [`GET /query/replay/work_item/${workItem.id}`]: timeline,
   [`GET /query/replay/work_item/${routeWorkItem.id}`]: routeTimeline,
   [`GET /query/replay/spec/${spec.id}`]: timeline.map((entry) => ({

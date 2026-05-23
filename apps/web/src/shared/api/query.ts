@@ -2,6 +2,7 @@ import { createApiContext, type ForgeloopApiOptions } from './common';
 import { normalizeProductWorkItemRegistryQuery } from './query-keys';
 import { z } from 'zod';
 import {
+  boardCardSchema,
   bugDetailSchema,
   bugListItemSchema,
   initiativeDetailSchema,
@@ -11,6 +12,7 @@ import {
   productLaneResponseSchema,
   productListResponseSchema,
   deliveryRunReadinessResponseSchema,
+  releaseReadinessDetailSchema,
   requirementDetailSchema,
   requirementListItemSchema,
   taskDetailSchema,
@@ -29,7 +31,6 @@ import type {
   ProductLaneResponse,
   ProductListResponse,
   ReleaseCockpitResponse,
-  ReleaseListResponse,
   ReviewPacket,
   TaskPackageEvidence,
   TaskReviewEvidence,
@@ -72,6 +73,15 @@ const initiativeListResponseSchema = z.object({ items: z.array(initiativeListIte
 const techDebtListResponseSchema = z.object({ items: z.array(techDebtListItemSchema) }).passthrough();
 const taskListResponseSchema = z.object({ items: z.array(taskListItemSchema) }).passthrough();
 const bugListResponseSchema = z.object({ items: z.array(bugListItemSchema) }).passthrough();
+const boardResponseSchema = z.object({ items: z.array(boardCardSchema) }).passthrough();
+const reportResponseSchema = z
+  .object({
+    id: z.string(),
+    project_id: z.string(),
+    generated_at: z.string().optional(),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
 
 export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const { request } = createApiContext(options);
@@ -125,6 +135,14 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       bugListResponseSchema.parse(await request<unknown>(`/query/bugs${queryString(query)}`)),
     getBug: async (bugId: string) =>
       bugDetailSchema.parse(await request<unknown>(`/query/bugs/${encodeURIComponent(bugId)}`)),
+    listBoardCards: async (query: ProductRegistryQuery) =>
+      boardResponseSchema.parse(await request<unknown>(`/query/board${queryString(query)}`)),
+    getReport: async (reportId: string, query: ProductRegistryQuery) =>
+      reportResponseSchema.parse(await request<unknown>(`/query/reports/${encodeURIComponent(reportId)}${queryString(query)}`)),
+    getReleaseReadiness: async (releaseId: string, query: ProjectQuery) =>
+      releaseReadinessDetailSchema.parse(
+        await request<unknown>(`/query/releases/${encodeURIComponent(releaseId)}/readiness${queryString(query)}`),
+      ),
     getPipeline: async (query: ProjectQuery) =>
       pipelineResponseSchema.parse(await request<unknown>(`/query/pipeline${queryString(query)}`)) as PipelineResponse,
     listWorkItems: async (query: ProductWorkItemRegistryQuery) =>
@@ -145,7 +163,6 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       productListResponseSchema.parse(await request<unknown>(`/query/review-packets${queryString(query)}`)) as ProductListResponse,
     listReviews: (query: ProjectQuery) => request<ReviewPacket[]>(`/query/reviews${queryString(query)}`),
     getReview: (reviewPacketId: string) => request<ReviewPacket>(`/query/reviews/${encodeURIComponent(reviewPacketId)}`),
-    listReleases: (query: ProjectQuery) => request<ReleaseListResponse>(`/query/releases${queryString(query)}`),
   };
 
   const api = {

@@ -3,7 +3,13 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { createForgeloopCommandApi } from './commands';
 import { createForgeloopQueryApi, type MyWorkQuery, type ProjectManagementListQuery } from './query';
-import { normalizeMyWorkQuery, normalizeProductLaneQuery, normalizeProjectManagementListQuery, queryKeys } from './query-keys';
+import {
+  normalizeMyWorkQuery,
+  normalizeProductLaneQuery,
+  normalizeProductRegistryQuery,
+  normalizeProjectManagementListQuery,
+  queryKeys,
+} from './query-keys';
 import type {
   CockpitResponse,
   AcknowledgeReleaseTestAcceptanceBody,
@@ -16,6 +22,7 @@ import type {
   ExecutionPackage,
   LinkReleaseScopeBody,
   ListProductQuery,
+  ListReleasesQuery,
   MarkdownDocument,
   OverrideApproveReleaseBody,
   PatchReleaseBody,
@@ -45,9 +52,9 @@ const createCommandApi = () => createForgeloopCommandApi();
 type ReleaseProductQuery = {
   project_id: string;
   release_owner_actor_id?: string;
-  phase?: string;
-  gate_state?: string;
-  resolution?: string;
+  phase?: NonNullable<ListReleasesQuery['phase']>;
+  gate_state?: NonNullable<ListReleasesQuery['gate_state']>;
+  resolution?: NonNullable<ListReleasesQuery['resolution']>;
   cursor?: string;
   limit?: number;
 };
@@ -174,6 +181,24 @@ export function useBugQuery(bugId: string | undefined) {
     queryKey: queryKeys.bug(bugId),
     queryFn: () => createQueryApi().getBug(requiredId(bugId, 'bugId')),
     enabled: bugId !== undefined,
+  });
+}
+
+export function useBoardQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.board(normalizedQuery),
+    queryFn: () => createQueryApi().listBoardCards(normalizedQuery),
+  });
+}
+
+export function useReportQuery(reportId: string, query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.report(reportId, normalizedQuery),
+    queryFn: () => createQueryApi().getReport(reportId, normalizedQuery),
   });
 }
 
@@ -552,7 +577,15 @@ export function useReleasesQuery(query: ReleaseProductQuery) {
 
   return useQuery({
     queryKey: queryKeys.releases(normalizedQuery),
-    queryFn: () => createQueryApi().listReleases(normalizedQuery),
+    queryFn: () => createCommandApi().listReleases(normalizedQuery),
+  });
+}
+
+export function useReleaseReadinessQuery(releaseId: string | undefined, projectId: string) {
+  return useQuery({
+    queryKey: queryKeys.releaseReadiness(releaseId, projectId),
+    queryFn: () => createQueryApi().getReleaseReadiness(requiredId(releaseId, 'releaseId'), { project_id: projectId }),
+    enabled: releaseId !== undefined,
   });
 }
 

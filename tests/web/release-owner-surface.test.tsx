@@ -19,8 +19,8 @@ describe('Release Owner surface', () => {
   it('renders the release cockpit route as a governed product surface', async () => {
     const screen = await renderRoute('/releases/release-web-product');
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy();
-    expect(screen.getByText('Release readiness')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Release Readiness' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Typed scope' })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/Linked Work Items|\/work-items|\/packages/);
     expect(screen.queryByRole('link', { name: 'Dev Tools' })).toBeNull();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
