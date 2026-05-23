@@ -723,6 +723,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       developmentPlanItemRevisionFixture({
         id: ids.developmentPlanItemRevision1,
         revision_number: 1,
+        snapshot: developmentPlanItemFixture({
+          boundary_status: 'not_started',
+          next_action: 'Start boundary brainstorming.',
+        }),
         change_reason: 'Initial generated row',
         created_at: '2026-05-24T00:02:00.000Z',
       }),
@@ -731,6 +735,12 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       developmentPlanItemRevisionFixture({
         id: ids.developmentPlanItemRevision2,
         revision_number: 2,
+        snapshot: developmentPlanItemFixture({
+          revision_id: ids.developmentPlanItemRevision2,
+          boundary_status: 'approved',
+          next_action: 'Generate Spec from approved boundary.',
+          updated_at: '2026-05-24T00:03:00.000Z',
+        }),
         change_reason: 'Boundary refinement',
         created_at: '2026-05-24T00:03:00.000Z',
       }),
@@ -788,13 +798,18 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     ).toMatchObject({
       base_revision_id: ids.developmentPlanItemRevision1,
       compare_revision_id: ids.developmentPlanItemRevision2,
+      changed_fields: expect.arrayContaining(['boundary_status', 'next_action', 'revision_id', 'updated_at']),
     });
     expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
     expect(await repository.getBoundarySummary(ids.boundarySummary)).toMatchObject({
       development_plan_item_id: ids.developmentPlanItem,
     });
     expect(await repository.listBoundarySummaryRevisions(ids.boundarySummary)).toEqual([
-      expect.objectContaining({ id: ids.boundarySummaryRevision, revision_number: 1 }),
+      expect.objectContaining({
+        id: ids.boundarySummaryRevision,
+        revision_number: 1,
+        development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+      }),
     ]);
     expect(
       await repository.compareBoundarySummaryRevisions({
@@ -804,6 +819,28 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     ).toMatchObject({
       base_revision_id: ids.boundarySummaryRevision,
       compare_revision_id: ids.boundarySummaryRevision,
+      changed_fields: [],
+    });
+
+    await repository.saveBoundarySummaryRevision(
+      boundarySummaryRevisionFixture({
+        id: '15151515-1515-4515-8515-151515151515',
+        revision_number: 2,
+        development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+        summary_markdown: 'Task 2 scope is approved after narrowed validation.',
+        decision_count: 2,
+        created_at: '2026-05-24T00:05:00.000Z',
+      }),
+    );
+    expect(
+      await repository.compareBoundarySummaryRevisions({
+        base_revision_id: ids.boundarySummaryRevision,
+        compare_revision_id: '15151515-1515-4515-8515-151515151515',
+      }),
+    ).toMatchObject({
+      base_revision_id: ids.boundarySummaryRevision,
+      compare_revision_id: '15151515-1515-4515-8515-151515151515',
+      changed_fields: expect.arrayContaining(['summary_markdown', 'decision_count', 'revision_number', 'created_at']),
     });
     expect(await repository.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
     expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
@@ -2378,7 +2415,9 @@ const boundarySummaryRevisionFixture = (overrides: Partial<BoundarySummaryRevisi
   id: ids.boundarySummaryRevision,
   boundary_summary_id: ids.boundarySummary,
   brainstorming_session_id: ids.brainstormingSession,
+  brainstorming_session_revision_id: ids.brainstormingSessionRevision,
   development_plan_item_id: ids.developmentPlanItem,
+  development_plan_item_revision_id: ids.developmentPlanItemRevision2,
   revision_number: 1,
   summary_markdown: 'Task 2 scope is approved.',
   decision_snapshot: brainstormingSessionFixture().decisions,

@@ -3,7 +3,7 @@ import type { BoundarySummary, BoundarySummaryRevision, BrainstormingSession } f
 
 import { timestampColumn } from './_shared';
 import { actors } from './actor';
-import { development_plan_items, development_plans } from './development-plan';
+import { development_plan_item_revisions, development_plan_items, development_plans } from './development-plan';
 
 export const brainstorming_sessions = pgTable('brainstorming_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -61,9 +61,13 @@ export const boundary_summary_revisions = pgTable(
     brainstormingSessionId: uuid('brainstorming_session_id')
       .notNull()
       .references(() => brainstorming_sessions.id),
+    brainstormingSessionRevisionId: uuid('brainstorming_session_revision_id').notNull(),
     developmentPlanItemId: uuid('development_plan_item_id')
       .notNull()
       .references(() => development_plan_items.id),
+    developmentPlanItemRevisionId: uuid('development_plan_item_revision_id')
+      .notNull()
+      .references(() => development_plan_item_revisions.id),
     revisionNumber: integer('revision_number').notNull(),
     summaryMarkdown: text('summary_markdown').notNull(),
     decisionSnapshot: jsonb('decision_snapshot').$type<BoundarySummaryRevision['decision_snapshot']>().notNull(),

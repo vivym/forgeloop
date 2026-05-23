@@ -342,10 +342,25 @@ const revisionDiff = (
 ): StructuredRevisionDiff => ({
   base_revision_id: query.base_revision_id,
   compare_revision_id: query.compare_revision_id,
-  changed_fields: valuesEqual(base, compare) ? [] : ['snapshot'],
+  changed_fields: changedFields(base, compare),
   ...(base === undefined ? {} : { base_snapshot: structuredClone(base) as Record<string, unknown> }),
   ...(compare === undefined ? {} : { compare_snapshot: structuredClone(compare) as Record<string, unknown> }),
 });
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const changedFields = (base: unknown, compare: unknown): string[] => {
+  if (valuesEqual(base, compare)) {
+    return [];
+  }
+  if (!isRecord(base) || !isRecord(compare)) {
+    return ['value'];
+  }
+  return [...new Set([...Object.keys(base), ...Object.keys(compare)])]
+    .filter((key) => !valuesEqual(base[key], compare[key]))
+    .sort();
+};
 const rawSha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const workspaceBundleAcquisitionKeys = new Set([
   'schema_version',

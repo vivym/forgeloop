@@ -4,6 +4,8 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import type { DeliveryRepository } from '../../packages/db/src';
 
 const expectedQuestions = [
   'Which repos, modules, and product surfaces are in scope?',
@@ -28,6 +30,7 @@ describe('Boundary Brainstorming API', () => {
   it('persists questions, answers, decisions, and approved boundary summary before Spec generation', async () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const session = (
       await request(server)
         .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
@@ -130,8 +133,9 @@ describe('Boundary Brainstorming API', () => {
     expect(itemDiff).toMatchObject({
       base_revision_id: itemRevisions[0].id,
       compare_revision_id: itemRevisions[1].id,
-      changed_fields: expect.arrayContaining(['snapshot']),
+      changed_fields: expect.arrayContaining(['boundary_status', 'next_action', 'revision_id', 'updated_at']),
     });
+    expect(itemDiff.changed_fields).not.toContain('snapshot');
 
     const boundaryRevisions = (
       await request(server)
@@ -142,9 +146,17 @@ describe('Boundary Brainstorming API', () => {
     expect(boundaryRevisions[0]).toMatchObject({
       boundary_summary_id: approved.boundary_summary_id,
       brainstorming_session_id: session.id,
+      development_plan_item_revision_id: approved.development_plan_item_revision_id,
       decision_count: 2,
       approved_by_actor_id: 'actor-tech',
     });
+    const persistedApprovedSession = await repository.getBrainstormingSession(session.id);
+    const persistedBoundarySummary = await repository.getBoundarySummary(approved.boundary_summary_id);
+    expect(persistedApprovedSession?.revision_id).toEqual(expect.any(String));
+    expect((persistedBoundarySummary as { brainstorming_session_revision_id?: string })?.brainstorming_session_revision_id).toBe(
+      persistedApprovedSession?.revision_id,
+    );
+    expect(boundaryRevisions[0].brainstorming_session_revision_id).toBe(persistedApprovedSession?.revision_id);
 
     const boundaryDiff = (
       await request(server)

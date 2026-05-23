@@ -514,6 +514,10 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(work_items, 'intake_context')).toBe('PgJsonb');
     expect(columnType(work_items, 'narrative_markdown')).toBe('PgText');
     expect(Object.keys(getTableColumns(work_items))).not.toContain('ownerActorId');
+    expect(columnType(boundary_summary_revisions, 'brainstorming_session_revision_id')).toBe('PgUUID');
+    expect(columnNotNull(boundary_summary_revisions, 'brainstormingSessionRevisionId')).toBe(true);
+    expect(columnType(boundary_summary_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');
+    expect(columnNotNull(boundary_summary_revisions, 'developmentPlanItemRevisionId')).toBe(true);
     expect(columnType(execution_packages, 'task_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'reviewer_actor_id')).toBe('PgUUID');

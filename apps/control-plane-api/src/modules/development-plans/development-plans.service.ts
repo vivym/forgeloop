@@ -129,6 +129,7 @@ export class DevelopmentPlansService {
       const item = this.buildDevelopmentPlanItem(plan.id, input.source_ref, itemInput);
       await this.repository.saveDevelopmentPlanItem(item);
       await this.saveItemRevision(item, 'ai_draft_generated', input.actor_id);
+      await this.appendItemEvent(item.id, 'development_plan_item_created', input.actor_id, { development_plan_id: plan.id });
     }
 
     await this.appendPlanEvent(plan.id, 'development_plan_draft_generated', input.actor_id, {
@@ -172,6 +173,13 @@ export class DevelopmentPlansService {
       });
       await repository.saveDevelopmentPlanItem(regeneratedItem);
       await this.saveItemRevision(regeneratedItem, 'ai_draft_regenerated', input.actor_id, repository);
+      await this.appendItemEvent(
+        regeneratedItem.id,
+        'development_plan_item_created',
+        input.actor_id,
+        { development_plan_id: plan.id, generated_by: 'regenerate_draft' },
+        repository,
+      );
 
       await repository.saveDevelopmentPlan({
         ...plan,

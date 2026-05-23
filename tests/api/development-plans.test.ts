@@ -4,6 +4,8 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import type { DeliveryRepository } from '../../packages/db/src';
 
 describe('Development Plans API', () => {
   let app: INestApplication;
@@ -101,6 +103,7 @@ describe('Development Plans API', () => {
   it('generates and regenerates a draft Development Plan with a context manifest and feedback', async () => {
     const { project, requirement } = await seedRequirement(app);
     const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const generated = (
       await request(server)
         .post('/development-plans/generate-draft')
@@ -129,6 +132,11 @@ describe('Development Plans API', () => {
         }),
       ]),
     });
+    for (const item of generated.items) {
+      await expect(repository.listObjectEvents(item.id, 'development_plan_item')).resolves.toEqual([
+        expect.objectContaining({ event_type: 'development_plan_item_created', actor_id: 'actor-product' }),
+      ]);
+    }
 
     const regenerated = (
       await request(server)
@@ -149,6 +157,25 @@ describe('Development Plans API', () => {
       preserve_prior_decisions: true,
     });
     expect(regenerated.items.length).toBeGreaterThan(generated.items.length);
+    const regeneratedItem = regenerated.items.find((item: { title: string }) => item.title === 'QA handoff planning');
+    expect(regeneratedItem).toBeDefined();
+    await expect(repository.listObjectEvents(regeneratedItem.id, 'development_plan_item')).resolves.toEqual([
+      expect.objectContaining({ event_type: 'development_plan_item_created', actor_id: 'actor-tech' }),
+    ]);
+  });
+
+  it('rejects unsupported public source object types', async () => {
+    const { project, requirement } = await seedRequirement(app);
+
+    await request(app.getHttpServer())
+      .post('/development-plans')
+      .send({
+        project_id: project.id,
+        source_ref: { type: 'work_item', id: requirement.id },
+        title: 'Legacy source ref plan',
+        actor_id: 'actor-product',
+      })
+      .expect(400);
   });
 });
 

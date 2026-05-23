@@ -153,6 +153,9 @@ export class BrainstormingService {
       const plan = await this.requireDevelopmentPlan(session.development_plan_id, repository);
       const item = await this.requireDevelopmentPlanItem(session.development_plan_id, session.development_plan_item_id, repository);
       const approvedAt = this.runtime.now();
+      const boundarySummaryId = this.runtime.id('boundary-summary');
+      const boundarySummaryRevisionId = this.runtime.id('boundary-summary-revision');
+      const approvedSessionRevisionId = this.runtime.id('brainstorming-session-revision');
       const decisions =
         input.final_decision === undefined
           ? session.decisions
@@ -169,10 +172,10 @@ export class BrainstormingService {
       const itemRevision = await this.saveItemRevision(updatedItem, 'boundary_approved', input.actor_id, repository);
 
       const summary: BoundarySummary = {
-        id: this.runtime.id('boundary-summary'),
-        revision_id: this.runtime.id('boundary-summary-revision'),
+        id: boundarySummaryId,
+        revision_id: boundarySummaryRevisionId,
         brainstorming_session_id: session.id,
-        brainstorming_session_revision_id: session.revision_id,
+        brainstorming_session_revision_id: approvedSessionRevisionId,
         development_plan_id: plan.id,
         development_plan_item_id: item.id,
         development_plan_item_revision_id: updatedItem.revision_id,
@@ -189,7 +192,9 @@ export class BrainstormingService {
         id: summary.revision_id,
         boundary_summary_id: summary.id,
         brainstorming_session_id: session.id,
+        brainstorming_session_revision_id: approvedSessionRevisionId,
         development_plan_item_id: item.id,
+        development_plan_item_revision_id: updatedItem.revision_id,
         revision_number: 1,
         summary_markdown: summary.summary,
         decision_snapshot: decisions,
@@ -202,7 +207,7 @@ export class BrainstormingService {
 
       const approvedSession: BrainstormingSession = {
         ...session,
-        revision_id: this.runtime.id('brainstorming-session-revision'),
+        revision_id: approvedSessionRevisionId,
         decisions,
         approval_state: 'approved',
         boundary_summary_id: summary.id,

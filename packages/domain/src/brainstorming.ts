@@ -19,7 +19,9 @@ export interface BoundarySummaryRevision {
   id: string;
   boundary_summary_id: string;
   brainstorming_session_id: string;
+  brainstorming_session_revision_id: string;
   development_plan_item_id: string;
+  development_plan_item_revision_id: string;
   revision_number: number;
   summary_markdown: string;
   decision_snapshot: BrainstormingDecision[];
