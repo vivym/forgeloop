@@ -2228,7 +2228,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     target_object_id: ids.workItem2,
   };
   const concurrentPending = await repository.createOrReplayAutomationActionRun(concurrentInput);
-const concurrentResults = await Promise.all(
+  const concurrentResults = await Promise.all(
     Array.from({ length: 8 }, (_, index) =>
       repository.claimNextAutomationActionRun({
         now: '2026-05-05T00:33:00.000Z',

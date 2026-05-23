@@ -84,6 +84,30 @@ describe('AI-native planning gate helpers', () => {
     ).toEqual({ ok: true });
   });
 
+  it('rejects approved Spec gates without an approved revision pointer', () => {
+    expect(
+      canGenerateExecutionPlanFromApprovedSpec({
+        spec: approvedSpec({ approved_revision_id: undefined }),
+        specRevision: specRevision(),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'approved_spec_revision_missing',
+    });
+  });
+
+  it('rejects loaded SpecRevisions that do not match the approved revision', () => {
+    expect(
+      canGenerateExecutionPlanFromApprovedSpec({
+        spec: approvedSpec(),
+        specRevision: specRevision({ id: 'spec-revision-2', revision_number: 2 }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'spec_revision_not_approved_revision',
+    });
+  });
+
   it('requires the approved ExecutionPlanRevision to be loaded before execution starts', () => {
     expect(canStartExecutionFromApprovedExecutionPlan({ executionPlan: approvedExecutionPlan() })).toEqual({
       ok: false,
@@ -95,5 +119,32 @@ describe('AI-native planning gate helpers', () => {
         executionPlanRevision: executionPlanRevision(),
       }),
     ).toEqual({ ok: true });
+  });
+
+  it('rejects execution start without an approved ExecutionPlan revision pointer', () => {
+    expect(
+      canStartExecutionFromApprovedExecutionPlan({
+        executionPlan: approvedExecutionPlan({ approved_revision_id: undefined }),
+        executionPlanRevision: executionPlanRevision(),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'approved_execution_plan_revision_missing',
+    });
+  });
+
+  it('rejects loaded ExecutionPlanRevisions that do not match the approved revision', () => {
+    expect(
+      canStartExecutionFromApprovedExecutionPlan({
+        executionPlan: approvedExecutionPlan(),
+        executionPlanRevision: executionPlanRevision({
+          id: 'execution-plan-revision-2',
+          revision_number: 2,
+        }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'execution_plan_revision_not_approved_revision',
+    });
   });
 });

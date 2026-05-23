@@ -496,7 +496,7 @@ describe('query module', () => {
     expect(response.body.stages.find((stage: { id: string }) => stage.id === 'spec_plan').representative_items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ object: expect.objectContaining({ type: 'spec' }) }),
-        expect.objectContaining({ object: expect.objectContaining({ type: 'plan' }) }),
+        expect.objectContaining({ object: expect.objectContaining({ type: 'execution_plan' }) }),
       ]),
     );
     expect(response.body.stages.find((stage: { id: string }) => stage.id === 'execution').representative_items).toEqual(
