@@ -1726,6 +1726,18 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       if (existing.status === 'pending' && valuesEqual(existing, pending)) {
         return;
       }
+      if (
+        existing.status === 'pending' &&
+        existing.runtime_job_id === undefined &&
+        existing.run_session_id === input.run_session_id &&
+        existing.execution_package_id === input.execution_package_id
+      ) {
+        await this.db
+          .update(codex_pending_workspace_bundles)
+          .set(toDbRecord(pending, codex_pending_workspace_bundles) as never)
+          .where(eq(codex_pending_workspace_bundles.bundleId, input.bundle_id));
+        return;
+      }
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle replay was rejected.');
     }
     await this.db.insert(codex_pending_workspace_bundles).values(toDbRecord(pending, codex_pending_workspace_bundles) as never);

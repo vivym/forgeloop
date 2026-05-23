@@ -1745,6 +1745,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       ) {
         return;
       }
+      if (
+        existing.status === 'pending' &&
+        existing.runtime_job_id === undefined &&
+        existing.run_session_id === input.run_session_id &&
+        existing.execution_package_id === input.execution_package_id
+      ) {
+        this.codexPendingWorkspaceBundles.set(input.bundle_id, clone(pending));
+        return;
+      }
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle replay was rejected.');
     }
     this.codexPendingWorkspaceBundles.set(input.bundle_id, clone(pending));

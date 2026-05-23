@@ -1,28 +1,49 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   type CodexGenerationWorkloadV1,
   type CodexLaunchMaterialization,
+  type CodexRunExecutionRuntimeJobResult,
+  type CodexRunExecutionWorkloadV1,
   type CodexLaunchTokenEnvelope,
   type CodexRuntimeJob,
   type CodexRuntimeTargetKind,
   type CodexRuntimeScope,
+  validateCodexRuntimeJobTerminalResult,
 } from '@forgeloop/domain';
 import {
   CodexAppServerEndpointTransport,
   createCodexGenerationRuntime,
   type CodexGenerationResult,
 } from '@forgeloop/codex-runtime';
+import type { CodexDriverStartInput, CodexDriverStreamItem, CodexSessionDriver } from '@forgeloop/executor';
 
 import type { DockerizedCodexAppServerLauncher } from './app-server-launcher.js';
 import { decryptCodexLaunchTokenEnvelope, generateCodexWorkerSessionKeyPair, type CodexWorkerSessionKeyPair } from './envelope-crypto.js';
+import { createMaterializedRunSessionCodexDriver } from './run-session-driver.js';
 import {
   generationRuntimeJobTerminalResult,
   jsonRuntimeJobArtifactUpload,
   type RuntimeJobArtifactUploadInput,
 } from './runtime-job-artifacts.js';
+import {
+  collectWorkspaceBundleChangedFiles,
+  createWorkspaceBundlePatchArtifact,
+  safeUnpackWorkspaceBundle,
+  type WorkspaceBundleUnpackResult,
+} from './workspace-bundle.js';
+
+type RunExecutionResultDraft = {
+  changed_files: string[];
+  patch?: string;
+  check_results: CodexRunExecutionRuntimeJobResult['check_results'];
+  execution_artifacts: CodexRunExecutionRuntimeJobResult['execution_artifacts'];
+  public_summary: string;
+};
 
 type RuntimeJobPollItem = {
   runtime_job: Pick<CodexRuntimeJob, 'id' | 'target_kind' | 'project_id' | 'repo_id' | 'launch_lease_id'> &
@@ -47,6 +68,12 @@ type RemoteControlPlaneClient = {
     jobId: string,
     input: RuntimeJobArtifactUploadInput & Record<string, unknown>,
   ): Promise<unknown>;
+  downloadWorkspaceBundle?(
+    workerId: string,
+    jobId: string,
+    bundleId: string,
+    input: Record<string, unknown>,
+  ): Promise<{ archive_path: string; archive_digest: string; size_bytes: number; content_type: string }>;
   terminalizeRuntimeJob(workerId: string, jobId: string, input: Record<string, unknown>): Promise<unknown>;
 };
 
@@ -72,6 +99,23 @@ export interface RemoteCodexWorkerClientOptions {
   scavenger: () => Promise<void>;
   sessionPublicKeyTtlMs?: number;
   generationRuntimeFactory?: typeof createCodexGenerationRuntime;
+  runExecutionDriverFactory?: (input: {
+    workload: CodexRunExecutionWorkloadV1;
+    packagePrompt: string;
+    executionContext: Record<string, unknown>;
+    materialization: CodexLaunchMaterialization;
+    dockerSession: Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>>;
+    workspacePath: string;
+  }) => CodexSessionDriver;
+  runExecutionResultCollector?: (input: {
+    workload: CodexRunExecutionWorkloadV1;
+    packagePrompt: string;
+    executionContext: Record<string, unknown>;
+    runSpec: CodexDriverStartInput['runSpec'];
+    workspacePath: string;
+    terminal: Extract<CodexDriverStreamItem, { kind: 'terminal' }>;
+    materialization: CodexLaunchMaterialization;
+  }) => Promise<RunExecutionResultDraft>;
   now?: () => string;
   nonceFactory?: () => string;
   sleep?: (durationMs: number) => Promise<void>;
@@ -222,6 +266,10 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
 
   const processJob = async (item: RuntimeJobPollItem, workerSession: WorkerSession): Promise<void> => {
     const job = item.runtime_job;
+    if (job.target_kind === 'run_execution') {
+      await processRunExecutionJob(item, workerSession);
+      return;
+    }
     if (job.target_kind !== 'generation') {
       await terminalize(workerSession, job, {
         terminal_status: 'failed',
@@ -352,6 +400,397 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         terminal_status: reasonCode === 'codex_runtime_job_cancelled' ? 'cancelled' : 'failed',
         reason_code: reasonCode,
       });
+    }
+  };
+
+  const processRunExecutionJob = async (item: RuntimeJobPollItem, workerSession: WorkerSession): Promise<void> => {
+    const job = item.runtime_job;
+    const sessionDigest = codexCredentialPayloadDigest(workerSession.token);
+    const publicKeyId = workerSession.keyPair.keyId;
+    await options.controlPlaneClient.acceptRuntimeJob(options.workerId, job.id, {
+      ...workerProof(workerSession),
+      accept_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'accept' }),
+      accepted_worker_session_digest: sessionDigest,
+      accepted_session_public_key_id: publicKeyId,
+      accepted_session_epoch: workerSession.epoch,
+    });
+
+    const control = await getControl(workerSession, job);
+    if (control.cancel_requested === true) {
+      await terminalize(workerSession, job, {
+        terminal_status: 'cancelled',
+        reason_code: 'codex_runtime_job_cancelled',
+      });
+      return;
+    }
+
+    let appServerSession: Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>> | undefined;
+    let driver: CodexSessionDriver | undefined;
+    let successTerminalAttempted = false;
+    try {
+      const claimed = await options.controlPlaneClient.claimLaunchTokenEnvelope?.(options.workerId, job.id, {
+        ...workerProof(workerSession),
+        envelope_id: item.envelope?.id,
+        claim_request_id: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'claim' }),
+        accepted_worker_session_digest: sessionDigest,
+        accepted_session_public_key_id: publicKeyId,
+        accepted_session_epoch: workerSession.epoch,
+      });
+      const envelope = requiredEnvelope(claimed);
+      const launchToken = await decryptCodexLaunchTokenEnvelope({
+        envelope,
+        privateKeyHandle: workerSession.keyPair.privateKeyHandle,
+      });
+      const workloadResponse = requiredRunExecutionWorkload(
+        await options.controlPlaneClient.fetchRuntimeJobWorkload?.(options.workerId, job.id, workerProof(workerSession)),
+      );
+      const acquisition = requiredWorkspaceBundleAcquisition(job, workloadResponse.workload);
+      const workspace = await acquireRunExecutionWorkspaceBundle(workerSession, job, workloadResponse.workload, acquisition);
+      const workloadPayload = await resolveRunExecutionWorkloadPayload(workloadResponse, workspace);
+      if (options.controlPlaneClient.materializeRuntimeJob === undefined) {
+        throw new Error('codex_control_plane_method_missing:materializeRuntimeJob');
+      }
+      await throwIfCancelled(workerSession, job);
+      const materialization = await options.controlPlaneClient.materializeRuntimeJob(options.workerId, job.id, {
+        ...workerProof(workerSession),
+        launch_lease_id: job.launch_lease_id,
+        launch_token: launchToken,
+        materialization_request_id: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'materialize' }),
+        accepted_worker_session_digest: sessionDigest,
+        accepted_session_public_key_id: publicKeyId,
+        accepted_session_epoch: workerSession.epoch,
+      });
+      await throwIfCancelled(workerSession, job);
+      appServerSession = await options.launcher.startFromMaterialization(materialization, {
+        workerSessionToken: workerSession.token,
+        terminalizeLaunchLeaseOnClose: false,
+        originalWorkspacePath: workspace.workspacePath,
+      });
+      await throwIfCancelled(workerSession, job);
+      if (options.controlPlaneClient.startRuntimeJob === undefined) {
+        throw new Error('codex_control_plane_method_missing:startRuntimeJob');
+      }
+      await options.controlPlaneClient.startRuntimeJob(options.workerId, job.id, {
+        ...workerProof(workerSession),
+        start_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'start' }),
+        runtime_evidence_digest: codexCanonicalDigest(appServerSession.publicEvidence),
+        launch_materialization_digest: codexCanonicalDigest({
+          lease_id: materialization.lease_id,
+          expires_at: materialization.expires_at,
+          materialized_at: materialization.materialized_at,
+        }),
+      });
+      await options.controlPlaneClient.appendRuntimeJobEvent?.(options.workerId, job.id, {
+        ...workerProof(workerSession),
+        event_id: codexCanonicalDigest({ runtime_job_id: job.id, event: 'app_server_started' }),
+        event_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'event', event: 'app_server_started' }),
+        event_type: 'app_server_started',
+        event_payload_json: { runtime_evidence_digest: codexCanonicalDigest(appServerSession.publicEvidence) },
+        event_payload_digest: codexCanonicalDigest({ runtime_evidence_digest: codexCanonicalDigest(appServerSession.publicEvidence) }),
+      });
+
+      driver =
+        options.runExecutionDriverFactory?.({
+          workload: workloadResponse.workload,
+          packagePrompt: workloadPayload.packagePrompt,
+          executionContext: workloadPayload.executionContext,
+          materialization,
+          dockerSession: appServerSession,
+          workspacePath: workspace.workspacePath,
+        }) ??
+        createMaterializedRunSessionCodexDriver(
+          { workerIdentity: options.workerIdentity },
+          { dockerSession: appServerSession },
+        );
+      const terminal = await runRunExecutionWithControl(workerSession, job, driver, {
+        runSpec: runSpecWithPackagePrompt(workloadPayload.runSpec, workloadPayload.packagePrompt),
+        workspacePath: appServerSession.containerWorkspacePath ?? workspace.workspacePath,
+        runtimeMetadata: {
+          durability_mode: 'durable',
+          recovery_attempt_count: 0,
+          effective_dangerous_mode: 'confirmed',
+          worker_id: options.workerId,
+          driver_kind: 'app_server',
+          driver_status: 'active',
+          app_server_attempted: true,
+          selected_execution_mode: 'app_server',
+          runtime_profile_id: appServerSession.publicEvidence.runtime_profile_id,
+          runtime_profile_revision_id: appServerSession.publicEvidence.runtime_profile_revision_id,
+          runtime_profile_digest: appServerSession.publicEvidence.runtime_profile_digest,
+          runtime_target_kind: 'run_execution',
+          source_access_mode: 'path_policy_scoped',
+          environment: appServerSession.publicEvidence.environment,
+          launch_lease_id: appServerSession.publicEvidence.launch_lease_id,
+          docker_image_digest: appServerSession.publicEvidence.docker_image_digest,
+          container_id_digest: appServerSession.publicEvidence.container_id_digest,
+          app_server_effective_config_digest: appServerSession.publicEvidence.app_server_effective_config_digest,
+          docker_policy_self_check_digest: appServerSession.publicEvidence.docker_policy_self_check_digest,
+        },
+      });
+      if (terminal.status !== 'succeeded') {
+        throw new Error(terminal.status === 'cancelled' ? 'codex_runtime_job_cancelled' : 'codex_app_server_unavailable');
+      }
+      const resultDraft = await collectRunExecutionResult({
+        workload: workloadResponse.workload,
+        packagePrompt: workloadPayload.packagePrompt,
+        executionContext: workloadPayload.executionContext,
+        runSpec: runSpecWithPackagePrompt(workloadPayload.runSpec, workloadPayload.packagePrompt),
+        workspacePath: workspace.workspacePath,
+        terminal,
+        materialization,
+      }, workspace);
+      const terminalResult = await runExecutionRuntimeJobTerminalResult(workerSession, job, workloadResponse.workload, workspace, resultDraft);
+      validateCodexRuntimeJobTerminalResult(terminalResult as unknown as Record<string, unknown>);
+      await driver.close?.();
+      driver = undefined;
+      successTerminalAttempted = true;
+      await terminalizeWithRetry(workerSession, job, {
+        terminal_status: 'succeeded',
+        reason_code: 'codex_runtime_job_succeeded',
+        terminal_result_json: terminalResult as unknown as Record<string, unknown>,
+      });
+    } catch (error) {
+      if (successTerminalAttempted) {
+        if (publicErrorCode(error) === 'codex_runtime_job_success_terminal_unconfirmed') {
+          const reasonCode = await publicErrorCodeForJobError(error, workerSession, job);
+          if (reasonCode === 'codex_runtime_job_cancelled') {
+            await terminalize(workerSession, job, {
+              terminal_status: 'cancelled',
+              reason_code: reasonCode,
+            });
+          }
+        }
+        await driver?.close?.().catch(() => undefined);
+        await appServerSession?.close('failed', 'codex_runtime_job_unavailable').catch(() => undefined);
+        return;
+      }
+      const reasonCode = await publicErrorCodeForJobError(error, workerSession, job);
+      await driver?.close?.().catch(() => undefined);
+      await appServerSession?.close('failed', reasonCode).catch(() => undefined);
+      if (reasonCode !== 'codex_runtime_job_cancelled') {
+        await uploadFailureArtifact(workerSession, job, reasonCode).catch(() => undefined);
+      }
+      await terminalize(workerSession, job, {
+        terminal_status: reasonCode === 'codex_runtime_job_cancelled' ? 'cancelled' : 'failed',
+        reason_code: reasonCode,
+      });
+    }
+  };
+
+  const acquireRunExecutionWorkspaceBundle = async (
+    workerSession: WorkerSession,
+    job: Pick<CodexRuntimeJob, 'id'>,
+    workload: CodexRunExecutionWorkloadV1,
+    acquisition: WorkspaceBundleAcquisition,
+  ): Promise<WorkspaceBundleUnpackResult> => {
+    if (options.controlPlaneClient.downloadWorkspaceBundle === undefined) {
+      throw new Error('codex_control_plane_method_missing:downloadWorkspaceBundle');
+    }
+    const downloaded = await options.controlPlaneClient.downloadWorkspaceBundle(options.workerId, job.id, workload.workspace_bundle_id, {
+      ...workerProof(workerSession),
+      tempRoot: options.workerTempRoot,
+      expectedArchiveDigest: workload.workspace_bundle_digest,
+      maxSizeBytes: acquisition.size_bytes,
+    });
+    if (downloaded.archive_digest !== workload.workspace_bundle_digest) {
+      throw new Error('codex_workspace_bundle_invalid');
+    }
+    const archiveBytes = await readFile(downloaded.archive_path);
+    return safeUnpackWorkspaceBundle({
+      archiveBytes,
+      expectedArchiveDigest: workload.workspace_bundle_digest,
+      expectedManifestDigest: acquisition.manifest_digest,
+      tempRoot: options.workerTempRoot,
+      runtimeJobId: job.id,
+    });
+  };
+
+  const resolveRunExecutionWorkloadPayload = async (
+    fetched: FetchedRunExecutionWorkload,
+    workspace: WorkspaceBundleUnpackResult,
+  ): Promise<Required<FetchedRunExecutionWorkload>> => {
+    if (fetched.packagePrompt !== undefined && fetched.executionContext !== undefined && fetched.runSpec !== undefined) {
+      return {
+        workload: fetched.workload,
+        packagePrompt: fetched.packagePrompt,
+        executionContext: fetched.executionContext,
+        runSpec: fetched.runSpec,
+      };
+    }
+    const packagePrompt = await readFile(join(workspace.workspacePath, remoteRunExecutionPromptPath), 'utf8').catch(() => {
+      throw new Error('codex_runtime_job_unavailable');
+    });
+    const executionContext = await readFile(join(workspace.workspacePath, remoteRunExecutionContextPath), 'utf8')
+      .then((content) => JSON.parse(content) as unknown)
+      .catch(() => {
+        throw new Error('codex_runtime_job_unavailable');
+      });
+    return validateRunExecutionWorkloadPayload(fetched.workload, packagePrompt, executionContext);
+  };
+
+  const collectRunExecutionResult = async (
+    input: {
+      workload: CodexRunExecutionWorkloadV1;
+      packagePrompt: string;
+      executionContext: Record<string, unknown>;
+      runSpec: CodexDriverStartInput['runSpec'];
+      workspacePath: string;
+      terminal: Extract<CodexDriverStreamItem, { kind: 'terminal' }>;
+      materialization: CodexLaunchMaterialization;
+    },
+    workspace: WorkspaceBundleUnpackResult,
+  ): Promise<RunExecutionResultDraft> => {
+    return (
+      (await options.runExecutionResultCollector?.(input)) ?? (await defaultRunExecutionResultCollector(input, workspace))
+    );
+  };
+
+  const runExecutionRuntimeJobTerminalResult = async (
+    workerSession: WorkerSession,
+    job: Pick<CodexRuntimeJob, 'id'>,
+    workload: CodexRunExecutionWorkloadV1,
+    workspace: WorkspaceBundleUnpackResult,
+    draft: RunExecutionResultDraft,
+  ): Promise<CodexRunExecutionRuntimeJobResult> => {
+    const changedFiles =
+      draft.patch === undefined
+        ? collectWorkspaceBundleChangedFiles({
+            changedFiles: draft.changed_files,
+            allowedPaths: workspace.manifest.allowed_paths,
+            forbiddenPaths: workspace.manifest.forbidden_paths,
+          })
+        : createWorkspaceBundlePatchArtifact({
+            runtimeJobId: job.id,
+            patch: draft.patch,
+            changedFiles: draft.changed_files,
+            allowedPaths: workspace.manifest.allowed_paths,
+            forbiddenPaths: workspace.manifest.forbidden_paths,
+          }).changed_files;
+    let patchArtifact:
+      | {
+          content_type: 'text/x-diff';
+          digest: string;
+          internal_ref: string;
+        }
+      | undefined;
+    if (draft.patch !== undefined) {
+      if (options.controlPlaneClient.uploadRuntimeJobArtifact === undefined) {
+        throw new Error('codex_control_plane_method_missing:uploadRuntimeJobArtifact');
+      }
+      const localPatch = createWorkspaceBundlePatchArtifact({
+        runtimeJobId: job.id,
+        patch: draft.patch,
+        changedFiles: draft.changed_files,
+        allowedPaths: workspace.manifest.allowed_paths,
+        forbiddenPaths: workspace.manifest.forbidden_paths,
+      });
+      const upload = {
+        artifact_idempotency_key: codexCanonicalDigest({
+          runtime_job_id: job.id,
+          kind: 'run_execution_patch',
+          digest: localPatch.digest,
+        }),
+        kind: 'run_execution_patch',
+        name: 'run-execution.patch',
+        content_type: localPatch.content_type,
+        digest: localPatch.digest,
+        size_bytes: localPatch.size_bytes,
+        metadata_json: {
+          changed_files: localPatch.changed_files,
+        },
+      } satisfies RuntimeJobArtifactUploadInput;
+      const response = await options.controlPlaneClient.uploadRuntimeJobArtifact(options.workerId, job.id, {
+        ...workerProof(workerSession),
+        ...upload,
+      });
+      const artifact = isRecord(response) && isRecord(response.artifact) ? response.artifact : localPatch;
+      patchArtifact = {
+        content_type: 'text/x-diff',
+        digest: requiredString(artifact, 'digest'),
+        internal_ref: requiredString(artifact, 'internal_ref'),
+      };
+    }
+    const terminalResult: CodexRunExecutionRuntimeJobResult = {
+      task_kind: 'run_execution',
+      execution_package_id: workload.execution_package_id,
+      execution_package_version: workload.execution_package_version,
+      run_session_id: workload.run_session_id,
+      workspace_bundle_digest: workload.workspace_bundle_digest,
+      changed_files: changedFiles,
+      ...(patchArtifact === undefined ? {} : { patch_artifact: patchArtifact }),
+      check_results: draft.check_results,
+      execution_artifacts: draft.execution_artifacts,
+      public_summary: draft.public_summary,
+    };
+    validateCodexRuntimeJobTerminalResult(terminalResult as unknown as Record<string, unknown>);
+    return terminalResult;
+  };
+
+  const runRunExecutionWithControl = async (
+    workerSession: WorkerSession,
+    job: Pick<CodexRuntimeJob, 'id'>,
+    driver: CodexSessionDriver,
+    input: CodexDriverStartInput,
+  ): Promise<Extract<CodexDriverStreamItem, { kind: 'terminal' }>> => {
+    let completed = false;
+    let stopWaiting: (() => void) | undefined;
+    let cancellationDetected = false;
+    let controlFailed = false;
+    const runPromise = (async () => {
+      for await (const item of driver.startRun(input)) {
+        if (item.kind === 'terminal') {
+          return item;
+        }
+      }
+      throw new Error('codex_app_server_unavailable');
+    })();
+    const watchControl = async (): Promise<never> => {
+      while (!completed) {
+        await Promise.race([
+          sleep(options.controlPollIntervalMs ?? 2_000),
+          new Promise<void>((resolve) => {
+            stopWaiting = resolve;
+          }),
+        ]);
+        if (completed) {
+          break;
+        }
+        await appendWorkerHeartbeat(workerSession, job);
+        await heartbeat(workerSession);
+        const control = await getControl(workerSession, job);
+        if (control.cancel_requested === true || control.shutdown_requested === true) {
+          cancellationDetected = true;
+          await driver.cancelRun({ runtimeMetadata: input.runtimeMetadata! }).catch(() => undefined);
+          throw new Error('codex_runtime_job_cancelled');
+        }
+      }
+      return new Promise<never>(() => undefined);
+    };
+    const controlPromise = watchControl().catch((error: unknown) => {
+      controlFailed = true;
+      throw error;
+    });
+    try {
+      return await Promise.race([runPromise, controlPromise]);
+    } catch (error) {
+      if (controlFailed) {
+        await driver.cancelRun({ runtimeMetadata: input.runtimeMetadata! }).catch(() => undefined);
+        await driver.close?.().catch(() => undefined);
+        if (cancellationDetected || publicErrorCode(error) === 'codex_runtime_job_cancelled') {
+          throw new Error('codex_runtime_job_cancelled');
+        }
+        throw error;
+      }
+      if (cancellationDetected || publicErrorCode(error) === 'codex_runtime_job_cancelled') {
+        await driver.cancelRun({ runtimeMetadata: input.runtimeMetadata! }).catch(() => undefined);
+        await driver.close?.().catch(() => undefined);
+        throw new Error('codex_runtime_job_cancelled');
+      }
+      throw error;
+    } finally {
+      completed = true;
+      stopWaiting?.();
+      controlPromise.catch(() => undefined);
     }
   };
 
@@ -703,6 +1142,23 @@ type FetchedGenerationWorkload = {
   signedContext: Record<string, unknown>;
 };
 
+type FetchedRunExecutionWorkload = {
+  workload: CodexRunExecutionWorkloadV1;
+  packagePrompt?: string;
+  executionContext?: Record<string, unknown>;
+  runSpec?: CodexDriverStartInput['runSpec'];
+};
+
+type WorkspaceBundleAcquisition = {
+  bundle_id: string;
+  archive_digest: string;
+  manifest_digest: string;
+  size_bytes: number;
+};
+
+const remoteRunExecutionPromptPath = '.forgeloop/codex-runtime/package-prompt.txt';
+const remoteRunExecutionContextPath = '.forgeloop/codex-runtime/execution-context.json';
+
 const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkload => {
   if (!isRecord(response) || !isRecord(response.workload)) {
     throw new Error('codex_runtime_job_unavailable');
@@ -721,6 +1177,174 @@ const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkloa
     throw new Error('codex_runtime_job_unavailable');
   }
   return { workload: typedWorkload, signedContext: response.signed_context };
+};
+
+const runSpecWithPackagePrompt = (
+  runSpec: CodexDriverStartInput['runSpec'],
+  packagePrompt: string,
+): CodexDriverStartInput['runSpec'] => ({
+  ...runSpec,
+  objective: packagePrompt,
+  context: {
+    ...runSpec.context,
+    package_instructions: packagePrompt,
+  },
+});
+
+const sha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+
+const shouldSkipDefaultCollectorPath = (path: string): boolean =>
+  path === '.forgeloop/codex-runtime' ||
+  path.startsWith('.forgeloop/codex-runtime/') ||
+  path.split('/').some((segment) => segment === '.git' || segment === 'node_modules');
+
+const collectCurrentWorkspaceFiles = async (workspacePath: string, current = ''): Promise<Map<string, string>> => {
+  const result = new Map<string, string>();
+  const absolute = current.length === 0 ? workspacePath : join(workspacePath, current);
+  const info = await lstat(absolute);
+  if (info.isDirectory()) {
+    const children = await readdir(absolute);
+    for (const child of children.sort()) {
+      const childPath = current.length === 0 ? child : `${current}/${child}`;
+      if (shouldSkipDefaultCollectorPath(childPath)) {
+        continue;
+      }
+      const nested = await collectCurrentWorkspaceFiles(workspacePath, childPath);
+      for (const [path, digest] of nested) {
+        result.set(path, digest);
+      }
+    }
+    return result;
+  }
+  if (info.isFile() && current.length > 0 && !shouldSkipDefaultCollectorPath(current)) {
+    result.set(current, sha256(await readFile(absolute)));
+    return result;
+  }
+  if (current.length > 0 && !shouldSkipDefaultCollectorPath(current)) {
+    result.set(current, `unsafe-entry:${info.mode}`);
+  }
+  return result;
+};
+
+const defaultRunExecutionResultCollector = async (
+  input: {
+    terminal: Extract<CodexDriverStreamItem, { kind: 'terminal' }>;
+  },
+  workspace: WorkspaceBundleUnpackResult,
+): Promise<RunExecutionResultDraft> => {
+  const currentFiles = await collectCurrentWorkspaceFiles(workspace.workspacePath);
+  const originalFiles = new Map(
+    workspace.manifest.entries
+      .filter((entry) => entry.type === 'file' && !shouldSkipDefaultCollectorPath(entry.path))
+      .map((entry) => [entry.path, entry.digest]),
+  );
+  const changedFiles = new Set<string>();
+  for (const [path, digest] of originalFiles) {
+    if (currentFiles.get(path) !== digest) {
+      changedFiles.add(path);
+    }
+  }
+  for (const path of currentFiles.keys()) {
+    if (!originalFiles.has(path)) {
+      changedFiles.add(path);
+    }
+  }
+  const sortedChangedFiles = [...changedFiles].sort();
+  return {
+    changed_files: sortedChangedFiles,
+    ...(sortedChangedFiles.length === 0
+      ? {}
+      : {
+          patch: sortedChangedFiles.map((path) => `diff --git a/${path} b/${path}\n`).join(''),
+        }),
+    check_results: [],
+    execution_artifacts: [],
+    public_summary: input.terminal.summary,
+  };
+};
+
+const requiredRunExecutionWorkload = (response: unknown): FetchedRunExecutionWorkload => {
+  if (!isRecord(response) || !isRecord(response.workload)) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  const workload = response.workload;
+  if (
+    workload.schema_version !== 'codex_run_execution_workload.v1' ||
+    typeof workload.runtime_job_id !== 'string' ||
+    typeof workload.run_session_id !== 'string' ||
+    typeof workload.execution_package_id !== 'string' ||
+    !Number.isInteger(workload.execution_package_version) ||
+    typeof workload.workspace_bundle_id !== 'string' ||
+    typeof workload.workspace_bundle_digest !== 'string' ||
+    typeof workload.package_prompt_digest !== 'string' ||
+    typeof workload.execution_context_digest !== 'string'
+  ) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  const typedWorkload = workload as unknown as CodexRunExecutionWorkloadV1;
+  const packagePrompt = typeof response.package_prompt === 'string' ? response.package_prompt : workload.package_prompt;
+  const executionContext = isRecord(response.execution_context_json) ? response.execution_context_json : workload.execution_context_json;
+  if (typeof packagePrompt === 'string' || isRecord(executionContext)) {
+    return validateRunExecutionWorkloadPayload(typedWorkload, packagePrompt, executionContext);
+  }
+  return { workload: typedWorkload };
+};
+
+const validateRunExecutionWorkloadPayload = (
+  workload: CodexRunExecutionWorkloadV1,
+  packagePrompt: unknown,
+  executionContext: unknown,
+): Required<FetchedRunExecutionWorkload> => {
+  if (typeof packagePrompt !== 'string' || !isRecord(executionContext)) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  if (codexCanonicalDigest(packagePrompt) !== workload.package_prompt_digest) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  if (codexCanonicalDigest(executionContext) !== workload.execution_context_digest) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  if (!isRecord(executionContext.run_spec)) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  if (
+    executionContext.run_spec.run_session_id !== workload.run_session_id ||
+    executionContext.run_spec.execution_package_id !== workload.execution_package_id ||
+    executionContext.run_spec.expected_package_version !== workload.execution_package_version
+  ) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  return {
+    workload,
+    packagePrompt,
+    executionContext,
+    runSpec: executionContext.run_spec as CodexDriverStartInput['runSpec'],
+  };
+};
+
+const requiredWorkspaceBundleAcquisition = (
+  job: Pick<CodexRuntimeJob, 'workspace_acquisition_json'>,
+  workload: CodexRunExecutionWorkloadV1,
+): WorkspaceBundleAcquisition => {
+  const acquisition = job.workspace_acquisition_json;
+  if (
+    !isRecord(acquisition) ||
+    acquisition.schema_version !== 'workspace_bundle_acquisition.v1' ||
+    acquisition.bundle_id !== workload.workspace_bundle_id ||
+    acquisition.archive_digest !== workload.workspace_bundle_digest ||
+    typeof acquisition.manifest_digest !== 'string' ||
+    typeof acquisition.size_bytes !== 'number' ||
+    !Number.isSafeInteger(acquisition.size_bytes) ||
+    acquisition.size_bytes < 0
+  ) {
+    throw new Error('codex_workspace_bundle_invalid');
+  }
+  return {
+    bundle_id: acquisition.bundle_id,
+    archive_digest: acquisition.archive_digest,
+    manifest_digest: acquisition.manifest_digest,
+    size_bytes: acquisition.size_bytes,
+  };
 };
 
 const requiredEnvelope = (response: unknown): CodexLaunchTokenEnvelope => {
@@ -765,6 +1389,11 @@ const publicRuntimeWorkerErrorCodes = new Set([
   'codex_runtime_job_success_terminal_unconfirmed',
   'codex_runtime_job_expired',
   'codex_runtime_job_unavailable',
+  'codex_workspace_bundle_invalid',
+  'codex_control_plane_workspace_bundle_content_type_rejected',
+  'codex_control_plane_workspace_bundle_size_rejected',
+  'codex_control_plane_workspace_bundle_digest_rejected',
+  'codex_control_plane_workspace_bundle_temp_root_rejected',
   'codex_launch_materialization_denied',
   'codex_worker_unavailable',
   'codex_worker_docker_policy_unavailable',

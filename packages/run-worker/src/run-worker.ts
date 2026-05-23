@@ -1,9 +1,15 @@
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
-import type { ExecutorFailure, ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
+import type { ArtifactRef, ChangedFile, CheckResult, ExecutorFailure, ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import type { DeliveryRepository, PendingWorkspaceBundleInput } from '../../db/src/index.js';
-import { codexCanonicalDigest, codexWorkspaceAcquisitionDigest } from '../../domain/src/index.js';
+import {
+  codexCanonicalDigest,
+  codexWorkspaceAcquisitionDigest,
+  validateCodexRuntimeJobTerminalResult,
+  type CodexRunExecutionRuntimeJobResult,
+  type CodexRuntimeStatusProjection,
+} from '../../domain/src/index.js';
 import type { ExecutionPackage, RunRuntimeMetadata, RunSession, RunWorkerLease } from '../../domain/src/index.js';
 import {
   createWorkspaceBundleArchive,
@@ -54,6 +60,7 @@ export interface RunWorkerInput {
   execFallbackDriverFactory?: (input: RunWorkerDriverFactoryInput) => CodexSessionDriver;
   evidenceCollector: (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
   selfReview: (input: SelfReviewInput) => Promise<SelfReviewResult>;
+  remoteRunExecutionClient?: RemoteRunExecutionClient;
   now?: () => IsoDateTime;
   heartbeatIntervalMs?: number;
   commandPollIntervalMs?: number;
@@ -61,6 +68,38 @@ export interface RunWorkerInput {
   idleThresholdMs?: number;
   artifactRoot?: string;
   allowExecFallback?: boolean;
+}
+
+export interface RemoteRunExecutionClient {
+  getStatus(input: { projectId: string; repoId?: string; targetKind: 'run_execution' }): Promise<CodexRuntimeStatusProjection>;
+  createRuntimeJob(input: Record<string, unknown>): Promise<unknown>;
+  getRuntimeJob(runtimeJobId: string): Promise<unknown>;
+  cancelRuntimeJob?(runtimeJobId: string, input: { reason_code: string; idempotency_key: string }): Promise<unknown>;
+}
+
+interface RemoteRunExecutionTerminal {
+  runtimeJobId: string;
+  terminalStatus: 'succeeded' | 'failed' | 'cancelled' | 'expired';
+  reasonCode?: string;
+  terminalResult?: CodexRunExecutionRuntimeJobResult;
+}
+
+interface RemoteRunExecutionWorkloadInput {
+  runtimeJobId: string;
+  launchLeaseId: string;
+  envelopeId: string;
+  jobRequestId: string;
+  bundleId: string;
+  packagePrompt: string;
+  executionContext: Record<string, unknown>;
+}
+
+interface RemoteRunExecutionFence {
+  runSessionStatus: RunSession['status'];
+  runSessionUpdatedAt: string;
+  executionPackageVersion: number;
+  workspaceBundleDigest: string;
+  pathPolicyDigest: string;
 }
 
 interface OwnedRun {
@@ -245,8 +284,16 @@ const stableUuidFromDigest = (input: Record<string, unknown>): string => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
 
+const remoteRunExecutionPromptPath = '.forgeloop/codex-runtime/package-prompt.txt';
+const remoteRunExecutionContextPath = '.forgeloop/codex-runtime/execution-context.json';
+
+const isReservedRemoteRuntimePath = (current: string): boolean => {
+  const normalized = current.replaceAll('\\', '/');
+  return normalized === '.forgeloop/codex-runtime' || normalized.startsWith('.forgeloop/codex-runtime/');
+};
+
 const collectWorkspaceFiles = async (workspacePath: string, current = '', rootRealPath?: string): Promise<WorkspaceBundleFileInput[]> => {
-  if (current === '.git' || current === 'node_modules') {
+  if (isReservedRemoteRuntimePath(current) || current.split(/[\\/]/).some((segment) => segment === '.git' || segment === 'node_modules')) {
     return [];
   }
   const root = rootRealPath ?? (await realpath(workspacePath));
@@ -283,6 +330,7 @@ export const createRunWorkerPendingWorkspaceBundleArtifact = async (input: {
   now: string;
   expiresAt: string;
   maxSizeBytes?: number;
+  extraFiles?: readonly WorkspaceBundleFileInput[];
 }): Promise<{
   pending_workspace_bundle: PendingWorkspaceBundleInput;
   archive_digest: string;
@@ -302,7 +350,7 @@ export const createRunWorkerPendingWorkspaceBundleArtifact = async (input: {
     input.runWorkerLease.lease_token,
     input.now,
   );
-  const files = await collectWorkspaceFiles(input.workspacePath);
+  const files = [...(await collectWorkspaceFiles(input.workspacePath)), ...(input.extraFiles ?? [])];
   const manifest = createWorkspaceBundleManifest({
     bundleId: input.bundleId,
     createdAt: input.now,
@@ -357,6 +405,194 @@ export const createRunWorkerPendingWorkspaceBundleArtifact = async (input: {
     archive_digest: archiveDigest,
     manifest_digest: manifestDigest,
     size_bytes: archiveBytes.byteLength,
+  };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const requiredRemoteStatusString = (status: CodexRuntimeStatusProjection, key: keyof CodexRuntimeStatusProjection): string => {
+  const value = status[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`codex_runtime_job_unavailable:${String(key)}`);
+  }
+  return value;
+};
+
+const escapeRegex = (value: string): string => value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+
+const globMatches = (pattern: string, candidate: string): boolean => {
+  const normalizedPattern = pattern.replaceAll('\\', '/');
+  if (normalizedPattern === '**') {
+    return true;
+  }
+  if (normalizedPattern.endsWith('/**')) {
+    const prefix = normalizedPattern.slice(0, -3);
+    return candidate === prefix || candidate.startsWith(`${prefix}/`);
+  }
+  let regex = '^';
+  for (let index = 0; index < normalizedPattern.length; index += 1) {
+    const char = normalizedPattern[index];
+    const next = normalizedPattern[index + 1];
+    if (char === '*' && next === '*') {
+      regex += '.*';
+      index += 1;
+    } else if (char === '*') {
+      regex += '[^/]*';
+    } else {
+      regex += escapeRegex(char ?? '');
+    }
+  }
+  regex += '$';
+  return new RegExp(regex).test(candidate);
+};
+
+const normalizeRemoteChangedPath = (path: string): string => {
+  if (path.length === 0 || path.includes('\\') || path.startsWith('/') || path.includes('\0')) {
+    throw new Error('path_policy_actual_changes_rejected');
+  }
+  const parts = path.split('/');
+  if (parts.some((part) => part.length === 0 || part === '.' || part === '..')) {
+    throw new Error('path_policy_actual_changes_rejected');
+  }
+  return path;
+};
+
+const assertRemoteChangedFilesAllowed = (runSession: RunSession, result: CodexRunExecutionRuntimeJobResult): void => {
+  const runSpec = runSession.run_spec;
+  if (runSpec === undefined) {
+    throw new Error('codex_runtime_job_stale');
+  }
+  for (const changedFile of result.changed_files) {
+    const normalized = normalizeRemoteChangedPath(changedFile);
+    const allowed = runSpec.allowed_paths.length === 0 || runSpec.allowed_paths.some((pattern) => globMatches(pattern, normalized));
+    const forbidden = runSpec.forbidden_paths.some((pattern) => globMatches(pattern, normalized));
+    if (!allowed || forbidden) {
+      throw new Error('path_policy_actual_changes_rejected');
+    }
+  }
+};
+
+const remoteChangedFiles = (runSession: RunSession, result: CodexRunExecutionRuntimeJobResult): ChangedFile[] => {
+  const repoId = runSession.run_spec?.repo.repo_id ?? '';
+  return result.changed_files.map((path) => ({
+    repo_id: repoId,
+    path: normalizeRemoteChangedPath(path),
+    change_kind: 'modified' as const,
+  }));
+};
+
+const remoteCheckResults = (result: CodexRunExecutionRuntimeJobResult): CheckResult[] =>
+  result.check_results.map((check) => ({
+    check_id: check.name,
+    command: check.name,
+    status: check.status === 'passed' ? 'succeeded' : check.status,
+    exit_code: check.status === 'passed' ? 0 : check.status === 'failed' ? 1 : null,
+    duration_seconds: 0,
+    blocks_review: check.status !== 'skipped',
+    ...(check.output_internal_ref === undefined
+      ? {}
+      : {
+          stdout: {
+            kind: 'check_output' as const,
+            name: `${check.name}.out`,
+            content_type: 'text/plain',
+            storage_uri: check.output_internal_ref,
+            ...(check.output_digest === undefined ? {} : { digest: check.output_digest }),
+          },
+        }),
+  }));
+
+const remoteArtifactRefs = (result: CodexRunExecutionRuntimeJobResult): ArtifactRef[] => {
+  const artifacts: ArtifactRef[] = [];
+  if (result.patch_artifact !== undefined) {
+    artifacts.push({
+      kind: 'diff',
+      name: 'run-execution.patch',
+      content_type: result.patch_artifact.content_type,
+      storage_uri: result.patch_artifact.internal_ref,
+      digest: result.patch_artifact.digest,
+    });
+  }
+  for (const artifact of result.execution_artifacts) {
+    if (
+      artifact.internal_ref !== undefined &&
+      ['diff', 'changed_files', 'check_output', 'logs', 'execution_summary', 'raw_metadata'].includes(artifact.kind)
+    ) {
+      artifacts.push({
+        kind: artifact.kind as ArtifactRef['kind'],
+        name: artifact.name,
+        content_type: artifact.content_type,
+        storage_uri: artifact.internal_ref,
+        ...(artifact.digest === undefined ? {} : { digest: artifact.digest }),
+      });
+    }
+  }
+  return artifacts;
+};
+
+const executorResultFromRemoteRunExecution = (input: {
+  runSession: RunSession;
+  terminal: RemoteRunExecutionTerminal;
+  at: string;
+}): ExecutorResult => {
+  const startedAt = input.runSession.started_at ?? input.at;
+  const result = input.terminal.terminalResult;
+  if (input.terminal.terminalStatus !== 'succeeded' || result === undefined) {
+    const status = input.terminal.terminalStatus === 'cancelled' ? 'cancelled' : 'failed';
+    return terminalExecutorResult({
+      runSession: input.runSession,
+      status,
+      summary: input.terminal.reasonCode ?? 'Remote Codex run execution failed.',
+      at: input.at,
+    });
+  }
+  return {
+    run_session_id: input.runSession.id,
+    executor_type: 'local_codex',
+    executor_version: 'codex-remote-worker',
+    status: 'succeeded',
+    started_at: startedAt,
+    finished_at: input.at,
+    summary: result.public_summary,
+    changed_files: remoteChangedFiles(input.runSession, result),
+    checks: remoteCheckResults(result),
+    artifacts: remoteArtifactRefs(result),
+    raw_metadata: {
+      remote_runtime_job_id: input.terminal.runtimeJobId,
+      workspace_bundle_digest: result.workspace_bundle_digest,
+    },
+  };
+};
+
+const pendingWorkspaceBundleFromRuntimeMetadata = (
+  runtimeMetadata: RunRuntimeMetadata,
+  runWorkerLeaseId: string,
+): PendingWorkspaceBundleInput | undefined => {
+  if (
+    typeof runtimeMetadata.remote_workspace_bundle_id !== 'string' ||
+    typeof runtimeMetadata.remote_run_worker_lease_id !== 'string' ||
+    runtimeMetadata.remote_run_worker_lease_id !== runWorkerLeaseId ||
+    typeof runtimeMetadata.remote_workspace_bundle_digest !== 'string' ||
+    typeof runtimeMetadata.remote_workspace_manifest_digest !== 'string' ||
+    typeof runtimeMetadata.remote_workspace_bundle_size_bytes !== 'number' ||
+    typeof runtimeMetadata.remote_workspace_bundle_expires_at !== 'string' ||
+    typeof runtimeMetadata.remote_workspace_acquisition_digest !== 'string' ||
+    !isRecord(runtimeMetadata.remote_workspace_acquisition_json) ||
+    typeof runtimeMetadata.remote_workspace_acquisition_json.archive_ref !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    bundle_id: runtimeMetadata.remote_workspace_bundle_id,
+    pending_artifact_ref: runtimeMetadata.remote_workspace_acquisition_json.archive_ref,
+    archive_digest: runtimeMetadata.remote_workspace_bundle_digest,
+    manifest_digest: runtimeMetadata.remote_workspace_manifest_digest,
+    run_worker_lease_id: runWorkerLeaseId,
+    size_bytes: runtimeMetadata.remote_workspace_bundle_size_bytes,
+    workspace_acquisition_digest: runtimeMetadata.remote_workspace_acquisition_digest,
+    workspace_acquisition_json: runtimeMetadata.remote_workspace_acquisition_json,
+    expires_at: runtimeMetadata.remote_workspace_bundle_expires_at,
   };
 };
 
@@ -419,6 +655,7 @@ export class RunWorker {
   private readonly execFallbackDriverFactory: NonNullable<RunWorkerInput['execFallbackDriverFactory']>;
   private readonly evidenceCollector: RunWorkerInput['evidenceCollector'];
   private readonly selfReview: RunWorkerInput['selfReview'];
+  private readonly remoteRunExecutionClient: RunWorkerInput['remoteRunExecutionClient'];
   private readonly now: () => string;
   private readonly heartbeatIntervalMs: number;
   private readonly commandPollIntervalMs: number;
@@ -436,6 +673,7 @@ export class RunWorker {
     this.execFallbackDriverFactory = input.execFallbackDriverFactory ?? input.driverFactory;
     this.evidenceCollector = input.evidenceCollector;
     this.selfReview = input.selfReview;
+    this.remoteRunExecutionClient = input.remoteRunExecutionClient;
     this.now = input.now ?? nowIso;
     this.heartbeatIntervalMs = input.heartbeatIntervalMs ?? 5_000;
     this.commandPollIntervalMs = input.commandPollIntervalMs ?? 750;
@@ -519,6 +757,11 @@ export class RunWorker {
 
       const wasQueued = loaded.status === 'queued';
       const started = wasQueued ? await this.startQueuedRun(loaded, input) : loaded;
+      if (this.shouldDelegateRemoteRunExecution(started)) {
+        terminalOrStopped = true;
+        await this.runRemoteExecution(started, input, wasQueued ? 'start' : 'resume', control);
+        return;
+      }
       let activeRunSession = started;
       let runtimeMetadata = mergeMetadata(started, input.workerId, {
         driver_kind: started.runtime_metadata?.driver_kind ?? 'fake',
@@ -667,6 +910,493 @@ export class RunWorker {
           // Another worker may already have taken over an expired lease.
         }
       }
+    }
+  }
+
+  private shouldDelegateRemoteRunExecution(runSession: RunSession): boolean {
+    return (
+      this.remoteRunExecutionClient !== undefined &&
+      runSession.run_spec?.executor_type === 'local_codex' &&
+      runSession.run_spec.workflow_only !== true
+    );
+  }
+
+  private async runRemoteExecution(
+    runSession: RunSession,
+    lease: OwnedRun,
+    mode: 'start' | 'resume',
+    control: RunControl,
+  ): Promise<void> {
+    if (this.remoteRunExecutionClient === undefined) {
+      throw new Error('codex_runtime_job_unavailable');
+    }
+    let activeRunSession = runSession;
+    let runtimeMetadata = mergeMetadata(runSession, lease.workerId, {
+      driver_kind: 'app_server',
+      driver_status: 'starting',
+      app_server_attempted: true,
+      selected_execution_mode: 'app_server',
+    });
+    const executionPackage = await this.repository.getExecutionPackage(activeRunSession.execution_package_id);
+    if (executionPackage === undefined) {
+      throw new Error('codex_runtime_job_unavailable');
+    }
+    const remoteWorkload = this.buildRemoteRunExecutionWorkloadInput(activeRunSession, executionPackage);
+    const canReusePreparedRemoteRun =
+      mode === 'resume' &&
+      runSession.runtime_metadata?.workspace_path !== undefined &&
+      runtimeMetadataSourceSnapshot(runSession.runtime_metadata) !== undefined &&
+      runSession.runtime_metadata.launch_lease_id === remoteWorkload.launchLeaseId;
+    if (canReusePreparedRemoteRun) {
+      runtimeMetadata = runSession.runtime_metadata!;
+    } else {
+      activeRunSession = await this.prepareLocalCodexRuntime(activeRunSession, lease, runtimeMetadata, mode);
+      runtimeMetadata = activeRunSession.runtime_metadata!;
+      if (runtimeMetadata.workspace_path === undefined) {
+        throw new Error('codex_runtime_job_unavailable');
+      }
+      activeRunSession = await this.updateRuntimeMetadata(activeRunSession, lease, {
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: runtimeMetadata.workspace_path,
+        launch_lease_id: remoteWorkload.launchLeaseId,
+      });
+      runtimeMetadata = activeRunSession.runtime_metadata!;
+    }
+    const runSpec = activeRunSession.run_spec;
+    if (runSpec === undefined || runtimeMetadata.workspace_path === undefined) {
+      throw new Error('codex_runtime_job_unavailable');
+    }
+    const workspacePath = runtimeMetadata.workspace_path;
+    const expiresAt = new Date(Date.parse(this.now()) + this.leaseDurationMs).toISOString();
+    const runWorkerLeaseId =
+      lease.leaseId ?? stableUuidFromDigest({ kind: 'run_worker_lease', run_session_id: activeRunSession.id, worker_id: lease.workerId });
+    const persistedRemoteFenceMatches =
+      runtimeMetadata.remote_runtime_job_id === remoteWorkload.runtimeJobId &&
+      runtimeMetadata.launch_lease_id === remoteWorkload.launchLeaseId;
+    let runtimeJobId = persistedRemoteFenceMatches ? runtimeMetadata.remote_runtime_job_id : undefined;
+    let pendingBundle = persistedRemoteFenceMatches ? pendingWorkspaceBundleFromRuntimeMetadata(runtimeMetadata, runWorkerLeaseId) : undefined;
+    let workspaceBundleDigest = pendingBundle?.archive_digest;
+    if (pendingBundle === undefined || workspaceBundleDigest === undefined) {
+      const bundle = await createRunWorkerPendingWorkspaceBundleArtifact({
+        repository: this.repository,
+        runSession: activeRunSession,
+        executionPackage,
+        runWorkerLease: {
+          id: runWorkerLeaseId,
+          run_session_id: activeRunSession.id,
+          worker_id: lease.workerId,
+          lease_token: lease.leaseToken,
+          status: 'active',
+          heartbeat_at: this.now(),
+          expires_at: expiresAt,
+        },
+        workspacePath,
+        bundleId: remoteWorkload.bundleId,
+        now: this.now(),
+        expiresAt,
+        extraFiles: [
+          { path: remoteRunExecutionPromptPath, content: remoteWorkload.packagePrompt },
+          { path: remoteRunExecutionContextPath, content: JSON.stringify(remoteWorkload.executionContext) },
+        ],
+      });
+      activeRunSession = await this.updateRuntimeMetadata(activeRunSession, lease, {
+        remote_runtime_job_id: remoteWorkload.runtimeJobId,
+        remote_run_worker_lease_id: bundle.pending_workspace_bundle.run_worker_lease_id,
+        remote_workspace_bundle_id: bundle.pending_workspace_bundle.bundle_id,
+        remote_workspace_bundle_digest: bundle.archive_digest,
+        remote_workspace_manifest_digest: bundle.manifest_digest,
+        remote_workspace_bundle_size_bytes: bundle.size_bytes,
+        remote_workspace_bundle_expires_at: bundle.pending_workspace_bundle.expires_at,
+        remote_workspace_acquisition_digest: bundle.pending_workspace_bundle.workspace_acquisition_digest,
+        remote_workspace_acquisition_json: bundle.pending_workspace_bundle.workspace_acquisition_json,
+      });
+      runtimeMetadata = activeRunSession.runtime_metadata!;
+      runtimeJobId = remoteWorkload.runtimeJobId;
+      pendingBundle = bundle.pending_workspace_bundle;
+      workspaceBundleDigest = bundle.archive_digest;
+    }
+    runtimeJobId = await this.createRemoteRunExecutionJob({
+      runSession: activeRunSession,
+      executionPackage,
+      lease,
+      bundle: pendingBundle,
+      expiresAt: pendingBundle.expires_at,
+      remoteWorkload,
+    });
+    const cancelRemoteRunExecutionJob = async () => {
+      await this.cancelRemoteRunExecutionJob(runtimeJobId);
+    };
+    const remoteCommandDriver: CodexSessionDriver = {
+      kind: 'app_server',
+      startRun: async function* () {
+        return;
+      },
+      resumeRun: async function* () {
+        return;
+      },
+      sendInput: async () => {
+        throw new Error('remote_runtime_input_unavailable');
+      },
+      cancelRun: async () => {
+        await cancelRemoteRunExecutionJob();
+        control.stop();
+        return { remote_runtime_job_cancel_requested: true };
+      },
+      close: async () => undefined,
+    };
+    control.cancelStream = async () => {
+      await cancelRemoteRunExecutionJob();
+    };
+    const commandPolling = this.startCommandPolling(() => ({
+      repository: this.repository,
+      runSessionId: activeRunSession.id,
+      workerId: lease.workerId,
+      leaseToken: lease.leaseToken,
+      driver: remoteCommandDriver,
+      runtimeMetadata: activeRunSession.runtime_metadata ?? runtimeMetadata,
+      now: this.now,
+      ...(mode === 'resume' ? { reclaimClaimedBefore: this.now() } : {}),
+    }), control);
+    let terminal: RemoteRunExecutionTerminal;
+    try {
+      terminal = await this.waitForRemoteRunExecutionTerminal(runtimeJobId, control, pendingBundle.expires_at);
+    } finally {
+      control.stop();
+      await commandPolling.done;
+    }
+    await this.finalizeRemoteRunExecutionTerminal(activeRunSession, terminal, lease, {
+      runSessionStatus: activeRunSession.status,
+      runSessionUpdatedAt: activeRunSession.updated_at,
+      executionPackageVersion: executionPackage.version,
+      workspaceBundleDigest,
+      pathPolicyDigest: codexCanonicalDigest({
+        allowed_paths: activeRunSession.run_spec?.allowed_paths ?? [],
+        forbidden_paths: activeRunSession.run_spec?.forbidden_paths ?? [],
+      }),
+    });
+  }
+
+  private buildRemoteRunExecutionWorkloadInput(
+    runSession: RunSession,
+    executionPackage: ExecutionPackage,
+  ): RemoteRunExecutionWorkloadInput {
+    const runSpec = runSession.run_spec;
+    if (runSpec === undefined) {
+      throw new Error('codex_runtime_job_unavailable');
+    }
+    const runtimeJobId = stableUuidFromDigest({
+      kind: 'codex_runtime_job',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+    });
+    const remoteRunSpec = {
+      ...runSpec,
+      repo: {
+        ...runSpec.repo,
+        local_path: '/workspace',
+      },
+    };
+    return {
+      runtimeJobId,
+      launchLeaseId: stableUuidFromDigest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
+      envelopeId: stableUuidFromDigest({ kind: 'codex_launch_token_envelope', runtime_job_id: runtimeJobId }),
+      jobRequestId: stableUuidFromDigest({
+        kind: 'codex_runtime_job_request',
+        run_session_id: runSession.id,
+        execution_package_id: executionPackage.id,
+        execution_package_version: executionPackage.version,
+      }),
+      bundleId: `run-worker-workspace-bundle-${runSession.id}`,
+      packagePrompt: [
+        `Objective: ${runSpec.objective}`,
+        '',
+        `Package instructions: ${runSpec.context.package_instructions}`,
+      ].join('\n'),
+      executionContext: {
+        schema_version: 'codex_run_execution_context.v1',
+        run_spec: remoteRunSpec,
+      },
+    };
+  }
+
+  private async createRemoteRunExecutionJob(input: {
+    runSession: RunSession;
+    executionPackage: ExecutionPackage;
+    lease: OwnedRun;
+    bundle: PendingWorkspaceBundleInput;
+    expiresAt: string;
+    remoteWorkload: RemoteRunExecutionWorkloadInput;
+  }): Promise<string> {
+    const client = this.remoteRunExecutionClient!;
+    const runSpec = input.runSession.run_spec;
+    if (runSpec === undefined) {
+      throw new Error('codex_runtime_job_unavailable');
+    }
+    const runtimeStatus = await client.getStatus({
+      projectId: runSpec.project_id,
+      repoId: runSpec.repo.repo_id,
+      targetKind: 'run_execution',
+    });
+    if ((runtimeStatus.blocker_codes?.length ?? 0) > 0 || runtimeStatus.profile_status !== 'active' || runtimeStatus.worker_status !== 'online') {
+      throw new Error('codex_runtime_job_unavailable');
+    }
+    const runWorkerLeaseId =
+      input.lease.leaseId ?? stableUuidFromDigest({ kind: 'run_worker_lease', run_session_id: input.runSession.id, worker_id: input.lease.workerId });
+    const runtimeJobId = input.remoteWorkload.runtimeJobId;
+    const workload = {
+      schema_version: 'codex_run_execution_workload.v1',
+      runtime_job_id: runtimeJobId,
+      run_session_id: input.runSession.id,
+      execution_package_id: input.executionPackage.id,
+      execution_package_version: input.executionPackage.version,
+      run_worker_lease_id: runWorkerLeaseId,
+      workspace_bundle_id: input.bundle.bundle_id,
+      workspace_bundle_digest: input.bundle.archive_digest,
+      package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/package-prompt`,
+      package_prompt_digest: codexCanonicalDigest(input.remoteWorkload.packagePrompt),
+      execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/execution-context`,
+      execution_context_digest: codexCanonicalDigest(input.remoteWorkload.executionContext),
+      path_policy_digest: codexCanonicalDigest({
+        allowed_paths: runSpec.allowed_paths,
+        forbidden_paths: runSpec.forbidden_paths,
+      }),
+      required_checks_digest: codexCanonicalDigest(runSpec.required_checks),
+      output_schema_version: 'codex_run_execution_result.v1',
+      created_at: this.now(),
+      expires_at: input.expiresAt,
+    };
+    const response = await client.createRuntimeJob({
+      runtime_job_id: runtimeJobId,
+      launch_lease_id: input.remoteWorkload.launchLeaseId,
+      envelope_id: input.remoteWorkload.envelopeId,
+      job_request_id: input.remoteWorkload.jobRequestId,
+      target: {
+        target_type: 'run_session',
+        target_id: input.runSession.id,
+        target_kind: 'run_execution',
+        project_id: runSpec.project_id,
+        repo_id: runSpec.repo.repo_id,
+      },
+      runtime_profile_revision_id: requiredRemoteStatusString(runtimeStatus, 'runtime_profile_revision_id'),
+      credential_binding_id: requiredRemoteStatusString(runtimeStatus, 'credential_binding_id'),
+      credential_binding_version_id: requiredRemoteStatusString(runtimeStatus, 'credential_binding_version_id'),
+      credential_payload_digest: requiredRemoteStatusString(runtimeStatus, 'credential_payload_digest'),
+      input_json: workload,
+      workspace_acquisition_json: input.bundle.workspace_acquisition_json,
+      pending_workspace_bundle: input.bundle,
+      launch_attempt: 1,
+      execution_package_id: input.executionPackage.id,
+      run_session_id: input.runSession.id,
+      run_worker_lease_id: runWorkerLeaseId,
+      run_worker_lease_token: input.lease.leaseToken,
+      run_session_status: input.runSession.status,
+      run_session_updated_at: input.runSession.updated_at,
+      execution_package_version: input.executionPackage.version,
+      expires_at: input.expiresAt,
+    });
+    if (!isRecord(response) || !isRecord(response.runtime_job) || typeof response.runtime_job.id !== 'string') {
+      throw new Error('codex_runtime_job_unavailable');
+    }
+    return response.runtime_job.id;
+  }
+
+  private async waitForRemoteRunExecutionTerminal(
+    runtimeJobId: string,
+    control: RunControl,
+    expiresAt: string,
+  ): Promise<RemoteRunExecutionTerminal> {
+    const client = this.remoteRunExecutionClient!;
+    const expiresAtMs = Date.parse(expiresAt);
+    while (!control.stopped) {
+      const nowMs = Date.parse(this.now());
+      if (Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && nowMs >= expiresAtMs) {
+        await this.cancelRemoteRunExecutionJob(runtimeJobId);
+        return {
+          runtimeJobId,
+          terminalStatus: 'expired',
+          reasonCode: 'codex_runtime_job_expired',
+        };
+      }
+      const expiryDelayMs = Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) ? Math.max(0, expiresAtMs - nowMs) : undefined;
+      let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+      const expiryPromise =
+        expiryDelayMs === undefined
+          ? undefined
+          : new Promise<{ kind: 'expired' }>((resolve) => {
+              expiryTimer = setTimeout(() => resolve({ kind: 'expired' }), expiryDelayMs);
+            });
+      const pollOutcome = await Promise.race([
+        client.getRuntimeJob(runtimeJobId).then((response) => ({ kind: 'response' as const, response })),
+        control.stoppedPromise.then(() => ({ kind: 'stopped' as const })),
+        ...(expiryPromise === undefined ? [] : [expiryPromise]),
+      ]);
+      if (expiryTimer !== undefined) {
+        clearTimeout(expiryTimer);
+      }
+      if (pollOutcome.kind === 'stopped') {
+        break;
+      }
+      if (pollOutcome.kind === 'expired') {
+        await this.cancelRemoteRunExecutionJob(runtimeJobId);
+        return {
+          runtimeJobId,
+          terminalStatus: 'expired',
+          reasonCode: 'codex_runtime_job_expired',
+        };
+      }
+      const response = pollOutcome.response;
+      if (!isRecord(response) || !isRecord(response.runtime_job)) {
+        throw new Error('codex_runtime_job_unavailable');
+      }
+      const job = response.runtime_job;
+      if (job.status === 'terminal') {
+        const terminalStatus = job.terminal_status;
+        if (
+          terminalStatus !== 'succeeded' &&
+          terminalStatus !== 'failed' &&
+          terminalStatus !== 'cancelled' &&
+          terminalStatus !== 'expired'
+        ) {
+          throw new Error('codex_runtime_job_unavailable');
+        }
+        const terminalResult =
+          isRecord(job.terminal_result_json) && job.terminal_result_json.task_kind === 'run_execution'
+            ? (validateCodexRuntimeJobTerminalResult(job.terminal_result_json) as CodexRunExecutionRuntimeJobResult)
+            : undefined;
+        return {
+          runtimeJobId,
+          terminalStatus,
+          ...(typeof job.terminal_reason_code === 'string' ? { reasonCode: job.terminal_reason_code } : {}),
+          ...(terminalResult === undefined ? {} : { terminalResult }),
+        };
+      }
+      await delay(this.commandPollIntervalMs);
+    }
+    if (control.failure !== undefined) {
+      throw control.failure;
+    }
+    await this.cancelRemoteRunExecutionJob(runtimeJobId);
+    return {
+      runtimeJobId,
+      terminalStatus: 'cancelled',
+      reasonCode: 'codex_runtime_job_cancelled',
+    };
+  }
+
+  private async cancelRemoteRunExecutionJob(runtimeJobId: string): Promise<void> {
+    await this.remoteRunExecutionClient?.cancelRuntimeJob?.(runtimeJobId, {
+      reason_code: 'codex_runtime_job_cancelled',
+      idempotency_key: codexCanonicalDigest({ runtime_job_id: runtimeJobId, operation: 'cancel' }),
+    });
+  }
+
+  private async finalizeRemoteRunExecutionTerminal(
+    runSession: RunSession,
+    terminal: RemoteRunExecutionTerminal,
+    lease: OwnedRun,
+    fence: RemoteRunExecutionFence,
+  ): Promise<void> {
+    const latest = (await this.repository.getRunSession(runSession.id)) ?? runSession;
+    const latestExecutionPackage = await this.repository.getExecutionPackage(latest.execution_package_id);
+    const leaseStillActive = await this.repository
+      .assertActiveRunWorkerLease(latest.id, lease.workerId, lease.leaseToken, this.now())
+      .then(() => true)
+      .catch(() => false);
+    const currentPathPolicyDigest =
+      latest.run_spec === undefined
+        ? undefined
+        : codexCanonicalDigest({
+            allowed_paths: latest.run_spec.allowed_paths,
+            forbidden_paths: latest.run_spec.forbidden_paths,
+          });
+    const staleFence =
+      !leaseStillActive ||
+      terminalStatuses.has(latest.status) ||
+      latest.status !== fence.runSessionStatus ||
+      latest.updated_at !== fence.runSessionUpdatedAt ||
+      latestExecutionPackage?.version !== fence.executionPackageVersion ||
+      currentPathPolicyDigest !== fence.pathPolicyDigest;
+    if (staleFence) {
+      await this.recordStaleRemoteTerminal(latest, terminal, lease);
+      return;
+    }
+    if (terminal.terminalResult !== undefined) {
+      if (
+        terminal.terminalResult.run_session_id !== latest.id ||
+        terminal.terminalResult.execution_package_id !== latest.execution_package_id ||
+        terminal.terminalResult.execution_package_version !== latest.run_spec?.expected_package_version ||
+        terminal.terminalResult.execution_package_version !== latestExecutionPackage?.version ||
+        terminal.terminalResult.workspace_bundle_digest !== fence.workspaceBundleDigest
+      ) {
+        await this.recordStaleRemoteTerminal(latest, terminal, lease);
+        return;
+      }
+    }
+    let executorResult = executorResultFromRemoteRunExecution({
+      runSession: latest,
+      terminal,
+      at: this.now(),
+    });
+    if (terminal.terminalResult !== undefined && terminal.terminalStatus === 'succeeded') {
+      try {
+        assertRemoteChangedFilesAllowed(latest, terminal.terminalResult);
+      } catch {
+        executorResult = terminalExecutorResult({
+          runSession: latest,
+          status: 'failed',
+          summary: 'Remote Codex run changed files outside the package path policy.',
+          at: this.now(),
+          failure: {
+            kind: 'path_violation',
+            message: 'Remote Codex run changed files outside the package path policy.',
+            retryable: true,
+          },
+        });
+      }
+    }
+    const terminalized = await terminalizePackageRunWithRuntimeEvidence({
+      repository: this.repository,
+      runSessionId: latest.id,
+      evidence: runtimeEvidenceFromExecutorResult(executorResult),
+      workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
+      now: () => this.now(),
+    });
+    await this.recordAfterRunDiagnosticsBestEffort(latest, terminalized, lease);
+    if (terminalized.reviewEligible) {
+      await completePackageRunReviewFinalization({
+        repository: this.repository,
+        runSessionId: latest.id,
+        selfReview: this.selfReview,
+        workerLease: { workerId: lease.workerId, leaseToken: lease.leaseToken },
+        now: () => this.now(),
+      });
+    }
+  }
+
+  private async recordStaleRemoteTerminal(runSession: RunSession, terminal: RemoteRunExecutionTerminal, lease: OwnedRun): Promise<void> {
+    const at = this.now();
+    try {
+      await this.repository.appendWorkerRunEvent(
+        {
+          id: `run-event:${runSession.id}:remote-runtime-stale-terminal:${at}`,
+          run_session_id: runSession.id,
+          event_type: 'codex_warning',
+          source: 'worker',
+          visibility: 'internal',
+          summary: 'Remote Codex runtime job terminal result was stale and was not applied.',
+          payload: {
+            runtime_job_id: terminal.runtimeJobId,
+            terminal_status: terminal.terminalStatus,
+            terminal_result_digest: terminal.terminalResult === undefined ? undefined : codexCanonicalDigest(terminal.terminalResult),
+          },
+          created_at: at,
+        },
+        { workerId: lease.workerId, leaseToken: lease.leaseToken },
+      );
+    } catch {
+      // If the lease is already gone, preserving "do not mutate product state" matters more than internal diagnostics.
     }
   }
 

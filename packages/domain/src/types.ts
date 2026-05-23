@@ -384,6 +384,15 @@ export interface RunRuntimeMetadata {
   network_policy_self_test_digest?: string;
   docker_policy_self_check_digest?: string;
   workspace_isolation_digest?: string;
+  remote_runtime_job_id?: string;
+  remote_run_worker_lease_id?: string;
+  remote_workspace_bundle_id?: string;
+  remote_workspace_bundle_digest?: string;
+  remote_workspace_manifest_digest?: string;
+  remote_workspace_bundle_size_bytes?: number;
+  remote_workspace_bundle_expires_at?: IsoDateTime;
+  remote_workspace_acquisition_digest?: string;
+  remote_workspace_acquisition_json?: Record<string, unknown>;
 }
 
 export interface RunSession {

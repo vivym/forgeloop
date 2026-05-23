@@ -9,10 +9,10 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
 import { InMemoryDeliveryRepository, type CreatePendingWorkspaceBundleArtifactInput } from '../../packages/db/src';
-import { transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
+import { codexCanonicalDigest, transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
 import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
-import { createRunWorkerPendingWorkspaceBundleArtifact, FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
+import { createRunWorkerPendingWorkspaceBundleArtifact, FakeCodexSessionDriver, RunWorker, type RemoteRunExecutionClient } from '../../packages/run-worker/src';
 import {
   seedQueuedPackageRun,
   seedReadyStartedPackageRun,
@@ -74,6 +74,12 @@ const localCodexRunSpec = (runSpec: RunSpec, repo: string, head: string): RunSpe
   },
 });
 
+const stableUuidFromDigestForTest = (input: Record<string, unknown>): string => {
+  const hex = codexCanonicalDigest(input).slice('sha256:'.length);
+  const variant = (8 + (Number.parseInt(hex[16]!, 16) % 4)).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -88,6 +94,7 @@ const runWorker = (input: {
   idleThresholdMs?: number;
   leaseDurationMs?: number;
   evidenceCollector?: (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
+  remoteRunExecutionClient?: RemoteRunExecutionClient;
 }) =>
   new RunWorker({
     repository: input.repository,
@@ -106,6 +113,7 @@ const runWorker = (input: {
     commandPollIntervalMs: input.commandPollIntervalMs ?? 10,
     leaseDurationMs: input.leaseDurationMs ?? 60_000,
     idleThresholdMs: input.idleThresholdMs ?? 30_000,
+    ...(input.remoteRunExecutionClient === undefined ? {} : { remoteRunExecutionClient: input.remoteRunExecutionClient }),
   });
 
 class FailingClaimRepository extends InMemoryDeliveryRepository {
@@ -1084,6 +1092,60 @@ describe('RunWorker', () => {
     expect(JSON.stringify(archive)).not.toContain(repo);
   });
 
+  it('skips nested git metadata and dependency directories when storing remote workspace bundles', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    await mkdir(join(repo, 'packages', 'workflow', '.git'), { recursive: true });
+    await mkdir(join(repo, 'packages', 'workflow', 'node_modules', 'pkg'), { recursive: true });
+    await mkdir(join(repo, '.forgeloop', 'codex-runtime', 'nested'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'workflow', 'src.ts'), 'export const value = 1;\n');
+    await writeFile(join(repo, 'packages', 'workflow', '.git', 'config'), '[remote \"origin\"]\nurl = git@example.com:secret/repo.git\n');
+    await writeFile(join(repo, 'packages', 'workflow', 'node_modules', 'pkg', 'index.js'), 'module.exports = \"secret\";\n');
+    await writeFile(join(repo, '.forgeloop', 'repo-owned.toml'), 'setting = true\n');
+    await writeFile(join(repo, '.forgeloop', 'codex-runtime', 'package-prompt.txt'), 'stale runtime prompt\n');
+    await writeFile(join(repo, '.forgeloop', 'codex-runtime', 'nested', 'state.json'), '{\"secret\":true}\n');
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: repo,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+
+    await createRunWorkerPendingWorkspaceBundleArtifact({
+      repository,
+      runSession,
+      executionPackage,
+      runWorkerLease: activeLease,
+      workspacePath: repo,
+      bundleId: 'run-worker-workspace-bundle-nested-skips',
+      now: '2026-05-23T00:00:00.000Z',
+      expiresAt: '2026-05-23T00:10:00.000Z',
+      maxSizeBytes: 1_000_000,
+    });
+
+    const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
+      entries: Array<{ path: string }>;
+    };
+    expect(archive.entries.map((entry) => entry.path)).toContain('packages/workflow/src.ts');
+    expect(archive.entries.map((entry) => entry.path)).toContain('.forgeloop/repo-owned.toml');
+    expect(archive.entries.map((entry) => entry.path)).not.toContain('packages/workflow/.git/config');
+    expect(archive.entries.map((entry) => entry.path)).not.toContain('packages/workflow/node_modules/pkg/index.js');
+    expect(archive.entries.map((entry) => entry.path)).not.toContain('.forgeloop/codex-runtime/package-prompt.txt');
+    expect(archive.entries.map((entry) => entry.path)).not.toContain('.forgeloop/codex-runtime/nested/state.json');
+    expect(JSON.stringify(archive)).not.toContain('git@example.com');
+    expect(JSON.stringify(archive)).not.toContain('module.exports = \"secret\"');
+    expect(JSON.stringify(archive)).not.toContain('stale runtime prompt');
+  });
+
   it('refuses to store remote workspace bundles that contain symlinks escaping the workspace', async () => {
     const repository = new CapturingWorkspaceBundleRepository();
     const { repo, head } = await createGitRepo();
@@ -1120,6 +1182,641 @@ describe('RunWorker', () => {
       }),
     ).rejects.toThrow(/codex_workspace_bundle_invalid/);
     expect(repository.pendingWorkspaceBundleInputs).toHaveLength(0);
+  });
+
+  it('delegates local Codex package execution through a remote runtime job and finalizes terminal evidence through the writer path', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    await mkdir(join(repo, 'packages', 'workflow'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'workflow', 'src.ts'), 'export const delegated = true;\n');
+    await execGit(repo, ['add', '.']);
+    await execGit(repo, ['commit', '-m', 'update readme']);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: repo,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+    });
+    const createdRuntimeJobs: Record<string, unknown>[] = [];
+    const remoteClient: RemoteRunExecutionClient = {
+      getStatus: async () => ({
+        profile_status: 'active',
+        worker_status: 'online',
+        runtime_profile_revision_id: 'profile-rev-run-1',
+        runtime_profile_digest: `sha256:${'a'.repeat(64)}`,
+        credential_binding_id: 'credential-binding-run-1',
+        credential_binding_version_id: 'credential-version-run-1',
+        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+        docker_image_digest: `sha256:${'c'.repeat(64)}`,
+        network_policy_digest: `sha256:${'d'.repeat(64)}`,
+      }),
+      createRuntimeJob: async (input) => {
+        createdRuntimeJobs.push(input);
+        return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
+      },
+      getRuntimeJob: async (runtimeJobId) => ({
+        runtime_job: {
+          id: runtimeJobId,
+          status: 'terminal',
+          terminal_status: 'succeeded',
+          terminal_result_json: {
+            task_kind: 'run_execution',
+            execution_package_id: executionPackage.id,
+            execution_package_version: executionPackage.version,
+            run_session_id: runSession.id,
+            workspace_bundle_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+            changed_files: ['packages/workflow/src.ts'],
+            patch_artifact: {
+              content_type: 'text/x-diff',
+              digest: `sha256:${'e'.repeat(64)}`,
+              internal_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/run_execution_patch`,
+            },
+            check_results: [],
+            execution_artifacts: [],
+            public_summary: 'Remote package run completed.',
+          },
+        },
+      }),
+    };
+    const localDriver = new FakeCodexSessionDriver({
+      kind: 'app_server',
+      script: [{ kind: 'terminal', status: 'failed', summary: 'local driver should not run' }],
+    });
+    const worker = runWorker({
+      repository,
+      driver: localDriver,
+      remoteRunExecutionClient: remoteClient,
+      now: () => '2026-05-23T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+    });
+
+    await worker.drainOnce();
+
+    expect(localDriver.startCalls).toHaveLength(0);
+    expect(repository.pendingWorkspaceBundleInputs).toHaveLength(1);
+    expect(createdRuntimeJobs).toHaveLength(1);
+    const created = createdRuntimeJobs[0]!;
+    expect(created).toMatchObject({
+      target: {
+        target_type: 'run_session',
+        target_id: runSession.id,
+        target_kind: 'run_execution',
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+      },
+      runtime_profile_revision_id: 'profile-rev-run-1',
+      credential_binding_id: 'credential-binding-run-1',
+      credential_binding_version_id: 'credential-version-run-1',
+      credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+      execution_package_id: executionPackage.id,
+      run_session_id: runSession.id,
+      run_session_status: 'running',
+      execution_package_version: executionPackage.version,
+      pending_workspace_bundle: expect.objectContaining({
+        bundle_id: repository.pendingWorkspaceBundleInputs[0]!.bundle_id,
+        archive_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+      }),
+      workspace_acquisition_json: repository.pendingWorkspaceBundleInputs[0]!.workspace_acquisition_json,
+    });
+    expect(created.input_json).toMatchObject({
+      schema_version: 'codex_run_execution_workload.v1',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+      workspace_bundle_id: repository.pendingWorkspaceBundleInputs[0]!.bundle_id,
+      workspace_bundle_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+      output_schema_version: 'codex_run_execution_result.v1',
+    });
+    expect(created.input_json).not.toMatchObject({
+      package_prompt: expect.anything(),
+      execution_context_json: expect.anything(),
+    });
+    expect(JSON.stringify(created)).not.toContain(repo);
+    const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
+      entries: Array<{ path: string; content_base64?: string }>;
+    };
+    const contextEntry = archive.entries.find((entry) => entry.path === '.forgeloop/codex-runtime/execution-context.json');
+    expect(contextEntry?.content_base64).toBeDefined();
+    const executionContext = JSON.parse(Buffer.from(contextEntry!.content_base64!, 'base64').toString('utf8')) as Record<string, unknown>;
+    expect(codexCanonicalDigest(executionContext)).toBe((created.input_json as Record<string, unknown>).execution_context_digest);
+    expect(JSON.stringify(executionContext)).not.toContain(repo);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'succeeded',
+      changed_files: [{ repo_id: 'repo-1', path: 'packages/workflow/src.ts', change_kind: 'modified' }],
+    });
+  });
+
+  it('reuses the persisted remote runtime job fence when resuming after runtime job creation', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const { executionPackage, runSession } = await seedReadyStartedPackageRun(repository);
+    const workspacePath = join(repo, '.worktrees', runSession.id);
+    await execGit(repo, ['worktree', 'add', '--detach', workspacePath, head]);
+    const runtimeJobId = stableUuidFromDigestForTest({
+      kind: 'codex_runtime_job',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+    });
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: `run-worker-workspace-bundle-${runSession.id}`,
+      archive_ref: `artifact:codex-pending-bundles:run-worker-workspace-bundle-${runSession.id}`,
+      archive_digest: `sha256:${'c'.repeat(64)}`,
+      manifest_digest: `sha256:${'d'.repeat(64)}`,
+      size_bytes: 128,
+      expires_at: '2026-05-23T00:10:00.000Z',
+    };
+    const persistedUpdatedAt = '2026-05-23T00:00:00.000Z';
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      updated_at: persistedUpdatedAt,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: workspacePath,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
+        remote_runtime_job_id: runtimeJobId,
+        remote_run_worker_lease_id: activeLease.id,
+        remote_workspace_bundle_id: workspaceAcquisitionJson.bundle_id,
+        remote_workspace_bundle_digest: workspaceAcquisitionJson.archive_digest,
+        remote_workspace_manifest_digest: workspaceAcquisitionJson.manifest_digest,
+        remote_workspace_bundle_size_bytes: workspaceAcquisitionJson.size_bytes,
+        remote_workspace_bundle_expires_at: workspaceAcquisitionJson.expires_at,
+        remote_workspace_acquisition_digest: codexCanonicalDigest(workspaceAcquisitionJson),
+        remote_workspace_acquisition_json: workspaceAcquisitionJson,
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const createInputs: Record<string, unknown>[] = [];
+    const polledRuntimeJobIds: string[] = [];
+    const remoteClient: RemoteRunExecutionClient = {
+      getStatus: async () => ({
+        profile_status: 'active',
+        worker_status: 'online',
+        runtime_profile_revision_id: 'profile-rev-run-1',
+        credential_binding_id: 'credential-binding-run-1',
+        credential_binding_version_id: 'credential-version-run-1',
+        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+      }),
+      createRuntimeJob: async (input) => {
+        createInputs.push(input);
+        return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
+      },
+      getRuntimeJob: async (id) => {
+        polledRuntimeJobIds.push(id);
+        return {
+          runtime_job: {
+          id,
+          status: 'terminal',
+          terminal_status: 'failed',
+          terminal_reason_code: 'codex_runtime_job_unavailable',
+          },
+        };
+      },
+    };
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => new FakeCodexSessionDriver({ kind: 'app_server', script: [] }),
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      remoteRunExecutionClient: remoteClient,
+      now: () => '2026-05-23T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+    });
+
+    await worker.runOne({
+      runSessionId: runSession.id,
+      workerId: 'worker-1',
+      leaseId: activeLease.id,
+      leaseToken: activeLease.lease_token,
+    });
+
+    expect(createInputs).toHaveLength(1);
+    expect(createInputs[0]).toMatchObject({
+      runtime_job_id: runtimeJobId,
+      launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
+      run_session_updated_at: persistedUpdatedAt,
+      pending_workspace_bundle: expect.objectContaining({
+        bundle_id: workspaceAcquisitionJson.bundle_id,
+        run_worker_lease_id: activeLease.id,
+        archive_digest: workspaceAcquisitionJson.archive_digest,
+      }),
+    });
+    expect(polledRuntimeJobIds).toEqual([runtimeJobId]);
+    expect((await repository.getRunSession(runSession.id))?.updated_at).toBe(persistedUpdatedAt);
+  });
+
+  it('recreates remote workspace bundle metadata when the persisted runtime job fence no longer matches', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const { executionPackage, runSession } = await seedReadyStartedPackageRun(repository);
+    const workspacePath = join(repo, '.worktrees', runSession.id);
+    await execGit(repo, ['worktree', 'add', '--detach', workspacePath, head]);
+    const currentRuntimeJobId = stableUuidFromDigestForTest({
+      kind: 'codex_runtime_job',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+    });
+    const staleRuntimeJobId = stableUuidFromDigestForTest({
+      kind: 'codex_runtime_job',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version + 1,
+    });
+    const staleWorkspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: `run-worker-workspace-bundle-${runSession.id}`,
+      archive_ref: `artifact:codex-pending-bundles:run-worker-workspace-bundle-${runSession.id}`,
+      archive_digest: `sha256:${'c'.repeat(64)}`,
+      manifest_digest: `sha256:${'d'.repeat(64)}`,
+      size_bytes: 128,
+      expires_at: '2026-05-23T00:10:00.000Z',
+    };
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: workspacePath,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: staleRuntimeJobId }),
+        remote_runtime_job_id: staleRuntimeJobId,
+        remote_workspace_bundle_id: staleWorkspaceAcquisitionJson.bundle_id,
+        remote_workspace_bundle_digest: staleWorkspaceAcquisitionJson.archive_digest,
+        remote_workspace_manifest_digest: staleWorkspaceAcquisitionJson.manifest_digest,
+        remote_workspace_bundle_size_bytes: staleWorkspaceAcquisitionJson.size_bytes,
+        remote_workspace_bundle_expires_at: staleWorkspaceAcquisitionJson.expires_at,
+        remote_workspace_acquisition_digest: codexCanonicalDigest(staleWorkspaceAcquisitionJson),
+        remote_workspace_acquisition_json: staleWorkspaceAcquisitionJson,
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+    const createInputs: Record<string, unknown>[] = [];
+    const remoteClient: RemoteRunExecutionClient = {
+      getStatus: async () => ({
+        profile_status: 'active',
+        worker_status: 'online',
+        runtime_profile_revision_id: 'profile-rev-run-1',
+        credential_binding_id: 'credential-binding-run-1',
+        credential_binding_version_id: 'credential-version-run-1',
+        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+      }),
+      createRuntimeJob: async (input) => {
+        createInputs.push(input);
+        return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
+      },
+      getRuntimeJob: async (id) => ({
+        runtime_job: {
+          id,
+          status: 'terminal',
+          terminal_status: 'failed',
+          terminal_reason_code: 'codex_runtime_job_unavailable',
+        },
+      }),
+    };
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => new FakeCodexSessionDriver({ kind: 'app_server', script: [] }),
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      remoteRunExecutionClient: remoteClient,
+      now: () => '2026-05-23T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+    });
+
+    await worker.runOne({
+      runSessionId: runSession.id,
+      workerId: 'worker-1',
+      leaseId: activeLease.id,
+      leaseToken: activeLease.lease_token,
+    });
+
+    expect(repository.pendingWorkspaceBundleInputs).toHaveLength(1);
+    expect(createInputs).toHaveLength(1);
+    expect(createInputs[0]).toMatchObject({
+      runtime_job_id: currentRuntimeJobId,
+      launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: currentRuntimeJobId }),
+      pending_workspace_bundle: expect.objectContaining({
+        archive_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+      }),
+    });
+    expect(createInputs[0]).not.toMatchObject({
+      pending_workspace_bundle: expect.objectContaining({
+        archive_digest: staleWorkspaceAcquisitionJson.archive_digest,
+      }),
+    });
+  });
+
+  it('recreates remote workspace bundle metadata when the persisted bundle lease fence no longer matches', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const { executionPackage, runSession } = await seedReadyStartedPackageRun(repository);
+    const workspacePath = join(repo, '.worktrees', runSession.id);
+    await execGit(repo, ['worktree', 'add', '--detach', workspacePath, head]);
+    const runtimeJobId = stableUuidFromDigestForTest({
+      kind: 'codex_runtime_job',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+    });
+    const staleWorkspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: `run-worker-workspace-bundle-${runSession.id}`,
+      archive_ref: `artifact:codex-pending-bundles:run-worker-workspace-bundle-${runSession.id}`,
+      archive_digest: `sha256:${'c'.repeat(64)}`,
+      manifest_digest: `sha256:${'d'.repeat(64)}`,
+      size_bytes: 128,
+      expires_at: '2026-05-23T00:10:00.000Z',
+    };
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: workspacePath,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
+        remote_runtime_job_id: runtimeJobId,
+        remote_run_worker_lease_id: 'stale-run-worker-lease',
+        remote_workspace_bundle_id: staleWorkspaceAcquisitionJson.bundle_id,
+        remote_workspace_bundle_digest: staleWorkspaceAcquisitionJson.archive_digest,
+        remote_workspace_manifest_digest: staleWorkspaceAcquisitionJson.manifest_digest,
+        remote_workspace_bundle_size_bytes: staleWorkspaceAcquisitionJson.size_bytes,
+        remote_workspace_bundle_expires_at: staleWorkspaceAcquisitionJson.expires_at,
+        remote_workspace_acquisition_digest: codexCanonicalDigest(staleWorkspaceAcquisitionJson),
+        remote_workspace_acquisition_json: staleWorkspaceAcquisitionJson,
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+    const createInputs: Record<string, unknown>[] = [];
+    const remoteClient: RemoteRunExecutionClient = {
+      getStatus: async () => ({
+        profile_status: 'active',
+        worker_status: 'online',
+        runtime_profile_revision_id: 'profile-rev-run-1',
+        credential_binding_id: 'credential-binding-run-1',
+        credential_binding_version_id: 'credential-version-run-1',
+        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+      }),
+      createRuntimeJob: async (input) => {
+        createInputs.push(input);
+        return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
+      },
+      getRuntimeJob: async (id) => ({
+        runtime_job: {
+          id,
+          status: 'terminal',
+          terminal_status: 'failed',
+          terminal_reason_code: 'codex_runtime_job_unavailable',
+        },
+      }),
+    };
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => new FakeCodexSessionDriver({ kind: 'app_server', script: [] }),
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      remoteRunExecutionClient: remoteClient,
+      now: () => '2026-05-23T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+    });
+
+    await worker.runOne({
+      runSessionId: runSession.id,
+      workerId: 'worker-1',
+      leaseId: activeLease.id,
+      leaseToken: activeLease.lease_token,
+    });
+
+    expect(repository.pendingWorkspaceBundleInputs).toHaveLength(1);
+    expect(createInputs[0]).toMatchObject({
+      pending_workspace_bundle: expect.objectContaining({
+        run_worker_lease_id: activeLease.id,
+        archive_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+      }),
+    });
+    expect(createInputs[0]).not.toMatchObject({
+      pending_workspace_bundle: expect.objectContaining({
+        archive_digest: staleWorkspaceAcquisitionJson.archive_digest,
+      }),
+    });
+  });
+
+  it('replays pending workspace bundle creation after a crash before remote metadata persistence', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const { executionPackage, runSession } = await seedReadyStartedPackageRun(repository);
+    const workspacePath = join(repo, '.worktrees', runSession.id);
+    await execGit(repo, ['worktree', 'add', '--detach', workspacePath, head]);
+    const runtimeJobId = stableUuidFromDigestForTest({
+      kind: 'codex_runtime_job',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+    });
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: workspacePath,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
+    });
+    const stalePending = await createRunWorkerPendingWorkspaceBundleArtifact({
+      repository,
+      runSession,
+      executionPackage,
+      runWorkerLease: activeLease,
+      workspacePath,
+      bundleId: `run-worker-workspace-bundle-${runSession.id}`,
+      now: '2026-05-23T00:00:00.000Z',
+      expiresAt: '2026-05-23T00:10:00.000Z',
+    });
+    const createInputs: Record<string, unknown>[] = [];
+    const remoteClient: RemoteRunExecutionClient = {
+      getStatus: async () => ({
+        profile_status: 'active',
+        worker_status: 'online',
+        runtime_profile_revision_id: 'profile-rev-run-1',
+        credential_binding_id: 'credential-binding-run-1',
+        credential_binding_version_id: 'credential-version-run-1',
+        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+      }),
+      createRuntimeJob: async (input) => {
+        createInputs.push(input);
+        return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
+      },
+      getRuntimeJob: async (id) => ({
+        runtime_job: {
+          id,
+          status: 'terminal',
+          terminal_status: 'failed',
+          terminal_reason_code: 'codex_runtime_job_unavailable',
+        },
+      }),
+    };
+    const worker = new RunWorker({
+      repository,
+      workerId: 'worker-1',
+      driverFactory: () => new FakeCodexSessionDriver({ kind: 'app_server', script: [] }),
+      evidenceCollector: async ({ runSpec }) => succeededExecutorResult(runSpec.run_session_id),
+      selfReview: async () => succeededSelfReview(),
+      remoteRunExecutionClient: remoteClient,
+      now: () => '2026-05-23T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+    });
+
+    await worker.runOne({
+      runSessionId: runSession.id,
+      workerId: 'worker-1',
+      leaseId: activeLease.id,
+      leaseToken: activeLease.lease_token,
+    });
+
+    expect(createInputs).toHaveLength(1);
+    expect(createInputs[0]).toMatchObject({
+      runtime_job_id: runtimeJobId,
+      pending_workspace_bundle: expect.objectContaining({
+        bundle_id: stalePending.pending_workspace_bundle.bundle_id,
+        run_worker_lease_id: activeLease.id,
+      }),
+    });
+    expect((createInputs[0]!.pending_workspace_bundle as Record<string, unknown>).archive_digest).not.toBe(stalePending.archive_digest);
+  });
+
+  it('maps run-session cancel commands to remote runtime job cancellation while waiting for terminal result', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: repo,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+    });
+    const runtimeJobId = stableUuidFromDigestForTest({
+      kind: 'codex_runtime_job',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+    });
+    const cancelRuntimeJobIds: string[] = [];
+    const remoteClient: RemoteRunExecutionClient = {
+      getStatus: async () => ({
+        profile_status: 'active',
+        worker_status: 'online',
+        runtime_profile_revision_id: 'profile-rev-run-1',
+        credential_binding_id: 'credential-binding-run-1',
+        credential_binding_version_id: 'credential-version-run-1',
+        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+      }),
+      createRuntimeJob: async (input) => ({ runtime_job: { id: input.runtime_job_id, status: 'queued' } }),
+      getRuntimeJob: async () => new Promise<never>(() => undefined),
+      cancelRuntimeJob: async (id) => {
+        cancelRuntimeJobIds.push(id);
+        return { id, status: 'terminal', terminal_status: 'cancelled' };
+      },
+    };
+    const worker = runWorker({
+      repository,
+      driver: new FakeCodexSessionDriver({ kind: 'app_server', script: [] }),
+      remoteRunExecutionClient: remoteClient,
+      now: () => '2026-05-23T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+      commandPollIntervalMs: 10,
+    });
+
+    const pending = worker.drainOnce();
+    await delay(30);
+    await repository.saveRunCommand({
+      id: 'run-command:remote-cancel',
+      run_session_id: runSession.id,
+      command_type: 'cancel',
+      status: 'pending',
+      actor_id: 'actor-owner',
+      payload: {},
+      created_at: '2026-05-23T00:00:00.000Z',
+      updated_at: '2026-05-23T00:00:00.000Z',
+    });
+
+    await expect(Promise.race([pending, delay(500).then(() => 'timeout')])).resolves.not.toBe('timeout');
+
+    expect(cancelRuntimeJobIds).toContain(runtimeJobId);
+    expect(await repository.getRunSession(runSession.id)).toMatchObject({
+      status: 'cancelled',
+    });
   });
 
   it('uses exec fallback when app-server emits a fallback event after initial progress', async () => {

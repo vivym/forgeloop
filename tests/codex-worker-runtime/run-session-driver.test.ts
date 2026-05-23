@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { CodexDriverStartInput, CodexDriverStreamItem, CodexSessionDriver } from '@forgeloop/executor';
 
-import { createLeasedRunSessionCodexDriver } from '../../packages/codex-worker-runtime/src/run-session-driver';
+import {
+  createLeasedRunSessionCodexDriver,
+  createMaterializedRunSessionCodexDriver,
+} from '../../packages/codex-worker-runtime/src/run-session-driver';
 
 const runSession = {
   id: 'run-session-1',
@@ -101,5 +104,66 @@ describe('createLeasedRunSessionCodexDriver', () => {
     expect(innerInputs).toHaveLength(1);
     expect(innerInputs[0]?.workspacePath).toBe('/workspace');
     expect(closed).toEqual([{ status: 'succeeded', summary: 'done' }]);
+  });
+
+  it('starts from an already materialized Docker app-server session without creating another launch lease', async () => {
+    const closed: Array<{ status: string; summary: string }> = [];
+    const innerInputs: CodexDriverStartInput[] = [];
+    const innerDriver: CodexSessionDriver = {
+      kind: 'app_server',
+      async *startRun(input) {
+        innerInputs.push(input);
+        yield { kind: 'terminal', status: 'succeeded', summary: 'remote run done' } satisfies CodexDriverStreamItem;
+      },
+      async *resumeRun(input) {
+        innerInputs.push(input);
+        yield { kind: 'terminal', status: 'failed', summary: 'unexpected resume' } satisfies CodexDriverStreamItem;
+      },
+      sendInput: async () => ({}),
+      cancelRun: async () => ({}),
+      close: async () => undefined,
+    };
+    const driver = createMaterializedRunSessionCodexDriver(
+      {
+        workerIdentity: 'remote-worker-identity',
+        innerDriverFactory: () => innerDriver,
+      },
+      {
+        dockerSession: {
+          endpoint: 'unix:/safe/codex.sock',
+          containerWorkspacePath: '/workspace',
+          publicEvidence: {
+            launch_lease_id: 'lease-1',
+            runtime_profile_id: 'profile-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: `sha256:${'a'.repeat(64)}`,
+            runtime_target_kind: 'run_execution',
+            source_access_mode: 'path_policy_scoped',
+            environment: 'test',
+            worker_id: 'worker-1',
+            docker_image_digest: `sha256:${'b'.repeat(64)}`,
+            container_id_digest: `sha256:${'c'.repeat(64)}`,
+            app_server_effective_config_digest: `sha256:${'d'.repeat(64)}`,
+            docker_policy_self_check_digest: `sha256:${'e'.repeat(64)}`,
+            app_server_attempted: true,
+            selected_execution_mode: 'app_server',
+          },
+          close: async (status, summary) => {
+            closed.push({ status, summary });
+          },
+        },
+      } as any,
+    );
+
+    const emitted: CodexDriverStreamItem[] = [];
+    for await (const item of driver.startRun(startInput)) {
+      emitted.push(item);
+    }
+    await driver.close?.();
+
+    expect(emitted).toEqual([{ kind: 'terminal', status: 'succeeded', summary: 'remote run done' }]);
+    expect(innerInputs).toHaveLength(1);
+    expect(innerInputs[0]?.workspacePath).toBe('/workspace');
+    expect(closed).toEqual([{ status: 'succeeded', summary: 'remote run done' }]);
   });
 });
