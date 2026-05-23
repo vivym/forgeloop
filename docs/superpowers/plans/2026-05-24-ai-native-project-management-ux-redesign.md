@@ -115,7 +115,7 @@ export const productObjectRefSchema = z.discriminatedUnion('type', [
 - Create: `packages/db/src/schema/development-plan.ts`
   - Tables: `development_plans`, `development_plan_source_links`, `development_plan_revisions`, `development_plan_items`, `development_plan_item_revisions`.
 - Create: `packages/db/src/schema/brainstorming.ts`
-  - Tables: `brainstorming_sessions`, `brainstorming_questions`, `brainstorming_answers`, `brainstorming_decisions`, `boundary_summaries`.
+  - Tables: `brainstorming_sessions`, `brainstorming_questions`, `brainstorming_answers`, `brainstorming_decisions`, `boundary_summaries`, `boundary_summary_revisions`.
 - Create: `packages/db/src/schema/context-manifest.ts`
   - Table: `context_manifests`.
 - Create: `packages/db/src/schema/execution-plan.ts`
@@ -131,7 +131,7 @@ export const productObjectRefSchema = z.discriminatedUnion('type', [
 - Modify: `packages/db/src/schema/index.ts`
   - Export all new schemas.
 - Modify: `packages/db/src/repositories/delivery-repository.ts`
-  - Add Development Plan, source link, brainstorming, context manifest, execution plan, execution, review handoff, and QA handoff methods.
+  - Add Development Plan, Development Plan Item revision, source link, brainstorming, Boundary Summary revision, context manifest, execution plan, execution, review handoff, and QA handoff methods.
 - Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
   - Implement new repository methods with clone-on-read/write.
 - Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
@@ -521,8 +521,36 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory) {
       created_at: '2026-05-24T00:01:00.000Z',
     });
     await repository.saveDevelopmentPlanItem(developmentPlanItemFixture({ id: 'dpi-1', development_plan_id: 'dp-1' }));
+    await repository.saveDevelopmentPlanItemRevision(developmentPlanItemRevisionFixture({
+      id: 'dpi-rev-1',
+      development_plan_item_id: 'dpi-1',
+      development_plan_id: 'dp-1',
+      revision_number: 1,
+      change_reason: 'Initial generated row',
+      edited_by_actor_id: 'actor-tech',
+      created_at: '2026-05-24T00:02:00.000Z',
+    }));
+    await repository.saveDevelopmentPlanItemRevision(developmentPlanItemRevisionFixture({
+      id: 'dpi-rev-2',
+      development_plan_item_id: 'dpi-1',
+      development_plan_id: 'dp-1',
+      revision_number: 2,
+      change_reason: 'Boundary refinement',
+      edited_by_actor_id: 'actor-tech',
+      created_at: '2026-05-24T00:03:00.000Z',
+    }));
     await repository.saveBrainstormingSession(brainstormingSessionFixture({ id: 'bs-1', development_plan_item_id: 'dpi-1' }));
     await repository.saveBoundarySummary(boundarySummaryFixture({ id: 'boundary-1', brainstorming_session_id: 'bs-1', development_plan_item_id: 'dpi-1' }));
+    await repository.saveBoundarySummaryRevision(boundarySummaryRevisionFixture({
+      id: 'boundary-rev-1',
+      boundary_summary_id: 'boundary-1',
+      brainstorming_session_id: 'bs-1',
+      development_plan_item_id: 'dpi-1',
+      revision_number: 1,
+      decision_count: 2,
+      approved_by_actor_id: 'actor-tech-lead',
+      approved_at: '2026-05-24T00:04:00.000Z',
+    }));
     await repository.saveSpec(specFixture({ id: 'spec-1', development_plan_item_id: 'dpi-1', boundary_summary_id: 'boundary-1' }));
     await repository.saveSpecRevision(specRevisionFixture({ id: 'spec-rev-1', spec_id: 'spec-1', development_plan_item_id: 'dpi-1', context_manifest_id: 'cm-1' }));
     await repository.saveExecutionPlan(executionPlanFixture({ id: 'ep-1', development_plan_item_id: 'dpi-1' }));
@@ -534,7 +562,22 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory) {
       expect.objectContaining({ development_plan_id: 'dp-1', link_type: 'related' }),
     ]);
     expect(await repository.listDevelopmentPlanSourceLinks('dp-1')).toHaveLength(2);
+    expect(await repository.listDevelopmentPlanItemRevisions('dpi-1')).toEqual([
+      expect.objectContaining({ id: 'dpi-rev-1', revision_number: 1 }),
+      expect.objectContaining({ id: 'dpi-rev-2', revision_number: 2 }),
+    ]);
+    expect(await repository.compareDevelopmentPlanItemRevisions({ base_revision_id: 'dpi-rev-1', compare_revision_id: 'dpi-rev-2' })).toMatchObject({
+      base_revision_id: 'dpi-rev-1',
+      compare_revision_id: 'dpi-rev-2',
+    });
     expect(await repository.getBoundarySummary('boundary-1')).toMatchObject({ development_plan_item_id: 'dpi-1' });
+    expect(await repository.listBoundarySummaryRevisions('boundary-1')).toEqual([
+      expect.objectContaining({ id: 'boundary-rev-1', revision_number: 1 }),
+    ]);
+    expect(await repository.compareBoundarySummaryRevisions({ base_revision_id: 'boundary-rev-1', compare_revision_id: 'boundary-rev-1' })).toMatchObject({
+      base_revision_id: 'boundary-rev-1',
+      compare_revision_id: 'boundary-rev-1',
+    });
     expect(await repository.getExecution('exec-1')).toMatchObject({ execution_plan_revision_id: 'epr-1' });
   });
 }
@@ -606,6 +649,19 @@ export const development_plan_source_links = pgTable('development_plan_source_li
   createdByActorId: uuid('created_by_actor_id').references(() => actors.id),
   createdAt: timestampColumn('created_at').notNull(),
 });
+
+export const boundary_summary_revisions = pgTable('boundary_summary_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  boundarySummaryId: uuid('boundary_summary_id').notNull(),
+  brainstormingSessionId: uuid('brainstorming_session_id').notNull(),
+  developmentPlanItemId: uuid('development_plan_item_id').notNull(),
+  revisionNumber: integer('revision_number').notNull(),
+  summaryMarkdown: text('summary_markdown').notNull(),
+  decisionSnapshot: jsonb('decision_snapshot').$type<BrainstormingDecision[]>().notNull(),
+  approvedByActorId: uuid('approved_by_actor_id').references(() => actors.id),
+  approvedAt: timestampColumn('approved_at'),
+  createdAt: timestampColumn('created_at').notNull(),
+});
 ```
 
 - [ ] **Step 5: Implement repository interface and in-memory methods**
@@ -622,8 +678,14 @@ listDevelopmentPlanSourceLinksForSource(sourceRef: SourceObjectRef): Promise<Dev
 saveDevelopmentPlanItem(item: DevelopmentPlanItem): Promise<void>;
 getDevelopmentPlanItem(id: string): Promise<DevelopmentPlanItem | undefined>;
 listDevelopmentPlanItems(developmentPlanId: string): Promise<DevelopmentPlanItem[]>;
+saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void>;
+listDevelopmentPlanItemRevisions(itemId: string): Promise<DevelopmentPlanItemRevision[]>;
+compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
 saveBrainstormingSession(session: BrainstormingSession): Promise<void>;
 saveBoundarySummary(summary: BoundarySummary): Promise<void>;
+saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void>;
+listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]>;
+compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
 saveExecutionPlan(plan: ExecutionPlanDocument): Promise<void>;
 saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void>;
 saveExecution(execution: Execution): Promise<void>;
@@ -895,6 +957,18 @@ recordDecision(...)
 
 @Post('brainstorming-sessions/:sessionId/approve-boundary')
 approveBoundary(...)
+
+@Get('development-plans/:developmentPlanId/items/:itemId/revisions')
+listDevelopmentPlanItemRevisions(...)
+
+@Get('development-plans/:developmentPlanId/items/:itemId/revisions/compare')
+compareDevelopmentPlanItemRevisions(...)
+
+@Get('boundary-summaries/:boundarySummaryId/revisions')
+listBoundarySummaryRevisions(...)
+
+@Get('boundary-summaries/:boundarySummaryId/revisions/compare')
+compareBoundarySummaryRevisions(...)
 ```
 
 Initial question generator can be deterministic:
@@ -909,6 +983,8 @@ const defaultBoundaryQuestions = [
 ```
 
 Approval must fail unless every question has an answer and at least one decision is recorded. `approve-boundary` may also record an additional final decision from the submitted boundary summary, but it must not be the only decision if no prior decision exists.
+
+Every manual Development Plan Item update, AI regeneration, and boundary approval must persist a structured revision. Boundary approval creates both the current `BoundarySummary` and an immutable `BoundarySummaryRevision` linked to the approved Brainstorming Session, Development Plan Item revision, decisions, approver, and approval timestamp. Compare routes return structured field diffs for item revisions and boundary revisions; they must not synthesize diffs from UI fixtures.
 
 - [ ] **Step 7: Run API tests**
 
@@ -1551,6 +1627,7 @@ Projection rules:
 - My Work rows can target source objects, Development Plans, Development Plan Items, Specs, Execution Plans, Executions, QA Handoffs, and Releases.
 - Board cards can mix source objects and Development Plan Items with type-specific status fields.
 - Specs & Execution Plans queue rows must show artifact type, source object, Development Plan Item, reviewer, age, risk, stale/blocked state, and next action.
+- Development Plan Item detail query must include persisted Development Plan Item revisions, persisted Boundary Summary revisions, and compare links backed by repository/API compare methods.
 - Executions queue rows must show approved Execution Plan revision, worker state, current step, last event, PR/diff/test evidence, and continue/inspect action.
 - Code Review Handoff rows must show execution, reviewer, review decision, changed surfaces, blocking comments, and QA handoff availability.
 - QA Handoff rows must show source object, Development Plan Item, approved Spec, approved Execution Plan, acceptance criteria, test strategy, evidence, risk, changed surfaces, release impact, and accept/block action state.
@@ -1642,6 +1719,10 @@ getDashboard(query)
 listDevelopmentPlans(query)
 getDevelopmentPlan(developmentPlanId)
 getDevelopmentPlanItem(developmentPlanId, itemId)
+listDevelopmentPlanItemRevisions(developmentPlanId, itemId)
+compareDevelopmentPlanItemRevisions(developmentPlanId, itemId, query)
+listBoundarySummaryRevisions(boundarySummaryId)
+compareBoundarySummaryRevisions(boundarySummaryId, query)
 generateDevelopmentPlanDraft(body)
 regenerateDevelopmentPlanDraft(developmentPlanId, body)
 linkSourceObjectToDevelopmentPlan(sourceType, sourceId, developmentPlanId, body)
@@ -1974,6 +2055,12 @@ it('renders Development Plan Item gate detail without calling it a Task', async 
   expect(screen.getByText(/Boundary brainstorming/i)).toBeTruthy();
   expect(screen.getByText(/Spec document/i)).toBeTruthy();
   expect(screen.getByText(/Execution Plan document/i)).toBeTruthy();
+  expect(screen.getByRole('region', { name: /development plan item revisions/i })).toBeTruthy();
+  expect(screen.getByText(/Item revision 3/i)).toBeTruthy();
+  expect(screen.getByRole('button', { name: /compare item revisions/i })).toBeTruthy();
+  expect(screen.getByRole('region', { name: /boundary summary revisions/i })).toBeTruthy();
+  expect(screen.getByText(/Boundary summary revision 2/i)).toBeTruthy();
+  expect(screen.getByRole('button', { name: /compare boundary revisions/i })).toBeTruthy();
   expect(document.body.textContent).not.toMatch(/\bTask\b|Work Item Owner|owner_actor_id/);
 });
 ```
@@ -2063,7 +2150,9 @@ Actions:
 Sections:
 
 - Row summary and structured fields.
+- Development Plan Item revision history with revision number, editor, timestamp, change reason, stale/current marker, and compare action.
 - Boundary brainstorming panel.
+- Boundary Summary revision history with approver, approval timestamp, source Brainstorming Session, decision count, and compare action.
 - Spec document panel.
 - Execution Plan document panel.
 - Execution supervision panel.
@@ -2071,6 +2160,7 @@ Sections:
 - Evidence timeline.
 
 Gate buttons must show disabled reasons.
+Development Plan Item and Boundary Summary revision histories must remain visible or one click away from the item gate detail; do not hide these behind the Markdown editor revision drawer because they are structured governance artifacts.
 Implement the Required Surface States matrix for Development Plan Page and Development Plan Item Detail in this task. State indicators must include accessible text and must not rely on color alone.
 
 - [ ] **Step 5: Implement brainstorming panel commands**
@@ -2129,13 +2219,19 @@ it('renders governance queues scoped to Development Plan Items', async () => {
 });
 
 it.each([
+  '/plans',
+  '/plans/plan-1',
+  '/specs',
+  '/specs/spec-1',
   '/requirements/req-1/spec',
   '/requirements/req-1/plan',
   '/bugs/bug-1/spec',
   '/bugs/bug-1/plan',
   '/tech-debt/td-1/spec',
   '/tech-debt/td-1/plan',
-])('does not expose direct source-object artifact route %s', async (route) => {
+  '/initiatives/init-1/spec',
+  '/initiatives/init-1/plan',
+])('does not expose legacy or direct artifact route %s', async (route) => {
   const screen = await renderRoute(route);
   expect(await screen.findByText(/not found|route retired|use a development plan item/i)).toBeTruthy();
   expect(document.body.textContent).not.toMatch(/generate spec|generate execution plan|start execution/i);
@@ -2336,6 +2432,8 @@ On Development Plan Item detail:
 - Ready for code review enabled only after execution completion and required verification evidence exists.
 - QA handoff enabled only after approved code review or a visible audited exception for early QA preparation.
 - QA accept/block actions update the Development Plan Item, My Work, Reports, and Release readiness projections.
+- Manual item edits, AI regeneration of Development Plan rows, boundary decision changes, and boundary approval create new Development Plan Item or Boundary Summary revisions without overwriting approved history.
+- Revision compare actions for Development Plan Item and Boundary Summary structured revisions remain available from the item gate surface after Spec/Execution Plan generation, so reviewers can audit what changed between boundary approval and execution.
 
 - [ ] **Step 5: Run focused tests**
 
@@ -2396,6 +2494,10 @@ Allow `Release Owner` only on release pages. Plain `Replay` is allowed only insi
 Create a Playwright-based helper that starts from the already running dev server or `FORGELOOP_WEB_BASE_URL`, visits these routes at 375, 768, 1024, and 1440 widths:
 
 - `/dashboard`
+- `/plans`
+- `/plans/plan-1`
+- `/specs`
+- `/specs/spec-1`
 - `/requirements/req-1`
 - `/requirements/req-1/spec`
 - `/requirements/req-1/plan`
@@ -2415,6 +2517,7 @@ The helper should write PNGs under `test-results/ai-native-project-management/` 
 - role lens labels visible on source object page.
 - every route has a visible non-color-only state affordance for the route's default status.
 - loading, empty, error, stale, blocked, approved, running, and resumable variants are covered by `tests/web/ai-native-surface-states.test.tsx`.
+- top-level legacy artifact routes such as `/plans`, `/plans/plan-1`, `/specs`, and `/specs/spec-1` render product-safe not-found/retired-route states and do not show legacy document browsers.
 - direct source-object artifact routes such as `/requirements/req-1/spec` and `/requirements/req-1/plan` render product-safe not-found/retired-route states and do not show generation commands.
 
 Also create a Playwright happy-path smoke in the same file:
@@ -2500,7 +2603,7 @@ Fix any:
 Run:
 
 ```bash
-rg -n "Work Item Owner|owner_actor_id|/tasks|path: 'tasks'|work-items/.*/specs|work-items/.*/plans|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)|Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser|/replay|path: 'replay'" apps/web/src/app apps/web/src/features tests/web/router-test-utils.tsx tests/e2e/web-product-routes.e2e.test.ts tests/e2e/ai-native-project-management-visual.e2e.test.ts
+rg -n "Work Item Owner|owner_actor_id|/tasks|path: 'tasks'|route\\(['\"]plans|route\\(['\"]specs|path: ['\"]plans['\"]|path: ['\"]specs['\"]|/plans(/|['\"[:space:]]|$)|/specs(/|['\"[:space:]]|$)|work-items/.*/specs|work-items/.*/plans|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)|Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser|/replay|path: 'replay'" apps/web/src/app apps/web/src/features tests/web/router-test-utils.tsx tests/e2e/web-product-routes.e2e.test.ts tests/e2e/ai-native-project-management-visual.e2e.test.ts
 ```
 
 Expected: no active product route, nav, rendered-route, or fixture matches. This step intentionally does not scan all API/workflow/test helpers because Task 13 migrates remaining legacy callers next. Allowed matches must be limited to:
@@ -2556,7 +2659,7 @@ git commit -m "test: verify ai-native project management product closure"
 Run:
 
 ```bash
-rg -n "post\\(`/work-items/\\$\\{[^}]+\\}/(specs|plans)|post\\('/work-items/[^']+/(specs|plans)|/work-items/.*/(specs|plans)|\\.post\\('/tasks'|\\.post\\(`/tasks|/query/tasks|/tasks/|createTask\\(|createSpec\\(|createPlan\\(|generatePlanDraft\\(|work_item_id|task_id|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)" tests apps packages scripts
+rg -n "post\\(`/work-items/\\$\\{[^}]+\\}/(specs|plans)|post\\('/work-items/[^']+/(specs|plans)|/work-items/.*/(specs|plans)|\\.post\\('/tasks'|\\.post\\(`/tasks|/query/tasks|/tasks/|route\\(['\"]plans|route\\(['\"]specs|path: ['\"]plans['\"]|path: ['\"]specs['\"]|/plans(/|['\"[:space:]]|$)|/specs(/|['\"[:space:]]|$)|createTask\\(|createSpec\\(|createPlan\\(|generatePlanDraft\\(|work_item_id|task_id|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)" tests apps packages scripts
 ```
 
 Expected: matches may remain at the start of this task. Copy the matched file list into the task notes and classify each match as:
@@ -2610,7 +2713,7 @@ Expected: PASS.
 Run:
 
 ```bash
-rg -n "post\\(`/work-items/\\$\\{[^}]+\\}/(specs|plans)|post\\('/work-items/[^']+/(specs|plans)|/work-items/.*/(specs|plans)|\\.post\\('/tasks'|\\.post\\(`/tasks|/query/tasks|/tasks/|createTask\\(|createSpec\\(|createPlan\\(|generatePlanDraft\\(|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)" tests apps packages scripts
+rg -n "post\\(`/work-items/\\$\\{[^}]+\\}/(specs|plans)|post\\('/work-items/[^']+/(specs|plans)|/work-items/.*/(specs|plans)|\\.post\\('/tasks'|\\.post\\(`/tasks|/query/tasks|/tasks/|route\\(['\"]plans|route\\(['\"]specs|path: ['\"]plans['\"]|path: ['\"]specs['\"]|/plans(/|['\"[:space:]]|$)|/specs(/|['\"[:space:]]|$)|createTask\\(|createSpec\\(|createPlan\\(|generatePlanDraft\\(|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)" tests apps packages scripts
 ```
 
 Expected: no matches except explicit negative tests and dev-tools-only routes. If any product-facing caller remains, migrate it before continuing.
@@ -2679,7 +2782,7 @@ Expected: PASS.
 Run:
 
 ```bash
-rg -n "Work Item Owner|owner_actor_id|type: z.literal\\('work_item'\\)|type: z.literal\\('task'\\)|type: z.literal\\('plan'\\)|/tasks|work-items/.*/specs|work-items/.*/plans|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)|Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser|/replay|path: 'replay'" apps packages tests
+rg -n "Work Item Owner|owner_actor_id|type: z.literal\\('work_item'\\)|type: z.literal\\('task'\\)|type: z.literal\\('plan'\\)|/tasks|route\\(['\"]plans|route\\(['\"]specs|path: ['\"]plans['\"]|path: ['\"]specs['\"]|/plans(/|['\"[:space:]]|$)|/specs(/|['\"[:space:]]|$)|work-items/.*/specs|work-items/.*/plans|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)|Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser|/replay|path: 'replay'" apps packages tests
 ```
 
 Expected: no product-facing matches. Any remaining match must be an explicit negative test, internal-only storage schema, or existing Project/Release Owner domain where the wording is legitimate.
