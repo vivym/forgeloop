@@ -1781,7 +1781,7 @@ describe('delivery loop contracts', () => {
 
   it('parses the public Evidence Chain response DTO from the contract barrel', () => {
     const parsed = evidenceChainResponseSchema.parse({
-      work_item_id: 'work-item-1',
+      scope_ref: { type: 'requirement', id: 'work-item-1' },
       generated_at: '2026-05-08T01:00:00.000Z',
       focus: {
         selection: 'explicit',
@@ -1806,6 +1806,7 @@ describe('delivery loop contracts', () => {
     });
 
     expect(parsed.focus.selection).toBe('explicit');
+    expect(parsed.scope_ref).toEqual({ type: 'requirement', id: 'work-item-1' });
     expect(parsed.summary.risk_flags).toEqual(['no_evidence']);
   });
 });

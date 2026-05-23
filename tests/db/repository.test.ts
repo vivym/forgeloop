@@ -85,6 +85,7 @@ const workItem: WorkItem = {
   project_id: project.id,
   kind: 'requirement',
   title: 'Ship delivery db boundary',
+  narrative_markdown: '',
   goal: 'Persist the delivery loop state.',
   success_criteria: ['Required delivery records can be saved and queried.'],
   priority: 'P0',

@@ -54,7 +54,7 @@ describe('delivery runtime readiness query', () => {
         expect.objectContaining({
           code: 'runtime_profile_missing',
           severity: 'blocking',
-          next_step_href: `/packages/${executionPackage.id}`,
+          message: 'A local Codex run execution profile must be active for this package scope.',
         }),
       ],
     });
